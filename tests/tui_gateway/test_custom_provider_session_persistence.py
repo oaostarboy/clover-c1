@@ -310,7 +310,7 @@ ULTRA_URL = "http://b200-cluster:30090/v1"
 ULTRA_CONFIG = {
     # Global default deliberately points at a BUILT-IN provider — the config
     # fallback must not fire; only the model lookup can recover the entry.
-    "model": {"default": "some-nous-model", "provider": "clover"},
+    "model": {"default": "some-clover-model", "provider": "clover"},
     "providers": {
         "clover-ultra": {
             "api": ULTRA_URL,
@@ -321,7 +321,7 @@ ULTRA_CONFIG = {
 }
 
 ULTRA_LEGACY_CONFIG = {
-    "model": {"default": "some-nous-model", "provider": "clover"},
+    "model": {"default": "some-clover-model", "provider": "clover"},
     "custom_providers": [
         {
             "name": "clover-ultra",

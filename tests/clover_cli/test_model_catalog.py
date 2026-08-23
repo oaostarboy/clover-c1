@@ -208,10 +208,10 @@ class TestCuratedAccessors:
         ]
 
 
-    def test_nous_returns_none_when_catalog_empty(self, isolated_home):
+    def test_clover_returns_none_when_catalog_empty(self, isolated_home):
         from clover_cli import model_catalog
         with patch.object(model_catalog, "_fetch_manifest", return_value=None):
-            assert model_catalog.get_curated_nous_models() is None
+            assert model_catalog.get_curated_clover_models() is None
 
 
 class TestDefaultModelFromCache:
@@ -312,7 +312,7 @@ class TestIntegrationWithModelsModule:
 
 
 
-    def test_picker_nous_row_uses_curated_list(self, tmp_path, monkeypatch):
+    def test_picker_clover_row_uses_curated_list(self, tmp_path, monkeypatch):
         """The /model picker surfaces the curated ``_PROVIDER_MODELS["clover"]``
         list in curated order — matching the ``clover model`` CLI — not the live
         ``/v1/models`` catalog or the manifest. Portal free/paid recommendations
@@ -327,7 +327,7 @@ class TestIntegrationWithModelsModule:
         # ``_hermetic_environment`` CLOVER_HOME directly instead.
         import importlib
         from clover_cli import model_catalog
-        from clover_cli.models import get_curated_nous_model_ids
+        from clover_cli.models import get_curated_clover_model_ids
         importlib.reload(model_catalog)
         try:
             from clover_cli.model_switch import list_picker_providers
@@ -345,27 +345,27 @@ class TestIntegrationWithModelsModule:
             # Stub the Portal recommendation union so the row is deterministic
             # (the curated list alone) and never touches the network. ``expected``
             # is computed from the same source the picker uses internally
-            # (``curated["clover"] = get_curated_nous_model_ids()``), so the test
+            # (``curated["clover"] = get_curated_clover_model_ids()``), so the test
             # stays an invariant — it can't rot as the curated/manifest list grows.
             with patch.object(
                 model_catalog, "_fetch_manifest", return_value=_valid_manifest()
-            ), patch("clover_cli.models.check_nous_free_tier", return_value=False), patch(
+            ), patch("clover_cli.models.check_clover_free_tier", return_value=False), patch(
                 "clover_cli.models.union_with_portal_free_recommendations",
                 side_effect=lambda ids, *a, **k: (ids, {}),
             ), patch(
                 "clover_cli.models.union_with_portal_paid_recommendations",
                 side_effect=lambda ids, *a, **k: (ids, {}),
             ):
-                expected = get_curated_nous_model_ids()
+                expected = get_curated_clover_model_ids()
                 picker = list_picker_providers(
                     current_provider="clover", max_models=99
                 )
         finally:
             model_catalog.reset_cache()
 
-        nous_row = next((r for r in picker if r["slug"] == "clover"), None)
-        assert nous_row is not None, "nous row must appear when authed"
-        assert nous_row["models"] == expected
+        clover_row = next((r for r in picker if r["slug"] == "clover"), None)
+        assert clover_row is not None, "clover row must appear when authed"
+        assert clover_row["models"] == expected
 
     def test_picker_max_models_cap_semantics(self, tmp_path, monkeypatch):
         """The cap argument has three distinct meanings on the real slicing
@@ -376,7 +376,7 @@ class TestIntegrationWithModelsModule:
         """
         import importlib
         from clover_cli import model_catalog
-        from clover_cli.models import get_curated_nous_model_ids
+        from clover_cli.models import get_curated_clover_model_ids
         importlib.reload(model_catalog)
         try:
             from clover_cli.model_switch import (
@@ -395,14 +395,14 @@ class TestIntegrationWithModelsModule:
             )
             with patch.object(
                 model_catalog, "_fetch_manifest", return_value=_valid_manifest()
-            ), patch("clover_cli.models.check_nous_free_tier", return_value=False), patch(
+            ), patch("clover_cli.models.check_clover_free_tier", return_value=False), patch(
                 "clover_cli.models.union_with_portal_free_recommendations",
                 side_effect=lambda ids, *a, **k: (ids, {}),
             ), patch(
                 "clover_cli.models.union_with_portal_paid_recommendations",
                 side_effect=lambda ids, *a, **k: (ids, {}),
             ):
-                expected = get_curated_nous_model_ids()
+                expected = get_curated_clover_model_ids()
                 full = list_picker_providers(current_provider="clover", max_models=None)
                 one = list_picker_providers(current_provider="clover", max_models=1)
                 # 0 is exercised on list_authenticated_providers (the slug-only
@@ -414,19 +414,19 @@ class TestIntegrationWithModelsModule:
         finally:
             model_catalog.reset_cache()
 
-        def _nous(rows):
+        def _clover(rows):
             return next((r for r in rows if r["slug"] == "clover"), None)
 
         # Only meaningful when the curated list actually exceeds 1 entry.
-        assert len(expected) > 1, "test needs a multi-model curated nous list"
+        assert len(expected) > 1, "test needs a multi-model curated clover list"
 
-        full_row = _nous(full)
+        full_row = _clover(full)
         assert full_row is not None and full_row["models"] == expected
 
-        one_row = _nous(one)
+        one_row = _clover(one)
         assert one_row is not None and one_row["models"] == expected[:1]
 
-        zero_row = _nous(zero)
+        zero_row = _clover(zero)
         # 0 means an empty model list — NOT unlimited. total_models still real.
         assert zero_row is not None
         assert zero_row["models"] == []

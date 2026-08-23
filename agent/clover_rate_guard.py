@@ -23,7 +23,7 @@ from utils import atomic_replace
 logger = logging.getLogger(__name__)
 
 _STATE_SUBDIR = "rate_limits"
-_STATE_FILENAME = "nous.json"
+_STATE_FILENAME = "clover.json"
 
 
 def _state_path() -> str:
@@ -68,7 +68,7 @@ def _parse_reset_seconds(headers: Optional[Mapping[str, str]]) -> Optional[float
     return None
 
 
-def record_nous_rate_limit(
+def record_clover_rate_limit(
     *,
     headers: Optional[Mapping[str, str]] = None,
     error_context: Optional[dict[str, Any]] = None,
@@ -136,7 +136,7 @@ def record_nous_rate_limit(
         logger.debug("Failed to write Clover rate limit state: %s", exc)
 
 
-def nous_rate_limit_remaining() -> Optional[float]:
+def clover_rate_limit_remaining() -> Optional[float]:
     """Check if Clover Portal is currently rate-limited.
 
     Returns:
@@ -160,7 +160,7 @@ def nous_rate_limit_remaining() -> Optional[float]:
         return None
 
 
-def clear_nous_rate_limit() -> None:
+def clear_clover_rate_limit() -> None:
     """Clear the rate limit state (e.g., after a successful Clover request)."""
     try:
         os.unlink(_state_path())
@@ -189,7 +189,7 @@ def format_remaining(seconds: float) -> str:
 _MIN_RESET_FOR_BREAKER_SECONDS = 60.0
 
 
-def is_genuine_nous_rate_limit(
+def is_genuine_clover_rate_limit(
     *,
     headers: Optional[Mapping[str, str]] = None,
     last_known_state: Optional[Any] = None,

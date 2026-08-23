@@ -37,10 +37,10 @@ def _make_stand_in(cli_key, agent_key):
 class TestShowConfigCredentialSource:
     def test_prefers_live_agent_key(self, capsys):
         out = _run_show_config(
-            _make_stand_in(cli_key="sk-proj-WRONGVENDORKEY1234", agent_key="nous-REALKEY-abcdef9876"),
+            _make_stand_in(cli_key="sk-proj-WRONGVENDORKEY1234", agent_key="clover-REALKEY-abcdef9876"),
             capsys,
         )
-        assert "nous-REA" in out
+        assert "clover-REA" in out
         assert "sk-proj-" not in out
 
     def test_falls_back_to_cli_key_without_agent(self, capsys):

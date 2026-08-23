@@ -4758,8 +4758,8 @@ def _build_compact_banner() -> str:
     dim_color = _skin.get_color("banner_dim", "#B8860B") if _skin else "#B8860B"
 
     if skin_name == "default":
-        line1 = "⚕ NOUS CLOVER - AI Agent Framework"
-        tiny_line = "⚕ NOUS CLOVER"
+        line1 = "⚕ CLOVER CLOVER - AI Agent Framework"
+        tiny_line = "⚕ CLOVER CLOVER"
     else:
         agent_name = _skin.get_branding("agent_name", "Clover Cognition") if _skin else "Clover Cognition"
         line1 = f"{agent_name} - AI Agent Framework"
@@ -8563,10 +8563,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 )
 
         # Warn if the configured model is a Clover Clover LLM (not agentic)
-        from clover_cli.model_switch import is_nous_clover_non_agentic
+        from clover_cli.model_switch import is_clover_clover_non_agentic
 
         model_name = getattr(self, "model", "") or ""
-        if is_nous_clover_non_agentic(model_name):
+        if is_clover_clover_non_agentic(model_name):
             self._console_print()
             self._console_print(
                 "[bold yellow]⚠  Clover Cognition Clover 3 & 4 models are NOT agentic and are not "
@@ -13567,7 +13567,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         which would otherwise early-return before any credits showed.
         """
         if not self.agent:
-            if self._print_nous_credits_block():
+            if self._print_clover_credits_block():
                 self._print_usage_cta()
             else:
                 print("(._.) No active agent -- send a message first.")
@@ -13577,7 +13577,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         calls = agent.session_api_calls
 
         if calls == 0:
-            if self._print_nous_credits_block():
+            if self._print_clover_credits_block():
                 self._print_usage_cta()
             else:
                 print("(._.) No API calls made yet in this session.")
@@ -13650,7 +13650,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         # Clover credits magnitudes + monthly-grant gauge (agent-independent — also
         # runs at the no-agent / no-calls early-returns above). See the helper.
-        if self._print_nous_credits_block():
+        if self._print_clover_credits_block():
             self._print_usage_cta()
 
         if self.verbose:
@@ -16828,7 +16828,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 if result and result.get("failure_reason") == "billing":
                     _bb = result.get("billing_block") or {}
                     _prov_label = _bb.get("provider_label") or "your provider"
-                    if _bb.get("is_nous"):
+                    if _bb.get("is_clover_portal"):
                         _cta_lines = [
                             "Run [bold]/topup[/] to add credits, or "
                             "[bold]/subscription[/] to change plan.",

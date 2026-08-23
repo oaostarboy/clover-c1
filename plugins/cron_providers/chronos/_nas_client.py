@@ -42,8 +42,8 @@ class NasCronClient:
 
     def _access_token(self) -> str:
         """The agent's existing Clover Portal access token (refresh-aware)."""
-        from clover_cli.auth import resolve_nous_access_token
-        return resolve_nous_access_token()
+        from clover_cli.auth import resolve_clover_access_token
+        return resolve_clover_access_token()
 
     def _headers(self) -> Dict[str, str]:
         return {

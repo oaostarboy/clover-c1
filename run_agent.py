@@ -169,7 +169,7 @@ from agent.prompt_builder import (  # noqa: F401  # re-exported via _ra() / mock
     build_skills_system_prompt,
     build_context_files_prompt,
     build_environment_hints,
-    build_nous_subscription_prompt,
+    build_clover_subscription_prompt,
     load_soul_md,
 )
 from agent.process_bootstrap import _get_proxy_from_env  # noqa: F401
@@ -4153,7 +4153,7 @@ class AIAgent:
         self._capture_credits(http_response)
 
     def _capture_credits(self, http_response: Any) -> None:
-        """Parse x-nous-credits-* headers, cache CreditsState, fire threshold notices.
+        """Parse x-clover-credits-* headers, cache CreditsState, fire threshold notices.
 
         Fail-open throughout — header issues never break the agent loop. The PARSE is
         swallowed (any error → treated as a miss → keep last-known). The notice
@@ -4205,7 +4205,7 @@ class AIAgent:
         if state is None:
             if _dev:
                 logger.info(
-                    "credits ▸ response had no valid x-nous-credits-* headers "
+                    "credits ▸ response had no valid x-clover-credits-* headers "
                     "(miss — producer off / non-Clover path / >TTL stale)"
                 )
             return
@@ -5872,7 +5872,7 @@ class AIAgent:
 
         return True
 
-    def _try_refresh_nous_client_credentials(
+    def _try_refresh_clover_client_credentials(
         self,
         *,
         force: bool = True,
@@ -5886,10 +5886,10 @@ class AIAgent:
             return False
 
         try:
-            from clover_cli.auth import resolve_nous_runtime_credentials
+            from clover_cli.auth import resolve_clover_runtime_credentials
 
-            creds = resolve_nous_runtime_credentials(
-                timeout_seconds=env_float("CLOVER_NOUS_TIMEOUT_SECONDS", 15),
+            creds = resolve_clover_runtime_credentials(
+                timeout_seconds=env_float("CLOVER_PORTAL_TIMEOUT_SECONDS", 15),
                 force_refresh=force,
             )
         except Exception as exc:
@@ -5917,7 +5917,7 @@ class AIAgent:
         # Clover requests should not inherit OpenRouter-only attribution headers.
         self._client_kwargs.pop("default_headers", None)
 
-        if not self._replace_primary_openai_client(reason="nous_credential_refresh"):
+        if not self._replace_primary_openai_client(reason="clover_credential_refresh"):
             return False
 
         return True
@@ -6536,7 +6536,7 @@ class AIAgent:
             prefer_stream=not bool(getattr(self, "_disable_streaming", False)),
             # Rate-limit + credits state live in response headers, which the
             # parsed Message drops. No-ops on providers that don't send the
-            # matching header families (x-ratelimit-* / x-nous-credits-*).
+            # matching header families (x-ratelimit-* / x-clover-credits-*).
             on_response=self._capture_anthropic_response_headers,
         )
 

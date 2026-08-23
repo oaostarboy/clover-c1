@@ -151,7 +151,7 @@ def test_seed_is_idempotent():
     assert a.emitted == []
 
 
-def test_seed_skips_non_nous():
+def test_seed_skips_non_clover():
     from agent.credits_tracker import seed_credits_at_session_start
 
     a = _FakeAgent(provider="openrouter")

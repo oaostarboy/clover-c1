@@ -130,13 +130,13 @@ describe('toggleModelVisibility', () => {
   })
 
   it('keeps a hidden provider hidden when a different provider is toggled (regression for #43485)', () => {
-    // Hide ALL of nous — its sentinel is now stored.
+    // Hide ALL of clover — its sentinel is now stored.
     let stored: Set<string> | null = null
     stored = apply(stored, 'clover', 'clover-x')
     stored = apply(stored, 'clover', 'clover-y')
     expect(stored.has(emptyProviderSentinelKey('clover'))).toBe(true)
 
-    // Toggle a model in another provider. nous must NOT snap back on.
+    // Toggle a model in another provider. clover must NOT snap back on.
     stored = apply(stored, 'openai', 'gpt-a')
 
     expect(stored.has(emptyProviderSentinelKey('clover'))).toBe(true)
@@ -158,7 +158,7 @@ describe('toggleModelVisibility', () => {
   })
 
   it('re-enabling one model of a hidden-all provider restores ONLY that model, not the curated defaults', () => {
-    // openai hidden-all, nous untouched.
+    // openai hidden-all, clover untouched.
     let stored: Set<string> | null = new Set([emptyProviderSentinelKey('openai')])
 
     stored = apply(stored, 'openai', 'gpt-a')
@@ -235,13 +235,13 @@ describe('featured defaults', () => {
   })
 
   it('defaults to the featured shortlist when a provider publishes one', () => {
-    const nous = featuredProvider(
+    const clover = featuredProvider(
       'clover',
       ['anthropic/opus', 'anthropic/haiku', 'google/gemini', 'x-ai/grok'],
       ['anthropic/opus', 'google/gemini', 'x-ai/grok']
     )
 
-    const visible = defaultVisibleKeys([nous])
+    const visible = defaultVisibleKeys([clover])
 
     // Featured are visible; the non-featured model is hidden by default.
     expect(visible.has(modelVisibilityKey('clover', 'anthropic/opus'))).toBe(true)
@@ -298,7 +298,7 @@ describe('setProviderVisibility', () => {
   it('leaves other providers untouched (their sentinels survive)', () => {
     const stored = new Set([emptyProviderSentinelKey('clover')])
 
-    // Turn openai fully on; nous must stay hidden.
+    // Turn openai fully on; clover must stay hidden.
     const next = setProviderVisibility(stored, providers, 'openai', true)
 
     expect(next.has(emptyProviderSentinelKey('clover'))).toBe(true)

@@ -2,7 +2,7 @@
 name: stripe-link-cli
 description: Agent payments via Stripe Link — cards, SPT, approvals.
 version: 0.1.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 platforms: [linux, macos]
 metadata:

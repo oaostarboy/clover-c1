@@ -331,7 +331,7 @@ def build_gateway_parser(
     proxy_start.add_argument(
         "--provider",
         default="clover",
-        help="Upstream provider: nous or xai (default: nous). See `clover proxy providers`.",
+        help="Upstream provider: clover or xai (default: clover). See `clover proxy providers`.",
     )
     proxy_start.add_argument(
         "--host",

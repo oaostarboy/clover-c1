@@ -3525,7 +3525,7 @@ def compress_context(
                     # archive alongside the rest (harmless but wasted writes). The
                     # live-context load filters active=1, so a resume reloads ONLY
                     # the compacted set; the original turns remain under the SAME id
-                    # for search/recovery (Teknium review — keep one durable id
+                    # for search/recovery (the maintainer review — keep one durable id
                     # WITHOUT destroying history, unlike a hard replace_messages).
                     # See #38763.
                     from agent.context_compressor import (

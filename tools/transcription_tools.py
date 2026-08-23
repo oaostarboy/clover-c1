@@ -46,8 +46,8 @@ from clover_cli._subprocess_compat import windows_hide_flags
 from utils import is_truthy_value
 from tools.managed_tool_gateway import resolve_managed_tool_gateway
 from tools.tool_backend_helpers import (
-    managed_nous_tools_enabled,
-    nous_tool_gateway_unavailable_message,
+    managed_clover_tools_enabled,
+    clover_tool_gateway_unavailable_message,
     resolve_openai_audio_api_key,
 )
 
@@ -1025,7 +1025,7 @@ def _get_provider(stt_config: dict) -> str:
     explicit = "provider" in stt_config
     provider = stt_config.get("provider", DEFAULT_PROVIDER)
 
-    # The managed "Clover Subscription" selection (stt.provider: nous) is
+    # The managed "Clover Subscription" selection (stt.provider: clover) is
     # serviced by the OpenAI provider implementation, routed through the
     # managed openai-audio gateway by _resolve_openai_audio_client_config.
     if isinstance(provider, str) and provider.strip().lower() == "clover":
@@ -3295,7 +3295,7 @@ def _resolve_openai_audio_client_config() -> tuple[str, str]:
       base_url → env key → managed gateway.
     """
     from tools.tool_backend_helpers import (
-        NOUS_MANAGED_PROVIDER,
+        CLOVER_MANAGED_PROVIDER,
         read_selection,
         selection_error,
     )
@@ -3307,16 +3307,16 @@ def _resolve_openai_audio_client_config() -> tuple[str, str]:
 
     selected = read_selection("stt")
 
-    if selected == NOUS_MANAGED_PROVIDER:
+    if selected == CLOVER_MANAGED_PROVIDER:
         managed_gateway = resolve_managed_tool_gateway("openai-audio")
         if managed_gateway is None:
             raise ValueError(selection_error(
                 "stt",
-                NOUS_MANAGED_PROVIDER,
+                CLOVER_MANAGED_PROVIDER,
                 "the Clover Tool Gateway is not available (not entitled or "
                 "unreachable)",
             ))
-        return managed_gateway.nous_user_token, urljoin(
+        return managed_gateway.clover_user_token, urljoin(
             f"{managed_gateway.gateway_origin.rstrip('/')}/", "v1"
         )
 
@@ -3352,16 +3352,16 @@ def _resolve_openai_audio_client_config() -> tuple[str, str]:
     managed_gateway = resolve_managed_tool_gateway("openai-audio")
     if managed_gateway is None:
         message = "Neither stt.openai.api_key in config nor VOICE_TOOLS_OPENAI_KEY/OPENAI_API_KEY is set"
-        if managed_nous_tools_enabled():
+        if managed_clover_tools_enabled():
             message += (
                 ". "
-                + nous_tool_gateway_unavailable_message(
+                + clover_tool_gateway_unavailable_message(
                     "managed OpenAI audio for transcription",
                 )
             )
         raise ValueError(message)
 
-    return managed_gateway.nous_user_token, urljoin(
+    return managed_gateway.clover_user_token, urljoin(
         f"{managed_gateway.gateway_origin.rstrip('/')}/", "v1"
     )
 

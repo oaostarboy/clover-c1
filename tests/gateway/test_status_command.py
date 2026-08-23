@@ -184,7 +184,7 @@ async def test_status_command_uses_dominant_persisted_model_route(tmp_path):
         result = await runner._handle_message(_make_event("/status"))
 
         assert "**Model:** `z-ai/glm-5.2` (nvidia)" in result
-        assert "**Model:** `z-ai/glm-5.2` (nous)" not in result
+        assert "**Model:** `z-ai/glm-5.2` (clover)" not in result
     finally:
         db.close()
 

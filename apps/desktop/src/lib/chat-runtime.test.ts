@@ -87,7 +87,7 @@ describe('attachmentDisplayText', () => {
 
   it('expands a review attachment into an anchored fenced block', () => {
     const detail = JSON.stringify({
-      author: 'teknium1',
+      author: 'maintainer',
       body: 'this cap looks wrong',
       diffHunk: '@@ -1,2 +1,2 @@\n-const CAP = 5\n+const CAP = 50',
       kind: 'review',
@@ -102,7 +102,7 @@ describe('attachmentDisplayText', () => {
 
     // The contract: anchor (file:line), author, body, and the hunk all ride.
     expect(block).toContain('review-comment src/limits.ts:12')
-    expect(block).toContain('@teknium1')
+    expect(block).toContain('@maintainer')
     expect(block).toContain('this cap looks wrong')
     expect(block).toContain('const CAP = 50')
   })

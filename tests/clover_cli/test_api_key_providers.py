@@ -136,7 +136,7 @@ from clover_cli.auth import PROVIDER_REGISTRY as _REGISTRY
 
 _EXTRA_ENV_VARS = (
     # Checked directly in resolve_provider("auto"), not via the registry.
-    "OPENROUTER_API_KEY", "NOUS_API_KEY",
+    "OPENROUTER_API_KEY", "CLOVER_API_KEY",
     # Base URLs / paths that influence detection but aren't api_key_env_vars.
     "LM_BASE_URL", "KIMI_BASE_URL", "STEPFUN_BASE_URL", "KILOCODE_BASE_URL",
     "GMI_BASE_URL", "OPENAI_BASE_URL",

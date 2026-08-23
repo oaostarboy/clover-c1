@@ -2285,7 +2285,7 @@ class TestCronDeliveryMirror:
     # --- multi-participant parity with send_message (user_id passthrough) ---
 
 
-    # --- continuable cron: thread-preferred (Teknium's interface) ---
+    # --- continuable cron: thread-preferred (the maintainer's interface) ---
 
     def test_open_thread_returns_id_on_thread_platform(self):
         """On a thread-capable adapter, _open_continuable_cron_thread returns

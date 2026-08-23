@@ -13,7 +13,7 @@
  */
 
 const OFFICIAL_REPO_HTTPS_URL = ''
-const OFFICIAL_REPO_CANONICAL = 'github.com/clovercognition/clover-c1'
+const OFFICIAL_REPO_CANONICAL = 'github.com/cloverc1/clover-c1'
 
 // Normalize common GitHub remote URL forms to `host/owner/repo` (lowercased,
 // no trailing slash, no .git suffix) so SSH and HTTPS forms of the same repo

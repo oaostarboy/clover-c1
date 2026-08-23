@@ -41,7 +41,7 @@ There is **no general OAuth 2.0 authorization server**. There is no
 against. There is no shared cookie or session that browser-Portal-login
 extends to other apps on the same machine.
 
-What Clover Cognition has that *feels* like OAuth — `clover login --provider nous`
+What Clover Cognition has that *feels* like OAuth — `clover login --provider clover`
 opening a browser, user signs in, token lands in `~/.clover/auth.json` — is a
 **Clover-specific browser flow**. Under the hood it produces a credential
 Clover uses as a bearer. It is not a public OAuth provider that Karakeep et al.

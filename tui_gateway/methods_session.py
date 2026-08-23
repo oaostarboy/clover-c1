@@ -1601,9 +1601,9 @@ def _(rid, params: dict) -> dict:
     # these lines regardless of `calls`. Fail-open: [] when not logged into Clover
     # or on any portal hiccup.
     try:
-        from agent.account_usage import nous_credits_lines
+        from agent.account_usage import clover_credits_lines
 
-        credits = nous_credits_lines()
+        credits = clover_credits_lines()
         if credits:
             usage["credits_lines"] = credits
     except Exception:
@@ -2393,7 +2393,7 @@ def _(rid, params: dict) -> dict:
     drives the device step-up exactly like the mutations.
     """
     from agent.subscription_view import subscription_change_preview_from_payload
-    from clover_cli.nous_billing import BillingError, post_subscription_preview
+    from clover_cli.clover_billing import BillingError, post_subscription_preview
 
     tier_id = params.get("subscription_type_id")
     if not tier_id:
@@ -2417,7 +2417,7 @@ def _(rid, params: dict) -> dict:
     same-price change OR a cancellation at period end (chargeless). Requires
     billing:manage.
     """
-    from clover_cli.nous_billing import BillingError, put_subscription_pending_change
+    from clover_cli.clover_billing import BillingError, put_subscription_pending_change
 
     cancel = bool(params.get("cancel"))
     tier_id = params.get("subscription_type_id")
@@ -2439,7 +2439,7 @@ def _(rid, params: dict) -> dict:
     Clears a scheduled downgrade or cancellation (resume / undo). Chargeless, but it
     re-enables recurring spend → requires billing:manage and honors the kill-switch.
     """
-    from clover_cli.nous_billing import BillingError, delete_subscription_pending_change
+    from clover_cli.clover_billing import BillingError, delete_subscription_pending_change
 
     try:
         result = delete_subscription_pending_change()
@@ -2461,7 +2461,7 @@ def _(rid, params: dict) -> dict:
     the TUI reuses it on retry of the SAME upgrade. Requires billing:manage.
     """
     from agent.billing_view import new_idempotency_key
-    from clover_cli.nous_billing import BillingError, post_subscription_upgrade
+    from clover_cli.clover_billing import BillingError, post_subscription_upgrade
 
     tier_id = params.get("subscription_type_id")
     if not tier_id:
@@ -2496,7 +2496,7 @@ def _(rid, params: dict) -> dict:
     supplied, the server-side core mints a fresh one and returns it so the TUI can
     reuse it on retry of the SAME purchase.
     """
-    from clover_cli.nous_billing import BillingError, post_charge
+    from clover_cli.clover_billing import BillingError, post_charge
     from agent.billing_view import new_idempotency_key
 
     amount = params.get("amount_usd")
@@ -2520,7 +2520,7 @@ def _(rid, params: dict) -> dict:
 
     The poll. Caller drives the 2s/5-min cadence; this is a single status read.
     """
-    from clover_cli.nous_billing import BillingError, get_charge_status
+    from clover_cli.clover_billing import BillingError, get_charge_status
 
     charge_id = params.get("charge_id")
     if not charge_id:
@@ -2549,7 +2549,7 @@ def _(rid, params: dict) -> dict:
 
     params: {enabled: bool, threshold: number, top_up_amount: number}.
     """
-    from clover_cli.nous_billing import BillingError, patch_auto_top_up
+    from clover_cli.clover_billing import BillingError, patch_auto_top_up
 
     try:
         enabled = bool(params.get("enabled"))
@@ -2581,8 +2581,8 @@ def _(rid, params: dict) -> dict:
     """
     sid = params.get("session_id") or ""
     try:
-        from clover_cli.auth import step_up_nous_billing_scope
-        from clover_cli.nous_billing import BillingError
+        from clover_cli.auth import step_up_clover_billing_scope
+        from clover_cli.clover_billing import BillingError
 
         def _on_verification(url: str, code: str) -> None:
             _emit(
@@ -2591,7 +2591,7 @@ def _(rid, params: dict) -> dict:
                 {"verification_url": url, "user_code": code},
             )
 
-        granted = step_up_nous_billing_scope(
+        granted = step_up_clover_billing_scope(
             open_browser=False, on_verification=_on_verification
         )
         return _ok(rid, {"ok": True, "granted": bool(granted)})

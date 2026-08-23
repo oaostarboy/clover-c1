@@ -2,7 +2,7 @@
 
 **Status:** authoritative wire spec for the Chronos cron provider.
 **Audience:** the NAS-side implementer of the `agent-cron` endpoints
-(`nous-account-service`) and anyone debugging the managed-cron path.
+(`clover-account-service`) and anyone debugging the managed-cron path.
 
 Chronos lets a hosted Clover gateway **scale to zero** while idle and still
 fire cron jobs. Instead of an in-process 60-second ticker, the agent asks NAS
@@ -47,7 +47,7 @@ agent verifies the NAS JWT → store CAS claim → run_one_job → re-arm next o
 > **Which token, exactly (hop 1).** A hosted agent never holds an `agent:{instance_id}`
 > OAuth client credential — that shape is minted only by the interactive dashboard
 > auth-code grant (a browser user). For all of its own outbound portal calls the
-> agent uses the **bootstrap-session access token** (`resolve_nous_access_token`),
+> agent uses the **bootstrap-session access token** (`resolve_clover_access_token`),
 > minted under the bootstrap-only client `clover-cli-vps` and seeded into the
 > container on first boot. NAS therefore must resolve the calling agent's instance
 > id from EITHER an `agent:{id}` client (self-hosted/dashboard callers) OR — for the

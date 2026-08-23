@@ -1,30 +1,30 @@
 """Credits tracking for Clover inference API responses.
 
-Parses x-nous-credits-* (and optional x-nous-tool-pool-*) headers from
+Parses x-clover-credits-* (and optional x-clover-tool-pool-*) headers from
 inference responses into a validated CreditsState dataclass.  Provides
 depletion detection (paid_access), subscription-cap used_fraction, and
 warn-once schema-version gating.  This is the hardened parser used by all
 live consumers (run_agent, tui_gateway) — not a dev-only shim.
 
-Header schema (x-nous-credits-* family):
-    x-nous-credits-version                    contract/schema version
-    x-nous-credits-remaining-micros           total remaining balance (micros)
-    x-nous-credits-remaining-usd              same, formatted USD string
-    x-nous-credits-subscription-micros        subscription balance (SIGNED; may be negative/debt)
-    x-nous-credits-subscription-usd           same, formatted USD string
-    x-nous-credits-subscription-limit-micros  subscription cap (PAIRED/optional)
-    x-nous-credits-subscription-limit-usd     same, formatted USD string (PAIRED/optional)
-    x-nous-credits-rollover-micros            rolled-over balance (micros)
-    x-nous-credits-purchased-micros           purchased balance (micros)
-    x-nous-credits-purchased-usd              same, formatted USD string
-    x-nous-credits-denominator-kind           "subscription_cap" | "none"
-    x-nous-credits-paid-access                "true" | "false" (STRING!)
-    x-nous-credits-disabled-reason            reason string (header omitted when null)
-    x-nous-credits-as-of-ms                   server-side timestamp (ms epoch)
+Header schema (x-clover-credits-* family):
+    x-clover-credits-version                    contract/schema version
+    x-clover-credits-remaining-micros           total remaining balance (micros)
+    x-clover-credits-remaining-usd              same, formatted USD string
+    x-clover-credits-subscription-micros        subscription balance (SIGNED; may be negative/debt)
+    x-clover-credits-subscription-usd           same, formatted USD string
+    x-clover-credits-subscription-limit-micros  subscription cap (PAIRED/optional)
+    x-clover-credits-subscription-limit-usd     same, formatted USD string (PAIRED/optional)
+    x-clover-credits-rollover-micros            rolled-over balance (micros)
+    x-clover-credits-purchased-micros           purchased balance (micros)
+    x-clover-credits-purchased-usd              same, formatted USD string
+    x-clover-credits-denominator-kind           "subscription_cap" | "none"
+    x-clover-credits-paid-access                "true" | "false" (STRING!)
+    x-clover-credits-disabled-reason            reason string (header omitted when null)
+    x-clover-credits-as-of-ms                   server-side timestamp (ms epoch)
 
 Tool-pool headers use a SEPARATE prefix:
-    x-nous-tool-pool-micros                   tool-pool balance (micros)
-    x-nous-tool-pool-gated-off                "true" | "false" (STRING!)
+    x-clover-tool-pool-micros                   tool-pool balance (micros)
+    x-clover-tool-pool-gated-off                "true" | "false" (STRING!)
 
 Money is handled as micros ints only; *_usd values are preserved verbatim as
 the raw strings the server sent (never re-parsed to float).
@@ -92,7 +92,7 @@ def _validate_usd(value: Optional[str]) -> bool:
 
 @dataclass
 class CreditsState:
-    """Full credits state parsed from x-nous-credits-* response headers."""
+    """Full credits state parsed from x-clover-credits-* response headers."""
 
     version: int = 0
     remaining_micros: int = 0
@@ -453,10 +453,10 @@ def parse_credits_headers(
     headers: Mapping[str, str],
     provider: str = "",
 ) -> Optional[CreditsState]:
-    """Parse x-nous-credits-* (and x-nous-tool-pool-*) headers into a CreditsState.
+    """Parse x-clover-credits-* (and x-clover-tool-pool-*) headers into a CreditsState.
 
     Returns None (miss) on ANY of:
-    - No ``x-nous-credits-version`` header present.
+    - No ``x-clover-credits-version`` header present.
     - Version != 1 (> 1 also emits a one-time logger.warning).
     - Any ``*_micros`` field is non-integer, or negative for a non-subscription field.
     - Any ``*_usd`` field doesn't match ``^-?\\d+\\.\\d{2}$``.
@@ -477,7 +477,7 @@ def parse_credits_headers(
         # every API call) — skips allocating a dict over the whole response's
         # headers on the hot path, while preserving case-insensitivity. Behaviour
         # is identical: a missing version header was already a None return below.
-        if not any(k.lower() == "x-nous-credits-version" for k in headers):
+        if not any(k.lower() == "x-clover-credits-version" for k in headers):
             return None
         # Normalize to lowercase so lookups work regardless of how the server
         # capitalises headers (HTTP header names are case-insensitive per RFC 7230).
@@ -485,7 +485,7 @@ def parse_credits_headers(
 
         # ── Version check ────────────────────────────────────────────────────
         # Must be present and exactly 1; > 1 warns once then returns None.
-        version_raw = lowered.get("x-nous-credits-version")
+        version_raw = lowered.get("x-clover-credits-version")
         if version_raw is None:
             return None
         version_val = _safe_int(version_raw)
@@ -519,24 +519,24 @@ def parse_credits_headers(
             return val
 
         # ── Parse micros fields ──────────────────────────────────────────────
-        remaining_micros = _req_nonneg("x-nous-credits-remaining-micros")
+        remaining_micros = _req_nonneg("x-clover-credits-remaining-micros")
         if remaining_micros is _SENTINEL:
             return None
 
-        subscription_micros = _req_int("x-nous-credits-subscription-micros")
+        subscription_micros = _req_int("x-clover-credits-subscription-micros")
         if subscription_micros is _SENTINEL:
             return None
 
-        rollover_micros = _req_nonneg("x-nous-credits-rollover-micros")
+        rollover_micros = _req_nonneg("x-clover-credits-rollover-micros")
         if rollover_micros is _SENTINEL:
             return None
 
-        purchased_micros = _req_nonneg("x-nous-credits-purchased-micros")
+        purchased_micros = _req_nonneg("x-clover-credits-purchased-micros")
         if purchased_micros is _SENTINEL:
             return None
 
         # tool_pool_micros is OPTIONAL: absent → 0 (default); present-but-invalid → None (miss).
-        _tp_raw = lowered.get("x-nous-tool-pool-micros")
+        _tp_raw = lowered.get("x-clover-tool-pool-micros")
         if _tp_raw is None:
             tool_pool_micros = 0
         else:
@@ -545,28 +545,28 @@ def parse_credits_headers(
                 return None
             tool_pool_micros = _tp_val
 
-        as_of_ms = _req_nonneg("x-nous-credits-as-of-ms")
+        as_of_ms = _req_nonneg("x-clover-credits-as-of-ms")
         if as_of_ms is _SENTINEL:
             return None
 
         # ── Validate USD strings ─────────────────────────────────────────────
-        remaining_usd = lowered.get("x-nous-credits-remaining-usd", "")
+        remaining_usd = lowered.get("x-clover-credits-remaining-usd", "")
         if not _validate_usd(remaining_usd):
             return None
 
-        subscription_usd = lowered.get("x-nous-credits-subscription-usd", "")
+        subscription_usd = lowered.get("x-clover-credits-subscription-usd", "")
         if not _validate_usd(subscription_usd):
             return None
 
-        purchased_usd = lowered.get("x-nous-credits-purchased-usd", "")
+        purchased_usd = lowered.get("x-clover-credits-purchased-usd", "")
         if not _validate_usd(purchased_usd):
             return None
 
         # ── subscription_limit_* PAIRED + OPTIONAL ───────────────────────────
         # Both present → validate both; half-pair → treat BOTH as absent (parse
         # still succeeds, just with no limit pair).
-        sub_limit_micros_raw = lowered.get("x-nous-credits-subscription-limit-micros")
-        sub_limit_usd_raw = lowered.get("x-nous-credits-subscription-limit-usd")
+        sub_limit_micros_raw = lowered.get("x-clover-credits-subscription-limit-micros")
+        sub_limit_usd_raw = lowered.get("x-clover-credits-subscription-limit-usd")
 
         subscription_limit_micros: Optional[int] = None
         subscription_limit_usd: Optional[str] = None
@@ -585,7 +585,7 @@ def parse_credits_headers(
         # else: half-pair or both absent → leave both None, parse continues
 
         # ── denominator_kind ─────────────────────────────────────────────────
-        denominator_kind = lowered.get("x-nous-credits-denominator-kind", "none")
+        denominator_kind = lowered.get("x-clover-credits-denominator-kind", "none")
         if denominator_kind not in _VALID_DENOMINATOR_KINDS:
             return None
 
@@ -593,16 +593,16 @@ def parse_credits_headers(
         # Both must be exactly "true" or "false" (case-insensitive).  An absent
         # paid_access header → fail-open (assume access); absent tool_pool_gated_off
         # → default False.  Present but invalid → return None.
-        if "x-nous-credits-paid-access" in lowered:
-            pa_raw = lowered["x-nous-credits-paid-access"].strip().lower()
+        if "x-clover-credits-paid-access" in lowered:
+            pa_raw = lowered["x-clover-credits-paid-access"].strip().lower()
             if pa_raw not in ("true", "false"):
                 return None
             paid_access = pa_raw == "true"
         else:
             paid_access = True  # fail-open
 
-        if "x-nous-tool-pool-gated-off" in lowered:
-            tpgo_raw = lowered["x-nous-tool-pool-gated-off"].strip().lower()
+        if "x-clover-tool-pool-gated-off" in lowered:
+            tpgo_raw = lowered["x-clover-tool-pool-gated-off"].strip().lower()
             if tpgo_raw not in ("true", "false"):
                 return None
             tool_pool_gated_off = tpgo_raw == "true"
@@ -610,7 +610,7 @@ def parse_credits_headers(
             tool_pool_gated_off = False
 
         # ── disabled_reason: header omitted when null ────────────────────────
-        disabled_reason = lowered.get("x-nous-credits-disabled-reason")  # None if absent
+        disabled_reason = lowered.get("x-clover-credits-disabled-reason")  # None if absent
 
         return CreditsState(
             version=version_val,
@@ -651,7 +651,7 @@ def parse_credits_headers(
 # A fixture drives THREE surfaces uniformly, so the whole credits UX is testable
 # offline: (1) the per-turn capture/notice path (_capture_credits), (2) the
 # cold-start seed at session open (conversation_loop → depletion/warn90 hydrate
-# immediately), and (3) the /usage view (nous_credits_lines renders the fixture).
+# immediately), and (3) the /usage view (clover_credits_lines renders the fixture).
 # `clear` / `none` / unset → real behaviour. Delete with the rest of the
 # CLOVER_DEV_CREDITS scaffolding.
 _DEV_FIXTURES: dict[str, dict] = {
@@ -813,7 +813,7 @@ def seed_credits_at_session_start(agent) -> bool:
     build path didn't seed). Idempotent: a second call is a no-op once a seed or a
     real header has already populated _credits_state.
 
-    Returns True if it seeded this call, False otherwise (not nous / already seeded /
+    Returns True if it seeded this call, False otherwise (not clover / already seeded /
     fail-open error). Never raises — credits must never block session startup.
     """
     try:
@@ -840,8 +840,8 @@ def seed_credits_at_session_start(agent) -> bool:
 
         def _bg_seed() -> None:
             try:
-                from clover_cli.clover_account import get_nous_portal_account_info
-                info = get_nous_portal_account_info(force_fresh=True)
+                from clover_cli.clover_account import get_clover_portal_account_info
+                info = get_clover_portal_account_info(force_fresh=True)
                 if getattr(agent, "_credits_state", None) is not None:
                     return  # a live inference header beat us — don't clobber it
                 state = _credits_state_from_account(info)

@@ -100,8 +100,8 @@ export function isServerSideHttpError(error: unknown): {
  * isCloudBackendDown, statusCode, detail, and the original cause. The renderer
  * overlay keys on isCloudBackendDown/statusCode; main owns the classification.
  */
-export function makeNousCloudBackendDownError(baseUrl: string, error: unknown): Error | null {
-  if (!isNousCloudAgentUrl(baseUrl)) {
+export function makeCloverCloudBackendDownError(baseUrl: string, error: unknown): Error | null {
+  if (!isCloverCloudAgentUrl(baseUrl)) {
     return null
   }
 
@@ -116,7 +116,7 @@ export function makeNousCloudBackendDownError(baseUrl: string, error: unknown): 
   try {
     hostname = new URL(baseUrl).hostname
   } catch {
-    // baseUrl is known to parse (isNousCloudAgentUrl already did); keep the raw
+    // baseUrl is known to parse (isCloverCloudAgentUrl already did); keep the raw
     // value as a last resort rather than throwing.
   }
 
@@ -146,7 +146,7 @@ export function makeNousCloudBackendDownError(baseUrl: string, error: unknown): 
  * the user cannot restart themselves — a 503 from one means the server is down
  * and the recovery path is Portal/Discord/wait.
  */
-export function isNousCloudAgentUrl(baseUrl: string): boolean {
+export function isCloverCloudAgentUrl(baseUrl: string): boolean {
   try {
     const host = new URL(baseUrl).hostname
 
@@ -290,7 +290,7 @@ export async function waitForCloverReady(baseUrl: string, options: CloverReadyOp
   // Surface an actionable error instead (#85335). This is the SAME factory
   // buildRemoteConnection uses at the OAuth WS-ticket-mint boundary, so both
   // startup paths produce the identical Cloud-down shape.
-  const cloudError = makeNousCloudBackendDownError(baseUrl, lastError)
+  const cloudError = makeCloverCloudBackendDownError(baseUrl, lastError)
 
   if (cloudError !== null) {
     throw cloudError

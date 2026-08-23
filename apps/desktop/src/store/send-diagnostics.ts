@@ -2,13 +2,13 @@
 //
 // Flow: an error card (or any surface) calls requestSendDiagnostics() with
 // optional error context → the modal host renders the privacy notice → the
-// user explicitly clicks Upload → diagnostics.share_nous runs backend-side
+// user explicitly clicks Upload → diagnostics.share_clover runs backend-side
 // (collect + force-redact + Clover-S3 upload) → the modal shows the private
 // view link plus the support handoff (GitHub Issues · Clover Portal Support ·
 // Discord).
 //
 // Consent is per-upload and explicit — no "always allow", mirroring the CLI's
-// `clover debug share --nous` confirmation contract. On a remote connection
+// `clover debug share --clover` confirmation contract. On a remote connection
 // the backend bundles ITS OWN logs (the runtime that owns the failure); the
 // local desktop.log is attached as a client-side extra so support sees both
 // halves in one bundle.
@@ -107,7 +107,7 @@ export async function confirmSendDiagnostics(): Promise<void> {
     }
 
     const response = await gateway.request<ShareNousResponse>(
-      'diagnostics.share_nous',
+      'diagnostics.share_clover',
       {
         ...(current.errorContext ? { error_context: current.errorContext } : {}),
         ...(Object.keys(extraFiles).length ? { extra_files: extraFiles } : {})

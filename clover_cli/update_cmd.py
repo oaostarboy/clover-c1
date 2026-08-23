@@ -1061,7 +1061,7 @@ def _assess_parked_branch_switch(
     """Decide whether it is safe to auto-switch a parked feature branch back
     to the update target.
 
-    Live incident (2026-08-17, Teknium's box): the source checkout sat on a
+    Live incident (2026-08-17, the maintainer's box): the source checkout sat on a
     stale feature branch left behind by earlier tooling; ``clover update``
     autostashed, ran its post-update steps and printed "✓ Code updated!"
     while the running code stayed days behind main. The guard's contract:

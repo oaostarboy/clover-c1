@@ -2,7 +2,7 @@
 name: code-wiki
 description: "Generate wiki docs + Mermaid diagrams for any codebase."
 version: 0.1.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 platforms: [linux, macos, windows]
 metadata:

@@ -221,7 +221,7 @@ class TestBrowserAvailableNpxRung:
 
     def test_false_on_termux_local_bare_npx(self, monkeypatch, tmp_path):
         """On Termux in local mode the bare npx fallback is too fragile to
-        advertise as ready — must not diverge from dep_ensure/nous_subscription's
+        advertise as ready — must not diverge from dep_ensure/clover_subscription's
         same carve-out."""
         self._block_path_and_node_modules_checks(monkeypatch, tmp_path)
         import tools.browser_tool as bt

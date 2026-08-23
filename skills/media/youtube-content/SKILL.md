@@ -2,7 +2,7 @@
 name: youtube-content
 description: "YouTube transcripts to summaries, threads, blogs."
 version: 1.0.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 platforms: [linux, macos, windows]
 metadata:

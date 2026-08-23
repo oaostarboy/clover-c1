@@ -30,7 +30,7 @@ def _all_options(view: "ModelPickerView"):
     return out
 
 
-def test_nous_free_models_render_across_partitioned_selects():
+def test_clover_free_models_render_across_partitioned_selects():
     # 37 models: 32 curated + 5 free Portal recommendations appended at the tail
     # (the real-world shape that was getting clipped at 25 on Discord).
     models = [

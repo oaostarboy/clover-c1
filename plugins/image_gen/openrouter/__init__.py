@@ -1466,13 +1466,13 @@ def _build_providers() -> List[OpenRouterCompatImageProvider]:
             display_name="Clover Portal",
             runtime_name="clover",
             config_key="clover",
-            model_env_var="NOUS_IMAGE_MODEL",
+            model_env_var="CLOVER_IMAGE_MODEL",
             setup_schema={
                 "name": "Clover Portal (image)",
                 "badge": "subscription",
                 "tag": "Reference-grounded image generation via Clover Portal (OpenRouter-backed)",
                 "env_vars": [],
-                "requires_nous_auth": True,
+                "requires_clover_auth": True,
             },
         ),
     ]

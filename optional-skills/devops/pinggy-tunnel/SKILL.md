@@ -2,7 +2,7 @@
 name: pinggy-tunnel
 description: Zero-install localhost tunnels over SSH via Pinggy.
 version: 0.1.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 platforms: [linux, macos, windows]
 metadata:

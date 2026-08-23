@@ -21,10 +21,10 @@ class TestRecordNousRateLimit:
     """Test recording rate limit state."""
 
     def test_records_with_header_reset(self, rate_guard_env):
-        from agent.clover_rate_guard import record_nous_rate_limit, _state_path
+        from agent.clover_rate_guard import record_clover_rate_limit, _state_path
 
         headers = {"x-ratelimit-reset-requests-1h": "1800"}
-        record_nous_rate_limit(headers=headers)
+        record_clover_rate_limit(headers=headers)
 
         path = _state_path()
         assert os.path.exists(path)
@@ -37,10 +37,10 @@ class TestRecordNousRateLimit:
 
 
     def test_falls_back_to_error_context_reset_at(self, rate_guard_env):
-        from agent.clover_rate_guard import record_nous_rate_limit, _state_path
+        from agent.clover_rate_guard import record_clover_rate_limit, _state_path
 
         future_reset = time.time() + 900
-        record_nous_rate_limit(
+        record_clover_rate_limit(
             headers=None,
             error_context={"reset_at": future_reset},
         )
@@ -51,9 +51,9 @@ class TestRecordNousRateLimit:
 
 
     def test_custom_default_cooldown(self, rate_guard_env):
-        from agent.clover_rate_guard import record_nous_rate_limit, _state_path
+        from agent.clover_rate_guard import record_clover_rate_limit, _state_path
 
-        record_nous_rate_limit(headers=None, default_cooldown=120.0)
+        record_clover_rate_limit(headers=None, default_cooldown=120.0)
 
         with open(_state_path()) as f:
             state = json.load(f)
@@ -66,15 +66,15 @@ class TestNousRateLimitRemaining:
 
 
     def test_returns_remaining_seconds_when_active(self, rate_guard_env):
-        from agent.clover_rate_guard import record_nous_rate_limit, nous_rate_limit_remaining
+        from agent.clover_rate_guard import record_clover_rate_limit, clover_rate_limit_remaining
 
-        record_nous_rate_limit(headers={"x-ratelimit-reset-requests-1h": "600"})
-        remaining = nous_rate_limit_remaining()
+        record_clover_rate_limit(headers={"x-ratelimit-reset-requests-1h": "600"})
+        remaining = clover_rate_limit_remaining()
         assert remaining is not None
         assert 595 < remaining <= 605  # ~600 seconds, allowing for test execution time
 
     def test_returns_none_when_expired(self, rate_guard_env):
-        from agent.clover_rate_guard import nous_rate_limit_remaining, _state_path
+        from agent.clover_rate_guard import clover_rate_limit_remaining, _state_path
 
         # Write an already-expired state
         state_dir = os.path.dirname(_state_path())
@@ -82,7 +82,7 @@ class TestNousRateLimitRemaining:
         with open(_state_path(), "w") as f:
             json.dump({"reset_at": time.time() - 10, "recorded_at": time.time() - 100}, f)
 
-        assert nous_rate_limit_remaining() is None
+        assert clover_rate_limit_remaining() is None
         # File should be cleaned up
         assert not os.path.exists(_state_path())
 
@@ -93,24 +93,24 @@ class TestClearNousRateLimit:
 
     def test_clears_existing_file(self, rate_guard_env):
         from agent.clover_rate_guard import (
-            record_nous_rate_limit,
-            clear_nous_rate_limit,
-            nous_rate_limit_remaining,
+            record_clover_rate_limit,
+            clear_clover_rate_limit,
+            clover_rate_limit_remaining,
             _state_path,
         )
 
-        record_nous_rate_limit(headers={"retry-after": "600"})
-        assert nous_rate_limit_remaining() is not None
+        record_clover_rate_limit(headers={"retry-after": "600"})
+        assert clover_rate_limit_remaining() is not None
 
-        clear_nous_rate_limit()
-        assert nous_rate_limit_remaining() is None
+        clear_clover_rate_limit()
+        assert clover_rate_limit_remaining() is None
         assert not os.path.exists(_state_path())
 
     def test_clear_when_no_file(self, rate_guard_env):
-        from agent.clover_rate_guard import clear_nous_rate_limit
+        from agent.clover_rate_guard import clear_clover_rate_limit
 
         # Should not raise
-        clear_nous_rate_limit()
+        clear_clover_rate_limit()
 
 
 class TestFormatRemaining:
@@ -151,30 +151,30 @@ class TestParseResetSeconds:
 class TestAuxiliaryClientIntegration:
     """Test that the auxiliary client respects the rate guard."""
 
-    def test_try_nous_skips_when_rate_limited(self, rate_guard_env, monkeypatch):
-        from agent.clover_rate_guard import record_nous_rate_limit
+    def test_try_clover_skips_when_rate_limited(self, rate_guard_env, monkeypatch):
+        from agent.clover_rate_guard import record_clover_rate_limit
 
         # Record a rate limit
-        record_nous_rate_limit(headers={"retry-after": "600"})
+        record_clover_rate_limit(headers={"retry-after": "600"})
 
-        # Mock _read_nous_auth to return valid creds (would normally succeed)
+        # Mock _read_clover_auth to return valid creds (would normally succeed)
         import agent.auxiliary_client as aux
-        monkeypatch.setattr(aux, "_read_nous_auth", lambda: {
+        monkeypatch.setattr(aux, "_read_clover_auth", lambda: {
             "access_token": "test-token",
-            "inference_base_url": "https://api.nous.test/v1",
+            "inference_base_url": "https://api.clover.test/v1",
         })
 
-        result = aux._try_nous()
+        result = aux._try_clover()
         assert result == (None, None)
 
-    def test_try_nous_works_when_not_rate_limited(self, rate_guard_env, monkeypatch):
+    def test_try_clover_works_when_not_rate_limited(self, rate_guard_env, monkeypatch):
         import agent.auxiliary_client as aux
 
-        # No rate limit recorded — _try_nous should proceed normally
+        # No rate limit recorded — _try_clover should proceed normally
         # (will return None because no real creds, but won't be blocked
         # by the rate guard)
-        monkeypatch.setattr(aux, "_read_nous_auth", lambda: None)
-        result = aux._try_nous()
+        monkeypatch.setattr(aux, "_read_clover_auth", lambda: None)
+        result = aux._try_clover()
         assert result == (None, None)
 
 
@@ -187,7 +187,7 @@ class TestIsGenuineNousRateLimit:
     """
 
     def test_exhausted_hourly_bucket_in_429_headers_is_genuine(self):
-        from agent.clover_rate_guard import is_genuine_nous_rate_limit
+        from agent.clover_rate_guard import is_genuine_clover_rate_limit
 
         headers = {
             "x-ratelimit-limit-requests-1h": "800",
@@ -197,16 +197,16 @@ class TestIsGenuineNousRateLimit:
             "x-ratelimit-remaining-requests": "198",
             "x-ratelimit-reset-requests": "40",
         }
-        assert is_genuine_nous_rate_limit(headers=headers) is True
+        assert is_genuine_clover_rate_limit(headers=headers) is True
 
 
 
     def test_bare_429_with_no_headers_is_upstream(self):
-        from agent.clover_rate_guard import is_genuine_nous_rate_limit
+        from agent.clover_rate_guard import is_genuine_clover_rate_limit
 
-        assert is_genuine_nous_rate_limit(headers=None) is False
-        assert is_genuine_nous_rate_limit(headers={}) is False
-        assert is_genuine_nous_rate_limit(
+        assert is_genuine_clover_rate_limit(headers=None) is False
+        assert is_genuine_clover_rate_limit(headers={}) is False
+        assert is_genuine_clover_rate_limit(
             headers={"content-type": "application/json"}
         ) is False
 
@@ -215,7 +215,7 @@ class TestIsGenuineNousRateLimit:
     def test_last_known_state_all_healthy_stays_upstream(self):
         # Prior state was healthy; bare 429 arrives; should be treated
         # as upstream capacity.
-        from agent.clover_rate_guard import is_genuine_nous_rate_limit
+        from agent.clover_rate_guard import is_genuine_clover_rate_limit
         from agent.rate_limit_tracker import parse_rate_limit_headers
 
         prior_headers = {
@@ -233,7 +233,7 @@ class TestIsGenuineNousRateLimit:
             "x-ratelimit-reset-tokens-1h": "2000",
         }
         last_state = parse_rate_limit_headers(prior_headers, provider="clover")
-        assert is_genuine_nous_rate_limit(
+        assert is_genuine_clover_rate_limit(
             headers=None, last_known_state=last_state
         ) is False
 
@@ -251,7 +251,7 @@ class TestRateGuardStateEncoding:
     def test_read_uses_utf8_under_non_utf8_locale(self, rate_guard_env, monkeypatch):
         import builtins
 
-        from agent.clover_rate_guard import nous_rate_limit_remaining, _state_path
+        from agent.clover_rate_guard import clover_rate_limit_remaining, _state_path
 
         path = _state_path()
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -280,5 +280,5 @@ class TestRateGuardStateEncoding:
 
         monkeypatch.setattr(builtins, "open", guarded_open)
 
-        remaining = nous_rate_limit_remaining()
+        remaining = clover_rate_limit_remaining()
         assert remaining is not None and remaining > 0

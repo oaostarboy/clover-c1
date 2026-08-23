@@ -59,7 +59,7 @@ def test_prompt_snapshots_are_deduplicated_and_hydrated_for_readers(db):
 
 
 def test_prompt_replacement_and_route_changes_collect_only_orphans(db):
-    shared_prompt = "Model: x-ai/grok-4.5\nProvider: nous"
+    shared_prompt = "Model: x-ai/grok-4.5\nProvider: clover"
     db.create_session(
         "s1",
         "clover_browser",

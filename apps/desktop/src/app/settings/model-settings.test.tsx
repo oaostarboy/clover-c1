@@ -540,7 +540,7 @@ describe('ModelSettings MoA preset editor', () => {
       // Radix treats re-picking the current value as a no-op (no
       // onValueChange), so nothing changes: no save, model still shown.
       expect(saveMoaModels).not.toHaveBeenCalled()
-      expect(screen.getByText('nous · clover-4')).toBeTruthy()
+      expect(screen.getByText('clover · clover-4')).toBeTruthy()
     } finally {
       vi.useRealTimers()
     }

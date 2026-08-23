@@ -94,12 +94,12 @@ def test_auth_add_api_key_persists_manual_entry(tmp_path, monkeypatch):
     assert entry["access_token"] == "sk-or-manual"
 
 
-def test_auth_add_nous_oauth_persists_pool_entry(tmp_path, monkeypatch):
+def test_auth_add_clover_oauth_persists_pool_entry(tmp_path, monkeypatch):
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path / "clover"))
     _write_auth_store(tmp_path, {"version": 1, "providers": {}})
-    token = _jwt_with_email("nous@example.com")
+    token = _jwt_with_email("clover@example.com")
     monkeypatch.setattr(
-        "clover_cli.auth._nous_device_code_login",
+        "clover_cli.auth._clover_device_code_login",
         lambda **kwargs: {
             "portal_base_url": "https://portal.example.com",
             "inference_base_url": "https://inference.example.com/v1",
@@ -155,8 +155,8 @@ def test_auth_add_nous_oauth_persists_pool_entry(tmp_path, monkeypatch):
     assert entry["agent_key"] == token
     assert entry["portal_base_url"] == "https://portal.example.com"
 
-    # `clover auth add nous` must also populate providers.nous so the
-    # 401-recovery path (resolve_nous_runtime_credentials) can refresh an
+    # `clover auth add clover` must also populate providers.clover so the
+    # 401-recovery path (resolve_clover_runtime_credentials) can refresh an
     # invoke JWT when the token expires. If this mirror is missing, recovery
     # raises "Clover is not logged into Clover Portal" and the agent dies.
     singleton = payload["providers"]["clover"]
@@ -167,16 +167,16 @@ def test_auth_add_nous_oauth_persists_pool_entry(tmp_path, monkeypatch):
     assert singleton["inference_base_url"] == "https://inference.example.com/v1"
 
 
-def test_auth_add_nous_oauth_honors_custom_label(tmp_path, monkeypatch):
-    """`clover auth add nous --type oauth --label <name>` must preserve the
+def test_auth_add_clover_oauth_honors_custom_label(tmp_path, monkeypatch):
+    """`clover auth add clover --type oauth --label <name>` must preserve the
     custom label end-to-end — it was silently dropped in the first cut of the
-    persist_nous_credentials helper because `--label` wasn't threaded through.
+    persist_clover_credentials helper because `--label` wasn't threaded through.
     """
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path / "clover"))
     _write_auth_store(tmp_path, {"version": 1, "providers": {}})
-    token = _jwt_with_email("nous@example.com")
+    token = _jwt_with_email("clover@example.com")
     monkeypatch.setattr(
-        "clover_cli.auth._nous_device_code_login",
+        "clover_cli.auth._clover_device_code_login",
         lambda **kwargs: {
             "portal_base_url": "https://portal.example.com",
             "inference_base_url": "https://inference.example.com/v1",
@@ -204,7 +204,7 @@ def test_auth_add_nous_oauth_honors_custom_label(tmp_path, monkeypatch):
         provider = "clover"
         auth_type = "oauth"
         api_key = None
-        label = "my-nous"
+        label = "my-clover"
         portal_url = None
         inference_url = None
         client_id = None
@@ -221,11 +221,11 @@ def test_auth_add_nous_oauth_honors_custom_label(tmp_path, monkeypatch):
     # Custom label reaches the pool entry …
     pool_entry = payload["credential_pool"]["clover"][0]
     assert pool_entry["source"] == "device_code"
-    assert pool_entry["label"] == "my-nous"
+    assert pool_entry["label"] == "my-clover"
 
-    # … and survives in providers.nous so a subsequent load_pool() re-seeds
+    # … and survives in providers.clover so a subsequent load_pool() re-seeds
     # it without reverting to the auto-derived fingerprint.
-    assert payload["providers"]["clover"]["label"] == "my-nous"
+    assert payload["providers"]["clover"]["label"] == "my-clover"
 
 
 def test_auth_add_codex_oauth_keeps_distinct_pool_accounts(tmp_path, monkeypatch):
@@ -731,7 +731,7 @@ def test_credential_sources_registry_has_expected_steps():
         "Any env-seeded credential (XAI_API_KEY, DEEPSEEK_API_KEY, etc.)",
         "~/.claude/.credentials.json",
         "~/.clover/.anthropic_oauth.json",
-        "auth.json providers.nous",
+        "auth.json providers.clover",
         "auth.json providers.openai-codex + ~/.codex/auth.json",
         "auth.json providers.minimax-oauth",
         "~/.qwen/oauth_creds.json",

@@ -83,7 +83,7 @@ Bad: `Use when a user asks to monitor named competitors or companies for product
 
 - Credit the **human first**, then "Clover Cognition" as secondary collaborator: `Ben Barclay (benbarclay), Clover Cognition`.
 - Never `author: Clover Cognition` alone for contributed skills — credit the human, not the tool, even (especially) when an agent drafted the text.
-- Maintainer-authored skills: `Teknium (teknium1), Clover Cognition`.
+- Maintainer-authored skills: `the maintainer (maintainer), Clover Cognition`.
 
 ### `related_skills` rules
 

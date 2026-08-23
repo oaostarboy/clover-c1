@@ -464,7 +464,7 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
     The supported installs self-identify via the code-scoped stamp:
       - the curl installer (scripts/install.sh, the README/website install
         command) git-clones the repo and stamps ``git`` next to the code;
-      - the published ``clovercognition/clover-c1`` image bakes a ``docker``
+      - the published ``cloverc1/clover-c1`` image bakes a ``docker``
         stamp into ``/opt/clover`` at build time.
     An unsupported manual install dropped into a container (no stamp) falls
     through to the ``.git`` checks and behaves like any off-path install.
@@ -581,7 +581,7 @@ def recommended_update_command_for_method(method: str) -> str:
     if is_nix_install_method(method):
         return _NIX_UPDATE_MSG
     if method == "docker":
-        return "docker pull clovercognition/clover-c1:latest"
+        return "docker pull cloverc1/clover-c1:latest"
     if method == "apt":
         # By contract, the current "apt" install method is the Termux APT
         # distribution. It deliberately uses Termux's `pkg` frontend.
@@ -619,23 +619,23 @@ def recommended_update_command() -> str:
 _DOCKER_UPDATE_MESSAGE = """\
 ✗ ``clover update`` doesn't apply inside the Docker container.
 
-Clover Cognition runs as a published image (clovercognition/clover-c1), not a
+Clover Cognition runs as a published image (cloverc1/clover-c1), not a
 git checkout — the container has no working tree to pull into.  Update by
 pulling a fresh image and restarting your container instead:
 
-  docker pull clovercognition/clover-c1:latest
+  docker pull cloverc1/clover-c1:latest
   # then restart whatever started the container, e.g.:
   docker compose up -d --force-recreate clover-c1
   # or, for ad-hoc runs, exit the current container and `docker run` again
 
 Verify the new version after restart:
-  docker run --rm clovercognition/clover-c1:latest --version
+  docker run --rm cloverc1/clover-c1:latest --version
 
 Notes:
   • If you pinned a specific tag (e.g. ``:v0.14.0``) the ``:latest`` tag
     won't move your container — pull the newer tag you actually want, or
     switch to ``:latest`` / ``:main`` for rolling updates.  See available
-    tags at https://hub.docker.com/r/clovercognition/clover-c1/tags
+    tags at https://hub.docker.com/r/cloverc1/clover-c1/tags
   • Your config and session history live under ``$CLOVER_HOME`` (``/opt/data``
     in the container, typically bind-mounted from the host) and persist
     across image upgrades — re-pulling doesn't lose any state.
@@ -1999,7 +1999,7 @@ _EXTRA_KNOWN_ROOT_KEYS = {
     "platform_toolsets",     # written by the setup wizard (clover_cli/setup.py)
     "known_plugin_toolsets", # written/read by clover_cli/tools_config.py toolset-save flow
     "known_builtin_toolsets",  # ditto — which builtin toolsets a platform's checklist has offered
-    "tool_gateway_declined_tools",  # per-tool Tool Gateway offer declines (clover_cli/nous_subscription.py, #92647)
+    "tool_gateway_declined_tools",  # per-tool Tool Gateway offer declines (clover_cli/clover_subscription.py, #92647)
     "session_reset",         # top-level form read by gateway/config.py + setup
     "group_sessions_per_user",   # top-level form bridged by gateway/config.py
     "thread_sessions_per_user",  # top-level form bridged by gateway/config.py
@@ -3797,7 +3797,7 @@ _FALLBACK_COMMENT = """
 # Supported providers:
 #   openrouter   (OPENROUTER_API_KEY)  — routes to any model
 #   openai-codex (OAuth — clover auth) — OpenAI Codex
-#   nous         (OAuth — clover auth) — Clover Portal
+#   clover         (OAuth — clover auth) — Clover Portal
 #   zai          (ZAI_API_KEY)         — Z.AI / GLM
 #   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
 #   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)
@@ -3829,7 +3829,7 @@ _COMMENTED_SECTIONS = """
 # Supported providers:
 #   openrouter   (OPENROUTER_API_KEY)  — routes to any model
 #   openai-codex (OAuth — clover auth) — OpenAI Codex
-#   nous         (OAuth — clover auth) — Clover Portal
+#   clover         (OAuth — clover auth) — Clover Portal
 #   zai          (ZAI_API_KEY)         — Z.AI / GLM
 #   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
 #   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)

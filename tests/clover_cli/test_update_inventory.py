@@ -69,7 +69,7 @@ class TestCollectInventory:
         monkeypatch.setattr("clover_cli.config.detect_install_method", lambda *a, **k: "docker")
         monkeypatch.setattr(
             "clover_cli.config.recommended_update_command_for_method",
-            lambda m: "docker pull clovercognition/clover-c1:latest",
+            lambda m: "docker pull cloverc1/clover-c1:latest",
         )
         plan = ui.collect_runtime_inventory()
         assert plan.install_method == "docker"
@@ -140,7 +140,7 @@ class TestPrintPlan:
         monkeypatch.setattr("clover_cli.config.detect_install_method", lambda *a, **k: "docker")
         monkeypatch.setattr(
             "clover_cli.config.recommended_update_command_for_method",
-            lambda m: "docker pull clovercognition/clover-c1:latest",
+            lambda m: "docker pull cloverc1/clover-c1:latest",
         )
         ui.print_update_plan(ui.collect_runtime_inventory())
         out = capsys.readouterr().out

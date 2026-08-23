@@ -396,17 +396,17 @@ def _model_flow_moa(config, current_model=""):
     _print_moa_preset(selected_name, preset)
 
 
-def _model_flow_nous(config, current_model="", args=None):
+def _model_flow_clover(config, current_model="", args=None):
     """Clover Portal provider: ensure logged in, then pick model."""
     from clover_cli.auth import (
         get_provider_auth_state,
         _prompt_model_selection,
         _save_model_choice,
         _update_config_for_provider,
-        resolve_nous_runtime_credentials,
+        resolve_clover_runtime_credentials,
         AuthError,
         format_auth_error,
-        _login_nous,
+        _login_clover,
         PROVIDER_REGISTRY,
     )
     from clover_cli.config import (
@@ -415,7 +415,7 @@ def _model_flow_nous(config, current_model="", args=None):
         save_config,
         save_env_value,
     )
-    from clover_cli.nous_subscription import prompt_enable_tool_gateway
+    from clover_cli.clover_subscription import prompt_enable_tool_gateway
 
     state = get_provider_auth_state("clover")
     if not state or not state.get("access_token"):
@@ -432,7 +432,7 @@ def _model_flow_nous(config, current_model="", args=None):
                 ca_bundle=getattr(args, "ca_bundle", None),
                 insecure=bool(getattr(args, "insecure", False)),
             )
-            _login_nous(mock_args, PROVIDER_REGISTRY["clover"])
+            _login_clover(mock_args, PROVIDER_REGISTRY["clover"])
             # Offer Tool Gateway enablement for paid subscribers
             try:
                 _refreshed = load_config() or {}
@@ -445,29 +445,29 @@ def _model_flow_nous(config, current_model="", args=None):
         except Exception as exc:
             print(f"Login failed: {exc}")
             return
-        # login_nous already handles model selection + config update
+        # login_clover already handles model selection + config update
         return
 
     # Already logged in — use curated model list (same as OpenRouter defaults).
     # The live /models endpoint returns hundreds of models; the curated list
     # shows only agentic models users recognize from OpenRouter.
     from clover_cli.models import (
-        get_curated_nous_model_ids,
+        get_curated_clover_model_ids,
         get_pricing_for_provider,
-        check_nous_free_tier,
-        partition_nous_models_by_tier,
+        check_clover_free_tier,
+        partition_clover_models_by_tier,
         union_with_portal_free_recommendations,
         union_with_portal_paid_recommendations,
     )
 
-    model_ids = get_curated_nous_model_ids()
+    model_ids = get_curated_clover_model_ids()
     if not model_ids:
         print("No curated models available for Clover Portal.")
         return
 
     # Verify credentials are still valid (catches expired sessions early)
     try:
-        creds = resolve_nous_runtime_credentials()
+        creds = resolve_clover_runtime_credentials()
     except Exception as exc:
         relogin = isinstance(exc, AuthError) and exc.relogin_required
         msg = format_auth_error(exc) if isinstance(exc, AuthError) else str(exc)
@@ -485,7 +485,7 @@ def _model_flow_nous(config, current_model="", args=None):
                     ca_bundle=None,
                     insecure=False,
                 )
-                _login_nous(mock_args, PROVIDER_REGISTRY["clover"])
+                _login_clover(mock_args, PROVIDER_REGISTRY["clover"])
             except Exception as login_exc:
                 print(f"Re-login failed: {login_exc}")
             return
@@ -497,10 +497,10 @@ def _model_flow_nous(config, current_model="", args=None):
 
     # Force fresh account data for model selection so recent credit purchases
     # are reflected immediately.
-    free_tier = check_nous_free_tier(force_fresh=True)
+    free_tier = check_clover_free_tier(force_fresh=True)
     if not free_tier:
         try:
-            refreshed_creds = resolve_nous_runtime_credentials(
+            refreshed_creds = resolve_clover_runtime_credentials(
                 force_refresh=True,
             )
             if refreshed_creds:
@@ -512,11 +512,11 @@ def _model_flow_nous(config, current_model="", args=None):
 
     # Resolve portal URL early — needed both for upgrade links and for the
     # freeRecommendedModels endpoint below.
-    _nous_portal_url = ""
+    _clover_portal_url = ""
     try:
-        _nous_state = get_provider_auth_state("clover")
-        if _nous_state:
-            _nous_portal_url = _nous_state.get("portal_base_url", "")
+        _clover_state = get_provider_auth_state("clover")
+        if _clover_state:
+            _clover_portal_url = _clover_state.get("portal_base_url", "")
     except Exception:
         pass
 
@@ -534,13 +534,13 @@ def _model_flow_nous(config, current_model="", args=None):
     if free_tier:
         try:
             from clover_cli.clover_account import (
-                format_nous_portal_entitlement_message,
-                get_nous_portal_account_info,
+                format_clover_portal_entitlement_message,
+                get_clover_portal_account_info,
             )
 
-            _account_info = get_nous_portal_account_info(force_fresh=True)
+            _account_info = get_clover_portal_account_info(force_fresh=True)
             unavailable_message = (
-                format_nous_portal_entitlement_message(
+                format_clover_portal_entitlement_message(
                     _account_info,
                     capability="paid Clover models",
                 )
@@ -549,14 +549,14 @@ def _model_flow_nous(config, current_model="", args=None):
         except Exception:
             unavailable_message = ""
         model_ids, pricing = union_with_portal_free_recommendations(
-            model_ids, pricing, _nous_portal_url,
+            model_ids, pricing, _clover_portal_url,
         )
-        model_ids, unavailable_models = partition_nous_models_by_tier(
+        model_ids, unavailable_models = partition_clover_models_by_tier(
             model_ids, pricing, free_tier=True
         )
     else:
         model_ids, pricing = union_with_portal_paid_recommendations(
-            model_ids, pricing, _nous_portal_url,
+            model_ids, pricing, _clover_portal_url,
         )
 
     if not model_ids and not unavailable_models:
@@ -566,9 +566,9 @@ def _model_flow_nous(config, current_model="", args=None):
     if free_tier and not model_ids:
         print("No free models currently available.")
         if unavailable_models:
-            from clover_cli.auth import DEFAULT_NOUS_PORTAL_URL
+            from clover_cli.auth import DEFAULT_CLOVER_PORTAL_URL
 
-            _url = (_nous_portal_url or DEFAULT_NOUS_PORTAL_URL).rstrip("/")
+            _url = (_clover_portal_url or DEFAULT_CLOVER_PORTAL_URL).rstrip("/")
             print(unavailable_message or f"Upgrade at {_url} to access paid models.")
         return
 
@@ -581,7 +581,7 @@ def _model_flow_nous(config, current_model="", args=None):
         current_model=current_model,
         pricing=pricing,
         unavailable_models=unavailable_models,
-        portal_url=_nous_portal_url,
+        portal_url=_clover_portal_url,
         unavailable_message=unavailable_message,
         confirm_provider="clover",
         confirm_base_url=creds.get("base_url", ""),

@@ -103,7 +103,7 @@ describe('useStatusSnapshot', () => {
     const requestGatewayMock = vi.fn(
       async (method: string) =>
         (method === 'setup.runtime_check'
-          ? { error: 'No usable credentials found for nous.', ok: false }
+          ? { error: 'No usable credentials found for clover.', ok: false }
           : { provider_configured: true }) as never
     )
 
@@ -115,7 +115,7 @@ describe('useStatusSnapshot', () => {
 
     expect(result.current.inferenceStatus).toMatchObject({
       ready: false,
-      reason: expect.stringContaining('No usable credentials found for nous.'),
+      reason: expect.stringContaining('No usable credentials found for clover.'),
       source: 'runtime_check'
     })
   })

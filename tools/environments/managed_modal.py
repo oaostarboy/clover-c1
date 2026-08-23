@@ -61,7 +61,7 @@ class ManagedModalEnvironment(BaseModalExecutionEnvironment):
             raise ValueError("Managed Modal requires a configured tool gateway and Clover user token")
 
         self._gateway_origin = gateway.gateway_origin.rstrip("/")
-        self._nous_user_token = gateway.nous_user_token
+        self._clover_user_token = gateway.clover_user_token
         self._task_id = task_id
         self._persistent = persistent_filesystem
         self._image = image
@@ -231,7 +231,7 @@ class ManagedModalEnvironment(BaseModalExecutionEnvironment):
                  timeout: int = 30,
                  extra_headers: Dict[str, str] | None = None) -> requests.Response:
         headers = {
-            "Authorization": f"Bearer {self._nous_user_token}",
+            "Authorization": f"Bearer {self._clover_user_token}",
             "Content-Type": "application/json",
         }
         if extra_headers:

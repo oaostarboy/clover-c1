@@ -41,7 +41,7 @@ lean+recovery     70.0 @  62K    80.0 @  41K    43.3 @  45K    80.0 @  50K   68.
    1.1M-token lineage truncated at 500K, dense multi-PR state. Recovery
    misses there are mostly query formulation. Headroom, not a blocker.
 
-5. Goal check (Teknium): tail = max(10K, 2.5%) ✓; summaries scoped to the
+5. Goal check (the maintainer): tail = max(10K, 2.5%) ✓; summaries scoped to the
    compacted region only ✓ (sentinel tripwire test); session_search pointer ✓
    (+20-43pts measured); better accuracy AND more savings than current ✓
    (+22.5pts at 0.30x tokens).
@@ -113,7 +113,7 @@ mining, per-epoch anchor windows) before default flip.
    gold: `add config gate for title generation`
 7. **Which file path is noted as containing the #34034/#28149 manifest guard 'test_bundled_plugin_manifests_ship_in_both_wheel_and_sdist'?**
    gold: `tests/test_packaging_metadata.py`
-8. **What was the result of the 'npm ci' command run in /home/teknium/salv-desktop according to the background process notification?**
+8. **What was the result of the 'npm ci' command run in /home/maintainer/salv-desktop according to the background process notification?**
    gold: `completed normally (exit code 0)`
 9. **What was the 'Root Cause A' identified for why 'uv sync --extra all --locked' failed daily in issue #79434?**
    gold: `relative exclude-newer makes the committed lock stale every day`
@@ -136,7 +136,7 @@ mining, per-epoch anchor windows) before default flip.
 
 1. **What exact command did the agent use to search for open issues related to a specific topic during Phase 1 of the cluster-sweep salvage?**
    gold: `gh issue list --search "<topic>" --state open --limit 100 --json number,title`
-2. **According to Teknium's design intent, what is the status of 'platform toolsets' in the codebase?**
+2. **According to the maintainer's design intent, what is the status of 'platform toolsets' in the codebase?**
    gold: `platform toolsets are vestigial, never exposed`
 3. **During the July sweep, which specific issue's config bridge was found to already exist at the exact line it was claimed to be missing?**
    gold: `#32263`
@@ -153,7 +153,7 @@ mining, per-epoch anchor windows) before default flip.
 9. **Which two properties shape almost every design decision in Clover according to the Development Guide?**
    gold: `Per-conversation prompt caching is sacred and The core is a narrow waist; capability lives at the edges.`
 10. **What error message does the live-checkout git guard display when blocking a history-rewriting command?**
-   gold: `Blocked: `git <op>` would rewrite Clover's live source checkout (/home/teknium/.clover/clover-c1) and can mix module `
+   gold: `Blocked: `git <op>` would rewrite Clover's live source checkout (/home/maintainer/.clover/clover-c1) and can mix module `
 11. **What happened to the Desktop cluster's 'npm ci' command that resulted in an error writing to /tmp/ccH06T4r.s?**
    gold: `No space left on device`
 12. **What was the GraphQL API rate limit remaining for the user when the 'API rate limit already exceeded' error first occurred?**
@@ -299,18 +299,18 @@ mining, per-epoch anchor windows) before default flip.
 
 <details><summary>15 exam questions (questions-f45358df19.json)</summary>
 
-1. **What was the specific reason Teknium gave for reverting PR #30179 in July 2026?**
+1. **What was the specific reason the maintainer gave for reverting PR #30179 in July 2026?**
    gold: `WTF??? REVERT! DAMMIT`
-2. **On which specific PR did Teknium say, 'tf are you saying to me. Stop giving me such random verbose details'?**
+2. **On which specific PR did the maintainer say, 'tf are you saying to me. Stop giving me such random verbose details'?**
    gold: `PR #6391`
 3. **Which file path should be checked for the canonical list of provider models?**
    gold: `clover_cli/models.py`
 4. **What was the identified bug in PR #2314 regarding provider names?**
    gold: `checking for "alibaba-coding-plan"`
-5. **What is the mandatory line limit for PR reviews requested by Teknium?**
+5. **What is the mandatory line limit for PR reviews requested by the maintainer?**
    gold: `<= 15 lines`
 6. **What exact error message did the agent receive when attempting to checkout a worktree while in the live source directory?**
-   gold: `Blocked: `git checkout` would rewrite Clover's live source checkout (/home/teknium/.clover/clover-c1) and can mix mod`
+   gold: `Blocked: `git checkout` would rewrite Clover's live source checkout (/home/maintainer/.clover/clover-c1) and can mix mod`
 7. **Why was PR #74658 necessary to fix Slack 'broken on main'?**
    gold: `SlackResponse isn't a dict subclass, so every gate is always False.`
 8. **What was the final merge commit SHA for the Slack SDK response fix on main?**

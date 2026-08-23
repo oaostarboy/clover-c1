@@ -202,7 +202,7 @@ export const en: Translations = {
   },
 
   billingBlock: {
-    titleNous: 'Out of Clover credits',
+    titleCloverCredits: 'Out of Clover credits',
     titleProvider: provider => `Out of credits — ${provider}`,
     fallbackMessage: 'Your account is out of credits. Add credits to keep going.',
     openBilling: 'Open billing',
@@ -225,7 +225,7 @@ export const en: Translations = {
       'Your bundle was uploaded privately. Share the link below in your support thread so the team can see your logs.',
     failedTitle: 'Upload failed',
     failedHint:
-      'You can also run `clover debug share --nous` from a terminal, or `clover debug share --local` to print the report without uploading.',
+      'You can also run `clover debug share --clover` from a terminal, or `clover debug share --local` to print the report without uploading.',
     handoffLead: 'Pick up the discussion in:',
     links: {
       github: 'GitHub Issues',
@@ -1163,13 +1163,13 @@ export const en: Translations = {
       activeBackend: 'Active',
       activeBackendHint: 'This is your active backend',
       useBackend: 'Use this backend',
-      nousIncluded: 'Included with a Clover subscription — sign in to Clover Portal to activate.',
-      nousAuthNeededTitle: 'Sign in to Clover Portal',
-      nousAuthNeededMessage: provider => `${provider} is saved but won't activate until you sign in to Clover Portal.`,
-      nousAuthSignIn: 'Sign in',
-      nousAuthDoneTitle: 'Clover Portal connected',
-      nousAuthDoneMessage: 'Your subscription backends are now active.',
-      nousAuthFailed: 'Clover Portal sign-in did not complete',
+      cloverIncluded: 'Included with a Clover subscription — sign in to Clover Portal to activate.',
+      cloverAuthNeededTitle: 'Sign in to Clover Portal',
+      cloverAuthNeededMessage: provider => `${provider} is saved but won't activate until you sign in to Clover Portal.`,
+      cloverAuthSignIn: 'Sign in',
+      cloverAuthDoneTitle: 'Clover Portal connected',
+      cloverAuthDoneMessage: 'Your subscription backends are now active.',
+      cloverAuthFailed: 'Clover Portal sign-in did not complete',
       noApiKeyRequired: 'No API key required.',
       postSetupHint: step =>
         `This backend needs a one-time install (${step}). Runs on this machine — may take a few minutes.`,

@@ -357,7 +357,7 @@ class TestBomHandling:
         # provider path whose pre_content is BOM-STRIPPED (read_file_raw
         # strips before _apply_update forwards it), so it regresses if
         # _file_has_bom ever trusts pre_content instead of probing disk.
-        # Regression for teknium1's review on PR #55661.
+        # Regression for maintainer's review on PR #55661.
         target = tmp_path / "bom_v4a.py"
         target.write_bytes(self.BOM.encode("utf-8") + b"print('hello')\n")
         patch = (

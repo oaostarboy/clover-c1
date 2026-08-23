@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 // Reproduces the portal's tier-card hero treatment at thumbnail size: each webp sits
 // over a solid Clover-blue well and blends into it. This blue well is the ONLY place
 // Clover blue appears in the billing page — everything else stays on the app's own tokens.
-const NOUS_BLUE = '#0000f2'
+const CLOVER_BLUE = '#0000f2'
 
 const BLEND_CLASS = {
   lighten: 'mix-blend-lighten',
@@ -57,7 +57,7 @@ export function TierArt({ className, name, size = 40 }: { className?: string; na
   return (
     <div
       className={cn('relative shrink-0 overflow-hidden rounded-md', className)}
-      style={{ background: NOUS_BLUE, height: size, width: size }}
+      style={{ background: CLOVER_BLUE, height: size, width: size }}
     >
       <img
         alt=""

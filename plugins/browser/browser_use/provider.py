@@ -131,11 +131,11 @@ class BrowserUseBrowserProvider(BrowserProvider):
         # managed_tool_gateway pulls in the Clover auth stack which can be
         # heavy and is not needed for direct-API-key users.
         from tools.managed_tool_gateway import (
-            peek_nous_access_token,
+            peek_clover_access_token,
             resolve_managed_tool_gateway,
         )
         from tools.tool_backend_helpers import (
-            NOUS_MANAGED_PROVIDER,
+            CLOVER_MANAGED_PROVIDER,
             read_selection,
         )
 
@@ -143,12 +143,12 @@ class BrowserUseBrowserProvider(BrowserProvider):
             # Keep availability scans off the synchronous OAuth refresh path.
             managed = resolve_managed_tool_gateway(
                 "browser-use",
-                token_reader=None if refresh_token else peek_nous_access_token,
+                token_reader=None if refresh_token else peek_clover_access_token,
             )
             if managed is None:
                 return None
             return {
-                "api_key": managed.nous_user_token,
+                "api_key": managed.clover_user_token,
                 "base_url": managed.gateway_origin.rstrip("/"),
                 "managed_mode": True,
             }
@@ -160,7 +160,7 @@ class BrowserUseBrowserProvider(BrowserProvider):
         # gateway ONLY; any other stored browser selection → direct API key
         # ONLY (no silent managed fallback); never-configured → legacy
         # behavior (direct key when present, else managed gateway).
-        if selected == NOUS_MANAGED_PROVIDER:
+        if selected == CLOVER_MANAGED_PROVIDER:
             return _managed_config()
         if selected is not None:
             if api_key:
@@ -180,8 +180,8 @@ class BrowserUseBrowserProvider(BrowserProvider):
 
     def _get_config(self) -> Dict[str, Any]:
         from tools.tool_backend_helpers import (
-            NOUS_MANAGED_PROVIDER,
-            managed_nous_tools_enabled,
+            CLOVER_MANAGED_PROVIDER,
+            managed_clover_tools_enabled,
             read_selection,
             selection_error,
         )
@@ -189,10 +189,10 @@ class BrowserUseBrowserProvider(BrowserProvider):
         config = self._get_config_or_none()
         if config is None:
             selected = read_selection("browser")
-            if selected == NOUS_MANAGED_PROVIDER:
+            if selected == CLOVER_MANAGED_PROVIDER:
                 raise ValueError(selection_error(
                     "browser",
-                    NOUS_MANAGED_PROVIDER,
+                    CLOVER_MANAGED_PROVIDER,
                     "the Clover Tool Gateway is not available (not entitled or "
                     "unreachable)",
                 ))
@@ -205,7 +205,7 @@ class BrowserUseBrowserProvider(BrowserProvider):
             message = (
                 "Browser Use requires a direct BROWSER_USE_API_KEY credential."
             )
-            if managed_nous_tools_enabled():
+            if managed_clover_tools_enabled():
                 message = (
                     "Browser Use requires either a direct BROWSER_USE_API_KEY "
                     "credential or a managed Browser Use gateway configuration."

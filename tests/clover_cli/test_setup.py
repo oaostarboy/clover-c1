@@ -19,7 +19,7 @@ def _maybe_keep_current_tts(question, choices):
 
 def _clear_provider_env(monkeypatch):
     for key in (
-        "NOUS_API_KEY",
+        "CLOVER_API_KEY",
         "OPENROUTER_API_KEY",
         "OPENAI_BASE_URL",
         "OPENAI_API_KEY",
@@ -129,7 +129,7 @@ def test_select_provider_and_model_warns_if_named_custom_provider_disappears(
 
 
 def test_modal_setup_persists_direct_mode_when_user_chooses_their_own_account(tmp_path, monkeypatch):
-    monkeypatch.setattr("clover_cli.setup.managed_nous_tools_enabled", lambda: True)
+    monkeypatch.setattr("clover_cli.setup.managed_clover_tools_enabled", lambda: True)
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
     monkeypatch.delenv("MODAL_TOKEN_ID", raising=False)
     monkeypatch.delenv("MODAL_TOKEN_SECRET", raising=False)
@@ -148,8 +148,8 @@ def test_modal_setup_persists_direct_mode_when_user_chooses_their_own_account(tm
     monkeypatch.setattr("clover_cli.setup.prompt", lambda *args, **kwargs: next(prompt_values))
     monkeypatch.setattr("clover_cli.setup._prompt_container_resources", lambda config: None)
     monkeypatch.setattr(
-        "clover_cli.setup.get_nous_subscription_features",
-        lambda config: type("Features", (), {"nous_auth_present": True})(),
+        "clover_cli.setup.get_clover_subscription_features",
+        lambda config: type("Features", (), {"clover_auth_present": True})(),
     )
     monkeypatch.setitem(
         sys.modules,

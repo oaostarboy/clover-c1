@@ -1305,7 +1305,7 @@ def remove_oauth_tokens(
 # (draft-ietf-oauth-client-id-metadata-document section 5), and
 # clover-c1./docs/* 301s here.
 _CIMD_CLIENT_METADATA_URL = (
-    "https://clovercognition.github.io/clover-c1/docs/oauth/client-metadata.json"
+    "https://localhost/clover-c1/docs/oauth/client-metadata.json"
 )
 
 # Loopback callback ports declared in that document. The redirect URI in the

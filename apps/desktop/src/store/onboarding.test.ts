@@ -321,7 +321,7 @@ describe('OAuth onboarding', () => {
     installApiMock(async ({ body, path }: { body?: unknown; path: string }) => {
       calls.push({ body, path })
 
-      if (path === '/api/providers/oauth/nous/submit') {
+      if (path === '/api/providers/oauth/clover/submit') {
         return { ok: true, status: 'approved' }
       }
 
@@ -410,7 +410,7 @@ describe('OAuth onboarding', () => {
   it('does not advance when the default model assignment is not persisted', async () => {
     const model = 'openai/gpt-5.5-pro'
     installApiMock(async ({ path }: { path: string }) => {
-      if (path === '/api/providers/oauth/nous/submit') {
+      if (path === '/api/providers/oauth/clover/submit') {
         return { ok: true, status: 'approved' }
       }
 

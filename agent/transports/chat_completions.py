@@ -473,7 +473,7 @@ class ChatCompletionsTransport(ProviderTransport):
             # (i.e. custom / unregistered providers). Known providers all go
             # through provider_profile.
             is_openrouter: bool
-            is_nous: bool
+            is_clover_portal: bool
             is_qwen_portal: bool
             is_github_models: bool
             is_nvidia_nim: bool

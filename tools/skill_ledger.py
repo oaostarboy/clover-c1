@@ -5,7 +5,7 @@ Every skill mutation — regardless of actor — appends one JSONL entry to
 before/after file manifests whose contents are stored content-addressed
 (sha256-deduped) under ``~/.clover/.curator_backups/blobs/``.
 
-Design decisions (Teknium-approved):
+Design decisions (the maintainer-approved):
   - JSONL, not the state DB: the ledger is a durable, human-greppable audit
     trail that survives DB resets and is trivially rsync/backup friendly.
   - The ledger covers ALL actors, tagged ``curator`` / ``agent`` / ``user``.

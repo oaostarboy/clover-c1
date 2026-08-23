@@ -4021,10 +4021,10 @@ def test_resolve_model_strips_config_model(monkeypatch):
     monkeypatch.delenv("CLOVER_MODEL", raising=False)
     monkeypatch.delenv("CLOVER_INFERENCE_MODEL", raising=False)
     monkeypatch.setattr(
-        server, "_load_cfg", lambda: {"model": {"default": " nous/clover-test "}}
+        server, "_load_cfg", lambda: {"model": {"default": " clover/clover-test "}}
     )
 
-    assert server._resolve_model() == "nous/clover-test"
+    assert server._resolve_model() == "clover/clover-test"
 
 
 def _sync_test_session(**extra):
@@ -4060,7 +4060,7 @@ def test_config_sync_switches_unpinned_session(monkeypatch):
     assert calls == [
         (
             "sid",
-            "new/model --provider nous",
+            "new/model --provider clover",
             {
                 "confirm_expensive_model": True,
                 "pin_session_override": False,
@@ -4141,7 +4141,7 @@ def test_config_sync_switches_when_only_provider_differs(monkeypatch):
 
     server._sync_agent_model_with_config("sid", session)
 
-    assert calls == ["old/model --provider nous"]
+    assert calls == ["old/model --provider clover"]
 
 
 def test_config_sync_failure_emits_error_once_per_edit(monkeypatch):
@@ -4250,7 +4250,7 @@ def test_apply_model_switch_persist_override_false_never_persists(monkeypatch):
     session = {"agent": None}
 
     out = server._apply_model_switch(
-        "sid", session, "new/model --provider nous", persist_override=False
+        "sid", session, "new/model --provider clover", persist_override=False
     )
 
     assert out["value"] == "new/model"
@@ -4258,15 +4258,15 @@ def test_apply_model_switch_persist_override_false_never_persists(monkeypatch):
 
 
 def test_startup_runtime_uses_tui_provider_env(monkeypatch):
-    monkeypatch.setenv("CLOVER_MODEL", "nous/clover-test")
+    monkeypatch.setenv("CLOVER_MODEL", "clover/clover-test")
     monkeypatch.setenv("CLOVER_TUI_PROVIDER", "clover")
     monkeypatch.delenv("CLOVER_INFERENCE_PROVIDER", raising=False)
 
-    assert server._resolve_startup_runtime() == ("nous/clover-test", "clover")
+    assert server._resolve_startup_runtime() == ("clover/clover-test", "clover")
 
 
 def test_startup_runtime_does_not_treat_inference_provider_as_explicit(monkeypatch):
-    monkeypatch.setenv("CLOVER_MODEL", "nous/clover-test")
+    monkeypatch.setenv("CLOVER_MODEL", "clover/clover-test")
     monkeypatch.delenv("CLOVER_TUI_PROVIDER", raising=False)
     monkeypatch.setenv("CLOVER_INFERENCE_PROVIDER", "clover")
     monkeypatch.setattr(
@@ -4274,7 +4274,7 @@ def test_startup_runtime_does_not_treat_inference_provider_as_explicit(monkeypat
         lambda model, provider: None,
     )
 
-    assert server._resolve_startup_runtime() == ("nous/clover-test", None)
+    assert server._resolve_startup_runtime() == ("clover/clover-test", None)
 
 
 def test_startup_runtime_detects_provider_for_model_env(monkeypatch):
@@ -14127,13 +14127,13 @@ def test_model_options_does_not_overwrite_curated_models(monkeypatch):
 
     assert "result" in resp, resp
     providers = resp["result"]["providers"]
-    nous = next((p for p in providers if p.get("slug") == "clover"), None)
-    assert nous is not None
-    assert nous["models"] == [
+    clover = next((p for p in providers if p.get("slug") == "clover"), None)
+    assert clover is not None
+    assert clover["models"] == [
         "moonshotai/kimi-k2.5",
         "anthropic/claude-opus-4.7",
     ]
-    assert nous["total_models"] == 30
+    assert clover["total_models"] == 30
     # Handler must not consult the live catalog — curated is the truth.
     live_fetch.assert_not_called()
     # list_authenticated_providers is the single source.
@@ -17325,7 +17325,7 @@ class _BillingHeaders:
 def test_billing_error_serialization_preserves_server_code(
     status, error, retry_after
 ):
-    import clover_cli.nous_billing as nb
+    import clover_cli.clover_billing as nb
 
     headers = _BillingHeaders({"Retry-After": str(retry_after)}) if retry_after else None
     with pytest.raises(nb.BillingTransient) as ei:
@@ -17339,7 +17339,7 @@ def test_billing_error_serialization_preserves_server_code(
 
 
 def test_billing_rate_limit_without_error_defaults_wire_code():
-    import clover_cli.nous_billing as nb
+    import clover_cli.clover_billing as nb
 
     exc = nb.BillingRateLimited("slow down", status=429, retry_after=10)
 
@@ -17358,7 +17358,7 @@ def _sub_rpc(method, params):
 
 
 def test_subscription_preview_serializes_quote(monkeypatch):
-    import clover_cli.nous_billing as nb
+    import clover_cli.clover_billing as nb
 
     monkeypatch.setattr(
         nb,
@@ -17390,7 +17390,7 @@ def test_subscription_preview_requires_tier():
 
 
 def test_subscription_preview_scope_error_maps_to_step_up(monkeypatch):
-    import clover_cli.nous_billing as nb
+    import clover_cli.clover_billing as nb
 
     def _raise(subscription_type_id):
         raise nb.BillingScopeRequired("billing:manage required")
@@ -17402,7 +17402,7 @@ def test_subscription_preview_scope_error_maps_to_step_up(monkeypatch):
 
 
 def test_subscription_change_cancellation(monkeypatch):
-    import clover_cli.nous_billing as nb
+    import clover_cli.clover_billing as nb
 
     seen = {}
 
@@ -17419,7 +17419,7 @@ def test_subscription_change_cancellation(monkeypatch):
 
 
 def test_subscription_change_tier_downgrade(monkeypatch):
-    import clover_cli.nous_billing as nb
+    import clover_cli.clover_billing as nb
 
     seen = {}
 
@@ -17441,7 +17441,7 @@ def test_subscription_change_requires_tier_or_cancel():
 
 
 def test_subscription_resume(monkeypatch):
-    import clover_cli.nous_billing as nb
+    import clover_cli.clover_billing as nb
 
     monkeypatch.setattr(
         nb,
@@ -17454,7 +17454,7 @@ def test_subscription_resume(monkeypatch):
 
 
 def test_subscription_upgrade_echoes_status_and_idempotency(monkeypatch):
-    import clover_cli.nous_billing as nb
+    import clover_cli.clover_billing as nb
 
     seen = {}
 
@@ -17472,7 +17472,7 @@ def test_subscription_upgrade_echoes_status_and_idempotency(monkeypatch):
 
 
 def test_subscription_upgrade_requires_action_surfaces_recovery(monkeypatch):
-    import clover_cli.nous_billing as nb
+    import clover_cli.clover_billing as nb
 
     monkeypatch.setattr(
         nb,

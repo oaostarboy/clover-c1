@@ -88,13 +88,13 @@ from tools.debug_helpers import DebugSession
 # tools.web_tools (the firecrawl plugin reads them via its own import chain).
 from tools.managed_tool_gateway import (  # noqa: F401 — backward-compat names for tests
     build_vendor_gateway_url,
-    peek_nous_access_token as _peek_nous_access_token,
-    read_nous_access_token as _read_nous_access_token,
+    peek_clover_access_token as _peek_clover_access_token,
+    read_clover_access_token as _read_clover_access_token,
     resolve_managed_tool_gateway,
 )
 from tools.tool_backend_helpers import (  # noqa: F401
-    managed_nous_tools_enabled,
-    nous_tool_gateway_unavailable_message,
+    managed_clover_tools_enabled,
+    clover_tool_gateway_unavailable_message,
     prefers_gateway,
 )
 from tools.url_safety import async_is_safe_url, normalize_url_for_request, sensitive_query_param_name
@@ -237,9 +237,9 @@ def _get_backend() -> str:
         # The managed "Clover Subscription" selection ("clover") is serviced by
         # the firecrawl provider, whose client resolver routes it through
         # the managed Tool Gateway.
-        from tools.tool_backend_helpers import NOUS_MANAGED_PROVIDER
+        from tools.tool_backend_helpers import CLOVER_MANAGED_PROVIDER
 
-        if configured == NOUS_MANAGED_PROVIDER:
+        if configured == CLOVER_MANAGED_PROVIDER:
             return "firecrawl"
         return configured
 
@@ -593,7 +593,7 @@ def _web_requires_env() -> list[str]:
 
     The gateway env vars are always reported — they're metadata strings
     used by the tool registry to light up the tool when the variable is
-    set.  Gating them on ``managed_nous_tools_enabled()`` only saved
+    set.  Gating them on ``managed_clover_tools_enabled()`` only saved
     string noise in the metadata list, but cost a synchronous HTTP
     refresh against the Clover portal on every CLI startup (invoked at
     tool-registration time).  The behavioral contract is: if the env var

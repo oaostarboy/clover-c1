@@ -16,7 +16,7 @@ import clover_cli.models as models_mod
 def _patch_catalog(monkeypatch, caps_by_model, *, provider="clover"):
     """Point the Clover/OpenRouter catalog readers at a fixed capability map."""
     monkeypatch.setattr(models_mod, "model_supports_fast_mode", lambda model: False)
-    monkeypatch.setattr(models_mod, "warm_nous_reasoning_caps_async", lambda: None)
+    monkeypatch.setattr(models_mod, "warm_clover_reasoning_caps_async", lambda: None)
     monkeypatch.setattr(models_mod, "warm_openrouter_reasoning_caps_async", lambda: None)
     monkeypatch.setattr(
         models_mod,
@@ -143,12 +143,12 @@ def test_openrouter_uses_its_own_catalog(monkeypatch):
 def test_catalog_failure_never_breaks_the_picker(monkeypatch):
     """A raising catalog reader degrades to "unknown", not to a broken payload."""
     monkeypatch.setattr(models_mod, "model_supports_fast_mode", lambda model: False)
-    monkeypatch.setattr(models_mod, "warm_nous_reasoning_caps_async", lambda: None)
+    monkeypatch.setattr(models_mod, "warm_clover_reasoning_caps_async", lambda: None)
 
     def _boom(model, **kw):
         raise RuntimeError("catalog exploded")
 
-    monkeypatch.setattr(models_mod, "nous_model_reasoning_capabilities", _boom)
+    monkeypatch.setattr(models_mod, "clover_model_reasoning_capabilities", _boom)
     rows = [{"slug": "clover", "models": ["deepseek/deepseek-v4-pro"]}]
     inv._apply_capabilities(rows)
 

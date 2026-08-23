@@ -22,7 +22,7 @@
   "read_seconds": 207,
   "compaction_events": 1,
   "peak_context_tokens": 482525,
-  "rollout": "/home/teknium/.codex/sessions/2026/08/15/rollout-2026-08-15T18-28-36-01a0082f-5b69-7ff0-977d-998523a4b3fc.jsonl"
+  "rollout": "/home/maintainer/.codex/sessions/2026/08/15/rollout-2026-08-15T18-28-36-01a0082f-5b69-7ff0-977d-998523a4b3fc.jsonl"
  },
  "results": [
   {

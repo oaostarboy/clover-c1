@@ -91,7 +91,7 @@ function config(overrides: Partial<ToolsetConfig> = {}): ToolsetConfig {
         tag: 'No API key needed',
         env_vars: [],
         post_setup: null,
-        requires_nous_auth: false,
+        requires_clover_auth: false,
         is_active: false
       },
       {
@@ -102,7 +102,7 @@ function config(overrides: Partial<ToolsetConfig> = {}): ToolsetConfig {
           { key: 'ELEVENLABS_API_KEY', prompt: 'ElevenLabs API key', url: 'https://x', default: null, is_set: false }
         ],
         post_setup: null,
-        requires_nous_auth: false,
+        requires_clover_auth: false,
         is_active: false
       }
     ],
@@ -175,7 +175,7 @@ describe('ToolsetConfigPanel', () => {
               { key: 'VOICE_TOOLS_OPENAI_KEY', prompt: 'OpenAI API key', url: 'https://x', default: null, is_set: true }
             ],
             post_setup: null,
-            requires_nous_auth: false,
+            requires_clover_auth: false,
             is_active: true,
             tts_provider: 'openai'
           }
@@ -273,7 +273,7 @@ describe('ToolsetConfigPanel', () => {
             tag: 'Multi-model image generation',
             env_vars: [],
             post_setup: null,
-            requires_nous_auth: false,
+            requires_clover_auth: false,
             is_active: true
           }
         ]
@@ -349,7 +349,7 @@ describe('ToolsetConfigPanel', () => {
             tag: 'No API key needed',
             env_vars: [],
             post_setup: null,
-            requires_nous_auth: false,
+            requires_clover_auth: false,
             is_active: false
           },
           {
@@ -366,7 +366,7 @@ describe('ToolsetConfigPanel', () => {
               }
             ],
             post_setup: null,
-            requires_nous_auth: false,
+            requires_clover_auth: false,
             is_active: true
           }
         ]
@@ -396,7 +396,7 @@ describe('ToolsetConfigPanel', () => {
             tag: 'Stealth local browser',
             env_vars: [],
             post_setup: 'camofox',
-            requires_nous_auth: false,
+            requires_clover_auth: false,
             is_active: true
           }
         ]
@@ -445,7 +445,7 @@ describe('ToolsetConfigPanel', () => {
             tag: 'Stealth local browser',
             env_vars: [],
             post_setup: 'camofox',
-            requires_nous_auth: false,
+            requires_clover_auth: false,
             is_active: true
           }
         ]
@@ -477,7 +477,7 @@ describe('ToolsetConfigPanel', () => {
             tag: 'Stealth local browser',
             env_vars: [],
             post_setup: 'camofox',
-            requires_nous_auth: false,
+            requires_clover_auth: false,
             is_active: true
           }
         ]
@@ -523,7 +523,7 @@ describe('ToolsetConfigPanel', () => {
             tag: 'Stealth local browser',
             env_vars: [],
             post_setup: 'camofox',
-            requires_nous_auth: false,
+            requires_clover_auth: false,
             is_active: true,
             status: 'ready'
           }
@@ -557,7 +557,7 @@ describe('ToolsetConfigPanel', () => {
               tag: 'No API key needed',
               env_vars: [],
               post_setup: null,
-              requires_nous_auth: false,
+              requires_clover_auth: false,
               is_active: true,
               status: 'ready'
             },
@@ -567,7 +567,7 @@ describe('ToolsetConfigPanel', () => {
               tag: 'Managed OpenAI TTS',
               env_vars: [],
               post_setup: null,
-              requires_nous_auth: true,
+              requires_clover_auth: true,
               is_active: false,
               status: 'needs_auth'
             },
@@ -577,7 +577,7 @@ describe('ToolsetConfigPanel', () => {
               tag: 'Lightweight local ONNX TTS',
               env_vars: [],
               post_setup: 'kittentts',
-              requires_nous_auth: false,
+              requires_clover_auth: false,
               is_active: false,
               status: 'needs_setup'
             }
@@ -615,7 +615,7 @@ describe('ToolsetConfigPanel', () => {
                 }
               ],
               post_setup: null,
-              requires_nous_auth: false,
+              requires_clover_auth: false,
               is_active: false,
               status: 'needs_keys'
             }
@@ -666,7 +666,7 @@ describe('ToolsetConfigPanel', () => {
                 }
               ],
               post_setup: null,
-              requires_nous_auth: false,
+              requires_clover_auth: false,
               is_active: false,
               status: 'needs_keys'
             }
@@ -709,7 +709,7 @@ describe('ToolsetConfigPanel', () => {
               tag: 'Headless Chromium, no API key needed',
               env_vars: [],
               post_setup: 'agent_browser',
-              requires_nous_auth: false,
+              requires_clover_auth: false,
               is_active: true,
               status: 'ready'
             }
@@ -738,7 +738,7 @@ describe('ToolsetConfigPanel', () => {
               tag: 'Headless Chromium, no API key needed',
               env_vars: [],
               post_setup: 'agent_browser',
-              requires_nous_auth: false,
+              requires_clover_auth: false,
               is_active: true,
               status: 'ready'
             }
@@ -774,7 +774,7 @@ describe('ToolsetConfigPanel', () => {
               tag: 'Headless Chromium, no API key needed',
               env_vars: [],
               post_setup: 'agent_browser',
-              requires_nous_auth: false,
+              requires_clover_auth: false,
               is_active: true,
               status: 'needs_setup'
             }
@@ -795,7 +795,7 @@ describe('ToolsetConfigPanel', () => {
   })
 
   describe('managed Clover provider activation', () => {
-    const nousBrowserConfig = () =>
+    const cloverBrowserConfig = () =>
       config({
         name: 'browser',
         active_provider: null,
@@ -806,27 +806,27 @@ describe('ToolsetConfigPanel', () => {
             tag: 'Managed Browser Use billed to your subscription',
             env_vars: [],
             post_setup: 'agent_browser',
-            requires_nous_auth: true,
+            requires_clover_auth: true,
             is_active: false,
             status: 'needs_auth'
           }
         ]
       })
 
-    it('surfaces a sign-in notice when the PUT reports needs_nous_auth', async () => {
+    it('surfaces a sign-in notice when the PUT reports needs_clover_auth', async () => {
       // Regression (Windows 11 Capabilities journey): the GUI wrote
       // browser.cloud_provider but skipped the Portal entitlement handshake,
       // so the managed row silently never activated. The endpoint now
-      // reports needs_nous_auth and the panel must surface a sign-in action
+      // reports needs_clover_auth and the panel must surface a sign-in action
       // instead of the misleading "provider selected" success toast.
       const { notify } = await import('@/store/notifications')
 
-      getToolsetConfig.mockResolvedValue(nousBrowserConfig())
+      getToolsetConfig.mockResolvedValue(cloverBrowserConfig())
       selectToolsetProvider.mockResolvedValue({
         ok: true,
         name: 'browser',
         provider: 'Clover Subscription (Browser Use cloud)',
-        needs_nous_auth: true,
+        needs_clover_auth: true,
         feature: 'browser'
       })
 
@@ -855,18 +855,18 @@ describe('ToolsetConfigPanel', () => {
     it('drives the existing Clover OAuth device-code flow from the sign-in action and refetches', async () => {
       const { notify } = await import('@/store/notifications')
 
-      getToolsetConfig.mockResolvedValue(nousBrowserConfig())
+      getToolsetConfig.mockResolvedValue(cloverBrowserConfig())
       selectToolsetProvider.mockResolvedValue({
         ok: true,
         name: 'browser',
         provider: 'Clover Subscription (Browser Use cloud)',
-        needs_nous_auth: true,
+        needs_clover_auth: true,
         feature: 'browser'
       })
       startOAuthLogin.mockResolvedValue({
         flow: 'device_code',
         session_id: 'sess-1',
-        user_code: 'NOUS-1234',
+        user_code: 'CLOVER-1234',
         verification_url: '',
         poll_interval: 5,
         expires_in: 600
@@ -911,7 +911,7 @@ describe('ToolsetConfigPanel', () => {
     it('shows the plain success toast when the managed row is already entitled', async () => {
       const { notify } = await import('@/store/notifications')
 
-      getToolsetConfig.mockResolvedValue(nousBrowserConfig())
+      getToolsetConfig.mockResolvedValue(cloverBrowserConfig())
       selectToolsetProvider.mockResolvedValue({
         ok: true,
         name: 'browser',
@@ -949,7 +949,7 @@ describe('ToolsetConfigPanel', () => {
                 }
               ],
               post_setup: null,
-              requires_nous_auth: false,
+              requires_clover_auth: false,
               is_active: true,
               status: 'ready'
             }
@@ -1003,7 +1003,7 @@ describe('ToolsetConfigPanel', () => {
             tag: 'Free metasearch',
             env_vars: [],
             post_setup: null,
-            requires_nous_auth: false,
+            requires_clover_auth: false,
             is_active: true,
             status: 'ready',
             web_backend: 'searxng',
@@ -1015,7 +1015,7 @@ describe('ToolsetConfigPanel', () => {
             tag: 'Full search + extract',
             env_vars: [],
             post_setup: null,
-            requires_nous_auth: false,
+            requires_clover_auth: false,
             is_active: false,
             status: 'ready',
             web_backend: 'firecrawl',

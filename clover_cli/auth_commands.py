@@ -250,15 +250,15 @@ def auth_add_command(args) -> None:
 
     if provider == "clover":
         # Codex-style auto-import: if a shared Clover credential lives at
-        # <clover-root>/shared/nous_auth.json (written by any previous
+        # <clover-root>/shared/clover_auth.json (written by any previous
         # successful login), offer to import it instead of running the
         # full device-code flow. This makes `clover --profile <name>
-        # auth add nous --type oauth` a one-tap operation for users who
+        # auth add clover --type oauth` a one-tap operation for users who
         # run multiple profiles.
-        shared = auth_mod._read_shared_nous_state()
+        shared = auth_mod._read_shared_clover_state()
         if shared:
             try:
-                path = auth_mod._nous_shared_store_path()
+                path = auth_mod._clover_shared_store_path()
             except RuntimeError:
                 path = None
             print()
@@ -272,12 +272,12 @@ def auth_add_command(args) -> None:
                 do_import = "y"
             if do_import in {"", "y", "yes"}:
                 print("Rehydrating Clover session from shared credentials...")
-                rehydrated = auth_mod._try_import_shared_nous_state(
+                rehydrated = auth_mod._try_import_shared_clover_state(
                     timeout_seconds=getattr(args, "timeout", None) or 15.0,
                 )
                 if rehydrated is not None:
                     custom_label = (getattr(args, "label", None) or "").strip() or None
-                    entry = auth_mod.persist_nous_credentials(rehydrated, label=custom_label)
+                    entry = auth_mod.persist_clover_credentials(rehydrated, label=custom_label)
                     shown_label = entry.label if entry is not None else label_from_token(
                         rehydrated.get("access_token", ""), _oauth_default_label(provider, 1),
                     )
@@ -287,7 +287,7 @@ def auth_add_command(args) -> None:
                 # — fall through to device-code flow.
                 print("Could not refresh shared credentials — falling back to device-code login.")
 
-        creds = auth_mod._nous_device_code_login(
+        creds = auth_mod._clover_device_code_login(
             portal_base_url=getattr(args, "portal_url", None),
             inference_base_url=getattr(args, "inference_url", None),
             client_id=getattr(args, "client_id", None),
@@ -297,11 +297,11 @@ def auth_add_command(args) -> None:
             insecure=bool(getattr(args, "insecure", False)),
             ca_bundle=getattr(args, "ca_bundle", None),
         )
-        # Honor `--label <name>` so nous matches other providers' UX.  The
-        # helper embeds this into providers.nous so that label_from_token
+        # Honor `--label <name>` so clover matches other providers' UX.  The
+        # helper embeds this into providers.clover so that label_from_token
         # doesn't overwrite it on every subsequent load_pool("clover").
         custom_label = (getattr(args, "label", None) or "").strip() or None
-        entry = auth_mod.persist_nous_credentials(creds, label=custom_label)
+        entry = auth_mod.persist_clover_credentials(creds, label=custom_label)
         shown_label = entry.label if entry is not None else label_from_token(
             creds.get("access_token", ""), _oauth_default_label(provider, 1),
         )

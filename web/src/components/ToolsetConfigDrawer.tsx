@@ -300,7 +300,7 @@ export function ToolsetConfigDrawer({ toolset, profile, onClose, onChanged }: Pr
                           {provider.badge}
                         </Badge>
                       )}
-                      {provider.requires_nous_auth && (
+                      {provider.requires_clover_auth && (
                         <Badge tone="outline" className="text-xs">
                           Clover Portal
                         </Badge>

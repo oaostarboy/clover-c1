@@ -11,9 +11,9 @@ import clover_cli.models as models_mod
 
 def _patch_pricing(monkeypatch, *, free_tier, pricing, unavailable=None):
     monkeypatch.setattr(models_mod, "get_pricing_for_provider", lambda slug, **kw: pricing.get(slug, {}))
-    monkeypatch.setattr(models_mod, "check_nous_free_tier", lambda *, force_fresh=False: free_tier)
+    monkeypatch.setattr(models_mod, "check_clover_free_tier", lambda *, force_fresh=False: free_tier)
     monkeypatch.setattr(
-        models_mod, "partition_nous_models_by_tier",
+        models_mod, "partition_clover_models_by_tier",
         lambda ids, pr, free_tier: (
             [m for m in ids if m not in (unavailable or [])],
             list(unavailable or []),

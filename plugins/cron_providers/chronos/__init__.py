@@ -71,9 +71,9 @@ class ChronosCronScheduler(CronScheduler):
         """
         if not (_cfg("cron", "chronos", "portal_url") and _cfg("cron", "chronos", "callback_url")):
             return False
-        return self._have_nous_token()
+        return self._have_clover_token()
 
-    def _have_nous_token(self) -> bool:
+    def _have_clover_token(self) -> bool:
         """True if the agent has a Clover Portal login (no network call).
 
         Checks the stored auth state for a Clover access token — does NOT refresh

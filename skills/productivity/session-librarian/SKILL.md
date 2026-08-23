@@ -2,7 +2,7 @@
 name: session-librarian
 description: "Organize sessions by prompt: find, rename, archive, prune."
 version: 1.0.0
-author: Clover Cognition + Teknium
+author: Clover Cognition + the maintainer
 license: MIT
 platforms: [linux, macos, windows]
 metadata:

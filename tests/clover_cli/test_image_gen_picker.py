@@ -146,21 +146,21 @@ class TestConfigWriting:
         assert config["image_gen"]["model"] == "noenv-model-v1"
 
 
-    def test_plugin_provider_active_overrides_managed_nous_active_label(self, monkeypatch):
+    def test_plugin_provider_active_overrides_managed_clover_active_label(self, monkeypatch):
         from clover_cli import tools_config
 
         monkeypatch.setattr(
             tools_config,
-            "get_nous_subscription_features",
+            "get_clover_subscription_features",
             lambda config, **kwargs: SimpleNamespace(
-                features={"image_gen": SimpleNamespace(managed_by_nous=True)}
+                features={"image_gen": SimpleNamespace(managed_by_clover=True)}
             ),
         )
 
         config = {"image_gen": {"provider": "openai", "use_gateway": False}}
-        nous_row = {
+        clover_row = {
             "name": "Clover Subscription",
-            "managed_nous_feature": "image_gen",
+            "managed_clover_feature": "image_gen",
         }
         openai_row = {
             "name": "OpenAI",
@@ -168,5 +168,5 @@ class TestConfigWriting:
         }
 
         assert tools_config._is_provider_active(openai_row, config) is True
-        assert tools_config._is_provider_active(nous_row, config) is False
+        assert tools_config._is_provider_active(clover_row, config) is False
 

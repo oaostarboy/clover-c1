@@ -10,7 +10,7 @@ Three modes:
   1b. Ambient token endpoint when token_url is configured WITHOUT client
      credentials: plain GET, body is the token (raw JWT or JSON envelope).
      The metadata-server pattern (e.g. Domino's $DOMINO_API_PROXY/access-token).
-  2. Clover Portal (resolve_nous_access_token) otherwise — the default.
+  2. Clover Portal (resolve_clover_access_token) otherwise — the default.
 
 The HTTP calls and the Clover resolver are monkeypatched; these prove the mode
 SELECTION, the request shapes, and the fail-closed paths.

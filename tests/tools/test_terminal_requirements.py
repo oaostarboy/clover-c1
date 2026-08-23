@@ -36,9 +36,9 @@ def _clear_terminal_env(monkeypatch):
         monkeypatch.delenv(key, raising=False)
     # Default: no Clover subscription — patch both the terminal_tool local
     # binding and tool_backend_helpers (used by resolve_modal_backend_state).
-    monkeypatch.setattr(terminal_tool_module, "managed_nous_tools_enabled", lambda: False)
+    monkeypatch.setattr(terminal_tool_module, "managed_clover_tools_enabled", lambda: False)
     import tools.tool_backend_helpers as _tbh
-    monkeypatch.setattr(_tbh, "managed_nous_tools_enabled", lambda: False)
+    monkeypatch.setattr(_tbh, "managed_clover_tools_enabled", lambda: False)
 
 
 def test_local_terminal_requirements(monkeypatch, caplog):

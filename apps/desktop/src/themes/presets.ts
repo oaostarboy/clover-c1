@@ -2,13 +2,13 @@
  * Built-in desktop themes. Names match the CLI skins / dashboard presets.
  * Add new themes here — no code changes needed elsewhere.
  *
- * The palette-bearing skins (nous, catppuccin, everforest, solarized) are forks
+ * The palette-bearing skins (clover, catppuccin, everforest, solarized) are forks
  * of their VS Code originals, converted by `buildThemeFromMarketplace` (see
  * ./install.ts) from the extensions below — the same path a Marketplace import
  * takes, so each is identical to installing the extension by hand and costs the
  * user neither the download nor the install step.
  *
- *   nous       ← github.github-vscode-theme   (Light Default / Dark Default)
+ *   clover       ← github.github-vscode-theme   (Light Default / Dark Default)
  *   catppuccin ← Catppuccin.catppuccin-vsc    (Latte / Mocha)
  *   everforest ← sainnhe.everforest
  *   solarized  ← ryanolsonx.solarized
@@ -46,10 +46,10 @@ export const DEFAULT_TYPOGRAPHY: DesktopThemeTypography = { fontSans: SYSTEM_SAN
 /**
  * GitHub — the upstream palette, unmodified.
  *
- * `nous` is a fork of this with its own accent, so shipping both keeps the
+ * `clover` is a fork of this with its own accent, so shipping both keeps the
  * original available on its own terms instead of only existing as the thing
- * nous diverged from. Everything but the accent family is identical between
- * them; separate presets are what let nous's accent move without silently
+ * clover diverged from. Everything but the accent family is identical between
+ * them; separate presets are what let clover's accent move without silently
  * redefining what "GitHub" means.
  */
 export const githubTheme: DesktopTheme = {
@@ -170,7 +170,7 @@ export const githubTheme: DesktopTheme = {
  * surfaces below are mixed from those seeds in OKLab, which is what keeps a
  * saturated blue from drifting violet on its way to white.
  */
-export const nousTheme: DesktopTheme = {
+export const cloverTheme: DesktopTheme = {
   name: 'clover',
   label: 'Clover',
   description: 'GitHub chrome, Clover blue accent',
@@ -770,7 +770,7 @@ export const slateTheme: DesktopTheme = {
 }
 
 export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
-  nous: nousTheme,
+  clover: cloverTheme,
   github: githubTheme,
   catppuccin: catppuccinTheme,
   everforest: everforestTheme,

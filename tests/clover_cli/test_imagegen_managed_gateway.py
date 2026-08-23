@@ -8,10 +8,10 @@ the user's personal FAL_KEY instead of the Clover Tool Gateway (real incident:
 personal key drained to zero while the subscription sat unused).
 
 Current contract (strict provider-string selection): each picker row writes
-exactly ONE provider string per category — ``image_gen.provider: nous`` for
+exactly ONE provider string per category — ``image_gen.provider: clover`` for
 the managed "Clover Subscription" row, ``image_gen.provider: fal`` for the
 BYOK FAL row — and any legacy ``use_gateway`` key is popped so the
-read-time shim (use_gateway: true ⇒ nous) cannot override the fresh pick.
+read-time shim (use_gateway: true ⇒ clover) cannot override the fresh pick.
 The video twin (``_select_plugin_video_gen_provider``) shares the contract.
 """
 
@@ -87,9 +87,9 @@ def _quiet_reconfigure(monkeypatch):
     monkeypatch.setattr(tc, "_configure_imagegen_model", lambda *a, **k: None)
     monkeypatch.setattr(tc, "_run_post_setup", lambda *a, **k: None, raising=False)
     # Managed rows gate on live Portal auth — stub it green.
-    import clover_cli.nous_subscription as ns
+    import clover_cli.clover_subscription as ns
 
-    monkeypatch.setattr(ns, "ensure_nous_portal_access", lambda **k: True)
+    monkeypatch.setattr(ns, "ensure_clover_portal_access", lambda **k: True)
 
 
 def test_reconfigure_managed_fal_row_keeps_managed_selection(monkeypatch):
@@ -104,8 +104,8 @@ def test_reconfigure_managed_fal_row_keeps_managed_selection(monkeypatch):
     managed_row = {
         "name": "Clover Subscription",
         "env_vars": [],
-        "requires_nous_auth": True,
-        "managed_nous_feature": "image_gen",
+        "requires_clover_auth": True,
+        "managed_clover_feature": "image_gen",
         "override_env_vars": ["FAL_KEY"],
         "imagegen_backend": "fal",
     }

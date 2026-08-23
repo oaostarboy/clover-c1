@@ -9,7 +9,7 @@
  * separately, so this module is deliberately storage-shaped, not
  * transport-shaped.
  *
- * Design rules (agreed with Teknium, Aug 2026):
+ * Design rules (agreed with the maintainer, Aug 2026):
  *  - Every connection carries a REQUIRED, registry-unique `label` (the
  *    "device name"). Uniqueness is case-insensitive so `Homelab` and
  *    `homelab` can't coexist and produce two identical badges.

@@ -12,10 +12,10 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 
-NousAccountInfoSource = Literal["jwt", "account_api", "inference_key", "none", "error"]
+CloverAccountInfoSource = Literal["jwt", "account_api", "inference_key", "none", "error"]
 
 # Free tool-pool coverage categories. Kept byte-for-byte aligned with the
-# Portal's TOOL_COVERAGE_CATEGORIES (nous-account-service
+# Portal's TOOL_COVERAGE_CATEGORIES (clover-account-service
 # src/server/tool-pool-eligibility.ts). The Portal mints these into the
 # `tool_access.coverage` map on the JWT and /api/oauth/account; FAL video gen
 # (`fal-video`) is intentionally excluded from the pool.
@@ -45,7 +45,7 @@ class CloverPortalSubscriptionInfo:
 
 
 @dataclass(frozen=True)
-class NousPaidServiceAccessInfo:
+class CloverPaidServiceAccessInfo:
     allowed: Optional[bool] = None
     paid_access: Optional[bool] = None
     reason: Optional[str] = None
@@ -65,7 +65,7 @@ class NousPaidServiceAccessInfo:
 
 
 @dataclass(frozen=True)
-class NousToolAccessInfo:
+class CloverToolAccessInfo:
     """Free tool-pool entitlement, decoupled from paid/billing access.
 
     Mirrors the Portal's ``tool_access`` claim/field: ``enabled`` is true when a
@@ -80,7 +80,7 @@ class NousToolAccessInfo:
 @dataclass(frozen=True)
 class CloverPortalAccountInfo:
     logged_in: bool
-    source: NousAccountInfoSource
+    source: CloverAccountInfoSource
     fresh: bool
     user_id: Optional[str] = None
     org_id: Optional[str] = None
@@ -88,7 +88,7 @@ class CloverPortalAccountInfo:
     org_name: Optional[str] = None
     client_id: Optional[str] = None
     product_id: Optional[str] = None
-    nous_client: Optional[str] = None
+    clover_client: Optional[str] = None
     portal_base_url: Optional[str] = None
     inference_base_url: Optional[str] = None
     inference_credential_present: bool = False
@@ -98,8 +98,8 @@ class CloverPortalAccountInfo:
     privy_did: Optional[str] = None
     subscription: Optional[CloverPortalSubscriptionInfo] = None
     paid_service_access: Optional[bool] = None
-    paid_service_access_info: Optional[NousPaidServiceAccessInfo] = None
-    tool_access: Optional[NousToolAccessInfo] = None
+    paid_service_access_info: Optional[CloverPaidServiceAccessInfo] = None
+    tool_access: Optional[CloverToolAccessInfo] = None
     raw_claims: Optional[dict[str, Any]] = None
     raw_account: Optional[dict[str, Any]] = None
     error: Optional[str] = None
@@ -131,22 +131,22 @@ class CloverPortalAccountInfo:
         return bool(ta and ta.enabled and ta.coverage.get(category) is True)
 
 
-def nous_portal_billing_url(account_info: Optional[CloverPortalAccountInfo] = None) -> str:
+def clover_portal_billing_url(account_info: Optional[CloverPortalAccountInfo] = None) -> str:
     """Return the billing URL for a normalized Clover account snapshot."""
     try:
-        from clover_cli.auth import DEFAULT_NOUS_PORTAL_URL
+        from clover_cli.auth import DEFAULT_CLOVER_PORTAL_URL
     except Exception:
-        DEFAULT_NOUS_PORTAL_URL = ""
+        DEFAULT_CLOVER_PORTAL_URL = ""
 
     base = None
     if account_info is not None:
         base = account_info.portal_base_url
     if not isinstance(base, str) or not base.strip():
-        base = DEFAULT_NOUS_PORTAL_URL
+        base = DEFAULT_CLOVER_PORTAL_URL
     return f"{base.rstrip('/')}/billing"
 
 
-def nous_portal_topup_url(account_info: Optional[CloverPortalAccountInfo] = None) -> str:
+def clover_portal_topup_url(account_info: Optional[CloverPortalAccountInfo] = None) -> str:
     """Return the portal top-up URL that auto-opens the top-up modal.
 
     Prefers the org-pinned page ``{base}/orgs/{slug}/billing?topup=open`` (skips
@@ -158,7 +158,7 @@ def nous_portal_topup_url(account_info: Optional[CloverPortalAccountInfo] = None
     The ``?topup=open`` query is the NAS enabler that lands the user in the
     top-up flow rather than just on the billing page.
     """
-    base_billing = nous_portal_billing_url(account_info)  # {base}/billing
+    base_billing = clover_portal_billing_url(account_info)  # {base}/billing
     base = base_billing[: -len("/billing")]  # strip the trailing /billing
 
     slug = getattr(account_info, "org_slug", None) if account_info is not None else None
@@ -169,7 +169,7 @@ def nous_portal_topup_url(account_info: Optional[CloverPortalAccountInfo] = None
     return f"{base}/billing?topup=open"
 
 
-def format_nous_portal_entitlement_message(
+def format_clover_portal_entitlement_message(
     account_info: Optional[CloverPortalAccountInfo],
     *,
     capability: str = "this feature",
@@ -190,7 +190,7 @@ def format_nous_portal_entitlement_message(
     message implying their credits are exhausted. The pool-vs-paid distinction is
     never surfaced to the user.
     """
-    billing_url = nous_portal_billing_url(account_info)
+    billing_url = clover_portal_billing_url(account_info)
 
     if account_info is not None:
         if coverage_category is not None:
@@ -334,13 +334,13 @@ def _credit_detail(
     return f" ({', '.join(parts)})"
 
 
-def reset_nous_portal_account_info_cache() -> None:
+def reset_clover_portal_account_info_cache() -> None:
     """Clear the short-lived account-info cache used by tests."""
     global _account_info_cache
     _account_info_cache = None
 
 
-def get_nous_portal_account_info(
+def get_clover_portal_account_info(
     *,
     force_fresh: bool = False,
     min_jwt_ttl_seconds: int = 60,
@@ -405,9 +405,9 @@ def _fresh_account_info(
     global _account_info_cache
 
     try:
-        from clover_cli.auth import get_provider_auth_state, resolve_nous_access_token
+        from clover_cli.auth import get_provider_auth_state, resolve_clover_access_token
 
-        access_token = resolve_nous_access_token()
+        access_token = resolve_clover_access_token()
         refreshed_state = get_provider_auth_state("clover") or state
         portal_base_url = _portal_base_url(refreshed_state) or portal_base_url
         cache_key = _cache_key(access_token, portal_base_url)
@@ -418,7 +418,7 @@ def _fresh_account_info(
                 if cached_key == cache_key and (time.monotonic() - cached_at) < _ACCOUNT_INFO_CACHE_TTL:
                     return cached_info
 
-        payload = _fetch_nous_account_info(access_token, portal_base_url)
+        payload = _fetch_clover_account_info(access_token, portal_base_url)
         if not payload:
             return _error_info(
                 error="empty_account_response",
@@ -454,7 +454,7 @@ def _info_from_inference_key_pool(
 ) -> Optional[CloverPortalAccountInfo]:
     """Return an explicit unknown-entitlement snapshot for opaque Clover keys."""
     try:
-        entry = _select_nous_pool_entry()
+        entry = _select_clover_pool_entry()
         if entry is None:
             return None
         runtime_key = getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")
@@ -489,7 +489,7 @@ def _info_from_oauth_pool(
     portal_base_url: Optional[str],
 ) -> Optional[CloverPortalAccountInfo]:
     try:
-        entry = _select_nous_pool_entry()
+        entry = _select_clover_pool_entry()
     except Exception:
         return None
     if entry is None or not _pool_entry_is_portal_oauth(entry):
@@ -526,7 +526,7 @@ def _info_from_oauth_pool(
             return jwt_info
 
     try:
-        payload = _fetch_nous_account_info(access_token, entry_portal_url)
+        payload = _fetch_clover_account_info(access_token, entry_portal_url)
     except Exception as exc:
         return _error_info(
             error=exc,
@@ -553,7 +553,7 @@ def _info_from_oauth_pool(
     )
 
 
-def _select_nous_pool_entry() -> Optional[Any]:
+def _select_clover_pool_entry() -> Optional[Any]:
     from agent.credential_pool import load_pool
 
     pool = load_pool("clover")
@@ -581,7 +581,7 @@ def _pool_entry_is_portal_oauth(entry: Any) -> bool:
     return auth_type.startswith("oauth") or bool(refresh_token)
 
 
-def _fetch_nous_account_info(
+def _fetch_clover_account_info(
     access_token: str,
     portal_base_url: Optional[str] = None,
 ) -> dict[str, Any]:
@@ -619,7 +619,7 @@ def _info_from_valid_jwt(
 
     paid_access = _coerce_bool(claims.get("paid_access"))
     subscription_tier = _coerce_int(claims.get("subscription_tier"))
-    access_info = NousPaidServiceAccessInfo(
+    access_info = CloverPaidServiceAccessInfo(
         allowed=paid_access,
         paid_access=paid_access,
         organisation_id=_coerce_str(claims.get("org_id")),
@@ -634,7 +634,7 @@ def _info_from_valid_jwt(
         org_id=_coerce_str(claims.get("org_id")),
         client_id=_coerce_str(claims.get("client_id") or state.get("client_id")),
         product_id=_coerce_str(claims.get("product_id")),
-        nous_client=_coerce_str(claims.get("nous_client")),
+        clover_client=_coerce_str(claims.get("clover_client")),
         portal_base_url=portal_base_url,
         inference_base_url=_coerce_str(state.get("inference_base_url")),
         inference_credential_present=True,
@@ -685,9 +685,9 @@ def _info_from_account_payload(
     )
 
 
-def _tool_access_from_value(value: Any) -> Optional[NousToolAccessInfo]:
+def _tool_access_from_value(value: Any) -> Optional[CloverToolAccessInfo]:
     """Parse a Portal ``tool_access`` object (from the JWT claim or the account
-    API) into :class:`NousToolAccessInfo`. Fails closed: a non-object value
+    API) into :class:`CloverToolAccessInfo`. Fails closed: a non-object value
     yields ``None``, and only literal ``true`` counts for ``enabled`` and each
     coverage entry."""
     if not isinstance(value, dict):
@@ -699,7 +699,7 @@ def _tool_access_from_value(value: Any) -> Optional[NousToolAccessInfo]:
         for key, val in raw_coverage.items():
             if isinstance(key, str):
                 coverage[key] = val is True
-    return NousToolAccessInfo(enabled=enabled, coverage=coverage)
+    return CloverToolAccessInfo(enabled=enabled, coverage=coverage)
 
 
 def _subscription_from_payload(value: Any) -> Optional[CloverPortalSubscriptionInfo]:
@@ -716,12 +716,12 @@ def _subscription_from_payload(value: Any) -> Optional[CloverPortalSubscriptionI
     )
 
 
-def _paid_service_access_from_payload(value: Any) -> Optional[NousPaidServiceAccessInfo]:
+def _paid_service_access_from_payload(value: Any) -> Optional[CloverPaidServiceAccessInfo]:
     if not isinstance(value, dict):
         return None
     allowed = _coerce_bool(value.get("allowed"))
     paid_access = _coerce_bool(value.get("paid_access"))
-    return NousPaidServiceAccessInfo(
+    return CloverPaidServiceAccessInfo(
         allowed=allowed,
         paid_access=paid_access,
         reason=_coerce_str(value.get("reason")),

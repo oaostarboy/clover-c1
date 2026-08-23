@@ -392,7 +392,7 @@ _EMPTY_HTML = """\
 <h1>Sign-in unavailable</h1>
 <p>This dashboard is bound to a non-loopback host but no authentication
 providers are installed.</p>
-<p>Install <code>plugins/dashboard-auth-nous</code> (default) or another
+<p>Install <code>plugins/dashboard-auth-clover</code> (default) or another
 auth provider, or restart with <code>--insecure</code> to bypass the
 auth gate (not recommended on untrusted networks).</p>
 </main>

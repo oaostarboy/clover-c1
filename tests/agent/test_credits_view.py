@@ -15,7 +15,7 @@ import pytest
 
 import agent.account_usage as account_usage
 from agent.account_usage import CreditsView, build_credits_view
-from clover_cli.clover_account import CloverPortalAccountInfo, NousPaidServiceAccessInfo
+from clover_cli.clover_account import CloverPortalAccountInfo, CloverPaidServiceAccessInfo
 
 
 def _account(**kwargs) -> CloverPortalAccountInfo:
@@ -36,7 +36,7 @@ def _logged_in_account(monkeypatch):
 
     def _install(account):
         monkeypatch.setattr(
-            "clover_cli.clover_account.get_nous_portal_account_info",
+            "clover_cli.clover_account.get_clover_portal_account_info",
             lambda *a, **kw: account,
         )
 
@@ -55,7 +55,7 @@ def test_view_built_with_org_pinned_url_and_identity(_logged_in_account):
             org_name="Acme Inc",
             email="alice@example.test",
             paid_service_access=True,
-            paid_service_access_info=NousPaidServiceAccessInfo(
+            paid_service_access_info=CloverPaidServiceAccessInfo(
                 purchased_credits_remaining=30.0,
                 total_usable_credits=30.0,
             ),

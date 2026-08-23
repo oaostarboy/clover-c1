@@ -1061,7 +1061,7 @@ DEFAULT_CONFIG = {
         # copilot.tencent.com is always treated as stream-only.
         "stream_only_base_urls": [],
         "vision": {
-            "provider": "auto",    # auto | openrouter | nous | codex | custom
+            "provider": "auto",    # auto | openrouter | clover | codex | custom
             "model": "",           # e.g. "google/gemini-2.5-flash", "gpt-4o"
             "base_url": "",        # direct OpenAI-compatible endpoint (takes precedence over provider)
             "api_key": "",         # API key for base_url (falls back to OPENAI_API_KEY)
@@ -1606,7 +1606,7 @@ DEFAULT_CONFIG = {
         # bundled ``dashboard_auth/drain`` plugin (the first consumer of the
         # generic non-interactive token-auth capability). The SECRET itself
         # is a credential and is NOT configured here: it is provisioned by
-        # nous-account-service at deploy time via the
+        # clover-account-service at deploy time via the
         # ``CLOVER_DASHBOARD_DRAIN_SECRET`` env var (the .env-is-for-secrets
         # rule). These are the behavioural knobs only. The plugin is a no-op
         # unless that env var is set to a >=256-bit secret; a weak secret is
@@ -3706,7 +3706,7 @@ DEFAULT_CONFIG = {
 # Optional environment variables that enhance functionality
 OPTIONAL_ENV_VARS = {
     # ── Provider (handled in provider selection, not shown in checklists) ──
-    "NOUS_BASE_URL": {
+    "CLOVER_BASE_URL": {
         "description": "Clover Portal base URL override",
         "prompt": "Clover Portal base URL (leave empty for default)",
         "url": None,

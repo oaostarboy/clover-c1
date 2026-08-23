@@ -11,7 +11,7 @@
 #
 services:
   gateway:
-    image: clovercognition/clover-c1:latest
+    image: cloverc1/clover-c1:latest
     container_name: clover
     restart: unless-stopped
     volumes:
@@ -22,7 +22,7 @@ services:
     command: ["gateway", "run"]
 
   dashboard:
-    image: clovercognition/clover-c1:latest
+    image: cloverc1/clover-c1:latest
     container_name: clover-dashboard
     restart: unless-stopped
     depends_on:

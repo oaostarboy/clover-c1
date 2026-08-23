@@ -134,7 +134,7 @@ export function ComposerDirectiveActions({ editorRef }: { editorRef: RefObject<H
       style={{ left: anchor.left, top: anchor.top }}
     >
       <button
-        className={cn(composerFloatingPill, 'shadow-nous')}
+        className={cn(composerFloatingPill, 'shadow-clover')}
         onClick={() => {
           anchor.action.run(anchor.value)
           setAnchor(null)

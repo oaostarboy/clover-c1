@@ -137,7 +137,7 @@ export default defineConfig({
             },
             {
               name: "ui",
-              test: /node_modules[\\/]@nous-research[\\/]ui([\\/]|$)/,
+              test: /node_modules[\\/]@clover-research[\\/]ui([\\/]|$)/,
             },
             {
               name: "vendor",

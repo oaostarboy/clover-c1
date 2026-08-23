@@ -25,7 +25,7 @@ Public-safety note: ``/api/status`` is an unauthenticated liveness probe
 (``PUBLIC_API_PATHS``), which is exactly why NAS can consume it.  This
 block therefore carries only coarse numbers (MB granularity), enums, and
 booleans — the same disclosure class as the existing ``active_agents``
-count and ``nous_session_valid`` field (which was added for the same
+count and ``clover_session_valid`` field (which was added for the same
 NAS-sweep audience).
 
 Everything here is best-effort and read-only: a missing/corrupt file

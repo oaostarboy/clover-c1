@@ -39,8 +39,8 @@ model:
   # Inference provider selection:
   #   "auto"         - Auto-detect from credentials (default)
   #   "openrouter"   - OpenRouter (requires: OPENROUTER_API_KEY or OPENAI_API_KEY)
-  #   "clover"         - Clover Portal OAuth (requires: clover auth add nous)
-  #   "nous-api"     - Clover Portal API key (requires: NOUS_API_KEY)
+  #   "clover"         - Clover Portal OAuth (requires: clover auth add clover)
+  #   "clover-api"     - Clover Portal API key (requires: CLOVER_API_KEY)
   #   "anthropic"    - Direct Anthropic API (requires: ANTHROPIC_API_KEY)
   #   "openai-codex" - OpenAI Codex (requires: clover auth)
   #   "copilot"      - GitHub Copilot / GitHub Models (requires: GITHUB_TOKEN)
@@ -722,7 +722,7 @@ prompt_caching:
 # Provider options:
 #   "auto"       - Best available: OpenRouter → Clover Portal → main endpoint (default)
 #   "openrouter" - Force OpenRouter (requires OPENROUTER_API_KEY)
-#   "clover"       - Force Clover Portal (requires: clover auth add nous)
+#   "clover"       - Force Clover Portal (requires: clover auth add clover)
 #   "gemini"      - Force Google AI Studio direct (requires: GOOGLE_API_KEY or GEMINI_API_KEY)
 #   "ollama-cloud" - Ollama Cloud (requires: OLLAMA_API_KEY)
 #   "codex"       - Force Codex OAuth (requires: clover model → Codex).
@@ -1375,7 +1375,7 @@ stt:
   #   local_command/xai/
   #   elevenlabs             -> unsupported; DEBUG log, then continue
   #   plugin providers       -> `prompt` in `**extra`; plugin owns limits
-  # prompt: "Clover, Teknium, Clover Cognition, kanban"
+  # prompt: "Clover, the maintainer, Clover Cognition, kanban"
   local:
     model: "base"              # tiny | base | small | medium | large-v3 | turbo
     # language: ""             # auto-detect; set to "en", "es", "fr", etc. to force
@@ -1492,7 +1492,7 @@ delegation:
   # model: "google/gemini-3-flash-preview"    # Override model for subagents (empty = inherit parent)
   # provider: "openrouter"                    # Override provider for subagents (empty = inherit parent)
   #                                           # Resolves full credentials (base_url, api_key) automatically.
-  #                                           # Supported: openrouter, nous, zai, kimi-coding, minimax
+  #                                           # Supported: openrouter, clover, zai, kimi-coding, minimax
   #                                           # Cost tip: keep the parent on a frontier model and pin
   #                                           # delegation.model to an inexpensive one — children carry the
   #                                           # vast majority of tokens, so this is where spend is cut while
@@ -1825,7 +1825,7 @@ updates:
 # -----------------------------------------------------------------------------
 # Self-hosted OIDC dashboard auth (generic OpenID Connect — Authentik,
 # Keycloak, Zitadel, Authelia, Auth0, Okta, Google, …). Use this INSTEAD of the
-# nous block above when gating the dashboard with your own identity provider.
+# clover block above when gating the dashboard with your own identity provider.
 # Each setting can be overridden by an environment variable:
 #
 #   dashboard.oauth.self_hosted.issuer         <-  CLOVER_DASHBOARD_OIDC_ISSUER

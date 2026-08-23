@@ -1012,7 +1012,7 @@ _ANCHOR_PATTERNS: "list[tuple[str, re.Pattern[str], int]]" = [
     ("urls", re.compile(r"https?://[^\s)\"']{10,110}"), 30),
 ]
 _ANCHOR_NOISE = frozenset({
-    "@teknium", "@teknium1",  # session owner, in every transcript
+    "@maintainer", "@maintainer",  # session owner, in every transcript
 })
 
 

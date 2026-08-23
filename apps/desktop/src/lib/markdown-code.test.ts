@@ -22,14 +22,14 @@ describe('isLikelyProseCodeBlock', () => {
   })
 
   it('keeps an SSH config block fenced (regression: rendered as flat prose)', () => {
-    const ssh = ['Host 192.168.0.159', '    HostName 192.168.0.159', '    User teknium', '    Port 22'].join('\n')
+    const ssh = ['Host 192.168.0.159', '    HostName 192.168.0.159', '    User maintainer', '    Port 22'].join('\n')
 
     expect(isLikelyProseCodeBlock('', ssh)).toBe(false)
     expect(isLikelyProseCodeBlock('text', ssh)).toBe(false)
   })
 
   it('keeps a flat key-value config fenced', () => {
-    expect(isLikelyProseCodeBlock('', ['Host myserver', 'User teknium', 'Port 22'].join('\n'))).toBe(false)
+    expect(isLikelyProseCodeBlock('', ['Host myserver', 'User maintainer', 'Port 22'].join('\n'))).toBe(false)
   })
 
   it('keeps an .env-style dump fenced', () => {
@@ -43,7 +43,7 @@ describe('isLikelyStructuredText', () => {
   })
 
   it('flags flat key-value / settings listings', () => {
-    expect(isLikelyStructuredText(['Host myserver', 'User teknium', 'Port 22'].join('\n'))).toBe(true)
+    expect(isLikelyStructuredText(['Host myserver', 'User maintainer', 'Port 22'].join('\n'))).toBe(true)
     expect(isLikelyStructuredText(['API_KEY=abc123', 'PORT=8080', 'DEBUG=true'].join('\n'))).toBe(true)
   })
 
@@ -74,7 +74,7 @@ describe('isLikelyStructuredText', () => {
 
 describe('isLikelyProseFence', () => {
   it('keeps an SSH config block fenced', () => {
-    const ssh = ['Host 192.168.0.159', '    HostName 192.168.0.159', '    User teknium', '    Port 22'].join('\n')
+    const ssh = ['Host 192.168.0.159', '    HostName 192.168.0.159', '    User maintainer', '    Port 22'].join('\n')
 
     expect(isLikelyProseFence('', ssh)).toBe(false)
     expect(isLikelyProseFence('text', ssh)).toBe(false)

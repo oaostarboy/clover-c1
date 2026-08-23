@@ -216,7 +216,7 @@ class TestAuthJsonSiblingReaders:
 
         assert has_xai_credentials() is True
 
-    def test_auxiliary_nous_provider_reads_non_ascii_store(self, clover_home, windows_default_encoding, monkeypatch):
+    def test_auxiliary_clover_provider_reads_non_ascii_store(self, clover_home, windows_default_encoding, monkeypatch):
         """agent/auxiliary_client's Clover-provider lookup reads the same store.
 
         The lookup returns None on any read failure, silently disabling Clover as
@@ -237,21 +237,21 @@ class TestAuthJsonSiblingReaders:
         # the tmp store explicitly.
         monkeypatch.setattr(aux, "_AUTH_JSON_PATH", clover_home / "auth.json")
 
-        # _read_nous_auth consults the credential pool FIRST and returns early
+        # _read_clover_auth consults the credential pool FIRST and returns early
         # when a pool entry exists, never reaching the auth.json read. Force the
         # pool-absent path so the auth.json code under test actually runs.
         monkeypatch.setattr(aux, "_select_pool_entry", lambda _provider: (False, None))
 
-        provider = aux._read_nous_auth()
+        provider = aux._read_clover_auth()
         assert provider is not None
         assert provider.get("agent_key") == "k"
 
-    def test_read_shared_nous_state_reads_non_ascii_store(
+    def test_read_shared_clover_state_reads_non_ascii_store(
         self, tmp_path, monkeypatch, windows_default_encoding
     ):
-        """clover_cli.auth._read_shared_nous_state must read a non-ASCII store.
+        """clover_cli.auth._read_shared_clover_state must read a non-ASCII store.
 
-        The shared Clover store (``nous_auth.json``) is written as UTF-8. A
+        The shared Clover store (``clover_auth.json``) is written as UTF-8. A
         non-ASCII field (e.g. an accented display name) must not cause the
         read to raise under the Windows-default-encoding fixture and be
         silently swallowed — which would drop the user's shared OAuth
@@ -268,9 +268,9 @@ class TestAuthJsonSiblingReaders:
             # Non-ASCII display name → UTF-8 bytes cp1252 cannot decode.
             "display_name": "Réne — Noël",
         }
-        _write_utf8(shared_dir / "nous_auth.json", payload)
+        _write_utf8(shared_dir / "clover_auth.json", payload)
 
-        provider = auth._read_shared_nous_state()
+        provider = auth._read_shared_clover_state()
         assert provider is not None
         assert provider["access_token"] == "at"
         assert provider["refresh_token"] == "rt"
@@ -324,10 +324,10 @@ class TestAuthJsonSiblingReaders:
 
         assert main_mod._has_any_provider_configured() is True
 
-    def test_managed_tool_gateway_reads_non_ascii_nous_state(
+    def test_managed_tool_gateway_reads_non_ascii_clover_state(
         self, clover_home, windows_default_encoding
     ):
-        """tools.managed_tool_gateway._read_nous_provider_state reads auth.json.
+        """tools.managed_tool_gateway._read_clover_provider_state reads auth.json.
 
         The Clover provider entry can carry a non-ASCII label. Under the
         Windows-default-encoding fixture a no-encoding read raises and the
@@ -346,11 +346,11 @@ class TestAuthJsonSiblingReaders:
         }
         _write_utf8(clover_home / "auth.json", store)
 
-        from tools.managed_tool_gateway import _read_nous_provider_state
+        from tools.managed_tool_gateway import _read_clover_provider_state
 
-        nous = _read_nous_provider_state()
-        assert nous is not None
-        assert nous.get("agent_key") == "k"
+        clover = _read_clover_provider_state()
+        assert clover is not None
+        assert clover.get("agent_key") == "k"
         # The non-ASCII label round-trips intact.
-        assert nous.get("label") == "工作账号"
+        assert clover.get("label") == "工作账号"
 

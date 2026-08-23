@@ -35,7 +35,7 @@ def _impact(jobs: object, **config: Any) -> dict[str, Any]:
 
 def test_drift_axes_match_unpinned_guard_semantics() -> None:
     assert cron_model_drift_axes(
-        _job(), current_provider=" NOUS ", current_model="NEW/MODEL", config={}
+        _job(), current_provider=" CLOVER ", current_model="NEW/MODEL", config={}
     ) == ["provider", "model"]
     assert cron_model_drift_axes(
         _job(provider="openrouter"),

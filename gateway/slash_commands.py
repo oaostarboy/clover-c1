@@ -5359,7 +5359,7 @@ class GatewaySlashCommandsMixin:
                 account_lines = render_account_usage_lines(account_snapshot, markdown=True)
 
         # ── Clover credits magnitudes + monthly-grant % gauge ─────────────
-        # Shared with the CLI / TUI /usage block via nous_credits_lines(): a single
+        # Shared with the CLI / TUI /usage block via clover_credits_lines(): a single
         # auth-gate + portal-fetch + render path (which also honors the dev fixture).
         # Run off the event loop. The helper gates on "a Clover account is logged in"
         # — NOT the inference provider and NOT nested under `if provider:` — so a
@@ -5367,9 +5367,9 @@ class GatewaySlashCommandsMixin:
         # still sees their balance. NO recovery trigger: messaging binds no notice
         # consumer, so /usage only displays. Fail-open: never break /usage.
         try:
-            from agent.account_usage import nous_credits_lines
+            from agent.account_usage import clover_credits_lines
 
-            credits_lines = await asyncio.to_thread(nous_credits_lines, markdown=True)
+            credits_lines = await asyncio.to_thread(clover_credits_lines, markdown=True)
         except Exception:
             credits_lines = []  # fail-open: never break /usage
 

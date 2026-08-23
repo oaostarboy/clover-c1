@@ -118,7 +118,7 @@ class TestProviderModelsSWR:
             mod._spawn_swr_refresh("openrouter")
             mod._spawn_swr_refresh("openrouter")  # deduped
             mod._spawn_swr_refresh("clover")
-        assert started == ["model-cache-swr-openrouter", "model-cache-swr-nous"]
+        assert started == ["model-cache-swr-openrouter", "model-cache-swr-clover"]
 
     def test_swr_refresh_writes_cache_and_clears_inflight(self):
         import clover_cli.models as mod

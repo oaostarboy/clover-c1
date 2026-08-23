@@ -575,7 +575,7 @@ class _DeletedTestGitBaselineCheck:
     """Removed May 2026 — these tests asserted on a ``_check_git_baseline``
     method that doesn't exist on ``ShellFileOperations`` (regression intro
     by a separate refactor). All 6 tests in the class fail with
-    AttributeError on origin/main. Deleted wholesale per Teknium's
+    AttributeError on origin/main. Deleted wholesale per the maintainer's
     instruction to keep CI green; reinstate them when the underlying
     helper is restored or replaced.
     """

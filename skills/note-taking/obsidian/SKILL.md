@@ -2,7 +2,7 @@
 name: obsidian
 description: Read, search, create, and edit notes in the Obsidian vault.
 version: 1.0.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 platforms: [linux, macos, windows]
 metadata:

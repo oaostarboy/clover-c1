@@ -46,12 +46,12 @@ class TestResolveOpenaiAudioClientConfig:
             )
 
 
-    def test_nous_selection_overrides_config_credentials(self):
+    def test_clover_selection_overrides_config_credentials(self):
         """A stored 'clover' selection (or legacy use_gateway: true) routes
         managed even when direct credentials are present."""
         config = {"openai": {"api_key": "cfg-key", "base_url": "http://localhost:4003/v1"}}
         managed = SimpleNamespace(
-            nous_user_token="managed-token",
+            clover_user_token="managed-token",
             gateway_origin="https://openai-audio-gateway.",
         )
 
@@ -65,7 +65,7 @@ class TestResolveOpenaiAudioClientConfig:
                 True,
             )
 
-    def test_nous_selection_unentitled_raises_selection_error(self):
+    def test_clover_selection_unentitled_raises_selection_error(self):
         """Selected managed route + unavailable gateway = honest error naming
         the selection, never a silent fall back to direct credentials."""
         config = {"openai": {"api_key": "cfg-key"}}
@@ -96,7 +96,7 @@ class TestResolveOpenaiAudioClientConfig:
              patch.object(tts_tool, "read_selection", return_value=None), \
              patch.object(tts_tool, "resolve_openai_audio_api_key", return_value=""), \
              patch.object(tts_tool, "resolve_managed_tool_gateway", return_value=None), \
-             patch.object(tts_tool, "managed_nous_tools_enabled", return_value=False):
+             patch.object(tts_tool, "managed_clover_tools_enabled", return_value=False):
             with pytest.raises(ValueError) as exc:
                 tts_tool._resolve_openai_audio_client_config()
 

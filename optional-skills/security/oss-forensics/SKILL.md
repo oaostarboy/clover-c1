@@ -2,7 +2,7 @@
 name: oss-forensics
 description: "GitHub supply-chain forensics: recovery, IOCs, reporting."
 version: 1.0.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 platforms: [linux, macos, windows]
 category: security

@@ -17,7 +17,7 @@ from agent.prompt_builder import (
     _find_git_root,
     _strip_yaml_frontmatter,
     build_skills_system_prompt,
-    build_nous_subscription_prompt,
+    build_clover_subscription_prompt,
     build_context_files_prompt,
     CONTEXT_FILE_MAX_CHARS,
     _dynamic_context_file_max_chars,
@@ -35,7 +35,7 @@ from agent.prompt_builder import (
     PLATFORM_HINTS,
     WSL_ENVIRONMENT_HINT,
 )
-from clover_cli.nous_subscription import NousFeatureState, NousSubscriptionFeatures
+from clover_cli.clover_subscription import CloverFeatureState, CloverSubscriptionFeatures
 
 
 # =========================================================================
@@ -370,60 +370,60 @@ class TestBuildSkillsSystemPrompt:
 
 class TestBuildNousSubscriptionPrompt:
     def test_includes_active_subscription_features(self, monkeypatch):
-        monkeypatch.setattr("tools.tool_backend_helpers.managed_nous_tools_enabled", lambda: True)
+        monkeypatch.setattr("tools.tool_backend_helpers.managed_clover_tools_enabled", lambda: True)
         monkeypatch.setattr(
-            "clover_cli.nous_subscription.get_nous_subscription_features",
-            lambda config=None: NousSubscriptionFeatures(
+            "clover_cli.clover_subscription.get_clover_subscription_features",
+            lambda config=None: CloverSubscriptionFeatures(
                 subscribed=True,
-                nous_auth_present=True,
-                provider_is_nous=True,
+                clover_auth_present=True,
+                provider_is_clover_portal=True,
                 features={
-                    "web": NousFeatureState("web", "Web tools", True, True, True, True, False, True, "firecrawl"),
-                    "image_gen": NousFeatureState("image_gen", "Image generation", True, True, True, True, False, True, "Clover Subscription"),
-                    "video_gen": NousFeatureState("video_gen", "Video generation", False, False, False, False, False, False, ""),
-                    "tts": NousFeatureState("tts", "OpenAI TTS", True, True, True, True, False, True, "OpenAI TTS"),
-                    "stt": NousFeatureState("stt", "Speech-to-text", True, True, True, True, False, True, "OpenAI Whisper"),
-                    "browser": NousFeatureState("browser", "Browser automation", True, True, True, True, False, True, "Browser Use"),
-                    "modal": NousFeatureState("modal", "Modal execution", False, True, False, False, False, True, "local"),
+                    "web": CloverFeatureState("web", "Web tools", True, True, True, True, False, True, "firecrawl"),
+                    "image_gen": CloverFeatureState("image_gen", "Image generation", True, True, True, True, False, True, "Clover Subscription"),
+                    "video_gen": CloverFeatureState("video_gen", "Video generation", False, False, False, False, False, False, ""),
+                    "tts": CloverFeatureState("tts", "OpenAI TTS", True, True, True, True, False, True, "OpenAI TTS"),
+                    "stt": CloverFeatureState("stt", "Speech-to-text", True, True, True, True, False, True, "OpenAI Whisper"),
+                    "browser": CloverFeatureState("browser", "Browser automation", True, True, True, True, False, True, "Browser Use"),
+                    "modal": CloverFeatureState("modal", "Modal execution", False, True, False, False, False, True, "local"),
                 },
             ),
         )
 
-        prompt = build_nous_subscription_prompt({"web_search", "browser_navigate"})
+        prompt = build_clover_subscription_prompt({"web_search", "browser_navigate"})
 
         assert "Browser Use" in prompt
         assert "Modal execution is optional" in prompt
         assert "do not ask the user for Firecrawl, FAL, OpenAI TTS, OpenAI Whisper, or Browser-Use API keys" in prompt
 
     def test_non_subscriber_prompt_includes_relevant_upgrade_guidance(self, monkeypatch):
-        monkeypatch.setattr("tools.tool_backend_helpers.managed_nous_tools_enabled", lambda: True)
+        monkeypatch.setattr("tools.tool_backend_helpers.managed_clover_tools_enabled", lambda: True)
         monkeypatch.setattr(
-            "clover_cli.nous_subscription.get_nous_subscription_features",
-            lambda config=None: NousSubscriptionFeatures(
+            "clover_cli.clover_subscription.get_clover_subscription_features",
+            lambda config=None: CloverSubscriptionFeatures(
                 subscribed=False,
-                nous_auth_present=False,
-                provider_is_nous=False,
+                clover_auth_present=False,
+                provider_is_clover_portal=False,
                 features={
-                    "web": NousFeatureState("web", "Web tools", True, False, False, False, False, True, ""),
-                    "image_gen": NousFeatureState("image_gen", "Image generation", True, False, False, False, False, True, ""),
-                    "video_gen": NousFeatureState("video_gen", "Video generation", False, False, False, False, False, False, ""),
-                    "tts": NousFeatureState("tts", "OpenAI TTS", True, False, False, False, False, True, ""),
-                    "stt": NousFeatureState("stt", "Speech-to-text", True, False, False, False, False, True, ""),
-                    "browser": NousFeatureState("browser", "Browser automation", True, False, False, False, False, True, ""),
-                    "modal": NousFeatureState("modal", "Modal execution", False, False, False, False, False, True, ""),
+                    "web": CloverFeatureState("web", "Web tools", True, False, False, False, False, True, ""),
+                    "image_gen": CloverFeatureState("image_gen", "Image generation", True, False, False, False, False, True, ""),
+                    "video_gen": CloverFeatureState("video_gen", "Video generation", False, False, False, False, False, False, ""),
+                    "tts": CloverFeatureState("tts", "OpenAI TTS", True, False, False, False, False, True, ""),
+                    "stt": CloverFeatureState("stt", "Speech-to-text", True, False, False, False, False, True, ""),
+                    "browser": CloverFeatureState("browser", "Browser automation", True, False, False, False, False, True, ""),
+                    "modal": CloverFeatureState("modal", "Modal execution", False, False, False, False, False, True, ""),
                 },
             ),
         )
 
-        prompt = build_nous_subscription_prompt({"image_generate"})
+        prompt = build_clover_subscription_prompt({"image_generate"})
 
         assert "suggest Clover subscription as one option" in prompt
         assert "Do not mention subscription unless" in prompt
 
     def test_feature_flag_off_returns_empty_prompt(self, monkeypatch):
-        monkeypatch.setattr("tools.tool_backend_helpers.managed_nous_tools_enabled", lambda: False)
+        monkeypatch.setattr("tools.tool_backend_helpers.managed_clover_tools_enabled", lambda: False)
 
-        prompt = build_nous_subscription_prompt({"web_search"})
+        prompt = build_clover_subscription_prompt({"web_search"})
 
         assert prompt == ""
 

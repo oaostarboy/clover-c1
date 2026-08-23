@@ -51,7 +51,7 @@ describe('visible interpolation combined with a collapsed paste', () => {
     expect(submission.text).toBe('Tue for line one\nline two')
   })
 
-  // Regression guard for the display bug teknium1 flagged: the transcript must
+  // Regression guard for the display bug maintainer flagged: the transcript must
   // not fall back to the PRE-interpolation composer text, which still carries
   // the literal {!...}.
   it('does not show the raw {!...} syntax as the transcript display', () => {

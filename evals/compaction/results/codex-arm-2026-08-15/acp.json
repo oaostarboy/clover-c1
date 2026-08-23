@@ -22,18 +22,18 @@
   "read_seconds": 229,
   "compaction_events": 1,
   "peak_context_tokens": 454931,
-  "rollout": "/home/teknium/.codex/sessions/2026/08/15/rollout-2026-08-15T18-35-51-01a00835-fef4-7c31-944d-9d0d8ba933be.jsonl"
+  "rollout": "/home/maintainer/.codex/sessions/2026/08/15/rollout-2026-08-15T18-35-51-01a00835-fef4-7c31-944d-9d0d8ba933be.jsonl"
  },
  "results": [
   {
-   "q": "What was the specific reason Teknium gave for reverting PR #30179 in July 2026?",
+   "q": "What was the specific reason the maintainer gave for reverting PR #30179 in July 2026?",
    "gold": "WTF??? REVERT! DAMMIT",
    "answer": "UNKNOWN \u2014 best guess: it caused a regression on current `main` and had to be reverted until a safer implementation was available.",
    "score": 0,
    "why": "The answer provides a logical guess about a regression, but it fails to capture the specific, idiosyncratic reason/quote provided in the gold answer ('WTF??? REVERT! DAMMIT')."
   },
   {
-   "q": "On which specific PR did Teknium say, 'tf are you saying to me. Stop giving me such random verbose details'?",
+   "q": "On which specific PR did the maintainer say, 'tf are you saying to me. Stop giving me such random verbose details'?",
    "gold": "PR #6391",
    "answer": "UNKNOWN \u2014 best guess: PR #37865.",
    "score": 0,
@@ -54,7 +54,7 @@
    "why": "The answer identifies the core issue (provider name mismatch/inconsistency) which led to the specific bug, but it does not mention the specific string 'alibaba-coding-plan' identified in the gold answer."
   },
   {
-   "q": "What is the mandatory line limit for PR reviews requested by Teknium?",
+   "q": "What is the mandatory line limit for PR reviews requested by the maintainer?",
    "gold": "<= 15 lines",
    "answer": "Maximum 5 lines.",
    "score": 0,
@@ -62,7 +62,7 @@
   },
   {
    "q": "What exact error message did the agent receive when attempting to checkout a worktree while in the live source directory?",
-   "gold": "Blocked: `git checkout` would rewrite Clover's live source checkout (/home/teknium/.clover/clover-c1) and can mix module versions in this running process.",
+   "gold": "Blocked: `git checkout` would rewrite Clover's live source checkout (/home/maintainer/.clover/clover-c1) and can mix module versions in this running process.",
    "answer": "UNKNOWN \u2014 best guess: `fatal: '<branch>' is already checked out at '<worktree path>'`.",
    "score": 0,
    "why": "The answer provides a standard Git error message as a guess, which does not match the specific custom error message provided in the gold answer."

@@ -1,6 +1,6 @@
 """Default STT language contract.
 
-Teknium (July 2026): the global ``stt.language`` DEFAULTS to "en" because
+the maintainer (July 2026): the global ``stt.language`` DEFAULTS to "en" because
 Whisper auto-detection frequently misidentifies short/accented clips
 ("STT transcribed the wrong language" class). Users opt back into
 auto-detect with ``stt.language: ""``.

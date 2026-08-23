@@ -461,13 +461,13 @@ def _(rid, params: dict) -> dict:
         return _ok(rid, {"ok": False, "error": str(e)})
 
 
-@method("diagnostics.share_nous")
+@method("diagnostics.share_clover")
 def _(rid, params: dict) -> dict:
     """Upload a redacted debug bundle to Clover-internal diagnostics storage.
 
     Desktop's "Send Diagnostics" action (error card / diagnostics UI). Same
-    collection + force-redaction pipeline as ``clover debug share --nous``
-    (collect_share_bundle → build_nous_bundle → share_to_nous); redaction is
+    collection + force-redaction pipeline as ``clover debug share --clover``
+    (collect_share_bundle → build_clover_bundle → share_to_clover); redaction is
     NOT client-controllable — this handler always redacts.
 
     Params (all optional):
@@ -488,10 +488,10 @@ def _(rid, params: dict) -> dict:
     try:
         from clover_cli.debug import (
             _redact_log_text,
-            build_nous_bundle,
+            build_clover_bundle,
             collect_share_bundle,
         )
-        from clover_cli.diagnostics_upload import share_to_nous
+        from clover_cli.diagnostics_upload import share_to_clover
 
         log_lines = params.get("log_lines")
         if not isinstance(log_lines, int) or not (10 <= log_lines <= 2000):
@@ -529,8 +529,8 @@ def _(rid, params: dict) -> dict:
                     continue
                 bundle[f"client/{safe_label}"] = _redact_log_text(text[:524_288])
 
-        blob = build_nous_bundle(bundle, redact=True)
-        res = share_to_nous(blob)
+        blob = build_clover_bundle(bundle, redact=True)
+        res = share_to_clover(blob)
         view_url = res.get("viewUrl") or res.get("view_url")
         upload_id = res.get("id")
         if not view_url and not upload_id:

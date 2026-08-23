@@ -3,7 +3,7 @@
 Running ``clover portal`` with no subcommand performs the one-shot Portal
 onboarding: OAuth login, pick a Clover model, switch the inference provider to
 Clover, and offer to enable the Tool Gateway. It is the friendly alias for
-``clover auth add nous --type oauth`` (which still works), is identical to
+``clover auth add clover --type oauth`` (which still works), is identical to
 ``clover setup --portal``, and runs the same Clover flow as the first-time quick
 setup.
 
@@ -33,14 +33,14 @@ DOCS_URL = "docs/user-guide/features/tool-gateway"
 
 def _cmd_status(args) -> int:
     """Show Portal auth + Tool Gateway routing summary."""
-    from clover_cli.auth import get_nous_auth_status_local
-    from clover_cli.nous_subscription import get_nous_subscription_features
+    from clover_cli.auth import get_clover_auth_status_local
+    from clover_cli.clover_subscription import get_clover_subscription_features
 
     config = load_config() or {}
 
     try:
         # Read-only status display: refresh-free snapshot (no OAuth refresh).
-        auth = get_nous_auth_status_local() or {}
+        auth = get_clover_auth_status_local() or {}
     except Exception:
         auth = {}
 
@@ -74,7 +74,7 @@ def _cmd_status(args) -> int:
     print(color("  Tool Gateway", Colors.MAGENTA))
     print(color("  ────────────", Colors.MAGENTA))
     try:
-        features = get_nous_subscription_features(config)
+        features = get_clover_subscription_features(config)
     except Exception:
         features = None
 
@@ -84,7 +84,7 @@ def _cmd_status(args) -> int:
 
     rows = []
     for feat in features.items():
-        if feat.managed_by_nous:
+        if feat.managed_by_clover:
             state = color("via Clover Portal", Colors.GREEN)
         elif feat.active and feat.current_provider:
             state = feat.current_provider
@@ -121,11 +121,11 @@ def _cmd_open(args) -> int:
 
 def _cmd_tools(args) -> int:
     """List the Tool Gateway catalog + current routing."""
-    from clover_cli.nous_subscription import get_nous_subscription_features
+    from clover_cli.clover_subscription import get_clover_subscription_features
 
     config = load_config() or {}
     try:
-        features = get_nous_subscription_features(config)
+        features = get_clover_subscription_features(config)
     except Exception:
         print("Could not resolve Tool Gateway state.", file=sys.stderr)
         return 1
@@ -143,7 +143,7 @@ def _cmd_tools(args) -> int:
     print(color("  Tool Gateway catalog", Colors.MAGENTA))
     print(color("  ────────────────────", Colors.MAGENTA))
 
-    if not features.nous_auth_present:
+    if not features.clover_auth_present:
         print(color("  Not logged into Clover Portal — sign in with `clover portal`.", Colors.YELLOW))
         print()
 
@@ -152,7 +152,7 @@ def _cmd_tools(args) -> int:
         feat = features.features.get(key)
         if feat is None:
             state = color("unknown", Colors.DIM)
-        elif feat.managed_by_nous:
+        elif feat.managed_by_clover:
             state = color("✓ via Clover Portal", Colors.GREEN)
         elif feat.active and feat.current_provider:
             state = feat.current_provider
@@ -171,7 +171,7 @@ def _cmd_tools(args) -> int:
 def _cmd_login(args) -> int:
     """Run the one-shot Clover Portal onboarding (login + model + provider + tools).
 
-    This is the human-readable front door for `clover auth add nous --type
+    This is the human-readable front door for `clover auth add clover --type
     oauth`. It reuses the exact wiring behind `clover setup --portal` (which in
     turn runs the same Clover flow as the first-time quick setup), so the
     commands stay in lockstep: device-code login, pick a Clover model, switch the
@@ -194,7 +194,7 @@ def portal_command(args) -> int:
     sub = getattr(args, "portal_command", None)
     if sub in {None, "", "login"}:
         # Default to the one-shot onboarding — `clover portal` is the
-        # human-readable alias for `clover auth add nous --type oauth` /
+        # human-readable alias for `clover auth add clover --type oauth` /
         # `clover setup --portal`.
         return _cmd_login(args)
     if sub in {"info", "status"}:
@@ -218,7 +218,7 @@ def add_parser(subparsers) -> None:
             "Run `clover portal` with no subcommand to log in to Clover Portal "
             "and set it up — pick a model, set Clover as your provider, and offer "
             "the Tool Gateway (the human-readable alias for `clover auth add "
-            "nous --type oauth`, identical to `clover setup --portal`). "
+            "clover --type oauth`, identical to `clover setup --portal`). "
             "Subcommands: login (default), info, open, tools."
         ),
     )

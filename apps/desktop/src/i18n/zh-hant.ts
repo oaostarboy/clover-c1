@@ -196,7 +196,7 @@ export const zhHant = defineLocale({
   },
 
   billingBlock: {
-    titleNous: 'Clover 額度已用盡',
+    titleCloverCredits: 'Clover 額度已用盡',
     titleProvider: provider => `額度已用盡 — ${provider}`,
     fallbackMessage: '您的帳戶額度已用盡。請儲值以繼續使用。',
     openBilling: '開啟帳單',
@@ -218,7 +218,7 @@ export const zhHant = defineLocale({
     doneDescription: '偵錯套件已私密上傳。在您的支援討論串中分享以下連結，團隊即可檢視您的日誌。',
     failedTitle: '上傳失敗',
     failedHint:
-      '您也可以在終端機執行 `clover debug share --nous`，或執行 `clover debug share --local` 在不上傳的情況下檢視報告。',
+      '您也可以在終端機執行 `clover debug share --clover`，或執行 `clover debug share --local` 在不上傳的情況下檢視報告。',
     handoffLead: '在以下位置繼續討論:',
     links: {
       github: 'GitHub Issues',
@@ -1043,13 +1043,13 @@ export const zhHant = defineLocale({
       activeBackend: '目前後端',
       activeBackendHint: '這是你目前使用的後端',
       useBackend: '使用此後端',
-      nousIncluded: '包含在 Clover 訂閱中；登入 Clover Portal 即可啟用。',
-      nousAuthNeededTitle: '登入 Clover Portal',
-      nousAuthNeededMessage: provider => `已儲存 ${provider}，但在登入 Clover Portal 之前不會啟用。`,
-      nousAuthSignIn: '登入',
-      nousAuthDoneTitle: '已連接 Clover Portal',
-      nousAuthDoneMessage: '訂閱後端現已啟用。',
-      nousAuthFailed: 'Clover Portal 登入未完成',
+      cloverIncluded: '包含在 Clover 訂閱中；登入 Clover Portal 即可啟用。',
+      cloverAuthNeededTitle: '登入 Clover Portal',
+      cloverAuthNeededMessage: provider => `已儲存 ${provider}，但在登入 Clover Portal 之前不會啟用。`,
+      cloverAuthSignIn: '登入',
+      cloverAuthDoneTitle: '已連接 Clover Portal',
+      cloverAuthDoneMessage: '訂閱後端現已啟用。',
+      cloverAuthFailed: 'Clover Portal 登入未完成',
       noApiKeyRequired: '不需要 API 金鑰。',
       postSetupHint: step => `此後端需要一次性安裝 (${step})。將在此機器上執行，可能需要幾分鐘。`,
       postSetupInstalledHint: '已安裝。僅在出現問題時才需要重新執行安裝。',

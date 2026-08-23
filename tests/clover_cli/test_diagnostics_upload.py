@@ -135,7 +135,7 @@ class TestPutBundle:
 
 
 # ---------------------------------------------------------------------------
-# share_to_nous (orchestration)
+# share_to_clover (orchestration)
 # ---------------------------------------------------------------------------
 
 class TestShareToNous:
@@ -152,7 +152,7 @@ class TestShareToNous:
 
         with patch.object(mod, "request_upload_url", return_value=info) as req, \
              patch.object(mod, "put_bundle") as put:
-            result = mod.share_to_nous(blob)
+            result = mod.share_to_clover(blob)
 
         assert result == info
         req.assert_called_once()
@@ -170,7 +170,7 @@ class TestShareToNous:
         with patch.object(mod, "request_upload_url", return_value=info), \
              patch.object(mod, "put_bundle", side_effect=RuntimeError("PUT failed")):
             with pytest.raises(RuntimeError):
-                mod.share_to_nous(b"data")
+                mod.share_to_clover(b"data")
 
     def test_share_succeeds_without_id_in_response(self):
         from clover_cli import diagnostics_upload as mod
@@ -180,6 +180,6 @@ class TestShareToNous:
         info = {"uploadUrl": "https://u", "viewUrl": "v"}  # no id
         with patch.object(mod, "request_upload_url", return_value=info), \
              patch.object(mod, "put_bundle") as put:
-            result = mod.share_to_nous(b"data")
+            result = mod.share_to_clover(b"data")
         assert result == info
         put.assert_called_once()

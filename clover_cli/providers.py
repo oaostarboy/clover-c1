@@ -468,7 +468,7 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
     """Look up a built-in provider by id or alias.
 
     Resolution order:
-      1. Clover overlays (for providers not in models.dev: nous, openai-codex, etc.)
+      1. Clover overlays (for providers not in models.dev: clover, openai-codex, etc.)
       2. models.dev catalog + Clover overlay
 
     User-defined providers from config.yaml (``providers:`` / ``custom_providers:``)
@@ -700,7 +700,7 @@ def host_mandated_api_mode(base_url: str = "") -> Optional[str]:
     return None
 
 
-def nous_api_mode(model: str = "") -> str:
+def clover_api_mode(model: str = "") -> str:
     """Resolve the wire protocol for a Clover Portal model.
 
     Portal serves its ``anthropic/*`` catalog on a native Anthropic Messages
@@ -741,8 +741,8 @@ def determine_api_mode(provider: str, base_url: str = "", model: str = "") -> st
     # (the majority of the Portal catalog), so the transport lookup below
     # would pin Claude on the wrong wire without this carve-out.
     provider_norm = (provider or "").strip().lower()
-    if provider_norm in {"clover", "nous-portal", "clovercognition"}:
-        return nous_api_mode(model)
+    if provider_norm in {"clover", "clover-portal", "cloverc1"}:
+        return clover_api_mode(model)
 
     pdef = get_provider(provider)
     if pdef is not None:

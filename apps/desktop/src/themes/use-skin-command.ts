@@ -8,7 +8,7 @@ const ALIASES: Record<string, string> = {
   default: 'clover',
   gold: 'clover',
   clover: 'clover',
-  'nous-light': 'clover'
+  'clover-light': 'clover'
 }
 
 export function useSkinCommand() {

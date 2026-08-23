@@ -398,7 +398,7 @@ describe('usePromptActions slash session targeting', () => {
   })
 
   it('runs /goal status against the ROUTED stored session instead of minting a new one', async () => {
-    // Teknium's report: start a goal in the desktop app, then `/goal status`
+    // the maintainer's report: start a goal in the desktop app, then `/goal status`
     // says there is no goal. `/goal` state lives per-session in SessionDB
     // (`goal:<session_id>`), and slash.ts used to resolve its target with a
     // bare `hint || activeRef || createSession()`. With the runtime binding

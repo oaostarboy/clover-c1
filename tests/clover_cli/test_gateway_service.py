@@ -1759,7 +1759,7 @@ class TestRemoveLegacyCloverUnits:
     def test_does_not_touch_profile_units_during_migration(
         self, tmp_path, monkeypatch, capsys
     ):
-        """Teknium's constraint: profile units (clover-gateway-coder.service)
+        """the maintainer's constraint: profile units (clover-gateway-coder.service)
         must survive a migration call, even if we somehow include them in the
         search dir."""
         user_dir, _, _ = self._setup(tmp_path, monkeypatch, as_root=True)

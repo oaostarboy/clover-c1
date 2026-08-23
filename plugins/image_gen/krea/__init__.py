@@ -179,7 +179,7 @@ def _resolve_managed_krea_gateway():
     """Return managed Krea gateway config when the user is on the managed path.
 
     Strict selection model: the managed Krea gateway is used when the stored
-    ``image_gen`` selection is ``nous`` (or legacy ``use_gateway: true``), or
+    ``image_gen`` selection is ``clover`` (or legacy ``use_gateway: true``), or
     on a never-configured install when no direct ``KREA_API_KEY`` exists.
     An explicit vendor selection (``krea``, ``fal``, ...) pins the direct
     path. Returns ``None`` (direct/BYO path) otherwise, and never raises —
@@ -188,7 +188,7 @@ def _resolve_managed_krea_gateway():
     try:
         from tools.managed_tool_gateway import resolve_managed_tool_gateway
         from tools.tool_backend_helpers import (
-            NOUS_MANAGED_PROVIDER,
+            CLOVER_MANAGED_PROVIDER,
             read_selection,
         )
     except Exception as exc:  # noqa: BLE001
@@ -199,7 +199,7 @@ def _resolve_managed_krea_gateway():
         selected = read_selection("image_gen")
     except Exception:  # noqa: BLE001
         selected = None
-    if selected is not None and selected != NOUS_MANAGED_PROVIDER:
+    if selected is not None and selected != CLOVER_MANAGED_PROVIDER:
         # Explicit vendor selection: direct credentials only.
         return None
     if selected is None and get_secret("KREA_API_KEY"):
@@ -475,7 +475,7 @@ class KreaImageGenProvider(ImageGenProvider):
         managed = _resolve_managed_krea_gateway()
         if managed is not None:
             base_url = managed.gateway_origin.rstrip("/")
-            auth_token = managed.nous_user_token
+            auth_token = managed.clover_user_token
         else:
             base_url = BASE_URL
             auth_token = get_secret("KREA_API_KEY")

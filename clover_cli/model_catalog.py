@@ -13,7 +13,7 @@ Pipeline
    - Fetches the master URL if disk cache is stale or missing.
    - On any fetch failure, keeps using the stale cache (or empty dict).
 
-2. ``get_curated_openrouter_models()`` / ``get_curated_nous_models()`` —
+2. ``get_curated_openrouter_models()`` / ``get_curated_clover_models()`` —
    thin accessors returning the shapes existing callers expect. Each
    falls back to the in-repo hardcoded list on any lookup failure.
 
@@ -301,7 +301,7 @@ def get_catalog(*, force_refresh: bool = False) -> dict[str, Any]:
 
     # Stale-while-revalidate: an expired disk copy is served immediately and
     # refreshed off-thread, so interactive surfaces (the /model picker calls
-    # this via get_curated_nous_model_ids on every open) never block on the
+    # this via get_curated_clover_model_ids on every open) never block on the
     # manifest fetch. Only a cold cache (no disk copy at all) still blocks.
     if not force_refresh and disk_data is not None:
         _catalog_cache = disk_data
@@ -381,7 +381,7 @@ def get_curated_openrouter_models() -> list[tuple[str, str]] | None:
     return out or None
 
 
-def get_curated_nous_models() -> list[str] | None:
+def get_curated_clover_models() -> list[str] | None:
     """Return Clover Portal's curated list of model ids from the manifest.
 
     Returns ``None`` when the manifest is unavailable.

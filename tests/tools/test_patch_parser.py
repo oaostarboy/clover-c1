@@ -815,7 +815,7 @@ class TestV4ABomRoundTrip:
     ``read_file_raw`` deliberately strips the BOM (the agent should
     never see U+FEFF), but the underlying ``write_file`` must restore
     it on rewrite — otherwise a V4A patch turns an existing BOM-bearing
-    file into a plain UTF-8 file.  Regression for teknium1 review on
+    file into a plain UTF-8 file.  Regression for maintainer review on
     PR #55661.
     """
 

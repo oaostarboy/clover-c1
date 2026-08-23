@@ -64,7 +64,7 @@ def _get_jwk_client(jwks_url: str) -> Any:
 
             # Explicit Accept + User-Agent so the JWKS fetch isn't blocked by the
             # NAS portal's WAF, which 403s the default Python-urllib fingerprint
-            # (same fix as the dashboard-auth nous/self_hosted providers).
+            # (same fix as the dashboard-auth clover/self_hosted providers).
             client = PyJWKClient(
                 jwks_url,
                 headers={

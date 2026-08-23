@@ -1,6 +1,6 @@
 """Client for uploading ``clover debug share`` bundles to Clover-internal S3.
 
-This is the opt-in (``--nous``) destination for ``clover debug share``.
+This is the opt-in (``--clover``) destination for ``clover debug share``.
 Unlike the public paste.rs path, bundles uploaded here go to a Clover-owned
 S3 bucket via a short-lived signed URL minted by the Clover account service
 (NAS).  The bucket auto-expires objects after 14 days, and the contents are
@@ -119,7 +119,7 @@ def put_bundle(
             raise RuntimeError(f"diagnostics bundle PUT failed: HTTP {status}")
 
 
-def share_to_nous(report_bundle: bytes) -> dict:
+def share_to_clover(report_bundle: bytes) -> dict:
     """Orchestrate the full Clover-S3 upload of a gzipped *report_bundle*.
 
     Two steps: mint a presigned PUT URL (sending the exact ``sizeBytes`` NAS

@@ -2,7 +2,7 @@
 name: mpp-agent
 description: Pay HTTP 402 APIs via Machine Payments Protocol (MPP).
 version: 0.1.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 platforms: [linux, macos]
 metadata:

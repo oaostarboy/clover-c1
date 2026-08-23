@@ -1,4 +1,4 @@
-"""Portal-URL resolution for Phase 2b billing errors (nous_billing).
+"""Portal-URL resolution for Phase 2b billing errors (clover_billing).
 
 The server emits ``portalUrl`` relative by design (``/billing?topup=open``); the
 client must resolve it against the active portal base so deep-links are clickable
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from clover_cli.nous_billing import (
+from clover_cli.clover_billing import (
     BillingError,
     _absolutize_portal_url,
     _raise_for_error,
@@ -18,13 +18,13 @@ from clover_cli.nous_billing import (
 
 @pytest.fixture
 def _preview(monkeypatch):
-    monkeypatch.setenv("CLOVER_PORTAL_BASE_URL", "https://nas-pr-412.clovercognition.wtf")
+    monkeypatch.setenv("CLOVER_PORTAL_BASE_URL", "https://localhost")
 
 
 def test_absolutize_resolves_relative(_preview):
     assert (
         _absolutize_portal_url("/billing?topup=open")
-        == "https://nas-pr-412.clovercognition.wtf/billing?topup=open"
+        == "https://localhost/billing?topup=open"
     )
 
 
@@ -38,5 +38,5 @@ def test_raise_for_error_attaches_absolute_portal_url(_preview):
         )
     assert (
         exc_info.value.portal_url
-        == "https://nas-pr-412.clovercognition.wtf/billing?topup=open"
+        == "https://localhost/billing?topup=open"
     )

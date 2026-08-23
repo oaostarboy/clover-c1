@@ -77,7 +77,7 @@ def _mk_session(
                 "WHERE id = ?",
                 (
                     '{"platform": "telegram", "chat_id": "6308981865"}',
-                    "Teknium",
+                    "the maintainer",
                     session_id,
                 ),
             )

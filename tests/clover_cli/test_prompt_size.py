@@ -47,7 +47,7 @@ def isolated_home(tmp_path, monkeypatch):
 
 def test_runs_offline_without_credentials(isolated_home, monkeypatch):
     """No provider credentials configured → still produces a breakdown."""
-    for var in ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "NOUS_API_KEY",
+    for var in ("OPENROUTER_API_KEY", "OPENAI_API_KEY", "CLOVER_API_KEY",
                 "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     data = compute_prompt_breakdown("cli")

@@ -2,8 +2,8 @@
 
 from types import SimpleNamespace
 
-from clover_cli.clover_account import NousPaidServiceAccessInfo, CloverPortalAccountInfo
-from clover_cli.nous_subscription import NousFeatureState, NousSubscriptionFeatures
+from clover_cli.clover_account import CloverPaidServiceAccessInfo, CloverPortalAccountInfo
+from clover_cli.clover_subscription import CloverFeatureState, CloverSubscriptionFeatures
 
 
 def _patch_common_status_deps(monkeypatch, status_mod, tmp_path, *, openai_base_url=""):
@@ -18,9 +18,9 @@ def _patch_common_status_deps(monkeypatch, status_mod, tmp_path, *, openai_base_
         return ""
 
     monkeypatch.setattr(status_mod, "get_env_value", _get_env_value, raising=False)
-    monkeypatch.setattr(auth_mod, "get_nous_auth_status", lambda: {}, raising=False)
+    monkeypatch.setattr(auth_mod, "get_clover_auth_status", lambda: {}, raising=False)
     monkeypatch.setattr(
-        auth_mod, "get_nous_auth_status_local", lambda: {}, raising=False
+        auth_mod, "get_clover_auth_status_local", lambda: {}, raising=False
     )
     monkeypatch.setattr(auth_mod, "get_codex_auth_status", lambda: {}, raising=False)
     monkeypatch.setattr(

@@ -232,7 +232,7 @@ class TestRemoveCommand:
             ],
         })
 
-        # Picker returns index 1 (the middle entry, "nous / Clover-4")
+        # Picker returns index 1 (the middle entry, "clover / Clover-4")
         with patch("clover_cli.setup._curses_prompt_choice", return_value=1):
             from clover_cli.fallback_cmd import cmd_fallback_remove
             cmd_fallback_remove(types.SimpleNamespace())

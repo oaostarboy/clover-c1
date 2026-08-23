@@ -1,7 +1,7 @@
 # Profile Builder — Dashboard-Native, Full-Featured Profile Creation
 
 Status: design proposal (not yet implemented)
-Author: drafted for Teknium
+Author: drafted for the maintainer
 Supersedes: PR #31781 (prompt_toolkit `clover profile wizard`)
 
 ## Why this, not the CLI wizard
@@ -123,7 +123,7 @@ page's component + API, targeted at the new profile:
 
 Nothing writes to disk until ⑤.
 
-## Open product decisions (need Teknium)
+## Open product decisions (need the maintainer)
 
 1. **Skills seeding default.** Fresh profiles auto-seed the default bundle
    today. In the builder, should the skill step **replace** the bundle (pick

@@ -153,7 +153,7 @@ _BEARER_PROVIDERS: Dict[str, Tuple[str, ...]] = {
     "DEEPSEEK_API_KEY": ("api.deepseek.com",),
     "MISTRAL_API_KEY": ("api.mistral.ai",),
     "XAI_API_KEY": ("api.x.ai",),
-    "NOUS_API_KEY": ("inference.",),
+    "CLOVER_API_KEY": ("inference.",),
 }
 
 

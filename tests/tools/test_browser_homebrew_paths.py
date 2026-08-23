@@ -202,7 +202,7 @@ class TestFindAgentBrowser:
 
     def test_npx_fallback_validate_false(self):
         """The npx sentinel must resolve through the validate=False path too,
-        independent of the fully-mocked coverage in test_nous_subscription.py."""
+        independent of the fully-mocked coverage in test_clover_subscription.py."""
         def mock_which(cmd, path=None):
             if cmd == "agent-browser":
                 return None

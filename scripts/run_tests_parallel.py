@@ -67,7 +67,7 @@ _DEFAULT_ROOTS = ["tests"]
 #   tests/integration/ — historical; legacy --ignore flags
 #   tests/docker/      — .github/workflows/docker.yml ::
 #                        build-amd64 job (runs against the freshly-loaded
-#                        clovercognition/clover-c1:test image, via
+#                        cloverc1/clover-c1:test image, via
 #                        ``CLOVER_TEST_IMAGE`` so the fixture skips
 #                        rebuild). The full pytest-shard runner can't
 #                        host these because the session-scoped

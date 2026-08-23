@@ -848,7 +848,7 @@ framework only exposes CLI commands for the **currently active** memory
 provider (read from `memory.provider` in config.yaml), so disabled
 providers don't clutter `clover --help`.
 
-**Rule (Teknium, May 2026):** plugins MUST NOT modify core files
+**Rule (the maintainer, May 2026):** plugins MUST NOT modify core files
 (`run_agent.py`, `cli.py`, `gateway/run.py`, `clover_cli/main.py`, etc.).
 If a plugin needs a capability the framework doesn't expose, expand the
 generic plugin surface (new hook, new ctx method) — never hardcode

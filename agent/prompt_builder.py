@@ -2206,16 +2206,16 @@ def _build_skills_system_prompt_inner(
     return result
 
 
-def build_nous_subscription_prompt(valid_tool_names: "set[str] | None" = None) -> str:
+def build_clover_subscription_prompt(valid_tool_names: "set[str] | None" = None) -> str:
     """Build a compact Clover subscription capability block for the system prompt."""
     try:
-        from clover_cli.nous_subscription import get_nous_subscription_features
-        from tools.tool_backend_helpers import managed_nous_tools_enabled
+        from clover_cli.clover_subscription import get_clover_subscription_features
+        from tools.tool_backend_helpers import managed_clover_tools_enabled
     except Exception as exc:
         logger.debug("Failed to import Clover subscription helper: %s", exc)
         return ""
 
-    if not managed_nous_tools_enabled():
+    if not managed_clover_tools_enabled():
         return ""
 
     valid_names = set(valid_tool_names or set())
@@ -2241,17 +2241,17 @@ def build_nous_subscription_prompt(valid_tool_names: "set[str] | None" = None) -
     if valid_names and not (valid_names & relevant_tool_names):
         return ""
 
-    features = get_nous_subscription_features()
+    features = get_clover_subscription_features()
 
     def _status_line(feature) -> str:
-        if feature.managed_by_nous:
+        if feature.managed_by_clover:
             return f"- {feature.label}: active via Clover subscription"
         if feature.active:
             current = feature.current_provider or "configured provider"
             return f"- {feature.label}: currently using {current}"
-        if feature.included_by_default and features.nous_auth_present:
+        if feature.included_by_default and features.clover_auth_present:
             return f"- {feature.label}: included with Clover subscription, not currently selected"
-        if feature.key == "modal" and features.nous_auth_present:
+        if feature.key == "modal" and features.clover_auth_present:
             return f"- {feature.label}: optional via Clover subscription"
         return f"- {feature.label}: not currently available"
 

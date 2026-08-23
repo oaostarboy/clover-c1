@@ -57,7 +57,7 @@ export function getGlobalModelOptions(
 export interface RecommendedDefaultModel {
   provider: string
   model: string
-  /** True/false for Nous (free vs paid tier); null for other providers. */
+  /** True/false for Clover (free vs paid tier); null for other providers. */
   free_tier: boolean | null
 }
 

@@ -49,7 +49,7 @@ class TestFastFails:
         err = AuthError("not logged in", provider="clover", relogin_required=True)
         with patch.object(dr, "cmd_dashboard_register", dr.cmd_dashboard_register):
             with patch(
-                "clover_cli.auth.resolve_nous_access_token", side_effect=err
+                "clover_cli.auth.resolve_clover_access_token", side_effect=err
             ), patch("clover_cli.config.is_managed", return_value=False):
                 with pytest.raises(SystemExit) as exc:
                     dr.cmd_dashboard_register(_ns())
@@ -108,7 +108,7 @@ class TestHappyPath:
             return None
 
         with patch(
-            "clover_cli.auth.resolve_nous_access_token", return_value=account_token
+            "clover_cli.auth.resolve_clover_access_token", return_value=account_token
         ), patch("clover_cli.config.is_managed", return_value=False), patch.object(
             dr, "_resolve_portal_base_url", return_value=portal
         ), patch(
@@ -233,7 +233,7 @@ class TestCustomPortalPersistence:
             return None
 
         with patch(
-            "clover_cli.auth.resolve_nous_access_token", return_value="tok"
+            "clover_cli.auth.resolve_clover_access_token", return_value="tok"
         ), patch("clover_cli.config.is_managed", return_value=False), patch.dict(
             dr.os.environ, {}, clear=False
         ), patch.object(
@@ -305,7 +305,7 @@ class TestPublicUrlPersistence:
             return None
 
         with patch(
-            "clover_cli.auth.resolve_nous_access_token", return_value="tok"
+            "clover_cli.auth.resolve_clover_access_token", return_value="tok"
         ), patch("clover_cli.config.is_managed", return_value=False), patch.dict(
             dr.os.environ, {}, clear=False
         ), patch.object(
@@ -357,7 +357,7 @@ class TestPublicUrlPersistence:
             saved[key] = value
 
         with patch(
-            "clover_cli.auth.resolve_nous_access_token", return_value="tok"
+            "clover_cli.auth.resolve_clover_access_token", return_value="tok"
         ), patch("clover_cli.config.is_managed", return_value=False), patch.dict(
             dr.os.environ, {}, clear=False
         ), patch.object(
@@ -409,7 +409,7 @@ class TestPortalErrors:
         )
 
         with patch(
-            "clover_cli.auth.resolve_nous_access_token", return_value="tok"
+            "clover_cli.auth.resolve_clover_access_token", return_value="tok"
         ), patch("clover_cli.config.is_managed", return_value=False), patch.object(
             dr, "_resolve_portal_base_url", return_value=""
         ), patch.object(dr.urllib.request, "urlopen", side_effect=err):

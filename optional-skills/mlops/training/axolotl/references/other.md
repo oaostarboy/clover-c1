@@ -3187,7 +3187,7 @@ load_in_8bit: true
 adapter: lora
 
 datasets:
-  - path: teknium/GPT4-LLM-Cleaned
+  - path: maintainer/GPT4-LLM-Cleaned
     type: alpaca
 dataset_prepared_path: last_run_prepared
 val_set_size: 0.1

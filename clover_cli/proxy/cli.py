@@ -121,7 +121,7 @@ def cmd_proxy(args: Any) -> int:
         "OAuth-authenticated provider credentials to outbound requests.\n"
         "\n"
         "Subcommands:\n"
-        "  clover proxy start [--provider nous|xai] [--host 127.0.0.1] [--port 8645]\n"
+        "  clover proxy start [--provider clover|xai] [--host 127.0.0.1] [--port 8645]\n"
         "      Run the proxy in the foreground.\n"
         "  clover proxy status\n"
         "      Show which upstream adapters are ready.\n"

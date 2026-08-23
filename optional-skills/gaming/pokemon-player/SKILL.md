@@ -2,7 +2,7 @@
 name: pokemon-player
 description: "Play Pokemon via headless emulator + RAM reads."
 version: 1.0.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 tags: [gaming, pokemon, emulator, pyboy, gameplay, gameboy]
 platforms: [linux, macos, windows]

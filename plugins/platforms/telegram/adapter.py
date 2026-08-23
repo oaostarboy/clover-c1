@@ -4946,7 +4946,7 @@ class TelegramAdapter(BasePlatformAdapter):
         collect(getattr(self, "_polling_progress_verifier_task", None))
         # Hold-queue redispatch must be cancellable+awaitable on teardown so it
         # cannot dispatch handle_message into a torn-down session (same lifecycle
-        # rule teknium called out on #72037 for shielded flush dispatch).
+        # rule maintainer called out on #72037 for shielded flush dispatch).
         collect(getattr(self, "_held_inbound_redispatch_task", None))
 
         for task in pending_tasks:

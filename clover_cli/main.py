@@ -821,7 +821,7 @@ from clover_cli import __version__, __release_date__
 from clover_cli.model_setup_flows import (
     _prompt_auth_credentials_choice,
     _model_flow_openrouter,
-    _model_flow_nous,
+    _model_flow_clover,
     _model_flow_openai_codex,
     _model_flow_xai_oauth,
     _model_flow_qwen_oauth,
@@ -3973,7 +3973,7 @@ def select_provider_and_model(args=None):
     elif selected_provider == "ai-gateway":
         _model_flow_ai_gateway(config, current_model)
     elif selected_provider == "clover":
-        _model_flow_nous(config, current_model, args=args)
+        _model_flow_clover(config, current_model, args=args)
     elif selected_provider == "openai-codex":
         _model_flow_openai_codex(config, current_model)
     elif selected_provider == "xai-oauth":
@@ -5504,7 +5504,7 @@ def cmd_sync(args):
             )
         if not status.get("logged_in"):
             print("\nNot logged into Clover Portal — sync is inert.", file=sys.stderr)
-        elif not status.get("nous_admin"):
+        elif not status.get("clover_admin"):
             print(
                 "\nSync is not enabled for your account yet.",
                 file=sys.stderr,
@@ -5529,7 +5529,7 @@ def cmd_sync(args):
     except ssc.SyncInertError as e:
         print(f"sync inert: {e}", file=sys.stderr)
         return 1
-    if not identity.get("nous_admin"):
+    if not identity.get("clover_admin"):
         print(
             "sync unavailable: not enabled for your account yet.",
             file=sys.stderr,
@@ -11733,7 +11733,7 @@ def cmd_dashboard(args):
         print(f"→ Using web dist from CLOVER_WEB_DIST: {_dist_root}")
 
     # Discover and load plugins so any DashboardAuthProvider plugin
-    # (e.g. plugins/dashboard_auth/nous) registers BEFORE start_server's
+    # (e.g. plugins/dashboard_auth/clover) registers BEFORE start_server's
     # fail-closed gate check runs. The top-level argparse setup skips
     # plugin discovery for built-in subcommands like ``dashboard`` to
     # save ~500ms startup; we have to trigger it explicitly here because
@@ -13594,7 +13594,7 @@ def main():
         p.add_argument(
             "--provider",
             help="Only match sessions billed through this provider "
-            "(e.g. openrouter, anthropic, nous)",
+            "(e.g. openrouter, anthropic, clover)",
         )
         p.add_argument(
             "--user", help="Only match sessions from this user ID"

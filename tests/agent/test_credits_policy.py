@@ -330,7 +330,7 @@ class TestIsFreeTierModel:
                 }
             },
         )
-        # The agent holds the /v1-suffixed URL (DEFAULT_NOUS_INFERENCE_URL) —
+        # The agent holds the /v1-suffixed URL (DEFAULT_CLOVER_INFERENCE_URL) —
         # the helper must normalize it down to the picker's cache key.
         base = ""
         assert is_free_tier_model("some/zero-priced", base) is True

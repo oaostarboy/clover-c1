@@ -1186,7 +1186,7 @@ class TestWebServerEndpoints:
         assert data["name"] == "clover-update"
         assert data["pid"] is None
         assert data["error"] == "docker_update_unsupported"
-        assert "docker pull clovercognition/clover-c1:latest" in data["message"]
+        assert "docker pull cloverc1/clover-c1:latest" in data["message"]
         assert spawned is False
 
         status = self.client.get("/api/actions/clover-update/status")
@@ -1195,7 +1195,7 @@ class TestWebServerEndpoints:
         assert status_data["running"] is False
         assert status_data["exit_code"] == 1
         assert status_data["pid"] is None
-        assert any("docker pull clovercognition/clover-c1:latest" in line for line in status_data["lines"])
+        assert any("docker pull cloverc1/clover-c1:latest" in line for line in status_data["lines"])
 
     def test_update_clover_returns_apt_guidance_without_spawning(self, monkeypatch):
         import clover_cli.web_server as web_server
@@ -2590,13 +2590,13 @@ class TestNewEndpoints:
 
     def test_toolsets_resolve_subscription_features_once(self, monkeypatch):
         import clover_cli.tools_config as tools_config
-        from clover_cli.nous_subscription import NousSubscriptionFeatures
+        from clover_cli.clover_subscription import CloverSubscriptionFeatures
 
         calls = 0
-        features = NousSubscriptionFeatures(
+        features = CloverSubscriptionFeatures(
             subscribed=False,
-            nous_auth_present=False,
-            provider_is_nous=False,
+            clover_auth_present=False,
+            provider_is_clover_portal=False,
             features={},
             account_info=None,
         )
@@ -2608,7 +2608,7 @@ class TestNewEndpoints:
 
         monkeypatch.setattr(
             tools_config,
-            "get_nous_subscription_features",
+            "get_clover_subscription_features",
             resolve_features,
         )
 
@@ -2664,7 +2664,7 @@ class TestNewEndpoints:
 
         # Logged out of Clover Portal → managed subscription rows need sign-in.
         monkeypatch.setattr(
-            "clover_cli.nous_subscription.get_nous_portal_account_info",
+            "clover_cli.clover_subscription.get_clover_portal_account_info",
             lambda *a, **k: CloverPortalAccountInfo(
                 logged_in=False, source="none", fresh=False, paid_service_access=None
             ),
@@ -2697,19 +2697,19 @@ class TestNewEndpoints:
 
 
 
-    def test_select_managed_nous_provider_reports_needs_nous_auth(self, monkeypatch):
-        """Selecting a managed Clover row while logged out flags needs_nous_auth.
+    def test_select_managed_clover_provider_reports_needs_clover_auth(self, monkeypatch):
+        """Selecting a managed Clover row while logged out flags needs_clover_auth.
 
         Regression: the GUI PUT wrote browser.cloud_provider + use_gateway
         but skipped the Portal entitlement handshake the CLI runs inline
-        (ensure_nous_portal_access) — so the row never activated and nothing
+        (ensure_clover_portal_access) — so the row never activated and nothing
         told the user to sign in. The endpoint now reports the entitlement
         gap so the client can drive the existing Clover OAuth flow.
         """
         from clover_cli.clover_account import CloverPortalAccountInfo
 
         monkeypatch.setattr(
-            "clover_cli.nous_subscription.get_nous_portal_account_info",
+            "clover_cli.clover_subscription.get_clover_portal_account_info",
             lambda *a, **k: CloverPortalAccountInfo(
                 logged_in=False, source="none", fresh=False, paid_service_access=None
             ),
@@ -2722,7 +2722,7 @@ class TestNewEndpoints:
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
-        assert data["needs_nous_auth"] is True
+        assert data["needs_clover_auth"] is True
         assert data["feature"] == "browser"
         # The selection is still persisted — activation is what's gated.
         # Managed rows store the single 'clover' provider string (the runtime

@@ -109,7 +109,7 @@ def test_load_fallback_model_static_unchanged_contract(tmp_path, monkeypatch):
         "  - provider: deepseek\n"
         "    model: deepseek-v4-flash\n"
         "fallback_model:\n"
-        "  provider: nous\n"
+        "  provider: clover\n"
         "  model: Clover-4\n"
     )
 

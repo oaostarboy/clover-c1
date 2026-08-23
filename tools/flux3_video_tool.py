@@ -22,7 +22,7 @@ tool's result text, and surface ``error.message`` the same way on a refusal.
 Media inputs: handlers know their own media fields explicitly. A local file
 path is resolved through :func:`tools.image_source.resolve_image_source`
 (sandbox confinement, credential guard) and delivered via the Clover upload
-protocol (presign, direct PUT to storage, ``nous-upload:<token>`` reference).
+protocol (presign, direct PUT to storage, ``clover-upload:<token>`` reference).
 URLs pass through untouched.
 """
 
@@ -40,8 +40,8 @@ from tools.managed_tool_gateway import (
     build_managed_media_uploader,
     managed_gateway_auth_headers,
     managed_vendor_endpoints,
-    peek_nous_access_token,
-    read_nous_access_token,
+    peek_clover_access_token,
+    read_clover_access_token,
 )
 
 logger = logging.getLogger(__name__)
@@ -317,10 +317,10 @@ async def _wait_between_looks(seconds: float) -> bool:
     return True
 
 
-def _warm_nous_token() -> None:
+def _warm_clover_token() -> None:
     """Refresh the Clover token once, before any parallel upload needs it.
 
-    ``read_nous_access_token`` takes no lock and, when a refresh fails, falls
+    ``read_clover_access_token`` takes no lock and, when a refresh fails, falls
     back to returning the stale cached token. Uploading in parallel therefore
     had every request discover the token was expiring at the same instant and
     fire its own refresh; the rotating refresh token means the first wins and
@@ -329,7 +329,7 @@ def _warm_nous_token() -> None:
     reads it instead of racing for it.
     """
     try:
-        read_nous_access_token()
+        read_clover_access_token()
     except Exception as exc:  # pragma: no cover — the real read retries below
         logger.debug("Clover token warm-up failed before parallel uploads: %s", exc)
 
@@ -344,7 +344,7 @@ async def _prepare_media(args: dict, task_id: Optional[str]) -> dict:
     and discloses the user's directory layout to a third party.
     """
     prepared = dict(args or {})
-    _warm_nous_token()
+    _warm_clover_token()
     for field, permitted in _MEDIA_FIELDS.items():
         value = prepared.get(field)
         if value is None:
@@ -373,7 +373,7 @@ def _without_media(args: dict) -> dict:
 
 
 async def _deliver_media(value, permitted: tuple, task_id: Optional[str]):
-    """Replace a local path with a ``nous-upload:`` reference; pass URLs through.
+    """Replace a local path with a ``clover-upload:`` reference; pass URLs through.
 
     Raises ``ValueError`` with a model-readable sentence when the file cannot
     be read or uploaded — the caller turns that into the tool's error payload.
@@ -775,21 +775,21 @@ async def _handle_prompting_guide(args: dict, **kwargs) -> str:
 # Gating
 # ---------------------------------------------------------------------------
 
-def _has_nous_credential() -> bool:
+def _has_clover_credential() -> bool:
     """True when a Clover bearer is on hand, without spending a refresh to learn it.
 
     Two lookups, because the transport itself has two.
-    ``peek_nous_access_token`` covers the env override and the active store's
+    ``peek_clover_access_token`` covers the env override and the active store's
     cached token. A profile that was never logged into separately has neither,
     and reads the credential from the global-root ``auth.json`` — the same
-    fallback ``resolve_nous_access_token`` takes when the transport refreshes.
+    fallback ``resolve_clover_access_token`` takes when the transport refreshes.
     Probing only the first would hide the tools from a profile whose calls
     would have gone through perfectly well.
 
     Neither lookup validates or refreshes the token: an expired credential is
     the gateway's 401 to report, and that answer already asks for a sign-in.
     """
-    if peek_nous_access_token():
+    if peek_clover_access_token():
         return True
     try:
         from clover_cli.auth import get_provider_auth_state
@@ -820,7 +820,7 @@ def check_bfl_requirements() -> bool:
     try:
         if _endpoints() is None:
             return False
-        return _has_nous_credential()
+        return _has_clover_credential()
     except Exception:
         return False
 

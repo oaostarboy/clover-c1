@@ -30,7 +30,7 @@ Examples:
     clover debug share --expire 30  Keep paste for 30 days
     clover debug share --local      Print report locally (no upload)
     clover debug share --no-redact  Disable upload-time secret redaction
-    clover debug share --nous       Upload to Clover-internal storage (private)
+    clover debug share --clover       Upload to Clover-internal storage (private)
     clover debug delete <url>       Delete a previously uploaded paste
 """,
     )
@@ -77,7 +77,7 @@ Examples:
         ),
     )
     share_parser.add_argument(
-        "--nous",
+        "--clover",
         action="store_true",
         help=(
             "Upload the debug bundle to Clover-internal storage (AWS S3) instead "

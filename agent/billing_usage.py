@@ -246,10 +246,10 @@ def build_usage_model(*, timeout: float = 10.0) -> UsageModel:
     try:
         import concurrent.futures
 
-        from clover_cli.clover_account import get_nous_portal_account_info
+        from clover_cli.clover_account import get_clover_portal_account_info
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            account = pool.submit(get_nous_portal_account_info, force_fresh=True).result(timeout=timeout)
+            account = pool.submit(get_clover_portal_account_info, force_fresh=True).result(timeout=timeout)
         return usage_model_from_account(account)
     except Exception:
         logger.debug("usage ▸ portal fetch failed (fail-open)", exc_info=True)

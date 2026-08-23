@@ -318,7 +318,7 @@ export function DesktopOnboardingOverlay({
           'relative w-full max-w-[45rem] transition-all duration-500 ease-out',
           bare
             ? ''
-            : 'overflow-hidden rounded-xl border border-(--stroke-nous) bg-(--ui-chat-bubble-background) shadow-nous',
+            : 'overflow-hidden rounded-xl border border-(--stroke-clover) bg-(--ui-chat-bubble-background) shadow-clover',
           // Bare confirm screen orchestrates its own per-element exit; the
           // carded states use the simple lift/blur dissolve.
           leaving && !bare

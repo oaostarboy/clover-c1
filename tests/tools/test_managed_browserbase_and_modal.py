@@ -65,8 +65,8 @@ def _restore_tool_and_agent_modules():
 
 
 @pytest.fixture(autouse=True)
-def _enable_managed_nous_tools(monkeypatch):
-    """Ensure managed_nous_tools_enabled() returns True even after module reloads.
+def _enable_managed_clover_tools(monkeypatch):
+    """Ensure managed_clover_tools_enabled() returns True even after module reloads.
 
     The _install_fake_tools_package() helper resets and reimports tool modules,
     so a simple monkeypatch on tool_backend_helpers doesn't survive.  We patch
@@ -74,7 +74,7 @@ def _enable_managed_nous_tools(monkeypatch):
     clover_cli.clover_account — so the function body returns True.
     """
     monkeypatch.setattr(
-        "clover_cli.clover_account.get_nous_portal_account_info",
+        "clover_cli.clover_account.get_clover_portal_account_info",
         lambda: CloverPortalAccountInfo(
             logged_in=True,
             source="jwt",
@@ -220,7 +220,7 @@ def test_browser_use_explicit_local_mode_stays_local_even_when_managed_gateway_i
     env.pop("BROWSER_USE_API_KEY", None)
     env.update({
         "CLOVER_HOME": str(tmp_path),
-        "TOOL_GATEWAY_USER_TOKEN": "nous-token",
+        "TOOL_GATEWAY_USER_TOKEN": "clover-token",
         "BROWSER_USE_GATEWAY_URL": "http://127.0.0.1:3009",
     })
 
@@ -240,7 +240,7 @@ def test_browserbase_does_not_use_gateway_only_configuration():
     env.pop("BROWSERBASE_API_KEY", None)
     env.pop("BROWSERBASE_PROJECT_ID", None)
     env.update({
-        "TOOL_GATEWAY_USER_TOKEN": "nous-token",
+        "TOOL_GATEWAY_USER_TOKEN": "clover-token",
         "BROWSERBASE_GATEWAY_URL": "http://127.0.0.1:3009",
     })
 

@@ -741,7 +741,7 @@ def _is_model_free(model_id: str, pricing: dict[str, dict[str, str]]) -> bool:
 # ---------------------------------------------------------------------------
 # Clover Portal account tier detection
 # ---------------------------------------------------------------------------
-def is_nous_free_tier(account_info: dict[str, Any]) -> bool:
+def is_clover_free_tier(account_info: dict[str, Any]) -> bool:
     """Return True if the account info indicates a free (unpaid) tier.
 
     Prefer the Portal's explicit ``paid_service_access.allowed`` entitlement
@@ -769,7 +769,7 @@ def is_nous_free_tier(account_info: dict[str, Any]) -> bool:
         return False
 
 
-def partition_nous_models_by_tier(
+def partition_clover_models_by_tier(
     model_ids: list[str],
     pricing: dict[str, dict[str, str]],
     free_tier: bool,
@@ -806,7 +806,7 @@ def union_with_portal_free_recommendations(
 ) -> tuple[list[str], dict[str, dict[str, str]]]:
     """Augment curated list + pricing with the Portal's ``freeRecommendedModels``.
 
-    The Portal's ``/api/nous/recommended-models`` endpoint advertises which
+    The Portal's ``/api/clover/recommended-models`` endpoint advertises which
     models are free *right now* — independent of what the in-repo
     ``_PROVIDER_MODELS["clover"]`` list happens to contain or whether the
     docs-hosted catalog manifest has been rebuilt since the last release.
@@ -822,13 +822,13 @@ def union_with_portal_free_recommendations(
       show first and Portal-only picks follow).
     * ``pricing`` gets a synthetic ``{"prompt": "0", "completion": "0"}``
       entry for any free recommendation missing from the live pricing
-      map, so :func:`partition_nous_models_by_tier` keeps it.
+      map, so :func:`partition_clover_models_by_tier` keeps it.
 
     Failures (network, parse, missing field) are silent and degrade to
     returning the inputs unchanged.
     """
     try:
-        payload = fetch_nous_recommended_models(
+        payload = fetch_clover_recommended_models(
             portal_base_url, force_refresh=force_refresh
         )
     except Exception:
@@ -873,7 +873,7 @@ def union_with_portal_paid_recommendations(
     """Augment curated list with the Portal's ``paidRecommendedModels``.
 
     Mirror of :func:`union_with_portal_free_recommendations` for paid-tier
-    users. The Portal's ``/api/nous/recommended-models`` endpoint advertises
+    users. The Portal's ``/api/clover/recommended-models`` endpoint advertises
     which paid models are blessed *right now* — independent of what the
     in-repo ``_PROVIDER_MODELS["clover"]`` list happens to contain or whether
     the docs-hosted catalog manifest has been rebuilt since the last release.
@@ -891,7 +891,7 @@ def union_with_portal_paid_recommendations(
       via :func:`get_pricing_for_provider`; if the live endpoint hasn't
       published pricing yet, the picker shows a blank price column rather
       than fabricating numbers. (The free helper synthesizes ``$0`` so
-      :func:`partition_nous_models_by_tier` keeps free models selectable;
+      :func:`partition_clover_models_by_tier` keeps free models selectable;
       no equivalent gating applies on the paid side, so synthesis would
       only mislead the user.)
 
@@ -900,7 +900,7 @@ def union_with_portal_paid_recommendations(
     Portal-side hiccup.
     """
     try:
-        payload = fetch_nous_recommended_models(
+        payload = fetch_clover_recommended_models(
             portal_base_url, force_refresh=force_refresh
         )
     except Exception:
@@ -937,7 +937,7 @@ _FREE_TIER_CACHE_TTL: int = 180  # seconds (3 minutes)
 _free_tier_cache: tuple[bool, float] | None = None  # (result, timestamp)
 
 
-def check_nous_free_tier(*, force_fresh: bool = False) -> bool:
+def check_clover_free_tier(*, force_fresh: bool = False) -> bool:
     """Check if the current Clover Portal user is on a free (unpaid) tier.
 
     Results are cached for ``_FREE_TIER_CACHE_TTL`` seconds to avoid
@@ -955,9 +955,9 @@ def check_nous_free_tier(*, force_fresh: bool = False) -> bool:
             return cached_result
 
     try:
-        from clover_cli.clover_account import get_nous_portal_account_info
+        from clover_cli.clover_account import get_clover_portal_account_info
 
-        account_info = get_nous_portal_account_info(force_fresh=force_fresh)
+        account_info = get_clover_portal_account_info(force_fresh=force_fresh)
         result = account_info.is_free_tier
         _free_tier_cache = (result, now)
         return result
@@ -986,19 +986,19 @@ def check_nous_free_tier(*, force_fresh: bool = False) -> bool:
 #   }
 # ---------------------------------------------------------------------------
 
-NOUS_RECOMMENDED_MODELS_PATH = "/api/nous/recommended-models"
-_NOUS_RECOMMENDED_CACHE_TTL: int = 600  # seconds (10 minutes)
+CLOVER_RECOMMENDED_MODELS_PATH = "/api/clover/recommended-models"
+_CLOVER_RECOMMENDED_CACHE_TTL: int = 600  # seconds (10 minutes)
 # (result_dict, timestamp) keyed by portal_base_url so staging vs prod don't collide.
-_nous_recommended_cache: dict[str, tuple[dict[str, Any], float]] = {}
+_clover_recommended_cache: dict[str, tuple[dict[str, Any], float]] = {}
 
 
-def _nous_recommended_disk_path() -> "Path":
+def _clover_recommended_disk_path() -> "Path":
     """Disk path for the persisted recommended-models cache."""
     from clover_constants import get_clover_home
-    return get_clover_home() / "cache" / "nous_recommended_cache.json"
+    return get_clover_home() / "cache" / "clover_recommended_cache.json"
 
 
-def _read_nous_recommended_disk(base: str) -> dict[str, Any] | None:
+def _read_clover_recommended_disk(base: str) -> dict[str, Any] | None:
     """Return the last-known-good payload for ``base`` from disk, or None.
 
     The disk file is a JSON object keyed by portal base URL so staging and
@@ -1006,7 +1006,7 @@ def _read_nous_recommended_disk(base: str) -> dict[str, Any] | None:
     ``{"<base>": {"data": {...}, "ts": <epoch_seconds>}}``.
     """
     try:
-        with open(_nous_recommended_disk_path(), encoding="utf-8") as fh:
+        with open(_clover_recommended_disk_path(), encoding="utf-8") as fh:
             blob = json.load(fh)
     except (OSError, json.JSONDecodeError):
         return None
@@ -1019,7 +1019,7 @@ def _read_nous_recommended_disk(base: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) and data else None
 
 
-def _write_nous_recommended_disk(base: str, data: dict[str, Any]) -> None:
+def _write_clover_recommended_disk(base: str, data: dict[str, Any]) -> None:
     """Persist ``data`` as the last-known-good payload for ``base``.
 
     Merges into any existing per-base map, then writes atomically. Failures
@@ -1027,7 +1027,7 @@ def _write_nous_recommended_disk(base: str, data: dict[str, Any]) -> None:
     """
     if not data:
         return
-    path = _nous_recommended_disk_path()
+    path = _clover_recommended_disk_path()
     try:
         try:
             with open(path, encoding="utf-8") as fh:
@@ -1046,11 +1046,11 @@ def _write_nous_recommended_disk(base: str, data: dict[str, Any]) -> None:
     except OSError as exc:
         import logging
         logging.getLogger(__name__).debug(
-            "nous recommended-models disk cache write failed: %s", exc
+            "clover recommended-models disk cache write failed: %s", exc
         )
 
 
-def fetch_nous_recommended_models(
+def fetch_clover_recommended_models(
     portal_base_url: str = "",
     timeout: float = 5.0,
     *,
@@ -1058,13 +1058,13 @@ def fetch_nous_recommended_models(
 ) -> dict[str, Any]:
     """Fetch the Clover Portal's curated recommended-models payload.
 
-    Hits ``<portal>/api/nous/recommended-models``. The endpoint is public —
+    Hits ``<portal>/api/clover/recommended-models``. The endpoint is public —
     no auth is required. Results are cached per portal URL for
-    ``_NOUS_RECOMMENDED_CACHE_TTL`` seconds in process; pass
+    ``_CLOVER_RECOMMENDED_CACHE_TTL`` seconds in process; pass
     ``force_refresh=True`` to bypass the in-process cache.
 
     A successful live fetch is also persisted to a per-base disk cache
-    (``$CLOVER_HOME/cache/nous_recommended_cache.json``) as last-known-good.
+    (``$CLOVER_HOME/cache/clover_recommended_cache.json``) as last-known-good.
     When the live fetch fails (network, parse, non-2xx) and the in-process
     cache is empty, the disk copy is returned instead of ``{}`` — so a
     transient Portal hiccup no longer silently drops the free/paid model
@@ -1076,13 +1076,13 @@ def fetch_nous_recommended_models(
     """
     base = (portal_base_url or "").rstrip("/")
     now = time.monotonic()
-    cached = _nous_recommended_cache.get(base)
+    cached = _clover_recommended_cache.get(base)
     if not force_refresh and cached is not None:
         payload, cached_at = cached
-        if now - cached_at < _NOUS_RECOMMENDED_CACHE_TTL:
+        if now - cached_at < _CLOVER_RECOMMENDED_CACHE_TTL:
             return payload
 
-    url = f"{base}{NOUS_RECOMMENDED_MODELS_PATH}"
+    url = f"{base}{CLOVER_RECOMMENDED_MODELS_PATH}"
     try:
         req = urllib.request.Request(
             url,
@@ -1097,33 +1097,33 @@ def fetch_nous_recommended_models(
 
     if data:
         # Live fetch succeeded — refresh both cache layers.
-        _nous_recommended_cache[base] = (data, now)
-        _write_nous_recommended_disk(base, data)
+        _clover_recommended_cache[base] = (data, now)
+        _write_clover_recommended_disk(base, data)
         return data
 
     # Live fetch failed. Fall back to the last-known-good disk copy so a
     # transient Portal hiccup doesn't drop the recommendations entirely.
-    disk = _read_nous_recommended_disk(base)
+    disk = _read_clover_recommended_disk(base)
     if disk:
-        _nous_recommended_cache[base] = (disk, now)
+        _clover_recommended_cache[base] = (disk, now)
         return disk
 
-    _nous_recommended_cache[base] = (data, now)
+    _clover_recommended_cache[base] = (data, now)
     return data
 
 
-def _resolve_nous_portal_url() -> str:
+def _resolve_clover_portal_url() -> str:
     """Best-effort lookup of the Portal base URL the user is authed against."""
     try:
         from clover_cli.auth import (
-            DEFAULT_NOUS_PORTAL_URL,
+            DEFAULT_CLOVER_PORTAL_URL,
             get_provider_auth_state,
         )
         state = get_provider_auth_state("clover") or {}
         portal = str(state.get("portal_base_url") or "").strip()
         if portal:
             return portal.rstrip("/")
-        return str(DEFAULT_NOUS_PORTAL_URL).rstrip("/")
+        return str(DEFAULT_CLOVER_PORTAL_URL).rstrip("/")
     except Exception:
         return ""
 
@@ -1138,7 +1138,7 @@ def _extract_model_name(entry: Any) -> Optional[str]:
     return None
 
 
-def get_nous_recommended_aux_model(
+def get_clover_recommended_aux_model(
     *,
     vision: bool = False,
     free_tier: Optional[bool] = None,
@@ -1155,7 +1155,7 @@ def get_nous_recommended_aux_model(
                          ``freeRecommendedCompactionModel``
 
     When ``free_tier`` is ``None`` (default) the user's tier is auto-detected
-    via :func:`check_nous_free_tier`. Pass an explicit bool to bypass the
+    via :func:`check_clover_free_tier`. Pass an explicit bool to bypass the
     detection — useful for tests or when the caller already knows the tier.
 
     For paid-tier users we prefer the paid recommendation but gracefully fall
@@ -1166,14 +1166,14 @@ def get_nous_recommended_aux_model(
     fails — callers should fall back to their own default (currently
     ``google/gemini-3-flash-preview``).
     """
-    base = portal_base_url or _resolve_nous_portal_url()
-    payload = fetch_nous_recommended_models(base, force_refresh=force_refresh)
+    base = portal_base_url or _resolve_clover_portal_url()
+    payload = fetch_clover_recommended_models(base, force_refresh=force_refresh)
     if not payload:
         return None
 
     if free_tier is None:
         try:
-            free_tier = check_nous_free_tier()
+            free_tier = check_clover_free_tier()
         except Exception:
             # On any detection error, assume paid — paid users see both fields
             # anyway so this is a safe default that maximises model quality.
@@ -1536,7 +1536,7 @@ def pick_silent_default_model(model_ids: list[str], provider: str = "openrouter"
 # (cache-only catalog read). The *interactive* default (GUI onboarding /
 # ``clover model``) uses the richer free/paid-tier-aware resolver — see
 # ``get_recommended_default_model`` in clover_cli/web_server.py and
-# ``partition_nous_models_by_tier`` — which can hit the Portal.
+# ``partition_clover_models_by_tier`` — which can hit the Portal.
 _SILENT_DEFAULT_PROVIDERS: frozenset[str] = frozenset({"clover", "openrouter"})
 
 
@@ -1897,46 +1897,46 @@ def warm_openrouter_reasoning_caps_async() -> None:
 # Clover Portal serves OpenRouter's catalog schema, so the same parser and
 # tri-state contract apply. Kept in its own cache because the two catalogs
 # list different models (and different capabilities for shared ids).
-_nous_reasoning_caps_cache: dict[str, Optional[dict[str, Any]]] | None = None
-_nous_reasoning_caps_failed_at: float | None = None
+_clover_reasoning_caps_cache: dict[str, Optional[dict[str, Any]]] | None = None
+_clover_reasoning_caps_failed_at: float | None = None
 
 
-def nous_catalog_url() -> str:
+def clover_catalog_url() -> str:
     """The Portal ``/v1/models`` URL for the endpoint we actually talk to.
 
     Resolved through the documented ladder rather than pinned to production —
-    ``NOUS_INFERENCE_BASE_URL`` → resolved credential base → prod — so a
+    ``CLOVER_INFERENCE_BASE_URL`` → resolved credential base → prod — so a
     staging profile reads staging's capabilities. Reading prod's would answer
     the reasoning-mandatory question for the wrong deployment.
     """
-    return f"{_resolve_nous_pricing_credentials()[1]}/v1/models"
+    return f"{_resolve_clover_pricing_credentials()[1]}/v1/models"
 
 
-def _fetch_nous_reasoning_caps(
+def _fetch_clover_reasoning_caps(
     timeout: float = 6.0, *, force: bool = False
 ) -> Optional[dict[str, Optional[dict[str, Any]]]]:
     """Clover Portal counterpart of :func:`_fetch_openrouter_reasoning_caps`."""
-    global _nous_reasoning_caps_cache, _nous_reasoning_caps_failed_at
-    if _nous_reasoning_caps_cache is not None and not force:
-        return _nous_reasoning_caps_cache
+    global _clover_reasoning_caps_cache, _clover_reasoning_caps_failed_at
+    if _clover_reasoning_caps_cache is not None and not force:
+        return _clover_reasoning_caps_cache
     if (
-        _nous_reasoning_caps_failed_at is not None
-        and (time.monotonic() - _nous_reasoning_caps_failed_at) < 60
+        _clover_reasoning_caps_failed_at is not None
+        and (time.monotonic() - _clover_reasoning_caps_failed_at) < 60
     ):
         return None
-    caps_by_id = _fetch_reasoning_caps_catalog(nous_catalog_url(), timeout)
+    caps_by_id = _fetch_reasoning_caps_catalog(clover_catalog_url(), timeout)
     if caps_by_id is None:
-        _nous_reasoning_caps_failed_at = time.monotonic()
+        _clover_reasoning_caps_failed_at = time.monotonic()
         return None
-    _nous_reasoning_caps_cache = caps_by_id
+    _clover_reasoning_caps_cache = caps_by_id
     return caps_by_id
 
 
-def _refresh_nous_reasoning_caps() -> None:
-    _fetch_nous_reasoning_caps(force=True)
+def _refresh_clover_reasoning_caps() -> None:
+    _fetch_clover_reasoning_caps(force=True)
 
 
-def nous_model_reasoning_capabilities(
+def clover_model_reasoning_capabilities(
     model_id: Optional[str],
     *,
     timeout: float = 6.0,
@@ -1946,46 +1946,46 @@ def nous_model_reasoning_capabilities(
 
     Same tri-state contract and cache-only default as
     :func:`openrouter_model_reasoning_capabilities`; warm the cache with
-    :func:`warm_nous_reasoning_caps_async` from hot paths.
+    :func:`warm_clover_reasoning_caps_async` from hot paths.
     """
     model = str(model_id or "").strip()
     if not model:
         return None
-    caps_by_id = _nous_caps_cached()
+    caps_by_id = _clover_caps_cached()
     if caps_by_id is None and allow_fetch:
-        caps_by_id = _fetch_nous_reasoning_caps(timeout=timeout)
+        caps_by_id = _fetch_clover_reasoning_caps(timeout=timeout)
     if caps_by_id is None:
         return None
     return caps_by_id.get(model)
 
 
-_nous_caps_disk_checked = False
-_nous_caps_warm_started = False
+_clover_caps_disk_checked = False
+_clover_caps_warm_started = False
 
 
-def _nous_caps_cached() -> Optional[dict[str, Optional[dict[str, Any]]]]:
+def _clover_caps_cached() -> Optional[dict[str, Optional[dict[str, Any]]]]:
     """Cache-only Portal caps: memory, else the disk mirror. Never HTTP.
 
     Guarded to one attempt per process because naming the catalog means
     resolving Portal credentials, which can itself reach the network to
     refresh a token — far too expensive for a caller that runs every turn.
     """
-    global _nous_reasoning_caps_cache, _nous_caps_disk_checked
-    if _nous_reasoning_caps_cache is None and not _nous_caps_disk_checked:
-        _nous_caps_disk_checked = True
-        _nous_reasoning_caps_cache = _hydrate_reasoning_caps_from_disk(
-            nous_catalog_url(), _refresh_nous_reasoning_caps
+    global _clover_reasoning_caps_cache, _clover_caps_disk_checked
+    if _clover_reasoning_caps_cache is None and not _clover_caps_disk_checked:
+        _clover_caps_disk_checked = True
+        _clover_reasoning_caps_cache = _hydrate_reasoning_caps_from_disk(
+            clover_catalog_url(), _refresh_clover_reasoning_caps
         )
-    return _nous_reasoning_caps_cache
+    return _clover_reasoning_caps_cache
 
 
-def warm_nous_reasoning_caps_async() -> None:
+def warm_clover_reasoning_caps_async() -> None:
     """Clover Portal counterpart of :func:`warm_openrouter_reasoning_caps_async`."""
-    global _nous_caps_warm_started
-    if _nous_caps_warm_started or _nous_caps_cached() is not None:
+    global _clover_caps_warm_started
+    if _clover_caps_warm_started or _clover_caps_cached() is not None:
         return
-    _nous_caps_warm_started = True
-    _warm_reasoning_caps_async(_refresh_nous_reasoning_caps)
+    _clover_caps_warm_started = True
+    _warm_reasoning_caps_async(_refresh_clover_reasoning_caps)
 
 
 # Canonical low→high ordering used for nearest-level clamping. Kept as an
@@ -2102,7 +2102,7 @@ def model_ids(*, force_refresh: bool = False) -> list[str]:
     return [mid for mid, _ in fetch_openrouter_models(force_refresh=force_refresh)]
 
 
-def get_curated_nous_model_ids() -> list[str]:
+def get_curated_clover_model_ids() -> list[str]:
     """Return the curated Clover Portal model-id list.
 
     Prefers the remotely-hosted catalog manifest (published under
@@ -2111,8 +2111,8 @@ def get_curated_nous_model_ids() -> list[str]:
     unreachable. Always returns a list (never None).
     """
     try:
-        from clover_cli.model_catalog import get_curated_nous_models
-        remote = get_curated_nous_models()
+        from clover_cli.model_catalog import get_curated_clover_models
+        remote = get_curated_clover_models()
     except Exception:
         remote = None
     if remote:
@@ -2312,7 +2312,7 @@ def compute_sale_discount(
     show normal prices.
 
     Free / $0 models are a special case: they are always "-100%" sale chrome
-    (Teknium, Aug 2026 — the picker's discount column should say 100% off
+    (the maintainer, Aug 2026 — the picker's discount column should say 100% off
     rather than sit blank on free rows). The ``was_*`` raws come from
     ``original`` when the gateway serves one and are empty strings otherwise;
     callers must skip the "was" segment when both are empty.
@@ -2516,10 +2516,10 @@ def _resolve_openrouter_api_key() -> str:
     return os.getenv("OPENROUTER_API_KEY", "").strip()
 
 
-_DEFAULT_NOUS_INFERENCE_BASE = "https://inference-api."
+_DEFAULT_CLOVER_INFERENCE_BASE = "https://inference-api."
 
 
-def _resolve_nous_pricing_credentials() -> tuple[str, str]:
+def _resolve_clover_pricing_credentials() -> tuple[str, str]:
     """Return ``(api_key, base_url)`` for Clover Portal pricing.
 
     The Clover inference ``/v1/models`` endpoint exposes pricing without
@@ -2532,7 +2532,7 @@ def _resolve_nous_pricing_credentials() -> tuple[str, str]:
     models currently available").
 
     Base URL precedence (mirrors runtime credential resolution):
-    1. ``NOUS_INFERENCE_BASE_URL`` env override (staging / preview)
+    1. ``CLOVER_INFERENCE_BASE_URL`` env override (staging / preview)
     2. Resolved runtime credential ``base_url``
     3. Production default
 
@@ -2542,25 +2542,25 @@ def _resolve_nous_pricing_credentials() -> tuple[str, str]:
     """
     env_base = None
     try:
-        from clover_cli.auth import _nous_inference_env_override
+        from clover_cli.auth import _clover_inference_env_override
 
-        env_base = _nous_inference_env_override()
+        env_base = _clover_inference_env_override()
     except Exception:
         env_base = None
 
     api_key = ""
     creds_base = ""
     try:
-        from clover_cli.auth import resolve_nous_runtime_credentials
+        from clover_cli.auth import resolve_clover_runtime_credentials
 
-        creds = resolve_nous_runtime_credentials()
+        creds = resolve_clover_runtime_credentials()
         if creds:
             api_key = creds.get("api_key", "") or ""
             creds_base = (creds.get("base_url", "") or "").strip()
     except Exception:
         pass
 
-    base_url = (env_base or creds_base or _DEFAULT_NOUS_INFERENCE_BASE).rstrip("/")
+    base_url = (env_base or creds_base or _DEFAULT_CLOVER_INFERENCE_BASE).rstrip("/")
     # Credential bases arrive with or without the ``/v1`` suffix. Callers
     # append their own path, so hand back the bare origin.
     if base_url.endswith("/v1"):
@@ -2569,7 +2569,7 @@ def _resolve_nous_pricing_credentials() -> tuple[str, str]:
 
 
 def get_pricing_for_provider(provider: str, *, force_refresh: bool = False) -> dict[str, dict[str, str]]:
-    """Return live pricing for providers that support it (openrouter, nous, ai-gateway, novita)."""
+    """Return live pricing for providers that support it (openrouter, clover, ai-gateway, novita)."""
     normalized = normalize_provider(provider)
     if normalized == "openrouter":
         return fetch_models_with_pricing(
@@ -2586,7 +2586,7 @@ def get_pricing_for_provider(provider: str, *, force_refresh: bool = False) -> d
     if normalized == "fireworks":
         return _fireworks_pricing_from_models_dev(force_refresh=force_refresh)
     if normalized == "clover":
-        api_key, base_url = _resolve_nous_pricing_credentials()
+        api_key, base_url = _resolve_clover_pricing_credentials()
         if base_url:
             return fetch_models_with_pricing(
                 api_key=api_key,
@@ -2787,7 +2787,7 @@ def parse_model_input(raw: str, current_provider: str) -> tuple[str, str]:
     Supports ``provider:model`` syntax to switch providers at runtime::
 
         openrouter:anthropic/claude-sonnet-4.5  →  ("openrouter", "anthropic/claude-sonnet-4.5")
-        nous:clover-3                           →  ("clover", "clover-3")
+        clover:clover-3                           →  ("clover", "clover-3")
         anthropic/claude-sonnet-4.5             →  (current_provider, "anthropic/claude-sonnet-4.5")
         gpt-5.4                                 →  (current_provider, "gpt-5.4")
 
@@ -3424,7 +3424,7 @@ def detect_static_provider_for_model(
         return alias_match
 
     # --- Step 0: bare provider name typed as model ---
-    # If someone types `/model nous` or `/model anthropic`, treat it as a
+    # If someone types `/model clover` or `/model anthropic`, treat it as a
     # provider switch and pick the first model from that provider's catalog.
     # Skip "custom" and "openrouter" — custom has no model catalog, and
     # openrouter requires an explicit model name to be useful.
@@ -3439,7 +3439,7 @@ def detect_static_provider_for_model(
             # Route through the cost-safe default rather than picking
             # ``default_models[0]`` directly. For metered aggregators whose
             # curated list is ordered most-capable-first (e.g. Clover Portal),
-            # entry [0] is the priciest flagship, and typing ``/model nous``
+            # entry [0] is the priciest flagship, and typing ``/model clover``
             # would silently escalate to it — the exact billing footgun the
             # catalog-labeled silent default (``_SILENT_DEFAULT_PROVIDERS``)
             # exists to prevent. For providers outside that set this is
@@ -3926,10 +3926,10 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
     if normalized == "clover":
         # Try live Clover Portal /models endpoint
         try:
-            from clover_cli.auth import fetch_nous_models, resolve_nous_runtime_credentials
-            creds = resolve_nous_runtime_credentials()
+            from clover_cli.auth import fetch_clover_models, resolve_clover_runtime_credentials
+            creds = resolve_clover_runtime_credentials()
             if creds:
-                live = fetch_nous_models(api_key=creds.get("api_key", ""), inference_base_url=creds.get("base_url", ""))
+                live = fetch_clover_models(api_key=creds.get("api_key", ""), inference_base_url=creds.get("base_url", ""))
                 if live:
                     return live
         except Exception:
@@ -3937,7 +3937,7 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
         # Live failed (or no creds). Fall back to the docs-hosted manifest
         # — NOT the in-repo _PROVIDER_MODELS["clover"] snapshot — so newly
         # added Portal models still surface without a Clover release.
-        manifest_ids = get_curated_nous_model_ids()
+        manifest_ids = get_curated_clover_model_ids()
         if manifest_ids:
             return manifest_ids
     if normalized == "stepfun":
@@ -4256,7 +4256,7 @@ def _credential_fingerprint(provider: str) -> str:
     Rotating any of the relevant env vars invalidates the cached entry
     for that provider. We hash AT LEAST the api-key + base-url env vars
     declared in ``PROVIDER_REGISTRY``. For OAuth-backed providers
-    (codex, copilot, anthropic-via-claude-code, nous portal), the
+    (codex, copilot, anthropic-via-claude-code, clover portal), the
     relevant tokens live in ``$CLOVER_HOME/auth.json`` and external
     credential files. Rather than parse every shape, we additionally
     fold the mtime of those files into the fingerprint so refreshes

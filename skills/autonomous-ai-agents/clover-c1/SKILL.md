@@ -2,7 +2,7 @@
 name: clover-c1
 description: "Use, configure, theme, extend, and orchestrate Clover Cognition."
 version: 3.2.0
-author: Clover Cognition + Teknium
+author: Clover Cognition + the maintainer
 license: MIT
 platforms: [linux, macos, windows]
 metadata:

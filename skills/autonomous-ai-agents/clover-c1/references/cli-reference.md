@@ -107,7 +107,7 @@ clover profile rename A B | alias NAME | export NAME | import FILE
 
 ```
 clover auth                 Interactive credential manager
-clover auth add [PROVIDER]  Add OAuth or API-key credential (nous, openai-codex, qwen-oauth, …)
+clover auth add [PROVIDER]  Add OAuth or API-key credential (clover, openai-codex, qwen-oauth, …)
 clover auth list|remove P IDX|reset PROVIDER|status
 ```
 Multiple credentials per provider form a pool that rotates automatically and skips exhausted keys.

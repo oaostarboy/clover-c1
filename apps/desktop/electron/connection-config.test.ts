@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { makeNousCloudBackendDownError } from './backend-health'
+import { makeCloverCloudBackendDownError } from './backend-health'
 import {
   apiRequestRegistryConnectionId,
   AT_COOKIE_VARIANTS,
@@ -688,12 +688,12 @@ test('resolveProfileApiRequest uses exact method and path eligibility for mixed 
     { backendProfile: 'iris', requestPath: '/api/config/defaults' }
   )
   assert.deepEqual(
-    resolveProfileApiRequest('iris', '/api/model/recommended-default?provider=nous', {
+    resolveProfileApiRequest('iris', '/api/model/recommended-default?provider=clover', {
       requestMethod: 'GET'
     }),
     {
       backendProfile: 'iris',
-      requestPath: '/api/model/recommended-default?provider=nous'
+      requestPath: '/api/model/recommended-default?provider=clover'
     }
   )
 })
@@ -1197,7 +1197,7 @@ test('gatewayTicketFailure keeps 401 and 403 as reauth with needsOauthLogin', ()
 
 test('gatewayTicketFailure only copies an integer statusCode, not a message prefix', () => {
   // A legacy "503: ..." message carries no structured statusCode; the Cloud
-  // classifier (makeNousCloudBackendDownError) handles the prefix at the mint
+  // classifier (makeCloverCloudBackendDownError) handles the prefix at the mint
   // boundary. The wrapper must not invent an integer from the message.
   const source = new Error('503: Service Unavailable') as any
 
@@ -1219,7 +1219,7 @@ test('OAuth ticket-mint 503 surfaces the Cloud-down error (startup boundary)', (
   ticketErr.statusCode = 503
 
   // The exact production sequence from main.ts.
-  const cloudError = makeNousCloudBackendDownError(baseUrl, ticketErr)
+  const cloudError = makeCloverCloudBackendDownError(baseUrl, ticketErr)
 
   if (cloudError !== null) {
     assert.equal((cloudError as any).isCloudBackendDown, true)
@@ -1239,7 +1239,7 @@ test('OAuth ticket-mint 401 stays on the reauth path (never Cloud-down)', () => 
   const ticketErr = new Error('Unauthorized') as any
   ticketErr.statusCode = 401
 
-  const cloudError = makeNousCloudBackendDownError(baseUrl, ticketErr)
+  const cloudError = makeCloverCloudBackendDownError(baseUrl, ticketErr)
   assert.equal(cloudError, null, 'a 401 must not become a Cloud-down error')
 
   const wrapped = gatewayTicketFailure(ticketErr, 'auth message', 'transport message')

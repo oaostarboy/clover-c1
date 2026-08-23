@@ -27,7 +27,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  IMAGE_NAME: clovercognition/clover-c1
+  IMAGE_NAME: cloverc1/clover-c1
 
 jobs:
   # Classify the PR's changed files. ci.yml used to gate the docker call on
@@ -169,7 +169,7 @@ jobs:
           # real-API calls from inside the harness.
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
-          NOUS_API_KEY: ""
+          CLOVER_API_KEY: ""
         run: |
           # Each of these tests drives a container, so the docker daemon sets
           # the limit and not the processor. This caps the workers. The

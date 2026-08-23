@@ -614,16 +614,16 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
           : current
       )
 
-      if (result.needs_nous_auth) {
+      if (result.needs_clover_auth) {
         // Managed Clover row selected without Portal entitlement: the config
         // keys are written but the backend won't activate until the user
         // signs in (the CLI runs this gate inline; the GUI surfaces it as a
         // sign-in action). Reuses the existing Clover Portal device-code flow.
         notify({
           kind: 'warning',
-          title: copy.nousAuthNeededTitle,
-          message: copy.nousAuthNeededMessage(provider.name),
-          action: { label: copy.nousAuthSignIn, onClick: () => void signInToNousPortal() }
+          title: copy.cloverAuthNeededTitle,
+          message: copy.cloverAuthNeededMessage(provider.name),
+          action: { label: copy.cloverAuthSignIn, onClick: () => void signInToCloverPortal() }
         })
 
         return
@@ -641,12 +641,12 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
   // Drive the existing Clover Portal OAuth device-code flow (the same session
   // machinery onboarding uses: start → open verification URL → poll), then
   // refetch the toolset config so is_active / status flip once entitled.
-  async function signInToNousPortal() {
+  async function signInToCloverPortal() {
     try {
       const start = await startOAuthLogin('clover', profile)
 
       if (start.flow !== 'device_code') {
-        notifyError(new Error(`unexpected flow: ${start.flow}`), copy.nousAuthFailed)
+        notifyError(new Error(`unexpected flow: ${start.flow}`), copy.cloverAuthFailed)
 
         return
       }
@@ -674,7 +674,7 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
         const polled = await pollOAuthSession('clover', start.session_id, profile)
 
         if (polled.status === 'approved') {
-          notify({ kind: 'success', title: copy.nousAuthDoneTitle, message: copy.nousAuthDoneMessage })
+          notify({ kind: 'success', title: copy.cloverAuthDoneTitle, message: copy.cloverAuthDoneMessage })
           await refresh()
           onConfiguredChange?.()
 
@@ -682,14 +682,14 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
         }
 
         if (polled.status !== 'pending') {
-          notifyError(new Error(polled.error_message || `Sign-in ${polled.status}`), copy.nousAuthFailed)
+          notifyError(new Error(polled.error_message || `Sign-in ${polled.status}`), copy.cloverAuthFailed)
 
           return
         }
       }
     } catch (err) {
       if (mountedRef.current) {
-        notifyError(err, copy.nousAuthFailed)
+        notifyError(err, copy.cloverAuthFailed)
       }
     }
   }
@@ -860,8 +860,8 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
                     )}
                   </div>
                 )}
-                {provider.requires_nous_auth && (
-                  <p className="text-[0.72rem] text-muted-foreground">{copy.nousIncluded}</p>
+                {provider.requires_clover_auth && (
+                  <p className="text-[0.72rem] text-muted-foreground">{copy.cloverIncluded}</p>
                 )}
                 {provider.env_vars.length === 0 ? (
                   <p className="text-[0.72rem] text-muted-foreground">{copy.noApiKeyRequired}</p>

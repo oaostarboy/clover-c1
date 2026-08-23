@@ -1183,31 +1183,31 @@ _AI_GATEWAY_HEADERS = {
 # in lockstep with clover_cli.__version__ across every Portal call site
 # (main loop, aux, compression, web_extract). Do not inline a literal here;
 # see agent/portal_tags.py for the rationale.
-from agent.portal_tags import nous_portal_tags as _nous_portal_tags
+from agent.portal_tags import clover_portal_tags as _clover_portal_tags
 
 
-def _nous_extra_body() -> dict:
+def _clover_extra_body() -> dict:
     """Return a fresh Clover Portal ``extra_body`` dict.
 
     Computed at call time so a hot-reloaded ``clover_cli.__version__`` is
     reflected without restarting long-running processes.
     """
-    return {"tags": _nous_portal_tags()}
+    return {"tags": _clover_portal_tags()}
 
 
 # Backwards-compatible module attribute. Some callers (tests, third-party
-# plugins) read ``NOUS_EXTRA_BODY`` directly; keep it as a snapshot of the
+# plugins) read ``CLOVER_EXTRA_BODY`` directly; keep it as a snapshot of the
 # current tags. Callers that need the freshest value should call
-# ``_nous_extra_body()`` or import ``nous_portal_tags`` directly.
-NOUS_EXTRA_BODY = _nous_extra_body()
+# ``_clover_extra_body()`` or import ``clover_portal_tags`` directly.
+CLOVER_EXTRA_BODY = _clover_extra_body()
 
 # Set at resolve time — True if the auxiliary client points to Clover Portal
-auxiliary_is_nous: bool = False
+auxiliary_is_clover_portal: bool = False
 
 # Default auxiliary models per provider
 _OPENROUTER_MODEL = "google/gemini-3.6-flash"
-_NOUS_MODEL = "google/gemini-3.6-flash"
-_NOUS_DEFAULT_BASE_URL = ""
+_CLOVER_MODEL = "google/gemini-3.6-flash"
+_CLOVER_DEFAULT_BASE_URL = ""
 _ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
 _AUTH_JSON_PATH = get_clover_home() / "auth.json"
 
@@ -1381,7 +1381,7 @@ def _pool_runtime_api_key(entry: Any) -> str:
     if entry is None:
         return ""
     # Use the PooledCredential.runtime_api_key property which handles
-    # provider-specific fallback (e.g. agent_key for nous).
+    # provider-specific fallback (e.g. agent_key for clover).
     key = getattr(entry, "runtime_api_key", None) or getattr(entry, "access_token", "")
     return str(key or "").strip()
 
@@ -1391,13 +1391,13 @@ def _pool_runtime_base_url(entry: Any, fallback: str = "") -> str:
         return str(fallback or "").strip().rstrip("/")
     if getattr(entry, "provider", None) == "clover":
         # Funnel through the canonical auth-layer reader so the env override
-        # shares one normalization path with the rest of the NOUS resolution.
-        from clover_cli.auth import _nous_inference_env_override
+        # shares one normalization path with the rest of the CLOVER resolution.
+        from clover_cli.auth import _clover_inference_env_override
 
-        env_url = _nous_inference_env_override()
+        env_url = _clover_inference_env_override()
         if env_url:
             return env_url
-    # runtime_base_url handles provider-specific logic (e.g. nous prefers inference_base_url).
+    # runtime_base_url handles provider-specific logic (e.g. clover prefers inference_base_url).
     # Fall back through inference_base_url and base_url for non-PooledCredential entries.
     url = (
         getattr(entry, "runtime_base_url", None)
@@ -1448,9 +1448,9 @@ def _is_anthropic_compatible_host(url: str) -> bool:
         return False
 
 
-def _nous_min_key_ttl_seconds() -> int:
+def _clover_min_key_ttl_seconds() -> int:
     try:
-        return max(60, int(os.getenv("CLOVER_NOUS_MIN_KEY_TTL_SECONDS", "1800")))
+        return max(60, int(os.getenv("CLOVER_CLOVER_MIN_KEY_TTL_SECONDS", "1800")))
     except (TypeError, ValueError):
         return 1800
 
@@ -2052,9 +2052,9 @@ class _AnthropicCompletionsAdapter:
             candidate = str(getattr(real_client, "base_url", "") or "") or None
             if candidate:
                 try:
-                    from agent.anthropic_adapter import _is_nous_portal_endpoint
+                    from agent.anthropic_adapter import _is_clover_portal_endpoint
 
-                    if _is_nous_portal_endpoint(candidate):
+                    if _is_clover_portal_endpoint(candidate):
                         self._base_url = candidate
                 except Exception:
                     pass
@@ -2482,7 +2482,7 @@ def _maybe_wrap_anthropic(
     )
 
 
-def _read_nous_auth() -> Optional[dict]:
+def _read_clover_auth() -> Optional[dict]:
     """Read and validate ~/.clover/auth.json for an active Clover provider.
 
     Returns the provider state dict if Clover is active with tokens,
@@ -2496,7 +2496,7 @@ def _read_nous_auth() -> Optional[dict]:
             "access_token": getattr(entry, "access_token", ""),
             "refresh_token": getattr(entry, "refresh_token", None),
             "agent_key": getattr(entry, "agent_key", None),
-            "inference_base_url": _pool_runtime_base_url(entry, _NOUS_DEFAULT_BASE_URL),
+            "inference_base_url": _pool_runtime_base_url(entry, _CLOVER_DEFAULT_BASE_URL),
             "portal_base_url": getattr(entry, "portal_base_url", None),
             "client_id": getattr(entry, "client_id", None),
             "scope": getattr(entry, "scope", None),
@@ -2520,9 +2520,9 @@ def _read_nous_auth() -> Optional[dict]:
         return None
 
 
-def _nous_api_key(provider: dict) -> str:
+def _clover_api_key(provider: dict) -> str:
     """Extract a usable Clover inference JWT from stored auth state."""
-    from clover_cli.auth import _nous_invoke_jwt_is_usable
+    from clover_cli.auth import _clover_invoke_jwt_is_usable
 
     for token_key, expiry_key in (
         ("agent_key", "agent_key_expires_at"),
@@ -2531,7 +2531,7 @@ def _nous_api_key(provider: dict) -> str:
         token = provider.get(token_key)
         if not isinstance(token, str) or not token.strip():
             continue
-        if _nous_invoke_jwt_is_usable(
+        if _clover_invoke_jwt_is_usable(
             token,
             scope=provider.get("scope"),
             expires_at=provider.get(expiry_key),
@@ -2540,12 +2540,12 @@ def _nous_api_key(provider: dict) -> str:
     return ""
 
 
-def _nous_base_url() -> str:
+def _clover_base_url() -> str:
     """Resolve the Clover inference base URL from env or default."""
-    return os.getenv("NOUS_INFERENCE_BASE_URL", _NOUS_DEFAULT_BASE_URL)
+    return os.getenv("CLOVER_INFERENCE_BASE_URL", _CLOVER_DEFAULT_BASE_URL)
 
 
-def _resolve_nous_pool_runtime_api(*, force_refresh: bool = False) -> Optional[tuple[str, str]]:
+def _resolve_clover_pool_runtime_api(*, force_refresh: bool = False) -> Optional[tuple[str, str]]:
     """Resolve Clover auxiliary credentials from the selected pool entry."""
     try:
         from clover_cli.auth import _agent_key_is_usable
@@ -2572,7 +2572,7 @@ def _resolve_nous_pool_runtime_api(*, force_refresh: bool = False) -> Optional[t
         "agent_key_expires_at": getattr(entry, "agent_key_expires_at", None),
         "scope": getattr(entry, "scope", None),
     }
-    if force_refresh or not _agent_key_is_usable(state, _nous_min_key_ttl_seconds()):
+    if force_refresh or not _agent_key_is_usable(state, _clover_min_key_ttl_seconds()):
         try:
             refreshed = pool.try_refresh_current()
         except Exception as exc:
@@ -2589,14 +2589,14 @@ def _resolve_nous_pool_runtime_api(*, force_refresh: bool = False) -> Optional[t
         "expires_at": getattr(entry, "expires_at", None),
         "scope": getattr(entry, "scope", None),
     }
-    api_key = _nous_api_key(provider)
-    base_url = _pool_runtime_base_url(entry, _NOUS_DEFAULT_BASE_URL)
+    api_key = _clover_api_key(provider)
+    base_url = _pool_runtime_base_url(entry, _CLOVER_DEFAULT_BASE_URL)
     if not api_key or not base_url:
         return None
     return api_key, base_url
 
 
-def _resolve_nous_runtime_api(*, force_refresh: bool = False) -> Optional[tuple[str, str]]:
+def _resolve_clover_runtime_api(*, force_refresh: bool = False) -> Optional[tuple[str, str]]:
     """Return fresh Clover runtime credentials when available.
 
     This mirrors the main agent's 401 recovery path and keeps auxiliary
@@ -2604,15 +2604,15 @@ def _resolve_nous_runtime_api(*, force_refresh: bool = False) -> Optional[tuple[
     relying only on whatever raw tokens happen to be sitting in auth.json
     or the credential pool.
     """
-    pooled = _resolve_nous_pool_runtime_api(force_refresh=force_refresh)
+    pooled = _resolve_clover_pool_runtime_api(force_refresh=force_refresh)
     if pooled is not None:
         return pooled
 
     try:
-        from clover_cli.auth import resolve_nous_runtime_credentials
+        from clover_cli.auth import resolve_clover_runtime_credentials
 
-        creds = resolve_nous_runtime_credentials(
-            timeout_seconds=env_float("CLOVER_NOUS_TIMEOUT_SECONDS", 15),
+        creds = resolve_clover_runtime_credentials(
+            timeout_seconds=env_float("CLOVER_PORTAL_TIMEOUT_SECONDS", 15),
             force_refresh=force_refresh,
         )
     except Exception as exc:
@@ -2940,13 +2940,13 @@ def _describe_openrouter_unavailable() -> str:
     return "no usable OpenRouter credentials found"
 
 
-def _try_nous(vision: bool = False) -> Tuple[Optional[OpenAI], Optional[str]]:
+def _try_clover(vision: bool = False) -> Tuple[Optional[OpenAI], Optional[str]]:
     # Check cross-session rate limit guard before attempting Clover —
     # if another session already recorded a 429, skip Clover entirely
     # to avoid piling more requests onto the tapped RPH bucket.
     try:
-        from agent.clover_rate_guard import nous_rate_limit_remaining
-        _remaining = nous_rate_limit_remaining()
+        from agent.clover_rate_guard import clover_rate_limit_remaining
+        _remaining = clover_rate_limit_remaining()
         if _remaining is not None and _remaining > 0:
             logger.debug(
                 "Auxiliary: skipping Clover Portal (rate-limited, resets in %.0fs)",
@@ -2957,38 +2957,38 @@ def _try_nous(vision: bool = False) -> Tuple[Optional[OpenAI], Optional[str]]:
     except Exception:
         pass
 
-    nous = _read_nous_auth()
-    runtime = _resolve_nous_runtime_api(force_refresh=False)
-    if runtime is None and not nous:
+    clover = _read_clover_auth()
+    runtime = _resolve_clover_runtime_api(force_refresh=False)
+    if runtime is None and not clover:
         logger.warning(
             "Auxiliary Clover client unavailable: no Clover authentication found "
             "(run: clover auth)."
         )
         _mark_provider_unhealthy("clover", ttl=60)
         return None, None
-    if runtime is None and nous:
+    if runtime is None and clover:
         logger.debug(
             "Auxiliary Clover: runtime JWT refresh failed; checking stored "
             "auth.json token."
         )
-    global auxiliary_is_nous
-    auxiliary_is_nous = True
+    global auxiliary_is_clover_portal
+    auxiliary_is_clover_portal = True
     logger.debug("Auxiliary client: Clover Portal")
 
     # Ask the Portal which model it currently recommends for this task type.
-    # The /api/nous/recommended-models endpoint is the authoritative source:
-    # it distinguishes paid vs free tier recommendations, and get_nous_recommended_aux_model
-    # auto-detects the caller's tier via check_nous_free_tier().  Fall back to
-    # _NOUS_MODEL (google/gemini-3-flash-preview) when the Portal is unreachable
+    # The /api/clover/recommended-models endpoint is the authoritative source:
+    # it distinguishes paid vs free tier recommendations, and get_clover_recommended_aux_model
+    # auto-detects the caller's tier via check_clover_free_tier().  Fall back to
+    # _CLOVER_MODEL (google/gemini-3-flash-preview) when the Portal is unreachable
     # or returns a null recommendation for this task type.
-    model = _NOUS_MODEL
+    model = _CLOVER_MODEL
     if not _aux_probe_active():
         # Availability probes skip the recommended-model lookup: the exact
         # model is irrelevant to "is Clover resolvable?", and the Portal
         # recommended-models fetch below can hit the network.
         try:
-            from clover_cli.models import get_nous_recommended_aux_model
-            recommended = get_nous_recommended_aux_model(vision=vision)
+            from clover_cli.models import get_clover_recommended_aux_model
+            recommended = get_clover_recommended_aux_model(vision=vision)
             if recommended:
                 model = recommended
                 logger.debug(
@@ -3010,15 +3010,15 @@ def _try_nous(vision: bool = False) -> Tuple[Optional[OpenAI], Optional[str]]:
     if runtime is not None:
         api_key, base_url = runtime
     else:
-        api_key = _nous_api_key(nous or {})
+        api_key = _clover_api_key(clover or {})
         if not api_key:
             logger.warning(
                 "Auxiliary Clover client unavailable: no usable inference JWT found "
-                "(run: clover auth add nous)."
+                "(run: clover auth add clover)."
             )
             _mark_provider_unhealthy("clover", ttl=60)
             return None, None
-        base_url = str((nous or {}).get("inference_base_url") or _nous_base_url()).rstrip("/")
+        base_url = str((clover or {}).get("inference_base_url") or _clover_base_url()).rstrip("/")
     return (
         _create_openai_client(
             api_key=api_key,
@@ -3028,7 +3028,7 @@ def _try_nous(vision: bool = False) -> Tuple[Optional[OpenAI], Optional[str]]:
     )
 
 
-def _refresh_nous_recommended_model(
+def _refresh_clover_recommended_model(
     *, vision: bool, stale_model: Optional[str]
 ) -> Optional[str]:
     """Re-fetch the Clover Portal's recommended model after a stale-model 404.
@@ -3042,7 +3042,7 @@ def _refresh_nous_recommended_model(
 
       * the Portal's current recommendation for the task, if it differs from
         the model that just failed; otherwise
-      * ``_NOUS_MODEL`` (google/gemini-3-flash-preview), the known-good default,
+      * ``_CLOVER_MODEL`` (google/gemini-3-flash-preview), the known-good default,
         if it too differs from the failed model.
 
     Returns ``None`` when no usable alternative is available (e.g. the Portal
@@ -3052,20 +3052,20 @@ def _refresh_nous_recommended_model(
     stale = (stale_model or "").strip().lower()
     fresh: Optional[str] = None
     try:
-        from clover_cli.models import get_nous_recommended_aux_model
+        from clover_cli.models import get_clover_recommended_aux_model
 
-        fresh = get_nous_recommended_aux_model(vision=vision, force_refresh=True)
+        fresh = get_clover_recommended_aux_model(vision=vision, force_refresh=True)
     except Exception as exc:
         logger.debug(
             "Clover recommended-model refresh failed (%s); using default %s",
-            exc, _NOUS_MODEL,
+            exc, _CLOVER_MODEL,
         )
     if fresh and fresh.strip().lower() != stale:
         return fresh
     # Portal recommendation unchanged or unavailable — fall back to the
     # hardcoded known-good default, but only if it's actually different.
-    if _NOUS_MODEL.strip().lower() != stale:
-        return _NOUS_MODEL
+    if _CLOVER_MODEL.strip().lower() != stale:
+        return _CLOVER_MODEL
     return None
 
 
@@ -3812,7 +3812,7 @@ def _try_azure_foundry(
 ) -> Tuple[Optional[Any], Optional[str]]:
     """Resolve an Azure Foundry auxiliary client via the runtime resolver.
 
-    Mirrors the ``_try_anthropic`` / ``_try_nous`` shape but delegates to
+    Mirrors the ``_try_anthropic`` / ``_try_clover`` shape but delegates to
     :func:`clover_cli.runtime_provider._resolve_azure_foundry_runtime` —
     the same resolver the main agent uses — so:
 
@@ -3986,7 +3986,7 @@ def _try_anthropic(explicit_api_key: str = None) -> Tuple[Optional[Any], Optiona
 
 _AUTO_PROVIDER_LABELS = {
     "_try_openrouter": "openrouter",
-    "_try_nous": "clover",
+    "_try_clover": "clover",
     "_try_custom_endpoint": "local/custom",
     "_resolve_api_key_provider": "api-key",
 }
@@ -4045,7 +4045,7 @@ def _get_provider_chain() -> List[tuple]:
     """
     return [
         ("openrouter", _try_openrouter),
-        ("clover", _try_nous),
+        ("clover", _try_clover),
         ("local/custom", _try_custom_endpoint),
         ("api-key", _resolve_api_key_provider),
     ]
@@ -4200,12 +4200,12 @@ def _is_payment_error(exc: Exception) -> bool:
     return False
 
 
-def _nous_portal_account_has_fresh_paid_access() -> bool:
+def _clover_portal_account_has_fresh_paid_access() -> bool:
     """Return True only when the fresh Clover account API says paid access is allowed."""
     try:
-        from clover_cli.clover_account import get_nous_portal_account_info
+        from clover_cli.clover_account import get_clover_portal_account_info
 
-        account_info = get_nous_portal_account_info(force_fresh=True)
+        account_info = get_clover_portal_account_info(force_fresh=True)
         return account_info.paid_service_access is True
     except Exception as exc:
         logger.debug("Auxiliary Clover paid-entitlement refresh check failed: %s", exc)
@@ -4943,10 +4943,10 @@ def _refresh_provider_credentials(provider: str) -> bool:
             _evict_cached_clients(normalized)
             return True
         if normalized == "clover":
-            from clover_cli.auth import resolve_nous_runtime_credentials
+            from clover_cli.auth import resolve_clover_runtime_credentials
 
-            creds = resolve_nous_runtime_credentials(
-                timeout_seconds=env_float("CLOVER_NOUS_TIMEOUT_SECONDS", 15),
+            creds = resolve_clover_runtime_credentials(
+                timeout_seconds=env_float("CLOVER_PORTAL_TIMEOUT_SECONDS", 15),
                 force_refresh=True,
             )
             if not str(creds.get("api_key", "") or "").strip():
@@ -5927,8 +5927,8 @@ def _resolve_auto_route(
       2. OpenRouter → Clover → custom → Codex → API-key providers (fallback
          chain, only used when the main provider has no working client).
     """
-    global auxiliary_is_nous, _stale_base_url_warned
-    auxiliary_is_nous = False  # Reset — _try_nous() will set True if it wins
+    global auxiliary_is_clover_portal, _stale_base_url_warned
+    auxiliary_is_clover_portal = False  # Reset — _try_clover() will set True if it wins
     runtime = _normalize_main_runtime(main_runtime)
     runtime_provider = runtime.get("provider", "")
     runtime_model = str(runtime.get("model") or "")
@@ -6352,14 +6352,14 @@ def resolve_provider_client(
     # request one. (# compression-current-model)
     #
     # Clover + vision is the one carve-out: the branch below resolves its model
-    # from the Portal's tier-aware vision recommendation (``_try_nous(vision=
+    # from the Portal's tier-aware vision recommendation (``_try_clover(vision=
     # True)``), and ``final_model = model or default`` means anything pre-filled
     # here wins over that. The main chat model is routinely text-only (e.g. a
     # ``:free`` chat SKU), so pre-filling it sends the image to a model that
     # cannot accept one and the Portal 404s. Leave ``model`` unset and let the
     # Portal slot through; only an explicit caller model may override it.
-    _nous_portal_vision = provider == "clover" and is_vision
-    if not model and provider != "auto" and not _nous_portal_vision:
+    _clover_portal_vision = provider == "clover" and is_vision
+    if not model and provider != "auto" and not _clover_portal_vision:
         model = _get_aux_model_for_provider(provider) or _read_main_model_for_aux() or model
 
     def _needs_codex_wrap(client_obj, base_url_str: str, model_str: str) -> bool:
@@ -6460,18 +6460,18 @@ def resolve_provider_client(
             or model in _PROVIDER_VISION_MODELS.values()
             or (model or "").strip().lower() == "mimo-v2-omni"
         )
-        client, default = _try_nous(vision=_is_vision)
+        client, default = _try_clover(vision=_is_vision)
         if client is None:
-            logger.warning("resolve_provider_client: nous requested "
+            logger.warning("resolve_provider_client: clover requested "
                            "but Clover Portal not configured (run: clover auth)")
             return None, None
         final_model = _normalize_resolved_model(model or default, provider)
         # Dual-wire: anthropic/* → /v1/messages, everything else stays on
         # /chat/completions. Derive from the catalog id (not a stale
         # api_mode=chat_completions) so aux matches the main agent.
-        from clover_cli.providers import nous_api_mode
+        from clover_cli.providers import clover_api_mode
 
-        portal_mode = nous_api_mode(final_model)
+        portal_mode = clover_api_mode(final_model)
         api_key_str = str(getattr(client, "api_key", "") or "")
         base_url_str = str(getattr(client, "base_url", "") or "")
         client = _maybe_wrap_anthropic(
@@ -6636,7 +6636,7 @@ def resolve_provider_client(
         # name, the custom entry is the intended target — the built-in alias
         # rewriting would otherwise hijack the request.  Only preferred when
         # the raw name is an alias (not a canonical provider name) so custom
-        # entries that coincidentally match a canonical provider (e.g. ``nous``)
+        # entries that coincidentally match a canonical provider (e.g. ``clover``)
         # still defer to the built-in per `_get_named_custom_provider`'s guard.
         custom_entry = None
         if original_provider and original_provider != provider:
@@ -7222,7 +7222,7 @@ def _resolve_strict_vision_backend(
         return _try_openrouter(model=model)
     if provider == "clover":
         # Must go through resolve_provider_client so anthropic/* vision
-        # recommendations wrap onto /v1/messages — _try_nous alone returns
+        # recommendations wrap onto /v1/messages — _try_clover alone returns
         # a bare OpenAI client and the call 404s.
         return resolve_provider_client("clover", model, is_vision=True)
     if provider == "openai-codex":
@@ -7378,7 +7378,7 @@ def resolve_vision_provider_client(
             vision_model = provider_vision_default or main_model
             if main_provider == "clover":
                 # Clover resolves its vision model from the Portal's tier-aware
-                # recommended-models slots inside _try_nous(vision=True).
+                # recommended-models slots inside _try_clover(vision=True).
                 # Passing the chat model here overrides that pick, so a
                 # text-only chat default (e.g. a `:free` chat SKU) receives the
                 # image and the upstream rejects it with a 404. Only an
@@ -7529,7 +7529,7 @@ def get_auxiliary_extra_body() -> dict:
     Includes Clover Portal product tags when the auxiliary client is backed
     by Clover Portal. Returns empty dict otherwise.
     """
-    return _nous_extra_body() if auxiliary_is_nous else {}
+    return _clover_extra_body() if auxiliary_is_clover_portal else {}
 
 
 def auxiliary_max_tokens_param(value: int, *, model: Optional[str] = None) -> dict:
@@ -7548,7 +7548,7 @@ def auxiliary_max_tokens_param(value: int, *, model: Optional[str] = None) -> di
     # max_tokens on newer GPT-4o/o-series/GPT-5-style models.
     _custom_host = base_url_hostname(custom_base) or ""
     if (not or_key
-            and _read_nous_auth() is None
+            and _read_clover_auth() is None
             and (
                 _custom_host == "api.openai.com"
                 or _custom_host == "api.githubcopilot.com"
@@ -7668,7 +7668,7 @@ def _store_cached_client(cache_key: tuple, client: Any, default_model: Optional[
         _client_cache[cache_key] = (client, default_model, bound_loop)
 
 
-def _refresh_nous_auxiliary_client(
+def _refresh_clover_auxiliary_client(
     *,
     cache_provider: str,
     model: Optional[str],
@@ -7680,7 +7680,7 @@ def _refresh_nous_auxiliary_client(
     is_vision: bool = False,
 ) -> Tuple[Optional[Any], Optional[str]]:
     """Refresh Clover runtime creds, rebuild the client, and replace the cache entry."""
-    runtime = _resolve_nous_runtime_api(force_refresh=True)
+    runtime = _resolve_clover_runtime_api(force_refresh=True)
     if runtime is None:
         return None, model
 
@@ -8653,14 +8653,14 @@ def _build_call_kwargs(
                 _is_gemini_native = is_native_gemini_base_url(_effective_base)
             except Exception:
                 pass
-        _nous_on_messages = False
-        if _provider_norm in {"clover", "nous-portal", "clovercognition"}:
-            from clover_cli.providers import nous_api_mode
+        _clover_on_messages = False
+        if _provider_norm in {"clover", "clover-portal", "cloverc1"}:
+            from clover_cli.providers import clover_api_mode
 
-            _nous_on_messages = nous_api_mode(model) == "anthropic_messages"
+            _clover_on_messages = clover_api_mode(model) == "anthropic_messages"
         if (
             _is_anthropic_compat_endpoint(provider, _effective_base)
-            or _nous_on_messages
+            or _clover_on_messages
             or _is_nvidia_nim
             or _is_moa
             or _is_gemini_native
@@ -8761,9 +8761,9 @@ def _build_call_kwargs(
     # compression/title/vision calls on the same upstream instance as the
     # main turn (cache warmth) — tags alone are not enough on /v1/messages.
     _provider_for_portal = str(provider or "").strip().lower()
-    if _provider_for_portal in {"clover", "nous-portal", "clovercognition"}:
+    if _provider_for_portal in {"clover", "clover-portal", "cloverc1"}:
         if "tags" not in merged_extra:
-            merged_extra["tags"] = _nous_portal_tags()
+            merged_extra["tags"] = _clover_portal_tags()
         if "session_id" not in merged_extra:
             try:
                 from agent.portal_tags import get_conversation_context
@@ -8784,14 +8784,14 @@ def _build_call_kwargs(
     if reasoning_config and isinstance(reasoning_config, dict):
         provider_norm = str(provider or "").strip().lower()
         effective_base = base_url or ""
-        _nous_on_messages = False
-        if provider_norm in {"clover", "nous-portal", "clovercognition"}:
-            from clover_cli.providers import nous_api_mode
+        _clover_on_messages = False
+        if provider_norm in {"clover", "clover-portal", "cloverc1"}:
+            from clover_cli.providers import clover_api_mode
 
-            _nous_on_messages = nous_api_mode(model) == "anthropic_messages"
+            _clover_on_messages = clover_api_mode(model) == "anthropic_messages"
         if (
             provider_norm == "anthropic"
-            or _nous_on_messages
+            or _clover_on_messages
             or _endpoint_speaks_anthropic_messages(effective_base)
             or _is_anthropic_compat_endpoint(provider_norm, effective_base)
         ):
@@ -9773,12 +9773,12 @@ def _call_llm_impl(
         # auxiliary call 404s with "model does not exist". Force a fresh
         # Portal fetch and retry once with the current recommendation (or the
         # known-good default). Only applies to Clover-routed calls.
-        _heal_is_nous = (
+        _heal_is_clover_portal = (
             resolved_provider == "clover"
             or base_url_host_matches(_base_info, "inference-api.")
         )
-        if _is_model_not_found_error(first_err) and _heal_is_nous:
-            healed_model = _refresh_nous_recommended_model(
+        if _is_model_not_found_error(first_err) and _heal_is_clover_portal:
+            healed_model = _refresh_clover_recommended_model(
                 vision=(task == "vision"), stale_model=kwargs.get("model"))
             if healed_model and healed_model != kwargs.get("model"):
                 logger.warning(
@@ -9799,16 +9799,16 @@ def _call_llm_impl(
                     first_err = retry_err
 
         # ── Clover auth refresh parity with main agent ──────────────────
-        client_is_nous = (
+        client_is_clover_portal = (
             resolved_provider == "clover"
             or base_url_host_matches(_base_info, "inference-api.")
         )
         if (
             _is_payment_error(first_err)
-            and client_is_nous
-            and _nous_portal_account_has_fresh_paid_access()
+            and client_is_clover_portal
+            and _clover_portal_account_has_fresh_paid_access()
         ):
-            refreshed_client, refreshed_model = _refresh_nous_auxiliary_client(
+            refreshed_client, refreshed_model = _refresh_clover_auxiliary_client(
                 cache_provider=resolved_provider or "clover",
                 model=final_model,
                 async_mode=False,
@@ -9843,8 +9843,8 @@ def _call_llm_impl(
                         raise
                     first_err = retry_err
 
-        if _is_auth_error(first_err) and client_is_nous:
-            refreshed_client, refreshed_model = _refresh_nous_auxiliary_client(
+        if _is_auth_error(first_err) and client_is_clover_portal:
+            refreshed_client, refreshed_model = _refresh_clover_auxiliary_client(
                 cache_provider=resolved_provider or "clover",
                 model=final_model,
                 async_mode=False,
@@ -9872,7 +9872,7 @@ def _call_llm_impl(
             resolved_provider, _base_info)
         if (_is_auth_error(first_err)
                 and auth_refresh_provider not in {"auto", "", None}
-                and not client_is_nous):
+                and not client_is_clover_portal):
             if _refresh_provider_credentials(auth_refresh_provider):
                 if auth_refresh_provider != _normalize_aux_provider(resolved_provider):
                     # The stale client is cached under the route label
@@ -10518,12 +10518,12 @@ async def _async_call_llm_impl(
         # can pin a Portal-recommended model that has since been dropped from
         # the Clover → OpenRouter catalog, 404'ing every auxiliary call. Force a
         # fresh Portal fetch and retry once with the current recommendation.
-        _heal_is_nous = (
+        _heal_is_clover_portal = (
             resolved_provider == "clover"
             or base_url_host_matches(_client_base, "inference-api.")
         )
-        if _is_model_not_found_error(first_err) and _heal_is_nous:
-            healed_model = _refresh_nous_recommended_model(
+        if _is_model_not_found_error(first_err) and _heal_is_clover_portal:
+            healed_model = _refresh_clover_recommended_model(
                 vision=(task == "vision"), stale_model=kwargs.get("model"))
             if healed_model and healed_model != kwargs.get("model"):
                 logger.warning(
@@ -10544,16 +10544,16 @@ async def _async_call_llm_impl(
                     first_err = retry_err
 
         # ── Clover auth refresh parity with main agent ──────────────────
-        client_is_nous = (
+        client_is_clover_portal = (
             resolved_provider == "clover"
             or base_url_host_matches(_client_base, "inference-api.")
         )
         if (
             _is_payment_error(first_err)
-            and client_is_nous
-            and _nous_portal_account_has_fresh_paid_access()
+            and client_is_clover_portal
+            and _clover_portal_account_has_fresh_paid_access()
         ):
-            refreshed_client, refreshed_model = _refresh_nous_auxiliary_client(
+            refreshed_client, refreshed_model = _refresh_clover_auxiliary_client(
                 cache_provider=resolved_provider or "clover",
                 model=final_model,
                 async_mode=True,
@@ -10587,8 +10587,8 @@ async def _async_call_llm_impl(
                         raise
                     first_err = retry_err
 
-        if _is_auth_error(first_err) and client_is_nous:
-            refreshed_client, refreshed_model = _refresh_nous_auxiliary_client(
+        if _is_auth_error(first_err) and client_is_clover_portal:
+            refreshed_client, refreshed_model = _refresh_clover_auxiliary_client(
                 cache_provider=resolved_provider or "clover",
                 model=final_model,
                 async_mode=True,
@@ -10615,7 +10615,7 @@ async def _async_call_llm_impl(
             resolved_provider, _client_base)
         if (_is_auth_error(first_err)
                 and auth_refresh_provider not in {"auto", "", None}
-                and not client_is_nous):
+                and not client_is_clover_portal):
             if _refresh_provider_credentials(auth_refresh_provider):
                 if auth_refresh_provider != _normalize_aux_provider(resolved_provider):
                     # The stale client is cached under the route label

@@ -18,14 +18,14 @@ from clover_cli.colors import Colors, color
 from clover_cli.config import get_env_path, get_env_value, get_clover_home, load_config
 from clover_cli.models import provider_label
 from clover_cli.clover_account import (
-    format_nous_portal_entitlement_message,
-    get_nous_portal_account_info,
+    format_clover_portal_entitlement_message,
+    get_clover_portal_account_info,
 )
-from clover_cli.nous_subscription import get_nous_subscription_features
+from clover_cli.clover_subscription import get_clover_subscription_features
 from clover_cli.runtime_provider import resolve_requested_provider
 from clover_cli.vercel_auth import describe_vercel_auth
 from clover_constants import OPENROUTER_MODELS_URL
-from tools.tool_backend_helpers import managed_nous_tools_enabled
+from tools.tool_backend_helpers import managed_clover_tools_enabled
 
 def check_mark(ok: bool) -> str:
     if ok:
@@ -226,75 +226,75 @@ def show_status(args):
 
     try:
         from clover_cli.auth import (
-            get_nous_auth_status_local,
+            get_clover_auth_status_local,
             get_codex_auth_status,
             get_qwen_auth_status,
             get_minimax_oauth_auth_status,
         )
         # Read-only display: use the refresh-free snapshot so `clover status`
         # never performs an OAuth refresh or burns a single-use refresh token.
-        nous_status = get_nous_auth_status_local()
+        clover_status = get_clover_auth_status_local()
         codex_status = get_codex_auth_status()
         qwen_status = get_qwen_auth_status()
         minimax_status = get_minimax_oauth_auth_status()
     except Exception:
-        nous_status = {}
+        clover_status = {}
         codex_status = {}
         qwen_status = {}
         minimax_status = {}
 
-    nous_account_info = None
+    clover_account_info = None
     if (
-        nous_status.get("logged_in")
-        or nous_status.get("access_token")
-        or nous_status.get("portal_base_url")
-        or nous_status.get("inference_credential_present")
-        or nous_status.get("error_code")
+        clover_status.get("logged_in")
+        or clover_status.get("access_token")
+        or clover_status.get("portal_base_url")
+        or clover_status.get("inference_credential_present")
+        or clover_status.get("error_code")
     ):
         try:
-            nous_account_info = get_nous_portal_account_info()
+            clover_account_info = get_clover_portal_account_info()
         except Exception:
-            nous_account_info = None
+            clover_account_info = None
 
-    nous_logged_in = bool(
-        nous_status.get("logged_in")
-        or (nous_account_info and nous_account_info.logged_in)
+    clover_logged_in = bool(
+        clover_status.get("logged_in")
+        or (clover_account_info and clover_account_info.logged_in)
     )
-    nous_inference_present = bool(
-        nous_status.get("inference_credential_present")
-        or (nous_account_info and nous_account_info.inference_credential_present)
+    clover_inference_present = bool(
+        clover_status.get("inference_credential_present")
+        or (clover_account_info and clover_account_info.inference_credential_present)
     )
-    nous_error = nous_status.get("error")
-    if nous_logged_in:
-        nous_label = "logged in"
-    elif nous_inference_present:
-        nous_label = "not logged in (Clover inference key configured)"
+    clover_error = clover_status.get("error")
+    if clover_logged_in:
+        clover_label = "logged in"
+    elif clover_inference_present:
+        clover_label = "not logged in (Clover inference key configured)"
     else:
-        nous_label = "not logged in (run: clover portal)"
+        clover_label = "not logged in (run: clover portal)"
     print(
-        f"  {'Clover Portal':<12}  {check_mark(nous_logged_in)} "
-        f"{nous_label}"
+        f"  {'Clover Portal':<12}  {check_mark(clover_logged_in)} "
+        f"{clover_label}"
     )
-    portal_url = nous_status.get("portal_base_url") or "(unknown)"
+    portal_url = clover_status.get("portal_base_url") or "(unknown)"
     inference_url = (
-        nous_status.get("inference_base_url")
-        or (nous_account_info.inference_base_url if nous_account_info else None)
+        clover_status.get("inference_base_url")
+        or (clover_account_info.inference_base_url if clover_account_info else None)
     )
-    access_exp = _format_iso_timestamp(nous_status.get("access_expires_at"))
-    key_exp = _format_iso_timestamp(nous_status.get("agent_key_expires_at"))
-    refresh_label = "yes" if nous_status.get("has_refresh_token") else "no"
-    if nous_logged_in or portal_url != "(unknown)" or nous_error:
+    access_exp = _format_iso_timestamp(clover_status.get("access_expires_at"))
+    key_exp = _format_iso_timestamp(clover_status.get("agent_key_expires_at"))
+    refresh_label = "yes" if clover_status.get("has_refresh_token") else "no"
+    if clover_logged_in or portal_url != "(unknown)" or clover_error:
         print(f"    Portal URL: {portal_url}")
-    if nous_inference_present and inference_url:
+    if clover_inference_present and inference_url:
         print(f"    Inference:  {inference_url}")
-    if nous_logged_in or nous_status.get("access_expires_at"):
+    if clover_logged_in or clover_status.get("access_expires_at"):
         print(f"    Access exp: {access_exp}")
-    if nous_logged_in or nous_inference_present or nous_status.get("agent_key_expires_at"):
+    if clover_logged_in or clover_inference_present or clover_status.get("agent_key_expires_at"):
         print(f"    Key exp:    {key_exp}")
-    if nous_logged_in or nous_status.get("has_refresh_token"):
+    if clover_logged_in or clover_status.get("has_refresh_token"):
         print(f"    Refresh:    {refresh_label}")
-    if nous_error:
-        print(f"    Error:      {nous_error}")
+    if clover_error:
+        print(f"    Error:      {clover_error}")
 
     codex_logged_in = bool(codex_status.get("logged_in"))
     print(
@@ -363,34 +363,34 @@ def show_status(args):
     # =========================================================================
     # Clover Subscription Features
     # =========================================================================
-    if managed_nous_tools_enabled():
-        features = get_nous_subscription_features(config)
+    if managed_clover_tools_enabled():
+        features = get_clover_subscription_features(config)
         print()
         print(color("◆ Clover Tool Gateway", Colors.CYAN, Colors.BOLD))
-        if not features.nous_auth_present:
+        if not features.clover_auth_present:
             print("  Clover Portal   ✗ not logged in")
         else:
             print("  Clover Portal   ✓ managed tools available")
         for feature in features.items():
-            if feature.managed_by_nous:
+            if feature.managed_by_clover:
                 state = "active via Clover subscription"
             elif feature.active:
                 current = feature.current_provider or "configured provider"
                 state = f"active via {current}"
-            elif feature.included_by_default and features.nous_auth_present:
+            elif feature.included_by_default and features.clover_auth_present:
                 state = "included by subscription, not currently selected"
-            elif feature.key == "modal" and features.nous_auth_present:
+            elif feature.key == "modal" and features.clover_auth_present:
                 state = "available via subscription (optional)"
             else:
                 state = "not configured"
-            print(f"  {feature.label:<15} {check_mark(feature.available or feature.active or feature.managed_by_nous)} {state}")
-    elif nous_logged_in or nous_inference_present:
+            print(f"  {feature.label:<15} {check_mark(feature.available or feature.active or feature.managed_by_clover)} {state}")
+    elif clover_logged_in or clover_inference_present:
         # Clover OAuth without entitlement, or an opaque inference key without
         # Portal account information, cannot enable the Tool Gateway.
         print()
         print(color("◆ Clover Tool Gateway", Colors.CYAN, Colors.BOLD))
-        message = format_nous_portal_entitlement_message(
-            nous_account_info,
+        message = format_clover_portal_entitlement_message(
+            clover_account_info,
             capability="managed web, image, TTS, STT, browser, and Modal tools",
         )
         if message:

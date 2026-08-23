@@ -144,9 +144,9 @@ def get_active_provider() -> Optional[ImageGenProvider]:
     # routes managed when the stored selection is "clover").
     if configured:
         try:
-            from tools.tool_backend_helpers import NOUS_MANAGED_PROVIDER
+            from tools.tool_backend_helpers import CLOVER_MANAGED_PROVIDER
 
-            if configured.lower() == NOUS_MANAGED_PROVIDER:
+            if configured.lower() == CLOVER_MANAGED_PROVIDER:
                 configured = "fal"
         except Exception:  # pragma: no cover — helpers are in-repo
             pass

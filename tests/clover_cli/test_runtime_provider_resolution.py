@@ -898,7 +898,7 @@ def test_opencode_go_model_derivation_beats_stale_persisted_api_mode(monkeypatch
 
 
 
-def test_auto_detected_nous_auth_failure_falls_through_to_openrouter(monkeypatch):
+def test_auto_detected_clover_auth_failure_falls_through_to_openrouter(monkeypatch):
     """When auto-detect picks Clover but credentials are revoked, fall through to OpenRouter."""
     from clover_cli.auth import AuthError
 
@@ -916,7 +916,7 @@ def test_auto_detected_nous_auth_failure_falls_through_to_openrouter(monkeypatch
     })())
     # Clover credential resolution fails with revoked token
     monkeypatch.setattr(
-        rp, "resolve_nous_runtime_credentials",
+        rp, "resolve_clover_runtime_credentials",
         lambda **kw: (_ for _ in ()).throw(
             AuthError("Refresh session has been revoked",
                       provider="clover", code="invalid_grant", relogin_required=True)

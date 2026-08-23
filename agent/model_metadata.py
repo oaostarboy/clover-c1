@@ -2418,7 +2418,7 @@ _CODEX_OAUTH_CONTEXT_FALLBACK: Dict[str, int] = {
 # ≥11K margin under the observed ceiling and matches the compaction point
 # Codex's own client config documents for the 1M window.
 #
-# OPT-IN ONLY (Aug 2026 policy, Teknium): the large window is exposed via
+# OPT-IN ONLY (Aug 2026 policy, the maintainer): the large window is exposed via
 # explicit ``-900k`` picker variants (e.g. ``gpt-5.6-sol-900k``) — the base
 # slugs keep the advertised 272K so the cheaper limit is the default. A
 # week of the 900K default burned through subscription usage for people
@@ -2746,7 +2746,7 @@ def _resolve_codex_oauth_context_length(
     return context_length
 
 
-def _resolve_nous_context_length(
+def _resolve_clover_context_length(
     model: str,
     base_url: str = "",
     api_key: str = "",
@@ -3213,7 +3213,7 @@ def get_model_context_length(
             pass  # Fall through to models.dev
 
     if effective_provider == "clover":
-        ctx, source = _resolve_nous_context_length(
+        ctx, source = _resolve_clover_context_length(
             model, base_url=base_url or "", api_key=api_key or ""
         )
         if ctx:

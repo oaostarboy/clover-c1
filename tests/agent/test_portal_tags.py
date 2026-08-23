@@ -7,11 +7,11 @@ from __future__ import annotations
 
 
 
-def test_nous_portal_tags_contains_product_and_client():
+def test_clover_portal_tags_contains_product_and_client():
     """Every Clover Portal request gets BOTH the product tag and the version tag."""
-    from agent.portal_tags import clover_client_tag, nous_portal_tags
+    from agent.portal_tags import clover_client_tag, clover_portal_tags
 
-    tags = nous_portal_tags()
+    tags = clover_portal_tags()
     assert "product=clover-c1" in tags
     assert clover_client_tag() in tags
     assert len(tags) == 2
@@ -36,7 +36,7 @@ def test_ambient_context_set_none_clears():
     """set_conversation_context(None) publishes no tag (and coerces '')."""
     from agent.portal_tags import (
         get_conversation_context,
-        nous_portal_tags,
+        clover_portal_tags,
         reset_conversation_context,
         set_conversation_context,
     )
@@ -45,7 +45,7 @@ def test_ambient_context_set_none_clears():
         token = set_conversation_context(empty)
         try:
             assert get_conversation_context() is None
-            assert len(nous_portal_tags()) == 2
+            assert len(clover_portal_tags()) == 2
         finally:
             reset_conversation_context(token)
 
@@ -56,13 +56,13 @@ def test_ambient_context_isolated_between_contexts():
 
     from agent.portal_tags import (
         conversation_tag,
-        nous_portal_tags,
+        clover_portal_tags,
         set_conversation_context,
     )
 
     def _in_conversation(cid):
         set_conversation_context(cid)
-        return nous_portal_tags()
+        return clover_portal_tags()
 
     tags_a = contextvars.copy_context().run(_in_conversation, "agent-a")
     tags_b = contextvars.copy_context().run(_in_conversation, "agent-b")
@@ -70,7 +70,7 @@ def test_ambient_context_isolated_between_contexts():
     assert conversation_tag("agent-b") in tags_b
     assert conversation_tag("agent-b") not in tags_a
     # The outer (test) context stays clean.
-    assert not any(t.startswith("conversation=") for t in nous_portal_tags())
+    assert not any(t.startswith("conversation=") for t in clover_portal_tags())
 
 
 def test_ambient_context_propagates_via_thread_context_helper():
@@ -79,7 +79,7 @@ def test_ambient_context_propagates_via_thread_context_helper():
 
     from agent.portal_tags import (
         conversation_tag,
-        nous_portal_tags,
+        clover_portal_tags,
         reset_conversation_context,
         set_conversation_context,
     )
@@ -88,9 +88,9 @@ def test_ambient_context_propagates_via_thread_context_helper():
     token = set_conversation_context("moa-root")
     try:
         with ThreadPoolExecutor(max_workers=1) as ex:
-            plain = ex.submit(nous_portal_tags).result()
+            plain = ex.submit(clover_portal_tags).result()
             propagated = ex.submit(
-                propagate_context_to_thread(nous_portal_tags)
+                propagate_context_to_thread(clover_portal_tags)
             ).result()
     finally:
         reset_conversation_context(token)
@@ -106,7 +106,7 @@ def test_ambient_context_propagates_via_thread_context_helper():
 
 
 
-def test_nous_sticky_key_matches_conversation_tag():
+def test_clover_sticky_key_matches_conversation_tag():
     """Sticky routing key must resolve like the ``conversation=`` tag does.
 
     The load-bearing case is the auxiliary call sites (compression, titles,

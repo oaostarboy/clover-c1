@@ -77,8 +77,8 @@ export interface SelectToolsetProviderResponse {
   /** Present (true) when a managed Clover row was selected but the Portal
    *  entitlement is missing — the row won't activate until the user signs
    *  in to Clover Portal. */
-  needs_nous_auth?: boolean
-  /** The managed feature key (e.g. "browser") when needs_nous_auth is set. */
+  needs_clover_auth?: boolean
+  /** The managed feature key (e.g. "browser") when needs_clover_auth is set. */
   feature?: string
 }
 

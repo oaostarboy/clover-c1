@@ -121,7 +121,7 @@ def build_models_payload(
     pricing: bool = False,
     capabilities: bool = False,
     featured: bool = False,
-    force_fresh_nous_tier: bool = False,
+    force_fresh_clover_tier: bool = False,
     refresh: bool = False,
     probe_custom_providers: bool = True,
     probe_current_custom_provider: bool = False,
@@ -160,7 +160,7 @@ def build_models_payload(
       these; the rest of ``models`` stays reachable via search / show-all. Empty
       for single-lab providers (callers fall back to top-N). Derived live from
       models.dev — no allowlist.
-    - ``force_fresh_nous_tier``: bypass the short Clover free-tier cache when
+    - ``force_fresh_clover_tier``: bypass the short Clover free-tier cache when
       selecting Portal-recommended Clover models and applying tier gating. Keep
       this false for UI picker opens; explicit auth/model flows can opt in
       when they need freshly-purchased credits to show up immediately.
@@ -191,7 +191,7 @@ def build_models_payload(
         current_model=ctx.current_model,
         user_providers=ctx.user_providers,
         custom_providers=ctx.custom_providers,
-        force_fresh_nous_tier=force_fresh_nous_tier,
+        force_fresh_clover_tier=force_fresh_clover_tier,
         max_models=max_models,
         refresh=refresh,
         probe_custom_providers=probe_custom_providers,
@@ -267,7 +267,7 @@ def build_models_payload(
     if canonical_order:
         rows = _reorder_canonical(rows)
     if pricing:
-        _apply_pricing(rows, force_fresh_nous_tier=force_fresh_nous_tier)
+        _apply_pricing(rows, force_fresh_clover_tier=force_fresh_clover_tier)
     if capabilities:
         _apply_capabilities(rows)
     if featured:
@@ -411,17 +411,17 @@ def _reasoning_catalog_reader(slug: str):
     """
     try:
         from clover_cli.models import (
-            nous_model_reasoning_capabilities,
+            clover_model_reasoning_capabilities,
             openrouter_model_reasoning_capabilities,
-            warm_nous_reasoning_caps_async,
+            warm_clover_reasoning_caps_async,
             warm_openrouter_reasoning_caps_async,
         )
     except Exception:
         return None
 
     if slug == "clover":
-        warm_nous_reasoning_caps_async()
-        return nous_model_reasoning_capabilities
+        warm_clover_reasoning_caps_async()
+        return clover_model_reasoning_capabilities
     if slug == "openrouter":
         warm_openrouter_reasoning_caps_async()
         return openrouter_model_reasoning_capabilities
@@ -506,7 +506,7 @@ _FEATURED_PER_LAB = 5
 def _apply_featured(rows: list[dict]) -> None:
     """Attach a ``featured_models`` shortlist to each aggregator provider row.
 
-    Aggregator providers (nous, openrouter) serve dozens of models across many
+    Aggregator providers (clover, openrouter) serve dozens of models across many
     labs, so a flat "top-N" default would drop whole labs from the picker.
     Instead we surface the ``_FEATURED_PER_LAB`` newest models per lab (the
     vendor segment of a ``vendor/model`` id), ranked by models.dev
@@ -873,12 +873,12 @@ def _reorder_canonical(rows: list[dict]) -> list[dict]:
 def _apply_pricing(
     rows: list[dict],
     *,
-    force_fresh_nous_tier: bool = False,
+    force_fresh_clover_tier: bool = False,
 ) -> None:
     """Enrich each provider row with per-model pricing + Clover tier gating.
 
     Mutates ``rows`` in-place. For every row whose provider supports live
-    pricing (openrouter / nous / novita) adds::
+    pricing (openrouter / clover / novita) adds::
 
         row["pricing"] = {model_id: {"input": "$3.00", "output": "$15.00",
                                      "cache": "$0.30" | None, "free": bool}}
@@ -894,14 +894,14 @@ def _apply_pricing(
     """
     from clover_cli.models import (
         _format_price_per_mtok,
-        check_nous_free_tier,
+        check_clover_free_tier,
         compute_sale_discount,
         get_pricing_for_provider,
-        partition_nous_models_by_tier,
+        partition_clover_models_by_tier,
     )
 
     # Resolve Clover free-tier once (cached in models.py for the TTL window).
-    nous_free_tier: Optional[bool] = None
+    clover_free_tier: Optional[bool] = None
 
     for row in rows:
         slug = str(row.get("slug", "")).lower()
@@ -961,13 +961,13 @@ def _apply_pricing(
 
         if slug == "clover":
             try:
-                if nous_free_tier is None:
-                    nous_free_tier = check_nous_free_tier(
-                        force_fresh=force_fresh_nous_tier
+                if clover_free_tier is None:
+                    clover_free_tier = check_clover_free_tier(
+                        force_fresh=force_fresh_clover_tier
                     )
-                row["free_tier"] = bool(nous_free_tier)
-                if nous_free_tier:
-                    _selectable, unavailable = partition_nous_models_by_tier(
+                row["free_tier"] = bool(clover_free_tier)
+                if clover_free_tier:
+                    _selectable, unavailable = partition_clover_models_by_tier(
                         list(models), raw_pricing, free_tier=True
                     )
                     row["unavailable_models"] = unavailable

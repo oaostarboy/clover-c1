@@ -12,7 +12,7 @@ export const FALLBACK_PORTAL_BILLING_URL = ''
 export const FALLBACK_PORTAL_URL = ''
 
 // The billing endpoint is the authoritative source of truth for balance / cap /
-// plan — the inference `x-nous-credits-*` headers are best-effort and can drift
+// plan — the inference `x-clover-credits-*` headers are best-effort and can drift
 // out of sync (notably in team/org accounts where another member's spend moves
 // the shared balance without ever touching THIS client's headers). So the page
 // never trusts a cache: `staleTime: 0` + `refetchOnMount: 'always'` force a

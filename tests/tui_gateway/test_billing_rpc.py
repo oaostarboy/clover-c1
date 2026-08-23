@@ -14,7 +14,7 @@ from decimal import Decimal
 import pytest
 
 import tui_gateway.server as srv
-import clover_cli.nous_billing as nb
+import clover_cli.clover_billing as nb
 import agent.billing_view as bv
 from agent.billing_view import BillingState, CardInfo, MonthlyCap, PaymentMethodInfo
 

@@ -1,7 +1,7 @@
 """Tests for _purge_stale_clover_modules — the class fix for stale
 sys.modules breaking the gateway auto-restart after `clover update`.
 
-Field failure (2026-08-20, Teknium's Linux box): `clover update` pulled a
+Field failure (2026-08-20, the maintainer's Linux box): `clover update` pulled a
 checkout where clover_cli/gateway.py newly imports `line_input` from
 clover_cli.cli_output, but the updater process had cli_output cached from
 before that symbol existed. The function-level `from clover_cli.gateway

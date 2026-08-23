@@ -82,7 +82,7 @@ def test_local_endpoint_hostname_detection():
     )
 
 
-def test_nous_portal_host_detection():
+def test_clover_portal_host_detection():
     from utils import base_url_host_matches
 
     assert base_url_host_matches("", "")

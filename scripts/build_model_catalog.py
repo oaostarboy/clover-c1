@@ -51,7 +51,7 @@ def _openrouter_entry(mid: str, desc: str) -> dict:
     return entry
 
 
-def _nous_entry(mid: str) -> dict:
+def _clover_entry(mid: str) -> dict:
     entry: dict = {"id": mid}
     if mid == PREFERRED_SILENT_DEFAULT_MODEL:
         entry["default"] = True
@@ -87,13 +87,13 @@ def build_catalog() -> dict:
                     "display_name": "Clover Portal",
                     "note": (
                         "Free-tier gating is determined live via Portal pricing "
-                        "(partition_nous_models_by_tier), not this manifest. "
+                        "(partition_clover_models_by_tier), not this manifest. "
                         'The entry labeled "default": true is the model Clover '
                         "silently lands on when the user never picked one."
                     ),
                 },
                 "models": [
-                    _nous_entry(mid)
+                    _clover_entry(mid)
                     for mid in _PROVIDER_MODELS.get("clover", [])
                 ],
             },

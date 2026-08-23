@@ -27,12 +27,12 @@ one-off at the call site.
 1. **Flat, not boxed.** No card-in-card, no divider borders inside a panel.
    Group with whitespace and a single hairline, never nested rounded boxes.
 2. **Borderless elevation for floating panels.** Overlays float on
-   `shadow-nous` + a `--stroke-nous` hairline, not thick framed boxes. In-panel
+   `shadow-clover` + a `--stroke-clover` hairline, not thick framed boxes. In-panel
    structure may use token hairlines sparingly.
 3. **One primitive per concern.** One `Button`, one set of control variants,
    one `SearchField`, one `Loader`, one `ErrorState`. Migrate onto them; don't
    fork.
-4. **Tokens, not literals.** Reference CSS vars (`--ui-*`, `--shadow-nous`,
+4. **Tokens, not literals.** Reference CSS vars (`--ui-*`, `--shadow-clover`,
    `--theme-*`), never raw hex / ad-hoc rgba in components.
 5. **Style lives in the primitive.** Variants and sizes own padding, radius,
    color, chrome. Call sites pass a `variant`/`size`, not `className` overrides
@@ -73,8 +73,8 @@ Floating panels (base `Dialog`, route overlays, boot/install/update surfaces,
 model-picker, onboarding, prompt overlays, notifications) use:
 
 ```
-shadow-nous           /* downward-weighted, layered contact→ambient falloff */
-border-(--stroke-nous) /* currentColor hairline, theme-adaptive */
+shadow-clover           /* downward-weighted, layered contact→ambient falloff */
+border-(--stroke-clover) /* currentColor hairline, theme-adaptive */
 ```
 
 Both are CSS vars in `src/styles.css` — tune in one place, everything inherits.
@@ -92,7 +92,7 @@ for call-site shadow or border inventions.
 | --- | --- |
 | `--ui-stroke-primary…quaternary` | hairlines, in descending strength |
 | `--ui-stroke-tertiary` | the default in-panel divider / list hairline — and every bordered surface in the transcript |
-| `--stroke-nous` | the overlay hairline (pairs with `shadow-nous`) |
+| `--stroke-clover` | the overlay hairline (pairs with `shadow-clover`) |
 | `--ui-text-primary / -secondary / -tertiary` | text hierarchy |
 | `--ui-bg-quaternary` | soft control fill (secondary button) |
 | `--ui-widget-surface-background` | fill for inline chat widgets (`WIDGET_SHELL_CLASS`) |
@@ -332,14 +332,14 @@ The detailed state contract lives in the scoped
 - [ ] Reuse a primitive (`Button`, `SearchField`, `SegmentedControl`,
       `ListRow`, `Loader`, `ErrorState`, `LogView`, `ConfirmDialog`) instead of
       forking one?
-- [ ] Tokens (`--ui-*`, `shadow-nous`, `--stroke-nous`) — zero raw colors /
+- [ ] Tokens (`--ui-*`, `shadow-clover`, `--stroke-clover`) — zero raw colors /
       one-off shadows?
 - [ ] No `className` overriding a primitive's padding / size / radius / chrome?
 - [ ] Tips only where hover teaches something new (no kebab / menu-trigger
       tips; unlabeled chrome that needs discovery gets `<Tip>` + `aria-label`)?
 - [ ] No native `title=` on buttons?
 - [ ] Keybind hints on tipped buttons use `useKeybindHint` / `TipKeybindLabel`?
-- [ ] Overlay uses `shadow-nous` + `border-(--stroke-nous)`, no hard border?
+- [ ] Overlay uses `shadow-clover` + `border-(--stroke-clover)`, no hard border?
 - [ ] Flat — no card-in-card, no gratuitous row dividers?
 - [ ] No automatic navigation, focus steal, or pane opening from background
       events?

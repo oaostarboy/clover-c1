@@ -22,7 +22,7 @@
   "read_seconds": 420,
   "compaction_events": 1,
   "peak_context_tokens": 482248,
-  "rollout": "/home/teknium/.codex/sessions/2026/08/15/rollout-2026-08-15T18-20-54-01a00828-4e75-70f0-9e6d-31c7aac8d71c.jsonl"
+  "rollout": "/home/maintainer/.codex/sessions/2026/08/15/rollout-2026-08-15T18-20-54-01a00828-4e75-70f0-9e6d-31c7aac8d71c.jsonl"
  },
  "results": [
   {
@@ -75,7 +75,7 @@
    "why": "The answer identifies the wrong file (test_plugin_packaging.py vs the correct test_packaging_metadata.py)."
   },
   {
-   "q": "What was the result of the 'npm ci' command run in /home/teknium/salv-desktop according to the background process notification?",
+   "q": "What was the result of the 'npm ci' command run in /home/maintainer/salv-desktop according to the background process notification?",
    "gold": "completed normally (exit code 0)",
    "answer": "`npm ci` completed successfully with exit code 0.",
    "score": 2,

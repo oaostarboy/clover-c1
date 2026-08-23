@@ -203,7 +203,7 @@ export const ja = defineLocale({
   },
 
   billingBlock: {
-    titleNous: 'Clover クレジットが不足しています',
+    titleCloverCredits: 'Clover クレジットが不足しています',
     titleProvider: provider => `クレジット不足 — ${provider}`,
     fallbackMessage: 'アカウントのクレジットが不足しています。続行するにはクレジットを追加してください。',
     openBilling: '請求を開く',
@@ -226,7 +226,7 @@ export const ja = defineLocale({
       'バンドルは非公開でアップロードされました。サポートスレッドで以下のリンクを共有すると、チームがログを確認できます。',
     failedTitle: 'アップロードに失敗しました',
     failedHint:
-      'ターミナルから `clover debug share --nous` を実行するか、`clover debug share --local` でアップロードせずにレポートを表示することもできます。',
+      'ターミナルから `clover debug share --clover` を実行するか、`clover debug share --local` でアップロードせずにレポートを表示することもできます。',
     handoffLead: '続きは次の場所で:',
     links: {
       github: 'GitHub Issues',
@@ -1080,14 +1080,14 @@ export const ja = defineLocale({
       activeBackend: '使用中',
       activeBackendHint: 'これが現在アクティブなバックエンドです',
       useBackend: 'このバックエンドを使う',
-      nousIncluded: 'Clover サブスクリプションに含まれています。有効にするには Clover Portal にサインインしてください。',
-      nousAuthNeededTitle: 'Clover Portal にサインイン',
-      nousAuthNeededMessage: provider =>
+      cloverIncluded: 'Clover サブスクリプションに含まれています。有効にするには Clover Portal にサインインしてください。',
+      cloverAuthNeededTitle: 'Clover Portal にサインイン',
+      cloverAuthNeededMessage: provider =>
         `${provider} は保存されましたが、Clover Portal にサインインするまで有効になりません。`,
-      nousAuthSignIn: 'サインイン',
-      nousAuthDoneTitle: 'Clover Portal に接続しました',
-      nousAuthDoneMessage: 'サブスクリプションのバックエンドが有効になりました。',
-      nousAuthFailed: 'Clover Portal のサインインが完了しませんでした',
+      cloverAuthSignIn: 'サインイン',
+      cloverAuthDoneTitle: 'Clover Portal に接続しました',
+      cloverAuthDoneMessage: 'サブスクリプションのバックエンドが有効になりました。',
+      cloverAuthFailed: 'Clover Portal のサインインが完了しませんでした',
       noApiKeyRequired: 'API キーは不要です。',
       postSetupHint: step =>
         `このバックエンドは一度だけインストールが必要です (${step})。このマシン上で実行され、数分かかる場合があります。`,

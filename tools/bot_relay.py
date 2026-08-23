@@ -4,7 +4,7 @@ Every gateway connected to the user's Desktop (local, remote URL, SSH,
 Clover Cloud, docker) is a persistent line. This module is the gateway-side
 half of the relay that rides those lines so agents on ANY connected gateway
 can find and message agents on ANY other, with `message_agent` as the one
-send path (Teknium ruling, Aug 2026 — the peers-vs-connections split was
+send path (the maintainer ruling, Aug 2026 — the peers-vs-connections split was
 itself the bug).
 
 How the relay works (three files under ``<root>/bot_relay/``):

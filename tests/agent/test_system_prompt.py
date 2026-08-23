@@ -42,7 +42,7 @@ def _captured_context_cwd(agent):
 
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
+        patch("run_agent.build_clover_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", side_effect=fake_context_files),
     ):
@@ -65,7 +65,7 @@ class TestContextFileCwd:
 def _stable_prompt(agent):
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
+        patch("run_agent.build_clover_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", return_value=""),
     ):
@@ -75,7 +75,7 @@ def _stable_prompt(agent):
 def _prompt_parts(agent):
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
+        patch("run_agent.build_clover_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", return_value=""),
     ):
@@ -265,7 +265,7 @@ def test_build_system_prompt_records_stable_prefix():
     agent = _make_agent()
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
+        patch("run_agent.build_clover_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", return_value="context"),
     ):
@@ -310,7 +310,7 @@ def test_coding_prompt_preserves_legacy_workspace_order(monkeypatch):
 
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
+        patch("run_agent.build_clover_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", return_value="CONTEXT_FILES"),
         patch(
@@ -455,7 +455,7 @@ def _build(builder, **overrides):
     agent = _make_agent(valid_tool_names=["skills_list"], **overrides)
     with (
         patch("run_agent.load_soul_md", return_value=""),
-        patch("run_agent.build_nous_subscription_prompt", return_value=""),
+        patch("run_agent.build_clover_subscription_prompt", return_value=""),
         patch("run_agent.build_environment_hints", return_value=""),
         patch("run_agent.build_context_files_prompt", return_value=_CONTEXT),
         patch("run_agent.get_toolset_for_tool", return_value=None),

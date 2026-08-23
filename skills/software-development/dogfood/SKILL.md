@@ -2,7 +2,7 @@
 name: dogfood
 description: "Exploratory QA of web apps: find bugs, evidence, reports."
 version: 1.0.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 platforms: [linux, macos, windows]
 metadata:

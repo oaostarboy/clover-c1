@@ -280,26 +280,26 @@ class TestResolveVisionMainFirst:
 
 
     @staticmethod
-    def _stub_nous_portal(seen: dict):
+    def _stub_clover_portal(seen: dict):
         """Stub the Clover network boundary, keeping the resolution chain real.
 
-        Returns a ``_try_nous`` replacement that answers with the Portal's
+        Returns a ``_try_clover`` replacement that answers with the Portal's
         tier-aware slots: a vision model for ``vision=True``, the text chat
         default otherwise.
         """
-        nous_client = MagicMock()
-        nous_client.api_key = "jwt-test"
-        nous_client.base_url = ""
+        clover_client = MagicMock()
+        clover_client.api_key = "jwt-test"
+        clover_client.base_url = ""
 
-        def fake_try_nous(vision=False):
+        def fake_try_clover(vision=False):
             seen["vision"] = vision
-            return nous_client, (
+            return clover_client, (
                 "stepfun/step-3.7-flash:free" if vision else "tencent/hy3:free"
             )
 
-        return nous_client, fake_try_nous
+        return clover_client, fake_try_clover
 
-    def test_nous_main_vision_uses_portal_pick_not_text_chat_model(self):
+    def test_clover_main_vision_uses_portal_pick_not_text_chat_model(self):
         """Clover main → vision runs the Portal's vision slot, not the chat model.
 
         A Clover chat default is routinely text-only (e.g. a ``:free`` chat SKU).
@@ -310,7 +310,7 @@ class TestResolveVisionMainFirst:
         the chat model used to clobber the Portal's pick.
         """
         seen: dict = {}
-        nous_client, fake_try_nous = self._stub_nous_portal(seen)
+        clover_client, fake_try_clover = self._stub_clover_portal(seen)
 
         with patch(
             "agent.auxiliary_client._read_main_provider", return_value="clover",
@@ -320,21 +320,21 @@ class TestResolveVisionMainFirst:
             "agent.auxiliary_client._resolve_task_provider_model",
             return_value=("auto", None, None, None, None),
         ), patch(
-            "agent.auxiliary_client._try_nous", side_effect=fake_try_nous,
+            "agent.auxiliary_client._try_clover", side_effect=fake_try_clover,
         ):
             from agent.auxiliary_client import resolve_vision_provider_client
 
             provider, client, model = resolve_vision_provider_client()
 
         assert provider == "clover"
-        assert client is nous_client
+        assert client is clover_client
         assert seen["vision"] is True
         assert model == "stepfun/step-3.7-flash:free"
 
-    def test_nous_main_vision_honours_explicit_vision_model(self):
+    def test_clover_main_vision_honours_explicit_vision_model(self):
         """An explicit auxiliary.vision.model still overrides the Portal pick."""
         seen: dict = {}
-        _nous_client, fake_try_nous = self._stub_nous_portal(seen)
+        _clover_client, fake_try_clover = self._stub_clover_portal(seen)
 
         with patch(
             "agent.auxiliary_client._read_main_provider", return_value="clover",
@@ -344,7 +344,7 @@ class TestResolveVisionMainFirst:
             "agent.auxiliary_client._resolve_task_provider_model",
             return_value=("auto", "qwen/qwen3-vl-8b-instruct", None, None, None),
         ), patch(
-            "agent.auxiliary_client._try_nous", side_effect=fake_try_nous,
+            "agent.auxiliary_client._try_clover", side_effect=fake_try_clover,
         ):
             from agent.auxiliary_client import resolve_vision_provider_client
 
@@ -353,14 +353,14 @@ class TestResolveVisionMainFirst:
         assert provider == "clover"
         assert model == "qwen/qwen3-vl-8b-instruct"
 
-    def test_nous_explicit_vision_provider_also_skips_chat_model(self):
-        """``auxiliary.vision.provider: nous`` takes the same Portal pick.
+    def test_clover_explicit_vision_provider_also_skips_chat_model(self):
+        """``auxiliary.vision.provider: clover`` takes the same Portal pick.
 
         The explicit-provider branch reaches the strict vision backend with no
         model too, so it has to resolve the same way the auto branch does.
         """
         seen: dict = {}
-        nous_client, fake_try_nous = self._stub_nous_portal(seen)
+        clover_client, fake_try_clover = self._stub_clover_portal(seen)
 
         with patch(
             "agent.auxiliary_client._read_main_provider", return_value="clover",
@@ -370,31 +370,31 @@ class TestResolveVisionMainFirst:
             "agent.auxiliary_client._resolve_task_provider_model",
             return_value=("clover", None, None, None, None),
         ), patch(
-            "agent.auxiliary_client._try_nous", side_effect=fake_try_nous,
+            "agent.auxiliary_client._try_clover", side_effect=fake_try_clover,
         ):
             from agent.auxiliary_client import resolve_vision_provider_client
 
             provider, client, model = resolve_vision_provider_client()
 
         assert provider == "clover"
-        assert client is nous_client
+        assert client is clover_client
         assert model == "stepfun/step-3.7-flash:free"
 
-    def test_nous_text_aux_still_uses_main_chat_model(self):
+    def test_clover_text_aux_still_uses_main_chat_model(self):
         """The vision carve-out must not leak into text aux resolution.
 
         Text auxiliary work on a Clover main deliberately keeps the user's chat
         model rather than dropping to the Portal's cheap default.
         """
         seen: dict = {}
-        _nous_client, fake_try_nous = self._stub_nous_portal(seen)
+        _clover_client, fake_try_clover = self._stub_clover_portal(seen)
 
         with patch(
             "agent.auxiliary_client._read_main_provider", return_value="clover",
         ), patch(
             "agent.auxiliary_client._read_main_model", return_value="tencent/hy3:free",
         ), patch(
-            "agent.auxiliary_client._try_nous", side_effect=fake_try_nous,
+            "agent.auxiliary_client._try_clover", side_effect=fake_try_clover,
         ):
             from agent.auxiliary_client import resolve_provider_client
 

@@ -1039,10 +1039,10 @@ class TestBuildSystemPrompt:
                         if ln.startswith("Conversation started:"))
         assert _line(agent._build_system_prompt()) == _line(agent._build_system_prompt())
 
-    def test_includes_nous_subscription_prompt(self, agent, monkeypatch):
-        monkeypatch.setattr(run_agent, "build_nous_subscription_prompt", lambda tool_names: "NOUS SUBSCRIPTION BLOCK")
+    def test_includes_clover_subscription_prompt(self, agent, monkeypatch):
+        monkeypatch.setattr(run_agent, "build_clover_subscription_prompt", lambda tool_names: "CLOVER SUBSCRIPTION BLOCK")
         prompt = agent._build_system_prompt()
-        assert "NOUS SUBSCRIPTION BLOCK" in prompt
+        assert "CLOVER SUBSCRIPTION BLOCK" in prompt
 
     def test_skills_prompt_derives_available_toolsets_from_loaded_tools(self):
         tools = _make_tool_defs("web_search", "skills_list", "skill_view", "skill_manage")
@@ -3957,7 +3957,7 @@ class TestRunConversation:
             for m in replayed
         )
 
-    def test_nous_401_refreshes_after_remint_and_retries(self, agent):
+    def test_clover_401_refreshes_after_remint_and_retries(self, agent):
         self._setup_agent(agent)
         agent.provider = "clover"
         agent.api_mode = "chat_completions"
@@ -3988,7 +3988,7 @@ class TestRunConversation:
             patch.object(agent, "_cleanup_task_resources"),
             patch.object(agent, "_interruptible_api_call", side_effect=_fake_api_call),
             patch.object(
-                agent, "_try_refresh_nous_client_credentials", side_effect=_fake_refresh
+                agent, "_try_refresh_clover_client_credentials", side_effect=_fake_refresh
             ),
         ):
             result = agent.run_conversation("hello")
@@ -5118,7 +5118,7 @@ class TestConversationHistoryNotMutated:
 class TestNousCredentialRefresh:
     """Verify Clover credential refresh rebuilds the runtime client."""
 
-    def test_try_refresh_nous_client_credentials_rebuilds_client(
+    def test_try_refresh_clover_client_credentials_rebuilds_client(
         self, agent, monkeypatch
     ):
         agent.provider = "clover"
@@ -5139,7 +5139,7 @@ class TestNousCredentialRefresh:
         def _fake_resolve(**kwargs):
             captured.update(kwargs)
             return {
-                "api_key": "new-nous-key",
+                "api_key": "new-clover-key",
                 "base_url": "",
             }
 
@@ -5148,7 +5148,7 @@ class TestNousCredentialRefresh:
             return _RebuiltClient()
 
         monkeypatch.setattr(
-            "clover_cli.auth.resolve_nous_runtime_credentials", _fake_resolve
+            "clover_cli.auth.resolve_clover_runtime_credentials", _fake_resolve
         )
 
         existing = _ExistingClient()
@@ -5164,7 +5164,7 @@ class TestNousCredentialRefresh:
         monkeypatch.setattr(agent, "_retire_shared_openai_client", _spy_retire)
 
         with patch("run_agent.OpenAI", side_effect=_fake_openai):
-            ok = agent._try_refresh_nous_client_credentials(force=True)
+            ok = agent._try_refresh_clover_client_credentials(force=True)
 
         assert ok is True
         # #70773: the replaced shared client is RETIRED (sockets shutdown,
@@ -5174,14 +5174,14 @@ class TestNousCredentialRefresh:
         assert retired["value"] is True
         assert closed["value"] is False
         assert captured["force_refresh"] is True
-        assert rebuilt["kwargs"]["api_key"] == "new-nous-key"
+        assert rebuilt["kwargs"]["api_key"] == "new-clover-key"
         assert (
             rebuilt["kwargs"]["base_url"] == ""
         )
         assert "default_headers" not in rebuilt["kwargs"]
         assert isinstance(agent.client, _RebuiltClient)
 
-    def test_try_refresh_nous_client_credentials_rebuilds_anthropic_client(
+    def test_try_refresh_clover_client_credentials_rebuilds_anthropic_client(
         self, agent, monkeypatch
     ):
         """Portal anthropic/* sessions hold an Anthropic client, not OpenAI.
@@ -5194,9 +5194,9 @@ class TestNousCredentialRefresh:
         agent.provider = "clover"
         agent.api_mode = "anthropic_messages"
         agent.model = "anthropic/claude-opus-4.8"
-        agent.api_key = "stale-nous-key"
+        agent.api_key = "stale-clover-key"
         agent.base_url = ""
-        agent._anthropic_api_key = "stale-nous-key"
+        agent._anthropic_api_key = "stale-clover-key"
         agent._anthropic_base_url = ""
         agent._client_kwargs = {}
         agent.client = None
@@ -5219,7 +5219,7 @@ class TestNousCredentialRefresh:
             agent._anthropic_client = _RebuiltAnthropic()
 
         monkeypatch.setattr(
-            "clover_cli.auth.resolve_nous_runtime_credentials", _fake_resolve
+            "clover_cli.auth.resolve_clover_runtime_credentials", _fake_resolve
         )
         monkeypatch.setattr(agent, "_rebuild_anthropic_client", _fake_rebuild)
         monkeypatch.setattr(
@@ -5228,7 +5228,7 @@ class TestNousCredentialRefresh:
             MagicMock(side_effect=AssertionError("OpenAI client must not be rebuilt")),
         )
 
-        ok = agent._try_refresh_nous_client_credentials(force=True)
+        ok = agent._try_refresh_clover_client_credentials(force=True)
 
         assert ok is True
         assert captured["force_refresh"] is True
@@ -5409,7 +5409,7 @@ class TestGpt5ApiModeRouting:
         assert agent.api_mode == "chat_completions"
 
 
-    def test_nous_gpt5_stays_on_chat_completions(self, agent):
+    def test_clover_gpt5_stays_on_chat_completions(self, agent):
         """Clover serves gpt-5.x on /chat/completions — must not upgrade to codex_responses."""
         agent.provider = "clover"
         agent.base_url = ""

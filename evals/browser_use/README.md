@@ -23,7 +23,7 @@ web tasks.
 - **Resume-safe.** Completed cells in `results/*.jsonl` are skipped on rerun
   (same pattern as `scripts/toolperf_abeval`).
 - **Backend matrix.** `orchestrate.py` drives a local headless-Chrome CDP;
-  `orchestrate_cloud.py --backend nous-cloud|browserbase` provisions a real
+  `orchestrate_cloud.py --backend clover-cloud|browserbase` provisions a real
   cloud browser per cell through the same provider plumbing the product uses.
 
 ## Run
@@ -73,10 +73,10 @@ nothing and saves a little; the full 11KB live skill dump adds nothing.
 ```
 model      backend          ok  tok_mean  calls   wall
 opus4.8    local-cdp     17/18     25934    2.0   17.5
-opus4.8    nous-cloud    12/12     33330    2.8   33.8
+opus4.8    clover-cloud    12/12     33330    2.8   33.8
 opus4.8    browserbase    6/6      26712    2.2   23.2
 kimi-k3    local-cdp     18/18     19230    2.4   33.3
-kimi-k3    nous-cloud    12/12     22050    2.9   41.4
+kimi-k3    clover-cloud    12/12     22050    2.9   41.4
 kimi-k3    browserbase    6/6      22121    2.8   35.2
 ```
 

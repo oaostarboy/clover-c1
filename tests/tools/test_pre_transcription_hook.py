@@ -35,7 +35,7 @@ import clover_cli.plugins as plugins_mod
 from tools import transcription_tools
 
 
-PROMPT = "Clover, Teknium, Clover Cognition, kanban"
+PROMPT = "Clover, the maintainer, Clover Cognition, kanban"
 
 
 # ---------------------------------------------------------------------------

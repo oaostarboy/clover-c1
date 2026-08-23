@@ -196,7 +196,7 @@ function notifyReady(provider: string) {
 }
 
 // Human-friendly labels for tools auto-routed through the Clover Tool Gateway,
-// mirroring clover_cli/nous_subscription._GATEWAY_TOOL_LABELS so the GUI and
+// mirroring clover_cli/clover_subscription._GATEWAY_TOOL_LABELS so the GUI and
 // CLI describe the same thing.
 const GATEWAY_TOOL_LABELS: Record<string, string> = {
   browser: 'browser automation',

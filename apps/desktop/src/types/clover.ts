@@ -1043,7 +1043,7 @@ export interface ToolProvider {
   tag: string
   env_vars: ToolEnvVar[]
   post_setup: string | null
-  requires_nous_auth: boolean
+  requires_clover_auth: boolean
   /** True when this is the provider currently written to config (mirrors the
    *  CLI `clover tools` active-provider detection). */
   is_active: boolean

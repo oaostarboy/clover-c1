@@ -33,7 +33,7 @@ test('canonicalGitHubRemote normalizes SSH and HTTPS forms to the same value', (
   assert.equal(canonicalGitHubRemote('ssh://git@github.com/clover-c1.git'), OFFICIAL_REPO_CANONICAL)
   assert.equal(canonicalGitHubRemote(''), OFFICIAL_REPO_CANONICAL)
   // Case-insensitive: an uppercased owner still canonicalizes to the same repo.
-  assert.equal(canonicalGitHubRemote('git@github.com:clovercognition/clover-c1.git'), OFFICIAL_REPO_CANONICAL)
+  assert.equal(canonicalGitHubRemote('git@github.com:cloverc1/clover-c1.git'), OFFICIAL_REPO_CANONICAL)
   // Trailing slashes are stripped.
   assert.equal(canonicalGitHubRemote(''), OFFICIAL_REPO_CANONICAL)
 })
@@ -57,7 +57,7 @@ test('isOfficialSshRemote is true only for the official repo over SSH', () => {
   assert.equal(isOfficialSshRemote('git@github.com:clover-c1'), true)
   assert.equal(isOfficialSshRemote('ssh://git@github.com/clover-c1.git'), true)
   // Case-insensitive owner/repo match.
-  assert.equal(isOfficialSshRemote('git@github.com:clovercognition/clover-c1.git'), true)
+  assert.equal(isOfficialSshRemote('git@github.com:cloverc1/clover-c1.git'), true)
 })
 
 test('isOfficialSshRemote does NOT match forks, other hosts, or HTTPS', () => {

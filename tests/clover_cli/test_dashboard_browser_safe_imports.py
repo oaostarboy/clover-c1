@@ -5,7 +5,7 @@ from pathlib import Path
 WEB_SRC = Path(__file__).resolve().parents[2] / "web" / "src"
 
 
-def test_dashboard_does_not_import_nous_ui_root_barrel():
+def test_dashboard_does_not_import_clover_ui_root_barrel():
     offenders = []
     for ext in ("*.tsx", "*.ts"):
         for path in WEB_SRC.rglob(ext):

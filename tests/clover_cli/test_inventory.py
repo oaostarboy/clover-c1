@@ -72,7 +72,7 @@ def _list_auth_returning(rows: list[dict]):
     )
 
 
-def _nous_row(model: str = "openai/gpt-5.5") -> dict:
+def _clover_row(model: str = "openai/gpt-5.5") -> dict:
     return {
         "slug": "clover",
         "name": "Clover",
@@ -124,7 +124,7 @@ def test_cli_model_picker_forwards_force_refresh_to_probe_flags():
 
 
 def test_list_authenticated_providers_force_fresh_is_keyword_only():
-    """``force_fresh_nous_tier`` must be keyword-only on the public listing API.
+    """``force_fresh_clover_tier`` must be keyword-only on the public listing API.
 
     It was inserted between ``custom_providers`` and ``max_models``; making it
     keyword-only ensures no positional caller passing ``max_models`` as the 5th
@@ -136,7 +136,7 @@ def test_list_authenticated_providers_force_fresh_is_keyword_only():
     from clover_cli.model_switch import list_authenticated_providers
 
     sig = inspect.signature(list_authenticated_providers)
-    param = sig.parameters["force_fresh_nous_tier"]
+    param = sig.parameters["force_fresh_clover_tier"]
     assert param.kind is inspect.Parameter.KEYWORD_ONLY
     assert param.default is False
 
@@ -481,7 +481,7 @@ def test_user_defined_rows_carry_alias_set_for_gui_current_match():
             "source": "user-config",
             "api_url": "http://localhost:8000/v1",
         },
-        _nous_row() | {"is_current": False},
+        _clover_row() | {"is_current": False},
     ]
     ctx = _empty_ctx(provider="custom:myep", model="my-model")
 

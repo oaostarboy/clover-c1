@@ -285,7 +285,7 @@ def test_cli_turn_routing_uses_primary_when_disabled(monkeypatch):
 
 
 
-def test_model_flow_nous_does_not_restore_stale_custom_api_key(tmp_path, monkeypatch):
+def test_model_flow_clover_does_not_restore_stale_custom_api_key(tmp_path, monkeypatch):
     import yaml
 
     config_home = tmp_path / "clover"
@@ -314,23 +314,23 @@ def test_model_flow_nous_does_not_restore_stale_custom_api_key(tmp_path, monkeyp
     monkeypatch.setattr(
         "clover_cli.auth.get_provider_auth_state",
         lambda provider: {
-            "access_token": "nous-token",
+            "access_token": "clover-token",
             "portal_base_url": "https://portal.example.com",
         },
     )
     monkeypatch.setattr(
-        "clover_cli.auth.resolve_nous_runtime_credentials",
+        "clover_cli.auth.resolve_clover_runtime_credentials",
         lambda *args, **kwargs: {
             "base_url": "",
-            "api_key": "nous-key",
+            "api_key": "clover-key",
         },
     )
     monkeypatch.setattr(
-        "clover_cli.models.get_curated_nous_model_ids",
+        "clover_cli.models.get_curated_clover_model_ids",
         lambda: [selected_model],
     )
     monkeypatch.setattr("clover_cli.models.get_pricing_for_provider", lambda provider: {})
-    monkeypatch.setattr("clover_cli.models.check_nous_free_tier", lambda **kwargs: False)
+    monkeypatch.setattr("clover_cli.models.check_clover_free_tier", lambda **kwargs: False)
     monkeypatch.setattr(
         "clover_cli.models.union_with_portal_paid_recommendations",
         lambda model_ids, pricing, portal_url: (model_ids, pricing),
@@ -340,11 +340,11 @@ def test_model_flow_nous_does_not_restore_stale_custom_api_key(tmp_path, monkeyp
         lambda *args, **kwargs: selected_model,
     )
     monkeypatch.setattr(
-        "clover_cli.nous_subscription.prompt_enable_tool_gateway",
+        "clover_cli.clover_subscription.prompt_enable_tool_gateway",
         lambda config: None,
     )
 
-    clover_main._model_flow_nous(stale_config, current_model="glm-5.2")
+    clover_main._model_flow_clover(stale_config, current_model="glm-5.2")
 
     config = yaml.safe_load(config_path.read_text()) or {}
     model = config.get("model")
@@ -548,7 +548,7 @@ def test_model_flow_custom_persists_selected_api_mode(monkeypatch):
     assert saved_env[key_env] == "test-key"
 
 
-def test_cmd_model_forwards_nous_login_tls_options(monkeypatch):
+def test_cmd_model_forwards_clover_login_tls_options(monkeypatch):
     monkeypatch.setattr(clover_main, "_require_tty", lambda *a: None)
     monkeypatch.setattr(
         "clover_cli.config.load_config",
@@ -573,7 +573,7 @@ def test_cmd_model_forwards_nous_login_tls_options(monkeypatch):
         captured["ca_bundle"] = login_args.ca_bundle
         captured["insecure"] = login_args.insecure
 
-    monkeypatch.setattr("clover_cli.auth._login_nous", _fake_login)
+    monkeypatch.setattr("clover_cli.auth._login_clover", _fake_login)
 
     clover_main.cmd_model(
         SimpleNamespace(

@@ -78,11 +78,11 @@ class TestIdentityAtInsert:
         db.create_session(
             "s1", "telegram",
             session_key=PEER["session_key"], chat_id=PEER["chat_id"],
-            chat_type="dm", origin_json=origin, display_name="Teknium",
+            chat_type="dm", origin_json=origin, display_name="the maintainer",
         )
         row = db.get_session("s1")
         assert row["origin_json"] == origin
-        assert row["display_name"] == "Teknium"
+        assert row["display_name"] == "the maintainer"
         assert row["session_key"] == PEER["session_key"]
 
     def test_conflict_backfills_origin_without_overwriting(self, db):
@@ -113,7 +113,7 @@ class TestPeerRecorderSelfHeal:
             session_key=PEER["session_key"],
             chat_id=PEER["chat_id"],
             chat_type="dm",
-            display_name="Teknium",
+            display_name="the maintainer",
             origin_json='{"platform": "telegram"}',
         )
         row = db.get_session(sid)

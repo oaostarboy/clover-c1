@@ -110,16 +110,16 @@ AUTH_STORE_VERSION = 1
 AUTH_LOCK_TIMEOUT_SECONDS = 15.0
 
 # Clover Portal defaults
-DEFAULT_NOUS_PORTAL_URL = ""
-DEFAULT_NOUS_INFERENCE_URL = ""
-DEFAULT_NOUS_CLIENT_ID = "clover-cli"
-NOUS_INFERENCE_INVOKE_SCOPE = "inference:invoke"
-NOUS_BILLING_MANAGE_SCOPE = "billing:manage"
-DEFAULT_NOUS_SCOPE = NOUS_INFERENCE_INVOKE_SCOPE
-NOUS_DEVICE_CODE_SOURCE = "device_code"
-NOUS_AUTH_PATH_INVOKE_JWT = "invoke_jwt"
+DEFAULT_CLOVER_PORTAL_URL = ""
+DEFAULT_CLOVER_INFERENCE_URL = ""
+DEFAULT_CLOVER_CLIENT_ID = "clover-cli"
+CLOVER_INFERENCE_INVOKE_SCOPE = "inference:invoke"
+CLOVER_BILLING_MANAGE_SCOPE = "billing:manage"
+DEFAULT_CLOVER_SCOPE = CLOVER_INFERENCE_INVOKE_SCOPE
+CLOVER_DEVICE_CODE_SOURCE = "device_code"
+CLOVER_AUTH_PATH_INVOKE_JWT = "invoke_jwt"
 ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120       # refresh 2 min before expiry
-NOUS_INVOKE_JWT_MIN_TTL_SECONDS = ACCESS_TOKEN_REFRESH_SKEW_SECONDS
+CLOVER_INVOKE_JWT_MIN_TTL_SECONDS = ACCESS_TOKEN_REFRESH_SKEW_SECONDS
 DEVICE_AUTH_POLL_INTERVAL_CAP_SECONDS = 1     # poll at most every 1s
 DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api/codex"
 DEFAULT_XAI_OAUTH_BASE_URL = "https://api.x.ai/v1"
@@ -251,10 +251,10 @@ PROVIDER_REGISTRY: Dict[str, ProviderConfig] = {
         id="clover",
         name="Clover Portal",
         auth_type="oauth_device_code",
-        portal_base_url=DEFAULT_NOUS_PORTAL_URL,
-        inference_base_url=DEFAULT_NOUS_INFERENCE_URL,
-        client_id=DEFAULT_NOUS_CLIENT_ID,
-        scope=DEFAULT_NOUS_SCOPE,
+        portal_base_url=DEFAULT_CLOVER_PORTAL_URL,
+        inference_base_url=DEFAULT_CLOVER_INFERENCE_URL,
+        client_id=DEFAULT_CLOVER_CLIENT_ID,
+        scope=DEFAULT_CLOVER_SCOPE,
     ),
     "openai-codex": ProviderConfig(
         id="openai-codex",
@@ -988,17 +988,17 @@ def format_auth_error(error: Exception) -> str:
 
     if error.code == "subscription_required":
         if error.provider == "clover":
-            return _format_nous_entitlement_auth_error(error)
+            return _format_clover_entitlement_auth_error(error)
         return "No active paid subscription found. Please purchase/activate a subscription, then retry."
 
     if error.code == "insufficient_credits":
         if error.provider == "clover":
-            return _format_nous_entitlement_auth_error(error)
+            return _format_clover_entitlement_auth_error(error)
         return "Subscription credits are exhausted. Top up/renew credits, then retry."
 
     if error.code in {"subscription_expired", "no_usable_credits", "account_missing", "member_spend_cap_exceeded"}:
         if error.provider == "clover":
-            return _format_nous_entitlement_auth_error(error)
+            return _format_clover_entitlement_auth_error(error)
 
     if error.code == "temporarily_unavailable":
         return f"{error} Please retry in a few seconds."
@@ -1006,15 +1006,15 @@ def format_auth_error(error: Exception) -> str:
     return str(error)
 
 
-def _format_nous_entitlement_auth_error(error: AuthError) -> str:
+def _format_clover_entitlement_auth_error(error: AuthError) -> str:
     try:
         from clover_cli.clover_account import (
-            format_nous_portal_entitlement_message,
-            get_nous_portal_account_info,
+            format_clover_portal_entitlement_message,
+            get_clover_portal_account_info,
         )
 
-        account_info = get_nous_portal_account_info(force_fresh=True)
-        message = format_nous_portal_entitlement_message(
+        account_info = get_clover_portal_account_info(force_fresh=True)
+        message = format_clover_portal_entitlement_message(
             account_info,
             capability="Clover model access",
         )
@@ -1114,7 +1114,7 @@ def _load_global_auth_store() -> Dict[str, Any]:
     or the global auth.json is absent). Never raises on missing file.
 
     Memoised keyed on the global auth file's path + mtime (same pattern as
-    ``_nous_auth_status_cache``): read_credential_pool() -> load_pool() runs
+    ``_clover_auth_status_cache``): read_credential_pool() -> load_pool() runs
     this once per provider row in the /model picker, and the path resolution
     (``_global_auth_file_path()`` -> ``get_default_clover_root()``) + JSON
     parse cost ~105us+ per call even when nothing changed. The global
@@ -1271,7 +1271,7 @@ def _auth_store_lock(
     uses its own reentrancy tracker and kernel lock.
 
     Lock ordering invariant: when this lock is held together with
-    ``_nous_shared_store_lock``, acquire ``_auth_store_lock`` FIRST
+    ``_clover_shared_store_lock``, acquire ``_auth_store_lock`` FIRST
     (outer) and the shared Clover lock SECOND (inner). All runtime
     refresh paths follow this order; violating it risks deadlock
     against a concurrent import on the shared store.
@@ -1341,7 +1341,7 @@ def _load_auth_store(auth_file: Optional[Path] = None) -> Dict[str, Any]:
     ):
         raw.setdefault("providers", {})
         if isinstance(raw.get("providers"), dict):
-            _migrate_stale_nous_portal_url(raw["providers"])
+            _migrate_stale_clover_portal_url(raw["providers"])
         return raw
 
     # Migrate from PR's "systems" format if present
@@ -1477,7 +1477,7 @@ def _load_provider_state(auth_store: Dict[str, Any], provider_id: str) -> Option
     In profile mode, falls back to the global-root ``auth.json`` when the
     profile has no entry for ``provider_id``. This mirrors the per-provider
     shadowing already used by ``read_credential_pool``: workers spawned in a
-    profile can see providers (e.g. ``nous``) that were only authenticated at
+    profile can see providers (e.g. ``clover``) that were only authenticated at
     global scope. Once the user runs ``clover auth login <provider>`` inside
     the profile, the profile state fully shadows the global state on the next
     read. See issue #18594 follow-up.
@@ -2398,33 +2398,33 @@ def _optional_base_url(value: Any) -> Optional[str]:
     return cleaned if cleaned else None
 
 
-_NOUS_STALE_PORTAL_HOSTS: FrozenSet[str] = frozenset({
+_CLOVER_STALE_PORTAL_HOSTS: FrozenSet[str] = frozenset({
     "api.",
 })
 
 # Allowlist of valid Clover Portal hosts. A portal_base_url outside this
 # set is treated as a misconfiguration and falls back to the default.
 # "localhost" / "127.0.0.1" are valid for local development and testing.
-_NOUS_PORTAL_ALLOWED_HOSTS: FrozenSet[str] = frozenset({
+_CLOVER_PORTAL_ALLOWED_HOSTS: FrozenSet[str] = frozenset({
     "portal.",
     "localhost",
     "127.0.0.1",
 })
 
 
-def _migrate_stale_nous_portal_url(providers: Dict[str, Any]) -> None:
-    nous = providers.get("clover")
-    if not isinstance(nous, dict):
+def _migrate_stale_clover_portal_url(providers: Dict[str, Any]) -> None:
+    clover = providers.get("clover")
+    if not isinstance(clover, dict):
         return
-    stored = (nous.get("portal_base_url") or "").strip()
+    stored = (clover.get("portal_base_url") or "").strip()
     if stored:
         parsed = urlparse(stored)
-        if parsed.hostname in _NOUS_STALE_PORTAL_HOSTS:
+        if parsed.hostname in _CLOVER_STALE_PORTAL_HOSTS:
             logger.warning(
-                "auth: migrating stale nous portal_base_url %s -> %s",
-                stored, DEFAULT_NOUS_PORTAL_URL,
+                "auth: migrating stale clover portal_base_url %s -> %s",
+                stored, DEFAULT_CLOVER_PORTAL_URL,
             )
-            nous["portal_base_url"] = DEFAULT_NOUS_PORTAL_URL
+            clover["portal_base_url"] = DEFAULT_CLOVER_PORTAL_URL
 
 
 # Allowlist of hosts the Clover Portal proxy is willing to forward inference
@@ -2432,15 +2432,15 @@ def _migrate_stale_nous_portal_url(providers: Dict[str, Any]) -> None:
 #
 # This is consulted only for URLs coming from the NETWORK side (Portal
 # refresh responses). User-controlled env-var overrides
-# (NOUS_INFERENCE_BASE_URL) bypass validation — that's the documented
+# (CLOVER_INFERENCE_BASE_URL) bypass validation — that's the documented
 # dev/staging escape hatch and the env source is already trusted (the
 # user set it themselves).
-_ALLOWED_NOUS_INFERENCE_HOSTS: FrozenSet[str] = frozenset({
+_ALLOWED_CLOVER_INFERENCE_HOSTS: FrozenSet[str] = frozenset({
     "inference-api.",
 })
 
 
-def _validate_nous_inference_url_from_network(url: Optional[str]) -> Optional[str]:
+def _validate_clover_inference_url_from_network(url: Optional[str]) -> Optional[str]:
     """Validate a Portal-returned inference URL against the host allowlist.
 
     Returns ``url`` (normalised by stripping trailing slashes) if it's a
@@ -2456,7 +2456,7 @@ def _validate_nous_inference_url_from_network(url: Optional[str]) -> Optional[st
     Validating scheme + host at the source closes that loop before the
     poisoned URL ever lands in ``auth.json``.
 
-    The env-var override path (``NOUS_INFERENCE_BASE_URL``) bypasses
+    The env-var override path (``CLOVER_INFERENCE_BASE_URL``) bypasses
     this — env values come from the trusted OS user, not from the
     network, and the override is documented for staging/dev use.
 
@@ -2473,13 +2473,13 @@ def _validate_nous_inference_url_from_network(url: Optional[str]) -> Optional[st
         return None
     if parsed.scheme != "https":
         logger.warning(
-            "nous: refusing non-https inference URL scheme %r from Portal response",
+            "clover: refusing non-https inference URL scheme %r from Portal response",
             parsed.scheme,
         )
         return None
-    if parsed.hostname not in _ALLOWED_NOUS_INFERENCE_HOSTS:
+    if parsed.hostname not in _ALLOWED_CLOVER_INFERENCE_HOSTS:
         logger.warning(
-            "nous: refusing inference URL host %r from Portal response "
+            "clover: refusing inference URL host %r from Portal response "
             "(not in allowlist); falling back to default",
             parsed.hostname,
         )
@@ -2487,8 +2487,8 @@ def _validate_nous_inference_url_from_network(url: Optional[str]) -> Optional[st
     return cleaned.rstrip("/")
 
 
-def _nous_inference_env_override() -> Optional[str]:
-    """Return the user-set ``NOUS_INFERENCE_BASE_URL`` override, if any.
+def _clover_inference_env_override() -> Optional[str]:
+    """Return the user-set ``CLOVER_INFERENCE_BASE_URL`` override, if any.
 
     This is the documented dev/staging escape hatch. The env source is
     trusted (the OS user set it themselves), so it is intentionally NOT
@@ -2497,20 +2497,20 @@ def _nous_inference_env_override() -> Optional[str]:
     Returns a trailing-slash-stripped non-empty string, or ``None`` when
     the env var is unset/blank.
     """
-    return _optional_base_url(os.getenv("NOUS_INFERENCE_BASE_URL"))
+    return _optional_base_url(os.getenv("CLOVER_INFERENCE_BASE_URL"))
 
 
-def _nous_portal_env_override() -> Optional[str]:
+def _clover_portal_env_override() -> Optional[str]:
     """Return the user/deployment-set Portal base URL override, if any.
 
-    Mirrors ``_nous_inference_env_override()``: ``CLOVER_PORTAL_BASE_URL`` /
-    ``NOUS_PORTAL_BASE_URL`` are the documented dev/staging escape hatch for
+    Mirrors ``_clover_inference_env_override()``: ``CLOVER_PORTAL_BASE_URL`` /
+    ``CLOVER_PORTAL_BASE_URL`` are the documented dev/staging escape hatch for
     pointing Clover at a non-production Clover Portal (e.g. a hosted agent
-    provisioned on nous-account-service's `staging` environment, which stamps
+    provisioned on clover-account-service's `staging` environment, which stamps
     ``CLOVER_PORTAL_BASE_URL=`` into
     the container env). The env source is trusted (the OS user/deployment
     set it themselves), so — like the inference override — it must NOT be
-    gated by ``_NOUS_PORTAL_ALLOWED_HOSTS``: that allowlist exists to reject
+    gated by ``_CLOVER_PORTAL_ALLOWED_HOSTS``: that allowlist exists to reject
     an untrusted NETWORK-provided value (a poisoned portal_base_url
     persisted to auth.json), not a value the operator explicitly configured.
 
@@ -2518,7 +2518,7 @@ def _nous_portal_env_override() -> Optional[str]:
     neither env var is set/blank.
     """
     return _optional_base_url(
-        os.getenv("CLOVER_PORTAL_BASE_URL") or os.getenv("NOUS_PORTAL_BASE_URL")
+        os.getenv("CLOVER_PORTAL_BASE_URL") or os.getenv("CLOVER_PORTAL_BASE_URL")
     )
 
 
@@ -2551,12 +2551,12 @@ def _scope_values(raw_scope: Any) -> set[str]:
     return scopes
 
 
-def _nous_invoke_jwt_status(
+def _clover_invoke_jwt_status(
     token: Any,
     *,
     scope: Any = None,
     expires_at: Any = None,
-    min_ttl_seconds: int = NOUS_INVOKE_JWT_MIN_TTL_SECONDS,
+    min_ttl_seconds: int = CLOVER_INVOKE_JWT_MIN_TTL_SECONDS,
 ) -> Optional[str]:
     """Return None when the token can be used for inference, else a reason."""
     claims = _decode_jwt_claims(token)
@@ -2567,7 +2567,7 @@ def _nous_invoke_jwt_status(
         | _scope_values(claims.get("scope"))
         | _scope_values(claims.get("scp"))
     )
-    if NOUS_INFERENCE_INVOKE_SCOPE not in scopes:
+    if CLOVER_INFERENCE_INVOKE_SCOPE not in scopes:
         return "missing_inference_invoke_scope"
     exp = claims.get("exp")
     skew = max(0, int(min_ttl_seconds))
@@ -2580,15 +2580,15 @@ def _nous_invoke_jwt_status(
     return None
 
 
-def _nous_invoke_jwt_is_usable(
+def _clover_invoke_jwt_is_usable(
     token: Any,
     *,
     scope: Any = None,
     expires_at: Any = None,
-    min_ttl_seconds: int = NOUS_INVOKE_JWT_MIN_TTL_SECONDS,
+    min_ttl_seconds: int = CLOVER_INVOKE_JWT_MIN_TTL_SECONDS,
 ) -> bool:
     return (
-        _nous_invoke_jwt_status(
+        _clover_invoke_jwt_status(
             token,
             scope=scope,
             expires_at=expires_at,
@@ -2598,13 +2598,13 @@ def _nous_invoke_jwt_is_usable(
     )
 
 
-def _assert_nous_inference_jwt_usable(
+def _assert_clover_inference_jwt_usable(
     state: Dict[str, Any],
     *,
     access_token: Any = None,
 ) -> None:
     token = state.get("access_token") if access_token is None else access_token
-    reason = _nous_invoke_jwt_status(
+    reason = _clover_invoke_jwt_status(
         token,
         scope=state.get("scope"),
         expires_at=state.get("expires_at"),
@@ -2613,27 +2613,27 @@ def _assert_nous_inference_jwt_usable(
         return
     raise AuthError(
         "Clover Portal access token is not a usable inference JWT "
-        f"({reason}). Re-authenticate with: clover auth add nous",
+        f"({reason}). Re-authenticate with: clover auth add clover",
         provider="clover",
         code=reason,
         relogin_required=True,
     )
 
 
-def _log_nous_invoke_jwt_selected(
+def _log_clover_invoke_jwt_selected(
     *,
     access_token: Any,
     sequence_id: Optional[str] = None,
 ) -> None:
     logger.debug("Clover inference auth: using NAS invoke JWT")
     _oauth_trace(
-        "nous_invoke_jwt_selected",
+        "clover_invoke_jwt_selected",
         sequence_id=sequence_id,
         access_token_fp=_token_fingerprint(access_token),
     )
 
 
-def _nous_jwt_expires_at(token: Any, fallback_expires_at: Any = None) -> Optional[str]:
+def _clover_jwt_expires_at(token: Any, fallback_expires_at: Any = None) -> Optional[str]:
     claims = _decode_jwt_claims(token)
     exp = claims.get("exp")
     if isinstance(exp, (int, float)):
@@ -2644,7 +2644,7 @@ def _nous_jwt_expires_at(token: Any, fallback_expires_at: Any = None) -> Optiona
     return fallback_expires_at if isinstance(fallback_expires_at, str) else None
 
 
-def _set_nous_agent_key_from_invoke_jwt(
+def _set_clover_agent_key_from_invoke_jwt(
     state: Dict[str, Any],
     *,
     obtained_at: Optional[str] = None,
@@ -2664,7 +2664,7 @@ def _set_nous_agent_key_from_invoke_jwt(
         effective_obtained_at = existing_obtained_at
     else:
         effective_obtained_at = now.isoformat()
-    expires_at = _nous_jwt_expires_at(access_token, state.get("expires_at"))
+    expires_at = _clover_jwt_expires_at(access_token, state.get("expires_at"))
     expires_epoch = _parse_iso_timestamp(expires_at)
     expires_in = (
         max(0, int(expires_epoch - time.time()))
@@ -2682,7 +2682,7 @@ def _set_nous_agent_key_from_invoke_jwt(
     state["agent_key_obtained_at"] = effective_obtained_at
 
 
-def _select_nous_invoke_jwt(
+def _select_clover_invoke_jwt(
     state: Dict[str, Any],
     *,
     access_token: Any = None,
@@ -2690,14 +2690,14 @@ def _select_nous_invoke_jwt(
 ) -> None:
     if isinstance(access_token, str) and access_token.strip():
         state["access_token"] = access_token
-    _set_nous_agent_key_from_invoke_jwt(state)
-    _log_nous_invoke_jwt_selected(
+    _set_clover_agent_key_from_invoke_jwt(state)
+    _log_clover_invoke_jwt_selected(
         access_token=state.get("access_token"),
         sequence_id=sequence_id,
     )
 
 
-_NOUS_EFFECTIVE_STATE_IGNORED_KEYS = frozenset({
+_CLOVER_EFFECTIVE_STATE_IGNORED_KEYS = frozenset({
     # These are derived from expires_at/JWT exp and naturally tick down between
     # reads. Persisting only these changes makes auth.json noisy and defeats
     # the mtime-keyed auth-status cache.
@@ -2706,11 +2706,11 @@ _NOUS_EFFECTIVE_STATE_IGNORED_KEYS = frozenset({
 })
 
 
-def _nous_effective_provider_state(state: Dict[str, Any]) -> Dict[str, Any]:
+def _clover_effective_provider_state(state: Dict[str, Any]) -> Dict[str, Any]:
     return {
         key: value
         for key, value in state.items()
-        if key not in _NOUS_EFFECTIVE_STATE_IGNORED_KEYS
+        if key not in _CLOVER_EFFECTIVE_STATE_IGNORED_KEYS
     }
 
 
@@ -5329,7 +5329,7 @@ def _request_device_code(
     return data
 
 
-def _nous_device_auth_timeout_message(portal_base_url: str) -> str:
+def _clover_device_auth_timeout_message(portal_base_url: str) -> str:
     """Actionable timeout text for Clover device-code login failures.
 
     A bare "Timed out waiting for device authorization" gives the user
@@ -5337,7 +5337,7 @@ def _nous_device_auth_timeout_message(portal_base_url: str) -> str:
     the opened browser tab (including the server-side CAPTCHA loop from
     #20605), so point at the Portal login page and the retry command.
     """
-    portal = (portal_base_url or DEFAULT_NOUS_PORTAL_URL).rstrip("/")
+    portal = (portal_base_url or DEFAULT_CLOVER_PORTAL_URL).rstrip("/")
     return (
         "Timed out waiting for device authorization.\n"
         "  Portal sign-in is required before the device code can be approved.\n"
@@ -5395,9 +5395,9 @@ def _poll_for_token(
         raise RuntimeError(f"{error_code}: {description}")
 
     # Enriched at the SOURCE so every caller inherits the guidance:
-    # the CLI login (_nous_device_code_login) and the dashboard/desktop
-    # poller (web_server._nous_poller, which surfaces str(e) to the UI).
-    raise TimeoutError(_nous_device_auth_timeout_message(portal_base_url))
+    # the CLI login (_clover_device_code_login) and the dashboard/desktop
+    # poller (web_server._clover_poller, which surfaces str(e) to the UI).
+    raise TimeoutError(_clover_device_auth_timeout_message(portal_base_url))
 
 
 # =============================================================================
@@ -5406,11 +5406,11 @@ def _poll_for_token(
 
 # -----------------------------------------------------------------------------
 # Shared Clover token store — lets OAuth credentials persist across profiles
-# so a new `clover --profile <name> auth add nous --type oauth` can one-tap
+# so a new `clover --profile <name> auth add clover --type oauth` can one-tap
 # import instead of running the full device-code flow every time.
 #
-# File lives at ${CLOVER_SHARED_AUTH_DIR}/nous_auth.json, defaulting to
-# ``<clover-root>/shared/nous_auth.json`` where ``<clover-root>`` is what
+# File lives at ${CLOVER_SHARED_AUTH_DIR}/clover_auth.json, defaulting to
+# ``<clover-root>/shared/clover_auth.json`` where ``<clover-root>`` is what
 # ``get_default_clover_root()`` returns — ``~/.clover`` on Linux/macOS,
 # ``%LOCALAPPDATA%\clover`` on native Windows, or the Docker/custom root.
 # It is OUTSIDE any named profile's CLOVER_HOME so named profiles (which
@@ -5423,11 +5423,11 @@ def _poll_for_token(
 # gracefully and the user falls back to the normal device-code flow.
 # -----------------------------------------------------------------------------
 
-NOUS_SHARED_STORE_FILENAME = "nous_auth.json"
-_nous_shared_lock_holder = threading.local()
+CLOVER_SHARED_STORE_FILENAME = "clover_auth.json"
+_clover_shared_lock_holder = threading.local()
 
 
-def _nous_shared_auth_dir() -> Path:
+def _clover_shared_auth_dir() -> Path:
     """Resolve the directory that holds the shared Clover token store.
 
     Honors ``CLOVER_SHARED_AUTH_DIR`` so tests can redirect it to a tmp
@@ -5447,8 +5447,8 @@ def _nous_shared_auth_dir() -> Path:
     return get_default_clover_root() / "shared"
 
 
-def _nous_shared_store_path() -> Path:
-    path = _nous_shared_auth_dir() / NOUS_SHARED_STORE_FILENAME
+def _clover_shared_store_path() -> Path:
+    path = _clover_shared_auth_dir() / CLOVER_SHARED_STORE_FILENAME
     # Seat belt: if pytest is running and this resolves to a path under the
     # real user's Clover root, refuse rather than silently corrupt cross-profile
     # state. Tests must set CLOVER_SHARED_AUTH_DIR to a tmp_path (conftest
@@ -5458,7 +5458,7 @@ def _nous_shared_store_path() -> Path:
     if os.environ.get("PYTEST_CURRENT_TEST"):
         from clover_constants import get_default_clover_root
         real_home_shared = (
-            get_default_clover_root() / "shared" / NOUS_SHARED_STORE_FILENAME
+            get_default_clover_root() / "shared" / CLOVER_SHARED_STORE_FILENAME
         ).resolve(strict=False)
         try:
             resolved = path.resolve(strict=False)
@@ -5473,19 +5473,19 @@ def _nous_shared_store_path() -> Path:
 
 
 @contextmanager
-def _nous_shared_store_lock(timeout_seconds: float = AUTH_LOCK_TIMEOUT_SECONDS):
+def _clover_shared_store_lock(timeout_seconds: float = AUTH_LOCK_TIMEOUT_SECONDS):
     """Cross-profile lock for the shared Clover OAuth store.
 
     Lock ordering invariant: if both this and ``_auth_store_lock`` need
     to be held, acquire ``_auth_store_lock`` FIRST. All runtime refresh
     paths follow this order. The one exception is
-    ``_try_import_shared_nous_state``, which holds this lock alone for
+    ``_try_import_shared_clover_state``, which holds this lock alone for
     the entire refresh cycle so concurrent imports on sibling profiles
     can't race on the single-use shared refresh token; that helper must
     NOT be called with ``_auth_store_lock`` already held.
     """
     try:
-        lock_path = _nous_shared_store_path().with_suffix(".lock")
+        lock_path = _clover_shared_store_path().with_suffix(".lock")
     except RuntimeError:
         # No CLOVER_HOME yet (pre-setup): fall through without locking.
         yield
@@ -5493,16 +5493,16 @@ def _nous_shared_store_lock(timeout_seconds: float = AUTH_LOCK_TIMEOUT_SECONDS):
 
     with _file_lock(
         lock_path,
-        _nous_shared_lock_holder,
+        _clover_shared_lock_holder,
         timeout_seconds,
         "Timed out waiting for shared Clover auth lock",
     ):
         yield
 
 
-def _merge_shared_nous_oauth_state(state: Dict[str, Any]) -> bool:
+def _merge_shared_clover_oauth_state(state: Dict[str, Any]) -> bool:
     """Copy fresher shared OAuth tokens into a profile-local Clover state."""
-    shared = _read_shared_nous_state()
+    shared = _read_shared_clover_state()
     if not shared:
         return False
 
@@ -5535,7 +5535,7 @@ def _merge_shared_nous_oauth_state(state: Dict[str, Any]) -> bool:
     return True
 
 
-def _write_shared_nous_state(state: Dict[str, Any]) -> None:
+def _write_shared_clover_state(state: Dict[str, Any]) -> None:
     """Persist a minimal copy of the Clover OAuth state to the shared store.
 
     Best-effort: any failure is swallowed after logging. The shared store
@@ -5558,17 +5558,17 @@ def _write_shared_nous_state(state: Dict[str, Any]) -> None:
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": state.get("token_type") or "Bearer",
-        "scope": state.get("scope") or DEFAULT_NOUS_SCOPE,
-        "client_id": state.get("client_id") or DEFAULT_NOUS_CLIENT_ID,
-        "portal_base_url": state.get("portal_base_url") or DEFAULT_NOUS_PORTAL_URL,
-        "inference_base_url": state.get("inference_base_url") or DEFAULT_NOUS_INFERENCE_URL,
+        "scope": state.get("scope") or DEFAULT_CLOVER_SCOPE,
+        "client_id": state.get("client_id") or DEFAULT_CLOVER_CLIENT_ID,
+        "portal_base_url": state.get("portal_base_url") or DEFAULT_CLOVER_PORTAL_URL,
+        "inference_base_url": state.get("inference_base_url") or DEFAULT_CLOVER_INFERENCE_URL,
         "obtained_at": state.get("obtained_at"),
         "expires_at": state.get("expires_at"),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     try:
-        with _nous_shared_store_lock():
-            path = _nous_shared_store_path()
+        with _clover_shared_store_lock():
+            path = _clover_shared_store_path()
             path.parent.mkdir(parents=True, exist_ok=True)
             # secure_parent_dir refuses to chmod / or top-level dirs (#25821).
             secure_parent_dir(path)
@@ -5594,7 +5594,7 @@ def _write_shared_nous_state(state: Dict[str, Any]) -> None:
                 except OSError:
                     pass
         _oauth_trace(
-            "nous_shared_store_written",
+            "clover_shared_store_written",
             path=str(path),
             refresh_token_fp=_token_fingerprint(refresh_token),
         )
@@ -5602,7 +5602,7 @@ def _write_shared_nous_state(state: Dict[str, Any]) -> None:
         logger.debug("Failed to write shared Clover auth store: %s", exc)
 
 
-def _read_shared_nous_state() -> Optional[Dict[str, Any]]:
+def _read_shared_clover_state() -> Optional[Dict[str, Any]]:
     """Return the shared Clover OAuth state if present and well-formed.
 
     Returns ``None`` when the file is missing, unreadable, malformed, or
@@ -5610,7 +5610,7 @@ def _read_shared_nous_state() -> Optional[Dict[str, Any]]:
     credentials available — fall through to device-code".
     """
     try:
-        path = _nous_shared_store_path()
+        path = _clover_shared_store_path()
     except RuntimeError:
         # Test seat belt tripped — treat as missing
         return None
@@ -5632,21 +5632,21 @@ def _read_shared_nous_state() -> Optional[Dict[str, Any]]:
     return payload
 
 
-def _clear_shared_nous_state(reason: str) -> None:
+def _clear_shared_clover_state(reason: str) -> None:
     """Remove the shared Clover OAuth store after a terminal token failure."""
     try:
-        with _nous_shared_store_lock():
-            path = _nous_shared_store_path()
+        with _clover_shared_store_lock():
+            path = _clover_shared_store_path()
             try:
                 path.unlink()
             except FileNotFoundError:
                 pass
-        _oauth_trace("nous_shared_store_cleared", reason=reason)
+        _oauth_trace("clover_shared_store_cleared", reason=reason)
     except Exception as exc:
         logger.debug("Failed to clear shared Clover auth store: %s", exc)
 
 
-def _is_terminal_nous_refresh_error(exc: Exception) -> bool:
+def _is_terminal_clover_refresh_error(exc: Exception) -> bool:
     """True when retrying the same Clover refresh token cannot succeed."""
     return (
         isinstance(exc, AuthError)
@@ -5696,7 +5696,7 @@ def _is_terminal_codex_oauth_refresh_error(exc: Exception) -> bool:
     )
 
 
-def _quarantine_nous_oauth_state(
+def _quarantine_clover_oauth_state(
     state: Dict[str, Any],
     error: AuthError,
     *,
@@ -5777,11 +5777,11 @@ def _quarantine_nous_oauth_state(
         "relogin_required": True,
         "at": datetime.now(timezone.utc).isoformat(),
     }
-    _clear_shared_nous_state(reason)
-    invalidate_nous_auth_status_cache()
+    _clear_shared_clover_state(reason)
+    invalidate_clover_auth_status_cache()
 
 
-def _quarantine_nous_pool_entries(
+def _quarantine_clover_pool_entries(
     auth_store: Dict[str, Any],
     error: AuthError,
     *,
@@ -5797,7 +5797,7 @@ def _quarantine_nous_pool_entries(
 
     retained = []
     removed = False
-    singleton_sources = {NOUS_DEVICE_CODE_SOURCE, f"manual:{NOUS_DEVICE_CODE_SOURCE}"}
+    singleton_sources = {CLOVER_DEVICE_CODE_SOURCE, f"manual:{CLOVER_DEVICE_CODE_SOURCE}"}
     for entry in entries:
         if isinstance(entry, dict) and entry.get("source") in singleton_sources:
             removed = True
@@ -5807,14 +5807,14 @@ def _quarantine_nous_pool_entries(
     if removed:
         pool["clover"] = retained
         _oauth_trace(
-            "nous_pool_device_code_quarantined",
+            "clover_pool_device_code_quarantined",
             reason=reason,
             error_code=error.code,
         )
     return removed
 
 
-def _try_import_shared_nous_state(
+def _try_import_shared_clover_state(
     *,
     timeout_seconds: float = 15.0,
 ) -> Optional[Dict[str, Any]]:
@@ -5823,7 +5823,7 @@ def _try_import_shared_nous_state(
     Reads the shared file (if present), runs a forced refresh using the
     stored refresh_token to produce a fresh inference JWT scoped to this
     profile, and returns the full auth_state dict ready
-    for ``persist_nous_credentials()``.
+    for ``persist_clover_credentials()``.
 
     Returns ``None`` when no shared state is available or the rehydrate
     fails for any reason (expired refresh_token, portal unreachable,
@@ -5831,22 +5831,22 @@ def _try_import_shared_nous_state(
     flow.
     """
     try:
-        with _nous_shared_store_lock(timeout_seconds=max(timeout_seconds + 5.0, AUTH_LOCK_TIMEOUT_SECONDS)):
-            shared = _read_shared_nous_state()
+        with _clover_shared_store_lock(timeout_seconds=max(timeout_seconds + 5.0, AUTH_LOCK_TIMEOUT_SECONDS)):
+            shared = _read_shared_clover_state()
             if not shared:
                 return None
 
-            # Build a full state dict so refresh_nous_oauth_from_state has every
+            # Build a full state dict so refresh_clover_oauth_from_state has every
             # field it needs. force_refresh=True gets us a fresh access_token
             # for this profile.
             state: Dict[str, Any] = {
                 "access_token": shared.get("access_token"),
                 "refresh_token": shared.get("refresh_token"),
-                "client_id": shared.get("client_id") or DEFAULT_NOUS_CLIENT_ID,
-                "portal_base_url": shared.get("portal_base_url") or DEFAULT_NOUS_PORTAL_URL,
-                "inference_base_url": shared.get("inference_base_url") or DEFAULT_NOUS_INFERENCE_URL,
+                "client_id": shared.get("client_id") or DEFAULT_CLOVER_CLIENT_ID,
+                "portal_base_url": shared.get("portal_base_url") or DEFAULT_CLOVER_PORTAL_URL,
+                "inference_base_url": shared.get("inference_base_url") or DEFAULT_CLOVER_INFERENCE_URL,
                 "token_type": shared.get("token_type") or "Bearer",
-                "scope": shared.get("scope") or DEFAULT_NOUS_SCOPE,
+                "scope": shared.get("scope") or DEFAULT_CLOVER_SCOPE,
                 "obtained_at": shared.get("obtained_at"),
                 "expires_at": shared.get("expires_at"),
                 "agent_key": None,
@@ -5855,28 +5855,28 @@ def _try_import_shared_nous_state(
             }
 
             def _persist_shared_refresh(updated_state: Dict[str, Any], _reason: str) -> None:
-                _write_shared_nous_state(updated_state)
+                _write_shared_clover_state(updated_state)
 
-            refreshed = refresh_nous_oauth_from_state(
+            refreshed = refresh_clover_oauth_from_state(
                 state,
                 timeout_seconds=timeout_seconds,
                 force_refresh=True,
                 on_state_update=_persist_shared_refresh,
             )
-            _write_shared_nous_state(refreshed)
+            _write_shared_clover_state(refreshed)
     except AuthError as exc:
         _oauth_trace(
-            "nous_shared_import_failed",
+            "clover_shared_import_failed",
             error_type=type(exc).__name__,
             error_code=getattr(exc, "code", None),
         )
-        if _is_terminal_nous_refresh_error(exc):
-            _clear_shared_nous_state("shared_import_terminal_refresh_failure")
+        if _is_terminal_clover_refresh_error(exc):
+            _clear_shared_clover_state("shared_import_terminal_refresh_failure")
         logger.debug("Shared Clover import failed: %s", exc)
         return None
     except Exception as exc:
         _oauth_trace(
-            "nous_shared_import_failed",
+            "clover_shared_import_failed",
             error_type=type(exc).__name__,
         )
         logger.debug("Shared Clover import failed: %s", exc)
@@ -5894,7 +5894,7 @@ def _refresh_access_token(
 ) -> Dict[str, Any]:
     response = client.post(
         f"{portal_base_url}/api/oauth/token",
-        headers={"x-nous-refresh-token": refresh_token},
+        headers={"x-clover-refresh-token": refresh_token},
         data={
             "grant_type": "refresh_token",
             "client_id": client_id,
@@ -5936,14 +5936,14 @@ def _refresh_access_token(
             "Clover refresh tokens are single-use — only Clover may call the "
             "refresh endpoint. For health checks, use `clover auth status` "
             "instead.\n"
-            "Re-authenticate with: clover auth add nous"
+            "Re-authenticate with: clover auth add clover"
         )
         relogin = True
 
     raise AuthError(description, provider="clover", code=code, relogin_required=relogin)
 
 
-def fetch_nous_models(
+def fetch_clover_models(
     *,
     inference_base_url: str,
     api_key: str,
@@ -6004,7 +6004,7 @@ def _agent_key_is_usable(state: Dict[str, Any], min_ttl_seconds: int) -> bool:
     key = state.get("agent_key")
     if not isinstance(key, str) or not key.strip():
         return False
-    return _nous_invoke_jwt_is_usable(
+    return _clover_invoke_jwt_is_usable(
         key,
         scope=state.get("scope"),
         expires_at=state.get("agent_key_expires_at"),
@@ -6012,19 +6012,19 @@ def _agent_key_is_usable(state: Dict[str, Any], min_ttl_seconds: int) -> bool:
     )
 
 
-# Per-process memo for resolve_nous_access_token. Startup runs
+# Per-process memo for resolve_clover_access_token. Startup runs
 # check_tool_availability once per managed-tool check_fn (browser, image_gen,
 # etc.), and each one independently triggers a ~15s blocking token-refresh
 # network call when the stored token is expired. On a slow/constrained host that
 # serial burst stretches startup to many minutes. A short-TTL memo collapses the
 # burst into a single network round-trip; callers that need freshness use
-# separate flows (force_fresh / refresh_nous_oauth_pure) and are unaffected.
+# separate flows (force_fresh / refresh_clover_oauth_pure) and are unaffected.
 _RESOLVE_TOKEN_CACHE_LOCK = threading.Lock()
 _RESOLVE_TOKEN_CACHE: "tuple[float, str] | None" = None
 _RESOLVE_TOKEN_CACHE_TTL_S = 5.0
 
 
-def resolve_nous_access_token(
+def resolve_clover_access_token(
     *,
     timeout_seconds: float = 15.0,
     insecure: Optional[bool] = None,
@@ -6055,35 +6055,35 @@ def resolve_nous_access_token(
                 relogin_required=True,
             )
 
-        # CLOVER_PORTAL_BASE_URL / NOUS_PORTAL_BASE_URL is the trusted
-        # operator/deployment override (mirrors NOUS_INFERENCE_BASE_URL) and
+        # CLOVER_PORTAL_BASE_URL / CLOVER_PORTAL_BASE_URL is the trusted
+        # operator/deployment override (mirrors CLOVER_INFERENCE_BASE_URL) and
         # must win OUTRIGHT — including over a stored value — and bypass the
         # host allowlist entirely, since the allowlist exists to reject an
         # untrusted network-provided value, not one the operator configured.
         # Only fall through to the stored/default value + allowlist gate when
         # no override is set.
-        env_portal_override = _nous_portal_env_override()
+        env_portal_override = _clover_portal_env_override()
         if env_portal_override:
             portal_base_url = env_portal_override.rstrip("/")
         else:
             portal_base_url = (
                 _optional_base_url(state.get("portal_base_url"))
-                or DEFAULT_NOUS_PORTAL_URL
+                or DEFAULT_CLOVER_PORTAL_URL
             ).rstrip("/")
 
             parsed_portal_url = urlparse(portal_base_url)
-            if parsed_portal_url.hostname and parsed_portal_url.hostname not in _NOUS_PORTAL_ALLOWED_HOSTS:
+            if parsed_portal_url.hostname and parsed_portal_url.hostname not in _CLOVER_PORTAL_ALLOWED_HOSTS:
                 logger.warning(
                     "auth: ignoring invalid portal_base_url %r (host %r not in allowlist), using default",
                     portal_base_url, parsed_portal_url.hostname,
                 )
-                portal_base_url = DEFAULT_NOUS_PORTAL_URL
+                portal_base_url = DEFAULT_CLOVER_PORTAL_URL
 
-        client_id = str(state.get("client_id") or DEFAULT_NOUS_CLIENT_ID)
+        client_id = str(state.get("client_id") or DEFAULT_CLOVER_CLIENT_ID)
         verify = _resolve_verify(insecure=insecure, ca_bundle=ca_bundle, auth_state=state)
 
-        with _nous_shared_store_lock(timeout_seconds=max(timeout_seconds + 5.0, AUTH_LOCK_TIMEOUT_SECONDS)):
-            merged_shared = _merge_shared_nous_oauth_state(state)
+        with _clover_shared_store_lock(timeout_seconds=max(timeout_seconds + 5.0, AUTH_LOCK_TIMEOUT_SECONDS)):
+            merged_shared = _merge_shared_clover_oauth_state(state)
             access_token = state.get("access_token")
             refresh_token = state.get("refresh_token")
             if not isinstance(access_token, str) or not access_token:
@@ -6128,13 +6128,13 @@ def resolve_nous_access_token(
                         refresh_token=refresh_token,
                     )
                 except AuthError as exc:
-                    if _is_terminal_nous_refresh_error(exc):
-                        _quarantine_nous_oauth_state(
+                    if _is_terminal_clover_refresh_error(exc):
+                        _quarantine_clover_oauth_state(
                             state,
                             exc,
                             reason="managed_access_token_refresh_failure",
                         )
-                        _quarantine_nous_pool_entries(
+                        _quarantine_clover_pool_entries(
                             auth_store,
                             exc,
                             reason="managed_access_token_refresh_failure",
@@ -6161,7 +6161,7 @@ def resolve_nous_access_token(
                 "ca_bundle": verify if isinstance(verify, str) else None,
             }
             _save_provider_state_to_source(auth_store, "clover", state, state_source_path)
-            _write_shared_nous_state(state)
+            _write_shared_clover_state(state)
             resolved = state["access_token"]
             if not insecure and ca_bundle is None:
                 with _RESOLVE_TOKEN_CACHE_LOCK:
@@ -6169,7 +6169,7 @@ def resolve_nous_access_token(
             return resolved
 
 
-def refresh_nous_oauth_pure(
+def refresh_clover_oauth_pure(
     access_token: str,
     refresh_token: str,
     client_id: str,
@@ -6177,7 +6177,7 @@ def refresh_nous_oauth_pure(
     inference_base_url: str,
     *,
     token_type: str = "Bearer",
-    scope: str = DEFAULT_NOUS_SCOPE,
+    scope: str = DEFAULT_CLOVER_SCOPE,
     obtained_at: Optional[str] = None,
     expires_at: Optional[str] = None,
     agent_key: Optional[str] = None,
@@ -6197,11 +6197,11 @@ def refresh_nous_oauth_pure(
     state: Dict[str, Any] = {
         "access_token": access_token,
         "refresh_token": refresh_token,
-        "client_id": client_id or DEFAULT_NOUS_CLIENT_ID,
-        "portal_base_url": (portal_base_url or DEFAULT_NOUS_PORTAL_URL).rstrip("/"),
-        "inference_base_url": (inference_base_url or DEFAULT_NOUS_INFERENCE_URL).rstrip("/"),
+        "client_id": client_id or DEFAULT_CLOVER_CLIENT_ID,
+        "portal_base_url": (portal_base_url or DEFAULT_CLOVER_PORTAL_URL).rstrip("/"),
+        "inference_base_url": (inference_base_url or DEFAULT_CLOVER_INFERENCE_URL).rstrip("/"),
         "token_type": token_type or "Bearer",
-        "scope": scope or DEFAULT_NOUS_SCOPE,
+        "scope": scope or DEFAULT_CLOVER_SCOPE,
         "obtained_at": obtained_at,
         "expires_at": expires_at,
         "agent_key": agent_key,
@@ -6215,7 +6215,7 @@ def refresh_nous_oauth_pure(
     timeout = httpx.Timeout(timeout_seconds if timeout_seconds else 15.0)
 
     with httpx.Client(timeout=timeout, headers={"Accept": "application/json"}, verify=verify) as client:
-        current_invoke_jwt_status = _nous_invoke_jwt_status(
+        current_invoke_jwt_status = _clover_invoke_jwt_status(
             state.get("access_token"),
             scope=state.get("scope"),
             expires_at=state.get("expires_at"),
@@ -6227,7 +6227,7 @@ def refresh_nous_oauth_pure(
                     raise AuthError(
                         "Clover Portal access token is not a usable inference JWT "
                         f"({current_invoke_jwt_status}) and no refresh token is available. "
-                        "Re-authenticate with: clover auth add nous",
+                        "Re-authenticate with: clover auth add clover",
                         provider="clover",
                         code=current_invoke_jwt_status,
                         relogin_required=True,
@@ -6256,8 +6256,8 @@ def refresh_nous_oauth_pure(
             # was poisoned before the allowlist existed keeps re-validating to
             # None on every refresh and silently re-uses the dead endpoint —
             # the "falling back to default" warning never actually takes effect.
-            refreshed_url = _validate_nous_inference_url_from_network(refreshed.get("inference_base_url"))
-            state["inference_base_url"] = refreshed_url or DEFAULT_NOUS_INFERENCE_URL
+            refreshed_url = _validate_clover_inference_url_from_network(refreshed.get("inference_base_url"))
+            state["inference_base_url"] = refreshed_url or DEFAULT_CLOVER_INFERENCE_URL
             state["obtained_at"] = now.isoformat()
             state["expires_in"] = access_ttl
             state["expires_at"] = datetime.fromtimestamp(
@@ -6266,29 +6266,29 @@ def refresh_nous_oauth_pure(
             if on_state_update is not None:
                 on_state_update(dict(state), "post_refresh_access_token")
 
-        _assert_nous_inference_jwt_usable(state)
-        _select_nous_invoke_jwt(state)
+        _assert_clover_inference_jwt_usable(state)
+        _select_clover_invoke_jwt(state)
 
     return state
 
 
-def refresh_nous_oauth_from_state(
+def refresh_clover_oauth_from_state(
     state: Dict[str, Any],
     *,
     timeout_seconds: float = 15.0,
     force_refresh: bool = False,
     on_state_update: Optional[Callable[[Dict[str, Any], str], None]] = None,
 ) -> Dict[str, Any]:
-    """Refresh Clover OAuth from a state dict. Thin wrapper around refresh_nous_oauth_pure."""
+    """Refresh Clover OAuth from a state dict. Thin wrapper around refresh_clover_oauth_pure."""
     tls = state.get("tls") or {}
-    return refresh_nous_oauth_pure(
+    return refresh_clover_oauth_pure(
         state.get("access_token", ""),
         state.get("refresh_token", ""),
         state.get("client_id", "clover-cli"),
-        state.get("portal_base_url", DEFAULT_NOUS_PORTAL_URL),
-        state.get("inference_base_url", DEFAULT_NOUS_INFERENCE_URL),
+        state.get("portal_base_url", DEFAULT_CLOVER_PORTAL_URL),
+        state.get("inference_base_url", DEFAULT_CLOVER_INFERENCE_URL),
         token_type=state.get("token_type", "Bearer"),
-        scope=state.get("scope", DEFAULT_NOUS_SCOPE),
+        scope=state.get("scope", DEFAULT_CLOVER_SCOPE),
         obtained_at=state.get("obtained_at"),
         expires_at=state.get("expires_at"),
         agent_key=state.get("agent_key"),
@@ -6301,7 +6301,7 @@ def refresh_nous_oauth_from_state(
     )
 
 
-def persist_nous_credentials(
+def persist_clover_credentials(
     creds: Dict[str, Any],
     *,
     label: Optional[str] = None,
@@ -6311,23 +6311,23 @@ def persist_nous_credentials(
 
     Clover credentials are read at runtime from two independent locations:
 
-    - ``providers.nous``: singleton state read by
-      ``resolve_nous_runtime_credentials()`` during 401 recovery and by
+    - ``providers.clover``: singleton state read by
+      ``resolve_clover_runtime_credentials()`` during 401 recovery and by
       ``_seed_from_singletons()`` during pool load.
-    - ``credential_pool.nous``: used by the runtime ``pool.select()`` path.
+    - ``credential_pool.clover``: used by the runtime ``pool.select()`` path.
 
-    Historically ``clover auth add nous`` wrote a ``manual:device_code`` pool
-    entry only, skipping ``providers.nous``. When the runtime credential
+    Historically ``clover auth add clover`` wrote a ``manual:device_code`` pool
+    entry only, skipping ``providers.clover``. When the runtime credential
     expired, the recovery path read the empty singleton state and raised
     ``AuthError`` silently (``logger.debug`` at INFO level).
 
-    This helper writes ``providers.nous`` then calls ``load_pool("clover")`` so
+    This helper writes ``providers.clover`` then calls ``load_pool("clover")`` so
     ``_seed_from_singletons`` materialises the canonical ``device_code`` pool
     entry from the singleton.  Re-running login upserts the same entry in
     place; the pool never accumulates duplicate device_code rows.
 
     ``label`` is an optional user-chosen display name (from
-    ``clover auth add nous --label <name>``).  It gets embedded in the
+    ``clover auth add clover --label <name>``).  It gets embedded in the
     singleton state so that ``_seed_from_singletons`` uses it as the pool
     entry's label on every subsequent ``load_pool("clover")`` instead of the
     auto-derived token fingerprint.  When ``None``, the auto-derived label
@@ -6348,20 +6348,20 @@ def persist_nous_credentials(
         _save_auth_store(auth_store)
 
     # Mirror to the shared store so a new profile can one-tap import
-    # these credentials via `clover auth add nous --type oauth`. Best-
+    # these credentials via `clover auth add clover --type oauth`. Best-
     # effort: any I/O failure is logged and swallowed (the per-profile
     # auth.json is still the source of truth).
-    _write_shared_nous_state(state)
+    _write_shared_clover_state(state)
 
     pool = load_pool("clover")
     return next(
-        (e for e in pool.entries() if e.source == NOUS_DEVICE_CODE_SOURCE),
+        (e for e in pool.entries() if e.source == CLOVER_DEVICE_CODE_SOURCE),
         None,
     )
 
 
-def _sync_nous_pool_from_auth_store() -> None:
-    """Best-effort pool reseed after providers.nous changes; never fail login."""
+def _sync_clover_pool_from_auth_store() -> None:
+    """Best-effort pool reseed after providers.clover changes; never fail login."""
     try:
         from agent.credential_pool import load_pool
 
@@ -6370,7 +6370,7 @@ def _sync_nous_pool_from_auth_store() -> None:
         logger.debug("Failed to sync Clover credential pool from auth store: %s", exc)
 
 
-def resolve_nous_runtime_credentials(
+def resolve_clover_runtime_credentials(
     *,
     timeout_seconds: float = 15.0,
     insecure: Optional[bool] = None,
@@ -6406,15 +6406,15 @@ def resolve_nous_runtime_credentials(
             portal_url = (
                 _optional_base_url(state.get("portal_base_url"))
                 or os.getenv("CLOVER_PORTAL_BASE_URL")
-                or os.getenv("NOUS_PORTAL_BASE_URL")
-                or DEFAULT_NOUS_PORTAL_URL
+                or os.getenv("CLOVER_PORTAL_BASE_URL")
+                or DEFAULT_CLOVER_PORTAL_URL
             ).rstrip("/")
 
             # A persisted/stale portal_base_url is where the refresh token gets
             # POSTed on refresh — reject any host outside the allowlist so a
             # poisoned value can't exfiltrate the bearer, healing to the default.
             # Trusted operator env overrides bypass this network-value gate.
-            env_portal_override = _nous_portal_env_override()
+            env_portal_override = _clover_portal_env_override()
             if env_portal_override:
                 portal_url = env_portal_override.rstrip("/")
             else:
@@ -6429,7 +6429,7 @@ def resolve_nous_runtime_credentials(
                 )
                 if (
                     not portal_host
-                    or portal_host not in _NOUS_PORTAL_ALLOWED_HOSTS
+                    or portal_host not in _CLOVER_PORTAL_ALLOWED_HOSTS
                     or not trusted_scheme
                 ):
                     logger.warning(
@@ -6438,21 +6438,21 @@ def resolve_nous_runtime_credentials(
                         portal_url,
                         portal_host,
                     )
-                    portal_url = DEFAULT_NOUS_PORTAL_URL
+                    portal_url = DEFAULT_CLOVER_PORTAL_URL
 
             # Re-validate persisted network-provenance on every shared merge.
             # The env override is runtime-only and must never be persisted.
             stored_inference_url = (
-                _validate_nous_inference_url_from_network(
+                _validate_clover_inference_url_from_network(
                     _optional_base_url(state.get("inference_base_url"))
                 )
-                or DEFAULT_NOUS_INFERENCE_URL
+                or DEFAULT_CLOVER_INFERENCE_URL
             )
             effective_inference_url = (
-                _nous_inference_env_override() or stored_inference_url
+                _clover_inference_env_override() or stored_inference_url
             )
             effective_client_id = str(
-                state.get("client_id") or DEFAULT_NOUS_CLIENT_ID
+                state.get("client_id") or DEFAULT_CLOVER_CLIENT_ID
             )
             return (
                 portal_url,
@@ -6473,11 +6473,11 @@ def resolve_nous_runtime_credentials(
             # Skip writes where only derived TTL countdowns changed; this keeps
             # the mtime-keyed Clover auth-status cache warm during read paths.
             if (
-                _nous_effective_provider_state(state)
-                == _nous_effective_provider_state(persisted_state)
+                _clover_effective_provider_state(state)
+                == _clover_effective_provider_state(persisted_state)
             ):
                 _oauth_trace(
-                    "nous_state_persist_skipped",
+                    "clover_state_persist_skipped",
                     sequence_id=sequence_id,
                     reason=reason,
                 )
@@ -6486,14 +6486,14 @@ def resolve_nous_runtime_credentials(
                 _save_provider_state_to_source(auth_store, "clover", state, state_source_path)
             except Exception as exc:
                 _oauth_trace(
-                    "nous_state_persist_failed",
+                    "clover_state_persist_failed",
                     sequence_id=sequence_id,
                     reason=reason,
                     error_type=type(exc).__name__,
                 )
                 raise
             _oauth_trace(
-                "nous_state_persisted",
+                "clover_state_persisted",
                 sequence_id=sequence_id,
                 reason=reason,
                 refresh_token_fp=_token_fingerprint(state.get("refresh_token")),
@@ -6504,13 +6504,13 @@ def resolve_nous_runtime_credentials(
             # Mirror post-refresh state to the shared store so sibling
             # profiles don't hold stale refresh_tokens after rotation.
             # Best-effort — any failure is logged and swallowed inside
-            # _write_shared_nous_state.
-            _write_shared_nous_state(state)
+            # _write_shared_clover_state.
+            _write_shared_clover_state(state)
 
         verify = _resolve_verify(insecure=insecure, ca_bundle=ca_bundle, auth_state=state)
         timeout = httpx.Timeout(timeout_seconds if timeout_seconds else 15.0)
         _oauth_trace(
-            "nous_runtime_credentials_start",
+            "clover_runtime_credentials_start",
             sequence_id=sequence_id,
             refresh_token_fp=_token_fingerprint(state.get("refresh_token")),
         )
@@ -6520,10 +6520,10 @@ def resolve_nous_runtime_credentials(
             refresh_token = state.get("refresh_token")
 
             if not isinstance(access_token, str) or not access_token:
-                with _nous_shared_store_lock(
+                with _clover_shared_store_lock(
                     timeout_seconds=max(timeout_seconds + 5.0, AUTH_LOCK_TIMEOUT_SECONDS)
                 ):
-                    if _merge_shared_nous_oauth_state(state):
+                    if _merge_shared_clover_oauth_state(state):
                         access_token = state.get("access_token")
                         refresh_token = state.get("refresh_token")
                         (
@@ -6538,14 +6538,14 @@ def resolve_nous_runtime_credentials(
                 raise AuthError("No access token found for Clover Portal login.",
                                 provider="clover", relogin_required=True)
 
-            invoke_jwt_status = _nous_invoke_jwt_status(
+            invoke_jwt_status = _clover_invoke_jwt_status(
                 access_token,
                 scope=state.get("scope"),
                 expires_at=state.get("expires_at"),
             )
             if force_refresh or invoke_jwt_status is not None:
-                with _nous_shared_store_lock(timeout_seconds=max(timeout_seconds + 5.0, AUTH_LOCK_TIMEOUT_SECONDS)):
-                    if _merge_shared_nous_oauth_state(state):
+                with _clover_shared_store_lock(timeout_seconds=max(timeout_seconds + 5.0, AUTH_LOCK_TIMEOUT_SECONDS)):
+                    if _merge_shared_clover_oauth_state(state):
                         access_token = state.get("access_token")
                         refresh_token = state.get("refresh_token")
                         (
@@ -6554,7 +6554,7 @@ def resolve_nous_runtime_credentials(
                             inference_base_url,
                             client_id,
                         ) = _resolve_effective_routing_metadata()
-                        invoke_jwt_status = _nous_invoke_jwt_status(
+                        invoke_jwt_status = _clover_invoke_jwt_status(
                             access_token,
                             scope=state.get("scope"),
                             expires_at=state.get("expires_at"),
@@ -6567,7 +6567,7 @@ def resolve_nous_runtime_credentials(
                             raise AuthError(
                                 "Clover Portal access token is not a usable inference JWT "
                                 f"({reason}) and no refresh token is available. "
-                                "Re-authenticate with: clover auth add nous",
+                                "Re-authenticate with: clover auth add clover",
                                 provider="clover",
                                 code=reason,
                                 relogin_required=True,
@@ -6586,13 +6586,13 @@ def resolve_nous_runtime_credentials(
                                 client_id=client_id, refresh_token=refresh_token,
                             )
                         except AuthError as exc:
-                            if _is_terminal_nous_refresh_error(exc):
-                                _quarantine_nous_oauth_state(
+                            if _is_terminal_clover_refresh_error(exc):
+                                _quarantine_clover_oauth_state(
                                     state,
                                     exc,
                                     reason="runtime_access_refresh_failure",
                                 )
-                                _quarantine_nous_pool_entries(
+                                _quarantine_clover_pool_entries(
                                     auth_store,
                                     exc,
                                     reason="runtime_access_refresh_failure",
@@ -6606,17 +6606,17 @@ def resolve_nous_runtime_credentials(
                         state["refresh_token"] = refreshed.get("refresh_token") or refresh_token
                         state["token_type"] = refreshed.get("token_type") or state.get("token_type") or "Bearer"
                         state["scope"] = refreshed.get("scope") or state.get("scope")
-                        # Heal a poisoned stored value (see refresh_nous_oauth_pure):
+                        # Heal a poisoned stored value (see refresh_clover_oauth_pure):
                         # reject → reset to production default, don't keep a stale
                         # staging host that re-validates to None every refresh.
                         # This (validated, network-provenance) value is what gets
-                        # persisted to auth.json below. The NOUS_INFERENCE_BASE_URL
+                        # persisted to auth.json below. The CLOVER_INFERENCE_BASE_URL
                         # env override is layered on for the client/return value
                         # only (see below) — it is never persisted.
-                        refreshed_url = _validate_nous_inference_url_from_network(refreshed.get("inference_base_url"))
-                        stored_inference_base_url = refreshed_url or DEFAULT_NOUS_INFERENCE_URL
+                        refreshed_url = _validate_clover_inference_url_from_network(refreshed.get("inference_base_url"))
+                        stored_inference_base_url = refreshed_url or DEFAULT_CLOVER_INFERENCE_URL
                         inference_base_url = (
-                            _nous_inference_env_override() or stored_inference_base_url
+                            _clover_inference_env_override() or stored_inference_base_url
                         )
                         # Persist network-derived routing with rotated tokens so
                         # a later JWT validation failure cannot leave the profile
@@ -6640,11 +6640,11 @@ def resolve_nous_runtime_credentials(
                         # Persist immediately so validation failures cannot drop rotated refresh tokens.
                         _persist_state("post_refresh_access_token")
 
-            _assert_nous_inference_jwt_usable(
+            _assert_clover_inference_jwt_usable(
                 state,
                 access_token=access_token,
             )
-            _select_nous_invoke_jwt(
+            _select_clover_invoke_jwt(
                 state,
                 access_token=access_token,
                 sequence_id=sequence_id,
@@ -6662,10 +6662,10 @@ def resolve_nous_runtime_credentials(
                 "ca_bundle": verify if isinstance(verify, str) else None,
             }
 
-        _persist_state("resolve_nous_runtime_credentials_final")
+        _persist_state("resolve_clover_runtime_credentials_final")
 
     if state_persisted:
-        _sync_nous_pool_from_auth_store()
+        _sync_clover_pool_from_auth_store()
 
     api_key = state.get("agent_key")
     if not isinstance(api_key, str) or not api_key:
@@ -6687,11 +6687,11 @@ def resolve_nous_runtime_credentials(
         "key_id": state.get("agent_key_id"),
         "expires_at": expires_at,
         "expires_in": expires_in,
-        "source": NOUS_AUTH_PATH_INVOKE_JWT,
+        "source": CLOVER_AUTH_PATH_INVOKE_JWT,
         # Preserve the public semantic source label while exposing the concrete
         # store separately for diagnostics. Refresh persistence uses
         # state_source_path internally and must not overload this field.
-        "auth_path": NOUS_AUTH_PATH_INVOKE_JWT,
+        "auth_path": CLOVER_AUTH_PATH_INVOKE_JWT,
         "state_path": str(state_source_path or _auth_file_path()),
     }
 
@@ -6700,7 +6700,7 @@ def resolve_nous_runtime_credentials(
 # Status helpers
 # =============================================================================
 
-def _empty_nous_auth_status() -> Dict[str, Any]:
+def _empty_clover_auth_status() -> Dict[str, Any]:
     return {
         "logged_in": False,
         "portal_base_url": None,
@@ -6713,22 +6713,22 @@ def _empty_nous_auth_status() -> Dict[str, Any]:
     }
 
 
-def _snapshot_nous_pool_status() -> Dict[str, Any]:
+def _snapshot_clover_pool_status() -> Dict[str, Any]:
     """Best-effort status from the credential pool.
 
     This is a fallback only. The auth-store provider state is the runtime source
-    of truth because it is what ``resolve_nous_runtime_credentials()`` refreshes.
+    of truth because it is what ``resolve_clover_runtime_credentials()`` refreshes.
     """
     try:
         from agent.credential_pool import load_pool
 
         pool = load_pool("clover")
         if not pool or not pool.has_credentials():
-            return _empty_nous_auth_status()
+            return _empty_clover_auth_status()
 
         entries = list(pool.entries())
         if not entries:
-            return _empty_nous_auth_status()
+            return _empty_clover_auth_status()
 
         def _entry_sort_key(entry: Any) -> tuple[float, float, int]:
             agent_exp = _parse_iso_timestamp(getattr(entry, "agent_key_expires_at", None)) or 0.0
@@ -6739,7 +6739,7 @@ def _snapshot_nous_pool_status() -> Dict[str, Any]:
         entry = max(entries, key=_entry_sort_key)
         runtime_key = getattr(entry, "runtime_api_key", None)
         if not runtime_key:
-            return _empty_nous_auth_status()
+            return _empty_clover_auth_status()
         access_token = getattr(entry, "access_token", None)
         auth_type = str(getattr(entry, "auth_type", "") or "").strip().lower()
         refresh_token = getattr(entry, "refresh_token", None)
@@ -6751,7 +6751,7 @@ def _snapshot_nous_pool_status() -> Dict[str, Any]:
         if is_portal_oauth:
             portal_status_url = (
                 getattr(entry, "portal_base_url", None)
-                or DEFAULT_NOUS_PORTAL_URL
+                or DEFAULT_CLOVER_PORTAL_URL
             )
 
         return {
@@ -6769,11 +6769,11 @@ def _snapshot_nous_pool_status() -> Dict[str, Any]:
             "source": f"pool:{label}",
         }
     except Exception:
-        return _empty_nous_auth_status()
+        return _empty_clover_auth_status()
 
 
-# ── Process-level memo for get_nous_auth_status() ──
-# get_nous_auth_status() validates state by calling resolve_nous_runtime_credentials(),
+# ── Process-level memo for get_clover_auth_status() ──
+# get_clover_auth_status() validates state by calling resolve_clover_runtime_credentials(),
 # which does a synchronous OAuth refresh POST to portal.. That can take
 # ~350ms even on the failure path, and read-only UI surfaces (`clover tools`, status panels,
 # subscription-feature checks) call it many times per render — `clover tools` → "All Platforms"
@@ -6781,11 +6781,11 @@ def _snapshot_nous_pool_status() -> Dict[str, Any]:
 # single-use refresh tokens. Cache the snapshot for a few seconds, keyed on the auth.json
 # path + mtime so that profile switches do not share a process memo and
 # `clover auth login/logout/add/remove` invalidate naturally on the next call.
-_NOUS_AUTH_STATUS_CACHE_TTL = 15.0  # seconds
-_nous_auth_status_cache: Optional[Tuple[float, str, Optional[float], Dict[str, Any]]] = None
+_CLOVER_AUTH_STATUS_CACHE_TTL = 15.0  # seconds
+_clover_auth_status_cache: Optional[Tuple[float, str, Optional[float], Dict[str, Any]]] = None
 
 # mtime-keyed memo for _load_global_auth_store(): (path, mtime_ns, store).
-# Same invalidation contract as _nous_auth_status_cache — the global auth
+# Same invalidation contract as _clover_auth_status_cache — the global auth
 # file changes only when a global-scope auth write touches it.
 _global_auth_store_cache: Optional[Tuple[str, int, Dict[str, Any]]] = None
 
@@ -6804,19 +6804,19 @@ def _auth_file_cache_key() -> Tuple[str, Optional[float]]:
         return auth_file_key, None
 
 
-def invalidate_nous_auth_status_cache() -> None:
-    """Clear the get_nous_auth_status() process-level memo.
+def invalidate_clover_auth_status_cache() -> None:
+    """Clear the get_clover_auth_status() process-level memo.
 
     Call this from any code path that mutates Clover auth state without going
-    through resolve_nous_runtime_credentials() (e.g. tests). Login/logout
+    through resolve_clover_runtime_credentials() (e.g. tests). Login/logout
     flows touch auth.json, so the mtime check below invalidates them
     automatically — explicit invalidation is the belt-and-braces option.
     """
-    global _nous_auth_status_cache
-    _nous_auth_status_cache = None
+    global _clover_auth_status_cache
+    _clover_auth_status_cache = None
 
 
-def get_nous_auth_status() -> Dict[str, Any]:
+def get_clover_auth_status() -> Dict[str, Any]:
     """Status snapshot for Clover auth.
 
     Prefer the auth-store provider state, because that is the live source of
@@ -6829,28 +6829,28 @@ def get_nous_auth_status() -> Dict[str, Any]:
     so menu/status surfaces that ask repeatedly don't trigger one refresh POST
     per call. Login/logout flows write to auth.json and therefore invalidate
     the cache automatically; tests can also call
-    ``invalidate_nous_auth_status_cache()`` explicitly.
+    ``invalidate_clover_auth_status_cache()`` explicitly.
     """
-    global _nous_auth_status_cache
+    global _clover_auth_status_cache
     now = time.monotonic()
     auth_file_key, mtime = _auth_file_cache_key()
-    cached = _nous_auth_status_cache
+    cached = _clover_auth_status_cache
     if cached is not None:
         cached_at, cached_auth_file_key, cached_mtime, cached_status = cached
         if (
             cached_auth_file_key == auth_file_key
             and cached_mtime == mtime
-            and (now - cached_at) < _NOUS_AUTH_STATUS_CACHE_TTL
+            and (now - cached_at) < _CLOVER_AUTH_STATUS_CACHE_TTL
         ):
             return dict(cached_status)
 
-    status = _compute_nous_auth_status()
-    _nous_auth_status_cache = (now, auth_file_key, mtime, dict(status))
+    status = _compute_clover_auth_status()
+    _clover_auth_status_cache = (now, auth_file_key, mtime, dict(status))
     return status
 
 
-def _compute_nous_auth_status() -> Dict[str, Any]:
-    """Uncached implementation of get_nous_auth_status(). See that function."""
+def _compute_clover_auth_status() -> Dict[str, Any]:
+    """Uncached implementation of get_clover_auth_status(). See that function."""
     state = get_provider_auth_state("clover")
     if state:
         base_status = {
@@ -6868,7 +6868,7 @@ def _compute_nous_auth_status() -> Dict[str, Any]:
             "source": "auth_store",
         }
         try:
-            creds = resolve_nous_runtime_credentials()
+            creds = resolve_clover_runtime_credentials()
             refreshed_state = get_provider_auth_state("clover") or state
             base_status.update(
                 {
@@ -6898,21 +6898,21 @@ def _compute_nous_auth_status() -> Dict[str, Any]:
             })
             return base_status
 
-    return _snapshot_nous_pool_status()
+    return _snapshot_clover_pool_status()
 
 
-def get_nous_auth_status_local() -> Dict[str, Any]:
+def get_clover_auth_status_local() -> Dict[str, Any]:
     """Refresh-free Clover auth snapshot for read-only display surfaces.
 
-    Unlike :func:`get_nous_auth_status`, this NEVER calls
-    ``resolve_nous_runtime_credentials()`` and therefore never performs an
+    Unlike :func:`get_clover_auth_status`, this NEVER calls
+    ``resolve_clover_runtime_credentials()`` and therefore never performs an
     OAuth refresh POST or consumes a single-use refresh token. It reports the
     persisted auth-store state, classifying the access token with a local
     invoke-JWT decode only.
 
     Use this from status panels, doctor checks, and polled dashboard
     endpoints. Explicit auth actions (login flows, portal operations that
-    need a live credential) should keep using ``get_nous_auth_status()``.
+    need a live credential) should keep using ``get_clover_auth_status()``.
 
     ``logged_in`` here means "a persisted login exists that the runtime can
     use or refresh": a currently-usable invoke JWT, or a refresh token that
@@ -6925,10 +6925,10 @@ def get_nous_auth_status_local() -> Dict[str, Any]:
         state = None
 
     if not state:
-        return _snapshot_nous_pool_status()
+        return _snapshot_clover_pool_status()
 
     access_token = state.get("access_token")
-    jwt_reason = _nous_invoke_jwt_status(
+    jwt_reason = _clover_invoke_jwt_status(
         access_token,
         scope=state.get("scope"),
         expires_at=state.get("expires_at"),
@@ -6964,16 +6964,16 @@ def get_nous_auth_status_local() -> Dict[str, Any]:
     return status
 
 
-# Enum values reported on the dashboard /api/status as ``nous_session_valid``.
+# Enum values reported on the dashboard /api/status as ``clover_session_valid``.
 # NAS's health sweep re-mints the bootstrap session ONLY on "terminal"; "valid"
 # and "unknown" are no-ops. Keep this set small and stable — NAS parses it with
 # a permissive schema, so new members are non-breaking but should stay rare.
-NOUS_SESSION_VALID = "valid"
-NOUS_SESSION_TERMINAL = "terminal"
-NOUS_SESSION_UNKNOWN = "unknown"
+CLOVER_SESSION_VALID = "valid"
+CLOVER_SESSION_TERMINAL = "terminal"
+CLOVER_SESSION_UNKNOWN = "unknown"
 
 
-def get_nous_session_validity() -> str:
+def get_clover_session_validity() -> str:
     """Classify the Clover bootstrap session for the dashboard /api/status probe.
 
     Returns one of:
@@ -7004,10 +7004,10 @@ def get_nous_session_validity() -> str:
     try:
         state = get_provider_auth_state("clover")
     except Exception:
-        return NOUS_SESSION_UNKNOWN
+        return CLOVER_SESSION_UNKNOWN
 
     if not state:
-        return NOUS_SESSION_UNKNOWN
+        return CLOVER_SESSION_UNKNOWN
 
     last_err = state.get("last_auth_error")
     if isinstance(last_err, dict) and last_err.get("relogin_required"):
@@ -7015,19 +7015,19 @@ def get_nous_session_validity() -> str:
         # successful login repopulated tokens, the stale marker must not
         # keep reporting terminal.
         if not (state.get("access_token") or state.get("refresh_token")):
-            return NOUS_SESSION_TERMINAL
+            return CLOVER_SESSION_TERMINAL
 
-    if _nous_invoke_jwt_status(
+    if _clover_invoke_jwt_status(
         state.get("access_token"),
         scope=state.get("scope"),
         expires_at=state.get("expires_at"),
     ) is None:
-        return NOUS_SESSION_VALID
+        return CLOVER_SESSION_VALID
 
     # Missing, malformed, expired, or merely expiring credentials are not proof
     # of a terminal session. Runtime inference/keepalive paths own refreshes;
     # the health endpoint remains side-effect free and reports indeterminate.
-    return NOUS_SESSION_UNKNOWN
+    return CLOVER_SESSION_UNKNOWN
 
 
 def get_codex_auth_status() -> Dict[str, Any]:
@@ -7237,7 +7237,7 @@ def get_auth_status(provider_id: Optional[str] = None) -> Dict[str, Any]:
     if target == "spotify":
         return get_spotify_auth_status()
     if target == "clover":
-        return get_nous_auth_status()
+        return get_clover_auth_status()
     if target == "openai-codex":
         return get_codex_auth_status()
     if target == "xai-oauth":
@@ -7831,7 +7831,7 @@ def _prompt_model_selection(
         choices.append("Enter custom model name")
         choices.append("Skip (keep current)")
 
-        _upgrade_url = (portal_url or DEFAULT_NOUS_PORTAL_URL).rstrip("/")
+        _upgrade_url = (portal_url or DEFAULT_CLOVER_PORTAL_URL).rstrip("/")
         unavailable_footer = unavailable_message.strip()
         if not unavailable_footer and _unavailable:
             unavailable_footer = f"Upgrade at {_upgrade_url} for paid models"
@@ -7909,7 +7909,7 @@ def _prompt_model_selection(
     print(f"  {n + 2:>{num_width}}. Skip (keep current)")
 
     if _unavailable:
-        _upgrade_url = (portal_url or DEFAULT_NOUS_PORTAL_URL).rstrip("/")
+        _upgrade_url = (portal_url or DEFAULT_CLOVER_PORTAL_URL).rstrip("/")
         unavailable_footer = unavailable_message.strip() or (
             f"Unavailable models (requires paid tier — upgrade at {_upgrade_url})"
         )
@@ -8998,7 +8998,7 @@ def _login_minimax_oauth(args, pconfig: ProviderConfig) -> None:
         raise SystemExit(1)
 
 
-def _nous_device_code_login(
+def _clover_device_code_login(
     *,
     portal_base_url: Optional[str] = None,
     inference_base_url: Optional[str] = None,
@@ -9015,12 +9015,12 @@ def _nous_device_code_login(
     portal_base_url = (
         portal_base_url
         or os.getenv("CLOVER_PORTAL_BASE_URL")
-        or os.getenv("NOUS_PORTAL_BASE_URL")
+        or os.getenv("CLOVER_PORTAL_BASE_URL")
         or pconfig.portal_base_url
     ).rstrip("/")
     requested_inference_url = (
         inference_base_url
-        or os.getenv("NOUS_INFERENCE_BASE_URL")
+        or os.getenv("CLOVER_INFERENCE_BASE_URL")
         or pconfig.inference_base_url
     ).rstrip("/")
     client_id = client_id or pconfig.client_id
@@ -9118,7 +9118,7 @@ def _nous_device_code_login(
         "agent_key_obtained_at": None,
     }
     try:
-        return refresh_nous_oauth_from_state(
+        return refresh_clover_oauth_from_state(
             auth_state,
             timeout_seconds=timeout_seconds,
             force_refresh=False,
@@ -9126,7 +9126,7 @@ def _nous_device_code_login(
     except AuthError as exc:
         if exc.code == "subscription_required":
             portal_url = auth_state.get(
-                "portal_base_url", DEFAULT_NOUS_PORTAL_URL
+                "portal_base_url", DEFAULT_CLOVER_PORTAL_URL
             ).rstrip("/")
             message = format_auth_error(exc)
             print()
@@ -9138,7 +9138,7 @@ def _nous_device_code_login(
         raise
 
 
-def nous_token_has_billing_scope() -> bool:
+def clover_token_has_billing_scope() -> bool:
     """Return True if the currently-held Clover token carries ``billing:manage``.
 
     Reads the persisted ``scope`` string saved at login (``_save_provider_state``
@@ -9153,10 +9153,10 @@ def nous_token_has_billing_scope() -> bool:
     scope = state.get("scope")
     if not isinstance(scope, str):
         return False
-    return NOUS_BILLING_MANAGE_SCOPE in scope.split()
+    return CLOVER_BILLING_MANAGE_SCOPE in scope.split()
 
 
-def step_up_nous_billing_scope(
+def step_up_clover_billing_scope(
     *,
     open_browser: bool = True,
     timeout_seconds: float = 15.0,
@@ -9174,7 +9174,7 @@ def step_up_nous_billing_scope(
     Reuses the held credential's portal/inference URLs + client_id so the step-up
     targets the same deployment (incl. a preview via ``CLOVER_PORTAL_BASE_URL`` set
     at the original login). Persists to the auth store + shared store + pool, exactly
-    like ``_login_nous`` — but WITHOUT the model picker (this is a scope upgrade, not
+    like ``_login_clover`` — but WITHOUT the model picker (this is a scope upgrade, not
     a fresh login).
 
     Returns True iff the new token carries ``billing:manage``.
@@ -9187,14 +9187,14 @@ def step_up_nous_billing_scope(
     _raw_scope = prior.get("scope")
     prior_scope = _raw_scope if isinstance(_raw_scope, str) else ""
     requested: list[str] = []
-    for tok in (prior_scope.split() or [NOUS_INFERENCE_INVOKE_SCOPE, "tool:invoke"]):
+    for tok in (prior_scope.split() or [CLOVER_INFERENCE_INVOKE_SCOPE, "tool:invoke"]):
         if tok and tok not in requested:
             requested.append(tok)
-    if NOUS_BILLING_MANAGE_SCOPE not in requested:
-        requested.append(NOUS_BILLING_MANAGE_SCOPE)
+    if CLOVER_BILLING_MANAGE_SCOPE not in requested:
+        requested.append(CLOVER_BILLING_MANAGE_SCOPE)
     scope = " ".join(requested)
 
-    auth_state = _nous_device_code_login(
+    auth_state = _clover_device_code_login(
         portal_base_url=prior.get("portal_base_url") or None,
         inference_base_url=prior.get("inference_base_url") or None,
         client_id=prior.get("client_id") or pconfig.client_id,
@@ -9209,21 +9209,21 @@ def step_up_nous_billing_scope(
         _save_provider_state(auth_store, "clover", auth_state)
         _save_auth_store(auth_store)
 
-    # Mirror to shared store + reseed the pool (best-effort), same as _login_nous.
+    # Mirror to shared store + reseed the pool (best-effort), same as _login_clover.
     try:
-        _write_shared_nous_state(auth_state)
+        _write_shared_clover_state(auth_state)
     except Exception:
         pass
     try:
-        _sync_nous_pool_from_auth_store()
+        _sync_clover_pool_from_auth_store()
     except Exception:
         pass
 
     granted = auth_state.get("scope")
-    return isinstance(granted, str) and NOUS_BILLING_MANAGE_SCOPE in granted.split()
+    return isinstance(granted, str) and CLOVER_BILLING_MANAGE_SCOPE in granted.split()
 
 
-def _login_nous(args, pconfig: ProviderConfig) -> None:
+def _login_clover(args, pconfig: ProviderConfig) -> None:
     """Clover Portal device authorization flow."""
     timeout_seconds = getattr(args, "timeout", None) or 15.0
     insecure = bool(getattr(args, "insecure", False))
@@ -9239,10 +9239,10 @@ def _login_nous(args, pconfig: ProviderConfig) -> None:
         # Codex-style auto-import: before launching a fresh device-code
         # flow, check the shared store for an existing Clover credential
         # from any other profile. If present, offer to rehydrate it.
-        shared = _read_shared_nous_state()
+        shared = _read_shared_clover_state()
         if shared:
             try:
-                shared_path = _nous_shared_store_path()
+                shared_path = _clover_shared_store_path()
             except RuntimeError:
                 shared_path = None
             print()
@@ -9256,14 +9256,14 @@ def _login_nous(args, pconfig: ProviderConfig) -> None:
                 do_import = "y"
             if do_import in {"", "y", "yes"}:
                 print("Rehydrating Clover session from shared credentials...")
-                auth_state = _try_import_shared_nous_state(
+                auth_state = _try_import_shared_clover_state(
                     timeout_seconds=timeout_seconds,
                 )
                 if auth_state is None:
                     print("Could not refresh shared credentials — falling back to device-code login.")
 
         if auth_state is None:
-            auth_state = _nous_device_code_login(
+            auth_state = _clover_device_code_login(
                 portal_base_url=getattr(args, "portal_url", None),
                 inference_base_url=getattr(args, "inference_url", None),
                 client_id=getattr(args, "client_id", None) or pconfig.client_id,
@@ -9292,15 +9292,15 @@ def _login_nous(args, pconfig: ProviderConfig) -> None:
         # Mirror to the shared store so other profiles can one-tap import
         # these credentials. Best-effort: any I/O failure is logged and
         # swallowed inside the helper.
-        _write_shared_nous_state(auth_state)
-        _sync_nous_pool_from_auth_store()
+        _write_shared_clover_state(auth_state)
+        _sync_clover_pool_from_auth_store()
 
         print()
         print("Login successful!")
         print(f"  Auth state: {saved_to}")
 
         # Resolve model BEFORE writing provider to config.yaml so we never
-        # leave the config in a half-updated state (provider=nous but model
+        # leave the config in a half-updated state (provider=clover but model
         # still set to the previous provider's model, e.g. opus from
         # OpenRouter).  The auth.json active_provider was already set above.
         selected_model = None
@@ -9314,12 +9314,12 @@ def _login_nous(args, pconfig: ProviderConfig) -> None:
                 )
 
             from clover_cli.models import (
-                get_curated_nous_model_ids, get_pricing_for_provider,
-                check_nous_free_tier, partition_nous_models_by_tier,
+                get_curated_clover_model_ids, get_pricing_for_provider,
+                check_clover_free_tier, partition_clover_models_by_tier,
                 union_with_portal_free_recommendations,
                 union_with_portal_paid_recommendations,
             )
-            model_ids = get_curated_nous_model_ids()
+            model_ids = get_curated_clover_model_ids()
 
             print()
             unavailable_models: list = []
@@ -9328,18 +9328,18 @@ def _login_nous(args, pconfig: ProviderConfig) -> None:
                 pricing = get_pricing_for_provider("clover")
                 # Force fresh account data for model selection so recent credit
                 # purchases are reflected immediately.
-                free_tier = check_nous_free_tier(force_fresh=True)
+                free_tier = check_clover_free_tier(force_fresh=True)
                 _portal_for_recs = auth_state.get("portal_base_url", "")
                 if free_tier:
                     try:
                         from clover_cli.clover_account import (
-                            format_nous_portal_entitlement_message,
-                            get_nous_portal_account_info,
+                            format_clover_portal_entitlement_message,
+                            get_clover_portal_account_info,
                         )
 
-                        _account_info = get_nous_portal_account_info(force_fresh=True)
+                        _account_info = get_clover_portal_account_info(force_fresh=True)
                         unavailable_message = (
-                            format_nous_portal_entitlement_message(
+                            format_clover_portal_entitlement_message(
                                 _account_info,
                                 capability="paid Clover models",
                             )
@@ -9355,7 +9355,7 @@ def _login_nous(args, pconfig: ProviderConfig) -> None:
                     model_ids, pricing = union_with_portal_free_recommendations(
                         model_ids, pricing, _portal_for_recs,
                     )
-                    model_ids, unavailable_models = partition_nous_models_by_tier(
+                    model_ids, unavailable_models = partition_clover_models_by_tier(
                         model_ids, pricing, free_tier=True,
                     )
                 else:
@@ -9379,7 +9379,7 @@ def _login_nous(args, pconfig: ProviderConfig) -> None:
                     confirm_api_key=runtime_key,
                 )
             elif unavailable_models:
-                _url = (_portal or DEFAULT_NOUS_PORTAL_URL).rstrip("/")
+                _url = (_portal or DEFAULT_CLOVER_PORTAL_URL).rstrip("/")
                 print("No free models currently available.")
                 print(unavailable_message or f"Upgrade at {_url} to access paid models.")
             else:
@@ -9417,7 +9417,7 @@ def _login_nous(args, pconfig: ProviderConfig) -> None:
         if selected_model:
             _save_model_choice(selected_model)
             print(f"Default model set to: {selected_model}")
-        print(f"  Config updated: {config_path} (model.provider=nous)")
+        print(f"  Config updated: {config_path} (model.provider=clover)")
 
     except KeyboardInterrupt:
         print("\nLogin cancelled.")

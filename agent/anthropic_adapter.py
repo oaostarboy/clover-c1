@@ -607,7 +607,7 @@ def _is_deepseek_anthropic_endpoint(base_url: str | None) -> bool:
     return "/anthropic" in normalized.rstrip("/").lower()
 
 
-def _is_nous_portal_endpoint(base_url: str | None) -> bool:
+def _is_clover_portal_endpoint(base_url: str | None) -> bool:
     """Return True for Clover Portal's Anthropic Messages route.
 
     Portal serves its ``anthropic/*`` catalog natively at
@@ -618,7 +618,7 @@ def _is_nous_portal_endpoint(base_url: str | None) -> bool:
     Trusted hosts only:
 
     1. Prod hostname ``inference-api.``
-    2. The operator-set ``NOUS_INFERENCE_BASE_URL`` hostname (staging/preview)
+    2. The operator-set ``CLOVER_INFERENCE_BASE_URL`` hostname (staging/preview)
 
     Lookalikes such as ``inference-api..attacker.test`` are
     rejected (hostname match, not substring).
@@ -626,9 +626,9 @@ def _is_nous_portal_endpoint(base_url: str | None) -> bool:
     if base_url_host_matches(base_url or "", "inference-api."):
         return True
     try:
-        from clover_cli.auth import _nous_inference_env_override
+        from clover_cli.auth import _clover_inference_env_override
 
-        override = _nous_inference_env_override()
+        override = _clover_inference_env_override()
     except Exception:
         return False
     if not override:
@@ -647,7 +647,7 @@ def _requires_bearer_auth(base_url: str | None) -> bool:
     MiniMax's global and China Anthropic-compatible endpoints, Azure AI
     Foundry's Anthropic-style endpoint, Palantir Foundry's LLM proxy, and Clover Portal's Messages route follow this pattern.
     """
-    if _is_nous_portal_endpoint(base_url):
+    if _is_clover_portal_endpoint(base_url):
         return True
     normalized = _normalize_base_url_text(base_url)
     if not normalized:
@@ -2577,7 +2577,7 @@ def _manage_thinking_signatures(
     # as a signature-blind proxy even though the host is not anthropic.com.
     _is_third_party = (
         _is_third_party_anthropic_endpoint(base_url)
-        and not _is_nous_portal_endpoint(base_url)
+        and not _is_clover_portal_endpoint(base_url)
     )
 
     last_assistant_idx = None
@@ -2964,7 +2964,7 @@ def build_anthropic_kwargs(
     # normalizing to the bare Anthropic slug would make the model unresolvable
     # there. Skipping the call preserves the prefix AND the dots, so
     # ``preserve_dots`` stays irrelevant for Portal.
-    if not _is_nous_portal_endpoint(base_url):
+    if not _is_clover_portal_endpoint(base_url):
         model = normalize_model_name(model, preserve_dots=preserve_dots)
     # effective_max_tokens = output cap for this call (≠ total context window)
     # Use the resolver helper so non-positive values (negative ints,
@@ -3234,7 +3234,7 @@ def create_anthropic_message(
     ``on_response``: optional callable invoked once with the underlying httpx
     response before the message is aggregated (best-effort, exceptions
     swallowed). Response *headers* carry out-of-band provider state that the
-    parsed ``Message`` drops — Clover Portal's ``x-nous-credits-*`` balance family
+    parsed ``Message`` drops — Clover Portal's ``x-clover-credits-*`` balance family
     in particular. Only fires on the streaming path, which is the one the main
     turn loop takes.
     """

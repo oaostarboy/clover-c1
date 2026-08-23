@@ -22,7 +22,7 @@ from tools import tool_backend_helpers as tbh
 
 
 MANAGED = SimpleNamespace(
-    nous_user_token="managed-token",
+    clover_user_token="managed-token",
     gateway_origin="https://gateway.",
 )
 
@@ -47,11 +47,11 @@ class TestReadSelection:
         with self._with_raw({"image_gen": {"provider": "fal"}}):
             assert tbh.read_selection("image_gen") == "fal"
 
-    def test_nous_provider_returned(self):
+    def test_clover_provider_returned(self):
         with self._with_raw({"image_gen": {"provider": "clover"}}):
             assert tbh.read_selection("image_gen") == "clover"
 
-    def test_legacy_use_gateway_true_maps_to_nous(self):
+    def test_legacy_use_gateway_true_maps_to_clover(self):
         """Old configs stored use_gateway: true beside a vendor name — only
         the managed picker row ever wrote it, so it means 'clover'."""
         with self._with_raw({"video_gen": {"provider": "fal", "use_gateway": True}}):
@@ -99,7 +99,7 @@ class TestReadSelection:
 
 
 class TestImageFalStrictSelection:
-    def test_nous_selection_routes_managed_even_with_fal_key(self):
+    def test_clover_selection_routes_managed_even_with_fal_key(self):
         from tools import image_generation_tool as it
 
         with patch.object(it, "read_selection", return_value="clover"), \
@@ -108,7 +108,7 @@ class TestImageFalStrictSelection:
             assert it._resolve_managed_fal_gateway() is MANAGED
         gw.assert_called_once_with("fal-queue")
 
-    def test_nous_selection_unentitled_raises_selection_error(self):
+    def test_clover_selection_unentitled_raises_selection_error(self):
         from tools import image_generation_tool as it
 
         with patch.object(it, "read_selection", return_value="clover"), \
@@ -116,7 +116,7 @@ class TestImageFalStrictSelection:
              patch.object(it, "resolve_managed_tool_gateway", return_value=None):
             with pytest.raises(ValueError) as exc:
                 it._resolve_managed_fal_gateway()
-        assert "image_gen is configured to use nous" in str(exc.value)
+        assert "image_gen is configured to use clover" in str(exc.value)
         assert "clover tools" in str(exc.value)
 
     def test_fal_selection_missing_key_errors_without_managed_call(self):
@@ -173,7 +173,7 @@ class TestImageFalStrictSelection:
 
 
 class TestVideoFalStrictSelection:
-    def test_nous_selection_routes_managed_even_with_fal_key(self):
+    def test_clover_selection_routes_managed_even_with_fal_key(self):
         from plugins.video_gen import fal as vf
 
         with patch("tools.tool_backend_helpers.read_selection", return_value="clover"), \
@@ -207,7 +207,7 @@ class TestVideoFalStrictSelection:
 
 
 class TestSttStrictSelection:
-    def test_nous_selection_beats_direct_openai_key(self):
+    def test_clover_selection_beats_direct_openai_key(self):
         from tools import transcription_tools as tt
 
         with patch.object(tt, "_load_stt_config", return_value={"openai": {"api_key": "sk-direct"}}), \
@@ -251,7 +251,7 @@ class TestBrowserUseStrictSelection:
 
         return BrowserUseBrowserProvider()
 
-    def test_nous_selection_routes_managed_even_with_direct_key(self):
+    def test_clover_selection_routes_managed_even_with_direct_key(self):
         provider = self._provider()
         with patch("plugins.browser.browser_use.provider.get_secret", return_value="bu-key"), \
              patch("tools.tool_backend_helpers.read_selection", return_value="clover"), \
@@ -321,7 +321,7 @@ class TestCamofoxSelection:
 
 
 class TestWriteProviderConfig:
-    def test_managed_row_writes_nous_and_clears_legacy_flag(self):
+    def test_managed_row_writes_clover_and_clears_legacy_flag(self):
         from clover_cli.tools_config import _write_provider_config
 
         config = {"tts": {"provider": "edge", "use_gateway": False}}
@@ -339,7 +339,7 @@ class TestWriteProviderConfig:
         assert config["web"]["backend"] == "tavily"
         assert "use_gateway" not in config["web"]
 
-    def test_managed_image_row_persists_nous_provider(self):
+    def test_managed_image_row_persists_clover_provider(self):
         from clover_cli.tools_config import _write_provider_config
 
         config = {}

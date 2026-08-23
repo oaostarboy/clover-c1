@@ -61,7 +61,7 @@ class TestMsysToWindowsPath:
         # On a non-Windows host the function must never rewrite the path
         # — POSIX-style paths are real paths there.
         assert _msys_to_windows_path("/c/Users/NVIDIA") == "/c/Users/NVIDIA"
-        assert _msys_to_windows_path("/home/teknium") == "/home/teknium"
+        assert _msys_to_windows_path("/home/maintainer") == "/home/maintainer"
 
     @pytest.mark.windows_only
     def test_translates_drive_path(self):

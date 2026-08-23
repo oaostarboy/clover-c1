@@ -35,7 +35,7 @@ import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } f
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
 import { buildDesktopBackendEnv, cloverManagedNodePathEntries, normalizeCloverHomeRoot } from './backend-env'
-import { isReauthRequiredError, makeNousCloudBackendDownError, waitForCloverReady } from './backend-health'
+import { isReauthRequiredError, makeCloverCloudBackendDownError, waitForCloverReady } from './backend-health'
 import { backendCommandMatches, createBackendOwnership, createBackendShutdownCoordinator } from './backend-ownership'
 import {
   canImportCloverCli,
@@ -1210,12 +1210,12 @@ app.setName(APP_NAME)
 // Windows toast notifications silently no-op unless an AppUserModelID is set:
 // `new Notification().show()` returns without error and nothing appears. The
 // AUMID must match the installed Start Menu shortcut's AUMID, which
-// electron-builder derives from the build `appId` (com.clovercognition.clover) —
+// electron-builder derives from the build `appId` (com.cloverc1.clover) —
 // keep this string in sync with package.json `build.appId`. macOS/Linux don't
 // need this, so gate it on Windows. (Fixes: desktop approval/turn notifications
 // never firing on Windows.)
 if (IS_WINDOWS) {
-  app.setAppUserModelId('com.clovercognition.clover')
+  app.setAppUserModelId('com.cloverc1.clover')
 }
 
 // Seed the native About panel with the live Clover version. This is refreshed
@@ -7672,12 +7672,12 @@ async function freshGatewayWsUrl(profile) {
 //     its own PKCE exchange; SSO removes the human click, not a security check.
 
 // Canonical Clover portal base URL, overridable for staging/dev. Mirrors the CLI
-// convention (clover_cli/auth.py DEFAULT_NOUS_PORTAL_URL + the same env names)
+// convention (clover_cli/auth.py DEFAULT_CLOVER_PORTAL_URL + the same env names)
 // so a single override flips every Clover surface to the same portal.
-const DEFAULT_NOUS_PORTAL_URL = ''
+const DEFAULT_CLOVER_PORTAL_URL = ''
 
 function resolvePortalBaseUrl() {
-  const raw = process.env.CLOVER_PORTAL_BASE_URL || process.env.NOUS_PORTAL_BASE_URL || DEFAULT_NOUS_PORTAL_URL
+  const raw = process.env.CLOVER_PORTAL_BASE_URL || process.env.CLOVER_PORTAL_BASE_URL || DEFAULT_CLOVER_PORTAL_URL
 
   return String(raw).trim().replace(/\/+$/, '')
 }
@@ -9023,7 +9023,7 @@ async function buildRemoteConnection(
       // and the renderer would never see isCloudBackendDown. Preserve the
       // existing 401/403 reauth and generic transport behavior for everything
       // else (#85335).
-      const cloudError = makeNousCloudBackendDownError(baseUrl, error)
+      const cloudError = makeCloverCloudBackendDownError(baseUrl, error)
 
       if (cloudError !== null) {
         throw cloudError

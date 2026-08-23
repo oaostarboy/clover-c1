@@ -45,7 +45,7 @@ _PROVIDER_ENV_HINTS = (
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_TOKEN",
     "OPENAI_BASE_URL",
-    "NOUS_API_KEY",
+    "CLOVER_API_KEY",
     "GLM_API_KEY",
     "ZAI_API_KEY",
     "Z_AI_API_KEY",
@@ -1699,15 +1699,15 @@ def run_doctor(args):
 
     try:
         from clover_cli.auth import (
-            get_nous_auth_status_local,
+            get_clover_auth_status_local,
             get_codex_auth_status,
             get_minimax_oauth_auth_status,
         )
 
         # Read-only display: refresh-free snapshot — doctor must never
         # trigger an OAuth refresh as a side effect of a health check.
-        nous_status = get_nous_auth_status_local()
-        if nous_status.get("logged_in"):
+        clover_status = get_clover_auth_status_local()
+        if clover_status.get("logged_in"):
             check_ok("Clover Portal auth", "(logged in)")
         else:
             check_warn("Clover Portal auth", "(not logged in)")

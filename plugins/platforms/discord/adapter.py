@@ -5690,7 +5690,7 @@ class DiscordAdapter(BasePlatformAdapter):
         """
         Resolve non-numeric entries in DISCORD_ALLOWED_USERS to Discord user IDs.
 
-        Users can specify usernames (e.g. "teknium") or display names instead of
+        Users can specify usernames (e.g. "maintainer") or display names instead of
         raw numeric IDs.  After resolution, the env var and internal set are updated
         so authorization checks work with IDs only.
         """

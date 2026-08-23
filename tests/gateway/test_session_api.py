@@ -594,8 +594,8 @@ async def test_session_model_lock_endpoint_then_chat_reuses_persisted_lock_and_p
 
     assert captured["provider"] == "clover"
     assert captured["model"] == "x-ai/grok-4.5"
-    assert captured["api_key"] == "sk-nous"
-    assert captured["base_url"] == "https://nous.example/v1"
+    assert captured["api_key"] == "sk-clover"
+    assert captured["base_url"] == "https://clover.example/v1"
     assert payload["runtime"]["provider"] == "clover"
     assert payload["runtime"]["model"] == "x-ai/grok-4.5"
     assert payload["runtime"]["requested"] == {

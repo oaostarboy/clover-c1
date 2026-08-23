@@ -6,7 +6,7 @@ adding it to the guard, the corresponding test added here will fail too.
 
 The guard exists to protect the developer's live ``clover-gateway`` process
 from being SIGTERMed by tests. See PR #23397 for the original incident
-(5+ live gateway kills in 3 days). Per Teknium 2026-05-10:
+(5+ live gateway kills in 3 days). Per the maintainer 2026-05-10:
 
   > "You better do such a deep scan and scrub of the tests that this
   >  never is possible ever again for all eternity."

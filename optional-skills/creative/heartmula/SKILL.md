@@ -2,7 +2,7 @@
 name: heartmula
 description: "HeartMuLa: Suno-like song generation from lyrics + tags."
 version: 1.0.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 platforms: [linux, macos, windows]
 metadata:

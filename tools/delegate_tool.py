@@ -1767,16 +1767,16 @@ def _build_child_agent(
     # Clover Portal is dual-wire within a single provider: anthropic/* → Messages,
     # everything else → chat_completions. Same-provider inheritance would pin a
     # child Clover/Qwen subagent onto the parent's Claude Messages wire (or the
-    # reverse). agent_init honors an explicit api_mode above its nous branch, so
+    # reverse). agent_init honors an explicit api_mode above its clover branch, so
     # re-derive here before construction.
     _parent_provider = getattr(parent_agent, "provider", None) or ""
     _effective_provider_norm = (effective_provider or "").strip().lower()
     if override_api_mode is not None:
         effective_api_mode = override_api_mode
-    elif _effective_provider_norm in {"clover", "nous-portal", "clovercognition"}:
-        from clover_cli.providers import nous_api_mode
+    elif _effective_provider_norm in {"clover", "clover-portal", "cloverc1"}:
+        from clover_cli.providers import clover_api_mode
 
-        effective_api_mode = nous_api_mode(effective_model)
+        effective_api_mode = clover_api_mode(effective_model)
     elif effective_provider != _parent_provider:
         effective_api_mode = None  # force re-derivation from provider's defaults
     else:
@@ -4519,7 +4519,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
             f"Cannot resolve delegation provider '{configured_provider}': {exc}. "
             f"Check that the provider is configured (API key set, valid provider name), "
             f"or set delegation.base_url/delegation.api_key for a direct endpoint. "
-            f"Available providers: openrouter, nous, zai, kimi-coding, minimax."
+            f"Available providers: openrouter, clover, zai, kimi-coding, minimax."
         ) from exc
 
     api_key = runtime.get("api_key", "")

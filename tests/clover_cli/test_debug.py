@@ -375,7 +375,7 @@ class TestRunDebugShare:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.nous = False
+        args.clover = False
 
         with patch("clover_cli.dump.run_dump"), \
              patch("clover_cli.debug._sweep_expired_pastes", return_value=(0, 0)) as mock_sweep, \
@@ -396,7 +396,7 @@ class TestRunDebugShare:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.nous = False
+        args.clover = False
 
         call_count = [0]
         uploaded_content = []
@@ -478,7 +478,7 @@ class TestRunDebugShareRedaction:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.nous = False
+        args.clover = False
         args.no_redact = False
 
         captured: list[str] = []
@@ -509,7 +509,7 @@ class TestRunDebugShareRedaction:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.nous = False
+        args.clover = False
         args.no_redact = False
 
         captured: list[str] = []
@@ -538,7 +538,7 @@ class TestRunDebugShareRedaction:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.nous = False
+        args.clover = False
         args.no_redact = True
 
         captured: list[str] = []
@@ -589,7 +589,7 @@ class TestRunDebug:
         args.lines = 200
         args.expire = 7
         args.local = True
-        args.nous = False
+        args.clover = False
 
         with patch("clover_cli.dump.run_dump"):
             run_debug(args)
@@ -802,7 +802,7 @@ class TestShareIncludesAutoDelete:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.nous = False
+        args.clover = False
 
         with patch("clover_cli.dump.run_dump"), \
              patch("clover_cli.debug.upload_to_pastebin",
@@ -914,10 +914,10 @@ class TestBuildNousBundle:
         import gzip
         import json as _json
 
-        from clover_cli.debug import build_nous_bundle
+        from clover_cli.debug import build_clover_bundle
 
         files = {"report": "hello", "agent.log": "log line"}
-        blob = build_nous_bundle(files, redact=True)
+        blob = build_clover_bundle(files, redact=True)
 
         # It's gzip — magic bytes.
         assert blob[:2] == b"\x1f\x8b"
@@ -931,9 +931,9 @@ class TestBuildNousBundle:
         import gzip
         import json as _json
 
-        from clover_cli.debug import build_nous_bundle
+        from clover_cli.debug import build_clover_bundle
 
-        blob = build_nous_bundle({"report": "x"}, redact=False)
+        blob = build_clover_bundle({"report": "x"}, redact=False)
         envelope = _json.loads(gzip.decompress(blob).decode())
         assert envelope["redacted"] is False
 
@@ -944,7 +944,7 @@ class TestRunDebugShareNous:
             lines = 50
             expire = 7
             local = False
-            nous = True
+            clover = True
             no_redact = False
             yes = True
 
@@ -953,7 +953,7 @@ class TestRunDebugShareNous:
             setattr(a, k, v)
         return a
 
-    def test_nous_success_prints_view_url(self, clover_home, capsys):
+    def test_clover_success_prints_view_url(self, clover_home, capsys):
         from clover_cli.debug import run_debug_share
 
         res = {
@@ -962,7 +962,7 @@ class TestRunDebugShareNous:
             "expiresAt": "2026-06-20T00:00:00Z",
         }
         with patch("clover_cli.dump.run_dump"), patch(
-            "clover_cli.diagnostics_upload.share_to_nous", return_value=res
+            "clover_cli.diagnostics_upload.share_to_clover", return_value=res
         ) as share:
             run_debug_share(self._args())
 
@@ -970,15 +970,15 @@ class TestRunDebugShareNous:
         assert "Clover-INTERNAL" in out
         assert "https://support.example.com/diagnostics/id-1" in out
         assert "2026-06-20T00:00:00Z" in out
-        # The blob passed to share_to_nous must be gzip bytes.
+        # The blob passed to share_to_clover must be gzip bytes.
         blob = share.call_args[0][0]
         assert isinstance(blob, (bytes, bytearray)) and blob[:2] == b"\x1f\x8b"
 
-    def test_nous_failure_suggests_local(self, clover_home, capsys):
+    def test_clover_failure_suggests_local(self, clover_home, capsys):
         from clover_cli.debug import run_debug_share
 
         with patch("clover_cli.dump.run_dump"), patch(
-            "clover_cli.diagnostics_upload.share_to_nous",
+            "clover_cli.diagnostics_upload.share_to_clover",
             side_effect=RuntimeError("service down"),
         ):
             with pytest.raises(SystemExit) as exc:
@@ -988,19 +988,19 @@ class TestRunDebugShareNous:
         assert "Clover upload failed" in err
         assert "--local" in err
 
-    def test_nous_does_not_touch_pastebin(self, clover_home):
+    def test_clover_does_not_touch_pastebin(self, clover_home):
         from clover_cli.debug import run_debug_share
 
         res = {"id": "id-1", "viewUrl": "https://v"}
         with patch("clover_cli.dump.run_dump"), patch(
-            "clover_cli.diagnostics_upload.share_to_nous", return_value=res
+            "clover_cli.diagnostics_upload.share_to_clover", return_value=res
         ), patch("clover_cli.debug.upload_to_pastebin") as paste:
             run_debug_share(self._args())
         paste.assert_not_called()
 
 
 class TestDebugSlashCommand:
-    """`/debug [nous|local]` parsing in the CLI/TUI handler.
+    """`/debug [clover|local]` parsing in the CLI/TUI handler.
 
     The classic CLI and the TUI slash worker both dispatch through
     ``CloverCLI.process_command`` → ``_handle_debug_command(cmd_original)``,
@@ -1036,7 +1036,7 @@ class TestDebugSlashCommand:
 
 
     def test_word_parsing_is_case_insensitive(self):
-        c = self._captured("/debug NOUS")
+        c = self._captured("/debug CLOVER")
         assert c["clover"] is True
 
 
@@ -1057,7 +1057,7 @@ class TestShareConsentGate:
     def _args(self, **over):
         from types import SimpleNamespace
 
-        base = dict(lines=50, expire=7, local=False, nous=False,
+        base = dict(lines=50, expire=7, local=False, clover=False,
                     no_redact=False, yes=False)
         base.update(over)
         return SimpleNamespace(**base)

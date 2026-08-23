@@ -2,7 +2,7 @@
 name: gitnexus-explorer
 description: Serve an interactive codebase knowledge graph web UI.
 version: 1.0.0
-author: Clover Cognition + Teknium
+author: Clover Cognition + the maintainer
 license: MIT
 platforms: [linux, macos, windows]
 metadata:

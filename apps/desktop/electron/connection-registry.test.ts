@@ -215,7 +215,7 @@ test('resolvedConnectionId reuses the exact URL envelope and rejects weak or dup
         headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-b' } }
       },
       {
-        id: 'cloud-nous',
+        id: 'cloud-clover',
         kind: 'cloud',
         label: 'Clover cloud',
         url: sharedUrl,
@@ -265,7 +265,7 @@ test('resolvedConnectionId reuses the exact URL envelope and rejects weak or dup
       org: 'clover',
       remoteKind: 'cloud'
     }),
-    'cloud-nous'
+    'cloud-clover'
   )
   assert.equal(
     resolvedConnectionId(registry, {

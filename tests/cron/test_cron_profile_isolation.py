@@ -1,6 +1,6 @@
 """Regression tests for #4707 — cron must be per-profile.
 
-Design intent (Teknium, June 2026): a profile's cron jobs both LIVE in that
+Design intent (the maintainer, June 2026): a profile's cron jobs both LIVE in that
 profile's CLOVER_HOME and EXECUTE under it.
 
 - Storage: a job created under profile ``coder`` writes to

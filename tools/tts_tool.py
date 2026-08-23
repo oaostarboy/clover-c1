@@ -93,9 +93,9 @@ def _resolve_provider_key(env_var: str, provider_id: str) -> str:
 
 from tools.managed_tool_gateway import resolve_managed_tool_gateway
 from tools.tool_backend_helpers import (
-    NOUS_MANAGED_PROVIDER,
-    managed_nous_tools_enabled,
-    nous_tool_gateway_unavailable_message,
+    CLOVER_MANAGED_PROVIDER,
+    managed_clover_tools_enabled,
+    clover_tool_gateway_unavailable_message,
     read_selection,
     resolve_openai_audio_api_key,
     selection_error,
@@ -654,12 +654,12 @@ def _get_provider(tts_config: Dict[str, Any]) -> str:
     Users opt into cloud TTS by setting ``tts.provider`` (normally through
     ``clover tools``); otherwise the historical Edge backend remains active.
 
-    The managed "Clover Subscription" selection (``tts.provider: nous``) is
+    The managed "Clover Subscription" selection (``tts.provider: clover``) is
     serviced by the OpenAI provider implementation, routed through the
     managed openai-audio gateway by ``_resolve_openai_audio_client_config``.
     """
     provider = (tts_config.get("provider") or DEFAULT_PROVIDER).lower().strip()
-    if provider == NOUS_MANAGED_PROVIDER:
+    if provider == CLOVER_MANAGED_PROVIDER:
         return "openai"
     return provider
 
@@ -3814,17 +3814,17 @@ def _resolve_openai_audio_client_config() -> tuple[str, str, bool]:
 
     selected = read_selection("tts")
 
-    if selected == NOUS_MANAGED_PROVIDER:
+    if selected == CLOVER_MANAGED_PROVIDER:
         managed_gateway = resolve_managed_tool_gateway("openai-audio")
         if managed_gateway is None:
             raise ValueError(selection_error(
                 "tts",
-                NOUS_MANAGED_PROVIDER,
+                CLOVER_MANAGED_PROVIDER,
                 "the Clover Tool Gateway is not available (not entitled or "
                 "unreachable)",
             ))
         return (
-            managed_gateway.nous_user_token,
+            managed_gateway.clover_user_token,
             urljoin(f"{managed_gateway.gateway_origin.rstrip('/')}/", "v1"),
             True,
         )
@@ -3857,17 +3857,17 @@ def _resolve_openai_audio_client_config() -> tuple[str, str, bool]:
             "Neither tts.openai.api_key in config nor "
             "VOICE_TOOLS_OPENAI_KEY/OPENAI_API_KEY is set"
         )
-        if managed_nous_tools_enabled():
+        if managed_clover_tools_enabled():
             message += (
                 ". "
-                + nous_tool_gateway_unavailable_message(
+                + clover_tool_gateway_unavailable_message(
                     "managed OpenAI audio for TTS",
                 )
             )
         raise ValueError(message)
 
     return (
-        managed_gateway.nous_user_token,
+        managed_gateway.clover_user_token,
         urljoin(f"{managed_gateway.gateway_origin.rstrip('/')}/", "v1"),
         True,
     )

@@ -152,10 +152,10 @@ class TestOpenRouterProfile:
 
 class TestNousProfile:
     def test_tags(self):
-        from agent.portal_tags import nous_portal_tags
+        from agent.portal_tags import clover_portal_tags
         p = get_provider_profile("clover")
         body = p.build_extra_body()
-        assert body["tags"] == nous_portal_tags()
+        assert body["tags"] == clover_portal_tags()
 
     def test_sticky_session_id_normalizes_cron_timestamp(self):
         """Cron re-fires of the same job keep the same sticky routing key."""

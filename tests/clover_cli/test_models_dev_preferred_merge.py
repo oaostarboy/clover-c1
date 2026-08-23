@@ -137,7 +137,7 @@ class TestProviderModelIdsPreferred:
 
 
 class TestOpenRouterAndNousUnchanged:
-    """Per Teknium: openrouter and nous are NEVER merged with models.dev."""
+    """Per the maintainer: openrouter and clover are NEVER merged with models.dev."""
 
 
     def test_openrouter_does_not_call_merge(self):

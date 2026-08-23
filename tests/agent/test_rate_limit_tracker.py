@@ -16,7 +16,7 @@ from agent.rate_limit_tracker import (
 
 # ── Sample headers from Clover inference API ──────────────────────────────
 
-NOUS_HEADERS = {
+CLOVER_HEADERS = {
     "x-ratelimit-limit-requests": "800",
     "x-ratelimit-limit-requests-1h": "33600",
     "x-ratelimit-limit-tokens": "8000000",
@@ -34,7 +34,7 @@ NOUS_HEADERS = {
 
 class TestParseHeaders:
     def test_basic_parsing(self):
-        state = parse_rate_limit_headers(NOUS_HEADERS, provider="clover")
+        state = parse_rate_limit_headers(CLOVER_HEADERS, provider="clover")
         assert state is not None
         assert state.provider == "clover"
         assert state.has_data
@@ -96,7 +96,7 @@ class TestFormatting:
 
 
     def test_format_compact(self):
-        state = parse_rate_limit_headers(NOUS_HEADERS, provider="clover")
+        state = parse_rate_limit_headers(CLOVER_HEADERS, provider="clover")
         result = format_rate_limit_compact(state)
         assert "RPM:" in result
         assert "RPH:" in result
@@ -113,7 +113,7 @@ class TestAgentIntegration:
         """Simulate the header capture path without a real API call."""
         # Use a mock httpx-like response
         class MockResponse:
-            headers = NOUS_HEADERS
+            headers = CLOVER_HEADERS
 
         # Import AIAgent minimally
 

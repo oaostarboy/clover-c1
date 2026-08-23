@@ -8,8 +8,8 @@ from unittest.mock import patch
 import pytest
 
 from tools.browser_tool import AGENT_BROWSER_NPX_SPEC
-from clover_cli.clover_account import CloverPortalAccountInfo, NousToolAccessInfo
-from clover_cli.nous_subscription import NousSubscriptionFeatures
+from clover_cli.clover_account import CloverPortalAccountInfo, CloverToolAccessInfo
+from clover_cli.clover_subscription import CloverSubscriptionFeatures
 from clover_cli.tools_config import (
     _DEFAULT_OFF_TOOLSETS,
     _RECENTLY_SHIPPED_TOOLSETS,
@@ -203,13 +203,13 @@ def test_save_platform_tools_preserves_mcp_server_names():
 
 
 
-def test_first_install_nous_auto_configures_video_gen(monkeypatch):
+def test_first_install_clover_auto_configures_video_gen(monkeypatch):
     """When a Clover subscriber checks video_gen in the toolset checklist,
-    apply_nous_managed_defaults must write video_gen.provider and
+    apply_clover_managed_defaults must write video_gen.provider and
     video_gen.use_gateway so the FAL plugin can route through the gateway
     at runtime.  Regression test for the bug where video_gen was marked as
     auto-configured but no config was actually written."""
-    monkeypatch.setattr("clover_cli.nous_subscription.managed_nous_tools_enabled", lambda: True)
+    monkeypatch.setattr("clover_cli.clover_subscription.managed_clover_tools_enabled", lambda: True)
     config = {
         "model": {"provider": "clover"},
         "platform_toolsets": {"cli": []},
@@ -239,7 +239,7 @@ def test_first_install_nous_auto_configures_video_gen(monkeypatch):
         lambda: ["cli"],
     )
     monkeypatch.setattr(
-        "clover_cli.nous_subscription.get_nous_portal_account_info",
+        "clover_cli.clover_subscription.get_clover_portal_account_info",
         lambda *args, **kwargs: CloverPortalAccountInfo(
             logged_in=True,
             source="jwt",
@@ -898,7 +898,7 @@ def _fake_features(*, logged_in: bool, paid: bool = True):
             logged_in=False, source="none", fresh=False, paid_service_access=None
         )
     )
-    return SimpleNamespace(nous_auth_present=logged_in, account_info=account)
+    return SimpleNamespace(clover_auth_present=logged_in, account_info=account)
 
 
 def test_visible_providers_reuses_logged_out_feature_snapshot(monkeypatch):
@@ -910,16 +910,16 @@ def test_visible_providers_reuses_logged_out_feature_snapshot(monkeypatch):
         fresh=False,
         paid_service_access=None,
     )
-    features = NousSubscriptionFeatures(
+    features = CloverSubscriptionFeatures(
         subscribed=False,
-        nous_auth_present=False,
-        provider_is_nous=False,
+        clover_auth_present=False,
+        provider_is_clover_portal=False,
         features={},
         account_info=account,
     )
     monkeypatch.setattr(
         tools_config,
-        "get_nous_subscription_features",
+        "get_clover_subscription_features",
         lambda *args, **kwargs: pytest.fail("feature snapshot was resolved again"),
     )
 
@@ -928,7 +928,7 @@ def test_visible_providers_reuses_logged_out_feature_snapshot(monkeypatch):
     )
 
     assert any(
-        provider.get("managed_nous_feature") == "image_gen"
+        provider.get("managed_clover_feature") == "image_gen"
         for provider in providers
     )
 
@@ -941,21 +941,21 @@ def test_visible_providers_reuses_pool_video_feature_snapshot(monkeypatch):
         source="jwt",
         fresh=False,
         paid_service_access=False,
-        tool_access=NousToolAccessInfo(
+        tool_access=CloverToolAccessInfo(
             enabled=True,
             coverage={"fal-video": False},
         ),
     )
-    features = NousSubscriptionFeatures(
+    features = CloverSubscriptionFeatures(
         subscribed=True,
-        nous_auth_present=True,
-        provider_is_nous=False,
+        clover_auth_present=True,
+        provider_is_clover_portal=False,
         features={},
         account_info=account,
     )
     monkeypatch.setattr(
         tools_config,
-        "get_nous_subscription_features",
+        "get_clover_subscription_features",
         lambda *args, **kwargs: pytest.fail("feature snapshot was resolved again"),
     )
 
@@ -964,7 +964,7 @@ def test_visible_providers_reuses_pool_video_feature_snapshot(monkeypatch):
     )
 
     assert not any(
-        provider.get("managed_nous_feature") == "video_gen"
+        provider.get("managed_clover_feature") == "video_gen"
         for provider in providers
     )
 

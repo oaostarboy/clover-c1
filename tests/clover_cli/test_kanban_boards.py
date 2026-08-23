@@ -261,7 +261,7 @@ class TestWorkerSpawnEnv:
             id="t_abc",
             title="worker test",
             body=None,
-            assignee="teknium",
+            assignee="maintainer",
             status="ready",
             priority=0,
             created_by="user",

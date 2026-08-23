@@ -40,7 +40,7 @@ can tell a real citation-backed answer from an unsourced one:
   and the caller should treat the result as unsourced.
 
 Salvaged from PR #10786 (originally by @Jaaneek); credential resolution
-reworked to honor both auth modes per Teknium's design.
+reworked to honor both auth modes per the maintainer's design.
 """
 
 from __future__ import annotations

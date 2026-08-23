@@ -48,7 +48,7 @@ const FONT_STORAGE_KEY = "clover-dashboard-font";
  *  reasonably assume nobody still has the old value persisted. */
 const THEME_NAME_ALIASES: Record<string, string> = {
   // Renamed during the LENS_5I port + Clover-blue rebrand.
-  "lens-5i": "nous-blue",
+  "lens-5i": "clover-blue",
 };
 
 function migrateThemeName(name: string): string {

@@ -66,10 +66,10 @@ from tools.fal_common import (
 )
 from tools.managed_tool_gateway import resolve_managed_tool_gateway
 from tools.tool_backend_helpers import (
-    NOUS_MANAGED_PROVIDER,
+    CLOVER_MANAGED_PROVIDER,
     fal_key_is_configured,
-    managed_nous_tools_enabled,
-    nous_tool_gateway_unavailable_message,
+    managed_clover_tools_enabled,
+    clover_tool_gateway_unavailable_message,
     read_selection,
     selection_error,
 )
@@ -751,12 +751,12 @@ def _resolve_managed_fal_gateway():
     selection cannot run.
     """
     selected = read_selection("image_gen")
-    if selected == NOUS_MANAGED_PROVIDER:
+    if selected == CLOVER_MANAGED_PROVIDER:
         gateway = resolve_managed_tool_gateway("fal-queue")
         if gateway is None:
             raise ValueError(selection_error(
                 "image_gen",
-                NOUS_MANAGED_PROVIDER,
+                CLOVER_MANAGED_PROVIDER,
                 "the Clover Tool Gateway is not available (not entitled or "
                 "unreachable)",
             ))
@@ -781,7 +781,7 @@ def _get_managed_fal_client(managed_gateway):
 
     client_config = (
         managed_gateway.gateway_origin.rstrip("/"),
-        managed_gateway.nous_user_token,
+        managed_gateway.clover_user_token,
     )
     with _managed_fal_client_lock:
         if _managed_fal_client is not None and _managed_fal_client_config == client_config:
@@ -792,7 +792,7 @@ def _get_managed_fal_client(managed_gateway):
         _load_fal_client()
         _managed_fal_client = _ManagedFalSyncClient(
             fal_client,
-            key=managed_gateway.nous_user_token,
+            key=managed_gateway.clover_user_token,
             queue_run_origin=managed_gateway.gateway_origin,
         )
         _managed_fal_client_config = client_config
@@ -866,7 +866,7 @@ def _submit_fal_request(model: str, arguments: Dict[str, Any]):
             if status in {401, 402, 403}:
                 gateway_message = (
                     "\n\n"
-                    + nous_tool_gateway_unavailable_message(
+                    + clover_tool_gateway_unavailable_message(
                         "managed FAL image generation",
                         force_fresh=True,
                     )
@@ -1419,7 +1419,7 @@ def check_fal_api_key() -> bool:
     ``_resolve_managed_fal_gateway``.
     """
     selected = read_selection("image_gen")
-    if selected == NOUS_MANAGED_PROVIDER:
+    if selected == CLOVER_MANAGED_PROVIDER:
         return bool(resolve_managed_tool_gateway("fal-queue"))
     if selected is not None:
         return fal_key_is_configured()
@@ -1437,13 +1437,13 @@ def _build_no_backend_setup_message() -> str:
     """
     lines = ["Image generation is unavailable in this environment.", ""]
     lines.append("Missing requirements:")
-    if managed_nous_tools_enabled():
+    if managed_clover_tools_enabled():
         lines.append(
             "  - FAL_KEY is not set and the managed FAL gateway is unreachable"
         )
     else:
         lines.append("  - FAL_KEY environment variable is not set")
-        gateway_message = nous_tool_gateway_unavailable_message(
+        gateway_message = clover_tool_gateway_unavailable_message(
             "managed FAL image generation",
         )
         if gateway_message:
@@ -1454,7 +1454,7 @@ def _build_no_backend_setup_message() -> str:
         "  1. Get a free API key at https://fal.ai and set "
         "FAL_KEY=<your-key> (then restart the session)"
     )
-    if managed_nous_tools_enabled():
+    if managed_clover_tools_enabled():
         lines.append(
             "  2. Sign in to a Clover account that has the managed FAL "
             "gateway enabled (`clover setup`)"
@@ -1481,7 +1481,7 @@ def check_image_generation_requirements() -> bool:
         pass
 
     configured = _read_configured_image_provider()
-    if not configured or configured in ("fal", NOUS_MANAGED_PROVIDER):
+    if not configured or configured in ("fal", CLOVER_MANAGED_PROVIDER):
         return False
 
     # Probe only the explicitly selected plugin. Merely possessing a cloud
@@ -1679,7 +1679,7 @@ def _dispatch_to_plugin_provider(
     ignore it via their ``**kwargs`` (the ABC contract).
     """
     configured = _read_configured_image_provider()
-    if not configured or configured in ("fal", NOUS_MANAGED_PROVIDER):
+    if not configured or configured in ("fal", CLOVER_MANAGED_PROVIDER):
         # Unset/explicit FAL keeps the legacy FAL path; "clover" (managed
         # Clover Subscription selection) also runs the legacy pipeline, which
         # routes through the managed fal-queue gateway.
@@ -1844,7 +1844,7 @@ def _maybe_route_managed_krea(
     # picker choice dispatches normally. Interception is permitted only on
     # never-configured installs or under the managed selection.
     configured_provider = _read_configured_image_provider()
-    if configured_provider is not None and configured_provider != NOUS_MANAGED_PROVIDER:
+    if configured_provider is not None and configured_provider != CLOVER_MANAGED_PROVIDER:
         return None
 
     normalized = _normalize_krea_model(_read_configured_image_model())

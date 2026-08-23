@@ -540,19 +540,19 @@ def _resolve_managed_fal_video_gateway():
     """
     from tools.managed_tool_gateway import resolve_managed_tool_gateway
     from tools.tool_backend_helpers import (
-        NOUS_MANAGED_PROVIDER,
+        CLOVER_MANAGED_PROVIDER,
         fal_key_is_configured,
         read_selection,
         selection_error,
     )
 
     selected = read_selection("video_gen")
-    if selected == NOUS_MANAGED_PROVIDER:
+    if selected == CLOVER_MANAGED_PROVIDER:
         gateway = resolve_managed_tool_gateway("fal-queue")
         if gateway is None:
             raise ValueError(selection_error(
                 "video_gen",
-                NOUS_MANAGED_PROVIDER,
+                CLOVER_MANAGED_PROVIDER,
                 "the Clover Tool Gateway is not available (not entitled or "
                 "unreachable)",
             ))
@@ -578,7 +578,7 @@ def _get_managed_fal_video_client(managed_gateway):
 
     client_config = (
         managed_gateway.gateway_origin.rstrip("/"),
-        managed_gateway.nous_user_token,
+        managed_gateway.clover_user_token,
     )
     with _managed_fal_video_client_lock:
         if _managed_fal_video_client is not None and _managed_fal_video_client_config == client_config:
@@ -587,7 +587,7 @@ def _get_managed_fal_video_client(managed_gateway):
         _load_fal_client()
         _managed_fal_video_client = _ManagedFalSyncClient(
             _fal_client,
-            key=managed_gateway.nous_user_token,
+            key=managed_gateway.clover_user_token,
             queue_run_origin=managed_gateway.gateway_origin,
         )
         _managed_fal_video_client_config = client_config
@@ -637,13 +637,13 @@ def _check_fal_video_available() -> bool:
     """
     from tools.managed_tool_gateway import resolve_managed_tool_gateway
     from tools.tool_backend_helpers import (
-        NOUS_MANAGED_PROVIDER,
+        CLOVER_MANAGED_PROVIDER,
         fal_key_is_configured,
         read_selection,
     )
 
     selected = read_selection("video_gen")
-    if selected == NOUS_MANAGED_PROVIDER:
+    if selected == CLOVER_MANAGED_PROVIDER:
         return resolve_managed_tool_gateway("fal-queue") is not None
     if selected is not None:
         return fal_key_is_configured()
@@ -830,7 +830,7 @@ class FALVideoGenProvider(VideoGenProvider):
                 error=(
                     "No FAL backend available. Either set FAL_KEY "
                     "(run `clover tools` → Video Generation → FAL to configure) "
-                    "or sign in to Nous (`clover setup`) for managed gateway access."
+                    "or sign in to Clover (`clover setup`) for managed gateway access."
                 ),
                 error_type="auth_required",
                 provider="fal",

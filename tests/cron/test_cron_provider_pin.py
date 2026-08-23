@@ -2,7 +2,7 @@
 
 Background: an UNPINNED cron job follows the global default provider. If that
 global state is changed (e.g. a temporary switch to a paid provider like
-nous/claude-fable-5), the job would silently inherit it on its next tick and
+clover/claude-fable-5), the job would silently inherit it on its next tick and
 spend real money — the $7.73 incident.
 
 The fix has two halves:

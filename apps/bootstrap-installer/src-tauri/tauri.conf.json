@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Clover",
   "version": "0.0.1",
-  "identifier": "com.clovercognition.clover.setup",
+  "identifier": "com.cloverc1.clover.setup",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:5175",

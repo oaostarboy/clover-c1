@@ -2,7 +2,7 @@
 name: bioinformatics
 description: Gateway to 400+ genomics and computational biology skills.
 version: 1.0.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 platforms: [linux, macos]
 metadata:

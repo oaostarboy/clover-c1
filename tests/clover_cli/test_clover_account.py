@@ -10,12 +10,12 @@ from typing import Any
 import pytest
 
 from clover_cli.clover_account import (
-    NousPaidServiceAccessInfo,
+    CloverPaidServiceAccessInfo,
     CloverPortalAccountInfo,
-    format_nous_portal_entitlement_message,
-    get_nous_portal_account_info,
-    nous_portal_topup_url,
-    reset_nous_portal_account_info_cache,
+    format_clover_portal_entitlement_message,
+    get_clover_portal_account_info,
+    clover_portal_topup_url,
+    reset_clover_portal_account_info_cache,
 )
 
 
@@ -89,9 +89,9 @@ def _account_payload(
 
 @pytest.fixture(autouse=True)
 def _reset_cache():
-    reset_nous_portal_account_info_cache()
+    reset_clover_portal_account_info_cache()
     yield
-    reset_nous_portal_account_info_cache()
+    reset_clover_portal_account_info_cache()
 
 
 
@@ -156,10 +156,10 @@ def _reset_cache():
 def test_fresh_account_payload_normalization(monkeypatch, payload, expected_paid):
     token = _jwt({"sub": "user_123", "org_id": "org_123", "exp": int(time.time()) + 900})
     monkeypatch.setattr("clover_cli.auth.get_provider_auth_state", lambda provider: _state(token))
-    monkeypatch.setattr("clover_cli.auth.resolve_nous_access_token", lambda: "fresh-token")
-    monkeypatch.setattr("clover_cli.clover_account._fetch_nous_account_info", lambda *a, **kw: payload)
+    monkeypatch.setattr("clover_cli.auth.resolve_clover_access_token", lambda: "fresh-token")
+    monkeypatch.setattr("clover_cli.clover_account._fetch_clover_account_info", lambda *a, **kw: payload)
 
-    info = get_nous_portal_account_info(force_fresh=True)
+    info = get_clover_portal_account_info(force_fresh=True)
 
     assert isinstance(info, CloverPortalAccountInfo)
     assert info.source == "account_api"
@@ -176,7 +176,7 @@ def test_no_oauth_token_reports_inference_key_present(monkeypatch):
     monkeypatch.setattr("clover_cli.auth.get_provider_auth_state", lambda provider: {})
 
     class _Entry:
-        label = "manual-nous"
+        label = "manual-clover"
         access_token = ""
         agent_key = "opaque-runtime-key"
         agent_key_expires_at = "2099-01-01T00:00:00+00:00"
@@ -202,12 +202,12 @@ def test_no_oauth_token_reports_inference_key_present(monkeypatch):
 
     monkeypatch.setattr("agent.credential_pool.load_pool", lambda provider: _Pool())
 
-    info = get_nous_portal_account_info()
+    info = get_clover_portal_account_info()
 
     assert info.logged_in is False
     assert info.source == "inference_key"
     assert info.inference_credential_present is True
-    assert info.credential_source == "pool:manual-nous"
+    assert info.credential_source == "pool:manual-clover"
     assert info.paid_service_access is None
 
 
@@ -227,7 +227,7 @@ def test_pool_oauth_entry_force_fresh_uses_account_api(monkeypatch):
         purchased_credits=3,
     )
     monkeypatch.setattr("clover_cli.auth.get_provider_auth_state", lambda provider: {})
-    monkeypatch.setattr("clover_cli.clover_account._fetch_nous_account_info", lambda *a, **kw: payload)
+    monkeypatch.setattr("clover_cli.clover_account._fetch_clover_account_info", lambda *a, **kw: payload)
 
     class _Entry:
         label = "dashboard device_code"
@@ -259,7 +259,7 @@ def test_pool_oauth_entry_force_fresh_uses_account_api(monkeypatch):
 
     monkeypatch.setattr("agent.credential_pool.load_pool", lambda provider: _Pool())
 
-    info = get_nous_portal_account_info(force_fresh=True)
+    info = get_clover_portal_account_info(force_fresh=True)
 
     assert info.logged_in is True
     assert info.source == "account_api"
@@ -286,10 +286,10 @@ def test_member_spend_cap_exceeded_message(monkeypatch):
     )
     token = _jwt({"sub": "user_123", "org_id": "org_123", "exp": int(time.time()) + 900})
     monkeypatch.setattr("clover_cli.auth.get_provider_auth_state", lambda provider: _state(token))
-    monkeypatch.setattr("clover_cli.auth.resolve_nous_access_token", lambda: "fresh-token")
-    monkeypatch.setattr("clover_cli.clover_account._fetch_nous_account_info", lambda *a, **kw: payload)
+    monkeypatch.setattr("clover_cli.auth.resolve_clover_access_token", lambda: "fresh-token")
+    monkeypatch.setattr("clover_cli.clover_account._fetch_clover_account_info", lambda *a, **kw: payload)
 
-    info = get_nous_portal_account_info(force_fresh=True)
+    info = get_clover_portal_account_info(force_fresh=True)
 
     assert info.paid_service_access is False
     assert info.paid_service_access_info is not None
@@ -297,7 +297,7 @@ def test_member_spend_cap_exceeded_message(monkeypatch):
     assert info.paid_service_access_info.member_spend_cap_usd == 500.0
     assert info.paid_service_access_info.member_spend_usd == 520.51
 
-    msg = format_nous_portal_entitlement_message(info, capability="Clover model access")
+    msg = format_clover_portal_entitlement_message(info, capability="Clover model access")
     assert msg is not None
     # Must mention spend cap, not "no active subscription or usable credits"
     assert "spend cap" in msg
@@ -321,11 +321,11 @@ def test_member_spend_cap_exceeded_without_amounts(monkeypatch):
     )
     token = _jwt({"sub": "user_123", "org_id": "org_123", "exp": int(time.time()) + 900})
     monkeypatch.setattr("clover_cli.auth.get_provider_auth_state", lambda provider: _state(token))
-    monkeypatch.setattr("clover_cli.auth.resolve_nous_access_token", lambda: "fresh-token")
-    monkeypatch.setattr("clover_cli.clover_account._fetch_nous_account_info", lambda *a, **kw: payload)
+    monkeypatch.setattr("clover_cli.auth.resolve_clover_access_token", lambda: "fresh-token")
+    monkeypatch.setattr("clover_cli.clover_account._fetch_clover_account_info", lambda *a, **kw: payload)
 
-    info = get_nous_portal_account_info(force_fresh=True)
-    msg = format_nous_portal_entitlement_message(info, capability="Clover model access")
+    info = get_clover_portal_account_info(force_fresh=True)
+    msg = format_clover_portal_entitlement_message(info, capability="Clover model access")
     assert msg is not None
     assert "spend cap" in msg
     assert "no active subscription" not in msg

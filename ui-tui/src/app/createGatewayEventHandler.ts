@@ -1458,7 +1458,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
               confirmLabel: copy.confirmLabel,
               detail: copy.detail,
               onConfirm: () => {
-                if (block.is_nous) {
+                if (block.is_clover_portal) {
                   submitRef.current('/topup')
                 } else if (block.billing_url) {
                   openExternalUrl(block.billing_url)

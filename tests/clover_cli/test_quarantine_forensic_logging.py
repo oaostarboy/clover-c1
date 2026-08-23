@@ -6,19 +6,19 @@ Historically this was completely silent — no WARNING+ record at the terminal
 rejection, only a downstream "No access token found" warning once the pool was
 already empty. The Fly log drain is WARNING-only, so nothing about the terminal
 death reached centralized logging. These tests lock in that
-``_quarantine_nous_oauth_state`` now emits a WARNING+ forensic record, and — the
+``_quarantine_clover_oauth_state`` now emits a WARNING+ forensic record, and — the
 load-bearing assertion — that the raw refresh token never appears in that output.
 """
 
 import hashlib
 import logging
 
-from clover_cli.auth import AuthError, _quarantine_nous_oauth_state
+from clover_cli.auth import AuthError, _quarantine_clover_oauth_state
 
 
 # A distinctive, obviously-fake refresh token so the redaction assertion is
 # unambiguous if it ever leaks.
-_FAKE_RT = "nous_rt_LEAK_CANARY_do_not_log_raw_0123456789abcdef"
+_FAKE_RT = "clover_rt_LEAK_CANARY_do_not_log_raw_0123456789abcdef"
 _EXPECTED_FP = hashlib.sha256(_FAKE_RT.encode("utf-8")).hexdigest()[:12]
 
 
@@ -26,9 +26,9 @@ def _make_state(**overrides):
     state = {
         "portal_base_url": "https://portal.example.com",
         "client_id": "test-client-id",
-        "access_token": "nous_at_SECRET_access_token_material",
+        "access_token": "clover_at_SECRET_access_token_material",
         "refresh_token": _FAKE_RT,
-        "agent_key": "nous_agent_key_SECRET_material",
+        "agent_key": "clover_agent_key_SECRET_material",
         "agent_key_id": "ak-12345",
         "expires_at": "2020-01-01T00:00:00+00:00",  # in the past
         "obtained_at": "2019-12-31T00:00:00+00:00",
@@ -49,7 +49,7 @@ def _error():
 def test_quarantine_emits_warning(caplog):
     state = _make_state()
     with caplog.at_level(logging.WARNING, logger="clover_cli.auth"):
-        _quarantine_nous_oauth_state(state, _error(), reason="unit_test_quarantine")
+        _quarantine_clover_oauth_state(state, _error(), reason="unit_test_quarantine")
 
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert warnings, "expected at least one WARNING+ record from quarantine"
@@ -62,12 +62,12 @@ def test_raw_refresh_token_never_logged(caplog):
     """Load-bearing redaction-safety test: the raw secret must never appear."""
     state = _make_state()
     with caplog.at_level(logging.DEBUG, logger="clover_cli.auth"):
-        _quarantine_nous_oauth_state(state, _error(), reason="unit_test_quarantine")
+        _quarantine_clover_oauth_state(state, _error(), reason="unit_test_quarantine")
 
     text = caplog.text
     assert _FAKE_RT not in text, "RAW refresh token leaked into log output!"
     # Belt-and-suspenders: the access token and agent key must not leak either.
-    assert "nous_at_SECRET_access_token_material" not in text
-    assert "nous_agent_key_SECRET_material" not in text
+    assert "clover_at_SECRET_access_token_material" not in text
+    assert "clover_agent_key_SECRET_material" not in text
 
 

@@ -22,8 +22,8 @@ import copy
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from clover_cli.nous_subscription import get_nous_subscription_features
-from tools.tool_backend_helpers import managed_nous_tools_enabled
+from clover_cli.clover_subscription import get_clover_subscription_features
+from tools.tool_backend_helpers import managed_clover_tools_enabled
 from clover_constants import get_optional_skills_dir
 
 logger = logging.getLogger(__name__)
@@ -422,7 +422,7 @@ def _print_setup_summary(config: dict, clover_home):
     print_header("Tool Availability Summary")
 
     tool_status = []
-    subscription_features = get_nous_subscription_features(config)
+    subscription_features = get_clover_subscription_features(config)
 
     # Vision — use the same runtime resolver as the actual vision tools
     try:
@@ -439,7 +439,7 @@ def _print_setup_summary(config: dict, clover_home):
 
 
     # Web tools (Exa, Parallel, Firecrawl, or Tavily)
-    if subscription_features.web.managed_by_nous:
+    if subscription_features.web.managed_by_clover:
         tool_status.append(("Web Search & Extract (Clover subscription)", True, None))
     elif subscription_features.web.available:
         label = "Web Search & Extract"
@@ -451,7 +451,7 @@ def _print_setup_summary(config: dict, clover_home):
 
     # Browser tools (local Chromium, Camofox, Browserbase, Browser Use, or Firecrawl)
     browser_provider = subscription_features.browser.current_provider
-    if subscription_features.browser.managed_by_nous:
+    if subscription_features.browser.managed_by_clover:
         tool_status.append(("Browser Automation (Clover Browser Use)", True, None))
     elif subscription_features.browser.available:
         label = "Browser Automation"
@@ -481,7 +481,7 @@ def _print_setup_summary(config: dict, clover_home):
 
     # Image generation — FAL (direct or via Clover), or any plugin-registered
     # provider (OpenAI, etc.)
-    if subscription_features.image_gen.managed_by_nous:
+    if subscription_features.image_gen.managed_by_clover:
         tool_status.append(("Image Generation (Clover subscription)", True, None))
     elif subscription_features.image_gen.available:
         tool_status.append(("Image Generation", True, None))
@@ -513,7 +513,7 @@ def _print_setup_summary(config: dict, clover_home):
     # Video generation — opt-in via `clover tools` → Video Generation.
     # Only show the row when a plugin reports available so we don't badger
     # users who don't care about video gen with a "missing" status line.
-    if subscription_features.video_gen.managed_by_nous:
+    if subscription_features.video_gen.managed_by_clover:
         tool_status.append(("Video Generation (FAL via Clover subscription)", True, None))
     else:
         try:
@@ -535,7 +535,7 @@ def _print_setup_summary(config: dict, clover_home):
 
     # TTS — show configured provider
     tts_provider = cfg_get(config, "tts", "provider", default="edge")
-    if subscription_features.tts.managed_by_nous:
+    if subscription_features.tts.managed_by_clover:
         tool_status.append(("Text-to-Speech (OpenAI via Clover subscription)", True, None))
     elif tts_provider == "elevenlabs" and get_env_value("ELEVENLABS_API_KEY"):
         tool_status.append(("Text-to-Speech (ElevenLabs)", True, None))
@@ -573,7 +573,7 @@ def _print_setup_summary(config: dict, clover_home):
     # STT — show configured provider
     stt_provider = cfg_get(config, "stt", "provider", default="local") or "local"
     _stt_feature = subscription_features.features.get("stt")
-    if _stt_feature is not None and _stt_feature.managed_by_nous:
+    if _stt_feature is not None and _stt_feature.managed_by_clover:
         tool_status.append(("Speech-to-Text (OpenAI via Clover subscription)", True, None))
     elif stt_provider == "openai" and (
         get_env_value("VOICE_TOOLS_OPENAI_KEY") or get_env_value("OPENAI_API_KEY")
@@ -599,14 +599,14 @@ def _print_setup_summary(config: dict, clover_home):
                 ("Speech-to-Text (Local Whisper — not installed)", False, "run 'clover tools' → Speech-to-Text")
             )
 
-    if subscription_features.modal.managed_by_nous:
+    if subscription_features.modal.managed_by_clover:
         tool_status.append(("Modal Execution (Clover subscription)", True, None))
     elif cfg_get(config, "terminal", "backend") == "modal":
         if subscription_features.modal.direct_override:
             tool_status.append(("Modal Execution (direct Modal)", True, None))
         else:
             tool_status.append(("Modal Execution", False, "run 'clover setup terminal'"))
-    elif managed_nous_tools_enabled() and subscription_features.nous_auth_present:
+    elif managed_clover_tools_enabled() and subscription_features.clover_auth_present:
         tool_status.append(("Modal Execution (optional via Clover subscription)", True, None))
 
     # Home Assistant
@@ -921,7 +921,7 @@ def setup_model_provider(config: dict, *, quick: bool = False):
     # `clover setup tts`. This keeps both quick and full setup thin.
 
 
-    # Tool Gateway prompt is already shown by _model_flow_nous() above.
+    # Tool Gateway prompt is already shown by _model_flow_clover() above.
     save_config(config)
 
 
@@ -1081,7 +1081,7 @@ def _setup_tts_provider(config: dict):
     """Interactive TTS provider selection with install flow for NeuTTS."""
     tts_config = config.get("tts", {})
     current_provider = tts_config.get("provider", "edge")
-    subscription_features = get_nous_subscription_features(config)
+    subscription_features = get_clover_subscription_features(config)
 
     provider_labels = {
         "edge": "Edge TTS",
@@ -1103,9 +1103,9 @@ def _setup_tts_provider(config: dict):
 
     choices = []
     providers = []
-    if managed_nous_tools_enabled() and subscription_features.nous_auth_present:
+    if managed_clover_tools_enabled() and subscription_features.clover_auth_present:
         choices.append("Clover Subscription (managed OpenAI TTS, billed to your subscription)")
-        providers.append("nous-openai")
+        providers.append("clover-openai")
     choices.extend(
         [
             "Edge TTS (free, cloud-based, no setup needed)",
@@ -1128,8 +1128,8 @@ def _setup_tts_provider(config: dict):
         return
 
     selected = providers[idx]
-    selected_via_nous = selected == "nous-openai"
-    if selected == "nous-openai":
+    selected_via_clover = selected == "clover-openai"
+    if selected == "clover-openai":
         selected = "openai"
         print_info("OpenAI TTS will use the managed Clover gateway and bill to your subscription.")
         if get_env_value("VOICE_TOOLS_OPENAI_KEY") or get_env_value("OPENAI_API_KEY"):
@@ -1172,7 +1172,7 @@ def _setup_tts_provider(config: dict):
                 print_warning("No API key provided. Falling back to Edge TTS.")
                 selected = "edge"
 
-    elif selected == "openai" and not selected_via_nous:
+    elif selected == "openai" and not selected_via_clover:
         existing = get_env_value("VOICE_TOOLS_OPENAI_KEY") or get_env_value("OPENAI_API_KEY")
         if not existing:
             print()
@@ -1442,9 +1442,9 @@ def setup_terminal_backend(config: dict):
         from tools.tool_backend_helpers import normalize_modal_mode
 
         managed_modal_available = bool(
-            managed_nous_tools_enabled()
+            managed_clover_tools_enabled()
             and
-            get_nous_subscription_features(config).nous_auth_present
+            get_clover_subscription_features(config).clover_auth_present
             and is_managed_tool_gateway_ready("modal")
         )
         modal_mode = normalize_modal_mode(cfg_get(config, "terminal", "modal_mode"))
@@ -2770,7 +2770,7 @@ def _run_portal_one_shot(config: dict) -> None:
     ``clover setup`` and hunt for the quick-setup option.
 
     The login + model selection + provider switch + Tool Gateway opt-in are all
-    delegated to ``_model_flow_nous`` — the exact same flow quick setup uses
+    delegated to ``_model_flow_clover`` — the exact same flow quick setup uses
     (``_run_first_time_quick_setup``) and the same one ``clover model`` runs
     when you pick Clover. Routing through it (instead of hand-rolling the auth +
     provider write here) means ``clover portal`` always offers a model picker,
@@ -2800,18 +2800,18 @@ def _run_portal_one_shot(config: dict) -> None:
     print_info("  Sign up: ")
     print()
 
-    # _model_flow_nous handles BOTH the logged-out path (device-code OAuth,
+    # _model_flow_clover handles BOTH the logged-out path (device-code OAuth,
     # which selects a model internally) and the already-logged-in path (curated
     # Clover model picker), then offers the Tool Gateway opt-in and sets
-    # provider=nous via the login/model save. This is the same routine quick
+    # provider=clover via the login/model save. This is the same routine quick
     # setup calls, so `clover portal` == quick setup's Clover step.
     try:
-        from clover_cli.main import _model_flow_nous
+        from clover_cli.main import _model_flow_clover
 
-        _model_flow_nous(config)
+        _model_flow_clover(config)
     except (KeyboardInterrupt, EOFError, SystemExit):
-        # _login_nous raises SystemExit(130)/(1) on cancel/failure; the
-        # logged-out path inside _model_flow_nous catches it, but the
+        # _login_clover raises SystemExit(130)/(1) on cancel/failure; the
+        # logged-out path inside _model_flow_clover catches it, but the
         # expired-session re-login path only catches Exception, so a
         # SystemExit there would otherwise escape and kill the whole CLI.
         # Treat all of these as a graceful cancel/abort for the portal flow.
@@ -2820,13 +2820,13 @@ def _run_portal_one_shot(config: dict) -> None:
         print_info("  You can retry later with `clover portal`.")
         return
     except Exception as exc:
-        logger.debug("_model_flow_nous error during `clover portal`: %s", exc)
+        logger.debug("_model_flow_clover error during `clover portal`: %s", exc)
         print()
         print_error(f"  Clover Portal setup encountered an error: {exc}")
         print_info("  You can retry later with `clover portal`.")
         return
 
-    # Re-sync the in-memory config from disk — _model_flow_nous (and the
+    # Re-sync the in-memory config from disk — _model_flow_clover (and the
     # underlying login/model save) write via their own load/save cycle, so any
     # later save_config(config) by a caller must not clobber those values.
     try:
@@ -3096,7 +3096,7 @@ def _run_first_time_quick_setup(config: dict, clover_home, is_existing: bool):
     from clover_cli.config import load_config
 
     # Step 1: Clover Portal — OAuth login + model selection.
-    # _model_flow_nous() handles both the logged-out path (device-code OAuth,
+    # _model_flow_clover() handles both the logged-out path (device-code OAuth,
     # which selects a model internally) and the already-logged-in path (curated
     # Clover model picker). Provider is set to "clover" by the login/model save.
     print()
@@ -3106,17 +3106,17 @@ def _run_first_time_quick_setup(config: dict, clover_home, is_existing: bool):
     print_info("Sign up: ")
     print()
     try:
-        from clover_cli.main import _model_flow_nous
-        _model_flow_nous(config)
+        from clover_cli.main import _model_flow_clover
+        _model_flow_clover(config)
     except (KeyboardInterrupt, EOFError):
         print()
         print_info("Clover Portal setup cancelled.")
     except Exception as exc:
-        logger.debug("_model_flow_nous error during quick setup: %s", exc)
+        logger.debug("_model_flow_clover error during quick setup: %s", exc)
         print_warning(f"Clover Portal setup encountered an error: {exc}")
         print_info("You can try again later with: clover model")
 
-    # Re-sync the wizard's config dict from disk — _model_flow_nous (and the
+    # Re-sync the wizard's config dict from disk — _model_flow_clover (and the
     # underlying login/model save) write via their own load/save cycle, and the
     # wizard's later save_config(config) must not clobber those values (#4172).
     _refreshed = load_config()

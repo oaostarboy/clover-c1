@@ -237,12 +237,12 @@ def test_launch_tui_exports_model_provider_and_toolsets(monkeypatch, main_mod):
 
     with pytest.raises(SystemExit):
         main_mod._launch_tui(
-            model="nous/clover-test", provider="clover", toolsets="web, terminal"
+            model="clover/clover-test", provider="clover", toolsets="web, terminal"
         )
 
     env = captured["env"]
-    assert env["CLOVER_MODEL"] == "nous/clover-test"
-    assert env["CLOVER_INFERENCE_MODEL"] == "nous/clover-test"
+    assert env["CLOVER_MODEL"] == "clover/clover-test"
+    assert env["CLOVER_INFERENCE_MODEL"] == "clover/clover-test"
     assert env["CLOVER_TUI_PROVIDER"] == "clover"
     assert env["CLOVER_INFERENCE_PROVIDER"] == "clover"
     assert env["CLOVER_TUI_TOOLSETS"] == "web,terminal"

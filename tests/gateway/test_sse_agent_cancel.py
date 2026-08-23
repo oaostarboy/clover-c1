@@ -396,7 +396,7 @@ class TestSSEAgentFailureFinishReason:
 
 
 # ---------------------------------------------------------------------------
-# Sweeper review fix (teknium1, 2026-07-30): cover the cross-thread
+# Sweeper review fix (maintainer, 2026-07-30): cover the cross-thread
 # ``put_threadsafe`` boundary that #72610 introduces via ``ThreadSafeAsyncQueue``.
 # ``run_conversation`` runs in a worker thread (``loop.run_in_executor``),
 # so its ``_on_delta`` / ``_on_tool_*`` callbacks must be able to push into

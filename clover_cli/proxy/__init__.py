@@ -10,7 +10,7 @@ upstream credential to the forwarded request. The credential is refreshed
 automatically when it approaches expiry.
 
 First-class adapter:
-  - ``nous`` — Clover Portal ()
+  - ``clover`` — Clover Portal ()
 
 Future adapters can plug in by implementing ``UpstreamAdapter``.
 """

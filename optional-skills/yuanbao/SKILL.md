@@ -2,7 +2,7 @@
 name: yuanbao
 description: "Yuanbao (元宝) groups: @mention users, query info/members."
 version: 1.0.0
-author: Teknium (teknium1), Clover Cognition
+author: the maintainer (maintainer), Clover Cognition
 license: MIT
 platforms: [linux, macos, windows]
 metadata:

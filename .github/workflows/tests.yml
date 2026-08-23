@@ -123,7 +123,7 @@ jobs:
           # Ensure tests don't accidentally call real APIs
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
-          NOUS_API_KEY: ""
+          CLOVER_API_KEY: ""
 
   e2e:
     runs-on: ubuntu-latest
@@ -193,4 +193,4 @@ jobs:
         env:
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
-          NOUS_API_KEY: ""
+          CLOVER_API_KEY: ""

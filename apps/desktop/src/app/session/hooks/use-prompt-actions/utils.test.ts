@@ -516,7 +516,7 @@ describe('renderRpcResult', () => {
 
   describe('session.status', () => {
     it('passes through the multi-line plain-text output verbatim', () => {
-      const output = 'Clover TUI Status\n\nSession ID: s-1\nModel: nous-clover-3 (unknown)'
+      const output = 'Clover TUI Status\n\nSession ID: s-1\nModel: clover-clover-3 (unknown)'
       expect(renderRpcResult({ output }, 'status')).toBe(output)
     })
   })

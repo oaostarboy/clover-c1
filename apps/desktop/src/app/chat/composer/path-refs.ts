@@ -14,7 +14,7 @@ import type { KeyboardEvent } from 'react'
 import { quoteRefValue, REF_RE, refChipElement, replaceBeforeCaret } from './rich-editor'
 import { textBeforeCaret } from './text-utils'
 
-// A `/` is required, exactly like URL_RE requires an explicit scheme: `@teknium1`
+// A `/` is required, exactly like URL_RE requires an explicit scheme: `@maintainer`
 // and `@diff` are a handle and a simple ref, not paths, and guessing wrong turns
 // someone's name into a file reference. A separator is the cheap signal that the
 // user meant a path. The token also can't start with a `:` kind prefix — that is

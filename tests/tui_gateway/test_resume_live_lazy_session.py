@@ -4,7 +4,7 @@ session.create intentionally writes no state.db row until the first prompt.
 Bot Mode creates every fresh non-default bot's canonical Bot Chat exactly
 that way (profile-scoped, lazy, hidden), then the open/send path resumes it
 by stored key or pending title — which hard-404'd "session not found" for
-every bot that had never spoken (community + Teknium repro, Aug 2026).
+every bot that had never spoken (community + the maintainer repro, Aug 2026).
 
 Contract:
 - resume by stored session_key reattaches to the live in-memory record;

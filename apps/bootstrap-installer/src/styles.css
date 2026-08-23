@@ -58,12 +58,12 @@
  * The imported desktop :root.dark only flips the per-mode mix knobs + neutral
  * chrome; the seed COLORS are normally painted at runtime by the desktop's
  * applyTheme(). The installer has no theme runtime, so we mirror them here from
- * apps/desktop/src/themes/presets.ts (nousTheme.darkColors). The whole
+ * apps/desktop/src/themes/presets.ts (cloverTheme.darkColors). The whole
  * --ui-* / --dt-* chain in the imported stylesheet derives from these seeds, so
  * flipping them is enough — we only additionally override the few tokens
  * applyTheme() sets inline that DON'T derive from a seed (primary-foreground on
  * the cream accent, destructive). Unlayered on purpose so it wins over the
- * imported @layer base :root light seeds. Keep in sync with nousTheme.darkColors
+ * imported @layer base :root light seeds. Keep in sync with cloverTheme.darkColors
  * if that palette is retuned.
  */
 :root.dark {

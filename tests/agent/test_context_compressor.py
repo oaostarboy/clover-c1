@@ -799,7 +799,7 @@ class TestAuthFailureAborts:
     session unchanged) instead of rotating into a degraded child session
     with a placeholder summary — regardless of abort_on_summary_failure.
 
-    Real incident: a nous token pointed at a stale staging inference URL
+    Real incident: a clover token pointed at a stale staging inference URL
     401'd on every compression attempt, and because abort_on_summary_failure
     defaults False the session rotated anyway (messages N->N), stranding the
     user on a fresh-but-broken session that kept failing the same way.
@@ -3293,7 +3293,7 @@ class TestPreLlmFeasibilityCheck:
         assert len(result) < len(msgs)
 
     def test_boundary_accounting_skip_does_not_feed_fallback_streak(self, compressor):
-        """The interaction teknium's sweeper review flagged on #68334: the
+        """The interaction maintainer's sweeper review flagged on #68334: the
         skip path sets _last_summary_fallback_used, which the boundary
         wrapper (conversation_compression.py) records via
         record_completed_compaction(used_fallback=True) — incrementing

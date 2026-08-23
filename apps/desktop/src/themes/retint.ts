@@ -2,7 +2,7 @@
  * Accent retinting — re-seed a theme's accent family from one color.
  *
  * A palette's accent is not one color, it's a family: the seed plus the soft
- * surfaces mixed from it. In `nous` that's 7 slots per mode —
+ * surfaces mixed from it. In `clover` that's 7 slots per mode —
  * `primary`/`ring`/`midground`/`composerRing` carry the accent itself, and
  * `accent`/`secondary`/`userBubble` are mixes of it toward the background. The
  * carrying slots need not be the same hex: a theme may shade them (see
@@ -132,7 +132,7 @@ function seedFor(colors: DesktopThemeColors, seed: string): string {
  * Carry a light-mode seed across to dark by the theme's OWN lightness offset.
  *
  * A theme that ships both palettes has already answered "how much lighter does
- * this accent get in dark mode" — nous's blues are OKLCH L 0.528 → 0.638 at the
+ * this accent get in dark mode" — clover's blues are OKLCH L 0.528 → 0.638 at the
  * same hue. Reapplying that delta means a picked color lands in dark exactly
  * where the author would have put it, and it makes the round trip exact:
  * retinting with the theme's own accent reproduces both palettes byte-for-byte.

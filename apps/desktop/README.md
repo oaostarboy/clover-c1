@@ -213,7 +213,7 @@ rm "$HOME/.clover/clover-c1/.clover-bootstrap-complete"
 # Rebuild a broken Python venv
 rm -rf "$HOME/.clover/clover-c1/venv"
 # Reset a stuck macOS microphone prompt (macOS only)
-tccutil reset Microphone com.clovercognition.clover
+tccutil reset Microphone com.cloverc1.clover
 ```
 
 **Windows (PowerShell):**

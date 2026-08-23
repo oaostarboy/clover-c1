@@ -8,7 +8,7 @@ that the setup wizard correctly syncs config from disk after the call.
 from __future__ import annotations
 
 from clover_cli.config import load_config, save_config, save_env_value
-from clover_cli.nous_subscription import NousFeatureState, NousSubscriptionFeatures
+from clover_cli.clover_subscription import CloverFeatureState, CloverSubscriptionFeatures
 from clover_cli.setup import _print_setup_summary, setup_model_provider
 
 
@@ -136,7 +136,7 @@ def test_setup_summary_local_browser_unavailable_without_chromium(
     render as unavailable with an install hint — not a false 'available'.
 
     Unlike the mocked-feature tests above, this drives the real
-    ``get_nous_subscription_features`` so the surface stays aligned with the
+    ``get_clover_subscription_features`` so the surface stays aligned with the
     runtime gate in ``tools.browser_tool.check_browser_requirements``.
     """
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
@@ -151,9 +151,9 @@ def test_setup_summary_local_browser_unavailable_without_chromium(
     save_config(cfg)
 
     # Only stub the readiness probes; the feature resolver itself is real.
-    monkeypatch.setattr("clover_cli.nous_subscription._has_agent_browser", lambda: True)
+    monkeypatch.setattr("clover_cli.clover_subscription._has_agent_browser", lambda: True)
     monkeypatch.setattr(
-        "clover_cli.nous_subscription.get_nous_portal_account_info",
+        "clover_cli.clover_subscription.get_clover_portal_account_info",
         lambda *a, **k: None,
     )
     monkeypatch.setattr("tools.browser_tool._chromium_installed", lambda: False)

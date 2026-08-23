@@ -721,13 +721,13 @@ def init_agent(
         # AWS Bedrock — auto-detect from provider name or base URL
         # (bedrock-runtime.<region>.amazonaws.com).
         agent.api_mode = "bedrock_converse"
-    elif agent.provider in {"clover", "nous-portal", "clovercognition"}:
+    elif agent.provider in {"clover", "clover-portal", "cloverc1"}:
         # Portal is dual-wire: anthropic/* → Messages, everything else →
         # chat_completions. Callers that already pass api_mode win above;
         # this covers direct AIAgent construction without a resolved runtime.
-        from clover_cli.providers import nous_api_mode
+        from clover_cli.providers import clover_api_mode
 
-        agent.api_mode = nous_api_mode(agent.model)
+        agent.api_mode = clover_api_mode(agent.model)
     else:
         # Host-mandated wire check — LAST, so the elif chain's provider-slug
         # rewrites (e.g. api.anthropic.com → provider="anthropic", #63425)
@@ -1029,7 +1029,7 @@ def init_agent(
     agent._rate_limit_state: Optional["RateLimitState"] = None
 
     # Credits tracking (dev-only, L0 usage-aware-credits) — updated from
-    # x-nous-credits-* response headers after each API call.  Session-start
+    # x-clover-credits-* response headers after each API call.  Session-start
     # remaining is latched the first time a header is ever seen so we can
     # report cumulative micros spent.  Surfaced behind CLOVER_DEV_CREDITS.
     agent._credits_state = None

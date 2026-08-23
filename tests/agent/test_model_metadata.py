@@ -804,7 +804,7 @@ class TestFetchEndpointModelMetadata:
 # Clover Portal context-window resolution (provider="clover")
 # =========================================================================
 
-class TestNousPortalContextResolution:
+class TestCloverPortalContextResolution:
     """Clover Portal /v1/models is authoritative for what Clover infra enforces
     and may diverge from the OpenRouter catalog.
 
@@ -890,7 +890,7 @@ class TestNousPortalContextResolution:
     def test_stale_cache_is_bypassed_and_overwritten_by_portal(
         self, mock_or, mock_portal, tmp_path, monkeypatch
     ):
-        """Users upgrading from pre-fix builds have ``qwen3.6-plus@…nous… =
+        """Users upgrading from pre-fix builds have ``qwen3.6-plus@…clover… =
         1000000`` (OR-derived) sitting in their cache file.  Step 1 must
         NOT short-circuit on that entry — step 5b reconciles against the
         portal and overwrites the persistent value with 262144."""

@@ -17,7 +17,7 @@ _DEFAULT_MODAL_MODE = "auto"
 _VALID_MODAL_MODES = {"auto", "direct", "managed"}
 
 
-def managed_nous_tools_enabled(*, force_fresh: bool = False) -> bool:
+def managed_clover_tools_enabled(*, force_fresh: bool = False) -> bool:
     """Return True when the user is entitled to the Clover Tool Gateway.
 
     Entitlement is paid Clover Portal service access OR a live free tool pool
@@ -31,12 +31,12 @@ def managed_nous_tools_enabled(*, force_fresh: bool = False) -> bool:
     reflect a just-purchased subscription, credits, or pool grant immediately.
     """
     try:
-        from clover_cli.clover_account import get_nous_portal_account_info
+        from clover_cli.clover_account import get_clover_portal_account_info
 
         if force_fresh:
-            account_info = get_nous_portal_account_info(force_fresh=True)
+            account_info = get_clover_portal_account_info(force_fresh=True)
         else:
-            account_info = get_nous_portal_account_info()
+            account_info = get_clover_portal_account_info()
         if not account_info.logged_in:
             return False
         return account_info.tool_gateway_entitled
@@ -44,7 +44,7 @@ def managed_nous_tools_enabled(*, force_fresh: bool = False) -> bool:
         return False
 
 
-def nous_tool_gateway_unavailable_message(
+def clover_tool_gateway_unavailable_message(
     capability: str = "the Clover Tool Gateway",
     *,
     force_fresh: bool = False,
@@ -52,12 +52,12 @@ def nous_tool_gateway_unavailable_message(
     """Return account-aware guidance for an unavailable Clover Tool Gateway path."""
     try:
         from clover_cli.clover_account import (
-            format_nous_portal_entitlement_message,
-            get_nous_portal_account_info,
+            format_clover_portal_entitlement_message,
+            get_clover_portal_account_info,
         )
 
-        account_info = get_nous_portal_account_info(force_fresh=force_fresh)
-        message = format_nous_portal_entitlement_message(
+        account_info = get_clover_portal_account_info(force_fresh=force_fresh)
+        message = format_clover_portal_entitlement_message(
             account_info,
             capability=capability,
         )
@@ -119,7 +119,7 @@ def resolve_modal_backend_state(
     requested_mode = coerce_modal_mode(modal_mode)
     normalized_mode = normalize_modal_mode(modal_mode)
     if managed_enabled is None:
-        managed_enabled = managed_nous_tools_enabled()
+        managed_enabled = managed_clover_tools_enabled()
     managed_mode_blocked = (
         requested_mode == "managed" and not managed_enabled
     )
@@ -291,12 +291,12 @@ def prefers_gateway(config_section: str) -> bool:
 
 
 # The provider value the managed "Clover Subscription" picker rows write for
-# every category (image_gen.provider: nous, web.backend: nous,
-# browser.cloud_provider: nous, ...). Runtime dispatch is a plain switch on
+# every category (image_gen.provider: clover, web.backend: clover,
+# browser.cloud_provider: clover, ...). Runtime dispatch is a plain switch on
 # the stored string: "clover" → managed gateway client; any vendor name → that
 # vendor direct with the user's own credentials; no key ever written →
 # legacy credential autodetect.
-NOUS_MANAGED_PROVIDER = "clover"
+CLOVER_MANAGED_PROVIDER = "clover"
 
 # Per-capability keys that also count as "this category has been configured".
 _EXTRA_SELECTION_KEYS = {
@@ -359,7 +359,7 @@ def read_selection(section: str) -> str | None:
     # Legacy shim: a truthy use_gateway means the managed row was picked
     # (it was the only writer of use_gateway: true).
     if "use_gateway" in raw and is_truthy_value(raw.get("use_gateway"), default=False):
-        return NOUS_MANAGED_PROVIDER
+        return CLOVER_MANAGED_PROVIDER
 
     # NOTE on the legacy DEFAULT_CONFIG ``stt.provider: local`` seed: it never
     # reached the raw config.yaml (``save_config`` strips schema defaults),

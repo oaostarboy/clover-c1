@@ -187,7 +187,7 @@
   },
   "build": {
     "electronVersion": "40.10.2",
-    "appId": "com.clovercognition.clover",
+    "appId": "com.cloverc1.clover",
     "productName": "Clover",
     "executableName": "Clover",
     "protocols": [

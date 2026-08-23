@@ -6,14 +6,14 @@ import pytest
 
 import clover_cli.auth as auth
 from clover_cli.auth import (
-    NOUS_BILLING_MANAGE_SCOPE,
-    nous_token_has_billing_scope,
-    step_up_nous_billing_scope,
+    CLOVER_BILLING_MANAGE_SCOPE,
+    clover_token_has_billing_scope,
+    step_up_clover_billing_scope,
 )
 
 
 # ---------------------------------------------------------------------------
-# nous_token_has_billing_scope
+# clover_token_has_billing_scope
 # ---------------------------------------------------------------------------
 
 
@@ -22,7 +22,7 @@ from clover_cli.auth import (
 
 
 # ---------------------------------------------------------------------------
-# step_up_nous_billing_scope
+# step_up_clover_billing_scope
 # ---------------------------------------------------------------------------
 
 
@@ -33,8 +33,8 @@ def _stub_persist(monkeypatch):
     monkeypatch.setattr(auth, "_load_auth_store", lambda: {})
     monkeypatch.setattr(auth, "_save_provider_state", lambda *a, **kw: None)
     monkeypatch.setattr(auth, "_save_auth_store", lambda *a, **kw: "auth.json")
-    monkeypatch.setattr(auth, "_write_shared_nous_state", lambda *a, **kw: None)
-    monkeypatch.setattr(auth, "_sync_nous_pool_from_auth_store", lambda: None)
+    monkeypatch.setattr(auth, "_write_shared_clover_state", lambda *a, **kw: None)
+    monkeypatch.setattr(auth, "_sync_clover_pool_from_auth_store", lambda: None)
 
 
 class _NullCtx:
@@ -63,12 +63,12 @@ def test_step_up_requests_billing_scope_and_reuses_prior_urls(monkeypatch, _stub
         # Simulate the admin ticking the box → token comes back WITH the scope.
         return {"scope": "inference:invoke tool:invoke billing:manage", "access_token": "t"}
 
-    monkeypatch.setattr(auth, "_nous_device_code_login", _fake_login)
+    monkeypatch.setattr(auth, "_clover_device_code_login", _fake_login)
 
-    granted = step_up_nous_billing_scope()
+    granted = step_up_clover_billing_scope()
     assert granted is True
     # Requested scope must include billing:manage, preserving prior scopes.
-    assert NOUS_BILLING_MANAGE_SCOPE in captured["scope"].split()
+    assert CLOVER_BILLING_MANAGE_SCOPE in captured["scope"].split()
     assert "inference:invoke" in captured["scope"].split()
     # Reuses the prior credential's deployment URLs (so a preview stays a preview).
     assert captured["portal_base_url"] == "https://preview.example.com"
@@ -116,7 +116,7 @@ def test_device_login_fires_on_verification_before_polling(monkeypatch):
     # validation (JWT usability checks) is out of scope and may raise on the
     # synthetic token — swallow it; the ordering assertion is what matters.
     try:
-        auth._nous_device_code_login(open_browser=False, on_verification=_cb)
+        auth._clover_device_code_login(open_browser=False, on_verification=_cb)
     except Exception:
         pass
 

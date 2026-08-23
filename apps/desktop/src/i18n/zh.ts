@@ -196,7 +196,7 @@ export const zh: Translations = {
   },
 
   billingBlock: {
-    titleNous: 'Clover 额度已用尽',
+    titleCloverCredits: 'Clover 额度已用尽',
     titleProvider: provider => `额度已用尽 — ${provider}`,
     fallbackMessage: '您的账户额度已用尽。请充值以继续使用。',
     openBilling: '打开账单',
@@ -218,7 +218,7 @@ export const zh: Translations = {
     doneDescription: '调试包已私密上传。在您的支持会话中分享以下链接，团队即可查看您的日志。',
     failedTitle: '上传失败',
     failedHint:
-      '您也可以在终端运行 `clover debug share --nous`，或运行 `clover debug share --local` 在不上传的情况下查看报告。',
+      '您也可以在终端运行 `clover debug share --clover`，或运行 `clover debug share --local` 在不上传的情况下查看报告。',
     handoffLead: '在以下位置继续讨论:',
     links: {
       github: 'GitHub Issues',
@@ -1355,13 +1355,13 @@ export const zh: Translations = {
       activeBackend: '当前后端',
       activeBackendHint: '这是你当前使用的后端',
       useBackend: '使用此后端',
-      nousIncluded: '包含在 Clover 订阅中；登录 Clover Portal 即可激活。',
-      nousAuthNeededTitle: '登录 Clover Portal',
-      nousAuthNeededMessage: provider => `已保存 ${provider}，但在登录 Clover Portal 之前不会激活。`,
-      nousAuthSignIn: '登录',
-      nousAuthDoneTitle: '已连接 Clover Portal',
-      nousAuthDoneMessage: '订阅后端现已激活。',
-      nousAuthFailed: 'Clover Portal 登录未完成',
+      cloverIncluded: '包含在 Clover 订阅中；登录 Clover Portal 即可激活。',
+      cloverAuthNeededTitle: '登录 Clover Portal',
+      cloverAuthNeededMessage: provider => `已保存 ${provider}，但在登录 Clover Portal 之前不会激活。`,
+      cloverAuthSignIn: '登录',
+      cloverAuthDoneTitle: '已连接 Clover Portal',
+      cloverAuthDoneMessage: '订阅后端现已激活。',
+      cloverAuthFailed: 'Clover Portal 登录未完成',
       noApiKeyRequired: '不需要 API 密钥。',
       postSetupHint: step => `此后端需要一次性安装 (${step})。将在此机器上执行，可能需要几分钟。`,
       postSetupInstalledHint: '已安装。仅在出现问题时才需要重新运行安装。',

@@ -8,8 +8,8 @@ from unittest.mock import patch, MagicMock
 from clover_cli.clover_account import CloverPortalAccountInfo
 from clover_cli.models import (
     OPENROUTER_MODELS, fetch_openrouter_models, model_ids, detect_provider_for_model,
-    is_nous_free_tier, partition_nous_models_by_tier,
-    check_nous_free_tier, _FREE_TIER_CACHE_TTL,
+    is_clover_free_tier, partition_clover_models_by_tier,
+    check_clover_free_tier, _FREE_TIER_CACHE_TTL,
     union_with_portal_free_recommendations,
     union_with_portal_paid_recommendations,
 )
@@ -164,24 +164,24 @@ class TestDetectProviderForModel:
 
 
 class TestIsNousFreeTier:
-    """Tests for is_nous_free_tier — account tier detection."""
+    """Tests for is_clover_free_tier — account tier detection."""
 
     def test_paid_service_access_allowed_true_is_not_free(self):
-        assert is_nous_free_tier({"paid_service_access": {"allowed": True}}) is False
+        assert is_clover_free_tier({"paid_service_access": {"allowed": True}}) is False
 
 
     def test_empty_subscription_not_free(self):
         """Empty subscription dict defaults to not-free (don't block users)."""
-        assert is_nous_free_tier({"subscription": {}}) is False
+        assert is_clover_free_tier({"subscription": {}}) is False
 
 
     def test_empty_response_not_free(self):
         """Completely empty response defaults to not-free."""
-        assert is_nous_free_tier({}) is False
+        assert is_clover_free_tier({}) is False
 
 
 class TestPartitionNousModelsByTier:
-    """Tests for partition_nous_models_by_tier — free vs paid tier model split."""
+    """Tests for partition_clover_models_by_tier — free vs paid tier model split."""
 
     _PAID = {"prompt": "0.000003", "completion": "0.000015"}
     _FREE = {"prompt": "0", "completion": "0"}
@@ -190,7 +190,7 @@ class TestPartitionNousModelsByTier:
         """Paid users get all models as selectable, none unavailable."""
         models = ["anthropic/claude-opus-4.6", "xiaomi/mimo-v2-pro"]
         pricing = {"anthropic/claude-opus-4.6": self._PAID, "xiaomi/mimo-v2-pro": self._FREE}
-        sel, unav = partition_nous_models_by_tier(models, pricing, free_tier=False)
+        sel, unav = partition_clover_models_by_tier(models, pricing, free_tier=False)
         assert sel == models
         assert unav == []
 
@@ -199,7 +199,7 @@ class TestPartitionNousModelsByTier:
         """When all models are paid, free-tier users have none selectable."""
         models = ["anthropic/claude-opus-4.6", "openai/gpt-5.4"]
         pricing = {m: self._PAID for m in models}
-        sel, unav = partition_nous_models_by_tier(models, pricing, free_tier=True)
+        sel, unav = partition_clover_models_by_tier(models, pricing, free_tier=True)
         assert sel == []
         assert unav == models
 
@@ -228,7 +228,7 @@ class TestUnionWithPortalFreeRecommendations:
         curated = ["anthropic/claude-opus-4.6"]
         pricing = {"anthropic/claude-opus-4.6": self._PAID}
         with patch(
-            "clover_cli.models.fetch_nous_recommended_models",
+            "clover_cli.models.fetch_clover_recommended_models",
             return_value=self._payload(["qwen/qwen3.6-plus"]),
         ):
             ids, p = union_with_portal_free_recommendations(curated, pricing, "")
@@ -249,7 +249,7 @@ class TestUnionWithPortalFreeRecommendations:
         curated = ["a"]
         pricing = {"a": self._PAID}
         with patch(
-            "clover_cli.models.fetch_nous_recommended_models",
+            "clover_cli.models.fetch_clover_recommended_models",
             side_effect=RuntimeError("network down"),
         ):
             ids, p = union_with_portal_free_recommendations(curated, pricing, "")
@@ -284,7 +284,7 @@ class TestUnionWithPortalPaidRecommendations:
         curated = ["anthropic/claude-opus-4.6"]
         pricing = {"anthropic/claude-opus-4.6": self._PAID}
         with patch(
-            "clover_cli.models.fetch_nous_recommended_models",
+            "clover_cli.models.fetch_clover_recommended_models",
             return_value=self._payload(["openai/gpt-5.4", "openai/gpt-5.5"]),
         ):
             ids, _ = union_with_portal_paid_recommendations(curated, pricing, "")
@@ -296,7 +296,7 @@ class TestUnionWithPortalPaidRecommendations:
 
 
 class TestCheckNousFreeTierCache:
-    """Tests for the TTL cache on check_nous_free_tier()."""
+    """Tests for the TTL cache on check_clover_free_tier()."""
 
     def setup_method(self):
         _models_mod._free_tier_cache = None
@@ -304,7 +304,7 @@ class TestCheckNousFreeTierCache:
     def teardown_method(self):
         _models_mod._free_tier_cache = None
 
-    @patch("clover_cli.clover_account.get_nous_portal_account_info")
+    @patch("clover_cli.clover_account.get_clover_portal_account_info")
     def test_result_is_cached(self, mock_account):
         """Second call within TTL returns cached result without account lookup."""
         mock_account.return_value = CloverPortalAccountInfo(
@@ -313,15 +313,15 @@ class TestCheckNousFreeTierCache:
             fresh=False,
             paid_service_access=False,
         )
-        result1 = check_nous_free_tier()
-        result2 = check_nous_free_tier()
+        result1 = check_clover_free_tier()
+        result2 = check_clover_free_tier()
 
         assert result1 is True
         assert result2 is True
         assert mock_account.call_count == 1
 
 
-    @patch("clover_cli.clover_account.get_nous_portal_account_info")
+    @patch("clover_cli.clover_account.get_clover_portal_account_info")
     def test_force_fresh_bypasses_cache(self, mock_account):
         mock_account.return_value = CloverPortalAccountInfo(
             logged_in=True,
@@ -330,8 +330,8 @@ class TestCheckNousFreeTierCache:
             paid_service_access=True,
         )
 
-        assert check_nous_free_tier() is False
-        assert check_nous_free_tier(force_fresh=True) is False
+        assert check_clover_free_tier() is False
+        assert check_clover_free_tier(force_fresh=True) is False
 
         assert mock_account.call_count == 2
         mock_account.assert_called_with(force_fresh=True)
@@ -339,7 +339,7 @@ class TestCheckNousFreeTierCache:
 
 
 class TestNousRecommendedModels:
-    """Tests for fetch_nous_recommended_models + get_nous_recommended_aux_model."""
+    """Tests for fetch_clover_recommended_models + get_clover_recommended_aux_model."""
 
     _SAMPLE_PAYLOAD = {
         "paidRecommendedModels": [],
@@ -357,10 +357,10 @@ class TestNousRecommendedModels:
     }
 
     def setup_method(self):
-        _models_mod._nous_recommended_cache.clear()
+        _models_mod._clover_recommended_cache.clear()
 
     def teardown_method(self):
-        _models_mod._nous_recommended_cache.clear()
+        _models_mod._clover_recommended_cache.clear()
 
     def _mock_urlopen(self, payload):
         """Return a context-manager mock mimicking urllib.request.urlopen()."""
@@ -373,11 +373,11 @@ class TestNousRecommendedModels:
         return cm
 
     def test_fetch_caches_per_portal_url(self):
-        from clover_cli.models import fetch_nous_recommended_models
+        from clover_cli.models import fetch_clover_recommended_models
         mock_cm = self._mock_urlopen(self._SAMPLE_PAYLOAD)
         with patch("clover_cli.models._urlopen_model_catalog_request", return_value=mock_cm) as mock_urlopen:
-            a = fetch_nous_recommended_models("https://portal.example.com")
-            b = fetch_nous_recommended_models("https://portal.example.com")
+            a = fetch_clover_recommended_models("https://portal.example.com")
+            b = fetch_clover_recommended_models("https://portal.example.com")
         assert a == self._SAMPLE_PAYLOAD
         assert b == self._SAMPLE_PAYLOAD
         assert mock_urlopen.call_count == 1  # second call served from cache
@@ -390,16 +390,16 @@ class TestNousRecommendedModels:
 
     def test_paid_tier_prefers_paid_recommendation(self):
         """Paid-tier users should get the paid model when it's populated."""
-        from clover_cli.models import get_nous_recommended_aux_model
+        from clover_cli.models import get_clover_recommended_aux_model
         payload = {
             "paidRecommendedCompactionModel": {"modelName": "anthropic/claude-opus-4.7"},
             "freeRecommendedCompactionModel": {"modelName": "google/gemini-3-flash-preview"},
             "paidRecommendedVisionModel": {"modelName": "openai/gpt-5.4"},
             "freeRecommendedVisionModel": {"modelName": "google/gemini-3-flash-preview"},
         }
-        with patch("clover_cli.models.fetch_nous_recommended_models", return_value=payload):
-            text = get_nous_recommended_aux_model(vision=False, free_tier=False)
-            vision = get_nous_recommended_aux_model(vision=True, free_tier=False)
+        with patch("clover_cli.models.fetch_clover_recommended_models", return_value=payload):
+            text = get_clover_recommended_aux_model(vision=False, free_tier=False)
+            vision = get_clover_recommended_aux_model(vision=True, free_tier=False)
         assert text == "anthropic/claude-opus-4.7"
         assert vision == "openai/gpt-5.4"
 
@@ -408,16 +408,16 @@ class TestNousRecommendedModels:
 
     def test_tier_detection_error_defaults_to_paid(self):
         """If tier detection raises, assume paid so we don't downgrade silently."""
-        from clover_cli.models import get_nous_recommended_aux_model
+        from clover_cli.models import get_clover_recommended_aux_model
         payload = {
             "paidRecommendedCompactionModel": {"modelName": "paid-model"},
             "freeRecommendedCompactionModel": {"modelName": "free-model"},
         }
         with (
-            patch("clover_cli.models.fetch_nous_recommended_models", return_value=payload),
-            patch("clover_cli.models.check_nous_free_tier", side_effect=RuntimeError("boom")),
+            patch("clover_cli.models.fetch_clover_recommended_models", return_value=payload),
+            patch("clover_cli.models.check_clover_free_tier", side_effect=RuntimeError("boom")),
         ):
-            assert get_nous_recommended_aux_model(vision=False) == "paid-model"
+            assert get_clover_recommended_aux_model(vision=False) == "paid-model"
 
 
 class TestCodexSoftAcceptPlausibilityGate:
@@ -487,7 +487,7 @@ class TestFormatPricePerMtok:
 
 
 
-    def test_nous_list_includes_sonnet_5(self):
+    def test_clover_list_includes_sonnet_5(self):
         from clover_cli.models import _PROVIDER_MODELS
         assert "anthropic/claude-sonnet-5" in _PROVIDER_MODELS["clover"]
 

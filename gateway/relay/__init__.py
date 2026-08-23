@@ -538,7 +538,7 @@ def _resolve_relay_identity_token() -> str:
          IS the token — either a raw JWT string or a JSON envelope with an
          ``access_token`` field. No client registration involved; possession
          of the (typically loopback) endpoint is the credential.
-      2. **Clover Portal** (default): ``resolve_nous_access_token()`` — existing
+      2. **Clover Portal** (default): ``resolve_clover_access_token()`` — existing
          managed/hosted behaviour.
 
     Raises on failure; callers decide whether that's fatal (enroll CLI) or a
@@ -562,9 +562,9 @@ def _resolve_relay_identity_token() -> str:
 
     if not token_url:
         # Mode 2 — Clover Portal (default, unchanged behaviour).
-        from clover_cli.auth import resolve_nous_access_token
+        from clover_cli.auth import resolve_clover_access_token
 
-        return resolve_nous_access_token()
+        return resolve_clover_access_token()
 
     import json
     import urllib.error
@@ -646,7 +646,7 @@ def self_provision_relay() -> bool:
     Fires when relay is configured (``relay_url()`` set) and NO per-gateway secret
     is already present, AND the agent can resolve its own Clover access token. In
     that case the runtime resolves the agent's own Clover access token (the same
-    ``resolve_nous_access_token()`` the enroll CLI / dashboard register use),
+    ``resolve_clover_access_token()`` the enroll CLI / dashboard register use),
     POSTs ``/relay/provision`` asserting its own endpoint + route keys, and sets
     ``GATEWAY_RELAY_ID`` / ``GATEWAY_RELAY_SECRET`` / ``GATEWAY_RELAY_DELIVERY_KEY``
     into ``os.environ`` so the subsequent ``register_relay_adapter()`` picks them
@@ -664,7 +664,7 @@ def self_provision_relay() -> bool:
       - A self-hosted operator who ran ``clover gateway enroll``: has a PINNED
         ``GATEWAY_RELAY_SECRET`` -> skipped (the secret-present guard below).
       - A self-hosted box with a relay URL but no NAS identity:
-        ``resolve_nous_access_token()`` fails -> graceful no-op.
+        ``resolve_clover_access_token()`` fails -> graceful no-op.
 
     Stateless: process-env creds don't survive a restart, so a hosted container
     re-provisions every boot; the connector's rotation window covers a still-

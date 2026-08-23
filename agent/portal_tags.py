@@ -42,7 +42,7 @@ from typing import List, Optional
 # funnel through ``agent.auxiliary_client.call_llm`` which has no session
 # handle. Rather than threading a ``session_id`` parameter through every one
 # of those call sites (and every future one), the agent loop publishes the
-# active conversation id here and ``nous_portal_tags()`` picks it up as a
+# active conversation id here and ``clover_portal_tags()`` picks it up as a
 # fallback whenever no explicit ``session_id`` is passed.
 #
 # ContextVar (not a module global) so concurrent agents in one process —
@@ -52,7 +52,7 @@ from typing import List, Optional
 # MoA fan-out, tool executor) inherit it through the copied Context; bare
 # threads (title generator) capture it explicitly at spawn time.
 _conversation_id: ContextVar[Optional[str]] = ContextVar(
-    "nous_portal_conversation_id", default=None
+    "clover_portal_conversation_id", default=None
 )
 
 
@@ -117,11 +117,11 @@ def conversation_tag(session_id: str) -> str:
     return f"conversation={session_id}"
 
 
-def nous_portal_tags(session_id: str | None = None) -> List[str]:
+def clover_portal_tags(session_id: str | None = None) -> List[str]:
     """Return the canonical list of Clover Portal product tags.
 
     Always returns a fresh list so callers can mutate it freely
-    (e.g. ``merged_extra.setdefault("tags", []).extend(nous_portal_tags())``).
+    (e.g. ``merged_extra.setdefault("tags", []).extend(clover_portal_tags())``).
 
     When ``session_id`` is provided, a ``conversation=<session_id>`` tag is
     appended so Portal usage can be attributed to a specific Clover

@@ -7,7 +7,7 @@ zero-touch enrollment in the connector repo's
 
   1. Resolve a fresh Clover Portal access token from the existing login
      (``~/.clover/auth.json``) — the same path ``clover dashboard register``
-     uses (``resolve_nous_access_token``). This proves *which Clover org (tenant)*
+     uses (``resolve_clover_access_token``). This proves *which Clover org (tenant)*
      the caller owns; the connector derives the authoritative tenant from it via
      ``GET /api/oauth/account`` (never from anything the gateway asserts).
   2. POST ``{enrollmentToken, gatewayId}`` to the connector's ``/relay/enroll``
@@ -139,7 +139,7 @@ def _post_enroll(
         if exc.code == 401:
             raise RuntimeError(
                 "Connector rejected the caller identity (401). Your Clover Portal "
-                "token could not be verified — try `clover auth add nous` and retry."
+                "token could not be verified — try `clover auth add clover` and retry."
             ) from exc
         if exc.code == 403:
             raise RuntimeError(
@@ -203,7 +203,7 @@ def cmd_gateway_enroll(args) -> None:
     except AuthError as exc:
         if getattr(exc, "relogin_required", False):
             print("✗ You're not logged into Clover Portal.")
-            print("  Run `clover setup` (or `clover auth add nous`) first, then retry.")
+            print("  Run `clover setup` (or `clover auth add clover`) first, then retry.")
         else:
             print(f"✗ Could not resolve a Clover Portal access token: {exc}")
         sys.exit(1)

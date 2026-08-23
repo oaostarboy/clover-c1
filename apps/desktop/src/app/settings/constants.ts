@@ -44,7 +44,7 @@ export const CONTROL_TEXT = 'text-xs'
 
 export const PROVIDER_GROUPS: ProviderPrefix[] = [
   {
-    prefix: 'NOUS_',
+    prefix: 'CLOVER_',
     name: 'Clover Portal',
     description: 'Hosted Clover & Clover-trained models',
     docsUrl: '',

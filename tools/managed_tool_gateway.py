@@ -13,18 +13,18 @@ from urllib.parse import urlsplit
 logger = logging.getLogger(__name__)
 
 from clover_constants import get_clover_home
-from tools.tool_backend_helpers import managed_nous_tools_enabled
+from tools.tool_backend_helpers import managed_clover_tools_enabled
 
 _DEFAULT_TOOL_GATEWAY_DOMAIN = ""
 _DEFAULT_TOOL_GATEWAY_SCHEME = "https"
-_NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
+_CLOVER_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
 
 
 @dataclass(frozen=True)
 class ManagedToolGatewayConfig:
     vendor: str
     gateway_origin: str
-    nous_user_token: str
+    clover_user_token: str
     managed_mode: bool
 
 
@@ -33,7 +33,7 @@ def auth_json_path():
     return get_clover_home() / "auth.json"
 
 
-def _read_nous_provider_state() -> Optional[dict]:
+def _read_clover_provider_state() -> Optional[dict]:
     try:
         path = auth_json_path()
         if not path.is_file():
@@ -42,9 +42,9 @@ def _read_nous_provider_state() -> Optional[dict]:
         providers = data.get("providers", {})
         if not isinstance(providers, dict):
             return None
-        nous_provider = providers.get("clover", {})
-        if isinstance(nous_provider, dict):
-            return nous_provider
+        clover_provider = providers.get("clover", {})
+        if isinstance(clover_provider, dict):
+            return clover_provider
     except Exception:
         pass
     return None
@@ -95,7 +95,7 @@ def _read_user_token_override() -> Optional[str]:
     return None
 
 
-def peek_nous_access_token() -> Optional[str]:
+def peek_clover_access_token() -> Optional[str]:
     """Cheap probe for a Clover gateway token without triggering refresh.
 
     Availability scans (`clover tools`, banner/status paint, provider
@@ -103,38 +103,38 @@ def peek_nous_access_token() -> Optional[str]:
     This helper therefore only inspects the explicit env override and the
     cached auth-store token, without checking expiry and without making any
     network calls. Truthful refresh handling stays in request/session paths
-    that call :func:`read_nous_access_token`.
+    that call :func:`read_clover_access_token`.
     """
     explicit = _read_user_token_override()
     if explicit:
         return explicit
 
-    nous_provider = _read_nous_provider_state() or {}
-    access_token = nous_provider.get("access_token")
+    clover_provider = _read_clover_provider_state() or {}
+    access_token = clover_provider.get("access_token")
     if isinstance(access_token, str) and access_token.strip():
         return access_token.strip()
     return None
 
 
-def read_nous_access_token() -> Optional[str]:
+def read_clover_access_token() -> Optional[str]:
     """Read a Clover Subscriber OAuth access token from auth store or env override."""
     explicit = _read_user_token_override()
     if explicit:
         return explicit
-    nous_provider = _read_nous_provider_state() or {}
-    cached_token = peek_nous_access_token()
+    clover_provider = _read_clover_provider_state() or {}
+    cached_token = peek_clover_access_token()
 
     if cached_token and not _access_token_is_expiring(
-        nous_provider.get("expires_at"),
-        _NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
+        clover_provider.get("expires_at"),
+        _CLOVER_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
     ):
         return cached_token
 
     try:
-        from clover_cli.auth import resolve_nous_access_token
+        from clover_cli.auth import resolve_clover_access_token
 
-        refreshed_token = resolve_nous_access_token(
-            refresh_skew_seconds=_NOUS_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
+        refreshed_token = resolve_clover_access_token(
+            refresh_skew_seconds=_CLOVER_ACCESS_TOKEN_REFRESH_SKEW_SECONDS,
         )
         if isinstance(refreshed_token, str) and refreshed_token.strip():
             return refreshed_token.strip()
@@ -177,21 +177,21 @@ def resolve_managed_tool_gateway(
     token_reader: Optional[Callable[[], Optional[str]]] = None,
 ) -> Optional[ManagedToolGatewayConfig]:
     """Resolve shared managed-tool gateway config for a vendor."""
-    if not managed_nous_tools_enabled():
+    if not managed_clover_tools_enabled():
         return None
 
     resolved_gateway_builder = gateway_builder or build_vendor_gateway_url
-    resolved_token_reader = token_reader or read_nous_access_token
+    resolved_token_reader = token_reader or read_clover_access_token
 
     gateway_origin = resolved_gateway_builder(vendor)
-    nous_user_token = resolved_token_reader()
-    if not gateway_origin or not nous_user_token:
+    clover_user_token = resolved_token_reader()
+    if not gateway_origin or not clover_user_token:
         return None
 
     return ManagedToolGatewayConfig(
         vendor=vendor,
         gateway_origin=gateway_origin,
-        nous_user_token=nous_user_token,
+        clover_user_token=clover_user_token,
         managed_mode=True,
     )
 
@@ -203,15 +203,15 @@ def is_managed_tool_gateway_ready(
 ) -> bool:
     """Return True when gateway URL and a likely-usable Clover token are present.
 
-    Defaults to :func:`peek_nous_access_token` so read-only availability scans
+    Defaults to :func:`peek_clover_access_token` so read-only availability scans
     avoid synchronous OAuth refresh. Callers that are about to make a real
     gateway request should use :func:`resolve_managed_tool_gateway` (which
-    still defaults to the refresh-aware :func:`read_nous_access_token`).
+    still defaults to the refresh-aware :func:`read_clover_access_token`).
     """
     return resolve_managed_tool_gateway(
         vendor,
         gateway_builder=gateway_builder,
-        token_reader=token_reader or peek_nous_access_token,
+        token_reader=token_reader or peek_clover_access_token,
     ) is not None
 
 
@@ -275,7 +275,7 @@ def managed_vendor_endpoints(
     }
 
 
-def is_managed_nous_gateway_url(
+def is_managed_clover_gateway_url(
     url: object,
     gateway_builder: Optional[Callable[[str], str]] = None,
 ) -> bool:
@@ -310,10 +310,10 @@ def managed_gateway_auth_headers(
     bearer. Returns ``{}`` rather than raising when no token is available, so a
     caller can report "sign in" instead of sending an unauthenticated request.
     """
-    if not is_managed_nous_gateway_url(url, gateway_builder):
+    if not is_managed_clover_gateway_url(url, gateway_builder):
         return {}
 
-    resolved_token_reader = token_reader or read_nous_access_token
+    resolved_token_reader = token_reader or read_clover_access_token
     try:
         token = resolved_token_reader()
     except Exception as exc:  # pragma: no cover — defensive
@@ -333,10 +333,10 @@ def managed_gateway_auth_headers(
 # at ~2MB of real bytes under the gateway's request ceiling and ruled out video
 # entirely. Each pinned managed server carries an upload endpoint
 # (`upload_path`); the bytes go straight to storage via a presigned URL, and
-# the tool argument carries an opaque `nous-upload:<token>` reference instead.
+# the tool argument carries an opaque `clover-upload:<token>` reference instead.
 #
 # The protocol lives HERE rather than in a vendor tool module: the presign
-# request shape, the response contract, and the `nous-upload:` scheme are Clover
+# request shape, the response contract, and the `clover-upload:` scheme are Clover
 # gateway specifics shared by every managed vendor that takes media.
 
 _MEDIA_UPLOAD_PRESIGN_TIMEOUT_SECONDS = 15.0
@@ -383,11 +383,11 @@ def build_managed_media_uploader(
        expiry; type and length are signed into it) and an upload token.
     2. PUT the bytes to that URL. This goes directly to storage — never
        through the gateway — which is what removes the request-size ceiling.
-    3. Return ``nous-upload:<token>`` for the tool argument. The token is
+    3. Return ``clover-upload:<token>`` for the tool argument. The token is
        bound to this Clover principal and is redeemable only through the
        gateway, so it is inert anywhere else it might end up.
     """
-    if not is_managed_nous_gateway_url(server_url, gateway_builder):
+    if not is_managed_clover_gateway_url(server_url, gateway_builder):
         return None
     if not isinstance(upload_path, str) or not upload_path.startswith("/"):
         return None
@@ -409,7 +409,7 @@ def build_managed_media_uploader(
         #
         # The presign POST goes to `presign_url`, which is entirely determined
         # by the managed gateway origin (already validated by
-        # is_managed_nous_gateway_url) plus the pinned upload_path — the same
+        # is_managed_clover_gateway_url) plus the pinned upload_path — the same
         # first-party host the vendor calls go to freely. SSRF-guarding it
         # protects against nothing and would reject a local gateway on
         # 127.0.0.1, so it uses a plain client. The PUT target, by contrast, is
@@ -446,7 +446,7 @@ def build_managed_media_uploader(
         if put.status_code != 200:
             raise RuntimeError(f"storage refused the upload (HTTP {put.status_code})")
 
-        return f"nous-upload:{token}"
+        return f"clover-upload:{token}"
 
     return upload
 

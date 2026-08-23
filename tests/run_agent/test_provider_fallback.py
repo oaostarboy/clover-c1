@@ -146,7 +146,7 @@ class TestFallbackChainAdvancement:
             assert mock_rpc.call_args.kwargs["explicit_api_key"] == "env-secret"
 
 
-    def test_nous_anthropic_fallback_uses_the_messages_wire(self):
+    def test_clover_anthropic_fallback_uses_the_messages_wire(self):
         """Portal Claude fallbacks must not stay on chat_completions.
 
         ``resolve_provider_client`` still returns an OpenAI client for Clover;
@@ -201,7 +201,7 @@ class TestFallbackChainAdvancement:
         assert rebuilt["base_url"] == portal
         assert agent._anthropic_client is not None
 
-    def test_nous_non_anthropic_fallback_stays_on_chat_completions(self):
+    def test_clover_non_anthropic_fallback_stays_on_chat_completions(self):
         portal = ""
         fbs = [{"provider": "clover", "model": "clover-4-405b"}]
         agent = _make_agent(fallback_model=fbs)

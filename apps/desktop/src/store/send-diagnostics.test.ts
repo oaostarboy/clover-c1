@@ -67,7 +67,7 @@ describe('send-diagnostics store', () => {
       expect(request).toHaveBeenCalledTimes(1)
       const [method, params] = request.mock.calls[0]
 
-      expect(method).toBe('diagnostics.share_nous')
+      expect(method).toBe('diagnostics.share_clover')
       expect(params.error_context).toContain('stream_drop')
       expect(params.extra_files['desktop.log']).toContain('ws connected')
 

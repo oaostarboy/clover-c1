@@ -1,4 +1,4 @@
-"""Codex/nous quarantine paths must mutate self._entries under the lock.
+"""Codex/clover quarantine paths must mutate self._entries under the lock.
 
 Post-merge gate-sweep finding on the #71775 salvage (#77714). That PR moved
 single-use-token refreshes OUTSIDE the pool lock to avoid stalling every

@@ -479,7 +479,7 @@ class TestCustomProviderVisionAlias:
 
 
     def test_named_custom_provider_bare_custom_runtime_vision_alias(self):
-        """Teknium's requested regression case.
+        """the maintainer's requested regression case.
 
         A named custom provider (``model.provider: my-vllm``) is rewritten to
         the runtime value ``provider="custom"`` by

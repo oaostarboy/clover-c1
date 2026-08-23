@@ -354,7 +354,7 @@ def build_billing_state(*, timeout: float = 15.0) -> BillingState:
         return fixture
 
     try:
-        from clover_cli.nous_billing import (
+        from clover_cli.clover_billing import (
             BillingAuthError,
             BillingError,
             _absolutize_portal_url,

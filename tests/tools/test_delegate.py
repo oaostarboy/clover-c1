@@ -197,7 +197,7 @@ class TestStripBlockedTools(unittest.TestCase):
         ):
             self.assertIn(toolset_name, disabled)
         # code_execution is deliberately NOT denied — children keep
-        # execute_code for programmatic tool calling (Teknium, Jul 2026).
+        # execute_code for programmatic tool calling (the maintainer, Jul 2026).
         self.assertNotIn("code_execution", disabled)
 
         definitions = model_tools.get_tool_definitions(
@@ -413,7 +413,7 @@ class TestDelegateTask(unittest.TestCase):
                     child_db.close()
                 parent_db.close()
 
-    def test_nous_child_rederives_api_mode_from_model(self):
+    def test_clover_child_rederives_api_mode_from_model(self):
         """Portal is dual-wire — same provider + different model prefix must
         not inherit the parent's Messages/chat_completions mode verbatim."""
         parent = _make_mock_parent(depth=0)
@@ -769,7 +769,7 @@ class TestBlockedTools(unittest.TestCase):
     def test_execute_code_not_blocked(self):
         """Children retain execute_code (programmatic tool calling) so they
         can batch mechanical work instead of burning reasoning iterations
-        (Teknium, Jul 2026)."""
+        (the maintainer, Jul 2026)."""
         self.assertNotIn("execute_code", DELEGATE_BLOCKED_TOOLS)
 
 class TestDelegationCredentialResolution(unittest.TestCase):
@@ -928,7 +928,7 @@ class TestDelegationProviderIntegration(unittest.TestCase):
         parent = _make_mock_parent(depth=0)
         parent.provider = "clover"
         parent.base_url = ""
-        parent.api_key = "nous-key-abc"
+        parent.api_key = "clover-key-abc"
 
         with patch("run_agent.AIAgent") as MockAgent:
             mock_child = MagicMock()

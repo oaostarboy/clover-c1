@@ -160,7 +160,7 @@ def _call(handler, args, response, headers=None):
     with patch.object(
         flux3,
         "managed_gateway_auth_headers",
-        return_value=headers if headers is not None else {"Authorization": "Bearer nous-token"},
+        return_value=headers if headers is not None else {"Authorization": "Bearer clover-token"},
     ), patch.object(httpx, "AsyncClient", lambda **_kw: _FakeClient(response, sink)):
         raw = _run(handler(args))
     return json.loads(raw), sink
@@ -176,18 +176,18 @@ class TestGating:
         # refusal the model can act on. Deciding it here as well could only
         # hide the tools from someone the server would have served, so the
         # portal's entitlement view must not be consulted at all.
-        with patch.object(flux3, "peek_nous_access_token", return_value="nous-token"), \
+        with patch.object(flux3, "peek_clover_access_token", return_value="clover-token"), \
                 patch(
-                    "clover_cli.clover_account.get_nous_portal_account_info",
+                    "clover_cli.clover_account.get_clover_portal_account_info",
                     side_effect=AssertionError("entitlement must not gate visibility"),
                 ):
             assert flux3.check_bfl_requirements() is True
 
-    def test_hidden_without_a_nous_credential(self):
+    def test_hidden_without_a_clover_credential(self):
         # The gateway takes a Clover bearer and nothing else, so with no token
         # every call could only ever answer "sign in" — six schemas on every
         # API call for something that cannot work.
-        with patch.object(flux3, "peek_nous_access_token", return_value=None):
+        with patch.object(flux3, "peek_clover_access_token", return_value=None):
             assert flux3.check_bfl_requirements() is False
 
     def test_a_profile_sees_a_credential_held_at_the_global_root(self, tmp_path, monkeypatch):
@@ -210,19 +210,19 @@ class TestGating:
 
         # The profile's own store is empty, so this passes only via the
         # global-root fallback — without which the tools would be hidden.
-        assert flux3.peek_nous_access_token() is None
+        assert flux3.peek_clover_access_token() is None
         assert flux3.check_bfl_requirements() is True
 
     def test_the_credential_probe_never_forces_a_token_refresh(self, monkeypatch):
         # check_fn runs on every CLI start, gateway session and cron tick, so
         # it reads a cached credential rather than sitting on a synchronous
         # OAuth refresh.
-        monkeypatch.setenv("TOOL_GATEWAY_USER_TOKEN", "nous-token")
-        with patch.object(flux3, "read_nous_access_token", side_effect=AssertionError("refreshed")):
+        monkeypatch.setenv("TOOL_GATEWAY_USER_TOKEN", "clover-token")
+        with patch.object(flux3, "read_clover_access_token", side_effect=AssertionError("refreshed")):
             assert flux3.check_bfl_requirements() is True
 
     def test_fails_closed_when_the_credential_probe_raises(self):
-        with patch.object(flux3, "peek_nous_access_token", side_effect=RuntimeError("auth store unreadable")):
+        with patch.object(flux3, "peek_clover_access_token", side_effect=RuntimeError("auth store unreadable")):
             assert flux3.check_bfl_requirements() is False
 
 
@@ -244,7 +244,7 @@ class TestSubmitTransport:
             "duration": 5,
             "mode": "text_to_video",
         }
-        assert requests[0]["headers"]["Authorization"] == "Bearer nous-token"
+        assert requests[0]["headers"]["Authorization"] == "Bearer clover-token"
         # The gateway's guidance is the model-facing text, verbatim.
         assert parsed["result"] == "Poll bfl_flux3_get_result with id=bfl_job_1"
         assert parsed["details"]["id"] == "bfl_job_1"
@@ -291,7 +291,7 @@ class TestSubmitTransport:
         assert parsed["error"] == "A new BFL video generation may be started once every 5 minutes. Wait 210 seconds."
         assert parsed["details"] == {"retryAfterSeconds": 210}
 
-    def test_a_401_asks_for_a_nous_sign_in(self):
+    def test_a_401_asks_for_a_clover_sign_in(self):
         parsed, _requests = _call(flux3._handle_text_to_video, {"prompt": "a"}, _FakeResponse(401, {"error": {"code": "AUTH_ERROR"}}))
 
         assert parsed["needs_reauth"] is True
@@ -809,7 +809,7 @@ class TestMediaDelivery:
         async def fake_uploader(data, mime):
             assert data == _PNG
             assert mime == "image/png"
-            return "nous-upload:token-1"
+            return "clover-upload:token-1"
 
         with patch.object(flux3, "build_managed_media_uploader", return_value=fake_uploader), patch(
             "tools.image_source.resolve_image_source", return_value=self._resolved()
@@ -820,14 +820,14 @@ class TestMediaDelivery:
                 _FakeResponse(200, {"id": "j", "status": "submitted", "guidance": "ok"}),
             )
 
-        assert requests[0]["json"]["input_image"] == "nous-upload:token-1"
+        assert requests[0]["json"]["input_image"] == "clover-upload:token-1"
         # Images and video ride the same safety pipeline; only the permitted
         # type differs, and an image field must not accept a video.
         assert resolve.call_args.kwargs["permitted"] == ("image",)
 
     def test_video_fields_permit_video_only(self):
         async def fake_uploader(data, mime):
-            return "nous-upload:token-v"
+            return "clover-upload:token-v"
 
         with patch.object(flux3, "build_managed_media_uploader", return_value=fake_uploader), patch(
             "tools.image_source.resolve_image_source", return_value=self._resolved("video/mp4", b"\x00\x00\x00\x18ftypmp42")
@@ -838,7 +838,7 @@ class TestMediaDelivery:
                 _FakeResponse(200, {"id": "j", "status": "submitted", "guidance": "ok"}),
             )
 
-        assert requests[0]["json"]["input_video"] == "nous-upload:token-v"
+        assert requests[0]["json"]["input_video"] == "clover-upload:token-v"
         assert resolve.call_args.kwargs["permitted"] == ("video",)
 
     def test_every_keyframe_path_is_uploaded(self):
@@ -846,7 +846,7 @@ class TestMediaDelivery:
 
         async def fake_uploader(data, mime):
             uploads.append(mime)
-            return f"nous-upload:token-{len(uploads)}"
+            return f"clover-upload:token-{len(uploads)}"
 
         with patch.object(flux3, "build_managed_media_uploader", return_value=fake_uploader), patch(
             "tools.image_source.resolve_image_source", return_value=self._resolved()
@@ -859,9 +859,9 @@ class TestMediaDelivery:
 
         # The URL in the middle is forwarded untouched.
         assert requests[0]["json"]["input_images"] == [
-            "nous-upload:token-1",
+            "clover-upload:token-1",
             "https://x/b.png",
-            "nous-upload:token-2",
+            "clover-upload:token-2",
         ]
 
     def test_a_list_valued_input_image_is_still_uploaded(self):
@@ -869,7 +869,7 @@ class TestMediaDelivery:
         # local paths must not slip past unsanitized — that would send raw
         # filesystem paths to the vendor and disclose the user's directories.
         async def fake_uploader(data, mime):
-            return "nous-upload:token-1"
+            return "clover-upload:token-1"
 
         with patch.object(flux3, "build_managed_media_uploader", return_value=fake_uploader), patch(
             "tools.image_source.resolve_image_source", return_value=self._resolved()
@@ -880,7 +880,7 @@ class TestMediaDelivery:
                 _FakeResponse(200, {"id": "j", "status": "submitted", "guidance": "ok"}),
             )
 
-        assert requests[0]["json"]["input_image"] == ["nous-upload:token-1"]
+        assert requests[0]["json"]["input_image"] == ["clover-upload:token-1"]
         assert "/tmp/frame.png" not in json.dumps(requests[0]["json"])
 
     def test_media_fields_are_sanitized_whatever_the_mode_expects(self):
@@ -890,7 +890,7 @@ class TestMediaDelivery:
 
         async def fake_uploader(data, mime):
             uploads.append(mime)
-            return f"nous-upload:token-{len(uploads)}"
+            return f"clover-upload:token-{len(uploads)}"
 
         with patch.object(flux3, "build_managed_media_uploader", return_value=fake_uploader), patch(
             "tools.image_source.resolve_image_source", return_value=self._resolved()
@@ -908,7 +908,7 @@ class TestMediaDelivery:
 
         body = json.dumps(requests[0]["json"])
         assert "/tmp/sneaky.png" not in body
-        assert requests[0]["json"]["input_image"] == "nous-upload:token-1"
+        assert requests[0]["json"]["input_image"] == "clover-upload:token-1"
 
     def test_text_to_video_strips_media_fields_instead_of_uploading_them(self):
         # The mode takes no media, so an upload would spend the caller's quota
@@ -991,7 +991,7 @@ class TestLocalPathDetection:
         [
             "frame.png",
             "https://example.com/f.png",
-            "nous-upload:eyJhbGciOiJIUzI1NiJ9.e30.sig",
+            "clover-upload:eyJhbGciOiJIUzI1NiJ9.e30.sig",
             "C:frame.png",
             # Inline base64 of a JPEG always starts "/9j/" (first byte 0xFF),
             # which must not read as an absolute POSIX path.

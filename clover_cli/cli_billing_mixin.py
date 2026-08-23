@@ -20,13 +20,13 @@ from __future__ import annotations
 class CLIBillingMixin:
     """Mixin holding interactive-CLI billing and subscription handlers."""
 
-    def _print_nous_credits_block(self) -> bool:
+    def _print_clover_credits_block(self) -> bool:
         """Print the Clover dollar balance block (two-bar view) when a Clover account
         is logged in. Returns True if it printed anything.
 
         Prefers the shared dollar usage model (``agent.billing_usage`` — two-bar
         plan/top-up view, dollars-only, the /usage + /subscription source of
-        truth). Falls back to the legacy ``nous_credits_lines`` text only when the
+        truth). Falls back to the legacy ``clover_credits_lines`` text only when the
         model is unavailable. Agent-independent (a portal fetch gated on "a Clover account is logged in"), so /usage shows the block even in the TUI
         slash-worker subprocess that resumes WITHOUT a live agent. Fail-open and
         wall-clock-bounded; honors CLOVER_DEV_CREDITS_FIXTURE for offline testing.
@@ -74,9 +74,9 @@ class CLIBillingMixin:
                 return True
 
         # Fallback: legacy text lines (only when the model is unavailable).
-        from agent.account_usage import nous_credits_lines
+        from agent.account_usage import clover_credits_lines
 
-        lines = nous_credits_lines()
+        lines = clover_credits_lines()
         if not lines:
             return False
         print()
@@ -455,7 +455,7 @@ class CLIBillingMixin:
         from cli import _cprint, _b, _d
 
         from agent.subscription_view import subscription_change_preview_from_payload
-        from clover_cli.nous_billing import BillingError, BillingScopeRequired, post_subscription_preview
+        from clover_cli.clover_billing import BillingError, BillingScopeRequired, post_subscription_preview
 
         _cprint(f"  {_d('Checking the change…')}")
         try:
@@ -572,7 +572,7 @@ class CLIBillingMixin:
         """
         from cli import _cprint, _d, _DIM, _RST
 
-        from clover_cli.nous_billing import (
+        from clover_cli.clover_billing import (
             BillingError,
             BillingTransient,
             BillingRemoteSpendingRevoked,
@@ -656,7 +656,7 @@ class CLIBillingMixin:
         """insufficient_scope → allow remote spending (step-up), then replay `retry`.
 
         Mirrors _billing_handle_scope_required: the classic CLI calls
-        step_up_nous_billing_scope directly (it opens the browser + blocks), then
+        step_up_clover_billing_scope directly (it opens the browser + blocks), then
         replays the held preview/mutation so the user never re-runs the command.
         """
         from cli import _cprint, _d, _DIM, _RST
@@ -681,9 +681,9 @@ class CLIBillingMixin:
             return
         print("  Opening your browser to allow Remote Spending…")
         try:
-            from clover_cli.auth import step_up_nous_billing_scope
+            from clover_cli.auth import step_up_clover_billing_scope
 
-            granted = step_up_nous_billing_scope(open_browser=True)
+            granted = step_up_clover_billing_scope(open_browser=True)
         except Exception as exc:
             print(f"  Couldn't allow Remote Spending: {exc}")
             return
@@ -696,7 +696,7 @@ class CLIBillingMixin:
         # on a 401 (not a 403 scope denial) — without this, the replay would 403
         # again and (before the allow_stepup guard) re-prompt in a loop.
         try:
-            from clover_cli import nous_billing as _nb
+            from clover_cli import clover_billing as _nb
 
             _nb.invalidate_cached_token()
         except Exception:
@@ -751,7 +751,7 @@ class CLIBillingMixin:
     # ------------------------------------------------------------------
 
     def _show_billing(self, command: str = "/topup"):
-        """`/topup` — Remote Spending for Nous (one interactive modal).
+        """`/topup` — Remote Spending for Clover (one interactive modal).
 
         ZERO sub-commands: any argument is ignored. Bare ``/topup`` always
         opens the Overview (Screen 1), whose numbered menu is the *only* way to
@@ -1133,7 +1133,7 @@ class CLIBillingMixin:
             return
 
         # Submit the charge with a fresh idempotency key (reused on retry).
-        from clover_cli.nous_billing import (
+        from clover_cli.clover_billing import (
             BillingError,
             BillingScopeRequired,
             post_charge,
@@ -1163,7 +1163,7 @@ class CLIBillingMixin:
         import time as _time
 
         from agent.billing_view import format_money
-        from clover_cli.nous_billing import (
+        from clover_cli.clover_billing import (
             BillingError,
             BillingTransient,
             get_charge_status,
@@ -1218,7 +1218,7 @@ class CLIBillingMixin:
 
     def _billing_render_charge_error(self, state, exc):
         """Render a typed BillingError at submit time (pre-poll)."""
-        from clover_cli.nous_billing import (
+        from clover_cli.clover_billing import (
             BillingTransient,
             BillingRemoteSpendingRevoked,
             BillingSessionRevoked,
@@ -1299,9 +1299,9 @@ class CLIBillingMixin:
             return
         print("  Opening your browser to allow Remote Spending…")
         try:
-            from clover_cli.auth import step_up_nous_billing_scope
+            from clover_cli.auth import step_up_clover_billing_scope
 
-            granted = step_up_nous_billing_scope(open_browser=True)
+            granted = step_up_clover_billing_scope(open_browser=True)
         except Exception as exc:
             print(f"  Couldn't allow Remote Spending: {exc}")
             return
@@ -1353,7 +1353,7 @@ class CLIBillingMixin:
 
         # Replay the held charge, reusing the original idempotency key so a
         # double-submit collapses to one charge.
-        from clover_cli.nous_billing import BillingError, post_charge
+        from clover_cli.clover_billing import BillingError, post_charge
 
         from agent.billing_view import new_idempotency_key
 
@@ -1496,7 +1496,7 @@ class CLIBillingMixin:
             print("  🟡 Cancelled.")
             return
 
-        from clover_cli.nous_billing import (
+        from clover_cli.clover_billing import (
             BillingError,
             BillingScopeRequired,
             patch_auto_top_up,
@@ -1521,7 +1521,7 @@ class CLIBillingMixin:
         The endpoint requires ``threshold``/``topUpAmount`` in the body even when
         disabling, so we echo back the current values (falling back to 0).
         """
-        from clover_cli.nous_billing import (
+        from clover_cli.clover_billing import (
             BillingError,
             BillingScopeRequired,
             patch_auto_top_up,

@@ -182,10 +182,10 @@ def _use_keyless_ring() -> bool:
     if (get_env_value("FIRECRAWL_API_URL") or "").strip():
         return False
     import tools.web_tools as _wt
-    from tools.tool_backend_helpers import NOUS_MANAGED_PROVIDER, read_selection
+    from tools.tool_backend_helpers import CLOVER_MANAGED_PROVIDER, read_selection
 
     try:
-        if read_selection("web") == NOUS_MANAGED_PROVIDER:
+        if read_selection("web") == CLOVER_MANAGED_PROVIDER:
             return False
     except Exception:  # noqa: BLE001 — selection helpers optional
         pass
@@ -237,16 +237,16 @@ def _get_firecrawl_gateway_url() -> str:
 def _is_tool_gateway_ready() -> bool:
     """Return True when gateway URL + Clover Subscriber token are available.
 
-    Reads ``peek_nous_access_token`` and ``resolve_managed_tool_gateway``
+    Reads ``peek_clover_access_token`` and ``resolve_managed_tool_gateway``
     via :mod:`tools.web_tools` rather than direct imports, so unit tests
-    that ``patch("tools.web_tools._peek_nous_access_token", ...)`` see
+    that ``patch("tools.web_tools._peek_clover_access_token", ...)`` see
     their patches honored. The names are re-exported on
     :mod:`tools.web_tools` for exactly this reason.
     """
     import tools.web_tools as _wt
 
     return _wt.resolve_managed_tool_gateway(
-        "firecrawl", token_reader=_wt._peek_nous_access_token
+        "firecrawl", token_reader=_wt._peek_clover_access_token
     ) is not None
 
 
@@ -263,12 +263,12 @@ def check_firecrawl_api_key() -> bool:
     existing tests and the ``clover tools`` setup flow.
     """
     from tools.tool_backend_helpers import (
-        NOUS_MANAGED_PROVIDER,
+        CLOVER_MANAGED_PROVIDER,
         read_selection,
     )
 
     selected = read_selection("web")
-    if selected == NOUS_MANAGED_PROVIDER:
+    if selected == CLOVER_MANAGED_PROVIDER:
         return _is_tool_gateway_ready()
     if selected is not None:
         return _has_direct_firecrawl_config()
@@ -279,7 +279,7 @@ def _firecrawl_backend_help_suffix() -> str:
     """Return optional managed-gateway guidance for Firecrawl help text."""
     import tools.web_tools as _wt
 
-    if not _wt.managed_nous_tools_enabled():
+    if not _wt.managed_clover_tools_enabled():
         return ""
     return (
         ", or use the Clover Tool Gateway via your subscription "
@@ -296,13 +296,13 @@ def _raise_web_backend_configuration_error() -> "NoReturn":
         "Set FIRECRAWL_API_KEY for cloud Firecrawl or set FIRECRAWL_API_URL "
         "for a self-hosted Firecrawl instance."
     )
-    if _wt.managed_nous_tools_enabled():
+    if _wt.managed_clover_tools_enabled():
         message += (
             " With your Clover subscription you can also use the Tool Gateway. "
             "run `clover tools` and select Clover Subscription as the web provider."
         )
     else:
-        message += " " + _wt.nous_tool_gateway_unavailable_message(
+        message += " " + _wt.clover_tool_gateway_unavailable_message(
             "managed Firecrawl web tools",
         )
     raise ValueError(message)
@@ -327,13 +327,13 @@ def _get_firecrawl_client() -> Any:
     ``_firecrawl_client`` and ``_firecrawl_client_config``) rather than on
     this plugin module so that unit tests that reset the cache via
     ``tools.web_tools._firecrawl_client = None`` keep working. Helper
-    functions (``resolve_managed_tool_gateway``, ``_read_nous_access_token``,
+    functions (``resolve_managed_tool_gateway``, ``_read_clover_access_token``,
     ``Firecrawl``) are also looked up via :mod:`tools.web_tools` for the same
     reason — see :func:`_is_tool_gateway_ready`.
     """
     import tools.web_tools as _wt
     from tools.tool_backend_helpers import (
-        NOUS_MANAGED_PROVIDER,
+        CLOVER_MANAGED_PROVIDER,
         read_selection,
         selection_error,
         selection_exists,
@@ -345,21 +345,21 @@ def _get_firecrawl_client() -> Any:
 
     def _managed_kwargs():
         managed_gateway = _wt.resolve_managed_tool_gateway(
-            "firecrawl", token_reader=_wt._read_nous_access_token
+            "firecrawl", token_reader=_wt._read_clover_access_token
         )
         if managed_gateway is None:
             return None
         kwargs = {
-            "api_key": managed_gateway.nous_user_token,
+            "api_key": managed_gateway.clover_user_token,
             "api_url": managed_gateway.gateway_origin,
         }
         return kwargs, (
             "tool-gateway",
             kwargs["api_url"],
-            managed_gateway.nous_user_token,
+            managed_gateway.clover_user_token,
         )
 
-    if selected == NOUS_MANAGED_PROVIDER:
+    if selected == CLOVER_MANAGED_PROVIDER:
         managed = _managed_kwargs()
         if managed is None:
             logger.error(
@@ -369,7 +369,7 @@ def _get_firecrawl_client() -> Any:
             )
             raise ValueError(selection_error(
                 "web",
-                NOUS_MANAGED_PROVIDER,
+                CLOVER_MANAGED_PROVIDER,
                 "the Clover Tool Gateway is not available (not entitled or "
                 "unreachable)",
             ))

@@ -242,7 +242,7 @@ export interface Translations {
   }
 
   billingBlock: {
-    titleNous: string
+    titleCloverCredits: string
     titleProvider: (provider: string) => string
     fallbackMessage: string
     openBilling: string
@@ -1010,13 +1010,13 @@ export interface Translations {
       activeBackend: string
       activeBackendHint: string
       useBackend: string
-      nousIncluded: string
-      nousAuthNeededTitle: string
-      nousAuthNeededMessage: (provider: string) => string
-      nousAuthSignIn: string
-      nousAuthDoneTitle: string
-      nousAuthDoneMessage: string
-      nousAuthFailed: string
+      cloverIncluded: string
+      cloverAuthNeededTitle: string
+      cloverAuthNeededMessage: (provider: string) => string
+      cloverAuthSignIn: string
+      cloverAuthDoneTitle: string
+      cloverAuthDoneMessage: string
+      cloverAuthFailed: string
       noApiKeyRequired: string
       postSetupHint: (step: string) => string
       postSetupInstalledHint: string

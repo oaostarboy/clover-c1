@@ -7951,7 +7951,7 @@ function ModelPicker({ bot = null, value, onChange, placeholderModel = 'gateway 
         labeled(
           'Provider',
           jsx(Input, {
-            placeholder: 'omnirouter / 9router / nous \u2026',
+            placeholder: 'omnirouter / 9router / clover \u2026',
             value: value.provider,
             onChange: event => onChange({ provider: event.target.value })
           })
@@ -10620,7 +10620,7 @@ function RoutinesPane() {
               className: 'flex flex-1 flex-col items-center justify-center gap-3 px-4 text-center',
               children: [
                 // No generic placeholder here: an icon + "cronjobs are…" blurb and the
-                // create button both just said "empty" (Teknium, Aug 2026). The hint
+                // create button both just said "empty" (the maintainer, Aug 2026). The hint
                 // text stays only when jobs exist but are hidden by the bot filter —
                 // that carries real information, not an empty-state marker.
                 filterHint

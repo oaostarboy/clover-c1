@@ -10,7 +10,7 @@ Full docs: docs/integrations/providers
 |----------|------|----------------|
 | openrouter | API key | `OPENROUTER_API_KEY` |
 | anthropic | API key | `ANTHROPIC_API_KEY` (also `CLAUDE_CODE_OAUTH_TOKEN`) |
-| nous | OAuth device code | `clover auth add nous` (or `NOUS_API_KEY`) |
+| clover | OAuth device code | `clover auth add clover` (or `CLOVER_API_KEY`) |
 | openai-codex | OAuth | `clover auth add openai-codex` |
 | qwen-oauth | OAuth | `clover auth add qwen-oauth` |
 | minimax-oauth | OAuth | `clover auth add minimax-oauth` |

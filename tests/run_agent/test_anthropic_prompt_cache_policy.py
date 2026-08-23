@@ -480,7 +480,7 @@ class TestQwenAlibabaFamily:
 
 
 
-    def test_qwen_on_nous_portal_caches_with_envelope_layout(self):
+    def test_qwen_on_clover_portal_caches_with_envelope_layout(self):
         # Clover Portal Qwen takes the same envelope-layout cache_control
         # path as Portal Claude. Without this, Portal-routed qwen3.6-plus
         # falls through to the alibaba-family check (which only matches
@@ -494,7 +494,7 @@ class TestQwenAlibabaFamily:
         assert agent._anthropic_prompt_cache_policy() == (True, False)
 
 
-    def test_non_qwen_non_claude_on_nous_portal_does_not_cache(self):
+    def test_non_qwen_non_claude_on_clover_portal_does_not_cache(self):
         # Portal scope is narrow: Claude OR Qwen only. Other models
         # routed through Portal keep their existing fall-through behavior.
         agent = _make_agent(
@@ -822,7 +822,7 @@ class TestLiteLLMOpenAIWire:
         assert inner, "the OpenAI-wire grant must still place real breakpoints"
 
 
-class TestNousPortalAnthropicWire:
+class TestCloverPortalAnthropicWire:
     def test_portal_claude_on_the_messages_wire_uses_the_native_layout(self):
         agent = _make_agent(
             provider="clover",

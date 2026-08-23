@@ -50,11 +50,11 @@ class TestDiscordToolPreviewFormatting:
 
         adapter = _make_discord_adapter()
         url = "docs/gateway/discord/tool-progress"
-        visible = "https://clover-c1.clovercognition..."
+        visible = "https://localhost"
 
         out = adapter.format_tool_preview(ToolPreview(visible, truncated=True, url=url))
 
-        assert out == f"[clover-c1.clovercognition...](<{url}>)"
+        assert out == f"[localhost](<{url}>)"
 
     def test_truncated_url_label_is_not_a_second_url_target(self):
         from agent.display import ToolPreview

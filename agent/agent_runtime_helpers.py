@@ -1317,7 +1317,7 @@ def try_recover_primary_transport(
     # pool *does* need the rebuild every other anthropic_messages provider
     # already gets — don't blanket-skip the dual-wire path.
     if (
-        provider_lower in {"clover", "nous-portal", "clovercognition"}
+        provider_lower in {"clover", "clover-portal", "cloverc1"}
         and getattr(agent, "api_mode", None) != "anthropic_messages"
     ):
         return False
@@ -2284,7 +2284,7 @@ def anthropic_prompt_cache_policy(
     # Clover Portal proxies to OpenRouter behind the scenes — identical
     # OpenAI-wire envelope cache_control semantics. Treat it as an
     # OpenRouter-equivalent endpoint for caching layout purposes.
-    is_nous_portal = base_url_host_matches(eff_base_url, "")
+    is_clover_portal = base_url_host_matches(eff_base_url, "")
     is_anthropic_wire = eff_api_mode == "anthropic_messages"
     is_native_anthropic = (
         is_anthropic_wire
@@ -2363,7 +2363,7 @@ def anthropic_prompt_cache_policy(
     # branch below, which emits inner-block cache_control breakpoints; the
     # envelope form would be dropped and serve 0% cache hits.
     if (
-        (is_openrouter or is_nous_portal)
+        (is_openrouter or is_clover_portal)
         and (is_claude or is_kimi)
         and not is_anthropic_wire
     ):
@@ -2375,7 +2375,7 @@ def anthropic_prompt_cache_policy(
     # provider=opencode/alibaba and Portal traffic falls through to
     # (False, False), serving 0% cache hits and re-billing the full
     # prompt on every turn.
-    if is_nous_portal and "qwen" in model_lower:
+    if is_clover_portal and "qwen" in model_lower:
         return True, False
     if is_anthropic_wire and is_claude:
         # Third-party Anthropic-compatible gateway.

@@ -108,14 +108,14 @@ class TestNousParity:
     """Clover: product tags, reasoning passthrough (disable included)."""
 
     def test_tags(self, transport):
-        from agent.portal_tags import nous_portal_tags
+        from agent.portal_tags import clover_portal_tags
         kw = transport.build_kwargs(
             model="clover-3-llama-3.1-405b",
             messages=_simple_messages(),
             tools=None,
             provider_profile=get_provider_profile("clover"),
         )
-        assert kw["extra_body"]["tags"] == nous_portal_tags()
+        assert kw["extra_body"]["tags"] == clover_portal_tags()
 
 
 

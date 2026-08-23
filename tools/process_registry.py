@@ -2264,7 +2264,7 @@ class ProcessRegistry:
                 # session also carries an owned systemd scope, stop that scope
                 # before returning: a daemonized descendant may still be alive
                 # there even though the wrapper PID exited or was recycled
-                # across the gateway restart (#70716, teknium1 review).
+                # across the gateway restart (#70716, maintainer review).
                 if not self._host_pid_is_ours(session.pid, session.host_start_time):
                     if session.systemd_unit:
                         _stop_systemd_unit(session.systemd_unit)

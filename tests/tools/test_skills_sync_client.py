@@ -303,36 +303,36 @@ class TestDevGate:
     def test_gate_open_with_claim(self, monkeypatch):
         token = _jwt({"sub": "user1", "tool_gateway_admin": True})
         monkeypatch.setattr(
-            ssc, "resolve_nous_runtime_credentials",
+            ssc, "resolve_clover_runtime_credentials",
             lambda **kw: {"api_key": token, "base_url": "https://x"}, raising=False,
         )
         # patch the lazily-imported symbol used inside resolve_identity
         import clover_cli.auth as auth_mod
-        monkeypatch.setattr(auth_mod, "resolve_nous_runtime_credentials",
+        monkeypatch.setattr(auth_mod, "resolve_clover_runtime_credentials",
                             lambda **kw: {"api_key": token, "base_url": "https://x"})
         ident = ssc.resolve_identity()
-        assert ident["nous_admin"] is True
+        assert ident["clover_admin"] is True
         assert ident["owner"] == "user1"
 
     def test_gate_closed_without_claim(self, monkeypatch):
         token = _jwt({"sub": "user1"})  # no tool_gateway_admin
         import clover_cli.auth as auth_mod
-        monkeypatch.setattr(auth_mod, "resolve_nous_runtime_credentials",
+        monkeypatch.setattr(auth_mod, "resolve_clover_runtime_credentials",
                             lambda **kw: {"api_key": token, "base_url": "https://x"})
         ident = ssc.resolve_identity()
-        assert ident["nous_admin"] is False
+        assert ident["clover_admin"] is False
 
     def test_gate_closed_when_claim_false(self, monkeypatch):
         token = _jwt({"sub": "u", "tool_gateway_admin": False})
         import clover_cli.auth as auth_mod
-        monkeypatch.setattr(auth_mod, "resolve_nous_runtime_credentials",
+        monkeypatch.setattr(auth_mod, "resolve_clover_runtime_credentials",
                             lambda **kw: {"api_key": token, "base_url": "https://x"})
         assert ssc.dev_gate_open() is False
 
     def test_maybe_push_inert_when_gate_closed(self, monkeypatch):
         token = _jwt({"sub": "u"})
         import clover_cli.auth as auth_mod
-        monkeypatch.setattr(auth_mod, "resolve_nous_runtime_credentials",
+        monkeypatch.setattr(auth_mod, "resolve_clover_runtime_credentials",
                             lambda **kw: {"api_key": token})
         monkeypatch.setattr(ssc, "resolve_sync_base_url", lambda: "http://x")
         # gate closed -> None (inert), never attempts a push
@@ -344,7 +344,7 @@ class TestDevGate:
         def _raise(**kw):
             raise RuntimeError("not logged in")
 
-        monkeypatch.setattr(auth_mod, "resolve_nous_runtime_credentials", _raise)
+        monkeypatch.setattr(auth_mod, "resolve_clover_runtime_credentials", _raise)
         assert ssc.maybe_pull_skills() is None
 
 
@@ -484,7 +484,7 @@ def synced_env(tmp_path, monkeypatch):
 
     token = _jwt({"sub": "owner1", "tool_gateway_admin": True})
     identity = {"api_key": token, "base_url": "http://x", "owner": "owner1",
-                "nous_admin": True, "claims": {}}
+                "clover_admin": True, "claims": {}}
     return home, skills, identity
 
 
@@ -869,7 +869,7 @@ def _org_identity(role=None, org_id="org-1", owner="owner1"):
         claims["org_role"] = role
     token = _jwt(claims)
     return {"api_key": token, "base_url": "http://x", "owner": owner,
-            "nous_admin": True, "claims": claims,
+            "clover_admin": True, "claims": claims,
             **({"org_id": org_id, "org_role": role} if role else {})}
 
 
@@ -878,7 +878,7 @@ class TestOrgIdentityGate:
         # Personal org: NAS stamps NO org_role -> inert, not an error path.
         token = _jwt({"sub": "u", "org_id": "org-1"})
         import clover_cli.auth as auth_mod
-        monkeypatch.setattr(auth_mod, "resolve_nous_runtime_credentials",
+        monkeypatch.setattr(auth_mod, "resolve_clover_runtime_credentials",
                             lambda **kw: {"api_key": token, "base_url": "https://x"})
         with pytest.raises(ssc.SyncInertError):
             ssc.resolve_org_identity()
@@ -887,7 +887,7 @@ class TestOrgIdentityGate:
     def test_org_identity_with_role(self, monkeypatch):
         token = _jwt({"sub": "u", "org_id": "org-9", "org_role": "MEMBER"})
         import clover_cli.auth as auth_mod
-        monkeypatch.setattr(auth_mod, "resolve_nous_runtime_credentials",
+        monkeypatch.setattr(auth_mod, "resolve_clover_runtime_credentials",
                             lambda **kw: {"api_key": token, "base_url": "https://x"})
         ident = ssc.resolve_org_identity()
         assert ident["org_id"] == "org-9"
@@ -1006,7 +1006,7 @@ class TestOrgEndToEnd:
         # Personal org: no org_role claim -> None, never raises.
         token = _jwt({"sub": "u", "org_id": "org-1"})
         import clover_cli.auth as auth_mod
-        monkeypatch.setattr(auth_mod, "resolve_nous_runtime_credentials",
+        monkeypatch.setattr(auth_mod, "resolve_clover_runtime_credentials",
                             lambda **kw: {"api_key": token})
         assert ssc.maybe_pull_org_skills() is None
 

@@ -577,12 +577,12 @@ fi
 #
 # The [ ! -f ] guard above deliberately refuses to clobber an existing
 # auth.json, so a container whose Clover bootstrap session took a terminal
-# invalid_grant (tokens cleared, providers.nous.last_auth_error.relogin_required
+# invalid_grant (tokens cleared, providers.clover.last_auth_error.relogin_required
 # stamped) can NOT recover from a plain restart — it stays unauthenticated until
 # the credential is replaced. An orchestrator that manages the container can
 # supply a freshly-issued session via CLOVER_AUTH_JSON_REBOOTSTRAP (distinct
 # from the create-only *_BOOTSTRAP var); this helper swaps ONLY the
-# providers.nous entry when the on-disk entry is provably terminal OR the
+# providers.clover entry when the on-disk entry is provably terminal OR the
 # orchestrator seed has a later obtained_at timestamp. The latter covers the
 # stop/update/start sequence where NAS already revoked the still-healthy-looking
 # local session. Older/incomparable seeds remain no-ops, so leaving the env set
@@ -593,9 +593,9 @@ if [ -f "$CLOVER_HOME/auth.json" ] && [ -n "${CLOVER_AUTH_JSON_REBOOTSTRAP:-}" ]
         :
     else
         s6-setuidgid clover "$INSTALL_DIR/.venv/bin/python" \
-            "$INSTALL_DIR/scripts/docker_rebootstrap_nous_session.py" \
+            "$INSTALL_DIR/scripts/docker_rebootstrap_clover_session.py" \
             "$CLOVER_HOME/auth.json" \
-            || echo "[stage2] Warning: docker_rebootstrap_nous_session.py failed; continuing"
+            || echo "[stage2] Warning: docker_rebootstrap_clover_session.py failed; continuing"
     fi
 fi
 

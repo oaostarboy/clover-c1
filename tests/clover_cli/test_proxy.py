@@ -33,19 +33,19 @@ from clover_cli.proxy.adapters.xai import XAIGrokAdapter
 # ---------------------------------------------------------------------------
 
 
-def _write_auth_store(clover_home: Path, nous_state: Dict[str, Any]) -> Path:
-    """Write an auth.json with the given nous state into a hermetic CLOVER_HOME."""
+def _write_auth_store(clover_home: Path, clover_state: Dict[str, Any]) -> Path:
+    """Write an auth.json with the given clover state into a hermetic CLOVER_HOME."""
     auth_path = clover_home / "auth.json"
     auth_path.write_text(json.dumps({
         "version": 1,
-        "providers": {"clover": nous_state},
+        "providers": {"clover": clover_state},
     }))
     return auth_path
 
 
 
 
-def test_nous_adapter_concurrent_refresh_serialized(tmp_path, monkeypatch):
+def test_clover_adapter_concurrent_refresh_serialized(tmp_path, monkeypatch):
     """Two parallel get_credential() calls must serialize through the lock."""
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
     _write_auth_store(tmp_path, {
@@ -90,7 +90,7 @@ def test_nous_adapter_concurrent_refresh_serialized(tmp_path, monkeypatch):
             errors.append(exc)
 
     with patch(
-        "clover_cli.proxy.adapters.clover_portal.resolve_nous_runtime_credentials",
+        "clover_cli.proxy.adapters.clover_portal.resolve_clover_runtime_credentials",
         side_effect=serializing_refresh,
     ):
         threads = [threading.Thread(target=worker) for _ in range(3)]

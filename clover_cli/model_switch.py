@@ -371,7 +371,7 @@ _CLOVER_MODEL_WARNING = (
 #   Clover Cognition/Clover-3-Llama-3.1-70B, clover-4-405b, openrouter/clover3:70b
 # Negative examples it must NOT match:
 #   clover-brain:qwen3-14b-ctx16k, qwen3:14b, claude-opus-4-6
-_NOUS_CLOVER_NON_AGENTIC_RE = re.compile(
+_CLOVER_CLOVER_NON_AGENTIC_RE = re.compile(
     r"(?:^|[/:])clover[-_ ]?[34](?:[-_.:]|$)",
     re.IGNORECASE,
 )
@@ -422,7 +422,7 @@ def format_model_for_display(model_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-def is_nous_clover_non_agentic(model_name: str) -> bool:
+def is_clover_clover_non_agentic(model_name: str) -> bool:
     """Return True if *model_name* is a real Clover Clover 3/4 chat model.
 
     Used to decide whether to surface the non-agentic warning at startup.
@@ -431,12 +431,12 @@ def is_nous_clover_non_agentic(model_name: str) -> bool:
     """
     if not model_name:
         return False
-    return bool(_NOUS_CLOVER_NON_AGENTIC_RE.search(model_name))
+    return bool(_CLOVER_CLOVER_NON_AGENTIC_RE.search(model_name))
 
 
 def _check_clover_model_warning(model_name: str) -> str:
     """Return a warning string if *model_name* is a Clover Clover 3/4 chat model."""
-    if is_nous_clover_non_agentic(model_name):
+    if is_clover_clover_non_agentic(model_name):
         return _CLOVER_MODEL_WARNING
     return ""
 
@@ -2142,10 +2142,10 @@ def switch_model(
     # /chat/completions. resolve_runtime_provider already sets this when it
     # succeeds; always re-derive from the *final* (post-normalize) model so
     # alias clears / empty fallbacks cannot leave Claude on the OpenAI wire.
-    if target_provider in {"clover", "nous-portal", "clovercognition"}:
-        from clover_cli.providers import nous_api_mode
+    if target_provider in {"clover", "clover-portal", "cloverc1"}:
+        from clover_cli.providers import clover_api_mode
 
-        api_mode = nous_api_mode(new_model)
+        api_mode = clover_api_mode(new_model)
 
     # --- Determine api_mode if not already set ---
     if not api_mode:
@@ -2574,7 +2574,7 @@ def list_authenticated_providers(
     user_providers: dict = None,
     custom_providers: list | None = None,
     *,
-    force_fresh_nous_tier: bool = False,
+    force_fresh_clover_tier: bool = False,
     max_models: int | None = None,
     current_model: str = "",
     refresh: bool = False,
@@ -2599,7 +2599,7 @@ def list_authenticated_providers(
       - source: str — "built-in", "models.dev", "user-config"
 
     Only includes providers that have API keys set or are user-defined endpoints.
-    ``force_fresh_nous_tier`` bypasses the short Clover tier cache for explicit
+    ``force_fresh_clover_tier`` bypasses the short Clover tier cache for explicit
     account-sensitive flows. UI picker opens should leave it false so they do
     not block on fresh Portal/account checks every time.
 
@@ -2629,7 +2629,7 @@ def list_authenticated_providers(
     from clover_cli.models import (
         OPENROUTER_MODELS, _PROVIDER_MODELS,
         _MODELS_DEV_PREFERRED, _merge_with_models_dev, cached_provider_model_ids,
-        clear_provider_models_cache, get_curated_nous_model_ids,
+        clear_provider_models_cache, get_curated_clover_model_ids,
     )
 
     # Explicit refresh: drop every provider's cached model-id list so the
@@ -2737,7 +2737,7 @@ def list_authenticated_providers(
     # newly added Portal models surface in the /model picker without
     # requiring a Clover release. Falls back to the in-repo
     # _PROVIDER_MODELS["clover"] snapshot when the manifest is unreachable.
-    curated["clover"] = get_curated_nous_model_ids()
+    curated["clover"] = get_curated_clover_model_ids()
     # Ollama Cloud uses dynamic discovery (no static curated list)
     if "ollama-cloud" not in curated:
         from clover_cli.models import fetch_ollama_cloud_models
@@ -2926,7 +2926,7 @@ def list_authenticated_providers(
         seen_slugs.add(slug.lower())
         _record_builtin_endpoint(slug)
 
-    # --- 2. Check Clover-only providers (nous, openai-codex, copilot, opencode-go) ---
+    # --- 2. Check Clover-only providers (clover, openai-codex, copilot, opencode-go) ---
     from clover_cli.providers import CLOVER_OVERLAYS
     from clover_cli.auth import PROVIDER_REGISTRY as _auth_registry
 
@@ -3057,7 +3057,7 @@ def list_authenticated_providers(
             # `clover model` picker deliberately shows ONLY the curated agentic
             # list — augmented with the Portal's free/paid recommendations so
             # newly-launched models surface without a CLI release — in curated
-            # order. Mirror that exactly (see _model_flow_nous in main.py) so
+            # order. Mirror that exactly (see _model_flow_clover in main.py) so
             # the GUI picker matches the CLI. Was: falling through to
             # cached_provider_model_ids, which dumped the full alphabetical
             # catalog; then: curated-only, which dropped the 4 Portal
@@ -3065,21 +3065,21 @@ def list_authenticated_providers(
             model_ids = curated.get("clover", [])
             try:
                 from clover_cli.models import (
-                    get_pricing_for_provider as _nous_pricing,
-                    check_nous_free_tier as _nous_free,
+                    get_pricing_for_provider as _clover_pricing,
+                    check_clover_free_tier as _clover_free,
                     union_with_portal_free_recommendations as _union_free,
                     union_with_portal_paid_recommendations as _union_paid,
                 )
-                from clover_cli.auth import get_provider_auth_state as _nous_state
+                from clover_cli.auth import get_provider_auth_state as _clover_state
 
-                _pricing = _nous_pricing("clover") or {}
+                _pricing = _clover_pricing("clover") or {}
                 _portal = ""
                 try:
-                    _st = _nous_state("clover") or {}
+                    _st = _clover_state("clover") or {}
                     _portal = _st.get("portal_base_url", "") or ""
                 except Exception:
                     _portal = ""
-                if _nous_free(force_fresh=force_fresh_nous_tier):
+                if _clover_free(force_fresh=force_fresh_clover_tier):
                     model_ids, _ = _union_free(model_ids, _pricing, _portal)
                 else:
                     model_ids, _ = _union_paid(model_ids, _pricing, _portal)

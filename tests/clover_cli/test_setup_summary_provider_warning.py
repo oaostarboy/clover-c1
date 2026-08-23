@@ -25,7 +25,7 @@ def _summary_output(capsys, provider_ready: bool):
 
     # Keep the summary fast/hermetic: stub the heavier feature probes.
     with patch("clover_cli.auth.resolve_provider", resolver), \
-         patch.object(setup_mod, "get_nous_subscription_features") as feats:
+         patch.object(setup_mod, "get_clover_subscription_features") as feats:
         feats.side_effect = Exception("stubbed")
         try:
             setup_mod._print_setup_summary({}, "/tmp/nowhere")
