@@ -1,0 +1,7 @@
+name: web-xai
+version: 1.0.0
+description: "xAI Web Search — search the web via Grok's agentic web_search tool (Responses API). Requires xAI Grok OAuth (via `clover auth`) or XAI_API_KEY (https://x.ai)."
+author: Clover Cognition
+kind: backend
+provides_web_providers:
+  - xai

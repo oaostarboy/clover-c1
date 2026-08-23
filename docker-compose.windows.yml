@@ -1,0 +1,38 @@
+#
+# docker-compose.windows.yml — Windows Docker Desktop compatible
+#
+# Differences from docker-compose.yml:
+#   - Removes `network_mode: host` (not supported on Docker Desktop for Windows)
+#   - Uses explicit port mappings instead
+#   - Uses Windows-style volume path for ~/.clover
+#
+# Usage:
+#   docker compose -f docker-compose.windows.yml up -d
+#
+services:
+  gateway:
+    image: cloverc1/clover-c1:latest
+    container_name: clover
+    restart: unless-stopped
+    volumes:
+      - ${USERPROFILE}/.clover:/opt/data
+    environment:
+      - CLOVER_UID=10000
+      - CLOVER_GID=10000
+    command: ["gateway", "run"]
+
+  dashboard:
+    image: cloverc1/clover-c1:latest
+    container_name: clover-dashboard
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    volumes:
+      - ${USERPROFILE}/.clover:/opt/data
+    environment:
+      - CLOVER_UID=10000
+      - CLOVER_GID=10000
+      - CLOVER_DASHBOARD_HOST=0.0.0.0
+    ports:
+      - "127.0.0.1:9119:9119"
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--insecure"]
