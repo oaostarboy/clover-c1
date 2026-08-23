@@ -1,8 +1,8 @@
 import { useCallback } from "react";
-import { Input } from "@nous-research/ui/ui/components/input";
-import { Label } from "@nous-research/ui/ui/components/label";
-import { Select, SelectOption } from "@nous-research/ui/ui/components/select";
-import { Button } from "@nous-research/ui/ui/components/button";
+import { Input } from "@clover/ui/ui/components/input";
+import { Label } from "@clover/ui/ui/components/label";
+import { Select, SelectOption } from "@clover/ui/ui/components/select";
+import { Button } from "@clover/ui/ui/components/button";
 import { useI18n } from "@/i18n";
 import {
   buildScheduleString,

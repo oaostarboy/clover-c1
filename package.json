@@ -1,14 +1,15 @@
 {
   "name": "clover-c1",
   "version": "1.0.0",
-  "description": "Clover Cognition 1.0 (Clover C1) — an autonomous agent with advanced tool-calling and a flexible toolsets system.",
+  "description": "Clover Cognition 1.0 (Clover C1) \u2014 an autonomous agent with advanced tool-calling and a flexible toolsets system.",
   "private": true,
   "workspaces": [
     "apps/*",
     "ui-tui",
     "ui-tui/packages/*",
     "web",
-    "tests-js"
+    "tests-js",
+    "packages/*"
   ],
   "scripts": {
     "postinstall": "echo '\u2705 Node dependencies installed. Run: python run_agent.py --help'",

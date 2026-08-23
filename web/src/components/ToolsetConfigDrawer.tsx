@@ -7,14 +7,14 @@ import type {
   ToolsetInfo,
   ToolsetProvider,
 } from "@/lib/api";
-import { useToast } from "@nous-research/ui/hooks/use-toast";
-import { Button } from "@nous-research/ui/ui/components/button";
-import { Input } from "@nous-research/ui/ui/components/input";
-import { Label } from "@nous-research/ui/ui/components/label";
-import { Badge } from "@nous-research/ui/ui/components/badge";
-import { Switch } from "@nous-research/ui/ui/components/switch";
-import { Spinner } from "@nous-research/ui/ui/components/spinner";
-import { Toast } from "@nous-research/ui/ui/components/toast";
+import { useToast } from "@clover/ui/hooks/use-toast";
+import { Button } from "@clover/ui/ui/components/button";
+import { Input } from "@clover/ui/ui/components/input";
+import { Label } from "@clover/ui/ui/components/label";
+import { Badge } from "@clover/ui/ui/components/badge";
+import { Switch } from "@clover/ui/ui/components/switch";
+import { Spinner } from "@clover/ui/ui/components/spinner";
+import { Toast } from "@clover/ui/ui/components/toast";
 import { cn, themedBody } from "@/lib/utils";
 
 interface Props {

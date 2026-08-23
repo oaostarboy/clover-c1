@@ -2,7 +2,7 @@
   "name": "@clover/bootstrap-installer",
   "private": true,
   "version": "0.0.1",
-  "description": "Clover Setup — signed installer that drives scripts/install.ps1 with a polished native UI.",
+  "description": "Clover Setup \u2014 signed installer that drives scripts/install.ps1 with a polished native UI.",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5175",
@@ -19,7 +19,7 @@
     "fix": "npm run lint:fix"
   },
   "dependencies": {
-    "@nous-research/ui": "0.18.2",
+    "@clover/ui": "*",
     "@tailwindcss/typography": "0.5.20",
     "@tailwindcss/vite": "4.3.3",
     "@tauri-apps/api": "2.11.1",

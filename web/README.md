@@ -65,7 +65,7 @@ Read before adding or editing UI styles. These rules keep the dashboard legible 
 
 - **Never apply opacity below 0.7 to text.** No `opacity-30`, `opacity-50`, `opacity-60` on `<span>`s, `<p>`s, labels, etc.
 - **Do not stack opacity tokens.** Patterns like `text-muted-foreground/60`, `text-midground/70`, `text-foreground/50` create unpredictable WCAG failures because the parent token already has alpha.
-- Use the **semantic text tokens** from `@nous-research/ui`'s `globals.css`:
+- Use the **semantic text tokens** from `@clover/ui`'s `globals.css`:
   - `text-text-primary` — default body text.
   - `text-text-secondary` — subtitles, meta, inactive nav.
   - `text-text-tertiary` — small chrome labels, counts, footnotes.
