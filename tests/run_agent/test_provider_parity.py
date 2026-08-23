@@ -359,7 +359,7 @@ class TestBuildApiKwargsNousPortal:
         agent = _make_agent(
             monkeypatch,
             "clover",
-            base_url="https://inference.clover-c1.local/v1",
+            base_url="",
             model="gpt-5",
         )
         messages = [{"role": "user", "content": "hi"}]
@@ -371,7 +371,7 @@ class TestBuildApiKwargsNousPortal:
         agent = _make_agent(
             monkeypatch,
             "clover",
-            base_url="https://inference.clover-c1.local/v1",
+            base_url="",
             model="gpt-5",
         )
         messages = [{"role": "user", "content": "hi"}]

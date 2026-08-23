@@ -255,7 +255,7 @@ def is_free_tier_model(model: str, base_url: str = "") -> bool:
         from clover_cli.models import _is_model_free, _pricing_cache
 
         # Mirror get_pricing_for_provider's key normalization: the agent's
-        # Clover base_url is /v1-suffixed (https://inference.clover-c1.local/v1)
+        # Clover base_url is /v1-suffixed ()
         # but the picker keys _pricing_cache on the pre-/v1 root.
         key = base_url.rstrip("/")
         if key.endswith("/v1"):

@@ -24,10 +24,10 @@ A quick search before you build saves your time and keeps the PR queue clean —
 
 - **Search both open *and* merged PRs and issues** for your topic or error symptom — the duplicate-check in the PR template fires at review time, after you've already done the work:
   ```bash
-  gh search issues --repo CloverCognition/clover-c1 "<your terms>"
-  gh search prs --repo CloverCognition/clover-c1 --state all "<your terms>"
+  gh search issues --repo clover-c1 "<your terms>"
+  gh search prs --repo clover-c1 --state all "<your terms>"
   ```
-  Or use the web UI: [issues](https://github.com/CloverCognition/clover-c1/issues?q=) · [PRs (all states)](https://github.com/CloverCognition/clover-c1/pulls?q=is%3Apr).
+  Or use the web UI: issues · PRs (all states).
 - **The issue tracker can lag the code.** Many requested features are already implemented in-tree, so also search the source (`search_files`, or your editor's grep) for the capability before proposing it.
 - **If an open PR already addresses it**, consider reviewing or improving that one instead of opening a competing duplicate.
 - **For larger work**, comment on the issue to signal you're working on it, so others don't start the same thing.
@@ -63,7 +63,7 @@ Bundled skills (in `skills/`) ship with every Clover install. They should be **b
 
 If your skill is official and useful but not universally needed (e.g., a paid service integration, a heavyweight dependency), put it in **`optional-skills/`** — it ships with the repo but isn't activated by default. Users can discover it via `clover skills browse` (labeled "official") and install it with `clover skills install` (no third-party warning, built-in trust).
 
-If your skill is specialized, community-contributed, or niche, it's better suited for a **Skills Hub** — upload it to a skills registry and share it in the [Clover Cognition Discord](https://discord.gg/CloverCognition). Users can install it with `clover skills install`.
+If your skill is specialized, community-contributed, or niche, it's better suited for a **Skills Hub** — upload it to a skills registry and share it in the Clover Cognition Discord. Users can install it with `clover skills install`.
 
 ---
 
@@ -93,10 +93,10 @@ The reason is maintenance load, not quality. Every external product absorbed int
 
 Publish these as a **standalone plugin repo** instead:
 
-- Implement the relevant ABC and use the existing plugin discovery path (`~/.clover/plugins/`, project `.clover/plugins/`, or a pip entry point) — see [Build a Clover Plugin](https://clover-c1.local/docs/guides/build-a-clover-plugin)
+- Implement the relevant ABC and use the existing plugin discovery path (`~/.clover/plugins/`, project `.clover/plugins/`, or a pip entry point) — see [Build a Clover Plugin](docs/guides/build-a-clover-plugin)
 - Register lifecycle hooks (`pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`, `on_session_start`, `on_session_end`), tools (`ctx.register_tool`), and CLI subcommands (`ctx.register_cli_command`) through the surface we already expose — no core changes needed
 - If your plugin needs a capability the framework doesn't expose, that's a feature request to **widen the generic plugin surface** (a new hook or `ctx` method) — never special-case your plugin in core
-- Promote it in the [Clover Cognition Discord](https://discord.gg/CloverCognition) `#plugins-skills-and-skins` channel so users can find and install it
+- Promote it in the Clover Cognition Discord `#plugins-skills-and-skins` channel so users can find and install it
 
 A well-built third-party-product plugin can clear automated review and still be closed for this reason — it's a placement decision, not a verdict on the code. PRs that add such a directory under `plugins/` will be closed with a pointer to publish it as its own repo.
 
@@ -124,7 +124,7 @@ development environment on the same layout the CLI, updater, lazy dependency
 installer, gateway, and docs assume.
 
 ```bash
-curl -fsSL https://clover-c1.local/install.sh | bash
+curl -fsSL  | bash
 cd "${CLOVER_HOME:-$HOME/.clover}/clover-c1"
 
 # Add dev/test extras on top of the standard install.
@@ -156,7 +156,7 @@ which silently destroys the running runtime mid-session. Keeping it outside the
 tree means no relative path from the workspace resolves to it.
 
 ```bash
-git clone https://github.com/CloverCognition/clover-c1.git
+git clone
 cd clover-c1
 
 # Create venv with Python 3.11, OUTSIDE the source tree
@@ -275,7 +275,7 @@ clover-c1/
 ├── skills/                   # Bundled skills (copied to ~/.clover/skills/ on install)
 ├── optional-skills/          # Official optional skills (discoverable via hub, not activated by default)
 ├── tests/                    # Test suite
-├── website/                  # Documentation site (clover-c1.clover-c1.local)
+├── website/                  # Documentation site (clover-c1.)
 │
 ├── cli-config.yaml.example   # Example configuration (copied to ~/.clover/config.yaml)
 └── AGENTS.md                 # Development guide for AI coding assistants
@@ -972,7 +972,7 @@ test(tools): add unit tests for file_operations
 
 ## Reporting Issues
 
-- Use [GitHub Issues](https://github.com/CloverCognition/clover-c1/issues)
+- Use GitHub Issues
 - Include: OS, Python version, Clover version (`clover --version`), full error traceback
 - Include steps to reproduce
 - Check existing issues before creating duplicates
@@ -981,8 +981,6 @@ test(tools): add unit tests for file_operations
 ---
 
 ## Community
-
-- **Discord**: [discord.gg/CloverCognition](https://discord.gg/CloverCognition) — for questions, showcasing projects, and sharing skills
 - **GitHub Discussions**: For design proposals and architecture discussions
 - **Skills Hub**: Upload specialized skills to a registry and share them with the community
 

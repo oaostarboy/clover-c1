@@ -302,7 +302,7 @@ describe('external link helpers', () => {
   it('prefixes a pretty link to a known host with its brand glyph', () => {
     installDesktopBridge()
 
-    const url = 'https://github.com/CloverCognition/clover-c1/pull/123'
+    const url = ''
 
     render(<PrettyLink fallbackLabel="#123" href={url} />)
 

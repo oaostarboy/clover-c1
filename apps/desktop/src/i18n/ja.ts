@@ -886,7 +886,7 @@ export const ja = defineLocale({
       sshErrHostKey:
         '前回の接続以降、ホスト鍵が変更されています。想定どおりか確認し、ssh-keygen -R <host> を実行してから再接続してください。',
       sshErrNotInstalled:
-        'リモートホストに Clover がインストールされていません。リモートでインストールする（curl -fsSL https://clover-c1.local/install.sh | sh）か、Clover パスを設定してください。',
+        'リモートホストに Clover がインストールされていません。リモートでインストールする（curl -fsSL  | sh）か、Clover パスを設定してください。',
       sshErrPlatform:
         'サポートされていないリモートプラットフォームです。Clover Desktop の SSH モードは Linux、macOS、Windows のリモートホストに対応しています。',
       sshErrTimeout: 'SSH 接続がタイムアウトしました。ホストが到達不能、またはスリープ中の可能性があります。',

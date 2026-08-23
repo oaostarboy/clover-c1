@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   check-freshness:
-    if: github.repository == 'CloverCognition/clover-c1'
+    if: github.repository == 'clover-c1'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: trusted-automation
@@ -35,7 +35,7 @@ jobs:
         id: probe
         run: |
           set -e
-          URL="https://clover-c1.local/docs/api/skills-index.json"
+          URL="docs/api/skills-index.json"
           echo "Probing $URL"
           # -L follows redirects; -f fails on HTTP errors; -s suppresses progress
           if ! curl -fsSL --retry 3 --retry-delay 10 -o /tmp/skills-index.json "$URL"; then

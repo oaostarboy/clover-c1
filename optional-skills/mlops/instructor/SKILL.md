@@ -733,7 +733,6 @@ class PartialData(BaseModel):
 - **Documentation**: https://python.useinstructor.com
 - **GitHub**: https://github.com/jxnl/instructor (15k+ stars)
 - **Cookbook**: https://python.useinstructor.com/examples
-- **Discord**: Community support available
 
 ## See Also
 

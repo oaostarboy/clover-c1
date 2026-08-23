@@ -26,9 +26,9 @@ import { ExternalLink, Loader2Icon, Lock } from '@/lib/icons'
 import { $sendDiagnostics, confirmSendDiagnostics, dismissSendDiagnostics } from '@/store/send-diagnostics'
 
 const SUPPORT_LINKS = [
-  { key: 'github', url: 'https://github.com/CloverCognition/clover-c1/issues' },
-  { key: 'portal', url: 'https://portal.clover-c1.local/help' },
-  { key: 'discord', url: 'https://discord.gg/CloverCognition' }
+  { key: 'github', url: '' },
+  { key: 'portal', url: '' },
+  { key: 'discord', url: '' }
 ] as const
 
 export function SendDiagnosticsHost() {

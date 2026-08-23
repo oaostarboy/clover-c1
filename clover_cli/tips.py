@@ -335,7 +335,7 @@ TIPS = [
     "CLOVER_DEV=1 bypasses container mode detection for local development.",
     "Each MCP server gets its own toolset (mcp-servername) that can be toggled independently via clover tools.",
     "MCP ${ENV_VAR} placeholders in config are resolved at server spawn — including vars from ~/.clover/.env.",
-    "Skills from trusted repos (CloverCognition) get a 'trusted' security level; community skills get extra scanning.",
+    "Skills from trusted repos (Clover Cognition) get a 'trusted' security level; community skills get extra scanning.",
     "The skills quarantine at ~/.clover/skills/.hub/quarantine/ holds skills pending security review.",
 
     # --- Advanced Slash Commands ---

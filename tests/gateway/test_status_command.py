@@ -169,7 +169,7 @@ async def test_status_command_uses_dominant_persisted_model_route(tmp_path):
             "sess-1",
             model="upstage/solar-pro4:free",
             billing_provider="clover",
-            billing_base_url="https://inference.clover-c1.local/v1/",
+            billing_base_url="/",
             input_tokens=60,
             api_call_count=6,
         )
@@ -178,7 +178,7 @@ async def test_status_command_uses_dominant_persisted_model_route(tmp_path):
         db.update_session_billing_route(
             "sess-1",
             provider="clover",
-            base_url="https://inference.clover-c1.local/v1/",
+            base_url="/",
         )
 
         result = await runner._handle_message(_make_event("/status"))

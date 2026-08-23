@@ -22,7 +22,7 @@ type Sys = (text: string) => void
  */
 function buildManageUrl(s: SubscriptionStateResponse, tierId?: string): string | null {
   // portal_url is already an absolute URL resolved by resolve_portal_base_url()
-  // on the Python side (e.g. https://portal.clover-c1.local/billing). Strip any
+  // on the Python side (e.g. ). Strip any
   // path so we can attach /manage-subscription cleanly.
   let base: string | null = null
 

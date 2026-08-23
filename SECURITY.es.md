@@ -6,8 +6,8 @@ alcance para los informes de vulnerabilidades.
 
 ## 1. Reportar una Vulnerabilidad
 
-Reporta de forma privada a través de [GitHub Security Advisories](https://github.com/CloverCognition/clover-c1/security/advisories/new)
-o **security@clover-c1.local**. No abras issues públicos para
+Reporta de forma privada a través de GitHub Security Advisories
+o **security@**. No abras issues públicos para
 vulnerabilidades de seguridad. **Clover Cognition no opera un programa de
 recompensas por errores.**
 
@@ -321,6 +321,6 @@ La decisión de fortalecimiento más importante es hacer coincidir el aislamient
 - **Ventana de divulgación coordinada:** 90 días desde el informe, o hasta que se
   publique una corrección, lo que ocurra primero.
 - **Canal:** el hilo GHSA o correspondencia por email con
-  security@clover-c1.local.
+  security@.
 - **Crédito:** los reportadores reciben crédito en las notas de versión a menos que
   se solicite anonimato.

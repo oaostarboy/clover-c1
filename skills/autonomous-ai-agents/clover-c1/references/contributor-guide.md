@@ -1,6 +1,6 @@
 # Contributor Quick Reference
 
-For occasional contributors and PR authors. Full developer docs: https://clover-c1.local/docs/developer-guide/
+For occasional contributors and PR authors. Full developer docs: docs/developer-guide/
 
 ### Project Layout
 

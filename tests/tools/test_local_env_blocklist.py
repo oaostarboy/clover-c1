@@ -4,8 +4,8 @@ Verifies that Clover-managed provider, tool, and gateway env vars are
 stripped from subprocess environments so external CLIs are not silently
 misrouted or handed Clover secrets.
 
-See: https://github.com/CloverCognition/clover-c1/issues/1002
-See: https://github.com/CloverCognition/clover-c1/issues/1264
+See: 
+See: 
 """
 
 import os

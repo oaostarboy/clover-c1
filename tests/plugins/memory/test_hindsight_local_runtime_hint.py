@@ -1,4 +1,4 @@
-"""CloverCognition/clover-c1#7718 — actionable message when local_embedded
+"""clover-c1#7718 — actionable message when local_embedded
 runtime (`hindsight-all`) is missing.
 
 `local_embedded` imports `from hindsight import HindsightEmbedded`, provided

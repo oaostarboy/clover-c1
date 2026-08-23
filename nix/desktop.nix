@@ -209,7 +209,7 @@ stdenv.mkDerivation {
 
   meta = with lib; {
     description = "Native Electron desktop shell for Clover Cognition";
-    homepage = "https://github.com/CloverCognition/clover-c1";
+    homepage = "";
     license = licenses.mit;
     platforms = platforms.unix;
     mainProgram = "clover-desktop";

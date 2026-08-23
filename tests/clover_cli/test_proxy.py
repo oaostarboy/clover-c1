@@ -74,7 +74,7 @@ def test_nous_adapter_concurrent_refresh_serialized(tmp_path, monkeypatch):
             return {
                 "api_key": f"key-{idx}",
                 "expires_at": "2099-01-01T00:00:00Z",
-                "base_url": "https://inference.clover-c1.local/v1",
+                "base_url": "",
             }
         finally:
             in_flight.clear()

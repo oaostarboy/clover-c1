@@ -57,7 +57,7 @@ def test_check_via_local_git_ssh_fastpath_ahead_not_behind(tmp_path):
 
     def fake_git_stdout(args, *, cwd, timeout=5):
         if args == ["remote", "get-url", "origin"]:
-            return "git@github.com:CloverCognition/clover-c1.git"
+            return "git@github.com:clover-c1.git"
         if args == ["rev-parse", "HEAD"]:
             return "b" * 40  # carried commit, differs from upstream tip
         raise AssertionError(f"unexpected git call: {args}")
@@ -84,7 +84,7 @@ def test_check_via_local_git_ssh_fastpath_genuinely_behind(tmp_path):
 
     def fake_git_stdout(args, *, cwd, timeout=5):
         if args == ["remote", "get-url", "origin"]:
-            return "git@github.com:CloverCognition/clover-c1.git"
+            return "git@github.com:clover-c1.git"
         if args == ["rev-parse", "HEAD"]:
             return "b" * 40
         raise AssertionError(f"unexpected git call: {args}")
@@ -112,7 +112,7 @@ def test_check_via_local_git_ssh_fastpath_offline_keeps_sentinel(tmp_path):
 
     def fake_git_stdout(args, *, cwd, timeout=5):
         if args == ["remote", "get-url", "origin"]:
-            return "git@github.com:CloverCognition/clover-c1.git"
+            return "git@github.com:clover-c1.git"
         if args == ["rev-parse", "HEAD"]:
             return "b" * 40
         raise AssertionError(f"unexpected git call: {args}")

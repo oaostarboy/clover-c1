@@ -136,7 +136,7 @@ def nous_portal_billing_url(account_info: Optional[CloverPortalAccountInfo] = No
     try:
         from clover_cli.auth import DEFAULT_NOUS_PORTAL_URL
     except Exception:
-        DEFAULT_NOUS_PORTAL_URL = "https://portal.clover-c1.local"
+        DEFAULT_NOUS_PORTAL_URL = ""
 
     base = None
     if account_info is not None:
@@ -585,7 +585,7 @@ def _fetch_nous_account_info(
     access_token: str,
     portal_base_url: Optional[str] = None,
 ) -> dict[str, Any]:
-    base = (portal_base_url or "https://portal.clover-c1.local").rstrip("/")
+    base = (portal_base_url or "").rstrip("/")
     url = f"{base}/api/oauth/account"
     headers = {
         "Authorization": f"Bearer {access_token}",

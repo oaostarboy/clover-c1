@@ -21,7 +21,7 @@ from providers.base import ProviderProfile
 # rotation. Without them OpenCode only sees the OpenAI SDK's generic
 # "OpenAI/Python x.y.z" User-Agent and can't tell the traffic is Clover Cognition.
 _ATTRIBUTION_HEADERS = {
-    "HTTP-Referer": "https://clover-c1.local",
+    "HTTP-Referer": "",
     "X-Title": "Clover Cognition",
     "User-Agent": f"CloverAgent/{_CLOVER_VERSION}",
 }

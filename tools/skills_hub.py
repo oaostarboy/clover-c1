@@ -3333,7 +3333,7 @@ class OptionalSkillSource(SkillSource):
     (search / install / inspect) and labelled "official" with "builtin" trust.
     """
 
-    OFFICIAL_REPO = "CloverCognition/clover-c1"
+    OFFICIAL_REPO = "clover-c1"
     OPTIONAL_SKILLS_PREFIX = "optional-skills"
 
     def __init__(self, auth: Optional[GitHubAuth] = None):
@@ -4220,7 +4220,7 @@ def check_for_skill_updates(
 # Clover centralized index source
 # ---------------------------------------------------------------------------
 
-CLOVER_INDEX_URL = "https://clover-c1.local/docs/api/skills-index.json"
+CLOVER_INDEX_URL = "docs/api/skills-index.json"
 CLOVER_INDEX_TTL = 6 * 3600  # 6 hours
 
 

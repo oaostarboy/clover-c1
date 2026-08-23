@@ -102,7 +102,7 @@ describe('BootFailureOverlay', () => {
   it('shows the Clover Cloud down recovery when the backend flags isCloudBackendDown', async () => {
     const restore = stubDesktop(remoteToken)
     $desktopBoot.set({
-      error: 'Clover Cloud agent ares-3009.agents.clover-c1.local is down (HTTP 503: server-side fault).',
+      error: 'Clover Cloud agent ares-3009.agents. is down (HTTP 503: server-side fault).',
       fakeMode: false,
       isCloudBackendDown: true,
       message: 'boot failed',

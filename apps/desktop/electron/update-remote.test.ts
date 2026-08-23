@@ -6,7 +6,7 @@
  * (Wired into npm test:desktop:platforms in package.json.)
  *
  * Why this matters: a public install can carry
- * origin=git@github.com:CloverCognition/clover-c1.git. A background
+ * origin=git@github.com:clover-c1.git. A background
  * `git fetch origin` then authenticates over SSH and, with a FIDO2/passkey
  * key, triggers an unexplained hardware-touch prompt. isOfficialSshRemote
  * must reliably recognize the official SSH remote (in every URL form,
@@ -28,14 +28,14 @@ import {
 } from './update-remote'
 
 test('canonicalGitHubRemote normalizes SSH and HTTPS forms to the same value', () => {
-  assert.equal(canonicalGitHubRemote('git@github.com:CloverCognition/clover-c1.git'), OFFICIAL_REPO_CANONICAL)
-  assert.equal(canonicalGitHubRemote('git@github.com:CloverCognition/clover-c1'), OFFICIAL_REPO_CANONICAL)
-  assert.equal(canonicalGitHubRemote('ssh://git@github.com/CloverCognition/clover-c1.git'), OFFICIAL_REPO_CANONICAL)
-  assert.equal(canonicalGitHubRemote('https://github.com/CloverCognition/clover-c1.git'), OFFICIAL_REPO_CANONICAL)
+  assert.equal(canonicalGitHubRemote('git@github.com:clover-c1.git'), OFFICIAL_REPO_CANONICAL)
+  assert.equal(canonicalGitHubRemote('git@github.com:clover-c1'), OFFICIAL_REPO_CANONICAL)
+  assert.equal(canonicalGitHubRemote('ssh://git@github.com/clover-c1.git'), OFFICIAL_REPO_CANONICAL)
+  assert.equal(canonicalGitHubRemote(''), OFFICIAL_REPO_CANONICAL)
   // Case-insensitive: an uppercased owner still canonicalizes to the same repo.
   assert.equal(canonicalGitHubRemote('git@github.com:clovercognition/clover-c1.git'), OFFICIAL_REPO_CANONICAL)
   // Trailing slashes are stripped.
-  assert.equal(canonicalGitHubRemote('https://github.com/CloverCognition/clover-c1/'), OFFICIAL_REPO_CANONICAL)
+  assert.equal(canonicalGitHubRemote(''), OFFICIAL_REPO_CANONICAL)
 })
 
 test('canonicalGitHubRemote is empty for falsy input', () => {
@@ -45,17 +45,17 @@ test('canonicalGitHubRemote is empty for falsy input', () => {
 })
 
 test('isSshRemote detects scp-like and ssh:// forms only', () => {
-  assert.equal(isSshRemote('git@github.com:CloverCognition/clover-c1.git'), true)
-  assert.equal(isSshRemote('ssh://git@github.com/CloverCognition/clover-c1.git'), true)
-  assert.equal(isSshRemote('https://github.com/CloverCognition/clover-c1.git'), false)
+  assert.equal(isSshRemote('git@github.com:clover-c1.git'), true)
+  assert.equal(isSshRemote('ssh://git@github.com/clover-c1.git'), true)
+  assert.equal(isSshRemote(''), false)
   assert.equal(isSshRemote(''), false)
   assert.equal(isSshRemote(null), false)
 })
 
 test('isOfficialSshRemote is true only for the official repo over SSH', () => {
-  assert.equal(isOfficialSshRemote('git@github.com:CloverCognition/clover-c1.git'), true)
-  assert.equal(isOfficialSshRemote('git@github.com:CloverCognition/clover-c1'), true)
-  assert.equal(isOfficialSshRemote('ssh://git@github.com/CloverCognition/clover-c1.git'), true)
+  assert.equal(isOfficialSshRemote('git@github.com:clover-c1.git'), true)
+  assert.equal(isOfficialSshRemote('git@github.com:clover-c1'), true)
+  assert.equal(isOfficialSshRemote('ssh://git@github.com/clover-c1.git'), true)
   // Case-insensitive owner/repo match.
   assert.equal(isOfficialSshRemote('git@github.com:clovercognition/clover-c1.git'), true)
 })
@@ -65,10 +65,10 @@ test('isOfficialSshRemote does NOT match forks, other hosts, or HTTPS', () => {
   // not the official upstream, so the SSH-avoidance swap must not apply.
   assert.equal(isOfficialSshRemote('git@github.com:someuser/clover-c1.git'), false)
   // Same repo name on a different host is not the official repo.
-  assert.equal(isOfficialSshRemote('git@gitlab.com:CloverCognition/clover-c1.git'), false)
+  assert.equal(isOfficialSshRemote('git@gitlab.com:clover-c1.git'), false)
   // HTTPS to the official repo never prompts for SSH/FIDO2, so it keeps the
   // normal fetch path — must not be flagged as an official SSH remote.
-  assert.equal(isOfficialSshRemote('https://github.com/CloverCognition/clover-c1.git'), false)
+  assert.equal(isOfficialSshRemote(''), false)
   assert.equal(isOfficialSshRemote(''), false)
   assert.equal(isOfficialSshRemote(null), false)
 })

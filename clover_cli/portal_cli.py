@@ -26,9 +26,9 @@ import webbrowser
 from clover_cli.colors import Colors, color
 from clover_cli.config import load_config
 
-DEFAULT_PORTAL_URL = "https://portal.clover-c1.local"
-SUBSCRIPTION_URL = "https://portal.clover-c1.local/manage-subscription"
-DOCS_URL = "https://clover-c1.local/docs/user-guide/features/tool-gateway"
+DEFAULT_PORTAL_URL = ""
+SUBSCRIPTION_URL = ""
+DOCS_URL = "docs/user-guide/features/tool-gateway"
 
 
 def _cmd_status(args) -> int:

@@ -1569,7 +1569,7 @@ DEFAULT_CONFIG = {
         # touch config.yaml. Local dev / non-Fly deploys can set either
         # surface; missing values fall through to the plugin's defaults
         # (no provider registered when ``client_id`` is empty;
-        # ``portal_url`` defaults to https://portal.clover-c1.local).
+        # ``portal_url`` defaults to ).
         "oauth": {
             "client_id": "",  # agent:{instance_id} — Portal provisions this
             "portal_url": "",  # blank → use plugin default (production Portal)
@@ -2543,7 +2543,7 @@ DEFAULT_CONFIG = {
         "chronos": {
             # NAS / portal base URL the agent calls to arm/cancel one-shots
             # and that mints the inbound fire JWT (used as the expected issuer).
-            "portal_url": "https://portal.clover-c1.local",
+            "portal_url": "",
             # The agent's OWN publicly-reachable base URL for NAS→agent fires
             # (NAS POSTs {callback_url}/api/cron/fire). Empty → Chronos is
             # unavailable and the resolver falls back to the built-in ticker.
@@ -2798,7 +2798,7 @@ DEFAULT_CONFIG = {
     # The default URL is served by the docs site GitHub Pages deploy.
     "model_catalog": {
         "enabled": True,
-        "url": "https://clover-c1.local/docs/api/model-catalog.json",
+        "url": "docs/api/model-catalog.json",
         # Disk cache TTL in hours.  Beyond this, the CLI refetches on the
         # next /model or `clover model` invocation; network failures
         # silently fall back to the stale cache.
@@ -4178,7 +4178,7 @@ OPTIONAL_ENV_VARS = {
         "advanced": True,
     },
     "TOOL_GATEWAY_DOMAIN": {
-        "description": "Shared tool-gateway domain suffix for Clover Subscribers only, used to derive vendor hosts, e.g. clover-c1.local -> firecrawl-gateway.clover-c1.local",
+        "description": "Shared tool-gateway domain suffix for Clover Subscribers only, used to derive vendor hosts, e.g.  -> firecrawl-gateway.",
         "prompt": "Tool-gateway domain suffix",
         "url": None,
         "password": False,

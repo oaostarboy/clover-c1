@@ -1049,7 +1049,7 @@ _PROVIDERS_WITHOUT_VISION: frozenset = frozenset({
 # `X-Title` is the canonical attribution header OpenRouter's dashboard
 # reads; the previous `X-OpenRouter-Title` label was not recognized there.
 _OR_HEADERS_BASE = {
-    "HTTP-Referer": "https://clover-c1.local",
+    "HTTP-Referer": "",
     "X-Title": "Clover Cognition",
     "X-OpenRouter-Categories": "productivity,cli-agent",
 }
@@ -1170,7 +1170,7 @@ def build_nvidia_nim_headers(base_url: str | None) -> dict:
 from clover_cli import __version__ as _CLOVER_VERSION
 
 _AI_GATEWAY_HEADERS = {
-    "HTTP-Referer": "https://clover-c1.local",
+    "HTTP-Referer": "",
     "X-Title": "Clover Cognition",
     "User-Agent": f"CloverAgent/{_CLOVER_VERSION}",
 }
@@ -1207,7 +1207,7 @@ auxiliary_is_nous: bool = False
 # Default auxiliary models per provider
 _OPENROUTER_MODEL = "google/gemini-3.6-flash"
 _NOUS_MODEL = "google/gemini-3.6-flash"
-_NOUS_DEFAULT_BASE_URL = "https://inference.clover-c1.local/v1"
+_NOUS_DEFAULT_BASE_URL = ""
 _ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
 _AUTH_JSON_PATH = get_clover_home() / "auth.json"
 
@@ -4687,7 +4687,7 @@ def _recoverable_pool_provider(
         return "openai-codex"
     if base_url_host_matches(base, "openrouter.ai"):
         return "openrouter"
-    if base_url_host_matches(base, "inference-api.clover-c1.local"):
+    if base_url_host_matches(base, "inference-api."):
         return "clover"
     if base_url_host_matches(base, "api.anthropic.com"):
         return "anthropic"
@@ -5026,7 +5026,7 @@ def _auth_refresh_provider_for_route(
         return "openai-codex"
     if base_url_host_matches(client_base_url, "api.anthropic.com"):
         return "anthropic"
-    if base_url_host_matches(client_base_url, "inference-api.clover-c1.local"):
+    if base_url_host_matches(client_base_url, "inference-api."):
         return "clover"
     return normalized
 
@@ -9775,7 +9775,7 @@ def _call_llm_impl(
         # known-good default). Only applies to Clover-routed calls.
         _heal_is_nous = (
             resolved_provider == "clover"
-            or base_url_host_matches(_base_info, "inference-api.clover-c1.local")
+            or base_url_host_matches(_base_info, "inference-api.")
         )
         if _is_model_not_found_error(first_err) and _heal_is_nous:
             healed_model = _refresh_nous_recommended_model(
@@ -9801,7 +9801,7 @@ def _call_llm_impl(
         # ── Clover auth refresh parity with main agent ──────────────────
         client_is_nous = (
             resolved_provider == "clover"
-            or base_url_host_matches(_base_info, "inference-api.clover-c1.local")
+            or base_url_host_matches(_base_info, "inference-api.")
         )
         if (
             _is_payment_error(first_err)
@@ -10520,7 +10520,7 @@ async def _async_call_llm_impl(
         # fresh Portal fetch and retry once with the current recommendation.
         _heal_is_nous = (
             resolved_provider == "clover"
-            or base_url_host_matches(_client_base, "inference-api.clover-c1.local")
+            or base_url_host_matches(_client_base, "inference-api.")
         )
         if _is_model_not_found_error(first_err) and _heal_is_nous:
             healed_model = _refresh_nous_recommended_model(
@@ -10546,7 +10546,7 @@ async def _async_call_llm_impl(
         # ── Clover auth refresh parity with main agent ──────────────────
         client_is_nous = (
             resolved_provider == "clover"
-            or base_url_host_matches(_client_base, "inference-api.clover-c1.local")
+            or base_url_host_matches(_client_base, "inference-api.")
         )
         if (
             _is_payment_error(first_err)

@@ -184,7 +184,7 @@ ASSETS
   Accounts Receivable (from WC)
   Inventory (from WC)
   Total Current Assets
-  
+
   PP&E, Net (from DA)
   Deferred Tax Asset - NOL (from NOL schedule)
   Total Non-Current Assets
@@ -194,7 +194,7 @@ LIABILITIES
   Accounts Payable (from WC)
   Current Portion of Debt (from Debt)
   Total Current Liabilities
-  
+
   Long-Term Debt (from Debt)
   Total Liabilities
 

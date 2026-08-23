@@ -100,7 +100,7 @@ def _discord_request(
         headers={
             "Authorization": f"Bot {token}",
             "Content-Type": "application/json",
-            "User-Agent": "clover-c1 (https://github.com/CloverCognition/clover-c1)",
+            "User-Agent": "clover-c1 ()",
         },
     )
 

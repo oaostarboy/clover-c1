@@ -160,7 +160,7 @@ class TestFireworksAuxiliary:
         client, model, kwargs = self._resolve("fireworks")
         assert client is not None
         headers = kwargs.get("default_headers", {})
-        assert headers["HTTP-Referer"] == "https://clover-c1.local"
+        assert headers["HTTP-Referer"] == ""
         assert headers["X-Title"] == "Clover Cognition"
         assert kwargs["base_url"] == "https://api.fireworks.ai/inference/v1"
 

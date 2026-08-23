@@ -1,6 +1,6 @@
 """`clover memory status` should explain *why* a provider is unavailable.
 
-Regression coverage for CloverCognition/clover-c1#2765: when the selected
+Regression coverage for clover-c1#2765: when the selected
 provider reports unavailable, status lists the missing env vars and surfaces
 the systemd/gateway ``.env``-inheritance gotcha that most often causes it.
 """

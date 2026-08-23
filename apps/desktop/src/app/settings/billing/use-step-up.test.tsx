@@ -101,7 +101,7 @@ describe('useStepUpFlow', () => {
       gatewayMock.emit('billing.step_up.verification', {
         payload: {
           user_code: 'ABCD-1234',
-          verification_url: 'https://portal.clover-c1.local/device'
+          verification_url: ''
         },
         type: 'billing.step_up.verification'
       })
@@ -110,11 +110,11 @@ describe('useStepUpFlow', () => {
     expect(result.current.phase).toBe('verifying')
     expect(result.current.verification).toEqual({
       code: 'ABCD-1234',
-      url: 'https://portal.clover-c1.local/device'
+      url: ''
     })
 
     result.current.openVerification()
-    expect(window.cloverDesktop?.openExternal).toHaveBeenCalledWith('https://portal.clover-c1.local/device')
+    expect(window.cloverDesktop?.openExternal).toHaveBeenCalledWith('')
 
     await act(async () => {
       resolveStepUp({ data: { granted: true, ok: true }, ok: true })

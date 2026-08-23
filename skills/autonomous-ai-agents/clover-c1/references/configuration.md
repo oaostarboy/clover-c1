@@ -1,7 +1,7 @@
 # Configuration, Toolsets & Voice
 
 Edit with `clover config edit` or `clover config set section.key value`.
-Full reference: https://clover-c1.local/docs/user-guide/configuration
+Full reference: docs/user-guide/configuration
 
 ### Config Sections (most-used keys)
 

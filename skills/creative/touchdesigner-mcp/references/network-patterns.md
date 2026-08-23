@@ -912,10 +912,10 @@ def advance_cue():
     current = int(cue_state.par.value0.val)
     next_cue = min(current + 1, cue_table.numRows - 1)
     cue_state.par.value0.val = next_cue
-    
+
     scene = cue_table[next_cue, 'scene']
     duration = float(cue_table[next_cue, 'duration'])
-    
+
     # Set crossfade target and duration
     op('/project1/cross1').par.cross.val = 0
     # Animate cross to 1.0 over duration seconds
@@ -931,7 +931,7 @@ def advance_cue():
 # Sending OSC
 OSC Out CHOP -> (network) -> external application
 
-# Receiving OSC  
+# Receiving OSC
 (network) -> OSC In CHOP -> Select CHOP -> [use values]
 ```
 

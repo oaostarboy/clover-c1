@@ -611,19 +611,19 @@ def _is_nous_portal_endpoint(base_url: str | None) -> bool:
     """Return True for Clover Portal's Anthropic Messages route.
 
     Portal serves its ``anthropic/*`` catalog natively at
-    ``https://inference.clover-c1.local/v1/messages``.  Portal-specific
+    ``/messages``.  Portal-specific
     behaviours key off this: Bearer JWT auth, verbatim catalog model ids,
     and native thinking-signature replay.
 
     Trusted hosts only:
 
-    1. Prod hostname ``inference-api.clover-c1.local``
+    1. Prod hostname ``inference-api.``
     2. The operator-set ``NOUS_INFERENCE_BASE_URL`` hostname (staging/preview)
 
-    Lookalikes such as ``inference-api.clover-c1.local.attacker.test`` are
+    Lookalikes such as ``inference-api..attacker.test`` are
     rejected (hostname match, not substring).
     """
-    if base_url_host_matches(base_url or "", "inference-api.clover-c1.local"):
+    if base_url_host_matches(base_url or "", "inference-api."):
         return True
     try:
         from clover_cli.auth import _nous_inference_env_override
@@ -918,7 +918,7 @@ def build_anthropic_client(
         # HTTP-Referer + X-Title + CloverAgent User-Agent.
         kwargs["api_key"] = api_key
         kwargs["default_headers"] = {
-            "HTTP-Referer": "https://clover-c1.local",
+            "HTTP-Referer": "",
             "X-Title": "Clover Cognition",
             "User-Agent": f"CloverAgent/{_CLOVER_VERSION}",
             **( {"anthropic-beta": ",".join(common_betas)} if common_betas else {} )
@@ -965,7 +965,7 @@ def build_anthropic_client(
         # route builds its client right here and never sees the profile. Merge
         # the same set on top of whatever auth branch ran above.
         headers = dict(kwargs.get("default_headers") or {})
-        headers.setdefault("HTTP-Referer", "https://clover-c1.local")
+        headers.setdefault("HTTP-Referer", "")
         headers.setdefault("X-Title", "Clover Cognition")
         headers.setdefault("User-Agent", f"CloverAgent/{_CLOVER_VERSION}")
         kwargs["default_headers"] = headers

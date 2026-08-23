@@ -5,11 +5,11 @@
     {
       "name": "clover-media-studio",
       "description": "Media Studio — generative media workspace plugin for Clover Desktop (fal + Krea, durable job queue, library).",
-      "author": "CloverCognition",
+      "author": "Clover Cognition",
       "tags": ["media", "image-gen", "video-gen", "dashboard", "desktop"],
-      "repo": "CloverCognition/clover-media-studio",
+      "repo": "Clover Cognition/clover-media-studio",
       "ref": "e8d59971d2b7901405b39dac7b03bdd616272d0d",
-      "homepage": "https://github.com/CloverCognition/clover-media-studio",
+      "homepage": "",
       "capabilities": ["tools", "dashboard"],
       "api_version": 1,
       "added_at": "2026-08-12"
@@ -17,11 +17,11 @@
     {
       "name": "clover-telegram-business",
       "description": "Observe-with-approval Telegram Business Mode (secretary bot) plugin — every drafted reply requires owner approval before it reaches the customer.",
-      "author": "CloverCognition",
+      "author": "Clover Cognition",
       "tags": ["telegram", "gateway", "approvals", "messaging"],
-      "repo": "CloverCognition/clover-telegram-business",
+      "repo": "Clover Cognition/clover-telegram-business",
       "ref": "e905f3bc5eeaa5a9dab9bc5155601b3ebec75757",
-      "homepage": "https://github.com/CloverCognition/clover-telegram-business",
+      "homepage": "",
       "capabilities": ["platform"],
       "api_version": 1,
       "added_at": "2026-08-12"
@@ -29,12 +29,12 @@
     {
       "name": "plugin-llm-example",
       "description": "Reference plugin showing host-owned structured LLM access via ctx.llm.complete_structured(). Registers a /receipt-extract slash command.",
-      "author": "CloverCognition",
+      "author": "Clover Cognition",
       "tags": ["example", "llm", "reference", "slash-command"],
-      "repo": "CloverCognition/clover-example-plugins",
+      "repo": "Clover Cognition/clover-example-plugins",
       "subdir": "plugin-llm-example",
       "ref": "38fe0fb53eff98d477f807432e965429e665ca33",
-      "homepage": "https://github.com/CloverCognition/clover-example-plugins/tree/main/plugin-llm-example",
+      "homepage": "docs/plugins.md/tree/main/plugin-llm-example",
       "capabilities": ["commands", "llm"],
       "api_version": 1,
       "added_at": "2026-08-12"
@@ -42,12 +42,12 @@
     {
       "name": "plugin-llm-async-example",
       "description": "Reference plugin demonstrating async host-owned LLM access from plugin code — the asyncio counterpart to plugin-llm-example.",
-      "author": "CloverCognition",
+      "author": "Clover Cognition",
       "tags": ["example", "llm", "async", "reference"],
-      "repo": "CloverCognition/clover-example-plugins",
+      "repo": "Clover Cognition/clover-example-plugins",
       "subdir": "plugin-llm-async-example",
       "ref": "38fe0fb53eff98d477f807432e965429e665ca33",
-      "homepage": "https://github.com/CloverCognition/clover-example-plugins/tree/main/plugin-llm-async-example",
+      "homepage": "docs/plugins.md/tree/main/plugin-llm-async-example",
       "capabilities": ["commands", "llm"],
       "api_version": 1,
       "added_at": "2026-08-12"

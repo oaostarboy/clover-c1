@@ -377,14 +377,14 @@ test('isServerSideHttpError detects 502/503/504', () => {
 
 test('isNousCloudAgentUrl detects cloud agent hosts', () => {
   // Positive cases
-  assert.equal(isNousCloudAgentUrl('https://ares-3009.agents.clover-c1.local'), true)
-  assert.equal(isNousCloudAgentUrl('https://ares-3009.agents.clover-c1.local/api/health'), true)
-  assert.equal(isNousCloudAgentUrl('http://test.agents.clover-c1.local'), true)
+  assert.equal(isNousCloudAgentUrl('https://ares-3009.agents.'), true)
+  assert.equal(isNousCloudAgentUrl('https://ares-3009.agents./api/health'), true)
+  assert.equal(isNousCloudAgentUrl('http://test.agents.'), true)
 
   // Negative cases
   assert.equal(isNousCloudAgentUrl('http://127.0.0.1:9000'), false)
   assert.equal(isNousCloudAgentUrl('https://gateway.example.com'), false)
-  assert.equal(isNousCloudAgentUrl('https://clover-c1.local'), false)
+  assert.equal(isNousCloudAgentUrl(''), false)
   assert.equal(isNousCloudAgentUrl('not-a-url'), false)
 })
 
@@ -393,7 +393,7 @@ test('waitForCloverReady surfaces actionable error for cloud agent 503', async (
   const currentTime = { value: 0 }
 
   try {
-    await waitForCloverReady('https://ares-3009.agents.clover-c1.local', {
+    await waitForCloverReady('https://ares-3009.agents.', {
       fetchPublicJson: async () => {
         attempts++
         // Always return 503
@@ -418,8 +418,8 @@ test('waitForCloverReady surfaces actionable error for cloud agent 503', async (
   } catch (error: any) {
     assert.ok(error.message.includes('Clover Cloud agent'), `unexpected message: ${error.message}`)
     assert.ok(error.message.includes('503'), `should mention status code: ${error.message}`)
-    assert.ok(error.message.includes('portal.clover-c1.local'), `should mention portal: ${error.message}`)
-    assert.ok(error.message.includes('discord.gg/CloverCognition'), `should mention Discord: ${error.message}`)
+    assert.ok(error.message.includes('portal.'), `should mention portal: ${error.message}`)
+    assert.ok(error.message.includes(''), `should mention Discord: ${error.message}`)
     assert.equal(error.isCloudBackendDown, true)
     assert.equal(error.statusCode, 503)
     assert.ok(attempts > 1, 'should have retried before failing')
@@ -493,18 +493,18 @@ test('isServerSideHttpError structured path excludes 500/401/403/404/429 even wh
 test('makeNousCloudBackendDownError produces the Cloud shape and preserves cause', () => {
   const err = new Error('upstream unavailable') as any
   err.statusCode = 503
-  const result = makeNousCloudBackendDownError('https://ares-3009.agents.clover-c1.local', err)
+  const result = makeNousCloudBackendDownError('https://ares-3009.agents.', err)
   assert.ok(result)
   assert.equal((result as any).isCloudBackendDown, true)
   assert.equal((result as any).statusCode, 503)
   assert.equal((result as any).cause, err)
-  assert.ok(result?.message.includes('Clover Cloud agent ares-3009.agents.clover-c1.local is down'))
+  assert.ok(result?.message.includes('Clover Cloud agent ares-3009.agents. is down'))
 })
 
 test('makeNousCloudBackendDownError returns null for a Cloud 401 (routes to reauth)', () => {
   const err = new Error('Unauthorized') as any
   err.statusCode = 401
-  assert.equal(makeNousCloudBackendDownError('https://ares-3009.agents.clover-c1.local', err), null)
+  assert.equal(makeNousCloudBackendDownError('https://ares-3009.agents.', err), null)
 })
 
 test('makeNousCloudBackendDownError returns null for a non-Cloud 503 (generic remote failure)', () => {
@@ -516,7 +516,7 @@ test('makeNousCloudBackendDownError returns null for a non-Cloud 503 (generic re
 
 test('makeNousCloudBackendDownError preserves legacy string-prefix compatibility', () => {
   const result = makeNousCloudBackendDownError(
-    'https://ares-3009.agents.clover-c1.local',
+    'https://ares-3009.agents.',
     new Error('503: Service Unavailable')
   )
 

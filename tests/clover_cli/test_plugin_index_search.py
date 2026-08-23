@@ -37,26 +37,26 @@ SAMPLE = _index_doc(
         {
             "name": "clover-media-studio",
             "description": "Generative media workspace plugin.",
-            "author": "CloverCognition",
+            "author": "Clover Cognition",
             "tags": ["media", "image-gen"],
-            "repo": "CloverCognition/clover-media-studio",
+            "repo": "Clover Cognition/clover-media-studio",
             "ref": "e" * 40,
         },
         {
             "name": "clover-telegram-business",
             "description": "Telegram secretary bot with owner approval.",
-            "author": "CloverCognition",
+            "author": "Clover Cognition",
             "tags": ["telegram", "gateway"],
-            "repo": "CloverCognition/clover-telegram-business",
+            "repo": "Clover Cognition/clover-telegram-business",
             "ref": "f" * 40,
             "capabilities": ["platform"],
         },
         {
             "name": "plugin-llm-example",
             "description": "Reference plugin for structured LLM access.",
-            "author": "CloverCognition",
+            "author": "Clover Cognition",
             "tags": ["example", "llm"],
-            "repo": "CloverCognition/clover-example-plugins",
+            "repo": "Clover Cognition/clover-example-plugins",
             "subdir": "plugin-llm-example",
             "ref": "a" * 40,
             "capabilities": ["commands", "llm"],
@@ -99,9 +99,9 @@ class TestParsing:
         ]
         assert entries[2].subdir == "plugin-llm-example"
         assert entries[2].install_identifier == (
-            "CloverCognition/clover-example-plugins/plugin-llm-example"
+            "Clover Cognition/clover-example-plugins/plugin-llm-example"
         )
-        assert entries[0].install_identifier == "CloverCognition/clover-media-studio"
+        assert entries[0].install_identifier == "Clover Cognition/clover-media-studio"
 
     def test_parses_bare_list_form(self):
         entries = _parse_entries(SAMPLE["plugins"])
@@ -285,7 +285,7 @@ class TestResolveName:
 
     def test_exact_unique(self):
         entry, candidates = resolve_name(self.entries, "clover-media-studio")
-        assert entry is not None and entry.repo == "CloverCognition/clover-media-studio"
+        assert entry is not None and entry.repo == "Clover Cognition/clover-media-studio"
 
     def test_case_insensitive(self):
         entry, _ = resolve_name(self.entries, "Clover-Media-Studio")
@@ -337,7 +337,7 @@ class TestInstallResolution:
         monkeypatch.setattr(plugins_cmd, "_install_plugin_core", fake_core)
         with pytest.raises(SystemExit):
             plugins_cmd.cmd_install("clover-media-studio", enable=False)
-        assert captured["identifier"] == "CloverCognition/clover-media-studio"
+        assert captured["identifier"] == "Clover Cognition/clover-media-studio"
         assert captured["ref"] == "e" * 40
 
     def test_install_explicit_ref_beats_index_pin(self, clover_home, monkeypatch):
@@ -430,7 +430,7 @@ class TestCmdSearch:
         assert payload["source"] == "seed"
         assert payload["query"] == "telegram"
         assert payload["results"][0]["name"] == "clover-telegram-business"
-        assert payload["results"][0]["repo"] == "CloverCognition/clover-telegram-business"
+        assert payload["results"][0]["repo"] == "Clover Cognition/clover-telegram-business"
         assert payload["results"][0]["ref"] == "f" * 40
         assert "audited" in payload["note"]
 

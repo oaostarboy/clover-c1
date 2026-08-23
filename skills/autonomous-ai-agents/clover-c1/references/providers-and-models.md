@@ -2,7 +2,7 @@
 
 Set via `clover model` (picker) or `clover setup`. 35+ provider profiles ship as
 plugins under `plugins/model-providers/`; user plugins of the same name override.
-Full docs: https://clover-c1.local/docs/integrations/providers
+Full docs: docs/integrations/providers
 
 ### Providers
 

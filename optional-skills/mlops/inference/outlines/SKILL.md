@@ -652,7 +652,6 @@ article = Article.model_validate_json(result)  # Article instance
 
 - **Documentation**: https://dottxt-ai.github.io/outlines/
 - **GitHub**: https://github.com/dottxt-ai/outlines (12k+ stars)
-- **Discord**: https://discord.gg/R9DSu34mGd
 - **Blog**: https://blog.dottxt.co
 
 ## See Also

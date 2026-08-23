@@ -874,7 +874,7 @@ def _make_redirect_handler(port: int, redirect_uri: str | None = None):
                 f"         ssh -N -L {port}:127.0.0.1:{port} <user>@<this-host>\n"
                 f"       then open the URL above and let it redirect normally.\n"
                 f"\n"
-                f"  See: https://clover-c1.local/docs/guides/oauth-over-ssh\n",
+                f"  See: docs/guides/oauth-over-ssh\n",
                 file=sys.stderr,
             )
 
@@ -1303,7 +1303,7 @@ def remove_oauth_tokens(
 # deploy. The github.io origin is deliberate: an authorization server MUST NOT
 # follow HTTP redirects when fetching the document
 # (draft-ietf-oauth-client-id-metadata-document section 5), and
-# clover-c1.clover-c1.local/docs/* 301s here.
+# clover-c1./docs/* 301s here.
 _CIMD_CLIENT_METADATA_URL = (
     "https://clovercognition.github.io/clover-c1/docs/oauth/client-metadata.json"
 )

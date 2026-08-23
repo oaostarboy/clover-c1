@@ -165,7 +165,7 @@ SCENARIOS: list[tuple[str, str, dict[str, str]]] = [
         "managed-gateway-only",
         "",
         {
-            "TOOL_GATEWAY_DOMAIN": "clover-c1.local",
+            "TOOL_GATEWAY_DOMAIN": "",
             "TOOL_GATEWAY_USER_TOKEN": "nous-token",
         },
     ),

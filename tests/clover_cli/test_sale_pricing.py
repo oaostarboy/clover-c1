@@ -93,7 +93,7 @@ def test_resolve_nous_pricing_credentials_honors_inference_env_override(monkeypa
     """
     monkeypatch.setenv(
         "NOUS_INFERENCE_BASE_URL",
-        "https://stg-inference-api.clover-c1.local/v1",
+        "https://stg-inference-api./v1",
     )
     # Auth resolution fails / returns nothing — the env override must still win.
     monkeypatch.setattr(
@@ -104,7 +104,7 @@ def test_resolve_nous_pricing_credentials_honors_inference_env_override(monkeypa
     assert api_key == ""
     # The bare origin, whichever form the override was written in: callers
     # append their own path (``/v1/models``), so a suffix here would double up.
-    assert base_url == "https://stg-inference-api.clover-c1.local"
+    assert base_url == "https://stg-inference-api."
 
 
 def test_resolve_nous_pricing_credentials_normalizes_either_suffix(monkeypatch):
@@ -113,14 +113,14 @@ def test_resolve_nous_pricing_credentials_normalizes_either_suffix(monkeypatch):
         "clover_cli.auth.resolve_nous_runtime_credentials", lambda: None
     )
     for override in (
-        "https://stg-inference-api.clover-c1.local",
-        "https://stg-inference-api.clover-c1.local/",
-        "https://stg-inference-api.clover-c1.local/v1",
-        "https://stg-inference-api.clover-c1.local/v1/",
+        "https://stg-inference-api.",
+        "https://stg-inference-api./",
+        "https://stg-inference-api./v1",
+        "https://stg-inference-api./v1/",
     ):
         monkeypatch.setenv("NOUS_INFERENCE_BASE_URL", override)
         assert models_mod._resolve_nous_pricing_credentials()[1] == (
-            "https://stg-inference-api.clover-c1.local"
+            "https://stg-inference-api."
         )
 
 

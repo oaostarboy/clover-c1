@@ -28,7 +28,7 @@ fireworks = ProviderProfile(
     # generic profile.default_headers path, so they survive switch_model and
     # credential rotation.
     default_headers={
-        "HTTP-Referer": "https://clover-c1.local",
+        "HTTP-Referer": "",
         "X-Title": "Clover Cognition",
         "User-Agent": f"CloverAgent/{_CLOVER_VERSION}",
     },

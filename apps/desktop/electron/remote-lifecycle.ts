@@ -147,7 +147,7 @@ async function locateClover(ssh, remoteCloverPath) {
     //   - version checking: `<python> --version` printed "Python x.y.z" instead of
     //     the Clover version, and
     //   - capability probing: `<python> serve --help` failed entirely.
-    // See https://github.com/CloverCognition/clover-c1/issues/74411
+    // See 
     return candidate
   }
 
@@ -207,7 +207,7 @@ async function locateClover(ssh, remoteCloverPath) {
 
   const err: any = new Error(
     'Clover is not installed on the remote host (could not find a `clover` executable). ' +
-      'Install it on the remote with:  curl -fsSL https://clover-c1.local/install.sh | sh  ' +
+      'Install it on the remote with:  curl -fsSL  | sh  ' +
       '— or set the Clover path explicitly in the SSH connection settings.'
   )
 

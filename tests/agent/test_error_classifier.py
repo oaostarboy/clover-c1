@@ -223,7 +223,7 @@ class TestClassifyApiError:
                 "status": 404,
                 "message": (
                     "Model 'gpt-5' is not available on the Free Tier. "
-                    "Upgrade at https://portal.clover-c1.local or pick a free model."
+                    "Upgrade at  or pick a free model."
                 ),
             },
         )
@@ -241,7 +241,7 @@ class TestClassifyApiError:
                 "message": (
                     "Model 'openai/gpt-5.5-pro' requires available credits. "
                     "Your account balance is too low to use paid models — "
-                    "add credits at https://portal.clover-c1.local or pick a free model."
+                    "add credits at  or pick a free model."
                 ),
             },
         )

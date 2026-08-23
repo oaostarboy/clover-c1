@@ -3,7 +3,7 @@
 Why: kanban/tool worker sessions are deny-listed out of every conversation
 list, so the desktop Bots roster showed a profile as idle ("3 hr ago")
 while its kanban worker had been running for 12+ minutes
-(CloverCognition/clover-c1#90268). profiles.list now reports the newest
+(clover-c1#90268). profiles.list now reports the newest
 DENIED row per profile as ``worker_session`` so roster UIs can light
 ACTIVE NOW off the worker's ``last_activity_at`` heartbeat.
 

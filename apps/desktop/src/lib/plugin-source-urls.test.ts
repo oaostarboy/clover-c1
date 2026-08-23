@@ -4,9 +4,9 @@ import { resolvePluginSourceLinks } from './plugin-source-urls'
 
 describe('resolvePluginSourceLinks', () => {
   it('maps owner/repo to github browse and clone urls', () => {
-    expect(resolvePluginSourceLinks('CloverCognition/clover-example-plugins')).toEqual({
-      gitUrl: 'https://github.com/CloverCognition/clover-example-plugins.git',
-      browseUrl: 'https://github.com/CloverCognition/clover-example-plugins',
+    expect(resolvePluginSourceLinks('Clover Cognition/clover-example-plugins')).toEqual({
+      gitUrl: 'docs/plugins.md.git',
+      browseUrl: 'docs/plugins.md',
       subdir: null
     })
   })

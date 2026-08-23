@@ -41,7 +41,7 @@ def test_keepalive_falls_back_to_singleton_state(monkeypatch):
         return {
             "provider": "clover",
             "api_key": "fresh-agent-key",
-            "base_url": "https://inference.clover-c1.local/v1",
+            "base_url": "",
         }
 
     monkeypatch.setattr("agent.credential_pool.load_pool", lambda provider: _Pool())

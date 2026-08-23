@@ -110,8 +110,8 @@ AUTH_STORE_VERSION = 1
 AUTH_LOCK_TIMEOUT_SECONDS = 15.0
 
 # Clover Portal defaults
-DEFAULT_NOUS_PORTAL_URL = "https://portal.clover-c1.local"
-DEFAULT_NOUS_INFERENCE_URL = "https://inference.clover-c1.local/v1"
+DEFAULT_NOUS_PORTAL_URL = ""
+DEFAULT_NOUS_INFERENCE_URL = ""
 DEFAULT_NOUS_CLIENT_ID = "clover-cli"
 NOUS_INFERENCE_INVOKE_SCOPE = "inference:invoke"
 NOUS_BILLING_MANAGE_SCOPE = "billing:manage"
@@ -164,11 +164,11 @@ QWEN_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
 DEFAULT_SPOTIFY_ACCOUNTS_BASE_URL = "https://accounts.spotify.com"
 DEFAULT_SPOTIFY_API_BASE_URL = "https://api.spotify.com/v1"
 DEFAULT_SPOTIFY_REDIRECT_URI = "http://127.0.0.1:43827/spotify/callback"
-SPOTIFY_DOCS_URL = "https://clover-c1.local/docs/user-guide/features/spotify"
+SPOTIFY_DOCS_URL = "docs/user-guide/features/spotify"
 SPOTIFY_DASHBOARD_URL = "https://developer.spotify.com/dashboard"
 SPOTIFY_ACCESS_TOKEN_REFRESH_SKEW_SECONDS = 120
 
-OAUTH_OVER_SSH_DOCS_URL = "https://clover-c1.local/docs/guides/oauth-over-ssh"
+OAUTH_OVER_SSH_DOCS_URL = "docs/guides/oauth-over-ssh"
 DEFAULT_SPOTIFY_SCOPE = " ".join((
     "user-modify-playback-state",
     "user-read-playback-state",
@@ -2399,14 +2399,14 @@ def _optional_base_url(value: Any) -> Optional[str]:
 
 
 _NOUS_STALE_PORTAL_HOSTS: FrozenSet[str] = frozenset({
-    "api.clover-c1.local",
+    "api.",
 })
 
 # Allowlist of valid Clover Portal hosts. A portal_base_url outside this
 # set is treated as a misconfiguration and falls back to the default.
 # "localhost" / "127.0.0.1" are valid for local development and testing.
 _NOUS_PORTAL_ALLOWED_HOSTS: FrozenSet[str] = frozenset({
-    "portal.clover-c1.local",
+    "portal.",
     "localhost",
     "127.0.0.1",
 })
@@ -2436,7 +2436,7 @@ def _migrate_stale_nous_portal_url(providers: Dict[str, Any]) -> None:
 # dev/staging escape hatch and the env source is already trusted (the
 # user set it themselves).
 _ALLOWED_NOUS_INFERENCE_HOSTS: FrozenSet[str] = frozenset({
-    "inference-api.clover-c1.local",
+    "inference-api.",
 })
 
 
@@ -2507,7 +2507,7 @@ def _nous_portal_env_override() -> Optional[str]:
     ``NOUS_PORTAL_BASE_URL`` are the documented dev/staging escape hatch for
     pointing Clover at a non-production Clover Portal (e.g. a hosted agent
     provisioned on nous-account-service's `staging` environment, which stamps
-    ``CLOVER_PORTAL_BASE_URL=https://portal.staging-clover-c1.local`` into
+    ``CLOVER_PORTAL_BASE_URL=`` into
     the container env). The env source is trusted (the OS user/deployment
     set it themselves), so — like the inference override — it must NOT be
     gated by ``_NOUS_PORTAL_ALLOWED_HOSTS``: that allowlist exists to reject
@@ -6774,7 +6774,7 @@ def _snapshot_nous_pool_status() -> Dict[str, Any]:
 
 # ── Process-level memo for get_nous_auth_status() ──
 # get_nous_auth_status() validates state by calling resolve_nous_runtime_credentials(),
-# which does a synchronous OAuth refresh POST to portal.clover-c1.local. That can take
+# which does a synchronous OAuth refresh POST to portal.. That can take
 # ~350ms even on the failure path, and read-only UI surfaces (`clover tools`, status panels,
 # subscription-feature checks) call it many times per render — `clover tools` → "All Platforms"
 # was firing the refresh ~31× during one menu paint, racking up >13s of HTTP and burning

@@ -52,6 +52,6 @@ def test_nous_401_guidance_strings_present():
     assert "clover portal" in source
 
     # Must point at the portal so users can check account/credit status.
-    assert "portal.clover-c1.local" in source
+    assert "portal." in source
 
 

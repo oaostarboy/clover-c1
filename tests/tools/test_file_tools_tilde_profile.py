@@ -11,7 +11,7 @@ The fix adds ``_expand_tilde()`` which delegates to
 ``clover_constants.get_subprocess_home()`` — the same policy the terminal tool
 uses for subprocess environments.
 
-See: https://github.com/CloverCognition/clover-c1/issues/48552
+See: 
 """
 
 import os

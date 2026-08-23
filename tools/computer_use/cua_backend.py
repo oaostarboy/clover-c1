@@ -104,7 +104,7 @@ def _action_result_from(
     ``structuredContent`` (or any individual field) leaves the corresponding
     ActionResult attribute ``None``, so callers and tests see unchanged
     behavior on old drivers. See the action response shape in
-    cua-driver's mcp-tool-notes and CloverCognition/clover-c1#67052.
+    cua-driver's mcp-tool-notes and clover-c1#67052.
     """
     sc = structured if isinstance(structured, dict) else {}
 
@@ -799,7 +799,7 @@ def _resolve_mcp_invocation(
 ) -> Tuple[str, List[str]]:
     """Return ``(command, args)`` that spawn cua-driver's stdio MCP server.
 
-    Surface 8 of CloverCognition/clover-c1#47072: instead of hardcoding
+    Surface 8 of clover-c1#47072: instead of hardcoding
     ``["mcp"]`` we ask the driver itself via ``cua-driver manifest``
     (trycua/cua#1961). The manifest carries a stable ``mcp_invocation``
     pointer with both ``command`` and ``args``, so a future cua-driver
@@ -1332,7 +1332,7 @@ def _parse_elements_from_tree(markdown: str) -> List[UIElement]:
 
 
 def _parse_elements_from_structured(raw_elements: List[Dict[str, Any]]) -> List[UIElement]:
-    """Surface 2 of CloverCognition/clover-c1#47072: read the canonical
+    """Surface 2 of clover-c1#47072: read the canonical
     ``structuredContent.elements`` array cua-driver-rs emits on every
     ``get_window_state`` response (trycua/cua#1961).
 
@@ -1535,7 +1535,7 @@ class _CuaDriverSession:
         self._session = None
         self._lock = threading.Lock()
         self._started = False
-        # Surface 4 of CloverCognition/clover-c1#47072: per-tool
+        # Surface 4 of clover-c1#47072: per-tool
         # capability-token sets, populated from `tools/list` at session
         # init. Keys are tool names (e.g. "click", "get_window_state");
         # values are sets of capability strings (e.g.
@@ -2309,7 +2309,7 @@ def _extract_tool_result(mcp_result: Any) -> Dict[str, Any]:
 
     `image_mime_types` is the explicit `mimeType` cua-driver emits on every
     image part as of trycua/cua#1961 (Surface 7 of
-    CloverCognition/clover-c1#47072). Each entry corresponds index-for-index
+    clover-c1#47072). Each entry corresponds index-for-index
     with `images`; an empty string entry signals the part carried no
     mimeType (older cua-driver build), and the caller should fall back to
     base64-prefix sniffing.
@@ -2545,7 +2545,7 @@ class CuaDriverBackend(ComputerUseBackend):
         # Exact identity for capture_after. App names may be generic on Linux
         # (for example, multiple unrelated Qt windows can say Qt6Application).
         self._last_target: Optional[Dict[str, Optional[int]]] = None
-        # Surface 6 of CloverCognition/clover-c1#47072: per-snapshot
+        # Surface 6 of clover-c1#47072: per-snapshot
         # `element_index -> element_token` map populated on capture().
         # Action tools (click/scroll/set_value/...) attach the matching
         # token alongside `element_index` so cua-driver detects "stale"
@@ -2871,7 +2871,7 @@ class CuaDriverBackend(ComputerUseBackend):
         `get_window_state` (ax/som) or `screenshot` (vision).
         """
         # Step 1: enumerate on-screen windows to find target pid/window_id.
-        # Surface 3 of CloverCognition/clover-c1#47072: read the canonical
+        # Surface 3 of clover-c1#47072: read the canonical
         # `structuredContent.windows` array directly. Pre-fix the wrapper
         # also kept a text-line regex (`_WINDOW_LINE_RE`) as a fallback for
         # cua-driver builds that predated structuredContent; the supersede
@@ -3146,7 +3146,7 @@ class CuaDriverBackend(ComputerUseBackend):
             text = gws_out["data"] if isinstance(gws_out["data"], str) else ""
             summary, tree = _split_tree_text(text)
 
-            # Surface 2 of CloverCognition/clover-c1#47072: prefer the
+            # Surface 2 of clover-c1#47072: prefer the
             # canonical structuredContent.elements array (trycua/cua#1961).
             # Falls back to markdown regex parsing for cua-driver builds
             # that didn't carry the structured shape — those bounds come
@@ -3217,7 +3217,7 @@ class CuaDriverBackend(ComputerUseBackend):
         ``foreground_unsupported`` result instead of silently downgrading to
         background (which would land the input somewhere the model didn't
         expect). Returns an ActionResult to short-circuit on refusal, or None
-        to proceed. See CloverCognition/clover-c1#67052 phase B.
+        to proceed. See clover-c1#67052 phase B.
         """
         if not delivery_mode or delivery_mode == "background":
             return None
@@ -3314,7 +3314,7 @@ class CuaDriverBackend(ComputerUseBackend):
 
         # Choose tool by click_count only — single-vs-double — and pass the
         # button through to `click`'s `button` enum (Surface 5 of
-        # CloverCognition/clover-c1#47072). cua-driver-rs gained an explicit
+        # clover-c1#47072). cua-driver-rs gained an explicit
         # `button: "left"|"right"|"middle"` arg on `click` in trycua/cua#1961
         # which rejects unknown buttons; before that, `middle` was silently
         # mapped to a left-click via name-routing through `right_click`.

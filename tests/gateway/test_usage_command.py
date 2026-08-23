@@ -168,7 +168,7 @@ class TestUsageAccountSection:
         runner._session_db = AsyncSessionDB(MagicMock())
         runner._session_db._db.get_session.return_value = {
             "billing_provider": "clover",
-            "billing_base_url": "https://inference.clover-c1.local/v1/",
+            "billing_base_url": "/",
         }
         runner._session_db._db.get_dominant_session_model_route.return_value = {
             "model": "z-ai/glm-5.2",

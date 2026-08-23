@@ -116,7 +116,7 @@ const state = (overrides: Partial<SubscriptionStateResponse> = {}): Subscription
   role: 'OWNER',
   current: null,
   tiers: [],
-  portal_url: 'https://portal.clover-c1.local/billing',
+  portal_url: '',
   ...overrides
 })
 

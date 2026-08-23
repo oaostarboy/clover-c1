@@ -85,12 +85,12 @@ def test_upload_evidence_accepts_only_attachment_urls(tmp_path, monkeypatch):
     result = _mod.upload_evidence(
         [_mod.EvidenceFile("shot.png", "new screenshot: shot.png")],
         tmp_path,
-        "CloverCognition/clover-c1",
+        "clover-c1",
         "bot-session-token",
     )
 
     assert result == {"shot.png": "https://github.com/user-attachments/assets/12345678-1234-1234-1234-123456789abc"}
-    assert calls[0][0] == ["gh", "image", "--repo", "CloverCognition/clover-c1", str(shot)]
+    assert calls[0][0] == ["gh", "image", "--repo", "clover-c1", str(shot)]
     assert calls[0][1]["env"]["GH_SESSION_TOKEN"] == "bot-session-token"
 
 
@@ -114,7 +114,7 @@ def test_upload_evidence_reports_gh_image_error(tmp_path, monkeypatch, capsys):
         _mod.upload_evidence(
             [_mod.EvidenceFile("shot.png", "new screenshot: shot.png")],
             tmp_path,
-            "CloverCognition/clover-c1",
+            "clover-c1",
             "bot-session-token",
         )
 
@@ -161,7 +161,7 @@ def test_publish_marks_evidence_upload_failure_in_pr_comment(tmp_path, monkeypat
     with pytest.raises(RuntimeError, match="Failed to upload shot.png"):
         _mod.publish(
             "github-token",
-            "CloverCognition/clover-c1",
+            "clover-c1",
             tmp_path,
             "69868",
             "image-token",
@@ -169,7 +169,7 @@ def test_publish_marks_evidence_upload_failure_in_pr_comment(tmp_path, monkeypat
 
     assert updates == [
         (
-            "https://api.github.com/repos/CloverCognition/clover-c1/issues/comments/123",
+            "https://api.github.com/repos/clover-c1/issues/comments/123",
             "github-token",
             "PATCH",
             {
@@ -197,7 +197,7 @@ def test_publish_skips_when_no_review_comment_exists(tmp_path, monkeypatch, caps
 
     assert _mod.publish(
         "github-token",
-        "CloverCognition/clover-c1",
+        "clover-c1",
         tmp_path,
         "83202",
         "image-token",

@@ -368,7 +368,7 @@ _CLOVER_MODEL_WARNING = (
 # happen to carry "clover" in their tag but are fully tool-capable.
 #
 # Positive examples the regex must match:
-#   CloverCognition/Clover-3-Llama-3.1-70B, clover-4-405b, openrouter/clover3:70b
+#   Clover Cognition/Clover-3-Llama-3.1-70B, clover-4-405b, openrouter/clover3:70b
 # Negative examples it must NOT match:
 #   clover-brain:qwen3-14b-ctx16k, qwen3:14b, claude-opus-4-6
 _NOUS_CLOVER_NON_AGENTIC_RE = re.compile(
@@ -2733,7 +2733,7 @@ def list_authenticated_providers(
     curated: dict[str, list[str]] = dict(_PROVIDER_MODELS)
     curated["openrouter"] = [mid for mid, _ in OPENROUTER_MODELS]
     # "clover" pulls from the remote model-catalog manifest published at
-    # https://clover-c1.local/docs/api/model-catalog.json so
+    # docs/api/model-catalog.json so
     # newly added Portal models surface in the /model picker without
     # requiring a Clover release. Falls back to the in-repo
     # _PROVIDER_MODELS["clover"] snapshot when the manifest is unreachable.

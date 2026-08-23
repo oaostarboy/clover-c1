@@ -563,4 +563,3 @@ evaluator(optimized, devset=testset)
 
 - **Paper**: "DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines"
 - **GitHub**: https://github.com/stanfordnlp/dspy
-- **Discord**: https://discord.gg/XCGy2WDCQB

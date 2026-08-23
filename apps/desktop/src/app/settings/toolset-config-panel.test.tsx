@@ -867,7 +867,7 @@ describe('ToolsetConfigPanel', () => {
         flow: 'device_code',
         session_id: 'sess-1',
         user_code: 'NOUS-1234',
-        verification_url: 'https://portal.clover-c1.local/device?user_code=NOUS-1234',
+        verification_url: '',
         poll_interval: 5,
         expires_in: 600
       })
@@ -896,7 +896,7 @@ describe('ToolsetConfigPanel', () => {
 
         await waitFor(() => expect(startOAuthLogin).toHaveBeenCalledWith('clover'))
         expect(openSpy).toHaveBeenCalledWith(
-          'https://portal.clover-c1.local/device?user_code=NOUS-1234',
+          '',
           '_blank',
           'noopener,noreferrer'
         )

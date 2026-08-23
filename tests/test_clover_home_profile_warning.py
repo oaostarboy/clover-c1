@@ -1,6 +1,6 @@
 """Tests for get_clover_home() profile-mode fallback warning.
 
-Regression test for https://github.com/CloverCognition/clover-c1/issues/18594.
+Regression test for 
 
 When CLOVER_HOME is unset but an active_profile file indicates a non-default
 profile is active, get_clover_home() should:

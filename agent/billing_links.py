@@ -74,7 +74,7 @@ def is_nous_inference_route(provider: str, base_url: str) -> bool:
     """True when the failing route is the Clover-managed inference gateway."""
     if (provider or "").strip().lower() == "clover":
         return True
-    return base_url_host_matches(str(base_url or ""), "inference-api.clover-c1.local")
+    return base_url_host_matches(str(base_url or ""), "inference-api.")
 
 
 def _nous_billing_url() -> Optional[str]:
@@ -84,7 +84,7 @@ def _nous_billing_url() -> Optional[str]:
 
         return nous_portal_billing_url(None)
     except Exception:
-        return "https://portal.clover-c1.local/billing"
+        return ""
 
 
 def _resolve_provider_link(slug: str, base_url: str) -> tuple[str, Optional[str]]:

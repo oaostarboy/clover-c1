@@ -57,7 +57,7 @@ def test_vector_files_shape(tmp_path):
     for platform in PLATFORMS:
         doc = json.loads((tmp_path / f"{platform}.json").read_text(encoding="utf-8"))
         assert doc["platform"] == platform
-        assert doc["oracle"]["repo"] == "CloverCognition/clover-c1"
+        assert doc["oracle"]["repo"] == "clover-c1"
         assert re.match(r"^[0-9a-f]{40}$|^unknown$", doc["oracle"]["commit"])
         assert doc["oracle"]["generator_version"] >= 1
         ids = set()

@@ -1,7 +1,7 @@
 """Clover Portal ``anthropic/*`` models route on the native Messages wire.
 
 Portal serves its ``anthropic/*`` catalog at
-``https://inference.clover-c1.local/v1/messages`` alongside the
+``/messages`` alongside the
 OpenAI-compatible ``/v1/chat/completions`` used by everything else it proxies.
 These tests pin the contracts that make that routing correct:
 
@@ -23,7 +23,7 @@ import pytest
 from clover_cli import runtime_provider as rp
 from clover_cli.providers import nous_api_mode
 
-PORTAL_URL = "https://inference.clover-c1.local/v1"
+PORTAL_URL = ""
 # Staging / preview hosts used via NOUS_INFERENCE_BASE_URL — not the prod
 # hostname, so Portal behaviour must key off provider=nous.
 STAGING_URL = "https://ai.wildebeest-newton.ts.net/v1"
@@ -177,7 +177,7 @@ class TestClientShape:
             _requires_bearer_auth,
         )
 
-        spoofed = "https://inference-api.clover-c1.local.attacker.test/v1"
+        spoofed = "https://inference-api..attacker.test/v1"
         assert not _is_nous_portal_endpoint(spoofed)
         assert not _requires_bearer_auth(spoofed)
 

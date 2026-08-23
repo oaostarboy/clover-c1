@@ -137,9 +137,9 @@ class TestFallbackChain:
     releases (opus 4.8, etc.) never reach the picker.
     """
 
-    PRIMARY = "https://clover-c1.local/docs/api/model-catalog.json"
+    PRIMARY = "docs/api/model-catalog.json"
     FALLBACK = (
-        "https://raw.githubusercontent.com/CloverCognition/clover-c1"
+        "https://raw.githubusercontent.com/clover-c1"
         "/main/website/static/api/model-catalog.json"
     )
 

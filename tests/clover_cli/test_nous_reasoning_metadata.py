@@ -92,9 +92,9 @@ class TestNousModelReasoningCapabilities:
         from clover_cli.models import nous_catalog_url
 
         monkeypatch.setenv(
-            "NOUS_INFERENCE_BASE_URL", "https://staging.clover-c1.local/v1"
+            "NOUS_INFERENCE_BASE_URL", "https://staging./v1"
         )
-        assert nous_catalog_url() == "https://staging.clover-c1.local/v1/models"
+        assert nous_catalog_url() == "https://staging./v1/models"
 
         monkeypatch.delenv("NOUS_INFERENCE_BASE_URL")
         assert nous_catalog_url().endswith("/v1/models")

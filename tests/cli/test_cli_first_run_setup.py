@@ -177,7 +177,7 @@ def test_offer_first_run_setup_routes_into_shared_picker(monkeypatch):
         lambda **kw: {
             "provider": "clover",
             "api_key": "portal-token",
-            "base_url": "https://inference.clover-c1.local/v1",
+            "base_url": "",
             "source": "oauth",
         },
     )

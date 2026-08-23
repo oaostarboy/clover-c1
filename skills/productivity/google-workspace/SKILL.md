@@ -13,7 +13,7 @@ required_credential_files:
 metadata:
   clover:
     tags: [Google, Gmail, Calendar, Drive, Sheets, Docs, Contacts, Email, OAuth]
-    homepage: https://github.com/CloverCognition/clover-c1
+    homepage:
     related_skills: [himalaya]
 ---
 

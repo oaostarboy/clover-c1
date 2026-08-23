@@ -66,7 +66,7 @@ Watch a GitHub repo (set `GITHUB_TOKEN` in `${CLOVER_HOME:-~/.clover}/.env` to a
 
 ```bash
 python $CLOVER_HOME/skills/devops/watchers/scripts/watch_github.py \
-  --name clover-issues --repo CloverCognition/clover-c1 --scope issues
+  --name clover-issues --repo clover-c1 --scope issues
 ```
 
 Poll an arbitrary JSON API:

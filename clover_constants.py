@@ -127,7 +127,7 @@ def get_clover_home() -> Path:
     callers that import this at load time.  Subprocess spawners are
     expected to propagate ``CLOVER_HOME`` explicitly (see the systemd
     template in ``clover_cli/gateway.py`` and the kanban dispatcher in
-    ``clover_cli/kanban_db.py``).  See https://github.com/CloverCognition/clover-c1/issues/18594.
+    ``clover_cli/kanban_db.py``).  See 
     """
     override = get_clover_home_override()
     if override:
@@ -1017,7 +1017,7 @@ def secure_parent_dir(path: Path) -> None:
     prevent catastrophic host bricking when ``CLOVER_HOME`` or other path
     env vars resolve to an unexpected location.
 
-    See https://github.com/CloverCognition/clover-c1/issues/25821.
+    See 
     """
     parent = path.parent.resolve()
     # Refuse root and its direct children (/usr, /home, /var, /tmp, …).
@@ -1461,7 +1461,7 @@ def is_container() -> bool:
 
     Result is cached for the process lifetime.  Import-safe — no heavy deps.
 
-    See: CloverCognition/clover-c1#47111
+    See: clover-c1#47111
     """
     global _container_detected
     if _container_detected is not None:
@@ -1706,5 +1706,5 @@ def partial_update_hint(exc: BaseException) -> list[str]:
         "and a related one was not.",
         "Re-run the update to bring the whole tree to the same version:",
         "    clover update",
-        "If that also fails, reinstall: https://clover-c1.local",
+        "If that also fails, reinstall: ",
     ]

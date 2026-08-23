@@ -47,7 +47,7 @@ export const PROVIDER_GROUPS: ProviderPrefix[] = [
     prefix: 'NOUS_',
     name: 'Clover Portal',
     description: 'Hosted Clover & Clover-trained models',
-    docsUrl: 'https://portal.clover-c1.local',
+    docsUrl: '',
     priority: 0
   },
   {

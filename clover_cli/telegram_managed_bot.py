@@ -20,7 +20,7 @@ import httpx
 
 # Default pairing API base URL (Clover-hosted Cloudflare Worker).
 # Override for PoC/staging with TELEGRAM_ONBOARDING_URL.
-DEFAULT_API_URL = "https://setup.clover-c1.clover-c1.local"
+DEFAULT_API_URL = "https://setup.clover-c1."
 TELEGRAM_ONBOARDING_URL_ENV = "TELEGRAM_ONBOARDING_URL"
 
 # The Clover-hosted manager bot username (without @). The backend returns the

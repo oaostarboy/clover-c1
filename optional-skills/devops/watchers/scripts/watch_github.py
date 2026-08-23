@@ -6,7 +6,7 @@ Usage (via cron with --no-agent):
     clover cron create clover-issues \\
       --schedule "*/5 * * * *" --no-agent \\
       --script "$CLOVER_HOME/skills/devops/watchers/scripts/watch_github.py" \\
-      --script-args "--name clover-issues --repo CloverCognition/clover-c1 --scope issues"
+      --script-args "--name clover-issues --repo clover-c1 --scope issues"
 
 Set GITHUB_TOKEN (or GH_TOKEN) in the Clover .env file
 (``${CLOVER_HOME:-~/.clover}/.env``) to avoid the 60 req/hr

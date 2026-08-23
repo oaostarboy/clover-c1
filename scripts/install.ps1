@@ -5,7 +5,7 @@
 # Uses uv for fast Python provisioning and package management.
 #
 # Usage:
-#   iex (irm https://clover-c1.local/install.ps1)
+#   iex (irm )
 #
 # Or download and run with options:
 #   .\install.ps1 -NoVenv -SkipSetup
@@ -374,8 +374,8 @@ $script:ResolvedPathReport = @{
 # Configuration
 # ============================================================================
 
-$RepoUrlSsh = "git@github.com:CloverCognition/clover-c1.git"
-$RepoUrlHttps = "https://github.com/CloverCognition/clover-c1.git"
+$RepoUrlSsh = "git@github.com:clover-c1.git"
+$RepoUrlHttps = ""
 $PythonVersion = "3.11"
 # Minor versions the installer accepts when the requested $PythonVersion isn't
 # available, in preference order.  uv discovers both uv-managed and system
@@ -2272,13 +2272,13 @@ function Install-Repository {
                 # for.  GitHub supports archive URLs for commits, tags, and
                 # branches; we honour Commit > Tag > Branch.
                 if ($Commit) {
-                    $zipUrl = "https://github.com/CloverCognition/clover-c1/archive/$Commit.zip"
+                    $zipUrl = ""
                     $zipLabel = $Commit
                 } elseif ($Tag) {
-                    $zipUrl = "https://github.com/CloverCognition/clover-c1/archive/refs/tags/$Tag.zip"
+                    $zipUrl = ""
                     $zipLabel = $Tag
                 } else {
-                    $zipUrl = "https://github.com/CloverCognition/clover-c1/archive/refs/heads/$Branch.zip"
+                    $zipUrl = ""
                     $zipLabel = $Branch
                 }
                 $zipPath = "$env:TEMP\clover-c1-$zipLabel.zip"
@@ -4882,7 +4882,7 @@ try {
     Write-Err "Installation failed: $_"
     Write-Host ""
     Write-Info "If the error is unclear, try downloading and running the script directly:"
-    Write-Host "  Invoke-WebRequest -Uri 'https://clover-c1.local/install.ps1' -OutFile install.ps1" -ForegroundColor Yellow
+    Write-Host "  Invoke-WebRequest -Uri '' -OutFile install.ps1" -ForegroundColor Yellow
     Write-Host "  .\install.ps1" -ForegroundColor Yellow
     Write-Host ""
 }

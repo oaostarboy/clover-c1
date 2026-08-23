@@ -85,10 +85,10 @@ def test_local_endpoint_hostname_detection():
 def test_nous_portal_host_detection():
     from utils import base_url_host_matches
 
-    assert base_url_host_matches("https://inference.clover-c1.local/v1", "clover-c1.local")
-    assert base_url_host_matches("https://portal.clover-c1.local", "clover-c1.local")
-    assert not base_url_host_matches("https://clover-c1.local.evil.io/v1", "clover-c1.local")
-    assert not base_url_host_matches("https://proxy.example/clover-c1.local/v1", "clover-c1.local")
+    assert base_url_host_matches("", "")
+    assert base_url_host_matches("", "")
+    assert not base_url_host_matches(".evil.io/v1", "")
+    assert not base_url_host_matches("https://proxy.example//v1", "")
 
 
 # ── Widened class coverage (follow-up to #85737) ─────────────────────────────

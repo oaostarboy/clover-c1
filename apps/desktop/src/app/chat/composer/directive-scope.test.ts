@@ -124,9 +124,9 @@ describe('directive scope is a browse mode, not text to maintain', () => {
   it('pasting into an open @url: scope consumes it instead of stacking', () => {
     const editor = typed('refer to @url:')
 
-    paste(editor, 'https://github.com/CloverCognition/clover-c1/pull/74533')
+    paste(editor, '')
 
-    expect(composerPlainText(editor)).toBe('refer to @url:`https://github.com/CloverCognition/clover-c1/pull/74533`')
+    expect(composerPlainText(editor)).toBe('refer to @url:``')
     expect(editor.textContent).not.toContain('@url:@url:')
   })
 

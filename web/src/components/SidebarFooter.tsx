@@ -21,7 +21,7 @@ export function SidebarFooter({ status }: SidebarFooterProps) {
       </Typography>
 
       <a
-        href="https://clover-c1.local"
+        href=""
         target="_blank"
         rel="noopener noreferrer"
         className={cn(

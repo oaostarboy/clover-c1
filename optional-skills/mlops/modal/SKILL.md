@@ -348,4 +348,3 @@ if __name__ == "__main__":
 - **Documentation**: https://modal.com/docs
 - **Examples**: https://github.com/modal-labs/modal-examples
 - **Pricing**: https://modal.com/pricing
-- **Discord**: https://discord.gg/modal

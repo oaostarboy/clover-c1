@@ -253,7 +253,7 @@ def _patch_update_flow(monkeypatch, repo, run_real_git=True):
     monkeypatch.setattr(clover_main, "_is_windows", lambda: False)
     monkeypatch.setattr(
         clover_main, "_get_origin_url",
-        lambda *a, **k: "https://github.com/CloverCognition/clover-c1.git",
+        lambda *a, **k: "",
     )
     monkeypatch.setattr(clover_main, "_is_fork", lambda *a, **k: False)
     monkeypatch.setattr(clover_main, "_discard_lockfile_churn", lambda *a, **k: None)

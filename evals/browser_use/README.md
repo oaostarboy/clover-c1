@@ -1,6 +1,6 @@
 # Browser Use Mode Benchmark
 
-The A/B battery behind PR [#81958](https://github.com/CloverCognition/clover-c1/pull/81958)
+The A/B battery behind PR #81958
 (Browser Use CLI 3.0 mode, salvage of #66476 by @laithrw): built-in
 `browser_*` toolset vs the single `browser_exec` driver, measured as total
 task tokens / tool calls / wall clock at accuracy parity on live multi-step

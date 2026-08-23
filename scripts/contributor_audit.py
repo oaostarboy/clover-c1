@@ -62,11 +62,11 @@ IGNORED_PATTERNS = [
 IGNORED_EMAILS = {
     "noreply@anthropic.com",
     "noreply@github.com",
-    "noreply@clover-c1.local",
+    "noreply@",
     "cursoragent@cursor.com",
-    "clover@clover-c1.local",
+    "clover@",
     "clover-audit@example.com",
-    "nousbot@clover-c1.local",
+    "nousbot@",
     "clover@habibilabs.dev",
     "omx@oh-my-codex.dev",
     "codex@openai.com",
@@ -116,7 +116,7 @@ def gh_pr_list():
         result = subprocess.run(
             [
                 "gh", "pr", "list",
-                "--repo", "CloverCognition/clover-c1",
+                "--repo", "clover-c1",
                 "--state", "merged",
                 "--json", "number,title,body,author,mergedAt",
                 "--limit", "300",

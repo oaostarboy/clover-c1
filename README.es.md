@@ -4,21 +4,21 @@
 
 # Clover Cognition ☤
 <p align="center">
-  <a href="https://clover-c1.local/">Clover Cognition</a> | <a href="https://clover-c1.local/">Clover Desktop</a>
+  <a href="#">Clover Cognition</a> | <a href="#">Clover Desktop</a>
 </p>
 <p align="center">
-  <a href="https://clover-c1.local/docs/"><img src="https://img.shields.io/badge/Docs-clover--c1-FFD700?style=for-the-badge" alt="Documentación"></a>
-  <a href="https://discord.gg/CloverCognition"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://github.com/CloverCognition/clover-c1/blob/main/LICENSE"><img src="https://img.shields.io/badge/Licencia-MIT-green?style=for-the-badge" alt="Licencia: MIT"></a>
-  <a href="https://clover-c1.local"><img src="https://img.shields.io/badge/Creado%20por-Clover%20Research-blueviolet?style=for-the-badge" alt="Creado por Clover Cognition"></a>
+  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--c1-FFD700?style=for-the-badge" alt="Documentación"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Licencia-MIT-green?style=for-the-badge" alt="Licencia: MIT"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Creado%20por-Clover%20Research-blueviolet?style=for-the-badge" alt="Creado por Clover Cognition"></a>
   <a href="README.md"><img src="https://img.shields.io/badge/Lang-English-blue?style=for-the-badge" alt="English"></a>
   <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/Lang-中文-red?style=for-the-badge" alt="中文"></a>
   <a href="README.ur-pk.md"><img src="https://img.shields.io/badge/Lang-اردو-green?style=for-the-badge" alt="اردو"></a>
 </p>
 
-**El agente de IA con mejora continua creado por [Clover Cognition](https://clover-c1.local).** Es el único agente con un bucle de aprendizaje integrado: crea habilidades a partir de la experiencia, las mejora durante el uso, se impulsa a sí mismo a persistir el conocimiento, busca en sus propias conversaciones pasadas y construye un modelo cada vez más profundo de quién eres a lo largo de las sesiones. Ejecútalo en un VPS de $5, un clúster de GPUs o infraestructura sin servidor que cuesta casi nada cuando está inactivo. No está atado a tu laptop — habla con él desde Telegram mientras trabaja en una VM en la nube.
+**El agente de IA con mejora continua creado por Clover Cognition.** Es el único agente con un bucle de aprendizaje integrado: crea habilidades a partir de la experiencia, las mejora durante el uso, se impulsa a sí mismo a persistir el conocimiento, busca en sus propias conversaciones pasadas y construye un modelo cada vez más profundo de quién eres a lo largo de las sesiones. Ejecútalo en un VPS de $5, un clúster de GPUs o infraestructura sin servidor que cuesta casi nada cuando está inactivo. No está atado a tu laptop — habla con él desde Telegram mientras trabaja en una VM en la nube.
 
-Usa cualquier modelo que quieras — [Clover Portal](https://portal.clover-c1.local), [OpenRouter](https://openrouter.ai) (más de 200 modelos), [NovitaAI](https://novita.ai), [NVIDIA NIM](https://build.nvidia.com) (Nemotron), [Xiaomi MiMo](https://platform.xiaomimimo.com), [z.ai/GLM](https://z.ai), [Kimi/Moonshot](https://platform.moonshot.ai), [MiniMax](https://www.minimax.io), [Hugging Face](https://huggingface.co), OpenAI, o tu propio endpoint. Cambia con `clover model` — sin cambios de código, sin dependencias.
+Usa cualquier modelo que quieras — Clover Portal, [OpenRouter](https://openrouter.ai) (más de 200 modelos), [NovitaAI](https://novita.ai), [NVIDIA NIM](https://build.nvidia.com) (Nemotron), [Xiaomi MiMo](https://platform.xiaomimimo.com), [z.ai/GLM](https://z.ai), [Kimi/Moonshot](https://platform.moonshot.ai), [MiniMax](https://www.minimax.io), [Hugging Face](https://huggingface.co), OpenAI, o tu propio endpoint. Cambia con `clover model` — sin cambios de código, sin dependencias.
 
 <table>
 <tr><td><b>Una interfaz de terminal real</b></td><td>TUI completa con edición multilínea, autocompletado de comandos, historial de conversaciones, interrupción y redirección, y salida de herramientas en streaming.</td></tr>
@@ -37,24 +37,24 @@ Usa cualquier modelo que quieras — [Clover Portal](https://portal.clover-c1.lo
 ### Linux, macOS, WSL2, Termux
 
 ```bash
-curl -fsSL https://clover-c1.local/install.sh | bash
+curl -fsSL  | bash
 ```
 
 ### Windows (nativo, PowerShell)
 
-> **Nota:** En Windows nativo, Clover funciona sin WSL — la CLI, el gateway, la TUI y las herramientas funcionan de forma nativa. Si prefieres usar WSL2, el comando de Linux/macOS de arriba también funciona allí. ¿Encontraste un error? Por favor [crea un issue](https://github.com/CloverCognition/clover-c1/issues).
+> **Nota:** En Windows nativo, Clover funciona sin WSL — la CLI, el gateway, la TUI y las herramientas funcionan de forma nativa. Si prefieres usar WSL2, el comando de Linux/macOS de arriba también funciona allí. ¿Encontraste un error? Por favor crea un issue.
 
 Ejecuta esto en PowerShell:
 
 ```powershell
-iex (irm https://clover-c1.local/install.ps1)
+iex (irm )
 ```
 
 El instalador se encarga de todo: uv, Python 3.11, Node.js, ripgrep, ffmpeg, **y un Git Bash portátil** (MinGit, descomprimido en `%LOCALAPPDATA%\clover\git` — no requiere administrador, completamente aislado de cualquier instalación de Git del sistema). Clover usa este Git Bash incluido para ejecutar comandos de shell.
 
 Si ya tienes Git instalado, el instalador lo detecta y lo usa en su lugar. De lo contrario, una descarga de ~45MB de MinGit es todo lo que necesitas — no tocará ni interferirá con ningún Git del sistema.
 
-> **Android / Termux:** La ruta manual probada está documentada en la [guía de Termux](https://clover-c1.local/docs/getting-started/termux). En Termux, Clover instala el extra `.[termux]` curado porque el extra completo `.[all]` actualmente incluye dependencias de voz incompatibles con Android.
+> **Android / Termux:** La ruta manual probada está documentada en la [guía de Termux](docs/getting-started/termux). En Termux, Clover instala el extra `.[termux]` curado porque el extra completo `.[all]` actualmente incluye dependencias de voz incompatibles con Android.
 >
 > **Windows:** Windows nativo es totalmente compatible — el comando de PowerShell de arriba instala todo. Si prefieres usar WSL2, el comando de Linux también funciona allí. La instalación nativa de Windows se encuentra en `%LOCALAPPDATA%\clover`; WSL2 instala en `~/.clover` como en Linux.
 
@@ -81,13 +81,13 @@ clover update       # Actualiza a la última versión
 clover doctor       # Diagnostica cualquier problema
 ```
 
-📖 **[Documentación completa →](https://clover-c1.local/docs/)**
+📖 **[Documentación completa →](docs/)**
 
 ---
 
 ## Evita la colección de claves API — Clover Portal
 
-Clover funciona con cualquier proveedor que quieras — eso no cambiará. Pero si prefieres no recopilar cinco claves API separadas para el modelo, búsqueda web, generación de imágenes, TTS y un navegador en la nube, **[Clover Portal](https://portal.clover-c1.local)** las cubre todas bajo una sola suscripción:
+Clover funciona con cualquier proveedor que quieras — eso no cambiará. Pero si prefieres no recopilar cinco claves API separadas para el modelo, búsqueda web, generación de imágenes, TTS y un navegador en la nube, **Clover Portal** las cubre todas bajo una sola suscripción:
 
 - **Más de 300 modelos** — elige cualquiera con `/model <nombre>`
 - **Tool Gateway** — búsqueda web (Firecrawl), generación de imágenes (FAL), texto a voz (OpenAI), navegador en la nube (Browser Use), todo enrutado a través de tu suscripción. Sin cuentas adicionales.
@@ -98,7 +98,7 @@ Un comando desde una instalación nueva:
 clover setup --portal
 ```
 
-Esto te autentica vía OAuth, establece Clover como tu proveedor y activa el Tool Gateway. Comprueba qué está conectado en cualquier momento con `clover portal info`. Detalles completos en la [página de documentación del Tool Gateway](https://clover-c1.local/docs/user-guide/features/tool-gateway).
+Esto te autentica vía OAuth, establece Clover como tu proveedor y activa el Tool Gateway. Comprueba qué está conectado en cualquier momento con `clover portal info`. Detalles completos en la [página de documentación del Tool Gateway](docs/user-guide/features/tool-gateway).
 
 Puedes seguir usando tus propias claves por herramienta cuando quieras — el gateway es por backend, no todo o nada.
 
@@ -120,31 +120,31 @@ Clover tiene dos puntos de entrada: inicia la interfaz de terminal con `clover`,
 | Interrumpir trabajo actual          | `Ctrl+C` o enviar un nuevo mensaje            | `/stop` o enviar un nuevo mensaje                                                 |
 | Estado específico de plataforma     | `/platforms`                                  | `/status`, `/sethome`                                                             |
 
-Para las listas de comandos completas, consulta la [guía de CLI](https://clover-c1.local/docs/user-guide/cli) y la [guía del Gateway de Mensajería](https://clover-c1.local/docs/user-guide/messaging).
+Para las listas de comandos completas, consulta la [guía de CLI](docs/user-guide/cli) y la [guía del Gateway de Mensajería](docs/user-guide/messaging).
 
 ---
 
 ## Documentación
 
-Toda la documentación está en **[clover-c1.clover-c1.local/docs](https://clover-c1.local/docs/)**:
+Toda la documentación está en **[clover-c1./docs](docs/)**:
 
 | Sección                                                                                             | Contenido                                                    |
 | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| [Inicio rápido](https://clover-c1.local/docs/getting-started/quickstart)              | Instalar → configurar → primera conversación en 2 minutos   |
-| [Uso de CLI](https://clover-c1.local/docs/user-guide/cli)                             | Comandos, atajos de teclado, personalidades, sesiones        |
-| [Configuración](https://clover-c1.local/docs/user-guide/configuration)               | Archivo de configuración, proveedores, modelos, todas las opciones |
-| [Gateway de Mensajería](https://clover-c1.local/docs/user-guide/messaging)           | Telegram, Discord, Slack, WhatsApp, Signal, Home Assistant   |
-| [Seguridad](https://clover-c1.local/docs/user-guide/security)                        | Aprobación de comandos, emparejamiento por DM, aislamiento en contenedor |
-| [Herramientas y Toolsets](https://clover-c1.local/docs/user-guide/features/tools)   | Más de 40 herramientas, sistema de toolsets, backends de terminal |
-| [Sistema de Habilidades](https://clover-c1.local/docs/user-guide/features/skills)   | Memoria procedimental, Skills Hub, creación de habilidades   |
-| [Memoria](https://clover-c1.local/docs/user-guide/features/memory)                   | Memoria persistente, perfiles de usuario, mejores prácticas  |
-| [Integración MCP](https://clover-c1.local/docs/user-guide/features/mcp)              | Conecta cualquier servidor MCP para capacidades extendidas   |
-| [Programación Cron](https://clover-c1.local/docs/user-guide/features/cron)           | Tareas programadas con entrega a plataforma                  |
-| [Archivos de Contexto](https://clover-c1.local/docs/user-guide/features/context-files) | Contexto de proyecto que da forma a cada conversación      |
-| [Arquitectura](https://clover-c1.local/docs/developer-guide/architecture)            | Estructura del proyecto, bucle del agente, clases principales |
-| [Contribuir](https://clover-c1.local/docs/developer-guide/contributing)              | Configuración de desarrollo, proceso de PR, estilo de código |
-| [Referencia de CLI](https://clover-c1.local/docs/reference/cli-commands)             | Todos los comandos y flags                                   |
-| [Variables de Entorno](https://clover-c1.local/docs/reference/environment-variables) | Referencia completa de variables de entorno                  |
+| [Inicio rápido](docs/getting-started/quickstart)              | Instalar → configurar → primera conversación en 2 minutos   |
+| [Uso de CLI](docs/user-guide/cli)                             | Comandos, atajos de teclado, personalidades, sesiones        |
+| [Configuración](docs/user-guide/configuration)               | Archivo de configuración, proveedores, modelos, todas las opciones |
+| [Gateway de Mensajería](docs/user-guide/messaging)           | Telegram, Discord, Slack, WhatsApp, Signal, Home Assistant   |
+| [Seguridad](docs/user-guide/security)                        | Aprobación de comandos, emparejamiento por DM, aislamiento en contenedor |
+| [Herramientas y Toolsets](docs/user-guide/features/tools)   | Más de 40 herramientas, sistema de toolsets, backends de terminal |
+| [Sistema de Habilidades](docs/user-guide/features/skills)   | Memoria procedimental, Skills Hub, creación de habilidades   |
+| [Memoria](docs/user-guide/features/memory)                   | Memoria persistente, perfiles de usuario, mejores prácticas  |
+| [Integración MCP](docs/user-guide/features/mcp)              | Conecta cualquier servidor MCP para capacidades extendidas   |
+| [Programación Cron](docs/user-guide/features/cron)           | Tareas programadas con entrega a plataforma                  |
+| [Archivos de Contexto](docs/user-guide/features/context-files) | Contexto de proyecto que da forma a cada conversación      |
+| [Arquitectura](docs/developer-guide/architecture)            | Estructura del proyecto, bucle del agente, clases principales |
+| [Contribuir](docs/developer-guide/contributing)              | Configuración de desarrollo, proceso de PR, estilo de código |
+| [Referencia de CLI](docs/reference/cli-commands)             | Todos los comandos y flags                                   |
+| [Variables de Entorno](docs/reference/environment-variables) | Referencia completa de variables de entorno                  |
 
 ---
 
@@ -185,7 +185,7 @@ Consulta `clover claw migrate --help` para todas las opciones, o usa la habilida
 Inicio rápido para colaboradores — clona y comienza con `setup-clover.sh`:
 
 ```bash
-git clone https://github.com/CloverCognition/clover-c1.git
+git clone
 cd clover-c1
 ./setup-clover.sh     # instala uv, crea venv, instala .[all], enlaza ~/.local/bin/clover
 ./clover              # detecta automáticamente el venv, no necesitas hacer `source` primero
@@ -205,9 +205,9 @@ scripts/run_tests.sh
 
 ## Comunidad
 
-- 💬 [Discord](https://discord.gg/CloverCognition)
+- 💬 Discord
 - 📚 [Skills Hub](https://agentskills.io)
-- 🐛 [Issues](https://github.com/CloverCognition/clover-c1/issues)
+- 🐛 Issues
 - 🔌 [computer-use-linux](https://github.com/avifenesh/computer-use-linux) — Servidor MCP de control de escritorio Linux para Clover y otros hosts MCP, con árboles de accesibilidad AT-SPI, entrada Wayland/X11, capturas de pantalla y targeting de ventanas del compositor.
 - 🔌 [CloverClaw](https://github.com/AaronWong1999/cloverclaw) — Puente WeChat comunitario: Ejecuta Clover Cognition y OpenClaw en la misma cuenta de WeChat.
 
@@ -217,4 +217,4 @@ scripts/run_tests.sh
 
 MIT — ver [LICENSE](LICENSE).
 
-Creado por [Clover Cognition](https://clover-c1.local).
+Creado por Clover Cognition.

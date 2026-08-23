@@ -1074,7 +1074,7 @@ def fetch_nous_recommended_models(
     any cache layer can supply data. Callers must treat missing/null fields
     as "no recommendation" and fall back to their own default.
     """
-    base = (portal_base_url or "https://portal.clover-c1.local").rstrip("/")
+    base = (portal_base_url or "").rstrip("/")
     now = time.monotonic()
     cached = _nous_recommended_cache.get(base)
     if not force_refresh and cached is not None:
@@ -1125,7 +1125,7 @@ def _resolve_nous_portal_url() -> str:
             return portal.rstrip("/")
         return str(DEFAULT_NOUS_PORTAL_URL).rstrip("/")
     except Exception:
-        return "https://portal.clover-c1.local"
+        return ""
 
 
 def _extract_model_name(entry: Any) -> Optional[str]:
@@ -2516,7 +2516,7 @@ def _resolve_openrouter_api_key() -> str:
     return os.getenv("OPENROUTER_API_KEY", "").strip()
 
 
-_DEFAULT_NOUS_INFERENCE_BASE = "https://inference-api.clover-c1.local"
+_DEFAULT_NOUS_INFERENCE_BASE = "https://inference-api."
 
 
 def _resolve_nous_pricing_credentials() -> tuple[str, str]:
@@ -5448,7 +5448,7 @@ def opencode_zen_free_headers() -> dict:
         _v = "0"
     return {
         "Authorization": "",
-        "HTTP-Referer": "https://clover-c1.local",
+        "HTTP-Referer": "",
         "X-Title": "Clover Cognition",
         "User-Agent": f"CloverAgent/{_v}",
     }

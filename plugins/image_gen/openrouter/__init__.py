@@ -1263,7 +1263,7 @@ class OpenRouterCompatImageProvider(ImageGenProvider):
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             # OpenRouter attribution headers (harmless against Clover Portal).
-            "HTTP-Referer": "https://github.com/CloverCognition/clover-c1",
+            "HTTP-Referer": "",
             "X-Title": "Clover Cognition",
         }
         last_error: Optional[Dict[str, Any]] = None

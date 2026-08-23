@@ -2,7 +2,7 @@
 
 The cache avoids re-validating Clover credentials on every menu paint —
 `clover tools` → "All Platforms" used to fire ~31 OAuth refresh POSTs
-against portal.clover-c1.local during one render. The cache is keyed
+against portal. during one render. The cache is keyed
 on auth.json path + mtime so profile switches stay isolated while
 login/logout flows invalidate naturally; tests and other writers can
 also call invalidate_nous_auth_status_cache().

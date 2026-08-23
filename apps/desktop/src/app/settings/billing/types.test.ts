@@ -37,7 +37,7 @@ const fullBillingState = {
   },
   ok: true,
   org_name: 'Acme Research',
-  portal_url: 'https://portal.clover-c1.local/billing',
+  portal_url: '',
   role: 'OWNER',
   usage: {
     available: true,
@@ -101,7 +101,7 @@ const loggedOutSubscriptionState = {
   ok: true,
   org_id: null,
   org_name: null,
-  portal_url: 'https://portal.clover-c1.local/login',
+  portal_url: '',
   role: null,
   tiers: []
 } satisfies SubscriptionStateResponse

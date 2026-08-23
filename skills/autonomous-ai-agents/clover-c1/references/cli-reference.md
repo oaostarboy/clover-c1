@@ -1,7 +1,7 @@
 # Clover CLI Reference
 
 Live sources when anything looks stale: `clover --help`, `clover <command> --help`,
-https://clover-c1.local/docs/reference/cli-commands
+docs/reference/cli-commands
 
 ### Global Flags
 
@@ -79,7 +79,7 @@ clover gateway run|install|start|stop|restart|status|setup
 ```
 
 20+ platforms: Telegram, Discord, Slack, WhatsApp (Baileys + Business Cloud API), iMessage (Photon — `clover photon setup`), Signal, Email, SMS, Matrix, Mattermost, Teams, LINE, SimpleX, ntfy, Google Chat, Home Assistant, DingTalk, Feishu, WeCom, Weixin, API Server, Webhooks. Open WebUI connects via the API Server adapter. Most adapters ship under `plugins/platforms/`.
-Docs: https://clover-c1.local/docs/user-guide/messaging/
+Docs: docs/user-guide/messaging/
 
 ### Sessions
 
@@ -141,10 +141,10 @@ Plugin- and provider-supplied subcommands (e.g. `clover photon setup`) only appe
 
 | Looking for... | Location |
 |---|---|
-| Config options | `clover config edit` · [Configuration docs](https://clover-c1.local/docs/user-guide/configuration) |
-| Tools / toolsets | `clover tools list` · [Tools reference](https://clover-c1.local/docs/reference/tools-reference) |
-| Skills catalog | `clover skills browse` · [Skills catalog](https://clover-c1.local/docs/reference/skills-catalog) |
-| Provider setup | `clover model` · [Providers guide](https://clover-c1.local/docs/integrations/providers) |
-| Env variables | `clover config env-path` · [Env vars reference](https://clover-c1.local/docs/reference/environment-variables) |
+| Config options | `clover config edit` · [Configuration docs](docs/user-guide/configuration) |
+| Tools / toolsets | `clover tools list` · [Tools reference](docs/reference/tools-reference) |
+| Skills catalog | `clover skills browse` · [Skills catalog](docs/reference/skills-catalog) |
+| Provider setup | `clover model` · [Providers guide](docs/integrations/providers) |
+| Env variables | `clover config env-path` · [Env vars reference](docs/reference/environment-variables) |
 | Gateway logs | `~/.clover/logs/gateway.log` (or `clover logs`) |
 | Sessions | `clover sessions browse` (reads state.db) |

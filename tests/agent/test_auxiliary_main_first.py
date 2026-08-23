@@ -289,7 +289,7 @@ class TestResolveVisionMainFirst:
         """
         nous_client = MagicMock()
         nous_client.api_key = "jwt-test"
-        nous_client.base_url = "https://inference.clover-c1.local/v1"
+        nous_client.base_url = ""
 
         def fake_try_nous(vision=False):
             seen["vision"] = vision

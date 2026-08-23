@@ -17,7 +17,7 @@ def _acct(**kwargs):
     kwargs.setdefault("logged_in", True)
     kwargs.setdefault("source", "account_api")
     kwargs.setdefault("fresh", True)
-    kwargs.setdefault("portal_base_url", "https://portal.clover-c1.local")
+    kwargs.setdefault("portal_base_url", "")
     return CloverPortalAccountInfo(**kwargs)
 
 

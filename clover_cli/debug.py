@@ -988,9 +988,9 @@ def _run_debug_share_nous(args, *, log_lines: int, redact: bool) -> None:
     )
     print(
         "\nPick up the discussion in:\n"
-        "  GitHub Issues        https://github.com/CloverCognition/clover-c1/issues\n"
-        "  Clover Portal Support  https://portal.clover-c1.local/help\n"
-        "  Discord              https://discord.gg/CloverCognition"
+        "  GitHub Issues        "
+        "  Clover Portal Support  "
+        "  Discord              "
     )
 
 

@@ -13,7 +13,7 @@ import urllib.request
 
 DEFAULT_UA = (
     "clover-osint-investigation/0.2 "
-    "(+https://github.com/CloverCognition/clover-c1; "
+    "(+ "
     "set CLOVER_OSINT_UA env var to identify yourself per "
     "Wikimedia / SEC fair-use guidance)"
 )

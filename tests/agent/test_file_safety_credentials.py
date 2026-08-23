@@ -1,6 +1,6 @@
 """Tests for CLOVER_HOME credential-file read blocking in file_safety.
 
-Regression for https://github.com/CloverCognition/clover-c1/issues/17656 —
+Regression for  —
 ``read_file`` was previously only sandboxed against ``CLOVER_HOME`` itself,
 which left ``auth.json`` and ``.anthropic_oauth.json`` (plaintext provider
 keys + OAuth tokens) readable by the agent. A prompt-injection reaching

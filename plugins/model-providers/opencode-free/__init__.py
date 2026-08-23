@@ -20,7 +20,7 @@ from providers.base import ProviderProfile
 # off the wire (the free tier 401s any unrecognized bearer).
 _KEYLESS_HEADERS = {
     "Authorization": "",
-    "HTTP-Referer": "https://clover-c1.local",
+    "HTTP-Referer": "",
     "X-Title": "Clover Cognition",
     "User-Agent": f"CloverAgent/{_CLOVER_VERSION}",
 }

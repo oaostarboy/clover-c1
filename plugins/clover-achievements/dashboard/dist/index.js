@@ -257,7 +257,7 @@
     ctx.fillStyle = "#8b95a8";
     ctx.font = "600 20px ui-monospace, 'SF Mono', Menlo, monospace";
     ctx.textBaseline = "bottom";
-    ctx.fillText("CLOVER AGENT  ·  clover-c1.clover-c1.local", 70, H - 40);
+    ctx.fillText("CLOVER AGENT  ·  clover-c1.", 70, H - 40);
 
     // "UNLOCKED" stamp upper-right
     ctx.textBaseline = "top";
@@ -339,7 +339,7 @@
         tier_part: tierPart,
         name: achievement.name,
       });
-      return tmpl + "\n\n@CloverCognition · https://clover-c1.local";
+      return tmpl + "\n\n@Clover Cognition · ";
     }
 
     function shareOnX() {

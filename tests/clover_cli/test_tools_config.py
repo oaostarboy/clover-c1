@@ -160,7 +160,7 @@ def test_toolset_has_keys_for_vision_accepts_codex_auth(tmp_path, monkeypatch):
 def test_save_platform_tools_preserves_mcp_server_names():
     """Ensure MCP server names are preserved when saving platform tools.
 
-    Regression test for https://github.com/CloverCognition/clover-c1/issues/1247
+    Regression test for 
     """
     config = {
         "platform_toolsets": {
@@ -317,7 +317,7 @@ def test_numeric_mcp_server_name_does_not_crash_sorted():
     _get_platform_tools must normalise them to str so that sorted()
     on the returned set never raises TypeError on mixed int/str.
 
-    Regression test for https://github.com/CloverCognition/clover-c1/issues/6901
+    Regression test for 
     """
     config = {
         "platform_toolsets": {"cli": ["web", 12306]},

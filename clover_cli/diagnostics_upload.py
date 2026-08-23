@@ -28,7 +28,7 @@ import urllib.request
 # Overridable via env so the feature can be pointed at staging / a local dev
 # NAS instance during testing.
 NAS_BASE = os.environ.get(
-    "CLOVER_DIAGNOSTICS_BASE_URL", "https://portal.clover-c1.local"
+    "CLOVER_DIAGNOSTICS_BASE_URL", ""
 )
 
 # Network timeout for each request (seconds). The upload itself can be larger

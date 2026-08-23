@@ -204,7 +204,7 @@ def test_cmd_update_captures_and_propagates_pre_rebuild_snapshot(
     monkeypatch.setattr(m, "_pause_windows_gateways_for_update", lambda: None)
     monkeypatch.setattr(m, "_resume_windows_gateways_after_update", lambda state: None)
     monkeypatch.setattr(update_cmd, "_discard_lockfile_churn", lambda *args: None)
-    monkeypatch.setattr(m, "_get_origin_url", lambda *args: "https://github.com/CloverCognition/clover-c1.git")
+    monkeypatch.setattr(m, "_get_origin_url", lambda *args: "")
     monkeypatch.setattr(m, "_resolve_update_branch", lambda args: "main")
     monkeypatch.setattr(m, "_stash_local_changes_if_needed", lambda *args: None)
     monkeypatch.setattr(update_cmd, "_invalidate_update_cache", lambda: None)

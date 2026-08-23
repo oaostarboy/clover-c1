@@ -7633,7 +7633,7 @@ class AIAgent:
         Some providers/routes reject `reasoning` with 400s, so gate it to
         known reasoning-capable model families and direct Clover Portal.
         """
-        if base_url_host_matches(self._base_url_lower, "clover-c1.local"):
+        if base_url_host_matches(self._base_url_lower, ""):
             return True
         if base_url_host_matches(self._base_url_lower, "ai-gateway.vercel.sh"):
             return True

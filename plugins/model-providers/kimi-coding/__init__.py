@@ -118,7 +118,7 @@ kimi = KimiProfile(
     fixed_temperature=OMIT_TEMPERATURE,
     default_max_tokens=32000,
     default_headers={
-        "HTTP-Referer": "https://clover-c1.local",
+        "HTTP-Referer": "",
         "X-Title": "Clover Cognition",
         "User-Agent": f"CloverAgent/{_CLOVER_VERSION}",
     },
@@ -133,7 +133,7 @@ kimi_cn = KimiProfile(
     fixed_temperature=OMIT_TEMPERATURE,
     default_max_tokens=32000,
     default_headers={
-        "HTTP-Referer": "https://clover-c1.local",
+        "HTTP-Referer": "",
         "X-Title": "Clover Cognition",
         "User-Agent": f"CloverAgent/{_CLOVER_VERSION}",
     },

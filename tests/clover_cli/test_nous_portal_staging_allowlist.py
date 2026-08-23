@@ -4,7 +4,7 @@ _ALLOWED_NOUS_INFERENCE_HOSTS treatment.
 
 Real incident (2026-07): a hosted agent provisioned by nous-account-service
 on the `staging` Vercel environment is stamped with
-``CLOVER_PORTAL_BASE_URL=https://portal.staging-clover-c1.local`` in its
+``CLOVER_PORTAL_BASE_URL=`` in its
 container env (the documented dev/staging override), while its bootstrap
 ``auth.json`` ALSO persists ``portal_base_url`` to the same staging host.
 
@@ -50,11 +50,11 @@ class TestPortalEnvOverrideHelper:
         _NOUS_PORTAL_ALLOWED_HOSTS, and the helper must return it anyway —
         gating happens only for network-provenance values."""
         monkeypatch.setenv(
-            "CLOVER_PORTAL_BASE_URL", "https://portal.staging-clover-c1.local"
+            "CLOVER_PORTAL_BASE_URL", ""
         )
-        assert "portal.staging-clover-c1.local" not in _NOUS_PORTAL_ALLOWED_HOSTS
+        assert "portal.staging-" not in _NOUS_PORTAL_ALLOWED_HOSTS
         assert (
-            _nous_portal_env_override() == "https://portal.staging-clover-c1.local"
+            _nous_portal_env_override() == ""
         )
 
 
@@ -122,7 +122,7 @@ class TestResolveAccessTokenEnvOverrideWins:
         allowlist-rejection warning must never fire."""
         import clover_cli.auth as auth
 
-        staging_portal = "https://portal.staging-clover-c1.local"
+        staging_portal = ""
         monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
         monkeypatch.setenv("CLOVER_PORTAL_BASE_URL", staging_portal)
         self._write_auth_file(tmp_path, stored_portal_url=staging_portal)

@@ -161,7 +161,7 @@ CLOVER_AGENT_HELP_GUIDANCE = (
     "You run on Clover Cognition (by Clover Cognition). When the user needs help with "
     "Clover itself — configuring, setting up, using, extending, or troubleshooting "
     "it — or when you need to understand your own features, tools, or capabilities, "
-    "the documentation at https://clover-c1.local/docs is your "
+    "the documentation at docs/ is your "
     "authoritative reference and always holds the latest, most up-to-date "
     "information. Load the `clover-c1` skill with skill_view(name='clover-c1') "
     "for additional guidance and proven workflows, but treat the docs as the source "

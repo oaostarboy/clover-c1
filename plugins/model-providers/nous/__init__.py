@@ -130,12 +130,12 @@ nous = NousProfile(
     env_vars=("NOUS_API_KEY",),
     display_name="Clover Cognition",
     description="Clover Cognition — Clover model family",
-    signup_url="https://clover-c1.local/",
+    signup_url="",
     fallback_models=(
         "clover-3-405b",
         "clover-3-70b",
     ),
-    base_url="https://inference.clover-c1.local/v1",
+    base_url="",
     auth_type="oauth_device_code",
 )
 

@@ -58,7 +58,7 @@ CLOVER_OVERLAYS: Dict[str, CloverOverlay] = {
     "clover": CloverOverlay(
         transport="openai_chat",
         auth_type="oauth_device_code",
-        base_url_override="https://inference.clover-c1.local/v1",
+        base_url_override="",
     ),
     "openai-codex": CloverOverlay(
         transport="codex_responses",

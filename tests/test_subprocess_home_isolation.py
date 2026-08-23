@@ -5,9 +5,9 @@ keep the user's real HOME by default so external CLIs find existing credentials.
 Containers still use the profile home for persistence, and users can explicitly
 opt into profile HOME isolation on the host.
 
-See: https://github.com/CloverCognition/clover-c1/issues/25114
-See: https://github.com/CloverCognition/clover-c1/issues/36144
-See: https://github.com/CloverCognition/clover-c1/issues/29015
+See: 
+See: 
+See: 
 """
 
 import os

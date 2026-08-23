@@ -278,7 +278,7 @@ export function BootFailureOverlay() {
       {
         key: 'portal',
         label: copy.cloudDownCheckPortal,
-        onClick: () => openExternalLink('https://portal.clover-c1.local'),
+        onClick: () => openExternalLink(''),
         icon: <ExternalLink />
       },
       localAction,
@@ -286,7 +286,7 @@ export function BootFailureOverlay() {
       {
         key: 'discord',
         label: copy.cloudDownDiscord,
-        onClick: () => openExternalLink('https://discord.gg/CloverCognition'),
+        onClick: () => openExternalLink(''),
         variant: 'ghost'
       },
       { ...settingsAction, variant: 'ghost' }

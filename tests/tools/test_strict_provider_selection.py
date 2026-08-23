@@ -23,7 +23,7 @@ from tools import tool_backend_helpers as tbh
 
 MANAGED = SimpleNamespace(
     nous_user_token="managed-token",
-    gateway_origin="https://gateway.clover-c1.local",
+    gateway_origin="https://gateway.",
 )
 
 
@@ -215,7 +215,7 @@ class TestSttStrictSelection:
              patch.object(tt, "resolve_managed_tool_gateway", return_value=MANAGED):
             api_key, base_url = tt._resolve_openai_audio_client_config()
         assert api_key == "managed-token"
-        assert base_url.startswith("https://gateway.clover-c1.local")
+        assert base_url.startswith("https://gateway.")
 
     def test_vendor_selection_missing_key_errors_without_managed_call(self):
         from tools import transcription_tools as tt

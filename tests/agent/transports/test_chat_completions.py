@@ -633,7 +633,7 @@ class TestChatCompletionsGeminiNativeExtraBodyStrip:
             [{"role": "user", "content": "hi"}],
             None,
             provider_profile=self._nous_profile(),
-            base_url="https://inference.clover-c1.local/v1",
+            base_url="",
             session_id="s1",
             max_tokens=None,
         )

@@ -4,21 +4,21 @@
 
 # Clover Cognition ☤
 <p align="center">
-  <a href="https://clover-c1.local/">Clover Cognition</a> | <a href="https://clover-c1.local/">Clover Desktop</a>
+  <a href="#">Clover Cognition</a> | <a href="#">Clover Desktop</a>
 </p>
 <p align="center">
-  <a href="https://clover-c1.local/docs/"><img src="https://img.shields.io/badge/Docs-clover--c1-FFD700?style=for-the-badge" alt="Documentation"></a>
-  <a href="https://discord.gg/CloverCognition"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="https://github.com/CloverCognition/clover-c1/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
-  <a href="https://clover-c1.local"><img src="https://img.shields.io/badge/Built%20by-Clover%20Research-blueviolet?style=for-the-badge" alt="Built by Clover Cognition"></a>
+  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--c1-FFD700?style=for-the-badge" alt="Documentation"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="#"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Built%20by-Clover%20Research-blueviolet?style=for-the-badge" alt="Built by Clover Cognition"></a>
   <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/Lang-中文-red?style=for-the-badge" alt="中文"></a>
   <a href="README.ur-pk.md"><img src="https://img.shields.io/badge/Lang-اردو-green?style=for-the-badge" alt="اردو"></a>
   <a href="README.es.md"><img src="https://img.shields.io/badge/Lang-Español-orange?style=for-the-badge" alt="Español"></a>
 </p>
 
-**The self-improving AI agent built by [Clover Cognition](https://clover-c1.local).** It's the only agent with a built-in learning loop — it creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
+**The self-improving AI agent built by Clover Cognition.** It's the only agent with a built-in learning loop — it creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
 
-Use any model you want — [Clover Portal](https://portal.clover-c1.local), OpenRouter, OpenAI, your own endpoint, and [many others](https://clover-c1.local/docs/integrations/providers). Switch with `clover model` — no code changes, no lock-in.
+Use any model you want — Clover Portal, OpenRouter, OpenAI, your own endpoint, and [many others](docs/integrations/providers). Switch with `clover model` — no code changes, no lock-in.
 
 <table>
 <tr><td><b>A real terminal interface</b></td><td>Full TUI with multiline editing, slash-command autocomplete, conversation history, interrupt-and-redirect, and streaming tool output.</td></tr>
@@ -37,24 +37,24 @@ Use any model you want — [Clover Portal](https://portal.clover-c1.local), Open
 ### Linux, macOS, WSL2, Termux
 
 ```bash
-curl -fsSL https://clover-c1.local/install.sh | bash
+curl -fsSL  | bash
 ```
 
 ### Windows (native, PowerShell)
 
-> **Heads up:** Native Windows runs Clover without WSL — CLI, gateway, TUI, and tools all work natively. If you'd rather use WSL2, the Linux/macOS one-liner above works there too. Found a bug? Please [file issues](https://github.com/CloverCognition/clover-c1/issues).
+> **Heads up:** Native Windows runs Clover without WSL — CLI, gateway, TUI, and tools all work natively. If you'd rather use WSL2, the Linux/macOS one-liner above works there too. Found a bug? Please file issues.
 
 Run this in PowerShell:
 
 ```powershell
-iex (irm https://clover-c1.local/install.ps1)
+iex (irm )
 ```
 
 The installer handles everything: uv, Python 3.11, Node.js, ripgrep, ffmpeg, **and a portable Git Bash** (MinGit, unpacked to `%LOCALAPPDATA%\clover\git` — no admin required, completely isolated from any system Git install). Clover uses this bundled Git Bash to run shell commands.
 
 If you already have Git installed, the installer detects it and uses that instead. Otherwise a ~45MB MinGit download is all you need — it won't touch or interfere with any system Git.
 
-> **Android / Termux:** The tested manual path is documented in the [Termux guide](https://clover-c1.local/docs/getting-started/termux). On Termux, Clover installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
+> **Android / Termux:** The tested manual path is documented in the [Termux guide](docs/getting-started/termux). On Termux, Clover installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
 >
 > **Windows:** Native Windows is fully supported — the PowerShell one-liner above installs everything. If you'd rather use WSL2, the Linux command works there too. Native Windows install lives under `%LOCALAPPDATA%\clover`; WSL2 installs under `~/.clover` as on Linux.
 
@@ -117,13 +117,13 @@ clover update       # Update to the latest version
 clover doctor       # Diagnose any issues
 ```
 
-📖 **[Full documentation →](https://clover-c1.local/docs/)**
+📖 **[Full documentation →](docs/)**
 
 ---
 
 ## Skip the API-key collection — Clover Portal
 
-Clover works with whatever provider you want — that's not changing. But if you'd rather not collect five separate API keys for the model, web search, image generation, TTS, and a cloud browser, **[Clover Portal](https://portal.clover-c1.local)** covers all of them under one subscription:
+Clover works with whatever provider you want — that's not changing. But if you'd rather not collect five separate API keys for the model, web search, image generation, TTS, and a cloud browser, **Clover Portal** covers all of them under one subscription:
 
 - **300+ models** — pick any of them with `/model <name>`
 - **Tool Gateway** — web search (Firecrawl), image generation (FAL), text-to-speech (OpenAI), cloud browser (Browser Use), all routed through your sub. No extra accounts.
@@ -134,7 +134,7 @@ One command from a fresh install:
 clover setup --portal
 ```
 
-That logs you in via OAuth, sets Clover as your provider, and turns on the Tool Gateway. Check what's wired up any time with `clover portal info`. Full details on the [Tool Gateway docs page](https://clover-c1.local/docs/user-guide/features/tool-gateway).
+That logs you in via OAuth, sets Clover as your provider, and turns on the Tool Gateway. Check what's wired up any time with `clover portal info`. Full details on the [Tool Gateway docs page](docs/user-guide/features/tool-gateway).
 
 You can still bring your own keys per-tool whenever you want — the gateway is per-backend, not all-or-nothing.
 
@@ -156,31 +156,31 @@ Clover has two entry points: start the terminal UI with `clover`, or run the gat
 | Interrupt current work         | `Ctrl+C` or send a new message                | `/stop` or send a new message                                                    |
 | Platform-specific status       | `/platforms`                                  | `/status`, `/sethome`                                                            |
 
-For the full command lists, see the [CLI guide](https://clover-c1.local/docs/user-guide/cli) and the [Messaging Gateway guide](https://clover-c1.local/docs/user-guide/messaging).
+For the full command lists, see the [CLI guide](docs/user-guide/cli) and the [Messaging Gateway guide](docs/user-guide/messaging).
 
 ---
 
 ## Documentation
 
-All documentation lives at **[clover-c1.clover-c1.local/docs](https://clover-c1.local/docs/)**:
+All documentation lives at **[clover-c1./docs](docs/)**:
 
 | Section                                                                                             | What's Covered                                             |
 | --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| [Quickstart](https://clover-c1.local/docs/getting-started/quickstart)                 | Install → setup → first conversation in 2 minutes          |
-| [CLI Usage](https://clover-c1.local/docs/user-guide/cli)                              | Commands, keybindings, personalities, sessions             |
-| [Configuration](https://clover-c1.local/docs/user-guide/configuration)                | Config file, providers, models, all options                |
-| [Messaging Gateway](https://clover-c1.local/docs/user-guide/messaging)                | Telegram, Discord, Slack, WhatsApp, Signal, Home Assistant |
-| [Security](https://clover-c1.local/docs/user-guide/security)                          | Command approval, DM pairing, container isolation          |
-| [Tools & Toolsets](https://clover-c1.local/docs/user-guide/features/tools)            | 40+ tools, toolset system, terminal backends               |
-| [Skills System](https://clover-c1.local/docs/user-guide/features/skills)              | Procedural memory, Skills Hub, creating skills             |
-| [Memory](https://clover-c1.local/docs/user-guide/features/memory)                     | Persistent memory, user profiles, best practices           |
-| [MCP Integration](https://clover-c1.local/docs/user-guide/features/mcp)               | Connect any MCP server for extended capabilities           |
-| [Cron Scheduling](https://clover-c1.local/docs/user-guide/features/cron)              | Scheduled tasks with platform delivery                     |
-| [Context Files](https://clover-c1.local/docs/user-guide/features/context-files)       | Project context that shapes every conversation             |
-| [Architecture](https://clover-c1.local/docs/developer-guide/architecture)             | Project structure, agent loop, key classes                 |
-| [Contributing](https://clover-c1.local/docs/developer-guide/contributing)             | Development setup, PR process, code style                  |
-| [CLI Reference](https://clover-c1.local/docs/reference/cli-commands)                  | All commands and flags                                     |
-| [Environment Variables](https://clover-c1.local/docs/reference/environment-variables) | Complete env var reference                                 |
+| [Quickstart](docs/getting-started/quickstart)                 | Install → setup → first conversation in 2 minutes          |
+| [CLI Usage](docs/user-guide/cli)                              | Commands, keybindings, personalities, sessions             |
+| [Configuration](docs/user-guide/configuration)                | Config file, providers, models, all options                |
+| [Messaging Gateway](docs/user-guide/messaging)                | Telegram, Discord, Slack, WhatsApp, Signal, Home Assistant |
+| [Security](docs/user-guide/security)                          | Command approval, DM pairing, container isolation          |
+| [Tools & Toolsets](docs/user-guide/features/tools)            | 40+ tools, toolset system, terminal backends               |
+| [Skills System](docs/user-guide/features/skills)              | Procedural memory, Skills Hub, creating skills             |
+| [Memory](docs/user-guide/features/memory)                     | Persistent memory, user profiles, best practices           |
+| [MCP Integration](docs/user-guide/features/mcp)               | Connect any MCP server for extended capabilities           |
+| [Cron Scheduling](docs/user-guide/features/cron)              | Scheduled tasks with platform delivery                     |
+| [Context Files](docs/user-guide/features/context-files)       | Project context that shapes every conversation             |
+| [Architecture](docs/developer-guide/architecture)             | Project structure, agent loop, key classes                 |
+| [Contributing](docs/developer-guide/contributing)             | Development setup, PR process, code style                  |
+| [CLI Reference](docs/reference/cli-commands)                  | All commands and flags                                     |
+| [Environment Variables](docs/reference/environment-variables) | Complete env var reference                                 |
 
 ---
 
@@ -216,7 +216,7 @@ See `clover claw migrate --help` for all options, or use the `openclaw-migration
 
 ## Contributing
 
-We welcome contributions! See the [Contributing Guide](https://clover-c1.local/docs/developer-guide/contributing) for development setup, code style, and PR process.
+We welcome contributions! See the [Contributing Guide](docs/developer-guide/contributing) for development setup, code style, and PR process.
 
 Quick start for contributors — use the standard installer, then work from the
 full git checkout it creates at `$CLOVER_HOME/clover-c1` (usually
@@ -224,7 +224,7 @@ full git checkout it creates at `$CLOVER_HOME/clover-c1` (usually
 managed venv, lazy dependencies, gateway, and docs tooling.
 
 ```bash
-curl -fsSL https://clover-c1.local/install.sh | bash
+curl -fsSL  | bash
 cd "${CLOVER_HOME:-$HOME/.clover}/clover-c1"
 uv pip install -e ".[all,dev]"
 scripts/run_tests.sh
@@ -249,9 +249,9 @@ scripts/run_tests.sh
 
 ## Community
 
-- 💬 [Discord](https://discord.gg/CloverCognition)
+- 💬 Discord
 - 📚 [Skills Hub](https://agentskills.io)
-- 🐛 [Issues](https://github.com/CloverCognition/clover-c1/issues)
+- 🐛 Issues
 - 🔌 [computer-use-linux](https://github.com/avifenesh/computer-use-linux) — Linux desktop-control MCP server for Clover and other MCP hosts, with AT-SPI accessibility trees, Wayland/X11 input, screenshots, and compositor window targeting.
 - 🔌 [CloverClaw](https://github.com/AaronWong1999/cloverclaw) — Community WeChat bridge: Run Clover Cognition and OpenClaw on the same WeChat account.
 
@@ -261,4 +261,4 @@ scripts/run_tests.sh
 
 MIT — see [LICENSE](LICENSE).
 
-Built by [Clover Cognition](https://clover-c1.local).
+Built by Clover Cognition.

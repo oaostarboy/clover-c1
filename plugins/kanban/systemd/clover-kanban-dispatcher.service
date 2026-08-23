@@ -15,7 +15,7 @@
 
 [Unit]
 Description=Clover Kanban dispatcher (DEPRECATED standalone daemon — prefer gateway-embedded dispatch)
-Documentation=https://clover-c1.local/docs/user-guide/features/kanban
+Documentation=file:///usr/share/doc/clover-c1/kanban.md
 After=network.target
 
 [Service]

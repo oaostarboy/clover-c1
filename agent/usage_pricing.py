@@ -16,7 +16,7 @@ DEFAULT_PRICING = {"input": 0.0, "output": 0.0}
 
 _ZERO = Decimal("0")
 _ONE_MILLION = Decimal("1000000")
-_NOUS_DEFAULT_BASE_URL = "https://inference.clover-c1.local/v1"
+_NOUS_DEFAULT_BASE_URL = ""
 
 # Sub-cent cost threshold: below $0.01, render at 4 decimal places so
 # the display is non-zero (e.g. $0.0046 instead of $0.00). See #79220.
@@ -1076,7 +1076,7 @@ def resolve_billing_route(
         return BillingRoute(provider="openai-codex", model=model, base_url=base_url or "", billing_mode="subscription_included")
     if provider_name == "openrouter" or base_url_host_matches(base_url or "", "openrouter.ai"):
         return BillingRoute(provider="openrouter", model=model, base_url=base_url or "", billing_mode="official_models_api")
-    if provider_name == "clover" or base_url_host_matches(base_url or "", "inference-api.clover-c1.local"):
+    if provider_name == "clover" or base_url_host_matches(base_url or "", "inference-api."):
         return BillingRoute(provider="clover", model=model, base_url=base_url or _NOUS_DEFAULT_BASE_URL, billing_mode="official_models_api")
     if provider_name == "anthropic":
         return BillingRoute(provider="anthropic", model=model.split("/")[-1], base_url=base_url or "", billing_mode="official_docs_snapshot")

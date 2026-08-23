@@ -2,7 +2,7 @@
 name = "clover-bootstrap"
 version = "0.0.1"
 description = "Clover Setup — signed installer that drives scripts/install.ps1"
-authors = ["Clover Cognition <info@clover-c1.local>"]
+authors = ["Clover Cognition <info@>"]
 edition = "2021"
 rust-version = "1.77"
 

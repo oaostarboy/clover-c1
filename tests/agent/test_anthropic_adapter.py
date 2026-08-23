@@ -80,7 +80,7 @@ class TestBuildAnthropicClient:
             )
             kwargs = mock_sdk.Anthropic.call_args[1]
             headers = kwargs["default_headers"]
-            assert headers["HTTP-Referer"] == "https://clover-c1.local"
+            assert headers["HTTP-Referer"] == ""
             assert headers["X-Title"] == "Clover Cognition"
             assert headers["User-Agent"].startswith("CloverAgent/")
             # Auth branch is unchanged: x-api-key via api_key, betas kept.
@@ -1452,7 +1452,7 @@ class TestConvertToolsToAnthropicDedup:
 
     Anthropic rejects requests with duplicate tool names.  This guard converts
     a hard failure into a warning log.  See:
-    https://github.com/CloverCognition/clover-c1/issues/18478
+    
     """
 
     def _make_openai_tool(self, name: str) -> dict:

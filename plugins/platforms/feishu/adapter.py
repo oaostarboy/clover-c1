@@ -4949,7 +4949,7 @@ class FeishuAdapter(BasePlatformAdapter):
             # server does not push group @mention events over the WebSocket
             # transport.  The tag tells the server to use the Channel protocol
             # which enables group-message routing in addition to P2P DM.
-            # See https://github.com/CloverCognition/clover-c1/issues/50656
+            # See 
             extra_ua_tags=["channel"],
         )
         self._ws_future = loop.run_in_executor(

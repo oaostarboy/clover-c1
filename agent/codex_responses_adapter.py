@@ -1687,7 +1687,7 @@ def _normalize_codex_response(
         # are queued/in_progress/incomplete, reasoning alone is a valid final
         # state — forcing "incomplete" causes multi-minute stalls as the
         # continuation path re-issues calls (3 retries × up to 240s each).
-        # See https://github.com/CloverCognition/clover-c1/issues/64434
+        # See 
         if response_status == "completed" and issuer_kind not in (
             "codex_backend",
             "xai_responses",

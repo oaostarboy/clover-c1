@@ -279,7 +279,7 @@ describe('SkillsView toolset management', () => {
       window.dispatchEvent(
         new MessageEvent('message', {
           data: { type: 'clover-skill-pick', name: 'web-research', identifier: 'web-research' },
-          origin: 'https://clover-c1.local'
+          origin: ''
         })
       )
     })

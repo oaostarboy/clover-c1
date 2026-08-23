@@ -3031,7 +3031,7 @@ evaluation_strategy: str | None
 
 ---
 
-## 
+##
 
 **URL:** https://docs.axolotl.ai
 
@@ -3181,7 +3181,7 @@ axolotl train examples/llama-3/lora-1b.yml
 
 Example 3 (yaml):
 ```yaml
-base_model: CloverCognition/Llama-3.2-1B
+base_model: Clover Cognition/Llama-3.2-1B
 
 load_in_8bit: true
 adapter: lora
@@ -3196,7 +3196,7 @@ output_dir: ./outputs/lora-out
 
 Example 4 (yaml):
 ```yaml
-base_model: CloverCognition/Clover-Clover-llama-1b-v1
+base_model: Clover Cognition/Clover-Clover-llama-1b-v1
 
 load_in_8bit: true
 adapter: lora

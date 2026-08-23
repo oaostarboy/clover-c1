@@ -23,8 +23,8 @@ from clover_cli.model_switch import (
 @pytest.mark.parametrize(
     "model_name",
     [
-        "CloverCognition/Clover-3-Llama-3.1-70B",
-        "CloverCognition/Clover-3-Llama-3.1-405B",
+        "Clover Cognition/Clover-3-Llama-3.1-70B",
+        "Clover Cognition/Clover-3-Llama-3.1-405B",
         "clover-3",
         "Clover-3",
         "clover-4",
@@ -32,7 +32,7 @@ from clover_cli.model_switch import (
         "clover_4_70b",
         "openrouter/clover3:70b",
         "openrouter/clovercognition/clover-4-405b",
-        "CloverCognition/Clover3",
+        "Clover Cognition/Clover3",
         "clover-3.1",
     ],
 )

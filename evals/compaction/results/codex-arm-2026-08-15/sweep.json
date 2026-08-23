@@ -47,7 +47,7 @@
    "why": "The answer correctly identifies the specific setting 'backgroundThrottling' as the suspected cause, despite the initial 'UNKNOWN' disclaimer."
   },
   {
-   "q": "What exact error message is returned when 'gh pr merge --auto' is attempted on the CloverCognition/clover-c1 repository?",
+   "q": "What exact error message is returned when 'gh pr merge --auto' is attempted on the clover-c1 repository?",
    "gold": "Auto merge is not allowed for this repository (enablePullRequestAutoMerge)",
    "answer": "`GraphQL: Pull request Auto merge is not allowed for this repository`",
    "score": 2,

@@ -17,7 +17,7 @@ describe('githubHit', () => {
   })
 
   it('matches a pasted github.com link immediately', () => {
-    expect(githubHit('review https://github.com/CloverCognition/clover-c1/pull/1')).toBe(true)
+    expect(githubHit('review ')).toBe(true)
     expect(githubHit('see https://gist.github.com/foo/abc')).toBe(true)
   })
 

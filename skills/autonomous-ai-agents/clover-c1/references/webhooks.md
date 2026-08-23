@@ -83,7 +83,7 @@ clover webhook subscribe todoist-clover \
   --deliver telegram --deliver-chat-id "12345"
 ```
 
-Full filter syntax: https://clover-c1.local/docs/user-guide/messaging/webhooks#payload-filters
+Full filter syntax: docs/user-guide/messaging/webhooks#payload-filters
 
 ### List subscriptions
 ```bash

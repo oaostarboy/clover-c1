@@ -18,7 +18,7 @@ permissions:
 jobs:
   build-index:
     # Only run on the upstream repository, not on forks
-    if: github.repository == 'CloverCognition/clover-c1'
+    if: github.repository == 'clover-c1'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: trusted-automation

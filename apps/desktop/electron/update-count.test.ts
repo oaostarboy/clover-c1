@@ -261,22 +261,22 @@ test('compareApiUrl builds the GitHub compare URL for HTTPS origins', () => {
   assert.equal(
     compareApiUrl({
       currentSha: SHA_A,
-      originUrl: 'https://github.com/CloverCognition/clover-c1.git',
+      originUrl: '',
       targetSha: SHA_B
     }),
-    `https://api.github.com/repos/CloverCognition/clover-c1/compare/${SHA_A}...${SHA_B}`
+    `https://api.github.com/repos/clover-c1/compare/${SHA_A}...${SHA_B}`
   )
 })
 
 test('compareApiUrl handles SSH origin forms', () => {
   for (const originUrl of [
-    'git@github.com:CloverCognition/clover-c1.git',
-    'ssh://git@github.com/CloverCognition/clover-c1.git',
-    'git@github.com:CloverCognition/clover-c1'
+    'git@github.com:clover-c1.git',
+    'ssh://git@github.com/clover-c1.git',
+    'git@github.com:clover-c1'
   ]) {
     assert.equal(
       compareApiUrl({ currentSha: SHA_A, originUrl, targetSha: SHA_B }),
-      `https://api.github.com/repos/CloverCognition/clover-c1/compare/${SHA_A}...${SHA_B}`
+      `https://api.github.com/repos/clover-c1/compare/${SHA_A}...${SHA_B}`
     )
   }
 })

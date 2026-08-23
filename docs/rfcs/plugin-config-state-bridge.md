@@ -139,6 +139,6 @@ The implementation is covered with real temporary-Clover-home tests for:
 
 ## Related
 
-- [Issue #64227](https://github.com/CloverCognition/clover-c1/issues/64227)
-- [RFC PR #58542](https://github.com/CloverCognition/clover-c1/pull/58542) by Topher Ross
+- Issue #64227
+- RFC PR #58542 by Topher Ross
 - #67531 — standalone plugin settings namespace discussion

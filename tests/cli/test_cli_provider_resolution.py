@@ -321,7 +321,7 @@ def test_model_flow_nous_does_not_restore_stale_custom_api_key(tmp_path, monkeyp
     monkeypatch.setattr(
         "clover_cli.auth.resolve_nous_runtime_credentials",
         lambda *args, **kwargs: {
-            "base_url": "https://inference.clover-c1.local/v1",
+            "base_url": "",
             "api_key": "nous-key",
         },
     )
@@ -350,7 +350,7 @@ def test_model_flow_nous_does_not_restore_stale_custom_api_key(tmp_path, monkeyp
     model = config.get("model")
     assert model["provider"] == "clover"
     assert model["default"] == selected_model
-    assert model["base_url"] == "https://inference.clover-c1.local/v1"
+    assert model["base_url"] == ""
     assert "api_key" not in model
     assert "api_mode" not in model
 
@@ -577,8 +577,8 @@ def test_cmd_model_forwards_nous_login_tls_options(monkeypatch):
 
     clover_main.cmd_model(
         SimpleNamespace(
-            portal_url="https://portal.clover-c1.local",
-            inference_url="https://inference.clover-c1.local/v1",
+            portal_url="",
+            inference_url="",
             client_id="clover-local",
             scope="openid profile",
             no_browser=True,
@@ -589,8 +589,8 @@ def test_cmd_model_forwards_nous_login_tls_options(monkeypatch):
     )
 
     assert captured == {
-        "portal_url": "https://portal.clover-c1.local",
-        "inference_url": "https://inference.clover-c1.local/v1",
+        "portal_url": "",
+        "inference_url": "",
         "client_id": "clover-local",
         "scope": "openid profile",
         "no_browser": True,

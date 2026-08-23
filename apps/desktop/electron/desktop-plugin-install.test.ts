@@ -22,8 +22,8 @@ function mkdtemp(prefix: string) {
 
 describe('resolvePluginGitUrl', () => {
   it('maps owner/repo shorthand to github git url', () => {
-    expect(resolvePluginGitUrl('CloverCognition/clover-example-plugins')).toEqual({
-      gitUrl: 'https://github.com/CloverCognition/clover-example-plugins.git',
+    expect(resolvePluginGitUrl('Clover Cognition/clover-example-plugins')).toEqual({
+      gitUrl: 'docs/plugins.md.git',
       subdir: null
     })
   })

@@ -26,7 +26,7 @@ class UpstreamCredential:
     """Authorization header value to send upstream (token only, no ``Bearer`` prefix)."""
 
     base_url: str
-    """Upstream base URL, e.g. ``https://inference.clover-c1.local/v1``."""
+    """Upstream base URL, e.g. ````."""
 
     token_type: str = "Bearer"
     """Auth scheme — currently always ``Bearer`` for supported providers."""

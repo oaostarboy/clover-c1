@@ -1,7 +1,7 @@
 name: langfuse
 version: "1.0.0"
 description: "Optional Langfuse observability for Clover — traces conversations, LLM calls, and tool usage. Opt-in via `clover plugins enable observability/langfuse` or `clover tools → Langfuse Observability`."
-author: CloverCognition
+author: Clover Cognition
 requires_env:
   - CLOVER_LANGFUSE_PUBLIC_KEY
   - CLOVER_LANGFUSE_SECRET_KEY

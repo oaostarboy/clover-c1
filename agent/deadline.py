@@ -1,7 +1,7 @@
 """Unified deadline layer — one bounded-execution primitive, one timeout resolver.
 
 Phase 1 of the architectural fix for the timeout/hang backlog
-(https://github.com/CloverCognition/clover-c1/issues/85125).
+().
 
 The tree currently carries at least six site-local deadline mechanisms, each
 built for one incident, none shared (tool_executor batch deadline, telegram

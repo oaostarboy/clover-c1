@@ -1,6 +1,6 @@
 """Tests that Camofox browser sends Authorization header when CAMOFOX_API_KEY is set.
 
-Regression test for https://github.com/CloverCognition/clover-c1/issues/20476
+Regression test for 
 """
 
 import json

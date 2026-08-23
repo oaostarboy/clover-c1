@@ -34,7 +34,7 @@ _IN_NIX_BUILD = os.environ.get("CLOVER_NIX_BUILD") == "1"
 _BLOCK_MESSAGE = (
     "Building wheels or sdists for clover-c1 is not supported.\n"
     "Clover is distributed via the shell installer, Docker image, or Nix.\n"
-    "See: https://clover-c1.local/docs/getting-started/installation\n"
+    "See: docs/getting-started/installation\n"
     "\n"
     "If you are developing, use an editable install instead:\n"
     "  uv sync          # or: uv pip install -e .\n"
