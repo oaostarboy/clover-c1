@@ -2473,9 +2473,59 @@ class Migrator:
 
         self.record(kind, source_root, destination_root, status, reason, copied_files=copied, unchanged_files=skipped, conflicts=conflicts)
 
+    @staticmethod
+    def _is_unfilled_template(path: Path) -> bool:
+        """True when a doc is still the shipped template nobody edited.
+
+        The starter IDENTITY.md is all prompts in italics: "_(pick something
+        you like)_". If those are still there and no field was answered, the
+        file carries no information and archiving it loses nothing.
+        """
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        placeholders = text.count("_(")
+        # A filled file has content after the "**Field:**" markers.
+        answered = 0
+        for line in text.splitlines():
+            m = re.match(r"^\s*-\s+\*\*[^*]+:\*\*\s*(.+?)\s*$", line)
+            if m and not m.group(1).startswith("_("):
+                answered += 1
+        return placeholders >= 3 and answered == 0
+
     def archive_docs(self) -> None:
+        # IDENTITY.md is handled separately: if the user FILLED IT IN it is
+        # persona, and archiving it silently drops who the agent thinks it is.
+        # Only an untouched template gets archived.
+        identity = self.source_candidate(
+            "workspace/IDENTITY.md", "workspace.default/IDENTITY.md"
+        )
+        if identity and not self._is_unfilled_template(identity):
+            dest = self.target_root / "memories" / "IDENTITY.md"
+            if self.execute:
+                try:
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_text(
+                        rebrand_identity_only(
+                            identity.read_text(encoding="utf-8", errors="replace")
+                        ),
+                        encoding="utf-8",
+                    )
+                    self.record("identity", identity, dest, "migrated",
+                                "IDENTITY.md was filled in — carried across as persona "
+                                "rather than archived.")
+                except OSError as exc:
+                    self.record("identity", identity, dest, "error",
+                                f"Filled IDENTITY.md could not be copied: {exc}. "
+                                "Copy it by hand — it is the agent's persona.")
+            else:
+                self.record("identity", identity, dest, "migrated",
+                            "Would carry filled IDENTITY.md across as persona.")
+            identity = None  # already handled
+
         candidates = [
-            self.source_candidate("workspace/IDENTITY.md", "workspace.default/IDENTITY.md"),
+            identity,
             self.source_candidate("workspace/TOOLS.md", "workspace.default/TOOLS.md"),
             self.source_candidate("workspace/HEARTBEAT.md", "workspace.default/HEARTBEAT.md"),
             self.source_candidate("workspace/BOOTSTRAP.md", "workspace.default/BOOTSTRAP.md"),
@@ -2488,6 +2538,57 @@ class Migrator:
             candidate = self.source_root / rel
             if candidate.exists():
                 self.archive_path(candidate, reason="No direct Clover destination; archived for manual review")
+
+        # CUSTOM workspace docs. Everything above is a KNOWN filename; anything
+        # else the user wrote themselves used to be neither migrated NOR
+        # archived — it simply did not appear in the output or the report.
+        #
+        # Found on a real agent: one agent's `COMPANY_KNOWLEDGE_BASE.md` (5.9 KB of
+        # company positioning, her actual job) would have vanished without a
+        # line of output. An unknown file is not a worthless file, and a
+        # migration that quietly drops a user's own writing is not a migration.
+        _known = {
+            "SOUL.md", "MEMORY.md", "USER.md", "AGENTS.md", "IDENTITY.md",
+            "TOOLS.md", "HEARTBEAT.md", "BOOTSTRAP.md", "CLAUDE.md",
+        }
+        for ws_name in ("workspace", "workspace-main", "workspace.default"):
+            ws = self.source_root / ws_name
+            if not ws.is_dir():
+                continue
+            try:
+                extras = sorted(
+                    f for f in ws.iterdir()
+                    if f.is_file() and f.suffix.lower() == ".md"
+                    and f.name not in _known
+                )
+            except OSError:
+                continue
+            for extra in extras:
+                dest = self.target_root / "memories" / extra.name
+                if self.execute:
+                    try:
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        if dest.exists():
+                            self.record("workspace-docs", extra, dest, "conflict",
+                                        "A file of this name already exists in the "
+                                        "target; not overwritten.")
+                            continue
+                        dest.write_text(
+                            rebrand_identity_only(
+                                extra.read_text(encoding="utf-8", errors="replace")
+                            ),
+                            encoding="utf-8",
+                        )
+                        self.record("workspace-docs", extra, dest, "migrated",
+                                    "Custom workspace document carried across "
+                                    "(unknown filename, but it is the user's own "
+                                    "content).")
+                    except OSError as exc:
+                        self.record("workspace-docs", extra, dest, "error",
+                                    f"Could not copy custom workspace doc: {exc}")
+                else:
+                    self.record("workspace-docs", extra, dest, "migrated",
+                                "Would carry custom workspace document across.")
 
         partially_extracted = [
             ("openclaw.json", "Selected Clover-compatible values were extracted; raw OpenClaw config was not copied."),
