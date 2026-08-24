@@ -1653,7 +1653,17 @@ def get_compatible_custom_providers(
     custom_providers = config.get("custom_providers")
     if custom_providers is not None:
         if not isinstance(custom_providers, list):
-            return []
+            # Do NOT early-return: that skipped the `providers:` block below and
+            # made EVERY custom provider vanish from doctor, the model picker
+            # and the runtime, over one malformed key (a leftover
+            # `custom_providers: ""` was enough). Warn, ignore this key, and
+            # carry on with the rest of the config.
+            logger.warning(
+                "custom_providers is a %s, expected a list. Ignoring that key; "
+                "the providers: section is still being read.",
+                type(custom_providers).__name__,
+            )
+            custom_providers = []
         for entry in custom_providers:
             _append_if_new(_normalize_custom_provider_entry(entry))
 

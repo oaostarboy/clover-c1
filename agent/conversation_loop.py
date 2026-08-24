@@ -5344,6 +5344,14 @@ def run_conversation(
                 _should_fallback = (
                     (is_rate_limited and _wrapped_output_cap_budget is None)
                     or (_is_transport_failure and retry_count >= 2)
+                    # The classifier's own verdict is now honoured here. It used
+                    # to be computed, logged at debug, and then ignored — so a
+                    # classifier change looked like a fix while changing no
+                    # behaviour at all (that mistake shipped as commit 1c5b09e
+                    # on 2026-08-24). Gated on retry_count so a classifier that
+                    # says "fall back" still spends the local retry budget first
+                    # on genuinely transient blips.
+                    or (classified.should_fallback and retry_count >= 2)
                 )
                 if _should_fallback and agent._fallback_index < len(agent._fallback_chain):
                     # Don't eagerly fallback if credential pool rotation may

@@ -2415,6 +2415,24 @@ def _get_platform_tools(
     # (vs. falling back to the platform default). An explicit composite (e.g.
     # ``clover-discord``) is an opt-in to the platform's native default-off
     # toolsets — see _exempt_explicit_platform_native (#35527).
+    # A bare STRING is honoured as a one-item list (fixed 2026-08-24).
+    #
+    # `platform_toolsets: {telegram: clover-acp}` — the natural thing to write
+    # for a single toolset — used to fail the isinstance(list) check and fall
+    # through to the platform DEFAULT. Measured: 18 tools including terminal and
+    # file access, instead of the restricted 13 the user asked for. Someone who
+    # believed they had locked a chat platform down had in fact widened it, with
+    # no warning. Failing OPEN on a permission boundary is the wrong direction.
+    if isinstance(toolset_names, str):
+        _stripped = toolset_names.strip()
+        toolset_names = [_stripped] if _stripped else None
+        if toolset_names is not None:
+            logger.warning(
+                "platform_toolsets.%s is a string (%r); treating it as a "
+                "one-item list. Use a YAML list to silence this.",
+                platform, _stripped,
+            )
+
     explicitly_configured = isinstance(toolset_names, list)
 
     if toolset_names is None or not isinstance(toolset_names, list):

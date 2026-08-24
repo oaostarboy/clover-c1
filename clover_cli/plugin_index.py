@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 # Canonical index location. Override via config key ``plugins.index_url``.
 DEFAULT_INDEX_URL = (
-    "https://raw.githubusercontent.com/Clover Cognition/clover-plugin-index/main/index.json"
+    "https://raw.githubusercontent.com/oaostarboy/clover-c1/clover-plugin-index/main/index.json"
 )
 
 # Cache the fetched index for 24 hours; a stale cache is still preferred over

@@ -43,8 +43,8 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-REPO_URL_SSH="git@github.com:clover-c1.git"
-REPO_URL_HTTPS=""
+REPO_URL_SSH="git@github.com:oaostarboy/clover-c1.git"
+REPO_URL_HTTPS="https://github.com/oaostarboy/clover-c1.git"
 CLOVER_HOME="${CLOVER_HOME:-$HOME/.clover}"
 # INSTALL_DIR is resolved AFTER arg parsing and OS detection so we can pick an
 # FHS-style layout for root installs.  Track whether the user gave us an
