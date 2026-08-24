@@ -1319,8 +1319,16 @@ def _classify_by_status(
         # transient-overload path instead of burning the pool. (#14038)
         if any(p in error_msg for p in _OVERLOADED_PATTERNS):
             return result_fn(
+                # should_fallback=True: an overload that survives the retry
+                # budget must move to the NEXT MODEL, not surrender. Without it
+                # `overloaded` was retryable-only, so the loop hammered the same
+                # model 3 times and returned "API call failed after 3 retries"
+                # while a perfectly healthy fallback chain sat unused. That is
+                # exactly how Clover went silent on 2026-08-23/24 — the journal
+                # shows attempt 1/3, 2/3, 3/3 on one model and no switch.
                 FailoverReason.overloaded,
                 retryable=True,
+                should_fallback=True,
             )
         # Distinguish an OpenRouter-aggregator upstream 429 (an upstream model
         # like DeepSeek rate-limited OpenRouter's aggregate traffic) from an
@@ -1417,7 +1425,10 @@ def _classify_by_status(
                 retryable=True,
                 should_compress=True,
             )
-        return result_fn(FailoverReason.overloaded, retryable=True)
+        # should_fallback=True — see the note at the 429 overload branch above.
+        return result_fn(
+            FailoverReason.overloaded, retryable=True, should_fallback=True
+        )
 
     # 408 Request Timeout — a transient timing failure the server itself flags
     # as safe to retry (RFC 9110 §15.5.9), not a malformed request. Commonly
@@ -1827,8 +1838,12 @@ def _classify_by_message(
     # incorrectly triggering credential rotation.
     if any(p in error_msg for p in _OVERLOADED_PATTERNS):
         return result_fn(
+            # should_fallback=True — see the note at the 429 overload branch.
+            # This is the branch Anthropic's HTTP-200 `overloaded_error` body
+            # actually lands in, which is what silenced Clover.
             FailoverReason.overloaded,
             retryable=True,
+            should_fallback=True,
         )
 
     # Billing patterns
