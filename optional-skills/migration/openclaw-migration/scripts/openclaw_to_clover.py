@@ -2270,9 +2270,23 @@ class Migrator:
         # Check all OpenClaw skill sources: managed, personal, project-level
         skill_sources = [
             (self.source_root / "skills", "shared-skills", "managed skills"),
-            (Path.home() / ".agents" / "skills", "personal-skills", "personal cross-project skills"),
+            # NOTE: `.agents/skills` is resolved against the SOURCE ROOT, never
+            # against Path.home().
+            #
+            # It used to read Path.home()/.agents/skills — the home of whoever
+            # RUNS the migration, which for a remote or cross-machine migration
+            # is a completely different agent. Measured 2026-08-24: migrating
+            # Alfred (a security agent, 9 skills incl. osint and
+            # pentest-osint-recon) from this operator box produced 469 skills,
+            # 464 of them the OPERATOR's marketing library. Alfred would have
+            # received a stranger's skills and lost his own.
+            (self.source_root / ".agents" / "skills", "personal-skills", "personal cross-project skills"),
             (self.source_root / "workspace" / ".agents" / "skills", "project-skills", "project-level shared skills"),
             (self.source_root / "workspace.default" / ".agents" / "skills", "project-skills", "project-level shared skills"),
+            # Skills kept loose in the workspace (workspace/<name>/SKILL.md).
+            # Alfred's `osint` and `pentest-osint-recon` live exactly here and
+            # were being missed entirely.
+            (self.source_root / "workspace", "workspace-skills", "skills kept in the workspace"),
         ]
         found_any = False
         for source_root, kind_label, desc in skill_sources:
@@ -2586,6 +2600,41 @@ class Migrator:
             "SOUL.md", "MEMORY.md", "USER.md", "AGENTS.md", "IDENTITY.md",
             "TOOLS.md", "HEARTBEAT.md", "BOOTSTRAP.md", "CLAUDE.md",
         }
+
+        # WORK PRODUCT. An agent's workspace holds the things it MADE: reports,
+        # case folders, notes. Alfred's `osint/anne_nguyen_report.md` and his
+        # `cases/` directory were neither migrated nor archived — they did not
+        # appear anywhere in the output, and the only clue would have been
+        # noticing their absence months later.
+        #
+        # These are archived rather than migrated: they are not persona and not
+        # memory, so they should not be loaded into the agent's context. But
+        # they must SURVIVE and be findable.
+        _skip_dirs = {
+            ".agents", ".learnings", "memory", "node_modules", "__pycache__",
+            ".git", "media", "tmp", "cache",
+        }
+        for ws_name in ("workspace", "workspace-main", "workspace.default"):
+            ws = self.source_root / ws_name
+            if not ws.is_dir():
+                continue
+            try:
+                subdirs = sorted(
+                    d for d in ws.iterdir()
+                    if d.is_dir() and d.name not in _skip_dirs
+                    and not d.name.startswith(".")
+                )
+            except OSError:
+                continue
+            for sub in subdirs:
+                # A skill directory is handled by the skills importer.
+                if (sub / "SKILL.md").exists():
+                    continue
+                self.archive_path(
+                    sub,
+                    reason="Agent work product (reports, cases, notes) — archived "
+                           "so it survives the migration and stays findable.",
+                )
         for ws_name in ("workspace", "workspace-main", "workspace.default"):
             ws = self.source_root / ws_name
             if not ws.is_dir():
