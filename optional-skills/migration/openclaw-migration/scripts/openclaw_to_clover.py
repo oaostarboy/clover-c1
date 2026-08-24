@@ -1645,12 +1645,37 @@ class Migrator:
     # `hermes.json` / `config.yaml` are here because Clover is a Hermes fork and
     # a Hermes install is a legitimate migration source. `octaviaagents.json`
     # covers the OctaviaAgents profile layout found on real boxes.
+    # ORDER IS A CORRECTNESS PROPERTY, not a style choice.
+    #
+    # A state dir can contain SEVERAL of these, and the older ones are stale
+    # leftovers. One agent's dir holds both `openclaw.json` (February, primary
+    # anthropic/claude-sonnet-4-6, no fallbacks) and `octaviaagents.json`
+    # (August, primary xai/grok-4.5 WITH a fallback). Her running container
+    # points at octaviaagents.json via OPENCLAW_CONFIG_PATH, but this list
+    # checked openclaw.json first and won — so the migration read a config six
+    # months out of date and reported "no fallbacks configured" for an agent
+    # that has one.
+    #
+    # Rule: newest/most-specific product name first, generic legacy names last.
     _CONFIG_NAMES = (
+        "octaviaagents.json", "hermes.json",
         "openclaw.json", "clawdbot.json", "moltbot.json",
-        "hermes.json", "octaviaagents.json",
     )
 
     def load_openclaw_config(self) -> Dict[str, Any]:
+        # Announce ambiguity instead of silently picking. Choosing wrong here
+        # migrates a stale config and everything downstream inherits it.
+        present = [n for n in self._CONFIG_NAMES if (self.source_root / n).exists()]
+        if len(present) > 1 and not getattr(self, "_config_choice_reported", False):
+            self._config_choice_reported = True
+            chosen, *others = present
+            self.record(
+                "config-source", self.source_root / chosen, None, "migrated",
+                f"Multiple config files present ({', '.join(present)}). Using "
+                f"{chosen}; the others are treated as stale. If that is wrong, "
+                "remove or rename the stale ones and re-run.",
+            )
+
         # Check current name and legacy config filenames
         for name in self._CONFIG_NAMES:
             config_path = self.source_root / name
