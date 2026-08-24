@@ -1539,15 +1539,33 @@ def init_agent(
     # when the primary is exhausted (rate-limit, overload, connection
     # failure).  Supports both legacy single-dict ``fallback_model`` and
     # new list ``fallback_providers`` format.
-    if isinstance(fallback_model, list):
-        agent._fallback_chain = [
-            f for f in fallback_model
-            if isinstance(f, dict) and f.get("provider") and f.get("model")
-        ]
-    elif isinstance(fallback_model, dict) and fallback_model.get("provider") and fallback_model.get("model"):
-        agent._fallback_chain = [fallback_model]
+    # Coercion lives in ONE place (clover_cli.fallback_config) so this builder
+    # and the config-side builder can never disagree about what a valid entry
+    # is. They previously had independent isinstance(dict) filters, and both
+    # silently dropped the "provider/model" string form every doc example uses
+    # — producing an empty chain with no error. See coerce_fallback_entry.
+    from clover_cli.fallback_config import coerce_fallback_entry as _coerce
+
+    if isinstance(fallback_model, (list, tuple)):
+        _raw_entries = list(fallback_model)
+    elif fallback_model:
+        _raw_entries = [fallback_model]
     else:
-        agent._fallback_chain = []
+        _raw_entries = []
+
+    agent._fallback_chain = [
+        c for c in (_coerce(f) for f in _raw_entries) if c is not None
+    ]
+    if _raw_entries and not agent._fallback_chain:
+        # Configured a chain and got nothing usable: that is the exact failure
+        # that silenced the agent. It must never be quiet again.
+        print(
+            "⚠️  fallback chain is EMPTY but "
+            f"{len(_raw_entries)} fallback entr{'y was' if len(_raw_entries)==1 else 'ies were'} "
+            "configured — every entry was unusable. The agent has nowhere to go "
+            "when the primary model fails. Check `fallback_providers` in your "
+            "config; entries look like 'anthropic/claude-opus-5'."
+        )
     agent._fallback_index = 0
     agent._fallback_activated = getattr(agent, "_fallback_activated", False)
     # Legacy attribute kept for backward compat (tests, external callers)

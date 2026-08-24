@@ -665,8 +665,15 @@ def _apply_external_secret_sources(home_path: Path) -> None:
     # a generic dict entry must not force crypto load on every clover launch.
     # We whitelist by *shape* (source dict with enabled flag) rather than
     # hardcoding names, so plugin/test sources pass through unknown keys.
+    # Truthiness, NOT `is True`. YAML `enabled: "true"` (quoted) or `enabled: 1`
+    # are both obviously-intended-as-on and both failed the identity check, so
+    # external secret loading silently never ran: no Bitwarden, no 1Password, no
+    # warning. Worse, the profile-multiplex path has no such gate, so the same
+    # config worked there — identical YAML, different behaviour, hours of
+    # debugging. This now matches SecretSource.is_enabled, which is the
+    # authoritative reader.
     any_enabled = any(
-        isinstance(v, dict) and v.get("enabled") is True
+        isinstance(v, dict) and bool(v.get("enabled"))
         for v in cfg.values()
     )
     if not any_enabled:

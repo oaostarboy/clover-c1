@@ -539,10 +539,39 @@ def rebrand_text(text: str) -> str:
 
     Preserves case so filesystem-path matches (lowercase) don't become
     capitalized directory names that don't exist.
+
+    DO NOT call this on persona or memory BODY text — use
+    :func:`rebrand_identity_only`. See that docstring for why.
     """
     for pattern, replacement in _REBRAND_PATTERNS:
         text = pattern.sub(_case_preserving_replacement(replacement), text)
     return text
+
+
+def rebrand_identity_only(text: str) -> str:
+    """Rebrand harness references while leaving factual content alone.
+
+    A memory entry or a SOUL.md may legitimately DISCUSS OpenClaw: "the
+    OpenClaw gateway on port 18789 crash-looped", "Alfred runs OpenClaw
+    2026.7.1-2". Blanket-rewriting those to "Clover" turns an agent's true
+    notes into false ones, and the agent has no way to know. For a security
+    agent whose value is an accurate record, that is corruption, not a rename.
+
+    So: rewrite a brand name only where it is describing WHAT THIS AGENT RUNS ON
+    (an identity line like "You are running on OpenClaw"), and leave every other
+    occurrence exactly as written.
+    """
+    out_lines: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip().lower()
+        is_identity_line = (
+            stripped.startswith(("you are running on", "you run on",
+                                 "harness:", "runtime:", "platform:",
+                                 "you are powered by"))
+            or ("this agent runs on" in stripped)
+        )
+        out_lines.append(rebrand_text(line) if is_identity_line else line)
+    return "\n".join(out_lines) + ("\n" if text.endswith("\n") else "")
 
 
 def parse_existing_memory_entries(path: Path) -> List[str]:
@@ -586,17 +615,79 @@ def extract_markdown_entries(text: str) -> List[str]:
         else:
             entries.append(text_block)
 
+    # Fenced code blocks are PRESERVED (fixed 2026-08-24). They used to be
+    # dropped entirely — not even written to the overflow file. For an agent
+    # whose memory is largely "the exact command that worked", that silently
+    # deleted the most valuable half of its notes. A security agent's memory is
+    # mostly commands.
     in_code_block = False
+    code_lines: List[str] = []
+    code_fence_info = ""
+
+    # Markdown TABLES are preserved too (fixed 2026-08-24, same pass as the
+    # code fences above). A row starting and ending with `|` used to hit a
+    # bare `continue` and vanish — no entry, no overflow file, no warning.
+    # Tables are how an agent writes down the things it looks up most: host
+    # inventories, port maps, who-owns-what. Losing them quietly is the same
+    # class of failure as losing the commands.
+    table_lines: List[str] = []
+
+    def flush_code() -> None:
+        nonlocal code_lines, code_fence_info
+        if not code_lines:
+            code_fence_info = ""
+            return
+        body = "\n".join(code_lines).strip()
+        code_lines = []
+        lang = code_fence_info
+        code_fence_info = ""
+        if not body:
+            return
+        prefix = context_prefix()
+        block = f"```{lang}\n{body}\n```" if lang else f"```\n{body}\n```"
+        entries.append(f"{prefix}: {block}" if prefix else block)
+
+    def flush_table() -> None:
+        nonlocal table_lines
+        rows = table_lines
+        table_lines = []
+        if not rows:
+            return
+        # A separator-only table (header rule with no data) carries nothing.
+        data_rows = [
+            r for r in rows
+            if not re.fullmatch(r"\|[\s:\-|]+\|", r.strip())
+        ]
+        if not data_rows:
+            return
+        prefix = context_prefix()
+        block = "\n".join(rows)
+        entries.append(f"{prefix}: {block}" if prefix else block)
+
     for raw_line in text.splitlines():
         line = raw_line.rstrip()
         stripped = line.strip()
 
         if stripped.startswith("```"):
-            in_code_block = not in_code_block
-            flush_paragraph()
+            if in_code_block:
+                flush_code()
+                in_code_block = False
+            else:
+                flush_table()
+                flush_paragraph()
+                in_code_block = True
+                code_fence_info = stripped[3:].strip()
             continue
         if in_code_block:
+            code_lines.append(raw_line)
             continue
+
+        # Table rows accumulate; anything else closes the table first.
+        if stripped.startswith("|") and stripped.endswith("|") and len(stripped) > 1:
+            flush_paragraph()
+            table_lines.append(stripped)
+            continue
+        flush_table()
 
         heading_match = re.match(r"^(#{1,6})\s+(.*\S)\s*$", stripped)
         if heading_match:
@@ -620,13 +711,12 @@ def extract_markdown_entries(text: str) -> List[str]:
             flush_paragraph()
             continue
 
-        if stripped.startswith("|") and stripped.endswith("|"):
-            flush_paragraph()
-            continue
-
         paragraph_lines.append(stripped)
 
+    flush_table()
     flush_paragraph()
+    # An unterminated fence at EOF must not swallow the block.
+    flush_code()
 
     deduped: List[str] = []
     seen = set()
@@ -891,6 +981,37 @@ class Migrator:
         self.memory_limit = int(mem_cfg.get("memory_char_limit", DEFAULT_MEMORY_CHAR_LIMIT))
         self.user_limit = int(mem_cfg.get("user_char_limit", DEFAULT_USER_CHAR_LIMIT))
 
+        # MEMORY FIDELITY (fixed 2026-08-24).
+        #
+        # The limit above is the RUNTIME's steady-state budget, ~800 tokens. It
+        # was also being applied as a migration ceiling, so importing a real
+        # agent truncated its MEMORY.md to 2,200 characters and pushed the rest
+        # into an overflow file that nothing ever reads. A production agent with
+        # a 50 KB memory lost roughly 95% of itself and there was no error: it
+        # just woke up not knowing things.
+        #
+        # A migration is not a steady state. It is a one-time transfer, and the
+        # only correct behaviour is to carry everything across. So the ceiling
+        # is raised to fit what is actually being imported, and the new value is
+        # written into the target config (see _raise_target_memory_limit) so the
+        # runtime agrees with what is now on disk. Without that second half the
+        # import "succeeds" and then every future memory WRITE is refused for
+        # being over budget, which is its own silent failure.
+        self.memory_limit_floor = self.memory_limit
+        self.memory_limit_raised_to: Optional[int] = None
+
+    def _fit_memory_limit(self, incoming_chars: int) -> int:
+        """Grow the char ceiling to fit an incoming corpus. Never shrinks it."""
+        if incoming_chars <= self.memory_limit:
+            return self.memory_limit
+        # 25% headroom so the agent can still write the day it lands, rounded to
+        # something a human reading config.yaml will not find bizarre.
+        fitted = int(incoming_chars * 1.25)
+        fitted = ((fitted // 1000) + 1) * 1000
+        self.memory_limit = fitted
+        self.memory_limit_raised_to = fitted
+        return fitted
+
         if self.skill_conflict_mode not in SKILL_CONFLICT_MODES:
             raise ValueError(
                 "Unknown skill conflict mode: "
@@ -966,7 +1087,22 @@ class Migrator:
             # for multi-agent).  Try the new path as a fallback.
             if rel.startswith("workspace/"):
                 suffix = rel[len("workspace/"):]
-                for variant in ("workspace-main", "workspace-assistant"):
+                # Named variants first (stable, predictable), then ANY
+                # workspace-* directory. The hardcoded pair used to be the whole
+                # list, so a real multi-agent install (workspace-alfred/,
+                # workspace-oracle/) reported "skipped: not found" and the agent
+                # lost its entire identity with no error. Sorted for determinism.
+                variants = ["workspace-main", "workspace-assistant"]
+                try:
+                    variants += sorted(
+                        d.name for d in self.source_root.iterdir()
+                        if d.is_dir()
+                        and d.name.startswith("workspace-")
+                        and d.name not in ("workspace-main", "workspace-assistant")
+                    )
+                except OSError:
+                    pass
+                for variant in variants:
                     alt = self.source_root / variant / suffix
                     if alt.exists():
                         return alt
@@ -1006,12 +1142,71 @@ class Migrator:
             counter += 1
         return candidate
 
+    def warn_about_unmigrated_workspaces(self) -> None:
+        """Name every workspace this run is leaving behind.
+
+        In a multi-agent install (`workspace-alfred/`, `workspace-oracle/`)
+        `source_candidate` returns the FIRST match and the rest are simply not
+        looked at again. Before 2026-08-24 that was invisible: the other agents
+        produced no record of any kind, so a migration could report success
+        having transferred one of two production agents. Loud beats tidy.
+        """
+        try:
+            workspaces = sorted(
+                d.name for d in self.source_root.iterdir()
+                if d.is_dir() and (d.name == "workspace"
+                                   or d.name.startswith("workspace-")
+                                   or d.name.startswith("workspace."))
+                and d.name != "workspace-agents"
+            )
+        except OSError:
+            return
+
+        # Only those that actually hold an identity count as an agent.
+        agent_workspaces = [
+            n for n in workspaces
+            if any((self.source_root / n / f).exists()
+                   for f in ("SOUL.md", "MEMORY.md", "IDENTITY.md"))
+        ]
+        if len(agent_workspaces) <= 1:
+            return
+
+        chosen = None
+        for name in ("workspace", "workspace-main", "workspace-assistant"):
+            if name in agent_workspaces:
+                chosen = name
+                break
+        if chosen is None:
+            chosen = agent_workspaces[0]
+        left = [n for n in agent_workspaces if n != chosen]
+
+        self.record(
+            "multi-agent-workspaces", self.source_root, None, "error",
+            f"This install holds {len(agent_workspaces)} agent workspaces. "
+            f"This run migrates '{chosen}' ONLY. NOT migrated: "
+            + ", ".join(left)
+            + ". Each is a separate agent with its own SOUL/MEMORY — re-run the "
+              "migration once per agent with --source pointed at that workspace, "
+              "or those agents are left behind.",
+            workspaces=agent_workspaces,
+            migrated=chosen,
+            not_migrated=left,
+        )
+
     def migrate(self) -> Dict[str, Any]:
         if not self.source_root.exists():
-            self.record("source", self.source_root, None, "error", "OpenClaw directory does not exist")
+            self.record("source", self.source_root, None, "error",
+                        "OpenClaw directory does not exist")
             return self.build_report()
 
         config = self.load_openclaw_config()
+
+        # Before anything else: say out loud which agents this run will NOT
+        # carry. `source_candidate` picks ONE workspace; a multi-agent install
+        # has several, each with its own SOUL/MEMORY. Picking one quietly used
+        # to mean the others were reported as "skipped: not found" and their
+        # identities were simply left behind.
+        self.warn_about_unmigrated_workspaces()
 
         self.run_if_selected("soul", self.migrate_soul)
         self.run_if_selected("workspace-agents", self.migrate_workspace_agents)
@@ -1123,7 +1318,51 @@ class Migrator:
                 option_label=meta["label"],
             )
 
+    def _persist_memory_limit(self) -> None:
+        """Write a raised memory ceiling into the TARGET config.
+
+        Without this the import succeeds and then every future memory write is
+        refused for exceeding the runtime budget: the agent arrives with its
+        memory intact and immediately cannot learn anything new. Silent, and
+        very confusing to debug months later.
+        """
+        if not self.memory_limit_raised_to or not self.execute:
+            return
+        target_cfg = self.target_root / "config.yaml"
+        try:
+            config = load_yaml_file(target_cfg)
+        except Exception:
+            config = {}
+        if not isinstance(config, dict):
+            config = {}
+        mem = config.get("memory")
+        if not isinstance(mem, dict):
+            mem = {}
+        # Never lower a ceiling the user chose themselves.
+        current = int(mem.get("memory_char_limit") or 0)
+        if current >= self.memory_limit_raised_to:
+            return
+        mem["memory_char_limit"] = self.memory_limit_raised_to
+        config["memory"] = mem
+        try:
+            dump_yaml_file(target_cfg, config)
+            self.record(
+                "memory-char-limit", None, target_cfg, "migrated",
+                f"Raised memory_char_limit to {self.memory_limit_raised_to} to fit "
+                f"the imported memory (was {current or DEFAULT_MEMORY_CHAR_LIMIT}). "
+                "Without this the agent could not write new memories.",
+            )
+        except Exception as exc:
+            self.record(
+                "memory-char-limit", None, target_cfg, "error",
+                f"Imported memory needs memory_char_limit >= "
+                f"{self.memory_limit_raised_to} but the config could not be "
+                f"updated ({exc}). SET THIS BY HAND or the agent cannot write "
+                "new memories.",
+            )
+
     def build_report(self) -> Dict[str, Any]:
+        self._persist_memory_limit()
         summary: Dict[str, int] = {
             "migrated": 0,
             "archived": 0,
@@ -1300,9 +1539,15 @@ class Migrator:
         if not incoming:
             self.record(kind, source, destination, "skipped", "No importable entries found")
             return
-        incoming = [rebrand_text(entry) for entry in incoming]
+        # Facts, not marketing copy: see rebrand_identity_only.
+        incoming = [rebrand_identity_only(entry) for entry in incoming]
 
         existing = parse_existing_memory_entries(destination)
+        # See _fit_memory_limit: a migration carries everything, it does not
+        # clip to the runtime's steady-state budget. `limit` is the floor.
+        _incoming_chars = len(ENTRY_DELIMITER.join(existing + incoming))
+        if _incoming_chars > limit:
+            limit = self._fit_memory_limit(_incoming_chars)
         merged, stats, overflowed = merge_entries(existing, incoming, limit)
         details = {
             "existing_entries": stats["existing"],
@@ -1397,9 +1642,17 @@ class Migrator:
         else:
             self.record("command-allowlist", source, destination, "migrated", "Would merge patterns", added_patterns=added)
 
+    # `hermes.json` / `config.yaml` are here because Clover is a Hermes fork and
+    # a Hermes install is a legitimate migration source. `octaviaagents.json`
+    # covers the OctaviaAgents profile layout found on real boxes.
+    _CONFIG_NAMES = (
+        "openclaw.json", "clawdbot.json", "moltbot.json",
+        "hermes.json", "octaviaagents.json",
+    )
+
     def load_openclaw_config(self) -> Dict[str, Any]:
         # Check current name and legacy config filenames
-        for name in ("openclaw.json", "clawdbot.json", "moltbot.json"):
+        for name in self._CONFIG_NAMES:
             config_path = self.source_root / name
             if config_path.exists():
                 try:
@@ -1407,8 +1660,22 @@ class Migrator:
                     # UnicodeDecodeError; OSError covers unreadable/vanished files.
                     data = json.loads(config_path.read_text(encoding="utf-8", errors="replace"))
                     return data if isinstance(data, dict) else {}
-                except (json.JSONDecodeError, OSError):
-                    continue
+                except json.JSONDecodeError as exc:
+                    # A CORRUPT config must not look like an ABSENT one. This
+                    # used to `continue` silently, so a single stray comma
+                    # produced a migration where every option came back
+                    # "skipped" and the user was told nothing was found.
+                    raise RuntimeError(
+                        f"{config_path} exists but is not valid JSON "
+                        f"(line {exc.lineno}, col {exc.colno}: {exc.msg}). "
+                        "Fix or move it before migrating — continuing would "
+                        "silently migrate an agent with no configuration."
+                    ) from exc
+                except OSError as exc:
+                    raise RuntimeError(
+                        f"{config_path} exists but could not be read: {exc}. "
+                        "Refusing to migrate from a source that may be partial."
+                    ) from exc
         return {}
 
     def load_openclaw_env(self) -> Dict[str, str]:
@@ -2057,9 +2324,15 @@ class Migrator:
         if not all_incoming:
             self.record("daily-memory", source_dir, destination, "skipped", "No importable entries found in daily memory files")
             return
-        all_incoming = [rebrand_text(entry) for entry in all_incoming]
+        # Facts, not marketing copy: see rebrand_identity_only.
+        all_incoming = [rebrand_identity_only(entry) for entry in all_incoming]
 
         existing = parse_existing_memory_entries(destination)
+        # Fit the ceiling to what is actually arriving, so a real agent's memory
+        # is carried across whole instead of being clipped to ~800 tokens with
+        # the remainder dropped into an overflow file nothing reads.
+        _incoming_chars = len(ENTRY_DELIMITER.join(existing + all_incoming))
+        self._fit_memory_limit(_incoming_chars)
         merged, stats, overflowed = merge_entries(existing, all_incoming, self.memory_limit)
         details = {
             "source_files": len(md_files),
