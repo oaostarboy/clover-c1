@@ -2119,6 +2119,24 @@ class Migrator:
             self.record("model-config", source_path, destination, "conflict", "Model already set and overwrite is disabled", current=current_model, incoming=model_str)
             return
 
+        # The FALLBACK CHAIN moves with the model (added 2026-08-24).
+        #
+        # It was not migrated at all — the word "fallback" appeared nowhere in
+        # this script. A real agent (Alfred) carried SEVEN fallbacks and would
+        # have arrived with zero, which is precisely the state that silenced
+        # Clover for hours on 2026-08-23/24: primary fails, nothing to fall
+        # back to, "API call failed after 3 retries".
+        #
+        # OpenClaw writes them as "provider/model" strings, which is exactly the
+        # shape coerce_fallback_entry accepts, so they carry across as-is.
+        _fallbacks = []
+        if isinstance(model_value, dict):
+            raw_fb = model_value.get("fallbacks") or model_value.get("fallback")
+            if isinstance(raw_fb, str):
+                raw_fb = [raw_fb]
+            if isinstance(raw_fb, list):
+                _fallbacks = [f for f in raw_fb if isinstance(f, str) and f.strip()]
+
         if self.execute:
             backup_path = self.maybe_backup(destination)
             existing_model = clover_config.get("model")
@@ -2126,10 +2144,27 @@ class Migrator:
                 existing_model["default"] = model_str
             else:
                 clover_config["model"] = {"default": model_str}
+            if _fallbacks and not clover_config.get("fallback_providers"):
+                clover_config["fallback_providers"] = _fallbacks
             dump_yaml_file(destination, clover_config)
             self.record("model-config", source_path, destination, "migrated", backup=str(backup_path) if backup_path else "", model=model_str)
+            if _fallbacks:
+                self.record("fallback-chain", source_path, destination, "migrated",
+                            f"Carried {len(_fallbacks)} fallback model(s) across. "
+                            "Without these the agent has nowhere to go when its "
+                            "primary model fails.",
+                            fallbacks=_fallbacks)
+            else:
+                self.record("fallback-chain", source_path, destination, "skipped",
+                            "Source agent had no fallback models configured. "
+                            "Consider adding some: a single-model agent goes "
+                            "silent the moment that model is unavailable.")
         else:
             self.record("model-config", source_path, destination, "migrated", "Would set model", model=model_str)
+            if _fallbacks:
+                self.record("fallback-chain", source_path, destination, "migrated",
+                            f"Would carry {len(_fallbacks)} fallback model(s) across.",
+                            fallbacks=_fallbacks)
 
     def migrate_tts_config(self, config: Optional[Dict[str, Any]] = None) -> None:
         config = config or self.load_openclaw_config()
