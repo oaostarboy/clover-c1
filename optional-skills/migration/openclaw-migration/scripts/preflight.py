@@ -88,9 +88,57 @@ def check_fallback_chain(home: Path, cfg: dict, rep: Report, repo: Path) -> None
                 "difference is silently unusable — this is exactly how the "
                 "agent goes quiet under load.")
         return
+    # PARSING IS NOT RESOLVING. "claude-cli/claude-opus-5" parses perfectly:
+    # provider "claude-cli", model "claude-opus-5". But claude-cli is an
+    # OPENCLAW provider id. Clover has never heard of it, so the entry is a
+    # well-formed pointer to nothing.
+    #
+    # Caught live 2026-08-24: Alfred passed this check with "7 usable" and then
+    # could not answer at all — every one of his seven fallbacks was a
+    # claude-cli/ or claude-proxy/ name carried verbatim from OpenClaw. A gate
+    # that says OK while the agent cannot speak is worse than no gate.
+    known = set(_known_providers(cfg, repo))
+    unknown = [f"{p['provider']}/{p['model']}" for p in parsed
+               if p["provider"] not in known]
+    if unknown:
+        rep.add(FAIL, "fallback chain",
+                f"{len(unknown)} of {len(parsed)} name a provider Clover cannot "
+                f"resolve: {', '.join(unknown[:3])}"
+                + (" ..." if len(unknown) > 3 else "")
+                + ". These parse but point at nothing. OpenClaw ids such as "
+                "claude-cli/ and claude-proxy/ do not exist here — the Claude "
+                "Code CLI route is provider 'anthropic'.")
+        return
     names = ", ".join(f"{p['provider']}/{p['model']}" for p in parsed[:3])
     rep.add(OK, "fallback chain", f"{len(parsed)} usable: {names}"
             + (" ..." if len(parsed) > 3 else ""))
+
+
+def _known_providers(cfg: dict, repo: Path) -> set:
+    """Providers this install can actually route to.
+
+    Built-ins from Clover's own registry, plus whatever custom_providers the
+    agent defines. Anything else is a dead name.
+    """
+    names = set()
+    for entry in (cfg.get("custom_providers") or []):
+        if isinstance(entry, dict) and entry.get("name"):
+            names.add(str(entry["name"]).strip())
+    try:
+        sys.path.insert(0, str(repo))
+        from clover_cli.providers import ALIASES  # noqa: E402
+        names.update(ALIASES.keys())
+        names.update(ALIASES.values())
+        try:
+            from clover_cli.provider_catalog import PROVIDERS as _CAT  # noqa: E402
+            names.update(_CAT.keys())
+        except Exception:
+            pass
+    except Exception:
+        # Fail OPEN on the registry import, not closed: better to miss a bad
+        # name than to block a good migration on an import error.
+        names.update({"anthropic", "openai", "openrouter", "ollama", "google"})
+    return names
 
 
 def check_memory_budget(home: Path, cfg: dict, rep: Report) -> None:
