@@ -49,6 +49,7 @@ import logging
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -62,8 +63,16 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
+# The rebrand scrub replaced the old product domain with a bare relative path
+# here, which urllib rejects outright ("unknown url type"), and truncated the
+# raw.githubusercontent fallback to a repo that does not exist (404). Both
+# failures were swallowed by the silent fall-back-to-cache path below, so the
+# model picker was pinned to bundled seed data forever and no new model could
+# ever appear. Verified 2026-08-24 by fetching both: ValueError and HTTP 404.
+# Repo slug taken from the real `origin` remote, not guessed.
 DEFAULT_CATALOG_URL = (
-    "docs/api/model-catalog.json"
+    "https://raw.githubusercontent.com/oaostarboy/clover-c1/"
+    "main/website/static/api/model-catalog.json"
 )
 # Fallback fetch chain. The Docusaurus site is served through Vercel, which
 # occasionally returns HTTP 403 + x-vercel-mitigated: challenge for non-
@@ -72,8 +81,10 @@ DEFAULT_CATALOG_URL = (
 # is the same manifest published from the same repo and is not bot-gated,
 # so we fall through to it whenever the primary URL fails.
 DEFAULT_CATALOG_FALLBACK_URLS: tuple[str, ...] = (
-    "https://raw.githubusercontent.com/clover-c1/main/website/static/api/model-catalog.json",
+    "https://raw.githubusercontent.com/oaostarboy/clover-c1/"
+    "main/docs/api/model-catalog.json",
 )
+
 DEFAULT_TTL_HOURS = 1
 DEFAULT_FETCH_TIMEOUT = 8.0
 SUPPORTED_SCHEMA_VERSION = 1
@@ -124,7 +135,23 @@ def _cache_path() -> Path:
 
 
 def _fetch_manifest(url: str, timeout: float) -> dict[str, Any] | None:
-    """HTTP GET the manifest URL and return a parsed dict, or None on failure."""
+    """HTTP GET the manifest URL and return a parsed dict, or None on failure.
+
+    A STRUCTURALLY invalid URL is logged at WARNING, not INFO. The difference
+    matters: a network blip is routine and belongs at info, but a URL with no
+    scheme can never succeed on any run, and the caller's response to None is
+    to quietly serve stale cache. That combination is how this shipped with
+    `DEFAULT_CATALOG_URL = "docs/api/model-catalog.json"` and nobody noticed
+    the model picker had been frozen on seed data.
+    """
+    parsed_scheme = urllib.parse.urlparse(url).scheme if url else ""
+    if parsed_scheme not in ("http", "https"):
+        logger.warning(
+            "model catalog URL %r is not fetchable (expected http/https). "
+            "The catalog can never refresh; the bundled seed list is all you "
+            "will ever see.", url,
+        )
+        return None
     try:
         req = urllib.request.Request(
             url,
