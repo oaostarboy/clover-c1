@@ -1549,6 +1549,41 @@ def _live_system_guard(request, monkeypatch):
                 "flow against a dedicated throwaway repo)."
             )
 
+        # Spawning a REAL gateway. Observed 2026-08-30: a full
+        # ``pytest tests/clover_cli/`` run left NINE live
+        # ``python -m clover_cli.main gateway run --replace`` processes on the
+        # developer's machine and killed the gateway he had running. The
+        # orphans still carried ``PYTEST_CURRENT_TEST`` in their environ, which
+        # is how they were identified as test residue.
+        #
+        # Two properties combine into the fault:
+        #   1. ``_spawn_gateway_restart_watcher`` detaches its child
+        #      (``start_new_session=True`` on POSIX), so the grandchild sits
+        #      outside pytest's process group and nothing reaps it at session
+        #      end. It survives indefinitely.
+        #   2. The spawn inherits ``os.environ``. Pointing ``CLOVER_HOME`` at a
+        #      tmp_path isolates Clover state and nothing else, and the argv
+        #      carries ``--replace``: an instruction to terminate whichever
+        #      gateway is already running and take its place. The victim is the
+        #      developer's live gateway.
+        #
+        # So an unstubbed launcher is not a harmless gap: it kills a process
+        # outside the sandbox and leaves orphans behind.
+        _parts = cmd if isinstance(cmd, (list, tuple)) else [cmd]
+        _rendered = " ".join(str(p) for p in _parts)
+        if "gateway" in _rendered and " run" in f" {_rendered}":
+            raise AssertionError(
+                f"subprocess.{name}({cmd!r}) — this would spawn a REAL "
+                "gateway process. The argv carries --replace, so it "
+                "terminates the gateway currently running on this machine, "
+                "and the child is detached so it outlives the pytest "
+                "session as an orphan. Stub the launcher in your test, e.g. "
+                "monkeypatch.setattr(gateway, "
+                "'launch_detached_profile_gateway_restart', lambda *a: True), "
+                "or mark with @pytest.mark.live_system_guard_bypass if a real "
+                "spawn is genuinely intended."
+            )
+
     def _wrap_subprocess(name, real):
         def _guarded(cmd, *args, **kwargs):
             _check_subprocess_cmd(name, cmd)
