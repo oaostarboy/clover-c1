@@ -39,6 +39,11 @@ on:
         default: '5'
   schedule:
     # Every 12 hours, off the hour to avoid the top-of-hour runner crunch.
+    # The jobs below skip themselves when the repo has no release tags: this
+    # workflow tests UPGRADES BETWEEN RELEASES, and a fork with zero releases
+    # has nothing to upgrade between. Without that guard the scheduled run
+    # failed twice a day on "no release tags found" and mailed a failure
+    # notice each time. Cut the first release and it starts working.
     - cron: '20 7,19 * * *'
   push:
     tags:
@@ -75,13 +80,26 @@ jobs:
       - id: pick
         run: |
           set -euo pipefail
+          # No release tags means nothing to upgrade FROM. That is the normal
+          # state of a fork before its first release, so report an empty set
+          # and let the matrix jobs skip. Failing here mails a CI failure for
+          # a condition that is not a fault.
+          if [ -z "$(git tag --list 'v[0-9]*')" ]; then
+            echo "No release tags in this repo; skipping the update E2E."
+            echo "tags=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           tags="$(scripts/sandbox/pick-release-tags.sh --count '${{ inputs.tag-count || 5 }}')"
           echo "Testing updates from: $tags"
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
 
   # `clover update` -- the route most users take.
   update:
-    if: github.event_name != 'workflow_dispatch' || inputs.route != 'installer'
+    # The empty-tags guard: `fromJSON('')` on an empty output would blow up the
+    # matrix, so skip the job outright when pick-releases found no releases.
+    if: >-
+      needs.pick-releases.outputs.tags != ''
+      && (github.event_name != 'workflow_dispatch' || inputs.route != 'installer')
     needs: pick-releases
     strategy:
       # One release breaking is worth knowing about even if another already
@@ -97,7 +115,9 @@ jobs:
   # Re-running the curl one-liner over an existing checkout: autostash + pull
   # rather than the updater's own git handling.
   installer:
-    if: github.event_name != 'workflow_dispatch' || inputs.route != 'update'
+    if: >-
+      needs.pick-releases.outputs.tags != ''
+      && (github.event_name != 'workflow_dispatch' || inputs.route != 'update')
     needs: pick-releases
     strategy:
       fail-fast: false

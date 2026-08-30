@@ -35,16 +35,16 @@ name: auto-fix lint issues & formatting
 #      on the current state.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - '**/*.js'
-      - '**/*.cjs'
-      - '**/*.mjs'
-      - '**/*.ts'
-      - '**/*.tsx'
-      - 'package.json'
-      - 'package-lock.json'
+  # Automatic runs are OFF. This workflow opens a bot PR with its fixes, and
+  # this repo blocks Actions from creating pull requests
+  # (`default_workflow_permissions: read`, `can_approve_pull_request_reviews:
+  # false`). So every push to main ran the whole eslint job, then failed at the
+  # final "Create/update PR" step and mailed a failure notice. The lint work
+  # itself was fine; only the PR step was refused.
+  #
+  # Run `npm run fix` locally instead, or start this by hand from the Actions
+  # tab. To restore automatic runs, allow Actions to create pull requests in
+  # Settings > Actions > General, then put the `push:` block back.
   workflow_dispatch:
 
 permissions:
