@@ -236,7 +236,7 @@ class CLIAgentSetupMixin:
         from cli import _cprint, logger
 
         _cprint("")
-        _cprint("⚕ No inference provider is configured yet — let's fix that.")
+        _cprint("☘ No inference provider is configured yet — let's fix that.")
         _cprint("  You'll pick a provider (Clover Portal OAuth is the fastest; "
                 "no API key needed) and a model.")
         try:
