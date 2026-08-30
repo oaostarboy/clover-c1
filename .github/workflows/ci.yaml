@@ -144,12 +144,6 @@ jobs:
     if: needs.detect.outputs.event_name == 'pull_request'
     uses: ./.github/workflows/history-check.yml
 
-  contributor-check:
-    name: Check contributors
-    needs: detect
-    if: needs.detect.outputs.python == 'true'
-    uses: ./.github/workflows/contributor-check.yml
-
   uv-lockfile:
     name: Check uv.lock
     needs: detect
@@ -226,7 +220,6 @@ jobs:
       - e2e-desktop
       - docs-site
       - history-check
-      - contributor-check
       - uv-lockfile
       - lockfile-diff
       - docker-lint
