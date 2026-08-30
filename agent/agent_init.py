@@ -509,6 +509,30 @@ def _normalize_run_budget_seconds(value) -> Optional[float]:
     return seconds
 
 
+def _refuse_checkpoint_required_on_codex_app_server(
+    checkpoint_required: bool, api_mode: Optional[str]
+) -> None:
+    """Fail closed at init when the checkpoint gate cannot be honored.
+
+    The codex app-server owns its thread and compacts it without a truthful
+    pre-compaction transcript boundary (in "native" auto-compaction mode —
+    the default — Clover never even initiates the compaction), so no
+    pre-compress checkpoint can be guaranteed on this API mode. Refusing here
+    keeps a turn from ever reaching a codex-owned compaction boundary; the
+    compress_context() guard alone cannot cover native turns that bypass
+    Clover compression entirely.
+    """
+    if checkpoint_required and api_mode == "codex_app_server":
+        raise RuntimeError(
+            "BLOCKED_MISSING_PREREQUISITE: compression.checkpoint_required "
+            "is incompatible with the codex_app_server API mode: the codex "
+            "agent compacts its own thread without a truthful pre-compaction "
+            "transcript boundary, so a required pre-compress checkpoint "
+            "cannot be guaranteed. Disable compression.checkpoint_required "
+            "or use a non-app-server API mode."
+        )
+
+
 def init_agent(
     agent,
     base_url: str = None,
@@ -589,6 +613,7 @@ def init_agent(
     checkpoint_max_file_size_mb: int = 10,
     pass_session_id: bool = False,
     requested_provider: str = None,
+    capabilities: Optional[Dict[str, bool]] = None,
 ):
     """
     Initialize the AI Agent.
@@ -688,6 +713,10 @@ def init_agent(
         if isinstance(requested_provider, str) and requested_provider.strip()
         else agent.provider
     )
+    agent.capabilities = {
+        key: value for key, value in (capabilities or {}).items()
+        if isinstance(key, str) and isinstance(value, bool)
+    }
     agent._credential_pool = credential_pool
     agent.acp_command = acp_command or command
     agent.acp_args = list(acp_args or args or [])
@@ -790,9 +819,10 @@ def init_agent(
     # providers have exceptions (for example Copilot's gpt-5-mini still
     # uses chat completions). Also auto-upgrade for direct OpenAI URLs
     # (api.openai.com) since all newer tool-calling models prefer
-    # Responses there. ACP runtimes are excluded: CopilotACPClient
-    # handles its own routing and does not implement the Responses API
-    # surface.
+    # Responses there. ACP runtimes are excluded: an ACP client handles
+    # its own routing and does not implement the Responses API surface.
+    # Keyed on the `acp://` scheme, not one vendor, so every ACP client
+    # is covered.
     # When api_mode was explicitly provided, respect it — the user
     # knows what their endpoint supports (#10473).
     # Exception: Azure OpenAI serves gpt-5.x on /chat/completions and
@@ -802,7 +832,7 @@ def init_agent(
         api_mode is None
         and agent.api_mode == "chat_completions"
         and agent.provider != "copilot-acp"
-        and not str(agent.base_url or "").lower().startswith("acp://copilot")
+        and not str(agent.base_url or "").lower().startswith("acp://")
         and not str(agent.base_url or "").lower().startswith("acp+tcp://")
         and not agent._is_azure_openai_url()
         and (
@@ -1318,7 +1348,9 @@ def init_agent(
                 client_kwargs["default_headers"] = _ra()._qwen_portal_headers()
             elif base_url_host_matches(effective_base, "chatgpt.com"):
                 from agent.auxiliary_client import _codex_cloudflare_headers
-                client_kwargs["default_headers"] = _codex_cloudflare_headers(api_key)
+                client_kwargs["default_headers"] = _codex_cloudflare_headers(
+                    api_key, base_url=effective_base,
+                )
             elif base_url_host_matches(effective_base, "x.ai"):
                 from tools.xai_http import clover_xai_default_headers
 
@@ -1539,33 +1571,15 @@ def init_agent(
     # when the primary is exhausted (rate-limit, overload, connection
     # failure).  Supports both legacy single-dict ``fallback_model`` and
     # new list ``fallback_providers`` format.
-    # Coercion lives in ONE place (clover_cli.fallback_config) so this builder
-    # and the config-side builder can never disagree about what a valid entry
-    # is. They previously had independent isinstance(dict) filters, and both
-    # silently dropped the "provider/model" string form every doc example uses
-    # — producing an empty chain with no error. See coerce_fallback_entry.
-    from clover_cli.fallback_config import coerce_fallback_entry as _coerce
-
-    if isinstance(fallback_model, (list, tuple)):
-        _raw_entries = list(fallback_model)
-    elif fallback_model:
-        _raw_entries = [fallback_model]
+    if isinstance(fallback_model, list):
+        agent._fallback_chain = [
+            f for f in fallback_model
+            if isinstance(f, dict) and f.get("provider") and f.get("model")
+        ]
+    elif isinstance(fallback_model, dict) and fallback_model.get("provider") and fallback_model.get("model"):
+        agent._fallback_chain = [fallback_model]
     else:
-        _raw_entries = []
-
-    agent._fallback_chain = [
-        c for c in (_coerce(f) for f in _raw_entries) if c is not None
-    ]
-    if _raw_entries and not agent._fallback_chain:
-        # Configured a chain and got nothing usable: that is the exact failure
-        # that silenced the agent. It must never be quiet again.
-        print(
-            "⚠️  fallback chain is EMPTY but "
-            f"{len(_raw_entries)} fallback entr{'y was' if len(_raw_entries)==1 else 'ies were'} "
-            "configured — every entry was unusable. The agent has nowhere to go "
-            "when the primary model fails. Check `fallback_providers` in your "
-            "config; entries look like 'anthropic/claude-opus-5'."
-        )
+        agent._fallback_chain = []
     agent._fallback_index = 0
     agent._fallback_activated = getattr(agent, "_fallback_activated", False)
     # Legacy attribute kept for backward compat (tests, external callers)
@@ -2138,11 +2152,15 @@ def init_agent(
     compression_enabled = str(_compression_cfg.get("enabled", True)).lower() in {"true", "1", "yes"}
     compression_target_ratio = float(_compression_cfg.get("target_ratio", 0.20))
     compression_protect_last = int(_compression_cfg.get("protect_last_n", 20))
-    # Tail retention mode (compression.tail_mode). "legacy" (default) keeps
-    # the 0.20*window verbatim tail; "lean" switches to the clamped
-    # 2.5%/10K-25K tail with recovery-pointer machinery (#87326). Unknown
-    # values fall back to legacy inside the compressor.
-    compression_tail_mode = str(_compression_cfg.get("tail_mode", "legacy")).strip().lower()
+    # Tail retention mode (compression.tail_mode). "lean" (default) keeps a
+    # clamped 2.5%/10K-25K verbatim tail with recovery-pointer machinery —
+    # continuity rides the upgraded summary (digests, anchor index, verbatim
+    # user messages, session_search pointers; recall-eval'd, see
+    # evals/compaction/results/). "legacy" restores the pre-#87326
+    # 0.20*threshold verbatim tail, which on big-window/raised-threshold
+    # setups hoards 100-240K tokens per compaction. Unknown values fall back
+    # to lean inside the compressor.
+    compression_tail_mode = str(_compression_cfg.get("tail_mode", "lean")).strip().lower()
     # Minimum REAL (actionable) user messages guaranteed to survive in the
     # uncompressed tail (compression.min_tail_user_messages).  Default 1
     # preserves current behavior exactly — the existing single-user tail
@@ -2261,6 +2279,12 @@ def init_agent(
                 compression_threshold_tokens = None
         except (TypeError, ValueError):
             compression_threshold_tokens = None
+    compression_checkpoint_required = is_truthy_value(
+        _compression_cfg.get("checkpoint_required"), default=False
+    )
+    _refuse_checkpoint_required_on_codex_app_server(
+        compression_checkpoint_required, getattr(agent, "api_mode", None)
+    )
     # In-place compaction: when True, compress_context() rewrites the message
     # list + rebuilds the system prompt WITHOUT rotating the session id (no
     # parent_session_id chain, no `name #N` renumber). See #38763 and
@@ -2318,21 +2342,22 @@ def init_agent(
     codex_responses_native_compaction = _is_truthy(
         _compression_cfg.get("codex_responses_native", False)
     )
-    _native_threshold_raw = _compression_cfg.get(
-        "codex_responses_compact_threshold", 200_000
-    )
-    try:
-        if isinstance(_native_threshold_raw, bool):
-            raise ValueError
-        codex_responses_compact_threshold = int(_native_threshold_raw)
-        if codex_responses_compact_threshold <= 0:
-            raise ValueError
-    except (TypeError, ValueError):
-        _ra().logger.warning(
-            "Invalid compression.codex_responses_compact_threshold=%r; using 200000.",
-            _native_threshold_raw,
-        )
-        codex_responses_compact_threshold = 200_000
+    _native_threshold_raw = _compression_cfg.get("codex_responses_compact_threshold")
+    codex_responses_compact_threshold = None
+    if _native_threshold_raw is not None:
+        try:
+            if isinstance(_native_threshold_raw, (bool, float)):
+                raise ValueError
+            codex_responses_compact_threshold = int(_native_threshold_raw)
+            if codex_responses_compact_threshold <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            _ra().logger.warning(
+                "Invalid compression.codex_responses_compact_threshold=%r; "
+                "using the automatic threshold derived from local compression.",
+                _native_threshold_raw,
+            )
+            codex_responses_compact_threshold = None
     # Opt-in idle compaction: compact a session up front when it resumes after
     # this many seconds of inactivity (0 = disabled). Time-based, so it
     # complements the size-based threshold above. Consumed by build_turn_context().
@@ -2785,6 +2810,19 @@ def init_agent(
     agent.compression_in_place = compression_in_place
     # Apply micro-compaction settings to the compressor (feature is opt-in)
     _cc = getattr(agent, "context_compressor", None)
+    # compression.checkpoint_required: micro-compaction is a lossy rewrite
+    # authority too — it absorbs the oldest uncompacted exchanges into a
+    # rolling summary post-turn, with no pre-compress checkpoint hook in its
+    # path. Suppress it while the gate is armed so the checkpoint-aware
+    # batch compressor stays the only lossy authority (mirrors the
+    # server-side native-compaction suppression in native_compaction.py).
+    if compression_checkpoint_required and compression_micro_compact:
+        logger.warning(
+            "compression.checkpoint_required is enabled: post-turn "
+            "micro-compaction is disabled for this agent so every lossy "
+            "rewrite passes through the checkpoint-gated compressor."
+        )
+        compression_micro_compact = False
     if _cc is not None and hasattr(_cc, "_micro_compact_enabled"):
         _cc._micro_compact_enabled = compression_micro_compact
     if _cc is not None and hasattr(_cc, "_micro_compact_every_n_turns"):
@@ -2793,9 +2831,17 @@ def init_agent(
         _cc._micro_compact_defrag_threshold_tokens = (
             compression_micro_compact_defrag_tokens
         )
+    agent.compression_checkpoint_required = compression_checkpoint_required
     agent.codex_app_server_auto_compaction = codex_app_server_auto_compaction
     agent.codex_responses_native_compaction = codex_responses_native_compaction
     agent.codex_responses_compact_threshold = codex_responses_compact_threshold
+    from agent.native_compaction import resolve_native_compaction_capabilities
+    agent.runtime_capabilities = resolve_native_compaction_capabilities(
+        model=agent.model,
+        base_url=agent.base_url,
+        provider=agent.provider,
+        is_codex_backend=(agent.provider or "").strip().lower() == "openai-codex",
+    )
     agent.max_compression_attempts = compression_max_attempts
     agent.compression_idle_compact_after_seconds = (
         compression_idle_compact_after_seconds
@@ -2920,6 +2966,12 @@ def init_agent(
     # Copilot x-initiator flag: first API call of a user turn sends "user" (#3040).
     agent._is_user_initiated_turn = False
 
+    # Usage-anchored context accounting (agent/model_metadata.py): the last
+    # main-loop provider response's exact usage + transcript snapshot. None
+    # until the first response with usage; invalidated on compaction and
+    # session switches so stale anchors can never suppress compression.
+    agent._usage_anchor = None
+
     # Cumulative token usage for the session
     agent.session_prompt_tokens = 0
     agent.session_completion_tokens = 0
@@ -2933,6 +2985,12 @@ def init_agent(
     agent.session_estimated_cost_usd = 0.0
     agent.session_cost_status = "unknown"
     agent.session_cost_source = "none"
+    # Rolling history for status-bar avg latency / velocity (last 10 calls).
+    # Stored on the agent so both conversation_loop and codex_runtime share it
+    # and the CLI snapshot can read it without extra IPC.
+    from collections import deque as _deque
+    agent._api_latency_history = _deque(maxlen=10)
+    agent._api_output_history = _deque(maxlen=10)
     
     # ── Ollama num_ctx injection ──
     # Ollama defaults to 2048 context regardless of the model's capabilities.
@@ -3060,6 +3118,7 @@ def init_agent(
         "base_url": agent.base_url,
         "api_mode": agent.api_mode,
         "api_key": getattr(agent, "api_key", ""),
+        "request_overrides": dict(getattr(agent, "request_overrides", {}) or {}),
         "client_kwargs": dict(agent._client_kwargs),
         "use_prompt_caching": agent._use_prompt_caching,
         "use_native_cache_layout": agent._use_native_cache_layout,

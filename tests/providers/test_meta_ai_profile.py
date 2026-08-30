@@ -1,7 +1,7 @@
 """Tests for the bundled Meta Model API (Muse Spark) provider plugin.
 
 Adapted from the plugin's original suite at
-Community plugin by @albertodepaola — the plugin is now
+@albertodepaola — the plugin is now
 bundled, so profiles resolve through normal registry discovery.
 """
 

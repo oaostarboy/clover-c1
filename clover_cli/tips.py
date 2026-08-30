@@ -10,7 +10,7 @@ import random
 
 TIPS = [
     # --- Slash Commands ---
-    "/background <prompt> (alias /bg or /btw) runs a task in a separate session while your current one stays free.",
+    "/bg <prompt> runs a task in a separate session while your current one stays free; /btw <question> answers a side question about this conversation without interrupting it.",
     "/branch forks the current session so you can explore a different direction without losing progress.",
     "/compress manually compresses conversation context when things get long.",
     "/rollback lists filesystem checkpoints — restore files the agent modified to any prior state.",
@@ -175,7 +175,7 @@ TIPS = [
     "Skills can restrict to specific OS platforms — some only load on macOS or Linux.",
     "skills.external_dirs in config.yaml lets you load skills from custom directories.",
     "The agent can create its own skills as procedural memory using skill_manage.",
-    "The plan skill saves markdown plans under .clover/plans/ in the active workspace.",
+    "/plan writes a markdown implementation plan to .clover/plans/ without executing anything.",
 
     # --- Cron & Scheduling ---
     "Cron jobs can attach skills: clover cron add --skill blogwatcher \"Check for new posts\".",
@@ -335,7 +335,7 @@ TIPS = [
     "CLOVER_DEV=1 bypasses container mode detection for local development.",
     "Each MCP server gets its own toolset (mcp-servername) that can be toggled independently via clover tools.",
     "MCP ${ENV_VAR} placeholders in config are resolved at server spawn — including vars from ~/.clover/.env.",
-    "Skills from trusted repos (Clover Cognition) get a 'trusted' security level; community skills get extra scanning.",
+    "Skills from trusted repos (cloverc1) get a 'trusted' security level; community skills get extra scanning.",
     "The skills quarantine at ~/.clover/skills/.hub/quarantine/ holds skills pending security review.",
 
     # --- Advanced Slash Commands ---

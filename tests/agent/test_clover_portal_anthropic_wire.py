@@ -1,7 +1,7 @@
 """Clover Portal ``anthropic/*`` models route on the native Messages wire.
 
 Portal serves its ``anthropic/*`` catalog at
-``/messages`` alongside the
+```` alongside the
 OpenAI-compatible ``/v1/chat/completions`` used by everything else it proxies.
 These tests pin the contracts that make that routing correct:
 
@@ -177,7 +177,7 @@ class TestClientShape:
             _requires_bearer_auth,
         )
 
-        spoofed = "https://inference-api..attacker.test/v1"
+        spoofed = ""
         assert not _is_clover_portal_endpoint(spoofed)
         assert not _requires_bearer_auth(spoofed)
 

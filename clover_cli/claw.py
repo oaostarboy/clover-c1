@@ -52,63 +52,8 @@ _OPENCLAW_SCRIPT_INSTALLED = (
     / "openclaw_to_clover.py"
 )
 
-# Known source-install directory names (current + legacy).
-#
-# `.hermes` and its profile variants are in here because Clover IS a Hermes
-# fork: the on-disk layout is near-identical (SOUL.md at root, memories/,
-# sessions/, skills/, cron/, hooks/). Before 2026-08-24 nothing in the entire
-# repo referenced `.hermes`, so a real Hermes agent was INVISIBLE to every
-# importer — `clover claw` reported "nothing found" and every option came back
-# "skipped" rather than erroring. An agent whose skills live in ~/.hermes/skills
-# simply could not be migrated at all.
-#
-# Order matters: probed first-to-last, so the current names lead.
-_OPENCLAW_DIR_NAMES = (
-    ".openclaw", ".clawdbot", ".moltbot",
-    ".hermes",
-)
-
-
-def _iter_source_home_candidates(home: "Path") -> list["Path"]:
-    """Every plausible source install under ``home``, best-first.
-
-    Beyond the fixed names above this also picks up PROFILE directories:
-    `.hermes-<name>` and `.openclaw-<name>` (e.g. `.hermes-<name>`,
-    `.openclaw-<name>`), plus `.octaviaagents-<name>`. Those are where real
-    multi-agent installs actually keep state — verified on live boxes, where
-    the agent's true state was in `.octaviaagents-<name>` (85M) while the
-    default `.openclaw` held only 6.2M of leftovers. Migrating from the default
-    path would have produced an agent with the right name and none of its
-    memory.
-    """
-    seen: set[str] = set()
-    out: list["Path"] = []
-
-    def _add(p) -> None:
-        try:
-            if p.is_dir() and str(p) not in seen:
-                seen.add(str(p))
-                out.append(p)
-        except OSError:
-            pass
-
-    for name in _OPENCLAW_DIR_NAMES:
-        _add(home / name)
-    # Profile variants, sorted for a stable order.
-    try:
-        for child in sorted(home.iterdir()):
-            n = child.name
-            if not n.startswith("."):
-                continue
-            if any(
-                n.startswith(base + "-")
-                for base in (".hermes", ".openclaw", ".clawdbot",
-                             ".moltbot", ".octaviaagents")
-            ):
-                _add(child)
-    except OSError:
-        pass
-    return out
+# Known OpenClaw directory names (current + legacy)
+_OPENCLAW_DIR_NAMES = (".openclaw", ".clawdbot", ".moltbot")
 
 def _detect_openclaw_processes() -> list[str]:
     """Detect running OpenClaw processes and services.

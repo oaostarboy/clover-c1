@@ -28,13 +28,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+"
+    "url": "git+https://github.com/cloverc1/clover-c1.git"
   },
   "license": "MIT",
   "bugs": {
-    "url": ""
+    "url": "https://github.com/cloverc1/clover-c1/issues"
   },
-  "homepage": "",
+  "homepage": "https://github.com/cloverc1/clover-c1#readme",
   "devDependencies": {
     "@eslint/js": "9.39.5",
     "typescript-eslint": "8.64.0",
@@ -56,14 +56,11 @@
     "js-yaml@^4": "4.3.1",
     "undici@^6": "6.28.0",
     "undici@^7": "7.29.0",
-    "postcss": {
-      ".": "8.5.23",
-      "nanoid": "3.3.18"
-    },
+    "postcss": "8.5.23",
     "tar": "7.5.22"
   },
   "engines": {
-    "node": ">=22.22.0",
+    "node": "^22.22.0 || ^24.11.0 || >=26.0.0",
     "npm": "<11.10.0 || >=11.17.0"
   },
   "allowScripts": {

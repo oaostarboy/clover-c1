@@ -104,7 +104,7 @@ describe('createGatewayEventHandler', () => {
       payload: {
         billing: {
           billing_url: null,
-          is_clover_portal: true,
+          is_clover: true,
           message: 'out of credits',
           model: 'm',
           provider: 'clover',
@@ -133,7 +133,7 @@ describe('createGatewayEventHandler', () => {
       payload: {
         billing: {
           billing_url: 'https://openrouter.ai/settings/credits',
-          is_clover_portal: false,
+          is_clover: false,
           message: 'out of credits',
           model: 'm',
           provider: 'openrouter',

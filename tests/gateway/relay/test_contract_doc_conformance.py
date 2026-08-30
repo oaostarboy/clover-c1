@@ -1,7 +1,7 @@
 """Cross-repo contract conformance: docs/relay-connector-contract.md ⟷ Python.
 
 The contract doc is the formal interface the connector repo
-(Clover Cognition/gateway-gateway) implements against. The connector's TypeScript
+(cloverc1/gateway-gateway) implements against. The connector's TypeScript
 structs are hand-mirrored from the doc, so if the Python source of truth drifts
 from the doc, the two repos silently diverge and the handshake / session-keying
 breaks only at integration time.

@@ -913,7 +913,7 @@ def test_visible_providers_reuses_logged_out_feature_snapshot(monkeypatch):
     features = CloverSubscriptionFeatures(
         subscribed=False,
         clover_auth_present=False,
-        provider_is_clover_portal=False,
+        provider_is_clover=False,
         features={},
         account_info=account,
     )
@@ -949,7 +949,7 @@ def test_visible_providers_reuses_pool_video_feature_snapshot(monkeypatch):
     features = CloverSubscriptionFeatures(
         subscribed=True,
         clover_auth_present=True,
-        provider_is_clover_portal=False,
+        provider_is_clover=False,
         features={},
         account_info=account,
     )
@@ -1034,7 +1034,8 @@ def _saved_list_from_before(platform="cli"):
 
 @_requires_recently_shipped
 def test_saved_list_gains_toolsets_that_shipped_after_it_was_written():
-    """The bug: a frozen list never gained bfl, so composite users got Clover Portal video generation on upgrade and picker users silently did not."""
+    """The bug: a frozen list never gained a newly shipped toolset, so
+    composite users got it on upgrade and picker users silently did not."""
     on_composite = _get_platform_tools(
         {"platform_toolsets": {"cli": ["clover-cli"]}},
         "cli",

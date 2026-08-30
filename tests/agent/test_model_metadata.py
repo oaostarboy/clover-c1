@@ -804,7 +804,7 @@ class TestFetchEndpointModelMetadata:
 # Clover Portal context-window resolution (provider="clover")
 # =========================================================================
 
-class TestCloverPortalContextResolution:
+class TestNousPortalContextResolution:
     """Clover Portal /v1/models is authoritative for what Clover infra enforces
     and may diverge from the OpenRouter catalog.
 

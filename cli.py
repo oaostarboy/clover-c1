@@ -55,6 +55,7 @@ from clover_cli.cli_agent_setup_mixin import CLIAgentSetupMixin
 from clover_cli.cli_commands_mixin import CLICommandsMixin
 from clover_cli.cli_billing_mixin import CLIBillingMixin
 from agent.interrupt_compat import request_hard_interrupt
+from agent.pet import render as pet_render
 
 # prompt_toolkit for fixed input area TUI
 from prompt_toolkit.history import FileHistory
@@ -458,6 +459,7 @@ def load_cli_config() -> Dict[str, Any]:
             "daytona_image": "nikolaik/python-nodejs:python3.11-nodejs20",
             "docker_volumes": [],  # host:container volume mounts for Docker backend
             "docker_mount_cwd_to_workspace": False,  # explicit opt-in only; default off for sandbox isolation
+            "docker_shared_container_key": "",
         },
         "browser": {
             "inactivity_timeout": 120,  # Auto-cleanup inactive browser sessions after 2 min
@@ -524,12 +526,6 @@ def load_cli_config() -> Dict[str, Any]:
         },
         "auxiliary": {
             "vision": {
-                "provider": "auto",
-                "model": "",
-                "base_url": "",
-                "api_key": "",
-            },
-            "web_extract": {
                 "provider": "auto",
                 "model": "",
                 "base_url": "",
@@ -683,6 +679,7 @@ def load_cli_config() -> Dict[str, Any]:
         "docker_network": "TERMINAL_DOCKER_NETWORK",
         "docker_run_as_host_user": "TERMINAL_DOCKER_RUN_AS_HOST_USER",
         "docker_persist_across_processes": "TERMINAL_DOCKER_PERSIST_ACROSS_PROCESSES",
+        "docker_shared_container_key": "TERMINAL_DOCKER_SHARED_CONTAINER_KEY",
         "docker_orphan_reaper": "TERMINAL_DOCKER_ORPHAN_REAPER",
         "sandbox_dir": "TERMINAL_SANDBOX_DIR",
         # Persistent shell (non-local backends)
@@ -734,12 +731,6 @@ def load_cli_config() -> Dict[str, Any]:
             "model": "AUXILIARY_VISION_MODEL",
             "base_url": "AUXILIARY_VISION_BASE_URL",
             "api_key": "AUXILIARY_VISION_API_KEY",
-        },
-        "web_extract": {
-            "provider": "AUXILIARY_WEB_EXTRACT_PROVIDER",
-            "model": "AUXILIARY_WEB_EXTRACT_MODEL",
-            "base_url": "AUXILIARY_WEB_EXTRACT_BASE_URL",
-            "api_key": "AUXILIARY_WEB_EXTRACT_API_KEY",
         },
         "approval": {
             "provider": "AUXILIARY_APPROVAL_PROVIDER",
@@ -5008,6 +4999,53 @@ class _VoiceInputMessage:
         return self.text
 
 
+class _SeededQueryMessage:
+    """Sentinel wrapper for a ``-q/--query`` prompt seeded into an
+    interactive session.
+
+    When ``clover chat -q "…"`` runs on a real TTY, the query is submitted as
+    the first turn of a normal interactive session instead of the legacy
+    answer-and-exit single-query mode. The prompt is arbitrary user text (an
+    OS launcher, a desktop integration, a script) — it must be treated
+    LITERALLY: no slash-command routing, no ``!`` shell dispatch, no
+    file-drop detection. This sentinel marks the seeded first message so
+    ``process_loop`` skips those dispatchers for it (and only it).
+    """
+
+    __slots__ = ("text", "images")
+
+    def __init__(self, text: str, images=None):
+        self.text = text or ""
+        self.images = list(images or [])
+
+    def __str__(self) -> str:
+        return self.text
+
+
+def _should_seed_interactive(query, image, quiet: bool, oneshot: bool) -> bool:
+    """Whether a ``-q/--image`` invocation should seed an interactive session.
+
+    New default (Aug 2026): on a real TTY, ``chat -q`` submits the prompt as
+    the first turn of a normal interactive session (parity with other coding
+    agents' seeded launches — e.g. Omarchy's prompted agent terminals).
+
+    The legacy answer-and-exit behavior is preserved for every automation
+    surface:
+      - ``--oneshot`` on the chat subcommand (explicit legacy opt-in)
+      - ``-Q/--quiet`` (machine-readable single-query contract)
+      - any non-TTY stdin/stdout (kanban workers, cron, pipes, A2A)
+    ``-z/--oneshot`` at the top level never reaches this path at all.
+    """
+    if not (query or image):
+        return False
+    if oneshot or quiet:
+        return False
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except Exception:
+        return False
+
+
 class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     """
     Interactive CLI for the Clover Cognition.
@@ -5015,7 +5053,12 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     Provides a REPL interface with rich formatting, command history,
     and tool execution capabilities.
     """
-    
+
+    # Seeded -q handoff from main() → run() (see _should_seed_interactive):
+    # run() re-creates _pending_input, so the seeded first message rides in
+    # on this attribute and is enqueued after the fresh queue exists.
+    _seeded_first_message: Optional["_SeededQueryMessage"] = None
+
     def __init__(
         self,
         model: str = None,
@@ -5552,15 +5595,18 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._command_running = False
         self._command_blocks_input = False
         self._command_status = ""
-        # Petdex mascot (opt-in via display.pet). The base CLI mirrors the TUI's
-        # PetPane: a half-block sprite above the prompt that reacts to agent
-        # activity. Lazily resolved; an invalidate timer drives the animation.
+        # Petdex mascot (opt-in via display.pet). Kitty/Ghostty use Unicode
+        # placeholders plus out-of-band image transmission; other terminals
+        # use the truecolor half-block fallback.
         self._pet_renderer = None  # agent.pet.render.PetRenderer | None
         self._pet_slug: str = ""
         self._pet_enabled: bool = False
         self._pet_cols: int = 18
         self._pet_scale: float = 0.7
         self._pet_frames_cache: dict = {}  # state -> list[grid]
+        self._pet_kitty_cache: dict = {}  # state -> kitty placeholder payload
+        self._pet_kitty_image_id: int = 0
+        self._pet_kitty_pending: str = ""
         self._pet_frame_idx: int = 0
         self._pet_lock = threading.Lock()
         self._pet_cfg_checked: float = 0.0
@@ -5633,6 +5679,14 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Background task tracking: {task_id: threading.Thread}
         self._background_tasks: Dict[str, threading.Thread] = {}
         self._background_task_counter = 0
+
+        # Cache-hit ratio baseline — reset on model switch and on
+        # context compression so the bar reflects the *current* cache
+        # regime, not a lifetime average that survives invalidation.
+        self._cache_hit_baseline_prompt = 0
+        self._cache_hit_baseline_read = 0
+        self._cache_hit_baseline_model: Optional[str] = None
+        self._cache_hit_baseline_compressions = 0
 
     def _claim_active_session(self, surface: str = "cli", *, stderr: bool = False) -> bool:
         """Claim a global active-session slot for this CLI process."""
@@ -5771,6 +5825,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if getattr(self, "_terminal_io_broken", False):
             return
         _replay_output_history()
+        self._pet_queue_kitty_frame()
         try:
             app.invalidate()
         except OSError as exc:
@@ -5989,6 +6044,8 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 pass
         if new_width is not None:
             self._last_resize_width = new_width
+        if width_changed:
+            self._pet_queue_kitty_frame()
         original_on_resize()
         self._schedule_status_bar_unsuppress(app)
 
@@ -6128,6 +6185,35 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if percent_used >= 50:
             return "class:status-bar-warn"
         return "class:status-bar-good"
+
+    def _cache_hit_rate(self, snapshot: dict, precision: int = 1) -> "tuple[float, str] | None":
+        """Return (cache_pct, formatted_label) or None if no cache data.
+
+        Centralises the cache-hit-rate computation so both the plain-text
+        status bar and the prompt-toolkit fragment path share one formula.
+        Prefers the baseline-delta percentage computed in
+        ``_get_status_bar_snapshot`` (resets on model switch / compression,
+        so it reflects the *current* cache regime); falls back to the
+        session-lifetime ratio when no delta is available.
+        """
+        delta_pct = snapshot.get("cache_hit_pct")
+        if delta_pct is not None:
+            return float(delta_pct), f"◎ {float(delta_pct):.{precision}f}%"
+        cache_read = snapshot.get("session_cache_read_tokens", 0)
+        prompt_total = snapshot.get("session_prompt_tokens", 0)
+        if cache_read > 0 and prompt_total > 0:
+            cache_pct = cache_read / prompt_total * 100
+            return cache_pct, f"◎ {cache_pct:.{precision}f}%"
+        return None
+
+    def _cache_hit_rate_style(self, cache_pct: float) -> str:
+        """Style for cache hit rate — higher is better (opposite of context %)."""
+        if cache_pct >= 70:
+            return "class:status-bar-good"
+        if cache_pct >= 40:
+            return "class:status-bar-warn"
+        return "class:status-bar-bad"
+
 
     @staticmethod
     def _battery_status_style(category: str) -> str:
@@ -6347,7 +6433,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             except Exception:
                 pass
 
-        # Count live /background tasks. The dict entry is removed in the
+        # Count live /bg tasks. The dict entry is removed in the
         # task thread's finally block, so len() reflects truly-running tasks.
         # len() on a CPython dict is atomic; safe to read without a lock.
         try:
@@ -6423,6 +6509,97 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             snapshot["compressions"] = getattr(compressor, "compression_count", 0) or 0
             if context_length:
                 snapshot["context_percent"] = max(0, min(100, round((context_tokens / context_length) * 100)))
+
+        # -- Cache-hit ratio (delta since last reset) --
+        # Reset baseline on model switch and on compression — both invalidate
+        # the prompt cache. Formula verified against live logs:
+        #   hit = cache_read / prompt_tokens  (prompt = input+cache_read+cache_write)
+        #   see agent/conversation_loop.py:4314  cache=read/prompt (87%)
+        #   and CanonicalUsage.prompt_tokens = input+read+write
+        try:
+            base_model = getattr(self, "_cache_hit_baseline_model", None)
+            base_prompt = int(getattr(self, "_cache_hit_baseline_prompt", 0) or 0)
+            base_read = int(getattr(self, "_cache_hit_baseline_read", 0) or 0)
+            base_comps = int(getattr(self, "_cache_hit_baseline_compressions", 0) or 0)
+            cur_model = snapshot.get("model_name") or model_name
+            cur_comps = int(snapshot.get("compressions", 0) or 0)
+            cur_prompt = int(snapshot.get("session_prompt_tokens", 0) or 0)
+            cur_read = int(snapshot.get("session_cache_read_tokens", 0) or 0)
+            if base_model is None:
+                self._cache_hit_baseline_model = cur_model
+                self._cache_hit_baseline_compressions = cur_comps
+                base_model = cur_model
+                base_comps = cur_comps
+            if cur_model != base_model:
+                self._cache_hit_baseline_model = cur_model
+                self._cache_hit_baseline_prompt = cur_prompt
+                self._cache_hit_baseline_read = cur_read
+                self._cache_hit_baseline_compressions = cur_comps
+                base_prompt = cur_prompt
+                base_read = cur_read
+                base_comps = cur_comps
+            if cur_comps != base_comps:
+                self._cache_hit_baseline_compressions = cur_comps
+                self._cache_hit_baseline_prompt = cur_prompt
+                self._cache_hit_baseline_read = cur_read
+                base_prompt = cur_prompt
+                base_read = cur_read
+            delta_prompt = cur_prompt - base_prompt
+            delta_read = cur_read - base_read
+            # A zero-read regime hides the segment entirely (no cache data
+            # is not the same as a 0% hit worth alarming about), and the pct
+            # stays a float so renderers control their own precision.
+            if delta_prompt > 0 and delta_read > 0:
+                pct = max(0.0, min(100.0, (delta_read / delta_prompt) * 100))
+                snapshot["cache_hit_pct"] = pct
+                snapshot["cache_hit_label"] = f"{pct:.0f}%"
+            elif cur_prompt > 0 and cur_read > 0 and base_prompt == 0 and base_read == 0:
+                pct = max(0.0, min(100.0, (cur_read / cur_prompt) * 100))
+                snapshot["cache_hit_pct"] = pct
+                snapshot["cache_hit_label"] = f"{pct:.0f}%"
+            else:
+                snapshot["cache_hit_pct"] = None
+                snapshot["cache_hit_label"] = ""
+        except Exception:
+            snapshot["cache_hit_pct"] = None
+            snapshot["cache_hit_label"] = ""
+
+        # -- Rolling avg latency / velocity (last 10 calls) --
+        # Reads the deque maintained in agent/conversation_loop.py (and
+        # agent_init). Codex app-server has no latency, so it stays hidden there.
+        try:
+            agent_obj = getattr(self, "agent", None)
+            lhist = list(getattr(agent_obj, "_api_latency_history", []) or []) if agent_obj else []
+            ohist = list(getattr(agent_obj, "_api_output_history", []) or []) if agent_obj else []
+            # Keep the two histories aligned (they are appended together).
+            n = min(len(lhist), len(ohist))
+            if n:
+                lhist = lhist[-n:]
+                ohist = ohist[-n:]
+                # Simple mean for latency; sum/sum for velocity (true throughput, not mean of ratios).
+                avg_lat = sum(lhist) / len(lhist) if lhist else None
+                total_out = sum(ohist)
+                total_lat = sum(lhist)
+                avg_vel = (total_out / total_lat) if total_lat > 0 else None
+                # Guard against NaN / inf from weird provider timings (e.g. -0.8s in logs).
+                if avg_lat is not None and (avg_lat != avg_lat or avg_lat < 0 or avg_lat > 1e6):
+                    avg_lat = None
+                if avg_vel is not None and (avg_vel != avg_vel or avg_vel < 0 or avg_vel > 1e6):
+                    avg_vel = None
+                snapshot["avg_latency"] = float(avg_lat) if avg_lat is not None else None
+                snapshot["avg_latency_label"] = f"{avg_lat:.1f}s" if avg_lat is not None else ""
+                snapshot["avg_velocity"] = float(avg_vel) if avg_vel is not None else None
+                snapshot["avg_velocity_label"] = f"{avg_vel:.0f} t/s" if avg_vel is not None else ""
+            else:
+                snapshot["avg_latency"] = None
+                snapshot["avg_latency_label"] = ""
+                snapshot["avg_velocity"] = None
+                snapshot["avg_velocity_label"] = ""
+        except Exception:
+            snapshot["avg_latency"] = None
+            snapshot["avg_latency_label"] = ""
+            snapshot["avg_velocity"] = None
+            snapshot["avg_velocity_label"] = ""
 
         return snapshot
 
@@ -6735,15 +6912,23 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     # ── Petdex mascot (base-CLI pet pane) ───────────────────────────────
     #
-    # Parity with the TUI: a half-block sprite rendered as a prompt_toolkit
-    # window above the prompt, reacting to agent state and animated by a timer
-    # that calls ``app.invalidate()``. Half-blocks only — the crisp Kitty image
-    # protocol can't coexist with prompt_toolkit's patch_stdout output layer
-    # (raw image escapes get swallowed/mangled), so we use truecolor styled
-    # text, which prompt_toolkit renders natively in any 24-bit terminal.
+    # Parity with the TUI: a sprite in a prompt_toolkit window above the
+    # prompt. Kitty/Ghostty use Unicode placeholders — prompt_toolkit owns
+    # the measurable grid; image bytes go out-of-band as a virtual placement
+    # via after_render + write_raw (cursor untouched). WezTerm/iTerm/sixel
+    # stay on half-blocks: they are not placeholder-capable.
 
     _PET_FRAME_INTERVAL = 0.16
     _PET_CFG_INTERVAL = 2.5
+
+    def _pet_clear_runtime(self) -> None:
+        """Drop renderer + queued Kitty state. Caller holds ``_pet_lock``."""
+        self._pet_enabled = False
+        self._pet_renderer = None
+        self._pet_frames_cache.clear()
+        self._pet_kitty_cache.clear()
+        self._pet_kitty_pending = ""
+        self._pet_kitty_image_id = 0
 
     def _pet_resolve_config(self) -> None:
         """(Re)resolve the active pet from config — picks up live enable/disable/
@@ -6753,7 +6938,6 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         """
         try:
             from agent.pet import constants, store
-            from agent.pet.render import PetRenderer
             from clover_cli.config import load_config
 
             cfg = load_config()
@@ -6766,43 +6950,48 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             slug = str(pet_cfg.get("slug", "") or "")
             scale = float(pet_cfg.get("scale", constants.DEFAULT_SCALE) or constants.DEFAULT_SCALE)
             cols = constants.resolve_cols(scale, pet_cfg.get("unicode_cols", 0))
+            configured_mode = str(pet_cfg.get("render_mode", "auto") or "auto").lower()
+            # Placeholders only on kitty/Ghostty. WezTerm speaks kitty APC but
+            # not U+10EEEE — detect_terminal_graphics() still returns kitty
+            # there, which is why this gate is narrower.
+            use_kitty = configured_mode in ("", "auto", "kitty") and pet_render.supports_kitty_placeholders()
+            renderer_mode = "kitty" if use_kitty else "unicode"
 
-            if not enabled:
+            if not enabled or configured_mode == "off":
                 with self._pet_lock:
-                    self._pet_enabled = False
-                    self._pet_renderer = None
-                    self._pet_frames_cache.clear()
+                    self._pet_clear_runtime()
                 return
 
             pet = store.resolve_active_pet(slug)
             if pet is None or not pet.exists:
                 with self._pet_lock:
-                    self._pet_enabled = False
-                    self._pet_renderer = None
-                    self._pet_frames_cache.clear()
+                    self._pet_clear_runtime()
                 return
 
             with self._pet_lock:
-                # Rebuild only when the resolved pet or geometry changes.
+                # Rebuild only when the resolved pet, mode, or geometry changes.
                 if (
                     self._pet_renderer is None
                     or self._pet_slug != pet.slug
                     or self._pet_cols != cols
                     or self._pet_scale != scale
+                    or self._pet_renderer.mode != renderer_mode
                 ):
-                    self._pet_renderer = PetRenderer(
-                        str(pet.spritesheet), mode="unicode", scale=scale, unicode_cols=cols
+                    self._pet_renderer = pet_render.PetRenderer(
+                        str(pet.spritesheet), mode=renderer_mode, scale=scale, unicode_cols=cols
                     )
                     self._pet_slug = pet.slug
                     self._pet_cols = cols
                     self._pet_scale = scale
                     self._pet_frames_cache.clear()
+                    self._pet_kitty_cache.clear()
+                    self._pet_kitty_pending = ""
+                    self._pet_kitty_image_id = pet_render.kitty_image_id(pet.slug)
                     self._pet_frame_idx = 0
                 self._pet_enabled = True
         except Exception:
             with self._pet_lock:
-                self._pet_enabled = False
-                self._pet_renderer = None
+                self._pet_clear_runtime()
 
     def _pet_flash(self, state: str, secs: float = 1.6) -> None:
         """Briefly force a transient reaction (wave/jump/failed) before resting."""
@@ -6877,12 +7066,79 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._pet_frames_cache[state] = grids
         return grids
 
+    def _pet_kitty_payload_for(self, state: str) -> dict | None:
+        """Return and cache a Kitty virtual-placeholder payload for *state*."""
+        with self._pet_lock:
+            cached = self._pet_kitty_cache.get(state)
+            if cached is not None:
+                return cached
+            renderer = self._pet_renderer
+            image_id = self._pet_kitty_image_id
+            if renderer is None or renderer.mode != "kitty":
+                return None
+        try:
+            # PNG encoding is outside _pet_lock: first visit of a state must
+            # not stall the prompt under the lock.
+            payload = renderer.kitty_payload(state, image_id=image_id)
+        except Exception:
+            payload = None
+        if payload is not None:
+            payload = {**payload, "image_id": image_id}
+            with self._pet_lock:
+                if self._pet_renderer is renderer and self._pet_kitty_image_id == image_id:
+                    self._pet_kitty_cache[state] = payload
+        return payload
+
+    def _pet_queue_kitty_frame(self, state: str | None = None) -> None:
+        """Queue one virtual Kitty frame for the next prompt_toolkit render.
+
+        No-op when the pet pane was never initialized (``__new__`` fixtures
+        and ``_force_full_redraw`` / resize recovery on a pet-less CLI).
+        """
+        if not getattr(self, "_pet_enabled", False):
+            return
+        if state is None:
+            state = self._derive_pet_state()
+        payload = self._pet_kitty_payload_for(state)
+        if not payload or not payload.get("frames"):
+            return
+        with self._pet_lock:
+            if self._pet_renderer is not None and self._pet_renderer.mode == "kitty":
+                self._pet_kitty_pending = payload["frames"][self._pet_frame_idx % len(payload["frames"])]
+
+    def _pet_flush_kitty_frame(self, app) -> None:
+        """Write a queued APC after prompt_toolkit has finished its screen diff."""
+        with self._pet_lock:
+            frame = self._pet_kitty_pending
+            self._pet_kitty_pending = ""
+        if not frame:
+            return
+        try:
+            # U=1/q=2 leaves the cursor and input stream untouched.
+            app.output.write_raw(frame)
+            app.output.flush()
+        except (OSError, ValueError):
+            pass
+
     def _pet_fragments(self):
         """Return prompt_toolkit FormattedText for the current pet frame, or []."""
         with self._pet_lock:
             if not self._pet_enabled or self._pet_renderer is None:
                 return []
             state = self._derive_pet_state()
+            kitty = self._pet_renderer.mode == "kitty"
+        if kitty:
+            payload = self._pet_kitty_payload_for(state)
+            if not payload:
+                return []
+            color = pet_render.kitty_color_hex(payload["image_id"])
+            frags = []
+            for y, row in enumerate(payload["placeholder"]):
+                if y:
+                    frags.append(("", "\n"))
+                frags.append((f"fg:{color}", row))
+            return frags
+        with self._pet_lock:
             grids = self._pet_frames_for(state)
             if not grids:
                 return []
@@ -6914,7 +7170,13 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         with self._pet_lock:
             if not self._pet_enabled or self._pet_renderer is None:
                 return 0
-            grids = self._pet_frames_for(self._derive_pet_state())
+            state = self._derive_pet_state()
+            kitty = self._pet_renderer.mode == "kitty"
+        if kitty:
+            payload = self._pet_kitty_payload_for(state)
+            return int(payload.get("rows", 0)) if payload else 0
+        with self._pet_lock:
+            grids = self._pet_frames_for(state)
             if not grids or not grids[0]:
                 return 0
             return len(grids[0])
@@ -6934,6 +7196,9 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 continue
             with self._pet_lock:
                 self._pet_frame_idx += 1
+                kitty = self._pet_renderer is not None and self._pet_renderer.mode == "kitty"
+            if kitty:
+                self._pet_queue_kitty_frame()
             app = getattr(self, "_app", None)
             if app is not None:
                 try:
@@ -6949,6 +7214,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if self._pet_anim_running:
             return
         self._pet_resolve_config()
+        with self._pet_lock:
+            kitty = self._pet_enabled and self._pet_renderer is not None and self._pet_renderer.mode == "kitty"
+        if kitty:
+            self._pet_queue_kitty_frame()
         self._pet_anim_running = True
         self._pet_anim_thread = threading.Thread(target=self._pet_anim_loop, daemon=True)
         self._pet_anim_thread.start()
@@ -7029,6 +7298,36 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return f"⊙ goal {used}/{max_turns}"
         return "⊙ goal"
 
+    def _get_status_bar_field_set(self) -> Optional[frozenset]:
+        """Return the set of visible status-bar fields from config.
+
+        Reads ``display.status_bar.fields`` from the module-level
+        ``CLI_CONFIG`` (no per-render YAML parse — the status bar repaints
+        every frame). Returns ``None`` when the user has not customized the
+        bar (use built-in defaults, i.e. show everything), or a
+        ``frozenset`` of field names when the list is non-empty.
+
+        Available fields: model, context_detail, context_pct, cache_hit,
+        latency, tps, compressions, bg_tasks, bg_processes, bg_subagents,
+        goal, duration, prompt_elapsed, idle_since, focus, yolo, stash,
+        battery, title, total_tokens.
+        ``total_tokens`` is opt-in only (never shown by default).
+        The field order is fixed; the config controls visibility only.
+        """
+        if hasattr(self, "_status_bar_field_set_cache"):
+            return self._status_bar_field_set_cache
+        result = None
+        try:
+            display = CLI_CONFIG.get("display") if isinstance(CLI_CONFIG, dict) else None
+            status_bar = (display or {}).get("status_bar") if isinstance(display, dict) else None
+            fields = status_bar.get("fields") if isinstance(status_bar, dict) else None
+            if isinstance(fields, list) and fields:
+                result = frozenset(str(f) for f in fields)
+        except Exception:
+            result = None
+        self._status_bar_field_set_cache = result
+        return result
+
     def _build_status_bar_text(self, width: Optional[int] = None) -> str:
         """Return a compact one-line session status string for the TUI footer."""
         try:
@@ -7045,75 +7344,124 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
             yolo_active = self._is_session_yolo_active()
             goal_segment = self._status_bar_goal_segment(snapshot)
+            field_set = self._get_status_bar_field_set()
+
+            def _ok(name: str) -> bool:
+                return field_set is None or name in field_set
+
+            if not _ok("title"):
+                session_title = ""
+
+            if not _ok("goal"):
+                goal_segment = ""
+            if not _ok("focus"):
+                focus_label = ""
             if width < 52:
-                text = f"{battery_prefix}⚕ {snapshot['model_short']} · {duration_label}"
+                segs = []
+                if _ok("model"):
+                    segs.append(f"⚕ {snapshot['model_short']}")
+                if _ok("duration"):
+                    segs.append(duration_label)
                 if goal_segment:
-                    text += f" · {goal_segment}"
+                    segs.append(goal_segment)
                 if focus_label:
-                    text += f" · {focus_label}"
-                if yolo_active:
-                    text += " · ⚠ YOLO"
+                    segs.append(focus_label)
+                if yolo_active and _ok("yolo"):
+                    segs.append("⚠ YOLO")
+                text = battery_prefix + " · ".join(segs) if segs else f"{battery_prefix}⚕ {snapshot['model_short']}"
                 return self._right_align_status_title(text, session_title, width)
             if width < 76:
-                parts = [f"⚕ {snapshot['model_short']}", percent_label]
+                parts = []
+                if _ok("model"):
+                    parts.append(f"⚕ {snapshot['model_short']}")
+                if _ok("context_pct"):
+                    parts.append(percent_label)
+                cache = self._cache_hit_rate(snapshot, precision=0)
+                if cache and _ok("cache_hit"):
+                    parts.append(cache[1])
                 if battery_label:
                     parts.insert(0, battery_label)
                 compressions = snapshot.get("compressions", 0)
-                if compressions:
+                if compressions and _ok("compressions"):
                     parts.append(f"🗜️ {compressions}")
                 bg_count = snapshot.get("active_background_tasks", 0)
-                if bg_count:
+                if bg_count and _ok("bg_tasks"):
                     parts.append(f"▶ {bg_count}")
                 bg_proc_count = snapshot.get("active_background_processes", 0)
-                if bg_proc_count:
+                if bg_proc_count and _ok("bg_processes"):
                     parts.append(f"⚙ {bg_proc_count}")
                 bg_subagent_count = snapshot.get("active_background_subagents", 0)
-                if bg_subagent_count:
+                if bg_subagent_count and _ok("bg_subagents"):
                     parts.append(f"⛓ {bg_subagent_count}")
                 if goal_segment:
                     parts.append(goal_segment)
-                parts.append(duration_label)
+                if _ok("duration"):
+                    parts.append(duration_label)
                 if focus_label:
                     parts.append(focus_label)
-                if yolo_active:
+                if yolo_active and _ok("yolo"):
                     parts.append("⚠ YOLO")
+                if not parts:
+                    parts = [f"⚕ {snapshot['model_short']}"]
                 return self._right_align_status_title(" · ".join(parts), session_title, width)
 
-            if snapshot["context_length"]:
-                ctx_total = _format_context_length(snapshot["context_length"])
-                ctx_used = format_token_count_compact(snapshot["context_tokens"])
-                context_label = f"{ctx_used}/{ctx_total}"
-            else:
-                context_label = "ctx --"
-
-            compressions = snapshot.get("compressions", 0)
-            parts = [f"⚕ {snapshot['model_short']}", context_label, percent_label]
+            parts = []
+            if _ok("model"):
+                parts.append(f"⚕ {snapshot['model_short']}")
+            if _ok("context_detail"):
+                if snapshot["context_length"]:
+                    ctx_total = _format_context_length(snapshot["context_length"])
+                    ctx_used = format_token_count_compact(snapshot["context_tokens"])
+                    context_label = f"{ctx_used}/{ctx_total}"
+                else:
+                    context_label = "ctx --"
+                parts.append(context_label)
+            if _ok("context_pct"):
+                parts.append(percent_label)
             if battery_label:
                 parts.insert(0, battery_label)
-            if compressions:
+            compressions = snapshot.get("compressions", 0)
+            cache = self._cache_hit_rate(snapshot)
+            if cache and _ok("cache_hit"):
+                parts.append(cache[1])
+            _avg_lat = snapshot.get("avg_latency_label") or ""
+            if _avg_lat and _ok("latency"):
+                parts.append(f"◷ {_avg_lat}")
+            _avg_vel = snapshot.get("avg_velocity_label") or ""
+            if _avg_vel and _ok("tps"):
+                parts.append(f"↑ {_avg_vel}")
+            if compressions and _ok("compressions"):
                 parts.append(f"🗜️ {compressions}")
             bg_count = snapshot.get("active_background_tasks", 0)
-            if bg_count:
+            if bg_count and _ok("bg_tasks"):
                 parts.append(f"▶ {bg_count}")
             bg_proc_count = snapshot.get("active_background_processes", 0)
-            if bg_proc_count:
+            if bg_proc_count and _ok("bg_processes"):
                 parts.append(f"⚙ {bg_proc_count}")
             bg_subagent_count = snapshot.get("active_background_subagents", 0)
-            if bg_subagent_count:
+            if bg_subagent_count and _ok("bg_subagents"):
                 parts.append(f"⛓ {bg_subagent_count}")
             if goal_segment:
                 parts.append(goal_segment)
-            parts.append(duration_label)
+            if _ok("duration"):
+                parts.append(duration_label)
             prompt_elapsed = snapshot.get("prompt_elapsed")
-            if prompt_elapsed:
+            if prompt_elapsed and _ok("prompt_elapsed"):
                 parts.append(prompt_elapsed)
             idle_since = snapshot.get("idle_since")
-            if idle_since:
+            if idle_since and _ok("idle_since"):
                 parts.append(idle_since)
             if focus_label:
                 parts.append(focus_label)
-            if yolo_active:
+            if yolo_active and _ok("yolo"):
                 parts.append("⚠ YOLO")
+            # Session token total (Σ) — opt-in only via an explicit fields
+            # list, so default bars never widen.
+            total_tokens = snapshot.get("session_total_tokens", 0)
+            if total_tokens and field_set is not None and "total_tokens" in field_set:
+                parts.append(f"Σ{format_token_count_compact(total_tokens)}")
+            if not parts:
+                parts = [f"⚕ {snapshot['model_short']}"]
             return self._right_align_status_title(" │ ".join(parts), session_title, width)
         except Exception:
             return f"⚕ {self.model if getattr(self, 'model', None) else 'Clover'}"
@@ -7136,23 +7484,42 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             battery_style = self._battery_status_style(snapshot.get("battery_category", "dim"))
             focus_label = snapshot.get("focus_label") or ""
             session_title = snapshot.get("session_title") or ""
+            field_set = self._get_status_bar_field_set()
+
+            def _ok(name: str) -> bool:
+                return field_set is None or name in field_set
+
+            if not _ok("title"):
+                session_title = ""
+
+            if not _ok("goal"):
+                goal_segment = ""
+            if not _ok("focus"):
+                focus_label = ""
+
+            def _append(frag_list, sep, *pieces):
+                if frag_list:
+                    frag_list.append(("class:status-bar-dim", sep))
+                frag_list.extend(pieces)
 
             if width < 52:
-                frags = [
-                    ("class:status-bar", " ⚕ "),
-                    ("class:status-bar-strong", snapshot["model_short"]),
-                    ("class:status-bar-dim", " · "),
-                    ("class:status-bar-dim", duration_label),
-                ]
+                frags = []
+                if _ok("model"):
+                    frags.append(("class:status-bar", " ⚕ "))
+                    frags.append(("class:status-bar-strong", snapshot["model_short"]))
+                if _ok("duration"):
+                    _append(frags, " · ", ("class:status-bar-dim", duration_label))
                 if goal_segment:
-                    frags.append(("class:status-bar-dim", " · "))
-                    frags.append(("class:status-bar-strong", goal_segment))
+                    _append(frags, " · ", ("class:status-bar-strong", goal_segment))
                 if focus_label:
-                    frags.append(("class:status-bar-dim", " · "))
-                    frags.append(("class:status-bar-strong", focus_label))
-                if yolo_active:
-                    frags.append(("class:status-bar-dim", " · "))
-                    frags.append(("class:status-bar-yolo", "⚠ YOLO"))
+                    _append(frags, " · ", ("class:status-bar-strong", focus_label))
+                if yolo_active and _ok("yolo"):
+                    _append(frags, " · ", ("class:status-bar-yolo", "⚠ YOLO"))
+                if not frags:
+                    frags = [
+                        ("class:status-bar", " ⚕ "),
+                        ("class:status-bar-strong", snapshot["model_short"]),
+                    ]
                 frags.append(("class:status-bar", " "))
             else:
                 percent = snapshot["context_percent"]
@@ -7162,98 +7529,108 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     bg_count = snapshot.get("active_background_tasks", 0)
                     bg_proc_count = snapshot.get("active_background_processes", 0)
                     bg_subagent_count = snapshot.get("active_background_subagents", 0)
-                    frags = [
-                        ("class:status-bar", " ⚕ "),
-                        ("class:status-bar-strong", snapshot["model_short"]),
-                        ("class:status-bar-dim", " · "),
-                        (self._status_bar_context_style(percent), percent_label),
-                    ]
-                    if compressions:
-                        frags.append(("class:status-bar-dim", " · "))
-                        frags.append((self._compression_count_style(compressions), f"🗜️ {compressions}"))
-                    if bg_count:
-                        frags.append(("class:status-bar-dim", " · "))
-                        frags.append(("class:status-bar-strong", f"▶ {bg_count}"))
-                    if bg_proc_count:
-                        frags.append(("class:status-bar-dim", " · "))
-                        frags.append(("class:status-bar-strong", f"⚙ {bg_proc_count}"))
-                    if bg_subagent_count:
-                        frags.append(("class:status-bar-dim", " · "))
-                        frags.append(("class:status-bar-strong", f"⛓ {bg_subagent_count}"))
+                    frags = []
+                    if _ok("model"):
+                        frags.append(("class:status-bar", " ⚕ "))
+                        frags.append(("class:status-bar-strong", snapshot["model_short"]))
+                    if _ok("context_pct"):
+                        _append(frags, " · ", (self._status_bar_context_style(percent), percent_label))
+                    cache = self._cache_hit_rate(snapshot, precision=0)
+                    if cache and _ok("cache_hit"):
+                        _append(frags, " · ", (self._cache_hit_rate_style(cache[0]), cache[1]))
+                    if compressions and _ok("compressions"):
+                        _append(frags, " · ", (self._compression_count_style(compressions), f"🗜️ {compressions}"))
+                    if bg_count and _ok("bg_tasks"):
+                        _append(frags, " · ", ("class:status-bar-strong", f"▶ {bg_count}"))
+                    if bg_proc_count and _ok("bg_processes"):
+                        _append(frags, " · ", ("class:status-bar-strong", f"⚙ {bg_proc_count}"))
+                    if bg_subagent_count and _ok("bg_subagents"):
+                        _append(frags, " · ", ("class:status-bar-strong", f"⛓ {bg_subagent_count}"))
                     if goal_segment:
-                        frags.append(("class:status-bar-dim", " · "))
-                        frags.append(("class:status-bar-strong", goal_segment))
-                    frags.extend([
-                        ("class:status-bar-dim", " · "),
-                        ("class:status-bar-dim", duration_label),
-                    ])
+                        _append(frags, " · ", ("class:status-bar-strong", goal_segment))
+                    if _ok("duration"):
+                        _append(frags, " · ", ("class:status-bar-dim", duration_label))
                     if focus_label:
-                        frags.append(("class:status-bar-dim", " · "))
-                        frags.append(("class:status-bar-strong", focus_label))
-                    if yolo_active:
-                        frags.append(("class:status-bar-dim", " · "))
-                        frags.append(("class:status-bar-yolo", "⚠ YOLO"))
+                        _append(frags, " · ", ("class:status-bar-strong", focus_label))
+                    if yolo_active and _ok("yolo"):
+                        _append(frags, " · ", ("class:status-bar-yolo", "⚠ YOLO"))
+                    if not frags:
+                        frags = [
+                            ("class:status-bar", " ⚕ "),
+                            ("class:status-bar-strong", snapshot["model_short"]),
+                        ]
                     frags.append(("class:status-bar", " "))
                 else:
-                    if snapshot["context_length"]:
-                        ctx_total = _format_context_length(snapshot["context_length"])
-                        ctx_used = format_token_count_compact(snapshot["context_tokens"])
-                        context_label = f"{ctx_used}/{ctx_total}"
-                    else:
-                        context_label = "ctx --"
-
                     bar_style = self._status_bar_context_style(percent)
                     compressions = snapshot.get("compressions", 0)
                     bg_count = snapshot.get("active_background_tasks", 0)
                     bg_proc_count = snapshot.get("active_background_processes", 0)
                     bg_subagent_count = snapshot.get("active_background_subagents", 0)
-                    frags = [
-                        ("class:status-bar", " ⚕ "),
-                        ("class:status-bar-strong", snapshot["model_short"]),
-                        ("class:status-bar-dim", " │ "),
-                        ("class:status-bar-dim", context_label),
-                        ("class:status-bar-dim", " │ "),
-                        (bar_style, self._build_context_bar(percent)),
-                        ("class:status-bar-dim", " "),
-                        (bar_style, percent_label),
-                    ]
-                    if compressions:
-                        frags.append(("class:status-bar-dim", " │ "))
-                        frags.append((self._compression_count_style(compressions), f"🗜️ {compressions}"))
-                    if bg_count:
-                        frags.append(("class:status-bar-dim", " │ "))
-                        frags.append(("class:status-bar-strong", f"▶ {bg_count}"))
-                    if bg_proc_count:
-                        frags.append(("class:status-bar-dim", " │ "))
-                        frags.append(("class:status-bar-strong", f"⚙ {bg_proc_count}"))
-                    if bg_subagent_count:
-                        frags.append(("class:status-bar-dim", " │ "))
-                        frags.append(("class:status-bar-strong", f"⛓ {bg_subagent_count}"))
+                    frags = []
+                    if _ok("model"):
+                        frags.append(("class:status-bar", " ⚕ "))
+                        frags.append(("class:status-bar-strong", snapshot["model_short"]))
+                    if _ok("context_detail"):
+                        if snapshot["context_length"]:
+                            ctx_total = _format_context_length(snapshot["context_length"])
+                            ctx_used = format_token_count_compact(snapshot["context_tokens"])
+                            context_label = f"{ctx_used}/{ctx_total}"
+                        else:
+                            context_label = "ctx --"
+                        _append(frags, " │ ", ("class:status-bar-dim", context_label))
+                    if _ok("context_pct"):
+                        _append(
+                            frags,
+                            " │ ",
+                            (bar_style, self._build_context_bar(percent)),
+                            ("class:status-bar-dim", " "),
+                            (bar_style, percent_label),
+                        )
+                    cache = self._cache_hit_rate(snapshot)
+                    if cache and _ok("cache_hit"):
+                        _append(frags, " │ ", (self._cache_hit_rate_style(cache[0]), cache[1]))
+                    _avg_lat = snapshot.get("avg_latency_label") or ""
+                    if _avg_lat and _ok("latency"):
+                        _append(frags, " │ ", ("class:status-bar-dim", f"◷ {_avg_lat}"))
+                    _avg_vel = snapshot.get("avg_velocity_label") or ""
+                    if _avg_vel and _ok("tps"):
+                        _append(frags, " │ ", ("class:status-bar-dim", f"↑ {_avg_vel}"))
+                    if compressions and _ok("compressions"):
+                        _append(frags, " │ ", (self._compression_count_style(compressions), f"🗜️ {compressions}"))
+                    if bg_count and _ok("bg_tasks"):
+                        _append(frags, " │ ", ("class:status-bar-strong", f"▶ {bg_count}"))
+                    if bg_proc_count and _ok("bg_processes"):
+                        _append(frags, " │ ", ("class:status-bar-strong", f"⚙ {bg_proc_count}"))
+                    if bg_subagent_count and _ok("bg_subagents"):
+                        _append(frags, " │ ", ("class:status-bar-strong", f"⛓ {bg_subagent_count}"))
                     if goal_segment:
-                        frags.append(("class:status-bar-dim", " │ "))
-                        frags.append(("class:status-bar-strong", goal_segment))
-                    frags.extend([
-                        ("class:status-bar-dim", " │ "),
-                        ("class:status-bar-dim", duration_label),
-                    ])
+                        _append(frags, " │ ", ("class:status-bar-strong", goal_segment))
+                    if _ok("duration"):
+                        _append(frags, " │ ", ("class:status-bar-dim", duration_label))
                     # Position 7: per-prompt elapsed timer (live or frozen)
                     prompt_elapsed = snapshot.get("prompt_elapsed")
-                    if prompt_elapsed:
-                        frags.append(("class:status-bar-dim", " │ "))
-                        frags.append(("class:status-bar-dim", prompt_elapsed))
+                    if prompt_elapsed and _ok("prompt_elapsed"):
+                        _append(frags, " │ ", ("class:status-bar-dim", prompt_elapsed))
                     # Position 8: idle time since the last final agent response
                     idle_since = snapshot.get("idle_since")
-                    if idle_since:
-                        frags.append(("class:status-bar-dim", " │ "))
-                        frags.append(("class:status-bar-dim", idle_since))
+                    if idle_since and _ok("idle_since"):
+                        _append(frags, " │ ", ("class:status-bar-dim", idle_since))
                     # Persistent focus-view badge — so the reduced-output mode
                     # is never invisible (mirrors the YOLO badge convention).
                     if focus_label:
-                        frags.append(("class:status-bar-dim", " │ "))
-                        frags.append(("class:status-bar-strong", focus_label))
-                    if yolo_active:
-                        frags.append(("class:status-bar-dim", " │ "))
-                        frags.append(("class:status-bar-yolo", "⚠ YOLO"))
+                        _append(frags, " │ ", ("class:status-bar-strong", focus_label))
+                    if yolo_active and _ok("yolo"):
+                        _append(frags, " │ ", ("class:status-bar-yolo", "⚠ YOLO"))
+                    # Session token total (Σ) — opt-in only via an explicit
+                    # fields list, so default bars never widen.
+                    total_tokens = snapshot.get("session_total_tokens", 0)
+                    if total_tokens and field_set is not None and "total_tokens" in field_set:
+                        _append(frags, " │ ", ("class:status-bar-dim", f"Σ{format_token_count_compact(total_tokens)}"))
+                    if not frags:
+                        frags = [
+                            ("class:status-bar", " ⚕ "),
+                            ("class:status-bar-strong", snapshot["model_short"]),
+                        ]
                     frags.append(("class:status-bar", " "))
 
             # Stash indicator (📌 N) — appended after all width tiers so the
@@ -7265,7 +7642,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 stash_indicator = self._prompt_stash.indicator()
             except Exception:
                 stash_indicator = ""
-            if stash_indicator:
+            if stash_indicator and _ok("stash"):
                 # Insert before the trailing pad fragment so the bar keeps its
                 # one-cell right margin.
                 if frags and frags[-1] == ("class:status-bar", " "):
@@ -7279,7 +7656,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
             # Battery is the first status-bar element when enabled: prepend it
             # ahead of the leading ⚕ marker in whichever width tier ran above.
-            if battery_label:
+            if battery_label and _ok("battery"):
                 frags[0:0] = [
                     ("class:status-bar", " "),
                     (battery_style, battery_label),
@@ -9929,6 +10306,9 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                             api_key=_reset_result.api_key,
                             base_url=_reset_result.base_url,
                             api_mode=_reset_result.api_mode,
+                            capabilities=getattr(
+                                _reset_result, "runtime_capabilities", None
+                            ),
                         )
                     self.model = _reset_result.new_model
                     self.provider = _reset_result.target_provider
@@ -10174,6 +10554,118 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 print(f"       Resume the live session with: clover --resume {self.session_id}")
         except Exception as e:
             print(f"(x_x) Failed to save: {e}")
+
+    def _rewind_persisted_user_turn(
+        self,
+        *,
+        warm_history: List[Dict[str, Any]],
+        user_ordinal: int,
+        warm_live_view: Dict[str, Any],
+    ) -> tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+        """Bind one warm user ordinal to a durable row and rewind it atomically."""
+        if self._session_db is None or not self.session_id:
+            raise RuntimeError("session database is unavailable")
+
+        from agent.context_compressor import (
+            history_before_user_originated_turn,
+            split_user_originated_turn,
+            user_originated_turn_view,
+        )
+        from agent.memory_manager import sanitize_context
+        from agent.tool_dispatch_helpers import (
+            _is_multimodal_tool_result,
+            _multimodal_text_summary,
+        )
+        from run_agent import _is_ephemeral_scaffolding
+
+        def _persistence_content(content: Any) -> Any:
+            """Project warm content exactly as the session DB flush does."""
+            if _is_multimodal_tool_result(content):
+                return _multimodal_text_summary(content)
+            if isinstance(content, list):
+                text_parts = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text_parts.append(str(part.get("text", "")))
+                    elif isinstance(part, dict) and part.get("type") in {
+                        "image",
+                        "image_url",
+                        "input_image",
+                    }:
+                        text_parts.append("[screenshot]")
+                return "\n".join(text_parts) if text_parts else None
+            return content
+
+        def _comparison_content(message: Dict[str, Any]) -> Any:
+            content = _persistence_content(message.get("content"))
+            if message.get("role") in {"user", "assistant"} and isinstance(
+                content, str
+            ):
+                return sanitize_context(content).strip()
+            return content
+
+        expected_active_ids = self._session_db.get_active_message_ids(
+            self.session_id
+        )
+        durable = self._session_db.get_messages_as_conversation(
+            self.session_id,
+            include_row_ids=True,
+        )
+        warm_persistence_history = [
+            message
+            for message in warm_history
+            if not _is_ephemeral_scaffolding(message)
+        ]
+        warm_user_indices = [
+            index
+            for index, message in enumerate(warm_persistence_history)
+            if user_originated_turn_view(message) is not None
+        ]
+        durable_user_indices = [
+            index
+            for index, message in enumerate(durable)
+            if user_originated_turn_view(message) is not None
+        ]
+        if len(durable_user_indices) != len(warm_user_indices):
+            raise RuntimeError(
+                "session history changed before the rewind could be persisted"
+            )
+        if user_ordinal < 0 or user_ordinal >= len(durable_user_indices):
+            raise RuntimeError("persisted rewind target is no longer available")
+
+        warm_prefix, _ = history_before_user_originated_turn(
+            warm_persistence_history, warm_user_indices[user_ordinal]
+        )
+        durable_target_index = durable_user_indices[user_ordinal]
+        durable_target = durable[durable_target_index]
+        durable_prefix, durable_live_view = history_before_user_originated_turn(
+            durable, durable_target_index
+        )
+        if _comparison_content(durable_live_view) != _comparison_content(
+            warm_live_view
+        ):
+            raise RuntimeError(
+                "session history changed before the rewind could be persisted"
+            )
+        target_row_id = durable_target.get("_row_id")
+        if not isinstance(target_row_id, int):
+            raise RuntimeError("persisted rewind target has no row identity")
+        scaffold, _ = split_user_originated_turn(durable_target)
+        result = self._session_db.rewind_to_message(
+            self.session_id,
+            target_row_id,
+            preserve_compaction_handoff=scaffold is not None,
+            expected_active_ids=expected_active_ids,
+            expected_target_content=durable_live_view.get("content"),
+        )
+        if scaffold is not None:
+            replacement_id = result.get("replacement_message_id")
+            if not isinstance(replacement_id, int) or not durable_prefix:
+                raise RuntimeError("rewind did not retain its compaction handoff")
+            durable_prefix[-1]["_row_id"] = replacement_id
+            durable_prefix[-1]["_db_persisted"] = True
+            warm_prefix[-1] = durable_prefix[-1]
+        return warm_prefix, durable_live_view, result
     
     def retry_last(self):
         """Retry the last user message by removing the last exchange and re-sending.
@@ -10188,25 +10680,71 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         
         # Walk backwards to the last *real* user message. Timeline bookkeeping
         # rows (display_kind set) are role=user but are not user turns — match
-        # CLI resume counting and list_recent_user_messages. Compaction
+        # CLI resume counting and user_originated_turn_view. Compaction
         # handoffs are excluded too (durable role=user, sometimes without
         # display_kind on legacy sessions; #80622).
-        from agent.context_compressor import is_user_originated_turn
+        from agent.context_compressor import (
+            history_before_user_originated_turn,
+            retryable_user_text,
+            user_originated_turn_view,
+        )
+        from agent.memory_manager import sanitize_context
+        from run_agent import _is_ephemeral_scaffolding
 
-        last_user_idx = None
-        for i in range(len(self.conversation_history) - 1, -1, -1):
-            msg = self.conversation_history[i]
-            if is_user_originated_turn(msg):
-                last_user_idx = i
-                break
+        warm_history = list(self.conversation_history)
+
+        user_indices = [
+            index
+            for index, message in enumerate(warm_history)
+            if not _is_ephemeral_scaffolding(message)
+            and user_originated_turn_view(message) is not None
+        ]
         
-        if last_user_idx is None:
+        if not user_indices:
             print("(._.) No user message found to retry.")
             return None
+        last_user_idx = user_indices[-1]
         
-        # Extract the message text and remove everything from that point forward
-        last_message = self.conversation_history[last_user_idx].get("content", "")
-        self.conversation_history = self.conversation_history[:last_user_idx]
+        # Resolve a lossless live payload before touching either persistence or
+        # memory. A force-user-leading compaction row is one physical carrier:
+        # its historical handoff remains in the prefix while only the embedded
+        # human ask is retried. Media cannot be replayed by /retry, so fail
+        # closed before archiving anything.
+        try:
+            truncated, live_view = history_before_user_originated_turn(
+                warm_history, last_user_idx
+            )
+            live_content = live_view.get("content")
+            if isinstance(live_content, str):
+                live_content = sanitize_context(live_content).strip()
+            last_message = retryable_user_text(live_content)
+        except ValueError as exc:
+            print(f"(._.) Cannot retry that message safely: {exc}")
+            return None
+
+        # Persist the rewind before publishing the shorter in-memory view.
+        # The DB owns the physical carrier split so the archived original and
+        # retained scaffold are committed atomically. A plain user row keeps
+        # the legacy rewind shape (no replacement scaffold).
+        if self._session_db is not None and self.session_id:
+            try:
+                truncated, _, _ = self._rewind_persisted_user_turn(
+                    warm_history=warm_history,
+                    user_ordinal=len(user_indices) - 1,
+                    warm_live_view=live_view,
+                )
+            except Exception as exc:
+                print(f"(x_x) Retry rewind failed; history was not changed: {exc}")
+                return None
+
+        self.conversation_history = truncated
+        if self.agent is not None:
+            if hasattr(self.agent, "_session_messages"):
+                self.agent._session_messages = self.conversation_history
+            if hasattr(self.agent, "_last_flushed_db_idx"):
+                self.agent._last_flushed_db_idx = len(self.conversation_history)
+            if hasattr(self.agent, "_db_flush_scan_prefix"):
+                self.agent._db_flush_scan_prefix = self.conversation_history[:]
         
         print(f"(^_^)b Retrying: \"{last_message[:60]}{'...' if len(last_message) > 60 else ''}\"")
         return last_message
@@ -10243,61 +10781,64 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         # Walk backwards collecting the indices of the last N *real* user
         # messages (exclude display_kind timeline rows and compaction
-        # handoffs — same predicate as list_recent_user_messages, resume
+        # handoffs — same predicate as user_originated_turn_view, resume
         # turn counting, and /retry; #80622).
-        from agent.context_compressor import is_user_originated_turn
+        from agent.context_compressor import (
+            history_before_user_originated_turn,
+            user_originated_turn_view,
+        )
+        from run_agent import _is_ephemeral_scaffolding
 
-        user_indices = []
-        for i in range(len(self.conversation_history) - 1, -1, -1):
-            msg = self.conversation_history[i]
-            if is_user_originated_turn(msg):
-                user_indices.append(i)
-                if len(user_indices) >= n:
-                    break
+        warm_history = list(self.conversation_history)
+
+        user_indices = [
+            index
+            for index, message in enumerate(warm_history)
+            if not _is_ephemeral_scaffolding(message)
+            and user_originated_turn_view(message) is not None
+        ]
 
         if not user_indices:
             print("(._.) No user message found to undo.")
             return
 
-        # The oldest of the collected user messages is our truncation point.
-        cut_idx = user_indices[-1]
-        turns_undone = len(user_indices)
+        turns_undone = min(n, len(user_indices))
+        target_ordinal = len(user_indices) - turns_undone
+        cut_idx = user_indices[target_ordinal]
 
-        removed_count = len(self.conversation_history) - cut_idx
-        removed_msg = self.conversation_history[cut_idx].get("content", "")
-        removed_text = self._undo_content_to_text(removed_msg)
-
-        # Truncate the in-memory history to before that user message.
-        self.conversation_history = self.conversation_history[:cut_idx]
+        removed_count = len(warm_history) - cut_idx
+        truncated, live_view = history_before_user_originated_turn(
+            warm_history, cut_idx
+        )
+        removed_text = self._undo_content_to_text(live_view.get("content"))
 
         # Soft-delete the truncated rows on disk so re-prompts and search
         # see the clean transcript while the rows survive for audit.
         rewound_rows = 0
         if self._session_db is not None and self.session_id:
             try:
-                recents = self._session_db.list_recent_user_messages(
-                    self.session_id, limit=max(turns_undone, 10)
+                truncated, durable_live_view, result = (
+                    self._rewind_persisted_user_turn(
+                        warm_history=warm_history,
+                        user_ordinal=target_ordinal,
+                        warm_live_view=live_view,
+                    )
                 )
-                if recents:
-                    target_idx = min(turns_undone - 1, len(recents) - 1)
-                    target_id = recents[target_idx]["id"]
-                    result = self._session_db.rewind_to_message(
-                        self.session_id, target_id
-                    )
-                    rewound_rows = result.get("rewound_count", 0)
-                    # Prefer the DB's decoded target text for the prefill —
-                    # it's the canonical persisted copy.
-                    db_text = self._undo_content_to_text(
-                        (result.get("target_message") or {}).get("content")
-                    )
-                    if db_text:
-                        removed_text = db_text
-            except ValueError as e:
-                # Non-user target / cross-session — keep the in-memory undo
-                # but skip the soft-delete; surface a debug-level note.
-                logger.debug("undo: soft-delete skipped: %s", e)
+                # Canonicalize the editable prefill before mutation. The raw
+                # physical carrier contains the reference summary wrapper.
+                durable_text = self._undo_content_to_text(
+                    durable_live_view.get("content")
+                )
+                if durable_text:
+                    removed_text = durable_text
+                rewound_rows = result.get("rewound_count", 0)
             except Exception as e:
-                logger.debug("undo: soft-delete failed: %s", e)
+                logger.debug("undo: durable rewind failed: %s", e)
+                print(f"(x_x) Undo failed; history was not changed: {e}")
+                return
+
+        # Publish only after the durable rewind succeeds (or no store exists).
+        self.conversation_history = truncated
 
         # Agent surgery: invalidate the system-prompt cache and reset the
         # flush index so the next turn re-flushes from the truncated head.
@@ -10312,6 +10853,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     self.agent._last_flushed_db_idx = len(self.conversation_history)
                 except Exception:
                     pass
+            if hasattr(self.agent, "_session_messages"):
+                self.agent._session_messages = self.conversation_history
+            if hasattr(self.agent, "_db_flush_scan_prefix"):
+                self.agent._db_flush_scan_prefix = self.conversation_history[:]
             # Notify memory providers — same hook /branch fires, with the
             # rewound flag so per-turn document caches invalidate (#6672, #21910).
             try:
@@ -10938,6 +11483,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     api_key=snapshot.get("api_key", ""),
                     base_url=snapshot.get("base_url", ""),
                     api_mode=snapshot.get("api_mode", ""),
+                    capabilities=snapshot.get("capabilities"),
                 )
             except Exception as exc:
                 logger.warning("CLI one-turn model restore failed: %s", exc)
@@ -11082,6 +11628,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     api_key=result.api_key,
                     base_url=result.base_url,
                     api_mode=result.api_mode,
+                    capabilities=getattr(result, "runtime_capabilities", None),
                 )
             except Exception as exc:
                 # The agent rolled itself back to the old working model/client.
@@ -11472,6 +12019,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     api_key=result.api_key,
                     base_url=result.base_url,
                     api_mode=result.api_mode,
+                    capabilities=getattr(result, "runtime_capabilities", None),
                 )
             except Exception as exc:
                 # Agent rolled itself back; roll the CLI back too and abort so a
@@ -11641,20 +12189,20 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     def _should_handle_background_command_inline(
         self, text: str, has_images: bool = False
     ) -> bool:
-        """Return True when /background should be dispatched while the agent runs.
+        """Return True when /bg or /btw should be dispatched while the agent runs.
 
-        Same queue problem /steer had. ``/background`` (``/bg``, ``/btw``)
-        exists to start independent work *without* waiting for the current
-        turn, but a slash command typed while the agent is busy goes into
-        ``_pending_input``, and ``process_loop`` is blocked inside
-        ``self.chat()`` for the whole run. The background task therefore only
-        starts once the foreground turn has finished, which is the one moment
-        it was not needed.
+        Same queue problem /steer had. ``/bg`` exists to start independent
+        work *without* waiting for the current turn, and ``/btw`` exists to
+        answer a side question about the in-flight conversation, but a slash
+        command typed while the agent is busy goes into ``_pending_input``,
+        and ``process_loop`` is blocked inside ``self.chat()`` for the whole
+        run. The side task would therefore only start once the foreground
+        turn has finished, which is the one moment it was not needed.
 
-        The command's own ``CommandDef`` already declares
+        Both commands' ``CommandDef`` entries already declare
         ``busy_policy="dispatch"``; the gateway honours that, the classic CLI
         never consulted it. Dispatching inline on the UI thread starts the
-        background session immediately and leaves the foreground turn running
+        side session immediately and leaves the foreground turn running
         untouched: no interrupt, no steer.
         """
         if not text or has_images or not _looks_like_slash_command(text):
@@ -11665,7 +12213,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             from clover_cli.commands import resolve_command
             base = text.split(None, 1)[0].lower().lstrip('/')
             cmd = resolve_command(base)
-            return bool(cmd and cmd.name == "background")
+            return bool(cmd and cmd.name in ("bg", "btw"))
         except Exception:
             return False
 
@@ -12269,8 +12817,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._handle_agents_command()
         elif canonical == "journey":
             self._handle_journey_command(cmd_original)
-        elif canonical == "background":
+        elif canonical == "bg":
             self._handle_background_command(cmd_original)
+        elif canonical == "btw":
+            self._handle_btw_command(cmd_original)
         elif canonical == "queue":
             # Extract prompt after "/queue " or "/q "
             parts = cmd_original.split(None, 1)
@@ -12314,8 +12864,12 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._handle_heartbeat_command(cmd_original)
         elif canonical == "refine":
             self._handle_refine_command(cmd_original)
+        elif canonical == "review":
+            self._handle_review_command(cmd_original)
         elif canonical == "loop":
             self._handle_loop_command(cmd_original)
+        elif canonical == "plan":
+            self._handle_plan_command(cmd_original)
         elif canonical == "moa":
             # /moa is one-shot sugar only: run a single prompt through the
             # default MoA preset, then restore the prior model. To *switch* to a
@@ -15702,14 +16256,16 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     def _approval_callback(self, command: str, description: str,
                            *, allow_permanent: bool = True,
+                           allow_session: bool = True,
                            smart_denied: bool = False) -> str:
         """
         Prompt for dangerous command approval through the prompt_toolkit UI.
 
         Called from the agent thread. Shows a selection UI similar to clarify
         with choices: once / session / always / deny. Smart DENY owner
-        overrides show only once / deny. When allow_permanent is False for
-        another reason (for example tirith), only 'always' is hidden.
+        overrides show only once / deny, as do gates that re-ask every time
+        (allow_session=False). When allow_permanent is False for another
+        reason (for example tirith), only 'always' is hidden.
         Long commands also get a 'view' option so the full command can be
         expanded before deciding.
 
@@ -15729,6 +16285,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 "choices": self._approval_choices(
                     command,
                     allow_permanent=allow_permanent,
+                    allow_session=allow_session,
                     smart_denied=smart_denied,
                 ),
                 "selected": 0,
@@ -15780,9 +16337,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return "timeout"
 
     def _approval_choices(self, command: str, *, allow_permanent: bool = True,
+                          allow_session: bool = True,
                           smart_denied: bool = False) -> list[str]:
         """Return approval choices for a dangerous command prompt."""
-        if smart_denied:
+        if smart_denied or not allow_session:
             choices = ["once", "deny"]
         else:
             choices = ["once", "session", "always", "deny"] if allow_permanent else ["once", "session", "deny"]
@@ -16828,7 +17386,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 if result and result.get("failure_reason") == "billing":
                     _bb = result.get("billing_block") or {}
                     _prov_label = _bb.get("provider_label") or "your provider"
-                    if _bb.get("is_clover_portal"):
+                    if _bb.get("is_clover"):
                         _cta_lines = [
                             "Run [bold]/topup[/] to add credits, or "
                             "[bold]/subscription[/] to change plan.",
@@ -17580,6 +18138,13 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._agent_running = False
         self._pending_input = queue.Queue()     # For normal input (commands + new queries)
         self._interrupt_queue = queue.Queue()   # For messages typed while agent is running
+        # Seeded -q handoff: main() can't put directly into _pending_input
+        # (this reinit would discard it), so the seeded first message rides
+        # in on an attribute and is enqueued into the fresh queue here.
+        _seed_msg = getattr(self, "_seeded_first_message", None)
+        if _seed_msg is not None:
+            self._seeded_first_message = None
+            self._pending_input.put(_seed_msg)
         # See constructor note. Mirrored here for the run() path that skips
         # the earlier __init__ branch.
         self._last_turn_interrupted = False
@@ -17894,12 +18459,12 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     event.app.invalidate()
                     return
 
-                # Same treatment for /background (/bg, /btw) while the agent is
-                # running.  Queuing it defeats the entire point of the command:
-                # process_loop is blocked inside self.chat(), so the background
-                # task would only start once the foreground turn it was meant to
-                # run alongside has already finished (#75221).  The foreground
-                # turn is left alone: no interrupt, no steer.
+                # Same treatment for /bg and /btw while the agent is
+                # running.  Queuing them defeats the entire point of the
+                # commands: process_loop is blocked inside self.chat(), so the
+                # side task would only start once the foreground turn it was
+                # meant to run alongside has already finished (#75221).  The
+                # foreground turn is left alone: no interrupt, no steer.
                 if self._should_handle_background_command_inline(
                     text, has_images=has_images
                 ):
@@ -19265,10 +19830,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             wrap_lines=True,
         )
 
-        # Petdex mascot — right-aligned half-block sprite above the prompt,
-        # mirroring the TUI's PetPane. Collapses to height 0 when no pet is
-        # enabled, so it's a no-op for everyone else. The _pet_anim_loop thread
-        # advances frames + invalidates; align=RIGHT pins it to the edge.
+        # Petdex mascot — right-aligned Kitty placeholder or half-block sprite
+        # above the prompt. Collapses to height 0 when no pet is enabled.
+        # The animation thread queues virtual Kitty frames; after_render
+        # writes them out-of-band while prompt_toolkit owns the placeholder grid.
         self._pet_widget = Window(
             content=FormattedTextControl(self._pet_fragments),
             height=self._pet_widget_height,
@@ -20055,7 +20620,17 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # in _strip_leaked_terminal_responses still guards residual leaks.
         _cpr_disabled_output = _select_classic_cli_pt_output(sys.stdout)
 
-        # Create the application
+        # Kitty placeholders encode their image id in exact foreground RGB, so
+        # placeholder-capable terminals (kitty/Ghostty) use 24-bit color for
+        # the whole prompt_toolkit application — quantizing only that pane
+        # is not supported. WezTerm is excluded: it is not placeholder-capable.
+        # ColorDepth is imported here (not at module load) so tests that stub
+        # ``prompt_toolkit`` as a MagicMock can still import cli.
+        color_depth_kw = {}
+        if pet_render.supports_kitty_placeholders():
+            from prompt_toolkit.output import ColorDepth
+
+            color_depth_kw = {"color_depth": ColorDepth.DEPTH_24_BIT}
         app = Application(
             layout=layout,
             key_bindings=kb,
@@ -20063,6 +20638,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             full_screen=False,
             mouse_support=False,
             **({"output": _cpr_disabled_output} if _cpr_disabled_output is not None else {}),
+            **color_depth_kw,
             # Read from display.cli_refresh_interval (default 0 = disabled).
             # When non-zero, prompt_toolkit redraws the UI on this cadence
             # during idle, keeping wall-clock status-bar read-outs ticking.
@@ -20084,6 +20660,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             **({'cursor': _STEADY_CURSOR} if _STEADY_CURSOR is not None else {}),
         )
         _disable_prompt_toolkit_cpr_warning(app)
+        app.after_render += self._pet_flush_kitty_frame
         self._app = app  # Store reference for clarify_callback
 
         # ── Fix ghost status-bar lines on terminal resize ──────────────
@@ -20215,6 +20792,19 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     if is_voice_input:
                         user_input = user_input.text
 
+                    # Seeded -q prompts arrive wrapped in _SeededQueryMessage:
+                    # arbitrary launcher/script text that must be submitted
+                    # LITERALLY — skip slash routing, ! shell dispatch, and
+                    # file-drop detection for this one message.
+                    is_seeded_query = isinstance(user_input, _SeededQueryMessage)
+                    if is_seeded_query:
+                        seeded = user_input
+                        user_input = (
+                            (seeded.text, seeded.images)
+                            if seeded.images
+                            else seeded.text
+                        )
+
                     if not user_input:
                         continue
 
@@ -20242,8 +20832,13 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         continue
                     
                     # Check for commands — but detect dragged/pasted file paths first.
-                    # See _detect_file_drop() for details.
-                    _file_drop = _detect_file_drop(user_input) if isinstance(user_input, str) else None
+                    # See _detect_file_drop() for details. Seeded -q prompts are
+                    # literal text: no file-drop detection, no !/slash dispatch.
+                    _file_drop = (
+                        _detect_file_drop(user_input)
+                        if isinstance(user_input, str) and not is_seeded_query
+                        else None
+                    )
                     if _file_drop:
                         _drop_path = _file_drop["path"]
                         _remainder = _file_drop["remainder"]
@@ -20275,12 +20870,18 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     # turn is spent. See handle_bang_shell().
                     if (
                         not _file_drop
+                        and not is_seeded_query
                         and isinstance(user_input, str)
                         and self.handle_bang_shell(user_input)
                     ):
                         continue
 
-                    if not _file_drop and isinstance(user_input, str) and _looks_like_slash_command(user_input):
+                    if (
+                        not _file_drop
+                        and not is_seeded_query
+                        and isinstance(user_input, str)
+                        and _looks_like_slash_command(user_input)
+                    ):
                         _cprint(f"\n⚙️  {user_input}")
                         try:
                             if not self.process_command(user_input):
@@ -20884,6 +21485,7 @@ def _run_kanban_goal_loop_q(cli: "CloverCLI", first_response: str) -> None:
 def main(
     query: str = None,
     q: str = None,
+    oneshot: bool = False,
     image: str = None,
     toolsets: str = None,
     skills: str | list[str] | tuple[str, ...] = None,
@@ -20912,8 +21514,12 @@ def main(
     Clover Cognition CLI - Interactive AI Assistant
     
     Args:
-        query: Single query to execute (then exit). Alias: -q
+        query: Query to run. On a real TTY this seeds an interactive session
+            (submitted literally as the first turn); with --oneshot/-Q or a
+            non-TTY it answers and exits. Alias: -q
         q: Shorthand for --query
+        oneshot: With -q: force the legacy answer-and-exit single-query mode
+            even on a TTY.
         image: Optional local image path to attach to a single query
         toolsets: Comma-separated list of toolsets to enable (e.g., "web,terminal")
         skills: Comma-separated or repeated list of skills to preload for the session
@@ -21243,6 +21849,21 @@ def main(
     
     # Handle single query mode
     if query or image:
+        # NEW DEFAULT (Aug 2026): on a real TTY, a -q/--image invocation
+        # seeds a normal interactive session with the prompt as the first
+        # turn, submitted LITERALLY (no slash/! dispatch). Legacy
+        # answer-and-exit behavior is kept for --oneshot, -Q, and every
+        # non-TTY invocation (kanban/cron/pipes) — see
+        # _should_seed_interactive().
+        if _should_seed_interactive(query, image, quiet, oneshot):
+            seeded_query, seeded_images = _collect_query_images(query, image)
+            logger.info(
+                "Seeding interactive session with -q prompt (%d chars, %d images)",
+                len(seeded_query or ""), len(seeded_images),
+            )
+            cli._seeded_first_message = _SeededQueryMessage(seeded_query, seeded_images)
+            cli.run()
+            return
         # One-shot mode: no between-turns MCP late-binding refresh, so the
         # agent must wait the full MCP cold-start bound before its first
         # (and only) tool snapshot. See #51316.
@@ -21371,9 +21992,25 @@ def main(
                         cli.agent.suppress_status_output = True
                         # Suppress streaming display callbacks so stdout stays
                         # machine-readable (no styled "Clover" box, no tool-gen
-                        # status lines).  The response is printed once below.
+                        # status lines, no reasoning box).  The response is
+                        # printed once below.
                         cli.agent.stream_delta_callback = None
                         cli.agent.tool_gen_callback = None
+                        cli.agent.reasoning_callback = None
+                        # Inline-diff and progress callbacks print directly to
+                        # stdout and are gated by NEITHER quiet_mode nor
+                        # tool_progress_mode: _on_tool_complete renders full
+                        # file diffs via render_edit_diff_with_delta, and
+                        # _on_tool_progress prints MoA reference blocks before
+                        # its mode check. Neutralize them too so -Q stdout
+                        # carries only the final response (#93220).
+                        cli.agent.tool_progress_callback = None
+                        cli.agent.tool_start_callback = None
+                        cli.agent.tool_complete_callback = None
+                        # Belt-and-braces for the executor's direct prints
+                        # (they check agent.tool_progress_mode, initialized
+                        # from display.tool_progress at construction).
+                        cli.agent.tool_progress_mode = "off"
                         try:
                             result = cli.agent.run_conversation(
                                 user_message=effective_query,

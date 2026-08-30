@@ -19,7 +19,7 @@
     <assemblyIdentity
         version="0.0.1.0"
         processorArchitecture="*"
-        name="CloverC1.Clover.Setup"
+        name="cloverc1.Clover.Setup"
         type="win32"
     />
     <description>Clover Setup</description>

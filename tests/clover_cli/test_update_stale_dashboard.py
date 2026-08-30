@@ -14,6 +14,7 @@ History:
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import subprocess
 import sys
@@ -85,6 +86,67 @@ def _ps_runner(stdout: str):
         # Any other subprocess.run (e.g. taskkill) — benign success stub.
         return MagicMock(returncode=0, stdout="", stderr="")
     return _side_effect
+
+
+def _write_valid_ssh_backend_lock(tmp_path, monkeypatch) -> int:
+    pid = 4242
+    ownership_id = "a" * 32
+    spawn_nonce = "b" * 16
+    lock_dir = tmp_path / "desktop-ssh" / ownership_id
+    lock_dir.mkdir(parents=True)
+    (lock_dir / "backend.lock.json").write_text(json.dumps({
+        "schemaVersion": 2,
+        "protocolVersion": 1,
+        "ownershipId": ownership_id,
+        "spawnNonce": spawn_nonce,
+        "tokenFingerprint": "c" * 32,
+        "pid": pid,
+        "port": 46369,
+        "profile": "default",
+        "cloverPath": "/opt/clover/bin/clover",
+        "cloverHome": str(tmp_path),
+        "logPath": f"{tmp_path}/desktop-ssh/{ownership_id}/{spawn_nonce}.log",
+        "startedAt": "2026-08-21T15:27:39Z",
+    }))
+    monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
+    monkeypatch.delenv("CLOVER_DESKTOP_CHILD_PID", raising=False)
+    return pid
+
+
+def test_update_cleanup_spares_backend_owned_by_valid_ssh_lock(tmp_path, monkeypatch):
+    pid = _write_valid_ssh_backend_lock(tmp_path, monkeypatch)
+
+    def assert_owned_pid_is_excluded(*, exclude_pids=None):
+        assert exclude_pids is not None
+        assert pid in exclude_pids
+        return []
+
+    with patch(
+        "clover_cli.main._find_stale_dashboard_pids",
+        side_effect=assert_owned_pid_is_excluded,
+    ):
+        result = _kill_stale_dashboard_processes(restart_managed=True)
+
+    assert result == {"matched": [], "killed": [], "failed": []}
+
+
+def test_explicit_stop_does_not_spare_backend_owned_by_valid_ssh_lock(
+    tmp_path,
+    monkeypatch,
+):
+    pid = _write_valid_ssh_backend_lock(tmp_path, monkeypatch)
+
+    def assert_owned_pid_is_not_excluded(*, exclude_pids=None):
+        assert exclude_pids is None or pid not in exclude_pids
+        return []
+
+    with patch(
+        "clover_cli.main._find_stale_dashboard_pids",
+        side_effect=assert_owned_pid_is_not_excluded,
+    ):
+        result = _kill_stale_dashboard_processes(restart_managed=False)
+
+    assert result == {"matched": [], "killed": [], "failed": []}
 
 
 class TestFindStaleDashboardPids:
@@ -571,10 +633,13 @@ class TestFilterDashboardRespawnCandidates:
         home = "/tmp/clover-home-a"
         a = ["clover", "dashboard", "--port", "8300"]
         b = ["clover", "dashboard", "--port", "8301"]
-        out = _filter_dashboard_respawn_candidates([
-            (1, a, home),
-            (2, b, home),
-        ])
+        out = _filter_dashboard_respawn_candidates(
+            [
+                (1, a, home),
+                (2, b, home),
+            ],
+            own_home=home,
+        )
         assert out == [a]
 
     def test_profile_flag_and_profiles_home_share_cap(self):
@@ -594,22 +659,108 @@ class TestFilterDashboardRespawnCandidates:
         a = ["clover", "--profile", "default", "dashboard", "--port", "8300"]
         b = ["clover", "dashboard", "--port", "8301"]
         home = "/home/u/.clover"
-        out = _filter_dashboard_respawn_candidates([
-            (1, a, home),
-            (2, b, home),
-        ])
+        out = _filter_dashboard_respawn_candidates(
+            [
+                (1, a, home),
+                (2, b, home),
+            ],
+            own_home=home,
+        )
         assert out == [a]
 
-    def test_distinct_dot_clover_homes_do_not_share_cap(self):
+    def test_foreign_home_backend_is_not_replayed(self):
+        """A backend from another CLOVER_HOME is never respawned (#94030).
+
+        Its supervisor/user owns its lifecycle; an argv-only replay would
+        run on the updating install's home and steal the foreign install's
+        fixed port.  Supersedes the old "distinct homes don't share a cap"
+        pin — a foreign home is no longer replayed at all.
+        """
         from clover_cli.dashboard_procs import _filter_dashboard_respawn_candidates
 
         a = ["clover", "dashboard", "--port", "8300"]
         b = ["clover", "dashboard", "--port", "8301"]
-        out = _filter_dashboard_respawn_candidates([
-            (1, a, "/home/u/.clover"),
-            (2, b, "/work/project/.clover"),
+        out = _filter_dashboard_respawn_candidates(
+            [
+                (1, a, "/home/u/.clover"),
+                (2, b, "/work/project/.clover"),
+            ],
+            own_home="/home/u/.clover",
+        )
+        assert out == [a]
+
+    def test_skips_sidecar_fixed_port_serve_on_foreign_home(self):
+        """The reported case: launchd-supervised sidecar serve, fixed port."""
+        from clover_cli.dashboard_procs import _filter_dashboard_respawn_candidates
+
+        argv = [
+            "/Users/u/.clover-sidecar/clover-c1/venv/bin/python",
+            "-m", "clover_cli.main",
+            "serve", "--host", "127.0.0.1", "--port", "9118", "--skip-build",
+        ]
+        out = _filter_dashboard_respawn_candidates(
+            [(15364, argv, "/Users/u/.clover-lifeos")],
+            own_home="/Users/u/.clover",
+        )
+        assert out == []
+
+    def test_matching_clover_home_is_kept(self):
+        from clover_cli.dashboard_procs import _filter_dashboard_respawn_candidates
+
+        argv = ["clover", "serve", "--host", "127.0.0.1", "--port", "9118"]
+        out = _filter_dashboard_respawn_candidates(
+            [(15364, argv, "/Users/u/.clover")],
+            own_home="/Users/u/.clover",
+        )
+        assert out == [argv]
+
+    def test_symlinked_clover_home_compares_equal(self, tmp_path):
+        from clover_cli.dashboard_procs import _filter_dashboard_respawn_candidates
+
+        real = tmp_path / "real-home"
+        real.mkdir()
+        link = tmp_path / "linked-home"
+        try:
+            link.symlink_to(real, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable on this platform")
+
+        argv = ["clover", "serve", "--port", "9118"]
+        out = _filter_dashboard_respawn_candidates(
+            [(15364, argv, str(real))],
+            own_home=str(link),
+        )
+        assert out == [argv]
+
+    def test_unknown_home_stays_eligible(self):
+        """Unreadable CLOVER_HOME (env probe failed) keeps pre-#94030 behaviour."""
+        from clover_cli.dashboard_procs import _filter_dashboard_respawn_candidates
+
+        argv = ["clover", "dashboard", "--port", "8300"]
+        out = _filter_dashboard_respawn_candidates(
+            [(1, argv, None)],
+            own_home="/home/u/.clover",
+        )
+        assert out == [argv]
+
+    def test_own_home_defaults_to_get_clover_home(self, monkeypatch):
+        from pathlib import Path
+
+        import clover_constants
+        from clover_cli.dashboard_procs import _filter_dashboard_respawn_candidates
+
+        monkeypatch.setattr(
+            clover_constants, "get_clover_home", lambda: Path("/home/u/.clover")
+        )
+        argv = ["clover", "serve", "--port", "9118"]
+        foreign = _filter_dashboard_respawn_candidates([
+            (1, argv, "/Users/u/.clover-lifeos"),
         ])
-        assert out == [a, b]
+        assert foreign == []
+        own = _filter_dashboard_respawn_candidates([
+            (1, argv, "/home/u/.clover"),
+        ])
+        assert own == [argv]
 
     def test_keeps_fixed_port_serve(self):
         from clover_cli.dashboard_procs import _filter_dashboard_respawn_candidates

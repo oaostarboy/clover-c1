@@ -324,7 +324,7 @@ class TestIsFreeTierModel:
             models_mod,
             "_pricing_cache",
             {
-                "https://inference-api.": {
+                "": {
                     "some/zero-priced": {"prompt": "0", "completion": "0"},
                     "some/paid": {"prompt": "0.000001", "completion": "0.000002"},
                 }
@@ -336,8 +336,8 @@ class TestIsFreeTierModel:
         assert is_free_tier_model("some/zero-priced", base) is True
         assert is_free_tier_model("some/paid", base) is False
         # Pre-stripped and trailing-slash variants resolve to the same key.
-        assert is_free_tier_model("some/zero-priced", "https://inference-api./") is True
-        assert is_free_tier_model("some/zero-priced", "/") is True
+        assert is_free_tier_model("some/zero-priced", "") is True
+        assert is_free_tier_model("some/zero-priced", "") is True
 
 
     def test_exception_fails_open_to_false(self, monkeypatch):
@@ -349,7 +349,7 @@ class TestIsFreeTierModel:
                 raise RuntimeError("boom")
 
         monkeypatch.setattr(models_mod, "_pricing_cache", _Exploding())
-        assert is_free_tier_model("some/model", "https://inference-api.") is False
+        assert is_free_tier_model("some/model", "") is False
 
     def test_stealth_prefix_detected_as_free(self):
         """Stealth-preview SKUs (stealth/...) are free-tier but carry no

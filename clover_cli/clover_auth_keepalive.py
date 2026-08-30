@@ -31,7 +31,7 @@ def _timeout_seconds(value: Optional[float]) -> float:
     if value is not None:
         return float(value)
     try:
-        return float(os.getenv("CLOVER_PORTAL_TIMEOUT_SECONDS", "15"))
+        return float(os.getenv("CLOVER_CLOVER_TIMEOUT_SECONDS", "15"))
     except (TypeError, ValueError):
         return 15.0
 

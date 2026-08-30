@@ -623,7 +623,7 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
           kind: 'warning',
           title: copy.cloverAuthNeededTitle,
           message: copy.cloverAuthNeededMessage(provider.name),
-          action: { label: copy.cloverAuthSignIn, onClick: () => void signInToCloverPortal() }
+          action: { label: copy.cloverAuthSignIn, onClick: () => void signInToNousPortal() }
         })
 
         return
@@ -641,7 +641,7 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
   // Drive the existing Clover Portal OAuth device-code flow (the same session
   // machinery onboarding uses: start → open verification URL → poll), then
   // refetch the toolset config so is_active / status flip once entitled.
-  async function signInToCloverPortal() {
+  async function signInToNousPortal() {
     try {
       const start = await startOAuthLogin('clover', profile)
 

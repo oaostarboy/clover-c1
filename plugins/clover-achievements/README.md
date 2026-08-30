@@ -1,6 +1,6 @@
 # Clover Achievements
 
-> **Bundled with Clover Cognition.** Originally authored by @PCinkusz and vendored into `plugins/clover-achievements/` so it ships with the dashboard out-of-the-box.
+> **Bundled with Clover Cognition.** Originally authored by [@PCinkusz](https://github.com/PCinkusz) at @PCinkusz — vendored into `plugins/clover-achievements/` so it ships with the dashboard out-of-the-box and stays in lockstep with Clover feature changes. Upstream repo remains the staging ground for new badges and UI iteration.
 >
 > When Clover is installed via the install script or cloned from source, this plugin auto-registers as a dashboard tab on first `clover dashboard` launch. No separate install step. See [Built-in Plugins → clover-achievements](../../website/docs/user-guide/features/built-in-plugins.md) in the main docs.
 
@@ -61,11 +61,13 @@ Version `0.2.x` expands the catalog to 60+ achievements, including model/provide
 Clone into your Clover plugins directory:
 
 ```bash
+git clone @PCinkusz ~/.clover/plugins/clover-achievements
 ```
 
 For local development, keep the repo elsewhere and symlink it:
 
 ```bash
+git clone @PCinkusz ~/clover-achievements
 ln -s ~/clover-achievements ~/.clover/plugins/clover-achievements
 ```
 

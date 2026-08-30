@@ -158,6 +158,14 @@ _ENDPOINT_MODEL_CACHE_TTL = 300
 # of being pinned to the stale type for the whole process lifetime.
 # Values are (server_type, monotonic_timestamp).
 _ENDPOINT_PROBE_TTL_SECONDS = 3600.0
+# A failed probe verdict (server_type is None — no known endpoint answered)
+# is cached for a much shorter window: the in-memory entry exists only to
+# keep one image-bearing turn from re-running the 5-request waterfall on
+# every subsequent turn (#89863 — a keyed remote endpoint answered 401 to
+# each leg and the None verdict was never cached, so every turn re-probed).
+# Short TTL keeps a transient failure (server starting up, key being fixed)
+# recoverable within minutes instead of pinning "undetected" for an hour.
+_ENDPOINT_PROBE_FAILURE_TTL_SECONDS = 300.0
 _endpoint_probe_path_cache: Dict[str, tuple] = {}
 
 # A configured endpoint that is routable-but-dead — e.g. a corp LAN address
@@ -485,9 +493,18 @@ DEFAULT_CONTEXT_LENGTHS = {
     "deepseek": 128000,
     # Meta
     "llama": 131072,
+    # Thinking Machines — Inkling family ships with a 1M context window
+    # (max output 256K).  Verified against OpenRouter live metadata
+    # (context_length 1,048,576 for inkling, inkling-small, and the
+    # :free SKUs, 2026-08-27).  Substring matching means "inkling"
+    # covers inkling-small and every :free/:batch variant; the :batch
+    # SKU's smaller live window (524,288) is served by the provider's
+    # live metadata when available.
+    "inkling": 1_048_576,
     # Qwen — specific model families before the catch-all.
     # Official docs: https://help.aliyun.com/zh/model-studio/developer-reference/
     "qwen3.8-max": 1_000_000,     # 1M context (OpenRouter & Clover portal, verified 2026-08-03)
+    "qwen3.8-flash": 1_000_000,   # 1M context (OpenRouter & Clover portal, verified 2026-08-28)
     "qwen3.6-plus": 1048576,      # 1M context (DashScope/Alibaba & OpenRouter)
     "qwen3.7-plus": 1048576,      # 1M context (DashScope/Alibaba)
     "qwen3-coder-plus": 1000000,  # 1M context
@@ -556,6 +573,10 @@ DEFAULT_CONTEXT_LENGTHS = {
     "solar-pro3": 131072,
     "solar-pro2": 65536,
     "solar-mini": 32768,
+    # Tencent — Hy4 Preview (Hunyuan), 1M context window per OpenRouter
+    # live metadata (2026-08-28). Longest-key-first so this wins over any
+    # future shorter hy* catch-all.
+    "hy4-preview": 1_048_576,
     # Tencent — Hy3 Preview (Hunyuan) with 256K context window.
     # OpenRouter live metadata reports 262144 (256 × 1024); align the
     # static fallback so cache and offline both agree (issue #22268).
@@ -744,6 +765,7 @@ _URL_TO_PROVIDER: Dict[str, str] = {
     "api.gmi-serving.com": "gmi",
     "api.novita.ai": "novita",
     "tokenhub.tencentmaas.com": "tencent-tokenhub",
+    "api.lkeap.cloud.tencent.com": "tencent-tokenplan",
     "ollama.com": "ollama-cloud",
 }
 
@@ -1009,8 +1031,18 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
     lmstudio_url = _lmstudio_server_root(normalized)
 
     cached = _endpoint_probe_path_cache.get(server_url)
-    if cached is not None and (time.monotonic() - cached[1]) < _ENDPOINT_PROBE_TTL_SECONDS:
-        return cached[0]
+    if cached is not None:
+        # Positive verdicts live for the full TTL; a None verdict (probe
+        # waterfall answered nothing recognizable) gets the short failure
+        # TTL so it still throttles re-probing without pinning the
+        # endpoint as undetected for a whole hour (#89863).
+        ttl = (
+            _ENDPOINT_PROBE_TTL_SECONDS
+            if cached[0] is not None
+            else _ENDPOINT_PROBE_FAILURE_TTL_SECONDS
+        )
+        if (time.monotonic() - cached[1]) < ttl:
+            return cached[0]
 
     # The host already blackholed a connect: skip the waterfall below, each leg
     # of which would otherwise burn its full 2s timeout. Deliberately NOT
@@ -1089,6 +1121,12 @@ def detect_local_server_type(base_url: str, api_key: str = "") -> Optional[str]:
     if result is not None:
         _endpoint_probe_path_cache[server_url] = (result, time.monotonic())
         _local_probe_disk_put("server_type", server_url, result)
+    else:
+        # Cache the negative verdict in memory only (never on disk — a
+        # failure is often transient: server starting, key being fixed)
+        # so the very next turn does not re-run the whole waterfall
+        # against an endpoint that just answered nothing (#89863).
+        _endpoint_probe_path_cache[server_url] = (None, time.monotonic())
     return result
 
 
@@ -1128,12 +1166,61 @@ def _extract_first_int(payload: Dict[str, Any], keys: tuple[str, ...]) -> Option
     return None
 
 
+def _extract_flat_context_length(payload: Dict[str, Any]) -> Optional[int]:
+    """Read a context WINDOW from the top level of a model-describe payload.
+
+    Same key vocabulary as :func:`_extract_context_length` (the module's single
+    source of truth for what counts as a context window), but WITHOUT the
+    nested-dict walk — for callers that hold a specific model object and must
+    not pick up a same-named key from an unrelated nested section.
+
+    Critically, ``max_tokens`` is NOT in ``_CONTEXT_LENGTH_KEYS``: it lives in
+    ``_MAX_COMPLETION_KEYS`` because on an OpenAI-compatible ``/v1/models``
+    passthrough it is the max *output* tokens, not the context window.
+    """
+    for key in _CONTEXT_LENGTH_KEYS:
+        coerced = _coerce_reasonable_int(payload.get(key))
+        if coerced is not None:
+            return coerced
+    return None
+
+
 def _extract_context_length(payload: Dict[str, Any]) -> Optional[int]:
     return _extract_first_int(payload, _CONTEXT_LENGTH_KEYS)
 
 
 def _extract_max_completion_tokens(payload: Dict[str, Any]) -> Optional[int]:
     return _extract_first_int(payload, _MAX_COMPLETION_KEYS)
+
+
+def _context_length_from_model_payload(payload: Dict[str, Any]) -> Optional[int]:
+    """Extract a context *window* from a ``/v1/models`` model object.
+
+    Prefers input-window keys (``max_model_len``, ``max_input_tokens``,
+    ``context_length``, …) via :func:`_extract_flat_context_length`. Falls back to
+    ``max_tokens`` only when no input-window field is present.
+
+    Anthropic (and Anthropic-compatible proxies such as local reverse
+    proxies) expose both ``max_input_tokens`` (context window, e.g. 1M) and
+    ``max_tokens`` (max *output* length, e.g. 128k). Using ``max_tokens`` as
+    the context window under-reports the real limit, persists a stale value
+    into ``context_length_cache.yaml``, and makes the compressor fire far too
+    early (e.g. at 75% of 128k instead of 75% of 1M).
+    """
+    if not isinstance(payload, dict):
+        return None
+    ctx = _extract_flat_context_length(payload)
+    if ctx is not None:
+        return ctx
+    # Last resort for OpenAI-compat servers that only report max_tokens as
+    # the window. Safe for Anthropic shapes because max_input_tokens is
+    # present and already handled above.
+    raw = payload.get("max_tokens")
+    if isinstance(raw, (int, float)):
+        ivalue = int(raw)
+        if ivalue > 0:
+            return ivalue
+    return None
 
 
 def _extract_pricing(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2281,14 +2368,24 @@ def _query_local_context_length_uncached(model: str, base_url: str, api_key: str
                                     return int(ctx)
                             break
 
-            # LM Studio / vLLM / llama.cpp: try /v1/models/{model}
+            # LM Studio / vLLM / llama.cpp / Anthropic-compat proxies:
+            # try /v1/models/{model}
             resp = client.get(f"{server_url}/v1/models/{model}")
             if resp.status_code == 200:
                 data = resp.json()
-                # vLLM returns max_model_len
-                ctx = data.get("max_model_len") or data.get("context_length") or data.get("max_tokens")
-                if ctx and isinstance(ctx, (int, float)):
-                    return int(ctx)
+                if isinstance(data, dict):
+                    # Context-WINDOW keys only (canonical _CONTEXT_LENGTH_KEYS
+                    # vocabulary). `max_tokens` is the max *output* tokens on
+                    # OpenAI-compatible passthroughs (LiteLLM, Anthropic-compat
+                    # shims, cloud proxies) — e.g. 393216 for a 1M-context
+                    # model — so reading it ahead of real window keys collapses
+                    # the window to the output cap and poisons the context
+                    # cache. It is consulted only as an explicit last resort
+                    # inside _context_length_from_model_payload, for servers
+                    # that report nothing else.
+                    ctx = _context_length_from_model_payload(data)
+                    if ctx is not None:
+                        return ctx
 
             # Try /v1/models and find the model in the list.
             # Use _model_id_matches to handle "publisher/slug" vs bare "slug".
@@ -2301,6 +2398,8 @@ def _query_local_context_length_uncached(model: str, base_url: str, api_key: str
                 # so fall back to the sole model when nothing matches.
                 matched = None
                 for m in models_list:
+                    if not isinstance(m, dict):
+                        continue
                     if _model_id_matches(m.get("id", ""), model):
                         matched = m
                         break
@@ -2311,21 +2410,25 @@ def _query_local_context_length_uncached(model: str, base_url: str, api_key: str
                     # vLLM/OpenAI keys are also checked. Runtime n_ctx is
                     # preferred over n_ctx_train (the training maximum, which
                     # can be larger than what the server actually allocates).
-                    for source in (matched, matched.get("meta") or {}):
-                        if not isinstance(source, dict):
-                            continue
-                        for key in (
-                            "n_ctx",
-                            "context_length",
-                            "context_window",
-                            "max_model_len",
-                            "max_context_length",
-                            "max_tokens",
-                            "n_ctx_train",
-                        ):
-                            val = source.get(key)
-                            if isinstance(val, (int, float)) and val:
-                                return int(val)
+                    sources = [
+                        s
+                        for s in (matched, matched.get("meta") or {})
+                        if isinstance(s, dict)
+                    ]
+                    for source in sources:
+                        val = source.get("n_ctx")
+                        if isinstance(val, (int, float)) and val:
+                            return int(val)
+                    # Canonical context-WINDOW keys (via _CONTEXT_LENGTH_KEYS)
+                    # with max_tokens demoted to an explicit last resort —
+                    # sibling of the /v1/models/{id} path above; see that
+                    # comment for why max_tokens must never win over a real
+                    # window key (it is the max OUTPUT cap on
+                    # Anthropic/OpenAI-compatible passthroughs).
+                    for source in sources:
+                        ctx = _context_length_from_model_payload(source)
+                        if ctx is not None:
+                            return ctx
     except Exception as exc:
         if _is_connect_timeout(exc):
             _note_endpoint_blackholed(server_url)
@@ -3663,6 +3766,91 @@ def estimate_request_tokens_rough(
         total += estimate_messages_tokens_rough(messages)
     if tools:
         total += _estimate_tools_tokens_rough(tools)
+    return total
+
+
+# --- Usage-anchored context accounting ------------------------------------
+#
+# Provider responses carry ``usage.prompt_tokens`` — EXACT ground truth for
+# everything sent on that request (system prompt + tool schemas + full
+# history). Re-estimating the whole conversation with chars/4 heuristics on
+# every context-size check compounds error over the entire transcript (flat
+# 1500-token images, CJK density, provider replay blobs). Anchoring on the
+# last real usage shrinks the estimation window to the messages appended
+# since that response; the error self-corrects at every new response.
+#
+# The anchor is a plain dict so callers can store it anywhere:
+#   prompt_tokens / completion_tokens — provider-reported usage at capture.
+#   base_count — len(messages) at capture time (the assistant reply for the
+#       captured response is NOT yet appended at the capture site; when it
+#       appears at index base_count its cost is covered by completion_tokens,
+#       so the delta walk skips it).
+#   base_last_id / base_last_role — identity fingerprint of the last message
+#       at capture time. Compaction, splices, and history rewrites shift or
+#       replace that element, failing the check and falling back to full
+#       estimation. Belt-and-braces on top of explicit invalidation.
+
+
+def capture_usage_anchor(
+    prompt_tokens: Any,
+    completion_tokens: Any,
+    messages: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """Build a usage anchor from provider-reported usage, or None."""
+    try:
+        pt = int(prompt_tokens or 0)
+        ct = int(completion_tokens or 0)
+    except (TypeError, ValueError):
+        return None
+    if pt <= 0 or not isinstance(messages, list):
+        # No usable usage (some OpenAI-compatible endpoints omit it) — the
+        # caller keeps whatever anchor it had, or stays on pure estimation.
+        return None
+    base_count = len(messages)
+    last = messages[-1] if base_count else None
+    return {
+        "prompt_tokens": pt,
+        "completion_tokens": max(0, ct),
+        "base_count": base_count,
+        "base_last_id": id(last) if last is not None else None,
+        "base_last_role": last.get("role") if isinstance(last, dict) else None,
+    }
+
+
+def anchored_context_tokens(
+    messages: List[Dict[str, Any]],
+    anchor: Optional[Dict[str, Any]],
+) -> Optional[int]:
+    """Context size anchored on the last provider-reported usage.
+
+    Returns ``prompt_tokens + completion_tokens`` of the anchored response
+    plus a rough estimate of ONLY the messages appended since — or ``None``
+    when the anchor is missing or stale (caller falls back to full
+    estimation). The assistant reply produced by the anchored response
+    (first appended message after the base) is skipped: its cost is already
+    counted exactly by ``completion_tokens``.
+    """
+    if not isinstance(anchor, dict) or not isinstance(messages, list):
+        return None
+    base_count = anchor.get("base_count") or 0
+    if base_count <= 0 or len(messages) < base_count:
+        return None
+    base_msg = messages[base_count - 1]
+    if id(base_msg) != anchor.get("base_last_id"):
+        return None
+    base_role = base_msg.get("role") if isinstance(base_msg, dict) else None
+    if base_role != anchor.get("base_last_role"):
+        return None
+    total = int(anchor["prompt_tokens"]) + int(anchor.get("completion_tokens") or 0)
+    delta = messages[base_count:]
+    if delta:
+        first = delta[0]
+        if isinstance(first, dict) and first.get("role") == "assistant":
+            # The anchored response's own reply — already counted exactly by
+            # completion_tokens above.
+            delta = delta[1:]
+    if delta:
+        total += estimate_messages_tokens_rough(delta)
     return total
 
 

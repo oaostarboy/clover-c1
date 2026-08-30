@@ -6,7 +6,7 @@ alcance para los informes de vulnerabilidades.
 
 ## 1. Reportar una Vulnerabilidad
 
-Reporta de forma privada a través de GitHub Security Advisories
+Reporta de forma privada a través de [GitHub Security Advisories]()
 o **security@**. No abras issues públicos para
 vulnerabilidades de seguridad. **Clover Cognition no opera un programa de
 recompensas por errores.**

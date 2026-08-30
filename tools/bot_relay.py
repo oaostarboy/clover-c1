@@ -32,17 +32,19 @@ the sender fails fast instead of queueing a DM nobody will drain (#93091).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import re
 import shlex
+import shutil
 import sys
 import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +53,11 @@ ROSTER_FILE = "roster.json"
 OUTBOX_DIR = "outbox"
 CLAIMED_DIR = "claimed"
 REPLIES_DIR = "replies"
+LOCKS_DIR = "locks"
+
+# Fallback wait budget for a queued delivery turn when config is unreadable.
+# The real knob is ``bot_mode.turn_wait_seconds`` in config.yaml.
+TURN_WAIT_SECONDS_FALLBACK = 120
 
 # A reply must arrive before the waiter gives up. Cross-connection turns can
 # be slow (remote model, cold gateway) — generous, but bounded.
@@ -118,7 +125,11 @@ def _normalize_roster_row(row: Any) -> Optional[dict]:
         return None
     if not handle:
         handle = "clover" if profile == "default" else profile
-    if not _HANDLE_RE.match(handle) or not _HANDLE_RE.match(profile):
+    if (
+        not _HANDLE_RE.match(handle)
+        or not _HANDLE_RE.match(profile)
+        or not _HANDLE_RE.match(connection_id)
+    ):
         return None
     out = {
         "profile": profile,
@@ -480,22 +491,41 @@ def waiter_command(root: Path | str, envelope: dict) -> str:
     interpreter.
     """
     reply_path = str(relay_root(root) / REPLIES_DIR / f"{envelope['id']}.json")
-    label = f"@{envelope['target_handle']} on {envelope['target_connection']}"
+    label = (
+        f"@{envelope.get('target_handle', '')} "
+        f"on {envelope.get('target_connection', '')}"
+    )
+    # Encode label with !r so roster fields cannot break out of the generated
+    # python -c source (quotes, parens, or extra statements in connection_id).
+    # The raw-string prefix keeps Windows paths viable: repr escapes each
+    # backslash ("C:\\Users\\..."), but the Windows execution layer the
+    # waiter runs under folds "\\" back to "\", which turns "\U" into an
+    # invalid unicode escape and SyntaxErrors the whole script (#93590).
+    # With the r prefix the folded single backslash parses as a literal.
+    # POSIX paths contain no backslashes, so the prefix is a no-op there,
+    # and \' inside a raw literal still cannot terminate the string, so
+    # the injection defense above is unchanged.
     code = (
         "import json,os,sys,time\n"
-        f"p = {reply_path!r}\n"
+        f"p = r{reply_path!r}\n"
+        f"label = r{label!r}\n"
         f"deadline = time.time() + {REPLY_WAIT_SECONDS}\n"
         "while time.time() < deadline:\n"
         "    if os.path.exists(p):\n"
         "        d = json.load(open(p, encoding='utf-8'))\n"
         "        if d.get('error'):\n"
-        f"            print('Delivery to {label} failed: ' + d['error'])\n"
+        # The typed reason code (#93091) rides ahead of the free text so the
+        # sending agent can branch on it (auth vs rate limit vs offline)
+        # without parsing provider prose.
+        "            code = str(d.get('reason') or '').strip()\n"
+        "            tag = ' [reason: ' + code + ']' if code else ''\n"
+        "            print('Delivery to ' + label + ' failed' + tag + ': ' + d['error'])\n"
         "            sys.exit(1)\n"
-        f"        print('Reply from {label}:')\n"
+        "        print('Reply from ' + label + ':')\n"
         "        print(d.get('reply') or '(empty reply)')\n"
         "        sys.exit(0)\n"
         "    time.sleep(2)\n"
-        f"print('No reply from {label} within {REPLY_WAIT_SECONDS}s. The message may "
+        f"print('No reply from ' + label + ' within {REPLY_WAIT_SECONDS}s. The message may "
         "still be delivered when the Desktop reconnects; do not resend blindly.')\n"
         "sys.exit(1)\n"
     )
@@ -505,10 +535,33 @@ def waiter_command(root: Path | str, envelope: dict) -> str:
 # ── delivery command (used by the deliver RPC on the TARGET gateway) ────────
 
 
+def _clover_cli() -> str:
+    """Resolve the clover CLI beside this gateway's own interpreter.
+
+    The deliver RPC runs on the target gateway, whose process is the venv
+    python — its bin/Scripts directory holds the matching ``clover``
+    entrypoint. A bare ``"clover"`` relies on PATH, which is exactly what
+    service contexts (systemd units, desktop launchers, non-login SSH
+    shells) do not provide, so delivery died with ENOENT there (#93590).
+    When no sibling exists (e.g. running from a source tree without an
+    installed script), a ``shutil.which`` lookup runs next — it honors
+    whatever PATH the process does have — before falling back to the bare
+    name, preserving today's behavior for interactive shells.
+    """
+    exe = Path(sys.executable or "")
+    sibling = exe.parent / ("clover.exe" if sys.platform == "win32" else "clover")
+    if sibling.is_file():
+        return str(sibling)
+    found = shutil.which("clover")
+    if found:
+        return found
+    return "clover"
+
+
 def local_delivery_command(profile: str, query_file: str) -> list[str]:
     """argv that delivers a DM into ``profile``'s Bot Chat on THIS gateway."""
     return [
-        "clover",
+        _clover_cli(),
         "-p",
         profile,
         "chat",
@@ -521,3 +574,103 @@ def local_delivery_command(profile: str, query_file: str) -> list[str]:
         "--query-file",
         query_file,
     ]
+
+
+# ── per-profile turn lock (#93091) ───────────────────────────────────────────
+#
+# Two deliveries into the SAME target profile must never run their Bot Chat
+# turns concurrently: deliveries spawn separate ``clover`` subprocesses, so
+# an in-memory mutex is useless — the lock is a per-profile lockfile under
+# ``<root>/bot_relay/locks/`` held with ``fcntl.flock`` for exactly the turn
+# execution window. flock is released by the kernel when the holder's fd
+# closes (including process death), so a crashed turn can never wedge the
+# profile. A queued delivery waits up to ``bot_mode.turn_wait_seconds`` and
+# then fails with a structured 'target_busy' refusal instead of blocking
+# forever.
+
+
+class TurnBusyError(RuntimeError):
+    """A delivery turn is already running for the target profile.
+
+    ``reason`` is 'target_busy' — extends the #93091 item-1 structured
+    refusal enum. ``waited_seconds`` is roughly how long the caller queued
+    behind the current turn before giving up.
+    """
+
+    reason = "target_busy"
+
+    def __init__(self, profile: str, waited_seconds: float):
+        self.profile = profile
+        self.waited_seconds = waited_seconds
+        super().__init__(
+            f"target_busy: another delivery turn is already running for "
+            f"profile '{profile}' — queued behind it for ~{int(round(waited_seconds))}s "
+            "without it finishing. The message was NOT delivered; retry shortly."
+        )
+
+
+def turn_wait_seconds() -> float:
+    """Wait budget for a queued delivery turn (config, lazily read)."""
+    try:
+        from clover_cli.config import cfg_get, load_config
+
+        val = cfg_get(load_config(), "bot_mode", "turn_wait_seconds", default=None)
+        if val is not None:
+            return max(0.0, float(val))
+    except Exception:
+        logger.debug("bot_mode.turn_wait_seconds read failed", exc_info=True)
+    return float(TURN_WAIT_SECONDS_FALLBACK)
+
+
+def turn_lock_path(root: Path | str, profile: str) -> Path:
+    """Per-profile lockfile path (short — safe on macOS temp roots)."""
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "_", str(profile or ""))[:64] or "_"
+    return relay_root(root) / LOCKS_DIR / f"{safe}.lock"
+
+
+@contextlib.contextmanager
+def acquire_turn_lock(
+    root: Path | str, profile: str, timeout_seconds: float | None = None
+) -> Iterator[Path]:
+    """Hold ``profile``'s cross-process turn lock for the ``with`` body.
+
+    Non-blocking flock probe + short-sleep retry loop up to the budget
+    (``bot_mode.turn_wait_seconds`` unless ``timeout_seconds`` is given).
+    No ordering guarantee among waiters — whichever probe lands first after
+    release wins — but every waiter is bounded by the budget, so no
+    deadlock. Raises :class:`TurnBusyError` when the budget is exhausted.
+    On platforms without ``fcntl`` (Windows) the lock degrades to a no-op —
+    those installs never had this race path in production.
+    """
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover — Windows
+        logger.debug("bot turn lock disabled: fcntl unavailable on this platform")
+        yield turn_lock_path(root, profile)
+        return
+
+    budget = turn_wait_seconds() if timeout_seconds is None else max(0.0, float(timeout_seconds))
+    path = turn_lock_path(root, profile)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        start = time.monotonic()
+        deadline = start + budget
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                now = time.monotonic()
+                if now >= deadline:
+                    raise TurnBusyError(profile, now - start)
+                time.sleep(min(0.1, max(0.005, deadline - now)))
+        try:
+            yield path
+        finally:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:  # pragma: no cover — kernel releases on close anyway
+                pass
+    finally:
+        os.close(fd)

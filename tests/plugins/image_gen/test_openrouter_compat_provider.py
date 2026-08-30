@@ -383,7 +383,7 @@ class TestGenerate:
     def test_posts_to_resolved_base_url(self):
         """Clover routes to its own base URL — proves the same code serves both."""
         clover_runtime = _runtime_ok(
-            provider="clover", base_url="", api_key="clover-tok"
+            provider="clover", base_url="https://inference./v1", api_key="clover-tok"
         )
         with patch(_RUNTIME, return_value=clover_runtime), \
              patch("requests.post", return_value=_mock_chat_response([_PNG_DATA_URI])) as mock_post, \
@@ -396,7 +396,7 @@ class TestGenerate:
         assert result["success"] is True
         assert result["provider"] == "clover"
         url = mock_post.call_args[0][0]
-        assert url == "/chat/completions"
+        assert url == "https://inference./v1/chat/completions"
 
     def test_api_error(self):
         import requests as req_lib
@@ -576,7 +576,7 @@ class TestImageApiSurface:
         from plugins.image_gen.openrouter import _build_providers
 
         clover_runtime = _runtime_ok(
-            provider="clover", base_url="", api_key="clover-tok"
+            provider="clover", base_url="https://inference./v1", api_key="clover-tok"
         )
         with patch(_RUNTIME, return_value=clover_runtime), \
              patch("requests.post", return_value=_mock_chat_response([_PNG_DATA_URI])) as mock_post, \
@@ -585,7 +585,7 @@ class TestImageApiSurface:
             result = clover.generate(prompt="a pet", model="openai/gpt-image-2")
 
         assert result["success"] is True
-        assert mock_post.call_args[0][0] == "/chat/completions"
+        assert mock_post.call_args[0][0] == "https://inference./v1/chat/completions"
 
     # -- per-model parameter filtering ------------------------------------
 

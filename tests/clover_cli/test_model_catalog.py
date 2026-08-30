@@ -139,7 +139,7 @@ class TestFallbackChain:
 
     PRIMARY = "docs/api/model-catalog.json"
     FALLBACK = (
-        "https://raw.githubusercontent.com/clover-c1"
+        ""
         "/main/website/static/api/model-catalog.json"
     )
 

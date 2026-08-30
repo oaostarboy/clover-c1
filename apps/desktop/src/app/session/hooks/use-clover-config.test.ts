@@ -120,6 +120,33 @@ describe('useCloverConfig refreshCloverConfig', () => {
     expect($currentFastMode.get()).toBe(false)
   })
 
+  it('does not publish config after its switch loses ownership', async () => {
+    const staleConfig = deferred<Awaited<ReturnType<typeof getCloverConfig>>>()
+    vi.mocked(getCloverConfig).mockReturnValueOnce(staleConfig.promise)
+    const { result } = renderHook(() => useCloverConfig({ activeSessionIdRef: { current: null } }))
+    let ownsSwitch = true
+
+    let refresh!: Promise<void>
+    act(() => {
+      refresh = result.current.refreshCloverConfig(false, () => ownsSwitch)
+    })
+
+    ownsSwitch = false
+    staleConfig.resolve({
+      agent: { reasoning_effort: 'high', service_tier: 'priority' },
+      terminal: { font_family: 'MesloLGS NF' }
+    } as Awaited<ReturnType<typeof getCloverConfig>>)
+
+    await act(async () => {
+      await refresh
+    })
+
+    expect($defaultReasoningEffort.get()).toBe('')
+    expect($currentReasoningEffort.get()).toBe('')
+    expect($currentFastMode.get()).toBe(false)
+    expect($terminalFontFamily.get()).toBe('')
+  })
+
   it('does not let an older profile config overwrite a newer profile', async () => {
     const profileB = deferred<Awaited<ReturnType<typeof getCloverConfig>>>()
     const profileC = deferred<Awaited<ReturnType<typeof getCloverConfig>>>()

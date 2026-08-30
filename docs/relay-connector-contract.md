@@ -7,7 +7,7 @@
 
 This document is the formal interface between the **Clover gateway** (Python,
 `gateway/relay/`) and the **connector** (Node/TypeScript,
-`Clover Cognition/gateway-gateway`). The connector implementer's first action is to
+`cloverc1/gateway-gateway`). The connector implementer's first action is to
 read this file.
 
 The gateway runs a generic `RelayAdapter` that dials **out** to the connector,
@@ -156,6 +156,7 @@ path (a Discord interaction is decoded to a `MessageEvent` and handled like a
 message; the reply egresses over the outbound / `follow_up` path). `bufferId` is
 present when the forward was buffered (Phase 5 §5.3 buffered-only flip) and the
 gateway acks it after durable handoff.
+
 
 
 ### SessionSource fields (the wire surface)
@@ -665,7 +666,7 @@ The composition only ever **narrows** delivery (`deliver ⇔ authorized ∧ visi
 message always reaches their own instance — you don't @mention your own agent).
 A message authored by an unbound user reaches no instance (fail-closed). The
 full design + invariants live in the connector repo
-(`Clover Cognition/gateway-gateway`); this section is the gateway-facing summary.
+(`cloverc1/gateway-gateway`); this section is the gateway-facing summary.
 
 ### 7.2 Management routes (connector-side, authenticated)
 

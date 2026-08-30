@@ -25,6 +25,7 @@ import hashlib
 import hmac
 import inspect
 import importlib.util
+import ipaddress
 import json
 import logging
 import math
@@ -38,6 +39,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import threading
 import time
@@ -75,6 +77,8 @@ from clover_cli.config import (
     save_env_value,
     remove_env_value,
     custom_endpoint_key_env,
+    coerce_provider_id,
+    find_provider_entry,
     check_config_version,
     detect_install_method,
     format_docker_update_message,
@@ -271,16 +275,45 @@ def _start_desktop_cron_ticker(stop_event: "threading.Event", interval: int = 60
     scheduler provider here (no live adapters; delivery falls back to the
     per-platform send path).
 
+    Every local profile's store is ticked, not just this backend's own
+    (#69377's desktop sibling): the desktop pools per-profile backends and
+    reaps them after ~10 idle minutes, so a secondary profile's ticker dies
+    with its backend and that profile's jobs silently stop firing until the
+    user next opens it ("tasks on the sleeping profile could be idle" —
+    community report, Aug 2026). The primary backend outlives the pool, so it
+    owns every profile's tick, exactly like a multiplex gateway. External
+    providers keep the single-store behavior — their registries are not
+    profile-scoped (see _notify_cron_provider_for_profile).
+
     Cross-process safe: the built-in provider's ``cron.scheduler.tick`` takes
-    the ``cron/.tick.lock`` file lock, so this never double-fires alongside a
-    real gateway on the same CLOVER_HOME — whichever process grabs the lock
-    first wins the tick.
+    the per-store ``cron/.tick.lock`` file lock, so this never double-fires
+    alongside a real gateway or a live pool backend on the same profile home —
+    whichever process grabs the lock first wins the tick.
     """
-    from cron.scheduler_provider import resolve_cron_scheduler
+    from cron.scheduler_provider import InProcessCronScheduler, resolve_cron_scheduler
 
     provider = resolve_cron_scheduler()
+
+    start_kwargs: dict = {"interval": interval}
+    if isinstance(provider, InProcessCronScheduler):
+        try:
+            from clover_cli.profiles import profiles_to_serve
+
+            profile_homes = list(profiles_to_serve(multiplex=True))
+            if len(profile_homes) > 1:
+                start_kwargs["profile_homes"] = profile_homes
+                _log.info(
+                    "Desktop cron scheduler will tick %d profile(s): %s",
+                    len(profile_homes),
+                    [name for name, _home in profile_homes],
+                )
+        except Exception:
+            # Fail open to the single-store ticker — the active profile's
+            # jobs must keep firing even if profile enumeration breaks.
+            _log.exception("Desktop cron: profile enumeration failed; ticking active profile only")
+
     _log.info("Desktop cron scheduler started (provider=%s, interval=%ds)", provider.name, interval)
-    provider.start(stop_event, interval=interval)
+    provider.start(stop_event, **start_kwargs)
 
 
 def _warm_gateway_module() -> None:
@@ -514,6 +547,8 @@ def _resolve_session_token() -> str:
 _SESSION_TOKEN = _resolve_session_token()
 _SESSION_HEADER_NAME = "X-Clover-Session-Token"
 _SSH_OWNER_NONCE: Optional[str] = None
+_SSH_RUNTIME_PURELIB: Optional[Tuple[str, int, int]] = None
+_SSH_RUNTIME_MARKER: Optional[str] = None
 
 
 def _apply_ssh_session_token(token: str) -> None:
@@ -523,8 +558,52 @@ def _apply_ssh_session_token(token: str) -> None:
 
 
 def _apply_ssh_owner_nonce(nonce: Optional[str]) -> None:
-    global _SSH_OWNER_NONCE
+    global _SSH_OWNER_NONCE, _SSH_RUNTIME_PURELIB, _SSH_RUNTIME_MARKER
     _SSH_OWNER_NONCE = nonce
+    _SSH_RUNTIME_PURELIB = None
+    _SSH_RUNTIME_MARKER = None
+    if nonce:
+        try:
+            purelib = sysconfig.get_paths()["purelib"]
+        except (KeyError, OSError):
+            return
+        # Primary identity: a marker FILE written into site-packages now.
+        # A replaced venv (rm -rf && recreate — same OR different Python
+        # version) loses the marker deterministically, while pip installs
+        # into the live venv leave it untouched (no false stales). A bare
+        # (dev, ino) snapshot of the directory is NOT sufficient on its
+        # own: ext4 reuses directory inodes immediately, so the exact
+        # reported repro (`rm -rf venv && uv venv`) can land on the same
+        # inode and pass undetected (proven live during salvage).
+        try:
+            marker = os.path.join(purelib, f".clover-ssh-runtime-{nonce}")
+            with open(marker, "w", encoding="utf-8") as fh:
+                fh.write(f"pid={os.getpid()}\n")
+            _SSH_RUNTIME_MARKER = marker
+        except OSError:
+            pass  # read-only site-packages — fall back to the stat snapshot
+        try:
+            st = os.stat(purelib)
+            _SSH_RUNTIME_PURELIB = (purelib, st.st_dev, st.st_ino)
+        except OSError:
+            pass
+
+
+def _ssh_runtime_intact() -> bool:
+    # Marker file is the deterministic signal when we managed to write one.
+    if _SSH_RUNTIME_MARKER is not None:
+        return os.path.isfile(_SSH_RUNTIME_MARKER)
+    # Fallback (read-only site-packages): directory identity snapshot.
+    # Weaker — inode reuse can mask a same-filesystem recreate — but still
+    # catches cross-device moves and version-bump path changes.
+    if _SSH_RUNTIME_PURELIB is None:
+        return True
+    purelib, device, inode = _SSH_RUNTIME_PURELIB
+    try:
+        st = os.stat(purelib)
+    except OSError:
+        return False
+    return (st.st_dev, st.st_ino) == (device, inode)
 
 # In-browser Chat tab (/chat, /api/pty, /api/ws, …).  Always enabled: the
 # desktop app and the dashboard's own Chat tab both drive the agent over the
@@ -649,6 +728,28 @@ _LOOPBACK_HOST_VALUES: frozenset = frozenset({
 })
 
 
+def _dashboard_public_hosts() -> frozenset[str]:
+    """Return the exact hostname declared by ``dashboard.public_url``.
+
+    ``public_url`` is already Clover' canonical browser-facing URL behind a
+    reverse proxy. Reusing its validated hostname here keeps OAuth redirects,
+    HTTP Host validation, and WebSocket Origin validation on one source of
+    truth. Malformed or unset values fail closed as an empty set.
+    """
+    from clover_cli.dashboard_auth.prefix import resolve_public_url
+
+    public_url = resolve_public_url()
+    if not public_url:
+        return frozenset()
+    try:
+        hostname = urllib.parse.urlparse(public_url).hostname
+    except ValueError:
+        return frozenset()
+    if not hostname:
+        return frozenset()
+    return frozenset({hostname.lower()})
+
+
 def should_require_auth(host: str, allow_public: bool = False) -> bool:
     """Return True iff the dashboard auth gate must be active.
 
@@ -671,34 +772,83 @@ def should_require_auth(host: str, allow_public: bool = False) -> bool:
     return host not in _LOOPBACK_HOST_VALUES
 
 
-def _is_accepted_host(host_header: str, bound_host: str) -> bool:
+def should_require_dashboard_auth(
+    host: str,
+    trusted_public_hosts: Optional[frozenset[str]] = None,
+) -> bool:
+    """Return whether the dashboard auth gate must be active.
+
+    The browser-facing URL is part of the exposure boundary: a non-loopback
+    ``dashboard.public_url`` requires authentication even when a reverse proxy
+    reaches a backend bound to loopback. Callers may pass the already-resolved
+    host set so startup and request validation use the same snapshot.
+    """
+    if trusted_public_hosts is None:
+        trusted_public_hosts = _dashboard_public_hosts()
+    return should_require_auth(host) or any(
+        candidate not in _LOOPBACK_HOST_VALUES
+        for candidate in trusted_public_hosts
+    )
+
+
+def _host_header_hostname(host_header: str) -> str:
+    """Return a normalized hostname from a valid HTTP Host authority.
+
+    Host headers are authorities, not full URLs. Reject ambiguous ports,
+    malformed IPv6 brackets, and URL syntax so validation always fails closed.
+    """
+    value = (host_header or "").strip()
+    if not value:
+        return ""
+    if any(char in value for char in ('"', "'", "<", ">", " ", "\n", "\r", "\t")):
+        return ""
+    if "://" in value or any(char in value for char in ("/", "?", "#", "@")):
+        return ""
+
+    if value.startswith("["):
+        close = value.find("]")
+        if close == -1:
+            return ""
+        hostname = value[1:close]
+        # Bracket notation is reserved for IPv6 literals.
+        if ":" not in hostname:
+            return ""
+        suffix = value[close + 1:]
+        if suffix and not re.fullmatch(r":\d+", suffix):
+            return ""
+        return hostname.lower()
+
+    # Unbracketed IPv6 authorities are ambiguous with a port separator.
+    if value.count(":") > 1:
+        return ""
+    if ":" in value:
+        hostname, port = value.rsplit(":", 1)
+        if not hostname or not port.isdigit():
+            return ""
+        return hostname.lower()
+    return value.lower()
+
+
+def _is_accepted_host(
+    host_header: str,
+    bound_host: str,
+    trusted_public_hosts: frozenset[str] = frozenset(),
+) -> bool:
     """True if the Host header targets the interface we bound to.
 
     Accepts:
     - Exact bound host (with or without port suffix)
     - Loopback aliases when bound to loopback
+    - Exact operator-declared public hosts (with or without port suffix)
     - Any host when bound to 0.0.0.0 (explicit opt-in to non-loopback,
       no protection possible at this layer)
     """
-    if not host_header:
+    host_only = _host_header_hostname(host_header)
+    if not host_only:
         return False
-    # Strip port suffix. IPv6 addresses use bracket notation:
-    #   [::1]         — no port
-    #   [::1]:9119    — with port
-    # Plain hosts/v4:
-    #   localhost:9119
-    #   127.0.0.1:9119
-    h = host_header.strip()
-    if h.startswith("["):
-        # IPv6 bracketed — port (if any) follows "]:"
-        close = h.find("]")
-        if close != -1:
-            host_only = h[1:close]  # strip brackets
-        else:
-            host_only = h.strip("[]")
-    else:
-        host_only = h.rsplit(":", 1)[0] if ":" in h else h
-    host_only = host_only.lower()
+
+    if host_only in trusted_public_hosts:
+        return True
 
     # 0.0.0.0 bind means operator explicitly opted into all-interfaces
     # (requires --insecure per web_server.start_server). No Host-layer
@@ -732,13 +882,18 @@ async def host_header_middleware(request: Request, call_next):
     bound_host = getattr(app.state, "bound_host", None)
     if bound_host:
         host_header = request.headers.get("host", "")
-        if not _is_accepted_host(host_header, bound_host):
+        trusted_public_hosts = getattr(
+            app.state, "trusted_public_hosts", frozenset()
+        )
+        if not _is_accepted_host(
+            host_header, bound_host, trusted_public_hosts
+        ):
             return JSONResponse(
                 status_code=400,
                 content={
                     "detail": (
-                        "Invalid Host header. Dashboard requests must use "
-                        "the hostname the server was bound to."
+                        "Invalid Host header. Dashboard requests must use the "
+                        "bound hostname or the configured public hostname."
                     ),
                 },
             )
@@ -1192,6 +1347,16 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "type": "boolean",
         "description": "Run the local browser in headed mode (visible window). Also keeps the window open between turns; idle sessions are still reaped after browser.inactivity_timeout.",
     },
+    "plugins.hook_callback_timeout": {
+        "type": "number",
+        "description": (
+            "Wall-clock cap (seconds) for timeout-bounded in-process Python "
+            "plugin hook callbacks (hot-path observers + pre_tool_call). "
+            "Timed-out pre_tool_call fails closed. 0 disables the cap; "
+            "values above 600 are clamped. Caller-thread hooks such as "
+            "subagent_stop are never moved onto a timeout worker."
+        ),
+    },
 }
 
 # Categories with fewer fields get merged into "general" to avoid tab sprawl.
@@ -1211,8 +1376,8 @@ _CATEGORY_MERGE: Dict[str, str] = {
     "dashboard": "display",
     "code_execution": "agent",
     "prompt_caching": "agent",
-    # bot_mode currently surfaces a single field (envelope_ttl_seconds) —
-    # fold it into agent until the section grows.
+    # bot_mode holds a couple of relay tuning knobs — keep it folded into the
+    # agent tab rather than spawning a tiny standalone category.
     "bot_mode": "agent",
     "goals": "agent",
     "updates": "general",
@@ -1236,6 +1401,10 @@ _CATEGORY_MERGE: Dict[str, str] = {
     # `telemetry.shared_metrics.enabled` is the only schema-surfaced telemetry
     # field — fold it into security alongside the other privacy-posture toggles.
     "telemetry": "security",
+    # `plugins.hook_callback_timeout` is the only schema-surfaced plugins field
+    # (`enabled`/`disabled` are list allow-lists omitted from DEFAULT_CONFIG) —
+    # fold it into the agent tab rather than spawning a one-field orphan category.
+    "plugins": "agent",
     # `doctor.live_probe_timeout` is the only schema-surfaced doctor field —
     # fold it into general rather than spawning a one-field orphan category.
     "doctor": "general",
@@ -1501,6 +1670,18 @@ def _schema_with_dynamic_provider_options() -> Dict[str, Dict[str, Any]]:
             merge(f"{kind}.provider", _custom_provider_options(kind, list(existing), cfg))
 
     merge("memory.provider", _memory_provider_schema_options(cfg))
+
+    tb_entry = CONFIG_SCHEMA.get("terminal.backend")
+    if isinstance(tb_entry, dict) and isinstance(tb_entry.get("options"), list):
+        try:
+            plugin_names = sorted(
+                {row["name"] for row in _plugin_terminal_backend_rows()}
+                - set(tb_entry["options"])
+            )
+        except Exception:
+            plugin_names = []
+        if plugin_names:
+            merge("terminal.backend", [*tb_entry["options"], *plugin_names])
 
     if not overlay:
         return CONFIG_SCHEMA
@@ -1897,10 +2078,9 @@ def _count_status_active_sessions() -> int:
 
 
 async def _status_active_sessions() -> int:
-    loop = asyncio.get_running_loop()
     try:
         return await asyncio.wait_for(
-            loop.run_in_executor(None, _count_status_active_sessions),
+            run_in_threadpool(_count_status_active_sessions),
             timeout=_STATUS_ACTIVE_SESSIONS_TIMEOUT,
         )
     except asyncio.TimeoutError:
@@ -3461,7 +3641,12 @@ async def get_ssh_ownership(request: Request):
     _require_token(request)
     if not _SSH_OWNER_NONCE:
         raise HTTPException(status_code=404, detail="SSH ownership is not active")
-    return {"ok": True, "sshOwnerNonce": _SSH_OWNER_NONCE, "protocolVersion": 1}
+    return {
+        "ok": True,
+        "sshOwnerNonce": _SSH_OWNER_NONCE,
+        "protocolVersion": 1,
+        "runtimeIntact": _ssh_runtime_intact(),
+    }
 
 
 @app.get("/api/health")
@@ -3711,9 +3896,7 @@ async def get_status(profile: Optional[str] = None):
         # ``<profile>:<platform>`` grammar so fleet health sees them (OOF-3).
         # A ``?profile=`` request targets one profile's view and is left
         # unmerged.
-        topology = await asyncio.get_running_loop().run_in_executor(
-            None, _collect_profile_gateway_topology_cached
-        )
+        topology = await run_in_threadpool(_collect_profile_gateway_topology_cached)
         if not requested_profile:
             gateway_platforms = _merge_profile_gateway_platforms(
                 gateway_platforms, topology.get("profile_platforms") or {}
@@ -3742,11 +3925,9 @@ async def get_status(profile: Optional[str] = None):
         # Windows install the first import of clover_cli.gateway blocks the
         # asyncio event loop for 15-30s (.pyc compilation + Defender scans),
         # exceeding the desktop handshake's 15s socket timeout.  After the
-        # first call the module is in sys.modules and run_in_executor returns
+        # first call the module is in sys.modules and the worker call returns
         # in microseconds.
-        restart_drain_timeout = await asyncio.get_running_loop().run_in_executor(
-            None, _resolve_restart_drain_timeout
-        )
+        restart_drain_timeout = await run_in_threadpool(_resolve_restart_drain_timeout)
 
         # Dashboard auth gate (Phase 7): surface whether the gate is engaged
         # and which providers are registered so ``clover status`` and the
@@ -3825,9 +4006,7 @@ async def get_status(profile: Optional[str] = None):
         # may touch disk, so keep it off the event loop; afterwards it is a
         # process-global cache hit. Omitted (not null) when unpersistable so
         # older-client behavior and the no-identity fallback stay identical.
-        install_id = await asyncio.get_running_loop().run_in_executor(
-            None, get_install_id
-        )
+        install_id = await run_in_threadpool(get_install_id)
         if install_id:
             status["install_id"] = install_id
 
@@ -3846,9 +4025,7 @@ async def get_status(profile: Optional[str] = None):
         try:
             from gateway.readiness import _probe_state_db
 
-            storage_check = await asyncio.get_running_loop().run_in_executor(
-                None, functools.partial(_probe_state_db, get_clover_home())
-            )
+            storage_check = await run_in_threadpool(_probe_state_db, get_clover_home())
             components["storage"] = {"status": storage_check.get("status", "degraded")}
         except Exception:
             components["storage"] = {"status": "degraded"}
@@ -3886,12 +4063,9 @@ async def get_status(profile: Optional[str] = None):
         try:
             from gateway.memory_status import collect_memory_status
 
-            status["memory"] = await asyncio.get_running_loop().run_in_executor(
-                None,
-                functools.partial(
-                    collect_memory_status,
-                    profile_dir if profile_dir else get_clover_home(),
-                ),
+            status["memory"] = await run_in_threadpool(
+                collect_memory_status,
+                profile_dir if profile_dir else get_clover_home(),
             )
         except Exception:
             status["memory"] = {"pressure": "unknown"}
@@ -3904,12 +4078,9 @@ async def get_status(profile: Optional[str] = None):
         try:
             from gateway.disk_status import collect_disk_status
 
-            status["disk"] = await asyncio.get_running_loop().run_in_executor(
-                None,
-                functools.partial(
-                    collect_disk_status,
-                    profile_dir if profile_dir else get_clover_home(),
-                ),
+            status["disk"] = await run_in_threadpool(
+                collect_disk_status,
+                profile_dir if profile_dir else get_clover_home(),
             )
         except Exception:
             status["disk"] = {"pressure": "unknown"}
@@ -4463,13 +4634,48 @@ def _record_completed_action(name: str, message: str, exit_code: int = 1) -> Non
 def _dashboard_spawn_executable() -> str:
     """Interpreter for detached dashboard actions.
 
-    Returns ``sys.executable`` on every platform.  On Windows the spawn
-    below carries ``windows_detach_flags()`` (CREATE_NO_WINDOW), so the
-    console python owns a single hidden console that its own subprocess
+    Prefers the install's own venv interpreter over ``sys.executable`` when
+    they differ. Under an SSH remote backend the web server is launched by
+    running the **uv base interpreter** with the venv's site-packages
+    injected into ``sys.path`` at startup (``-c "sys.path[:0]=[...];
+    runpy.run_module('clover_cli.main', ...)"``) — so ``sys.executable`` is
+    the dependency-less base python and a detached action spawned from it
+    dies on the first third-party import (``ModuleNotFoundError: yaml``),
+    because the injected path is a startup artifact of the parent and is
+    not inherited (#90026). The venv launcher resolves the same dependency
+    set on its own.
+
+    Falls back to ``sys.executable`` when no venv interpreter exists next
+    to the install (in-process dev runs, exotic layouts). On Windows the
+    spawn below carries ``windows_detach_flags()`` (CREATE_NO_WINDOW), so
+    the console python owns a single hidden console that its own subprocess
     spawns inherit — the action stays invisible without resorting to
     console-less pythonw.exe, which would make every console-subsystem
     descendant flash its own conhost (#54220/#56747).
     """
+    exe = Path(sys.executable)
+    try:
+        for rel in ("venv/bin/python", "venv/Scripts/python.exe"):
+            candidate = PROJECT_ROOT / rel
+            if candidate.is_file():
+                # Same interpreter → keep sys.executable (preserves the
+                # docstring's console-ownership behavior verbatim). Compare
+                # UNRESOLVED normalized paths: a venv's bin/python is
+                # typically a SYMLINK to the base interpreter, so resolving
+                # both sides makes the venv python and the dependency-less
+                # base compare equal — exactly the SSH-runtime case this
+                # function exists to fix. The unresolved path IS the venv's
+                # identity (pyvenv.cfg discovery keys off argv0's location).
+                if os.path.normcase(os.path.normpath(str(candidate))) == (
+                    os.path.normcase(os.path.normpath(str(exe)))
+                ):
+                    return sys.executable
+                # Return the candidate UNRESOLVED for the same reason:
+                # invoking the resolved target would bypass pyvenv.cfg and
+                # run the bare base interpreter again.
+                return str(candidate)
+    except OSError:
+        pass
     return sys.executable
 
 
@@ -4860,31 +5066,33 @@ async def update_clover():
             "update_command": "managed outside dashboard",
         }
 
-    install_method = detect_install_method(PROJECT_ROOT)
-    if install_method == "docker":
-        message = format_docker_update_message()
-        _record_completed_action("clover-update", message, exit_code=1)
-        return {
-            "ok": False,
-            "pid": None,
-            "name": "clover-update",
-            "error": "docker_update_unsupported",
-            "message": message,
-            "update_command": recommended_update_command_for_method(install_method),
-        }
+    # Shared admission gate (#91277 Phase 3): marker-first, then the
+    # docker/nix/apt heuristics — one decision with the CLI paths. The
+    # response keeps the pre-existing per-kind error codes the dashboard UI
+    # already keys on.
+    from clover_cli.update_contract import (
+        evaluate_update_admission,
+        record_refusal_receipt,
+    )
 
-    if is_nix_install_method(install_method) or install_method == "apt":
-        message = recommended_update_command_for_method(install_method)
-        _record_completed_action("clover-update", message, exit_code=1)
+    refusal = evaluate_update_admission(PROJECT_ROOT)
+    if refusal is not None:
+        _record_completed_action("clover-update", refusal.message, exit_code=1)
+        record_refusal_receipt(refusal)
+        error_code = {
+            "docker": "docker_update_unsupported",
+            "image-marker": "docker_update_unsupported",
+            "image-marker-invalid": "docker_update_unsupported",
+            "apt": "apt_update_required",
+            "nix": "nix_update_unsupported",
+        }.get(refusal.code, "update_not_in_place")
         return {
             "ok": False,
             "pid": None,
             "name": "clover-update",
-            "error": (
-                "apt_update_required" if install_method == "apt" else "nix_update_unsupported"
-            ),
-            "message": message,
-            "update_command": message,
+            "error": error_code,
+            "message": refusal.message,
+            "update_command": refusal.update_command,
         }
 
     existing = _ACTION_PROCS.get("clover-update")
@@ -5368,16 +5576,23 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
         ".flac": "audio/flac",
     }.get(ext, "audio/mpeg")
 
+    def _read_and_unlink() -> bytes:
+        # Off-loop: synthesized audio can be several MB; reading it inline
+        # blocks the uvicorn event loop (Pattern A). Unlink rides the same
+        # thread hop so the temp file cannot outlive an early return.
+        try:
+            with open(file_path, "rb") as fh:
+                return fh.read()
+        finally:
+            try:
+                os.unlink(file_path)
+            except OSError:
+                pass
+
     try:
-        with open(file_path, "rb") as fh:
-            audio_bytes = fh.read()
+        audio_bytes = await asyncio.to_thread(_read_and_unlink)
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Could not read audio: {exc}")
-    finally:
-        try:
-            os.unlink(file_path)
-        except OSError:
-            pass
 
     encoded = base64.b64encode(audio_bytes).decode("ascii")
     return {
@@ -7159,12 +7374,12 @@ def get_model_info(profile: Optional[str] = None):
 # in clover_cli/config.py — listed here for deterministic ordering in the UI.
 _AUX_TASK_SLOTS: Tuple[str, ...] = (
     "vision",
-    "web_extract",
     "compression",
     "skills_hub",
     "approval",
     "mcp",
     "title_generation",
+    "review",
     "triage_specifier",
     "kanban_decomposer",
     "profile_describer",
@@ -8187,7 +8402,7 @@ def _parse_model_ids(resp: "Any") -> List[str]:
 
 
 def _custom_endpoint_id(raw: str, fallback: str = "custom") -> str:
-    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", (raw or "").strip()).strip("-_").lower()
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", coerce_provider_id(raw)).strip("-_").lower()
     return slug or fallback
 
 
@@ -8233,8 +8448,7 @@ def _config_api_key_is_env_ref(endpoint_id: str) -> bool:
     config.yaml, so migrating it would only copy that secret into a second
     env var the user didn't ask for.
     """
-    providers = read_raw_config().get("providers")
-    entry = providers.get(endpoint_id) if isinstance(providers, dict) else None
+    _stored, entry = find_provider_entry(read_raw_config().get("providers"), endpoint_id)
     raw_key = entry.get("api_key") if isinstance(entry, dict) else None
     return bool(isinstance(raw_key, str) and re.search(r"\$\{[^}]+\}", raw_key))
 
@@ -8340,8 +8554,8 @@ def _write_custom_endpoint(cfg: Dict[str, Any], body: CustomEndpointUpdate) -> T
     providers = cfg.get("providers")
     if not isinstance(providers, dict):
         providers = {}
-    existing = providers.get(endpoint_id)
-    if not isinstance(existing, dict):
+    stored_key, existing = find_provider_entry(providers, endpoint_id)
+    if existing is None:
         existing = {}
 
     # Merge onto the existing entry rather than replacing it. A providers.<name>
@@ -8400,6 +8614,8 @@ def _write_custom_endpoint(cfg: Dict[str, Any], body: CustomEndpointUpdate) -> T
         entry["key_env"] = env_var
         entry.pop("api_key", None)
 
+    if stored_key is not None and stored_key != endpoint_id:
+        providers.pop(stored_key, None)
     providers[endpoint_id] = entry
     cfg["providers"] = providers
 
@@ -8459,9 +8675,8 @@ def activate_custom_endpoint(endpoint_id: str, profile: Optional[str] = None):
         with _config_profile_scope(profile):
             cfg = load_config()
             provider_key = _custom_endpoint_id(endpoint_id)
-            providers = cfg.get("providers")
-            entry = providers.get(provider_key) if isinstance(providers, dict) else None
-            if not isinstance(entry, dict):
+            _stored, entry = find_provider_entry(cfg.get("providers"), provider_key)
+            if entry is None:
                 raise HTTPException(status_code=404, detail="custom endpoint not found")
 
             models = _models_from_custom_endpoint_entry(entry)
@@ -8494,9 +8709,10 @@ def delete_custom_endpoint(endpoint_id: str, profile: Optional[str] = None):
             cfg = load_config()
             provider_key = _custom_endpoint_id(endpoint_id)
             providers = cfg.get("providers")
-            if not isinstance(providers, dict) or provider_key not in providers:
+            stored_key, entry = find_provider_entry(providers, provider_key)
+            if entry is None or not isinstance(providers, dict):
                 raise HTTPException(status_code=404, detail="custom endpoint not found")
-            providers.pop(provider_key, None)
+            providers.pop(stored_key, None)
             cfg["providers"] = providers
             _detach_main_model_from_provider(cfg, provider_key)
             remove_env_value(custom_endpoint_key_env(provider_key))
@@ -10561,11 +10777,12 @@ async def test_messaging_platform(platform_id: str, profile: Optional[str] = Non
 # ---------------------------------------------------------------------------
 #
 # Phase 1 surfaces *which OAuth providers exist* and whether each is
-# connected, plus a disconnect button. The actual login flow (PKCE for
-# Anthropic, device-code for Clover/Codex) still runs in the CLI for now;
-# Phase 2 will add in-browser flows. For unconnected providers we return
-# the canonical ``clover auth add <provider>`` command so the dashboard
-# can surface a one-click copy.
+# connected, plus a disconnect button. Anthropic subscription OAuth is
+# deliberately delegated away from the dashboard: its card is external and
+# points to the supported terminal path. Phase 2 adds in-browser device-code
+# flows for providers that support them. For unconnected providers we return
+# the canonical ``clover auth add <provider>`` command so the dashboard can
+# surface a one-click copy.
 
 
 def _truncate_token(value: Optional[str], visible: int = 6) -> str:
@@ -10597,8 +10814,8 @@ def _anthropic_oauth_status() -> Dict[str, Any]:
     """Status for the "Anthropic API Key" catalog entry.
 
     Two sources, in priority order:
-    1. ``~/.clover/.anthropic_oauth.json`` — Clover-managed PKCE flow (what
-       this entry's Connect button writes)
+    1. ``~/.clover/.anthropic_oauth.json`` — Clover-managed terminal PKCE
+       credentials (the dashboard no longer has a Connect button for this)
     2. ``ANTHROPIC_API_KEY`` → ``ANTHROPIC_TOKEN`` → ``CLAUDE_CODE_OAUTH_TOKEN``
        env vars (registry order) — from ``.env``, the shell, or an external
        secret source like Bitwarden (whose keys are injected into the process
@@ -10715,12 +10932,11 @@ def _copilot_acp_status() -> Dict[str, Any]:
 # which unions them with every accounts-tab provider in ``provider_catalog()``
 # so newly-added OAuth/external providers appear automatically (no hand edit).
 # This tuple also still includes two entries that are NOT catalog providers but
-# must show on the Accounts tab: the api-key Anthropic PKCE card and the
+# must show on the Accounts tab: the Anthropic credential-status card and the
 # synthetic ``claude-code`` subscription row.
-# ``flow`` describes the OAuth shape so the modal can pick the right UI:
-# ``pkce`` = open URL + paste callback code, ``device_code`` = show code +
-# verification URL + poll, ``external`` = read-only (delegated to a third-party
-# CLI like Claude Code or Qwen).
+# ``flow`` describes the account-management shape so the UI can pick the right
+# behavior: ``device_code`` = show code + verification URL + poll, and
+# ``external`` = read-only/delegated to a terminal or third-party CLI.
 _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
     {
         "id": "clover",
@@ -10778,13 +10994,21 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
         "docs_url": "https://docs.github.com/en/copilot",
         "status_fn": _copilot_acp_status,
     },
-    # ── Anthropic / Claude entries sit at the bottom: the API-key path
-    # first, then the subscription OAuth path (which only works with extra
-    # usage credits on top of a Claude Max plan — see disclaimer in name).
+    # ── Anthropic / Claude entries sit at the bottom.
+    #
+    # This card is deliberately flow == "external" (no in-dashboard "Connect"
+    # button walking the user through claude.ai/oauth/authorize from the web
+    # server). Clover previously reimplemented that subscription-OAuth PKCE
+    # dance itself for the dashboard (issues #87887/#87888); that surface was
+    # removed because it lets an unattended, scriptable HTTP endpoint mint
+    # Claude Pro/Max subscription tokens outside Anthropic's own client,
+    # which sits on the wrong side of Anthropic's usage policies for OAuth
+    # credentials. Login still works via the terminal (`clover auth add
+    # anthropic`, unaffected by this change) or a plain API key below.
     {
         "id": "anthropic",
         "name": "Anthropic API Key",
-        "flow": "pkce",
+        "flow": "external",
         "cli_command": "clover auth add anthropic",
         "docs_url": "https://docs.claude.com/en/api/getting-started",
         "status_fn": _anthropic_oauth_status,
@@ -10923,7 +11147,14 @@ def _oauth_provider_disconnect_command(provider: Dict[str, Any]) -> Optional[str
 
 def _oauth_provider_disconnect_hint(provider: Dict[str, Any], status: Dict[str, Any]) -> Optional[str]:
     """Return the manual disconnect path when the API cannot clear this provider."""
-    if provider.get("flow") == "external":
+    # "anthropic" is flow == "external" (no in-dashboard OAuth login, see the
+    # catalog entry) but, unlike other external providers, Clover still OWNS
+    # the credential it can show here: the Clover-managed PKCE file
+    # (~/.clover/.anthropic_oauth.json) and its credential-pool entry, both
+    # written by `clover auth add anthropic` in the terminal. Those are ours
+    # to clear via the API, so this provider is excluded from the generic
+    # "external providers can't be auto-disconnected" rule below.
+    if provider.get("flow") == "external" and provider.get("id") != "anthropic":
         if _oauth_provider_disconnect_command(provider):
             # The GUI offers a one-click "run in terminal" path; this hint is the
             # fallback wording for surfaces that only show text.
@@ -10991,7 +11222,7 @@ async def list_oauth_providers(profile: Optional[str] = None):
     Response shape (per provider):
         id              stable identifier (used in DELETE path)
         name            human label
-        flow            "pkce" | "device_code" | "external"
+        flow            "device_code" | "external"
         cli_command     fallback CLI command for users to run manually
         disconnect_command  shell command that clears an external provider's
                             creds (run in the embedded terminal), else null
@@ -11102,21 +11333,16 @@ async def disconnect_oauth_provider(
 
 
 # ---------------------------------------------------------------------------
-# OAuth Phase 2 — in-browser PKCE & device-code flows
+# OAuth Phase 2 — in-browser device-code flows
 # ---------------------------------------------------------------------------
 #
-# Two flow shapes are supported:
-#
-#   PKCE (Anthropic):
-#     1. POST /api/providers/oauth/anthropic/start
-#          → server generates code_verifier + challenge, builds claude.ai
-#            authorize URL, stashes verifier in _oauth_sessions[session_id]
-#          → returns { session_id, flow: "pkce", auth_url }
-#     2. UI opens auth_url in a new tab. User authorizes, copies code.
-#     3. POST /api/providers/oauth/anthropic/submit { session_id, code }
-#          → server exchanges (code + verifier) → tokens at console.anthropic.com
-#          → persists to ~/.clover/.anthropic_oauth.json AND credential pool
-#          → returns { ok: true, status: "approved" }
+# Anthropic previously had a dashboard-triggered PKCE flow here too (server
+# generates a claude.ai/oauth/authorize URL, exchanges the code for tokens at
+# the Anthropic token endpoint, persists them). It was removed: an unattended
+# HTTP endpoint minting Claude Pro/Max subscription tokens outside Anthropic's
+# own client sits on the wrong side of Anthropic's usage policies for OAuth
+# credentials. The "anthropic" catalog entry is now flow == "external" and
+# points at `clover auth add anthropic` (terminal PKCE, unaffected) instead.
 #
 #   Device code (Clover, OpenAI Codex):
 #     1. POST /api/providers/oauth/{clover|openai-codex}/start
@@ -11140,24 +11366,6 @@ async def disconnect_oauth_provider(
 _OAUTH_SESSION_TTL_SECONDS = 15 * 60
 _oauth_sessions: Dict[str, Dict[str, Any]] = {}
 _oauth_sessions_lock = threading.Lock()
-
-# Import OAuth constants from canonical source instead of duplicating.
-# Guarded so clover web still starts if anthropic_adapter is unavailable;
-# Phase 2 endpoints will return 501 in that case.
-try:
-    from agent.anthropic_adapter import (
-        _OAUTH_CLIENT_ID as _ANTHROPIC_OAUTH_CLIENT_ID,
-        _OAUTH_TOKEN_URL as _ANTHROPIC_OAUTH_TOKEN_URL,
-        _OAUTH_TOKEN_URLS as _ANTHROPIC_OAUTH_TOKEN_URLS,
-        _OAUTH_REDIRECT_URI as _ANTHROPIC_OAUTH_REDIRECT_URI,
-        _OAUTH_SCOPES as _ANTHROPIC_OAUTH_SCOPES,
-        _generate_pkce as _generate_pkce_pair,
-    )
-    _ANTHROPIC_OAUTH_AVAILABLE = True
-except ImportError:
-    _ANTHROPIC_OAUTH_AVAILABLE = False
-_ANTHROPIC_OAUTH_AUTHORIZE_URL = "https://claude.ai/oauth/authorize"
-
 
 def _gc_oauth_sessions() -> None:
     """Drop expired sessions. Called opportunistically on /start."""
@@ -11214,168 +11422,6 @@ def _oauth_session_profile(
     return profile or _oauth_profile_name(fallback)
 
 
-def _save_anthropic_oauth_creds(access_token: str, refresh_token: str, expires_at_ms: int) -> None:
-    """Persist Anthropic PKCE creds to both Clover file AND credential pool.
-
-    Mirrors what auth_commands.add_command does so the dashboard flow leaves
-    the system in the same state as ``clover auth add anthropic``.
-    """
-    from agent.anthropic_adapter import _get_clover_oauth_file
-    oauth_file = _get_clover_oauth_file()
-    payload = {
-        "accessToken": access_token,
-        "refreshToken": refresh_token,
-        "expiresAt": expires_at_ms,
-    }
-    # atomic_json_write creates the temp with mode 0o600 (via mkstemp) *before*
-    # any content is written, then fsyncs and atomically replaces the target.
-    # The previous os.replace + post-hoc chmod left a TOCTOU window in which the
-    # OAuth token file was world-readable at the default umask (0o644 on most
-    # hosts) between the rename and the chmod. atomic_json_write also preserves
-    # the existing file's owner and cleans up its temp on failure.
-    from utils import atomic_json_write
-
-    atomic_json_write(oauth_file, payload, indent=2, mode=0o600)
-    # Best-effort credential-pool insert. Failure here doesn't invalidate
-    # the file write — pool registration only matters for the rotation
-    # strategy, not for runtime credential resolution.
-    try:
-        from agent.credential_pool import (
-            PooledCredential,
-            load_pool,
-            AUTH_TYPE_OAUTH,
-            SOURCE_MANUAL,
-        )
-        import uuid
-        pool = load_pool("anthropic")
-        # Avoid duplicate entries: delete any prior dashboard-issued OAuth entry
-        existing = [e for e in pool.entries() if getattr(e, "source", "").startswith(f"{SOURCE_MANUAL}:dashboard_pkce")]
-        for e in existing:
-            try:
-                pool.remove_entry(getattr(e, "id", ""))
-            except Exception:
-                pass
-        entry = PooledCredential(
-            provider="anthropic",
-            id=uuid.uuid4().hex[:6],
-            label="dashboard PKCE",
-            auth_type=AUTH_TYPE_OAUTH,
-            priority=0,
-            source=f"{SOURCE_MANUAL}:dashboard_pkce",
-            access_token=access_token,
-            refresh_token=refresh_token,
-            expires_at_ms=expires_at_ms,
-        )
-        pool.add_entry(entry)
-    except Exception as e:
-        _log.warning("anthropic pool add (dashboard) failed: %s", e)
-
-
-def _start_anthropic_pkce(profile: Optional[str] = None) -> Dict[str, Any]:
-    """Begin PKCE flow. Returns the auth URL the UI should open."""
-    if not _ANTHROPIC_OAUTH_AVAILABLE:
-        raise HTTPException(status_code=501, detail="Anthropic OAuth not available (missing adapter)")
-    verifier, challenge = _generate_pkce_pair()
-    sid, sess = _new_oauth_session("anthropic", "pkce", profile=profile)
-    sess["verifier"] = verifier
-    sess["state"] = verifier  # Anthropic round-trips verifier as state
-    params = {
-        "code": "true",
-        "client_id": _ANTHROPIC_OAUTH_CLIENT_ID,
-        "response_type": "code",
-        "redirect_uri": _ANTHROPIC_OAUTH_REDIRECT_URI,
-        "scope": _ANTHROPIC_OAUTH_SCOPES,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-        "state": verifier,
-    }
-    auth_url = f"{_ANTHROPIC_OAUTH_AUTHORIZE_URL}?{urllib.parse.urlencode(params)}"
-    return {
-        "session_id": sid,
-        "flow": "pkce",
-        "auth_url": auth_url,
-        "expires_in": _OAUTH_SESSION_TTL_SECONDS,
-    }
-
-
-def _submit_anthropic_pkce(
-    session_id: str,
-    code_input: str,
-    profile: Optional[str] = None,
-) -> Dict[str, Any]:
-    """Exchange authorization code for tokens. Persists on success."""
-    with _oauth_sessions_lock:
-        sess = _oauth_sessions.get(session_id)
-    if not sess or sess["provider"] != "anthropic" or sess["flow"] != "pkce":
-        raise HTTPException(status_code=404, detail="Unknown or expired session")
-    if sess["status"] != "pending":
-        return {"ok": False, "status": sess["status"], "message": sess.get("error_message")}
-
-    # Anthropic's redirect callback page formats the code as `<code>#<state>`.
-    # Strip the state suffix if present (we already have the verifier server-side).
-    parts = code_input.strip().split("#", 1)
-    code = parts[0].strip()
-    if not code:
-        return {"ok": False, "status": "error", "message": "No code provided"}
-    state_from_callback = parts[1] if len(parts) > 1 else ""
-
-    exchange_data = json.dumps({
-        "grant_type": "authorization_code",
-        "client_id": _ANTHROPIC_OAUTH_CLIENT_ID,
-        "code": code,
-        "state": state_from_callback or sess["state"],
-        "redirect_uri": _ANTHROPIC_OAUTH_REDIRECT_URI,
-        "code_verifier": sess["verifier"],
-    }).encode()
-    # Anthropic migrated the OAuth token endpoint to platform.claude.com;
-    # console.anthropic.com now 404s. Try the new host first, then fall back.
-    result = None
-    last_exc = None
-    for _endpoint in _ANTHROPIC_OAUTH_TOKEN_URLS:
-        req = urllib.request.Request(
-            _endpoint,
-            data=exchange_data,
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": "clover-dashboard/1.0",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                result = json.loads(resp.read().decode())
-            break
-        except Exception as e:
-            last_exc = e
-            continue
-    if result is None:
-        with _oauth_sessions_lock:
-            sess["status"] = "error"
-            sess["error_message"] = f"Token exchange failed: {last_exc}"
-        return {"ok": False, "status": "error", "message": sess["error_message"]}
-
-    access_token = result.get("access_token", "")
-    refresh_token = result.get("refresh_token", "")
-    expires_in = int(result.get("expires_in") or 3600)
-    if not access_token:
-        with _oauth_sessions_lock:
-            sess["status"] = "error"
-            sess["error_message"] = "No access token returned"
-        return {"ok": False, "status": "error", "message": sess["error_message"]}
-
-    expires_at_ms = int(time.time() * 1000) + (expires_in * 1000)
-    try:
-        with _profile_scope(_oauth_session_profile(session_id, profile)):
-            _save_anthropic_oauth_creds(access_token, refresh_token, expires_at_ms)
-    except Exception as e:
-        with _oauth_sessions_lock:
-            sess["status"] = "error"
-            sess["error_message"] = f"Save failed: {e}"
-        return {"ok": False, "status": "error", "message": sess["error_message"]}
-    with _oauth_sessions_lock:
-        sess["status"] = "approved"
-    _log.info("oauth/pkce: anthropic login completed (session=%s)", session_id)
-    return {"ok": True, "status": "approved"}
 
 
 async def _start_device_code_flow(
@@ -12020,14 +12066,6 @@ async def start_oauth_login(
             detail=f"{provider_id} uses an external CLI; run `{catalog_entry['cli_command']}` manually",
         )
     try:
-        # The pkce branch is gated on provider_id == "anthropic" because
-        # `_start_anthropic_pkce()` is hardcoded to the Anthropic flow.
-        # Routing any other future pkce-flagged provider through it would
-        # silently launch the Anthropic OAuth flow (the bug fixed in this
-        # change for MiniMax). New PKCE providers must add their own
-        # start function and an explicit branch here.
-        if catalog_entry["flow"] == "pkce" and provider_id == "anthropic":
-            return _start_anthropic_pkce(profile=profile)
         if catalog_entry["flow"] == "device_code":
             return await _start_device_code_flow(provider_id, profile=profile)
     except HTTPException:
@@ -12047,10 +12085,6 @@ async def submit_oauth_code(
 ):
     """Submit the auth code for PKCE flows. Token-protected."""
     _require_token(request)
-    if provider_id == "anthropic":
-        return await asyncio.get_running_loop().run_in_executor(
-            None, _submit_anthropic_pkce, body.session_id, body.code, profile,
-        )
     raise HTTPException(status_code=400, detail=f"submit not supported for {provider_id}")
 
 
@@ -12066,12 +12100,16 @@ async def poll_oauth_session(
     Each surfaces progress through the same background-worker-updated
     ``status`` field, so a single poll endpoint serves them all.
     """
+    _validate_oauth_profile(profile)
+    requested_profile = _oauth_profile_name(profile)
     with _oauth_sessions_lock:
         sess = _oauth_sessions.get(session_id)
     if not sess:
         raise HTTPException(status_code=404, detail="Session not found or expired")
     if sess["provider"] != provider_id:
         raise HTTPException(status_code=400, detail="Provider mismatch for session")
+    if sess.get("profile") != requested_profile:
+        raise HTTPException(status_code=400, detail="OAuth session profile mismatch")
     return {
         "session_id": session_id,
         "status": sess["status"],
@@ -12095,11 +12133,15 @@ async def cancel_oauth_session(
     user believed it was aborted.
     """
     _require_token(request)
+    _validate_oauth_profile(profile)
+    requested_profile = _oauth_profile_name(profile)
     with _oauth_sessions_lock:
         sess = _oauth_sessions.get(session_id)
         if sess is not None:
+            if sess.get("profile") != requested_profile:
+                raise HTTPException(status_code=400, detail="OAuth session profile mismatch")
             sess["cancelled"] = True
-        _oauth_sessions.pop(session_id, None)
+            _oauth_sessions.pop(session_id, None)
     if sess is None:
         return {"ok": False, "message": "session not found"}
     return {"ok": True, "session_id": session_id}
@@ -15320,6 +15362,46 @@ _TERMINAL_BACKENDS: List[Dict[str, str]] = [
 _TERMINAL_BACKEND_NAMES = {row["name"] for row in _TERMINAL_BACKENDS}
 
 
+def _plugin_terminal_backend_rows() -> List[Dict[str, str]]:
+    """Picker rows for plugin-registered terminal backends (fail-soft)."""
+    rows: List[Dict[str, str]] = []
+    try:
+        from clover_cli.plugins import discover_plugins
+
+        discover_plugins()  # idempotent — plugin state may not be loaded yet
+    except Exception:
+        pass
+    try:
+        from agent.terminal_env_registry import list_providers
+
+        for provider in list_providers():
+            try:
+                rows.append({
+                    "name": provider.name.strip().lower(),
+                    "label": provider.display_name,
+                    "description": provider.description,
+                })
+            except Exception:
+                continue
+    except Exception:
+        return rows
+    return rows
+
+
+def _terminal_backend_rows() -> List[Dict[str, str]]:
+    """Built-in picker rows plus plugin-registered backends (request time).
+
+    Computed per request (mirrors ``_schema_with_dynamic_provider_options``)
+    so a plugin installed after server start still shows up.
+    """
+    return [*_TERMINAL_BACKENDS, *_plugin_terminal_backend_rows()]
+
+
+def _terminal_backend_names() -> set:
+    """Valid ``terminal.backend`` values, including plugin backends."""
+    return {row["name"] for row in _terminal_backend_rows()}
+
+
 def _terminal_cfg_value(terminal_cfg: dict, key: str, env_var: str) -> str:
     """Read a terminal.* setting from config.yaml, falling back to its env var."""
     value = terminal_cfg.get(key)
@@ -15432,6 +15514,14 @@ def _probe_terminal_backend(name: str, terminal_cfg: dict) -> tuple:
             return _probe_modal_backend()
         if name == "daytona":
             return _probe_daytona_backend()
+        try:
+            from agent.terminal_env_registry import get_provider
+
+            provider = get_provider(name)
+            if provider is not None:
+                return provider.probe()
+        except Exception:
+            pass
         return ("unavailable", f"Unknown backend: {name}")
     except Exception as exc:  # pragma: no cover — belt-and-braces guard
         return ("unavailable", f"Probe failed: {exc}")
@@ -16121,8 +16211,14 @@ def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
     if not bound_host:
         return None
 
+    trusted_public_hosts = getattr(
+        app.state, "trusted_public_hosts", frozenset()
+    )
+
     host_header = ws.headers.get("host", "")
-    if not _is_accepted_host(host_header, bound_host):
+    if not _is_accepted_host(
+        host_header, bound_host, trusted_public_hosts
+    ):
         return f"host_mismatch host={host_header or '?'} bound={bound_host}"
 
     origin = ws.headers.get("origin", "")
@@ -16139,7 +16235,9 @@ def _ws_host_origin_reason(ws: "WebSocket") -> Optional[str]:
     if not parsed.netloc:
         return f"origin_mismatch origin={origin} bound={bound_host}"
 
-    if not _is_accepted_host(parsed.netloc, bound_host):
+    if not _is_accepted_host(
+        parsed.netloc, bound_host, trusted_public_hosts
+    ):
         return f"origin_mismatch origin={origin} bound={bound_host}"
     return None
 
@@ -16372,14 +16470,34 @@ def _resolve_chat_argv(
     argv, cwd = _make_tui_argv(PROJECT_ROOT / "ui-tui", tui_dev=False)
     # Clover TUI child: build via the single spawn-env factory (profile-home
     # contract applied; secrets kept — the spawned agent needs provider creds).
-    # An explicit profile scope below still overrides CLOVER_HOME afterwards.
+    # An explicit profile scope still overrides CLOVER_HOME before config is
+    # bridged into the child environment.
     from tools.environments.local import build_subprocess_env
     env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=True)
+    if profile_dir is not None:
+        env["CLOVER_HOME"] = str(profile_dir)
     try:
-        from clover_cli.config import apply_terminal_config_to_env
-        apply_terminal_config_to_env(env=env)
+        from clover_cli.config import (
+            apply_terminal_config_to_env,
+            read_raw_config,
+            terminal_config_owned_env_vars,
+        )
+
+        if profile_dir is not None:
+            # The dashboard process already bridged its own terminal config
+            # into os.environ at startup. Remove only keys explicitly owned by
+            # that launch profile before applying the selected profile. Values
+            # exported by the operator for keys omitted from the launch profile
+            # remain valid fallbacks, matching apply_terminal_config_to_env().
+            raw_launch_terminal = read_raw_config().get("terminal")
+            for env_var in terminal_config_owned_env_vars(raw_launch_terminal):
+                env.pop(env_var, None)
+            with _config_profile_scope(requested):
+                apply_terminal_config_to_env(env=env)
+        else:
+            apply_terminal_config_to_env(env=env)
     except Exception:
-        _log.debug("Failed to apply terminal config bridge for dashboard chat", exc_info=True)
+        _log.warning("Failed to apply terminal config bridge for dashboard chat", exc_info=True)
     _apply_tui_python_env(env)
     env.setdefault("NODE_ENV", "production")
     # Browser-embedded chat should prefer stable wheel-based scrollback over
@@ -16402,9 +16520,6 @@ def _resolve_chat_argv(
     # setdefault so an explicit operator value still wins.
     env.setdefault("COLORTERM", "truecolor")
     env["CLOVER_TUI_DASHBOARD"] = "1"
-
-    if profile_dir is not None:
-        env["CLOVER_HOME"] = str(profile_dir)
 
     if resume:
         _resume_db = _open_session_db_for_profile(
@@ -17278,6 +17393,12 @@ async def pty_ws(ws: WebSocket) -> None:
             _forget_active_session_file(active_session_file)
         elif not resume:
             resume = _read_active_session_file(active_session_file)
+            if resume:
+                # The client only knows to pin the viewport to the bottom
+                # when it requested `?resume=`. Tell it a replay is coming
+                # anyway so the implicit active-session fallback gets the
+                # same follow-scroll treatment as an explicit resume (#93518).
+                await ws.send_json({"type": "resume", "id": resume})
 
     resolve_kwargs = {
         "resume": resume,
@@ -17615,18 +17736,54 @@ def mount_spa(application: FastAPI):
     # SPA, even if a dist is lying around from a prior `dashboard`/build. Take
     # the no-frontend path so only the JSON-RPC/WS/API surface is reachable.
     _headless = os.environ.get("CLOVER_SERVE_HEADLESS") == "1"
-    if _headless or not WEB_DIST.exists():
+    if _headless:
         _msg = (
             "Headless backend (clover serve): web UI disabled — use "
             "`clover dashboard` for the browser UI."
-            if _headless
-            else "Frontend not built. Run: cd web && npm run build"
         )
 
         @application.get("/{full_path:path}")
         async def no_frontend(full_path: str):
+            # Desktop token handshake (#94227): the Electron shell boots by
+            # fetching `/` and extracting ``window.__CLOVER_SESSION_TOKEN__``
+            # for /api/ws auth (apps/desktop/electron/dashboard-token.ts).
+            # When headless serve 404'd every path, a renderer whose spawn
+            # token no longer matched the backend's live token (e.g. after
+            # `clover update` replaced the backend) had no way to adopt the
+            # served token — the WS handshake failed and the window
+            # white-screened (#95575). Serve a minimal token-only page at the
+            # exact root, but ONLY when the dashboard auth gate is off: on a
+            # gated (non-loopback/remote) serve the token must never be
+            # readable without auth, so the 404 JSON stays.
+            gated = bool(getattr(application.state, "auth_required", False))
+            if full_path == "" and not gated:
+                token_js = json.dumps(_SESSION_TOKEN)
+                return HTMLResponse(
+                    "<!doctype html><html><head><script>"
+                    f"window.__CLOVER_SESSION_TOKEN__={token_js};"
+                    "window.__CLOVER_AUTH_REQUIRED__=false;"
+                    "</script></head><body>"
+                    "Headless backend (clover serve): web UI disabled — use "
+                    "`clover dashboard` for the browser UI."
+                    "</body></html>",
+                    headers={
+                        "Cache-Control": "no-store, no-cache, must-revalidate"
+                    },
+                )
             return JSONResponse({"error": _msg}, status_code=404)
         return
+
+    # A missing WEB_DIST is deliberately NOT a mount-time terminal state
+    # (#82614): a long-lived `clover dashboard --skip-build` process that
+    # survives a `git pull` (or starts before the first build) used to
+    # install a permanent no_frontend catch-all here and could never
+    # recover — every route answered 404 "Frontend not built" until the
+    # process was restarted, even after `npm run build` completed. The SPA
+    # routes below all cope with a missing dist per-request (`_serve_index`
+    # returns the same 404 JSON when index.html is unreadable; the asset
+    # mounts use check_dir=False and 404 on missing files), so mounting
+    # them unconditionally makes the dashboard recover the moment a build
+    # appears on disk — no restart needed.
 
     _index_path = WEB_DIST / "index.html"
 
@@ -17743,7 +17900,12 @@ def mount_spa(application: FastAPI):
             return response
 
     application.mount(
-        "/assets", _ImmutableAssetFiles(directory=WEB_DIST / "assets"), name="assets"
+        "/assets",
+        # check_dir=False: the dist (and its assets/ dir) may not exist yet —
+        # the whole point of the dynamic recheck (#82614). StaticFiles then
+        # 404s per-request until a build appears instead of raising at mount.
+        _ImmutableAssetFiles(directory=WEB_DIST / "assets", check_dir=False),
+        name="assets",
     )
 
     @application.get("/{full_path:path}")
@@ -19117,6 +19279,178 @@ def _demo() -> None:
     print("web_server parent-death watchdog self-check: OK")
 
 
+# ── Port-conflict sentinel (#93608) ─────────────────────────────────────────
+# When the requested port is already bound, uvicorn's ``bind_socket()``
+# catches the OSError itself and does ``logger.error(exc); sys.exit(1)`` — a
+# bare ERROR line plus the same exit 1 as any real backend crash. The desktop
+# spawn (and any script wrapping ``clover serve``) cannot tell "port occupied"
+# from "backend broken". So we probe the exact bind before handing the socket
+# to uvicorn and, on conflict, emit ONE machine-readable stdout sentinel plus
+# a human hint, then exit with a distinct code.
+#
+# 75 == BSD ``EX_TEMPFAIL`` (sysexits.h) — the codebase's existing convention
+# for "transient environmental condition, not a code failure" (see
+# gateway/restart.py and kanban_db.py's quota-wall sentinel).
+PORT_IN_USE_EXIT_CODE = 75
+
+# One line, stable format, parsed by machines — mirrors the shape of the
+# CLOVER_BACKEND_READY sentinel (which is NOT changed by any of this).
+_PORT_IN_USE_SENTINEL = "BACKEND_PORT_IN_USE port={port}"
+
+
+def _is_addr_in_use_error(exc: OSError) -> bool:
+    """True when ``exc`` is the platform's address-in-use bind failure."""
+    import errno
+
+    codes = {errno.EADDRINUSE, 98, 48, 10048}  # POSIX, Linux, macOS, WinSock
+    if exc.errno in codes:
+        return True
+    return getattr(exc, "winerror", None) == 10048  # WSAEADDRINUSE
+
+
+def _port_bind_conflict(host: str, port: int) -> bool:
+    """Probe whether binding ``host:port`` would fail with EADDRINUSE.
+
+    ``port == 0`` (ephemeral) can never conflict — the kernel picks a free
+    port — so the probe is skipped and ``--port 0`` behaves exactly as
+    before. Any probe error other than address-in-use returns ``False`` so
+    uvicorn surfaces it with its normal diagnostics (bad host, EACCES, …).
+    """
+    if not port:
+        return False
+    import socket as _socket
+
+    family = _socket.AF_INET6 if ":" in host else _socket.AF_INET
+    try:
+        probe = _socket.socket(family, _socket.SOCK_STREAM)
+    except OSError:
+        return False
+    try:
+        import sys as _sys_mod
+
+        _exclusive = getattr(_socket, "SO_EXCLUSIVEADDRUSE", None)
+        if _sys_mod.platform == "win32" and _exclusive is not None:
+            # Windows: SO_REUSEADDR means "bind over anyone" — a probe (or
+            # uvicorn bind) with it SUCCEEDS on top of a live LISTEN socket,
+            # so it can never detect a conflict. SO_EXCLUSIVEADDRUSE makes
+            # the probe fail with WSAEADDRINUSE exactly when another socket
+            # holds the port (the reporter's 10048 shape in #93608).
+            probe.setsockopt(_socket.SOL_SOCKET, _exclusive, 1)
+        else:
+            # POSIX: match uvicorn's bind flags (uvicorn/config.py
+            # bind_socket) so the probe conflicts exactly when uvicorn's own
+            # bind would: SO_REUSEADDR lets TIME_WAIT remnants pass while a
+            # live LISTEN socket still fails.
+            probe.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        probe.bind((host, port))
+    except OSError as exc:
+        return _is_addr_in_use_error(exc)
+    except Exception:
+        return False
+    finally:
+        probe.close()
+    return False
+
+
+def _write_machine_sentinel_line(line: str) -> None:
+    """Write a machine-parsed sentinel line to the REAL stdout (fd 1).
+
+    The serve startup path imports ``tui_gateway.server`` (flush-on-SIGTERM
+    handlers, #94724) which redirects ``sys.stdout`` to ``sys.stderr`` at
+    import time to keep stray prints off the JSON-RPC protocol stream. Any
+    machine-readable sentinel printed after that import via ``print()`` lands
+    on stderr — invisible to consumers that parse the child's stdout pipe
+    (the Desktop spawn, scripts). fd 1 is untouched by the Python-level
+    redirect, so write there.
+
+    Best-effort by design: if fd 1 is unwritable (closed; invalid under
+    pythonw.exe), fall back to ``print()`` for human visibility only — the
+    redirected stream can't reach stdout-parsing consumers, and pythonw
+    Desktop spawns rely on ``_write_dashboard_ready_file()`` (the
+    CLOVER_DESKTOP_READY_FILE channel) for port discovery instead. Never
+    raises: a sentinel-delivery failure must not kill a healthy serve.
+    """
+    try:
+        os.write(1, (line + "\n").encode())
+    except OSError:
+        try:
+            print(line, flush=True)
+        except Exception:
+            pass
+
+
+def _report_port_in_use(host: str, port: int) -> None:
+    """Print the machine sentinel + a human hint naming likely holders."""
+    _write_machine_sentinel_line(_PORT_IN_USE_SENTINEL.format(port=port))
+    print(
+        f"  Port {port} on {host} is already in use — likely another "
+        "'clover serve' / 'clover dashboard' backend or the Clover gateway. "
+        "Stop the other process, or pass --port <other> "
+        "(--port 0 picks a free ephemeral port).",
+        flush=True,
+    )
+
+
+_DEFAULT_DASHBOARD_FORWARDED_ALLOW_IPS = ("127.0.0.1", "::1")
+
+
+def _dashboard_forwarded_allow_ips(dashboard_config: dict[str, Any]) -> list[str]:
+    """Return the bounded proxy addresses uvicorn may trust.
+
+    Uvicorn's default trusts loopback. Preserve that behavior and extend it
+    only with explicit IP addresses or CIDR networks from config. Invalid or
+    unbounded entries fail closed instead of turning arbitrary client-supplied
+    forwarding headers into request metadata.
+    """
+    configured = dashboard_config.get("trusted_proxies", [])
+    if configured in (None, ""):
+        configured = []
+    elif isinstance(configured, str):
+        configured = [configured]
+    elif not isinstance(configured, (list, tuple)):
+        _log.warning(
+            "dashboard.trusted_proxies must be a list of IP addresses or CIDR networks; "
+            "ignoring %r",
+            configured,
+        )
+        configured = []
+
+    trusted = list(_DEFAULT_DASHBOARD_FORWARDED_ALLOW_IPS)
+    for raw_entry in configured:
+        if not isinstance(raw_entry, str) or not raw_entry.strip():
+            _log.warning(
+                "Ignoring invalid dashboard.trusted_proxies entry %r; expected an IP "
+                "address or CIDR network",
+                raw_entry,
+            )
+            continue
+
+        entry = raw_entry.strip()
+        try:
+            if "/" in entry:
+                network = ipaddress.ip_network(entry, strict=False)
+                if network.prefixlen == 0:
+                    raise ValueError("unbounded network")
+                normalized = str(network)
+            else:
+                normalized = str(ipaddress.ip_address(entry))
+        except ValueError:
+            _log.warning(
+                "Ignoring unsafe dashboard.trusted_proxies entry %r; use a bounded IP "
+                "address or CIDR network, never '*' or a /0 network",
+                raw_entry,
+            )
+            continue
+
+        if normalized not in trusted:
+            trusted.append(normalized)
+
+    if trusted != list(_DEFAULT_DASHBOARD_FORWARDED_ALLOW_IPS):
+        _log.info("Dashboard trusted proxies: %s", ", ".join(trusted))
+
+    return trusted
+
+
 def start_server(
     host: str = "127.0.0.1",
     port: int = 9119,
@@ -19161,11 +19495,18 @@ def start_server(
     except Exception as exc:
         _log.debug("Clover auth keepalive did not start: %s", exc)
 
-    # Phase 0: stash the auth-gate flag on app.state so middleware / SPA-token
-    # injection / WS-auth paths can branch on it consistently.  Phase 3.5
-    # uses this to decide whether to refuse the bind, log the gate-on
-    # banner, and enable uvicorn proxy_headers.
-    app.state.auth_required = should_require_auth(host)
+    # A configured browser-facing URL is also the exact Host/Origin trust
+    # declaration for reverse-proxy deployments. Resolve it once at startup so
+    # request middleware never reloads config. Any non-loopback public hostname
+    # engages the auth gate even when the backend itself remains on loopback;
+    # otherwise the SPA's local session token would become remotely reachable.
+    app.state.trusted_public_hosts = _dashboard_public_hosts()
+    # Stash the auth-gate flag on app.state so middleware / SPA-token injection /
+    # WS-auth paths can branch on it consistently. It also decides whether to
+    # refuse startup, log the gate-on banner, and enable uvicorn proxy_headers.
+    app.state.auth_required = should_require_dashboard_auth(
+        host, app.state.trusted_public_hosts
+    )
 
     # ``--insecure`` no longer disables the auth gate (June 2026 hardening:
     # the clover-0day MCP-persistence campaign abused unauthenticated public
@@ -19203,8 +19544,42 @@ def start_server(
             except Exception:
                 pass
 
+            # Name the exact reason the gate engaged. When the bind itself is
+            # loopback the ONLY trigger is dashboard.public_url — an operator
+            # (or a stale config.yaml entry) declared external exposure. Say
+            # so explicitly, print the offending URL, and give the two exits:
+            # configure auth, or remove public_url to restore local-only mode.
+            if host in _LOOPBACK_HOST_VALUES:
+                _public_url_for_msg = ""
+                try:
+                    from clover_cli.dashboard_auth.prefix import (
+                        resolve_public_url as _rpu,
+                    )
+
+                    _public_url_for_msg = _rpu()
+                except Exception:
+                    pass
+                _gate_reason = (
+                    f"dashboard.public_url is set to "
+                    f"{_public_url_for_msg or '<a non-loopback URL>'} — an "
+                    f"operator-declared external URL engages the auth gate "
+                    f"even on a loopback bind"
+                )
+                _local_only_hint = (
+                    "If this dashboard should be LOCAL-ONLY (no reverse "
+                    "proxy), remove dashboard.public_url from config.yaml "
+                    "(and unset CLOVER_DASHBOARD_PUBLIC_URL) to restore the "
+                    "unauthenticated loopback mode.\n"
+                )
+            else:
+                _gate_reason = (
+                    f"the auth gate engages on non-loopback binds ({host})"
+                )
+                _local_only_hint = ""
+
             _fix_hint = (
-                "Configure an auth provider before exposing the dashboard:\n"
+                _local_only_hint
+                + "Configure an auth provider before exposing the dashboard:\n"
                 "  • Password: set dashboard.basic_auth.username + "
                 "password_hash in config.yaml\n"
                 "    (hash with: python -c \"from "
@@ -19212,8 +19587,10 @@ def start_server(
                 "print(hash_password('your-password'))\")\n"
                 "  • OAuth: run `clover dashboard register` (Clover Portal) or "
                 "install a DashboardAuthProvider plugin.\n"
-                "There is no unauthenticated public-bind option — to keep it "
-                "local, bind 127.0.0.1 and tunnel in (SSH / Tailscale)."
+                "There is no unauthenticated public-dashboard option. For "
+                "local-only use, bind 127.0.0.1 and leave dashboard.public_url "
+                "unset; a configured external public URL requires auth even "
+                "when a local reverse proxy reaches a loopback backend."
             )
             # Hint when credentials exist but the bundled provider is blocked
             # (#54489).
@@ -19243,18 +19620,16 @@ def start_server(
                 pass
             if skip_reasons:
                 raise SystemExit(
-                    f"Refusing to bind dashboard to {host} — the auth gate "
-                    f"engages on non-loopback binds, but no auth providers "
-                    f"are registered.\n\n"
+                    f"Refusing to bind dashboard to {host} — {_gate_reason}, "
+                    f"but no auth providers are registered.\n\n"
                     f"Bundled providers reported these issues:\n"
                     + "\n".join(skip_reasons)
                     + "\n\n"
                     + _fix_hint
                 )
             raise SystemExit(
-                f"Refusing to bind dashboard to {host} — the auth gate "
-                f"engages on non-loopback binds, but no auth providers are "
-                f"registered.\n\n" + _fix_hint
+                f"Refusing to bind dashboard to {host} — {_gate_reason}, "
+                f"but no auth providers are registered.\n\n" + _fix_hint
             )
         _log.info(
             "Dashboard binding to %s with auth gate enabled. Providers: %s",
@@ -19276,9 +19651,9 @@ def start_server(
     # (bind port 0 → close → uvicorn rebind): the socket is held by
     # uvicorn the entire time, so no other process can steal the port.
     #
-    # For explicit non-zero ports, if the port is taken uvicorn catches
-    # OSError inside create_server() and exits with a clear error — no
-    # separate preflight probe needed.
+    # For explicit non-zero ports, a taken port is detected by the #93608
+    # preflight probe below (BACKEND_PORT_IN_USE sentinel + distinct exit
+    # code); uvicorn's own bind error remains the fallback for races.
     # Loopback binds are the Desktop case: a single local client, no reverse
     # proxy in front. uvicorn's ws keepalive ping runs ON the same event loop
     # as agent turns, and a single synchronous GIL-holding call on a worker
@@ -19299,6 +19674,20 @@ def start_server(
     # ping at 20/20 to detect it promptly and stay under the tunnel's idle
     # window.
     _is_loopback = host in ("127.0.0.1", "localhost", "::1")
+    # Non-loopback ping cadence is config-driven (dashboard.ws_ping_interval /
+    # dashboard.ws_ping_timeout, #79635); the 20/20 defaults keep the
+    # Cloudflare-Tunnel-friendly behaviour when unset or invalid.
+    try:
+        _dash_cfg = load_config().get("dashboard") or {}
+    except Exception:
+        _dash_cfg = {}
+
+    def _ws_ping_setting(key: str, default: float = 20.0) -> float:
+        try:
+            return float(_dash_cfg.get(key, default))
+        except (TypeError, ValueError):
+            return default
+
     config = uvicorn.Config(
         app, host=host, port=port, log_level="warning",
         # proxy_headers defaults to False so _ws_client_is_allowed sees
@@ -19309,15 +19698,44 @@ def start_server(
         # decide cookie Secure flags, so we flip proxy_headers on for that
         # mode.
         proxy_headers=bool(app.state.auth_required),
+        # Keep uvicorn's loopback-only default unless the operator explicitly
+        # trusts the address or bounded network of an upstream proxy. This is
+        # what lets a separate-container TLS terminator supply HTTPS/client
+        # metadata without accepting spoofed X-Forwarded-* headers from every
+        # caller.
+        forwarded_allow_ips=_dashboard_forwarded_allow_ips(_dash_cfg),
         # Half-open detection for public binds only (see above). Loopback
         # disables the protocol ping (None) so an event-loop stall can never
         # trigger a false disconnect; a genuinely dead local client is still
         # reaped via the WebSocketDisconnect → disconnect/reap path.
-        ws_ping_interval=None if _is_loopback else 20.0,
-        ws_ping_timeout=None if _is_loopback else 20.0,
+        ws_ping_interval=None if _is_loopback else _ws_ping_setting("ws_ping_interval"),
+        ws_ping_timeout=None if _is_loopback else _ws_ping_setting("ws_ping_timeout"),
         ws_max_size=_DESKTOP_ATTACHMENT_WS_MAX_BYTES,
     )
     server = uvicorn.Server(config)
+
+    # Flush-on-kill guard (#94724 item 2): install chaining SIGTERM/SIGINT
+    # handlers that first persist in-memory session transcripts to state.db
+    # (bounded, best-effort) before the normal shutdown story runs. Installed
+    # on the main thread BEFORE uvicorn's capture_signals() so uvicorn saves
+    # these as the "original" handlers and re-raises into them after its own
+    # graceful shutdown — kills outside the serve window are covered too.
+    try:
+        from tui_gateway.server import install_exit_flush_signal_handlers
+
+        install_exit_flush_signal_handlers()
+    except Exception as exc:
+        _log.debug("exit-flush signal handlers not installed: %s", exc)
+
+    # ── #93608: machine-readable port-conflict detection ──────────────
+    # uvicorn's own bind_socket() would catch the EADDRINUSE and exit 1
+    # with a bare ERROR line — indistinguishable from "backend broken".
+    # Probe the exact bind first so a conflict surfaces as the stable
+    # BACKEND_PORT_IN_USE sentinel + a distinct exit code instead.
+    # ``--port 0`` (ephemeral) is skipped by the probe and unaffected.
+    if _port_bind_conflict(host, port):
+        _report_port_in_use(host, port)
+        raise SystemExit(PORT_IN_USE_EXIT_CODE)
 
     async def _serve():
         # Split startup from main_loop so we can read the bound port
@@ -19349,34 +19767,65 @@ def start_server(
                 except Exception as exc:
                     _log.debug("orphan desktop-local serve reap skipped: %s", exc)
 
+            # Same sweep for stdio MCP helper children (#61514): ledger-
+            # identified helpers whose recorded spawner is provably dead are
+            # corpses from a prior unclean exit — reap them before this
+            # backend stacks a fresh MCP tree on top. Positive identity only
+            # (spawn ledger + spawner_is_dead); a helper whose spawner is
+            # alive or unprovable is never touched.
+            try:
+                from clover_cli.process_identity import reap_orphaned_mcp_helpers
+
+                reap_orphaned_mcp_helpers()
+            except Exception as exc:
+                _log.debug("orphan MCP helper reap skipped: %s", exc)
+
             # tui_gateway/slash_worker.py::_start_parent_death_watchdog. No-op
             # for standalone `clover serve` (no CLOVER_PARENT_PID env).
             _start_parent_death_watchdog()
+
+            actual_port = _read_bound_port(server, fallback=port)
+            app.state.bound_port = actual_port
 
             # Positive process identity: record (pid, create_time, purpose,
             # spawner) in the machine spawn ledger and — on Windows — attach
             # to a kill-on-close job so this backend's whole child tree dies
             # with it. Both best-effort; failures degrade to legacy behavior.
+            # Registered AFTER the bind so the entry carries the ACTUAL port
+            # (ephemeral binds included) — the structured host/port/profile
+            # is what lets `clover update` relaunch a manually-started serve
+            # on its real endpoint instead of dropping it (#63206).
             try:
                 from clover_cli.process_identity import (
                     attach_self_to_kill_on_close_job,
                     register_self,
                 )
 
-                register_self("serve" if headless else "dashboard")
+                register_self(
+                    "serve" if headless else "dashboard",
+                    detail={
+                        "host": host,
+                        "port": actual_port,
+                        "profile": initial_profile or "",
+                    },
+                )
                 attach_self_to_kill_on_close_job()
             except Exception as exc:
                 _log.debug("process-identity registration skipped: %s", exc)
-
-            actual_port = _read_bound_port(server, fallback=port)
-            app.state.bound_port = actual_port
 
             _write_dashboard_ready_file(actual_port)
             # Port-discovery sentinel parsed by the desktop spawn. `serve` is a
             # plain backend, not a dashboard, so it announces a neutral token;
             # `dashboard` keeps the legacy one. The desktop matches either.
             ready_token = "CLOVER_BACKEND_READY" if headless else "CLOVER_DASHBOARD_READY"
-            print(f"{ready_token} port={actual_port}", flush=True)
+            # tui_gateway.server (imported above for the flush-on-SIGTERM
+            # handlers, #94724) redirects sys.stdout→sys.stderr at import time
+            # to keep stray prints off the JSON-RPC protocol stream. fd 1 is
+            # still the real stdout — and the Desktop spawn watches
+            # child.stdout for this sentinel — so write to the fd, not to the
+            # (redirected) sys.stdout, or the desktop times out after 90s
+            # against a perfectly healthy backend (#96282).
+            _write_machine_sentinel_line(f"{ready_token} port={actual_port}")
             if headless:
                 # No SPA, and the JSON-RPC/WS endpoints are auth-gated — don't
                 # advertise a paste-and-connect URL, just announce the bind.
@@ -19458,6 +19907,15 @@ def start_server(
             asyncio.run(_serve())
         except KeyboardInterrupt:
             return
+        except SystemExit as exc:
+            # Probe-to-bind race (#93608): another process grabbed the port
+            # between our preflight probe and uvicorn's real bind. uvicorn's
+            # bind_socket() exits 1 — re-check the bind and translate a
+            # confirmed conflict into the sentinel + distinct exit code.
+            if exc.code == 1 and _port_bind_conflict(host, port):
+                _report_port_in_use(host, port)
+                raise SystemExit(PORT_IN_USE_EXIT_CODE) from None
+            raise
         return
 
     # Windows-only path. Resolve the runner + loop factory FIRST (and fall back
@@ -19492,3 +19950,9 @@ def start_server(
             asyncio.run(_serve())
     except KeyboardInterrupt:
         return
+    except SystemExit as exc:
+        # Same probe-to-bind race translation as the POSIX branch (#93608).
+        if exc.code == 1 and _port_bind_conflict(host, port):
+            _report_port_in_use(host, port)
+            raise SystemExit(PORT_IN_USE_EXIT_CODE) from None
+        raise

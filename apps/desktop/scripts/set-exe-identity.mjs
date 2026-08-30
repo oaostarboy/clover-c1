@@ -65,7 +65,7 @@ async function stampExeIdentity(exe, desktopRoot = resolve(import.meta.dirname, 
       ProductName: 'Clover',
       FileDescription: 'Clover',
       CompanyName: 'Clover Cognition',
-      LegalCopyright: 'Copyright (c) 2026 Anthony Nguyen'
+      LegalCopyright: 'Copyright (c) 2026 Clover Cognition'
     }
   })
 

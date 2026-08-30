@@ -40,6 +40,7 @@ the same wake shape every Bot Mode agent already knows.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -517,18 +518,87 @@ def _unlink_dm_file(path: str) -> None:
         pass
 
 
+def _delivery_lock(argv: list[str], *, stdin_file: bool):
+    """Per-profile turn lock context for a LOCAL teammate delivery (#93091).
+
+    Local deliveries (``clover -p <profile> chat …``) collide with relay
+    deliveries into the same profile — both run a Bot Chat turn on this
+    install — so the turn window is serialized on the shared cross-process
+    lock in ``tools.bot_relay``. Peer transports (stdin mode) run on the
+    remote gateway; their turn is locked THERE by its own deliver path.
+    """
+    # The CLI element is matched by basename: local_delivery_command now
+    # resolves the venv-relative clover next to this gateway's interpreter
+    # (#93590 — service contexts lack PATH), so argv[0] may be an absolute
+    # path (and on Windows carries the .exe suffix). Split on both
+    # separators so the shape matches regardless of which platform built
+    # the argv.
+    cli = (argv[0] if argv else "").rsplit("\\", 1)[-1].rsplit("/", 1)[-1]
+    if (
+        stdin_file
+        or len(argv) < 3
+        or cli not in ("clover", "clover.exe")
+        or argv[1] != "-p"
+    ):
+        return contextlib.nullcontext()
+    from tools.bot_relay import acquire_turn_lock
+
+    home = Path(os.getenv("CLOVER_HOME") or os.path.expanduser("~/.clover"))
+    return acquire_turn_lock(_clover_root(home), argv[2])
+
+
 def _run_delivery(argv: list[str], dm_file: str, *, stdin_file: bool) -> int:
-    """Run one DM transport and remove its plaintext file after consumption."""
+    """Run one DM transport and remove its plaintext file after consumption.
+
+    The turn execution window (not the enqueue) holds the target profile's
+    cross-process lock, so two deliveries into one profile queue instead of
+    racing; a bounded wait ends in a structured 'target_busy' refusal.
+
+    Local (query-file) turns get one policy-gated retry (#93091 item 5):
+    transient failures re-run the same session; a context_overflow re-run
+    lets the retried turn's pre-API compaction pass compact the Bot Chat
+    transcript first (agent/conversation_loop.py) — the sanctioned
+    compression lever; no fresh session is ever minted. Auth/quota/config
+    failures never retry. Peer transports (stdin mode) retry on their own
+    gateway's deliver path, not here.
+    """
     try:
-        if stdin_file:
-            # Keep the file open until the transport exits; cleanup occurs
-            # after subprocess.run returns, not merely after stdin reaches EOF.
-            with open(dm_file, "r", encoding="utf-8") as stream:
-                return subprocess.run(argv, stdin=stream, check=False).returncode
-        return subprocess.run(
-            [*argv, "--query-file", dm_file],
-            check=False,
-        ).returncode
+        with _delivery_lock(argv, stdin_file=stdin_file):
+            if stdin_file:
+                # Keep the file open until the transport exits; cleanup occurs
+                # after subprocess.run returns, not merely after stdin reaches EOF.
+                with open(dm_file, "r", encoding="utf-8") as stream:
+                    return subprocess.run(argv, stdin=stream, check=False).returncode
+            proc = subprocess.run(
+                [*argv, "--query-file", dm_file],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode != 0:
+                from tools.bot_failure_reasons import (
+                    RETRY_NONE,
+                    classify_agent_error,
+                    retry_action,
+                )
+
+                detail = (proc.stderr or proc.stdout or "").strip()[-500:]
+                if retry_action(classify_agent_error(detail)) != RETRY_NONE:
+                    proc = subprocess.run(
+                        [*argv, "--query-file", dm_file],
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+            # Re-emit the transport's streams: stdout is the reply text the
+            # completion notification carries back to the sending agent.
+            if proc.stdout:
+                sys.stdout.write(proc.stdout)
+                sys.stdout.flush()
+            if proc.stderr:
+                sys.stderr.write(proc.stderr)
+                sys.stderr.flush()
+            return proc.returncode
     finally:
         _unlink_dm_file(dm_file)
 
@@ -543,6 +613,12 @@ def _delivery_command(argv: list[str], dm_file: str, *, stdin_file: bool) -> str
         dm_file,
         *argv,
     ]
+    if sys.platform == "win32":
+        # The tracked local backend uses Git Bash on native Windows. Forward
+        # slashes preserve native drive paths while remaining executable by
+        # that shell; backslash-form paths are parsed as command names and die
+        # with exit 127 before this runner starts.
+        runner_argv = [part.replace("\\", "/") for part in runner_argv]
     return shlex.join(runner_argv)
 
 
@@ -594,6 +670,8 @@ def _spawn_delivery(
             background=True,
             notify_on_complete=True,
             task_id=task_id,
+            workdir=str(Path(__file__).resolve().parent.parent),
+            _host_local=True,
         )
         try:
             parsed = json.loads(raw)
@@ -639,6 +717,14 @@ def _delivery_main(args: list[str]) -> int:
     try:
         return _run_delivery(args[3:], dm_file, stdin_file=stdin_file)
     except Exception as exc:
+        # 'target_busy' extends the #93091 item-1 structured refusal enum:
+        # the queued delivery gave up after its bounded wait — surface the
+        # structured payload on stdout so the completion notification carries
+        # it back to the sending agent.
+        reason = getattr(exc, "reason", "")
+        if reason == "target_busy":
+            print(json.dumps({"error": str(exc), "reason": "target_busy"}))
+            return 1
         print(
             f"message_agent delivery failed: {type(exc).__name__}: {exc}",
             file=sys.stderr,

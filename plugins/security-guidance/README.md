@@ -85,4 +85,4 @@ not a substitute for code review, SAST, dependency scanning, or pen testing.
   [Apache License 2.0](./LICENSE). See [NOTICE](./NOTICE) for the full
   attribution.
 * `__init__.py`, `plugin.yaml`, `README.md`, and tests are original work by
-  Clover Cognition, MIT-licensed alongside the rest of clover-c1.
+  cloverc1, MIT-licensed alongside the rest of clover-c1.

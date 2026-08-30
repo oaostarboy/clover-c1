@@ -38,6 +38,10 @@ export interface CloverReadyOptions {
 export const REMOTE_SESSION_EXPIRED_MESSAGE =
   'Your remote gateway session has expired. Open Settings → Gateway and click "Sign in" again.'
 
+export const REMOTE_UNSIGNED_OAUTH_MESSAGE =
+  'Remote Clover gateway uses OAuth, but you are not signed in. ' +
+  'Open Settings → Gateway and click "Sign in", or switch back to Local.'
+
 /**
  * True for HTTP 502/503/504 from the backend — a server-side fault, not a
  * connectivity or auth issue. These keep polling in the readiness loop but,
@@ -100,8 +104,8 @@ export function isServerSideHttpError(error: unknown): {
  * isCloudBackendDown, statusCode, detail, and the original cause. The renderer
  * overlay keys on isCloudBackendDown/statusCode; main owns the classification.
  */
-export function makeCloverCloudBackendDownError(baseUrl: string, error: unknown): Error | null {
-  if (!isCloverCloudAgentUrl(baseUrl)) {
+export function makeNousCloudBackendDownError(baseUrl: string, error: unknown): Error | null {
+  if (!isNousCloudAgentUrl(baseUrl)) {
     return null
   }
 
@@ -116,7 +120,7 @@ export function makeCloverCloudBackendDownError(baseUrl: string, error: unknown)
   try {
     hostname = new URL(baseUrl).hostname
   } catch {
-    // baseUrl is known to parse (isCloverCloudAgentUrl already did); keep the raw
+    // baseUrl is known to parse (isNousCloudAgentUrl already did); keep the raw
     // value as a last resort rather than throwing.
   }
 
@@ -127,7 +131,7 @@ export function makeCloverCloudBackendDownError(baseUrl: string, error: unknown)
       `(HTTP ${serverError.statusCode}: server-side fault). ` +
       'Check  for backend status, ' +
       'or switch to Local mode in Settings → Gateway. ' +
-      'You can also reach out on Discord at  ' +
+      'You can also reach out on Discord at discord.gg/cloverc1 ' +
       'for immediate assistance. ' +
       `Original detail: ${detail}`
   ) as any
@@ -146,7 +150,7 @@ export function makeCloverCloudBackendDownError(baseUrl: string, error: unknown)
  * the user cannot restart themselves — a 503 from one means the server is down
  * and the recovery path is Portal/Discord/wait.
  */
-export function isCloverCloudAgentUrl(baseUrl: string): boolean {
+export function isNousCloudAgentUrl(baseUrl: string): boolean {
   try {
     const host = new URL(baseUrl).hostname
 
@@ -196,6 +200,19 @@ export function makeReauthRequiredError(detail?: string): Error {
   if (detail) {
     error.detail = detail
   }
+
+  return error
+}
+
+/**
+ * No native token and no live cookie: boot cannot self-heal. Must carry
+ * `isReauthRequired` so startClover latches; `needsOauthLogin` alone only
+ * drives Sign in copy and would retry after #88070, hiding the overlay.
+ */
+export function makeUnsignedOauthError(): Error {
+  const error = new Error(REMOTE_UNSIGNED_OAUTH_MESSAGE) as any
+  error.needsOauthLogin = true
+  error.isReauthRequired = true
 
   return error
 }
@@ -290,7 +307,7 @@ export async function waitForCloverReady(baseUrl: string, options: CloverReadyOp
   // Surface an actionable error instead (#85335). This is the SAME factory
   // buildRemoteConnection uses at the OAuth WS-ticket-mint boundary, so both
   // startup paths produce the identical Cloud-down shape.
-  const cloudError = makeCloverCloudBackendDownError(baseUrl, lastError)
+  const cloudError = makeNousCloudBackendDownError(baseUrl, lastError)
 
   if (cloudError !== null) {
     throw cloudError

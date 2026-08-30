@@ -368,7 +368,7 @@ _CLOVER_MODEL_WARNING = (
 # happen to carry "clover" in their tag but are fully tool-capable.
 #
 # Positive examples the regex must match:
-#   Clover Cognition/Clover-3-Llama-3.1-70B, clover-4-405b, openrouter/clover3:70b
+#   cloverc1/Clover-3-Llama-3.1-70B, clover-4-405b, openrouter/clover3:70b
 # Negative examples it must NOT match:
 #   clover-brain:qwen3-14b-ctx16k, qwen3:14b, claude-opus-4-6
 _CLOVER_CLOVER_NON_AGENTIC_RE = re.compile(
@@ -620,11 +620,13 @@ class ModelSwitchResult:
     api_key: str = ""
     base_url: str = ""
     api_mode: str = ""
+    request_overrides: Optional[dict] = None
     error_message: str = ""
     warning_message: str = ""
     provider_label: str = ""
     resolved_via_alias: str = ""
     capabilities: Optional[ModelCapabilities] = None
+    runtime_capabilities: Optional[dict[str, bool]] = None
     model_info: Optional[ModelInfo] = None
     is_global: bool = False
 
@@ -1496,6 +1498,7 @@ def switch_model(
     from clover_cli.runtime_provider import resolve_runtime_provider
 
     resolved_alias = ""
+    request_overrides: dict = {}
     new_model = raw_input.strip()
     target_provider = current_provider
     resolved_moa_preset = False
@@ -1847,6 +1850,7 @@ def switch_model(
     api_key = current_api_key
     base_url = current_base_url
     api_mode = ""
+    runtime_capabilities: dict[str, bool] = {}
     ollama_headers: dict[str, str] = {}
     validation_headers: dict[str, str] = {}
     suppress_ollama_headers = False
@@ -1891,6 +1895,7 @@ def switch_model(
                 api_key = runtime.get("api_key", "") or _ukey
                 base_url = runtime.get("base_url", "") or _user_pdef.base_url
                 api_mode = runtime.get("api_mode", "")
+                runtime_capabilities = runtime.get("capabilities") or {}
                 validation_headers = runtime.get("extra_headers") or validation_headers
             except Exception:
                 api_key = _ukey
@@ -1909,6 +1914,7 @@ def switch_model(
                 api_key = runtime.get("api_key", "")
                 base_url = runtime.get("base_url", "")
                 api_mode = runtime.get("api_mode", "")
+                runtime_capabilities = runtime.get("capabilities") or {}
                 validation_headers = runtime.get("extra_headers") or validation_headers
             except Exception as e:
                 return ModelSwitchResult(
@@ -1969,6 +1975,7 @@ def switch_model(
                 api_key = runtime.get("api_key", "")
                 base_url = runtime.get("base_url", "")
                 api_mode = runtime.get("api_mode", "")
+                runtime_capabilities = runtime.get("capabilities") or {}
                 validation_headers = runtime.get("extra_headers") or validation_headers
             except Exception:
                 pass
@@ -2171,6 +2178,13 @@ def switch_model(
 
     # --- Get capabilities (legacy) ---
     capabilities = get_model_capabilities(target_provider, new_model, allow_network=True)
+    from agent.native_compaction import resolve_native_compaction_capabilities
+    runtime_capabilities = resolve_native_compaction_capabilities(
+        model=new_model,
+        base_url=base_url,
+        provider=target_provider,
+        is_codex_backend=target_provider.strip().lower() == "openai-codex",
+    )
 
     # --- Get full model info from models.dev ---
     model_info = get_model_info(target_provider, new_model, allow_network=True)
@@ -2183,6 +2197,22 @@ def switch_model(
     if clover_warn:
         warnings.append(clover_warn)
 
+    # Carry the switched provider's request_overrides (e.g. a custom_providers
+    # ``extra_body`` such as chat_template_kwargs) so a ``/model`` switch to a
+    # custom provider applies it on the gateway, matching the default-provider
+    # path. resolve_runtime_provider surfaces these for named custom providers.
+    request_overrides = None
+    try:
+        from clover_cli.runtime_provider import (
+            _get_named_custom_provider,
+            _custom_provider_request_overrides,
+        )
+        _cp_for_ro = _get_named_custom_provider(target_provider)
+        if _cp_for_ro:
+            request_overrides = _custom_provider_request_overrides(_cp_for_ro) or None
+    except Exception:
+        request_overrides = None
+
     # --- Build result ---
     return ModelSwitchResult(
         success=True,
@@ -2192,10 +2222,16 @@ def switch_model(
         api_key=api_key,
         base_url=base_url,
         api_mode=api_mode,
+        request_overrides=dict(request_overrides or {}),
         warning_message=" | ".join(warnings) if warnings else "",
         provider_label=provider_label,
         resolved_via_alias=resolved_alias,
         capabilities=capabilities,
+        runtime_capabilities={
+            key: value
+            for key, value in runtime_capabilities.items()
+            if isinstance(key, str) and isinstance(value, bool)
+        },
         model_info=model_info,
         is_global=is_global,
     )
@@ -2643,10 +2679,18 @@ def list_authenticated_providers(
         except Exception:
             pass
 
+    from clover_cli.config import coerce_provider_id, stringify_provider_map
+
     results: List[dict] = []
     seen_slugs: set = set()  # lowercase-normalized to catch case variants (#9545)
-    _current_provider_norm = str(current_provider or "").strip().lower()
-    _current_base_url_norm = str(current_base_url or "").strip().rstrip("/").lower()
+    # PyYAML parses unquoted numeric names (`provider: 2070`) as int. Later
+    # `.strip()` / `.lower()` on that raw value 500s GET /api/model/options.
+    current_provider = coerce_provider_id(current_provider)
+    current_base_url = str(current_base_url or "").strip()
+    current_model = str(current_model or "").strip()
+    _current_provider_norm = current_provider.lower()
+    _current_base_url_norm = current_base_url.rstrip("/").lower()
+    user_providers = stringify_provider_map(user_providers)
 
     def _can_probe_custom_provider(*, row_is_current: bool) -> bool:
         return bool(probe_custom_providers or (probe_current_custom_provider and row_is_current))
@@ -3226,7 +3270,7 @@ def list_authenticated_providers(
                 continue
             if ep_name.lower() in seen_slugs:
                 continue
-            display_name = ep_cfg.get("name", "") or ep_name
+            display_name = coerce_provider_id(ep_cfg.get("name")) or ep_name
             api_url = (
                 ep_cfg.get("base_url", "")
                 or ep_cfg.get("api", "")
@@ -3574,8 +3618,8 @@ def list_authenticated_providers(
             if not isinstance(entry, dict):
                 continue
 
-            raw_name = (entry.get("name") or "").strip()
-            api_url = (
+            raw_name = coerce_provider_id(entry.get("name"))
+            api_url = str(
                 entry.get("base_url", "")
                 or entry.get("url", "")
                 or entry.get("api", "")
@@ -3583,8 +3627,8 @@ def list_authenticated_providers(
             ).strip().rstrip("/")
             if not raw_name or not api_url:
                 continue
-            inline_api_key = (entry.get("api_key") or "").strip()
-            key_env = (entry.get("key_env") or "").strip()
+            inline_api_key = str(entry.get("api_key") or "").strip()
+            key_env = str(entry.get("key_env") or "").strip()
             api_key = inline_api_key or _scoped_key_env(key_env)
             api_mode = str(
                 entry.get("api_mode")

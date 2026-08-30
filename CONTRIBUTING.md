@@ -1,117 +1,127 @@
 # Contributing to Clover Cognition
 
-This guide covers what you need to contribute: dev setup, the architecture, what we merge, and how to get a PR through review.
-
-Read the sections about placement (skill vs tool, in-tree vs plugin) before you write code. Most closed PRs here are good code in the wrong place, and that is a frustrating way to find out.
+Thank you for contributing to Clover Cognition! This guide covers everything you need: setting up your dev environment, understanding the architecture, deciding what to build, and getting your PR merged.
 
 ---
 
-## What we merge, in order
+## Contribution Priorities
 
-1. **Bug fixes.** Crashes, incorrect behavior, data loss. Always first.
-2. **Cross-platform compatibility.** macOS, Linux distros, native Windows, WSL2. Clover should work everywhere.
-3. **Security hardening.** Shell injection, prompt injection, path traversal, privilege escalation. See [Security](#security-considerations).
-4. **Performance and robustness.** Retry logic, error handling, graceful degradation.
-5. **New skills**, if they are broadly useful. See [Skill or tool?](#skill-or-tool)
-6. **New tools**, rarely. Most capabilities should be skills. See below.
-7. **Documentation.** Fixes, clarifications, examples.
+We value contributions in this order:
 
----
-
-## Search first
-
-A minute of searching saves an afternoon of work. Duplicates are common here.
-
-Search open **and** merged PRs and issues. The duplicate check in the PR template fires at review time, which is after you have already built the thing:
-
-```bash
-gh search issues --repo clover-c1 "<your terms>"
-gh search prs --repo clover-c1 --state all "<your terms>"
-```
-
-The issue tracker lags the code. Plenty of requested features are already implemented in-tree, so grep the source before proposing a capability. If an open PR already covers it, review that one instead of opening a competitor. For anything large, comment on the issue so two people do not build it twice.
-
-Related: #38284 covers the agent-side version of this, Clover checking existing issues and PRs before deep self-troubleshooting. This section is the human half.
+1. **Bug fixes** — crashes, incorrect behavior, data loss. Always top priority.
+2. **Cross-platform compatibility** — macOS, different Linux distros, and WSL2 on Windows. We want Clover to work everywhere.
+3. **Security hardening** — shell injection, prompt injection, path traversal, privilege escalation. See [Security](#security-considerations).
+4. **Performance and robustness** — retry logic, error handling, graceful degradation.
+5. **New skills** — but only broadly useful ones. See [Should it be a Skill or a Tool?](#should-it-be-a-skill-or-a-tool)
+6. **New tools** — rarely needed. Most capabilities should be skills. See below.
+7. **Documentation** — fixes, clarifications, new examples.
 
 ---
 
-## Skill or tool?
+## Before You Start: Search First
 
-The most common question from new contributors, and the answer is almost always **skill**.
+A quick search before you build saves your time and keeps the PR queue clean — duplicates are common here, so it's worth a minute up front.
 
-**Make it a skill when:**
+- **Search both open *and* merged PRs and issues** for your topic or error symptom — the duplicate-check in the PR template fires at review time, after you've already done the work:
+  ```bash
+  gh search issues --repo clover-c1 "<your terms>"
+  gh search prs --repo clover-c1 --state all "<your terms>"
+  ```
+  Or use the web UI: [issues]() · [PRs (all states)]().
+- **The issue tracker can lag the code.** Many requested features are already implemented in-tree, so also search the source (`search_files`, or your editor's grep) for the capability before proposing it.
+- **If an open PR already addresses it**, consider reviewing or improving that one instead of opening a competing duplicate.
+- **For larger work**, comment on the issue to signal you're working on it, so others don't start the same thing.
 
-- The capability is instructions plus shell commands plus tools that already exist
-- It wraps an external CLI or API the agent can reach through `terminal` or `web_extract`
-- It does not need custom Python integration or API key management inside the agent
-- Examples: arXiv search, git workflows, Docker management, PDF processing, email through CLI tools
-
-**Make it a tool when:**
-
-- It needs end-to-end integration with API keys, auth flows, or multi-component config managed by the harness
-- It needs logic that must execute precisely every time, not best-effort from LLM interpretation
-- It handles binary data, streaming, or real-time events that cannot go through a terminal
-- Examples: browser automation (Browserbase session management), TTS (audio encoding plus platform delivery), vision analysis (base64 image handling)
-
-### Should the skill be bundled?
-
-Bundled skills in `skills/` ship with every install, so they need to earn their place in everyone's context window. Document handling, web research, common dev workflows, system administration: things a wide range of people use regularly.
-
-Official but not universal (a paid service integration, a heavyweight dependency) goes in **`optional-skills/`**. It ships with the repo, stays inactive by default, and users find it through `clover skills browse` (labeled "official") and install it with `clover skills install`. No third-party warning, because we vouch for it.
-
-Specialized, community-contributed, or niche belongs on a **Skills Hub**. Upload it to a registry, share it in the Discord, and users install it with `clover skills install`.
+Related: #38284 covers the agent-side analog — Clover itself checking existing issues and PRs before deep self-troubleshooting. This section is the human-contributor complement.
 
 ---
 
-## Memory providers ship as standalone plugins
+## Should it be a Skill or a Tool?
 
-**We are no longer accepting new memory providers into this repo.** The built-in set under `plugins/memory/` (honcho, mem0, supermemory, byterover, hindsight, holographic, openviking, retaindb) is closed. New memory backends should be **standalone plugin repos** that users install into `~/.clover/plugins/` or via a pip entry point.
+This is the most common question for new contributors. The answer is almost always **skill**.
 
-Standalone memory plugins are not second-class. They:
+### Make it a Skill when:
 
-- Implement the same `MemoryProvider` ABC (`agent/memory_provider.py`): `sync_turn`, `prefetch`, `shutdown`, and optionally `post_setup(clover_home, config)` for setup-wizard integration
-- Use the same discovery system, since `discover_memory_providers()` picks them up from user and project plugin directories and pip entry points
-- Integrate with `clover memory setup` through `post_setup()`, no core changes
-- Register their own CLI subcommands via `register_cli(subparser)` in a `cli.py`
-- Get the same lifecycle hooks and config plumbing as in-tree providers
+- The capability can be expressed as instructions + shell commands + existing tools
+- It wraps an external CLI or API that the agent can call via `terminal` or `web_extract`
+- It doesn't need custom Python integration or API key management baked into the agent
+- Examples: arXiv search, git workflows, Docker management, PDF processing, email via CLI tools
 
-PRs adding a new directory under `plugins/memory/` get closed with a pointer to publish it as its own repo. Existing in-tree providers stay, and bug fixes to them are welcome.
+### Make it a Tool when:
 
-This is a coupling decision, not a quality bar. Memory providers are the most common plugin type and they should not all live in this tree.
+- It requires end-to-end integration with API keys, auth flows, or multi-component configuration managed by the agent harness
+- It needs custom processing logic that must execute precisely every time (not "best effort" from LLM interpretation)
+- It handles binary data, streaming, or real-time events that can't go through the terminal
+- Examples: browser automation (Browserbase session management), TTS (audio encoding + platform delivery), vision analysis (base64 image handling)
 
----
+### Should the Skill be bundled?
 
-## Third-party product integrations ship as standalone plugins
+Bundled skills (in `skills/`) ship with every Clover install. They should be **broadly useful to most users**:
 
-Same rule, wider scope: **any plugin that integrates someone else's product does not land in this repo.** Observability backends, vendor SaaS connectors, analytics dashboards, paid-service tie-ins.
+- Document handling, web research, common dev workflows, system administration
+- Used regularly by a wide range of people
 
-The reason is maintenance load. Every external product absorbed into core becomes ours to keep working against a fast-moving codebase, for a backend we do not own and cannot control. Clover ships often and the core moves quickly. Coupling third-party products into it creates an open-ended burden on maintainers.
+If your skill is official and useful but not universally needed (e.g., a paid service integration, a heavyweight dependency), put it in **`optional-skills/`** — it ships with the repo but isn't activated by default. Users can discover it via `clover skills browse` (labeled "official") and install it with `clover skills install` (no third-party warning, built-in trust).
 
-Publish it as a standalone plugin instead:
-
-- Implement the relevant ABC and use the existing discovery path (`~/.clover/plugins/`, project `.clover/plugins/`, or a pip entry point). See [Build a Clover Plugin](docs/guides/build-a-clover-plugin).
-- Register lifecycle hooks (`pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`, `on_session_start`, `on_session_end`), tools (`ctx.register_tool`), and CLI subcommands (`ctx.register_cli_command`) through the surface we already expose. No core changes needed.
-- If your plugin needs something the framework does not expose, that is a feature request to **widen the generic plugin surface** with a new hook or `ctx` method. Never special-case your plugin in core.
-- Promote it in the Discord `#plugins-skills-and-skins` channel.
-
-A well-built integration can pass every automated check and still be closed for this reason. It is a placement decision, not a verdict on your code.
+If your skill is specialized, community-contributed, or niche, it's better suited for a **Skills Hub** — upload it to a skills registry and share it in the [Clover Cognition Discord](). Users can install it with `clover skills install`.
 
 ---
 
-## Development setup
+## Memory Providers: Ship as a Standalone Plugin
+
+**We are no longer accepting new memory providers into this repo.** The set of built-in providers under `plugins/memory/` (honcho, mem0, supermemory, byterover, hindsight, holographic, openviking, retaindb) is closed. If you want to add a new memory backend, publish it as a **standalone plugin repo** that users install into `~/.clover/plugins/` (or via a pip entry point).
+
+Standalone memory plugins:
+
+- Implement the same `MemoryProvider` ABC (`agent/memory_provider.py`) — `sync_turn`, `prefetch`, `shutdown`, and optionally `post_setup(clover_home, config)` for setup-wizard integration
+- Use the same discovery system — `discover_memory_providers()` picks them up from user/project plugin directories and pip entry points
+- Integrate with `clover memory setup` via `post_setup()` — no need to touch core code
+- Can register their own CLI subcommands via `register_cli(subparser)` in a `cli.py` file
+- Get all the same lifecycle hooks and config plumbing as in-tree providers
+
+PRs that add a new directory under `plugins/memory/` will be closed with a pointer to publish the provider as its own repo. Existing in-tree providers stay; bug fixes to them are welcome.
+
+This isn't a quality bar — it's a coupling-and-maintenance decision. Memory providers are the most common plugin type and they shouldn't all live in this tree.
+
+---
+
+## Third-Party Product Integrations: Ship as a Standalone Plugin
+
+The same rule extends to **any plugin that integrates someone else's product or project** — observability/metrics backends, vendor SaaS connectors, analytics dashboards, paid-service tie-ins, and similar third-party integrations. **These do not land in this repo.**
+
+The reason is maintenance load, not quality. Every external product absorbed into the core tree becomes ours to keep working against a fast-moving codebase, for a backend we don't own and can't control. Clover ships a lot and the core moves quickly; coupling third-party products into it creates an open-ended burden on the maintainers.
+
+Publish these as a **standalone plugin repo** instead:
+
+- Implement the relevant ABC and use the existing plugin discovery path (`~/.clover/plugins/`, project `.clover/plugins/`, or a pip entry point) — see [Build a Clover Plugin](docs/guides/build-a-clover-plugin)
+- Register lifecycle hooks (`pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`, `on_session_start`, `on_session_end`), tools (`ctx.register_tool`), and CLI subcommands (`ctx.register_cli_command`) through the surface we already expose — no core changes needed
+- If your plugin needs a capability the framework doesn't expose, that's a feature request to **widen the generic plugin surface** (a new hook or `ctx` method) — never special-case your plugin in core
+- Promote it in the [Clover Cognition Discord]() `#plugins-skills-and-skins` channel so users can find and install it
+
+A well-built third-party-product plugin can clear automated review and still be closed for this reason — it's a placement decision, not a verdict on the code. PRs that add such a directory under `plugins/` will be closed with a pointer to publish it as its own repo.
+
+---
+
+## Development Setup
 
 ### Prerequisites
 
 | Requirement | Notes |
 |-------------|-------|
 | **Git** | With the `git-lfs` extension installed |
-| **Python 3.11 to 3.13** | uv will install it if missing |
+| **Python 3.11–3.13** | uv will install it if missing |
 | **uv** | Fast Python package manager ([install](https://docs.astral.sh/uv/)) |
-| **Node.js 20+** | Optional, needed for browser tools and the WhatsApp bridge (matches root `package.json` engines) |
+| **Node.js 20+** | Optional — needed for browser tools and WhatsApp bridge (matches root `package.json` engines) |
 
-### Use the standard installer
+### Install with the standard installer
 
-The best dev bootstrap is the same path users take. Run the installer, then work inside the repository it cloned. It creates the Clover venv, wires the `clover` command, stamps the install method for `clover update`, and clones the full git project into `$CLOVER_HOME/clover-c1` (usually `~/.clover/clover-c1`). That keeps your environment on the layout the CLI, updater, lazy dependency installer, gateway, and docs tooling all assume.
+For most contributors, the best development bootstrap is the same path users
+take: run the standard installer, then work inside the repository it cloned.
+The installer creates the Clover venv, wires the `clover` command, stamps the
+install method for `clover update`, and clones the full git project into
+`$CLOVER_HOME/clover-c1` (usually `~/.clover/clover-c1`). That keeps your
+development environment on the same layout the CLI, updater, lazy dependency
+installer, gateway, and docs assume.
 
 ```bash
 curl -fsSL  | bash
@@ -124,7 +134,7 @@ uv pip install -e ".[all,dev]"
 npm install
 ```
 
-Then branch and test from that checkout:
+After that, create branches and run tests from that checkout:
 
 ```bash
 git checkout -b fix/description
@@ -133,12 +143,20 @@ scripts/run_tests.sh
 
 ### Manual clone fallback
 
-Use this only when you deliberately do not want the managed layout, for example a throwaway clone in a container or CI job. If you install this way, run the `clover` entrypoint from this venv. Running the system `python3 -m clover_cli.main` can pick up unrelated system packages.
+Use this only if you intentionally do not want Clover' managed install layout
+(for example, a throwaway clone inside a container or CI job). If you install
+this way, make sure you run the `clover` entrypoint from this venv; running the
+system `python3 -m clover_cli.main` can pick up unrelated system Python
+packages.
 
-Create the venv **outside** the source tree. A venv that lives inside the directory the agent operates from can be wiped by a relative-path command the agent runs against its own checkout (`rm -rf venv`, `uv venv venv`), which silently destroys the running runtime mid-session. Keeping it outside means no relative path from the workspace resolves to it.
+Create the venv **outside** the cloned source tree. A venv that lives inside
+the directory the agent operates from can be wiped by a relative-path command
+the agent runs against its own checkout (`rm -rf venv`, `uv venv venv`, etc.),
+which silently destroys the running runtime mid-session. Keeping it outside the
+tree means no relative path from the workspace resolves to it.
 
 ```bash
-git clone
+git clone 
 cd clover-c1
 
 # Create venv with Python 3.11, OUTSIDE the source tree
@@ -153,14 +171,14 @@ uv pip install -e ".[all,dev]"
 npm install
 ```
 
-### Configure
+### Configure for development
 
 ```bash
 mkdir -p ~/.clover/{cron,sessions,logs,memories,skills}
 cp cli-config.yaml.example ~/.clover/config.yaml
 touch ~/.clover/.env
 
-# At minimum, one LLM provider key:
+# Add at minimum an LLM provider key:
 echo "OPENROUTER_API_KEY=***" >> ~/.clover/.env
 ```
 
@@ -172,33 +190,34 @@ clover doctor
 clover chat -q "Hello"
 ```
 
-With the manual clone fallback, run `./clover` from the checkout or symlink the venv:
+If you used the manual clone fallback, run `./clover` from the checkout or
+symlink this clone's venv explicitly:
 
 ```bash
 mkdir -p ~/.local/bin
 ln -sf "$(pwd)/venv/bin/clover" ~/.local/bin/clover
 ```
 
-### Tests
+### Run tests
 
 ```bash
-# Preferred, matches CI: hermetic `env -i`, per-file subprocess isolation
-# via run_tests_parallel.py, worker count auto-scaled. See AGENTS.md.
+# Preferred — matches CI (hermetic `env -i`, per-file subprocess isolation
+# via run_tests_parallel.py, worker count auto-scaled); see AGENTS.md
 scripts/run_tests.sh
 
-# Alternative (activate the venv first). Run the wrapper before you open a
-# PR anyway, for parity with GitHub Actions.
+# Alternative (activate the venv first). The wrapper is still recommended
+# for parity with GitHub Actions before you open a PR:
 pytest tests/ -v
 ```
 
 ---
 
-## Project structure
+## Project Structure
 
 ```
 clover-c1/
-├── run_agent.py              # AIAgent class: core conversation loop, tool dispatch, session persistence
-├── cli.py                    # CloverCLI class: interactive TUI, prompt_toolkit integration
+├── run_agent.py              # AIAgent class — core conversation loop, tool dispatch, session persistence
+├── cli.py                    # CloverCLI class — interactive TUI, prompt_toolkit integration
 ├── model_tools.py            # Tool orchestration (thin layer over tools/registry.py)
 ├── toolsets.py               # Tool groupings and presets (clover-cli, clover-telegram, etc.)
 ├── clover_state.py           # SQLite session database with FTS5 full-text search, session titles
@@ -206,7 +225,6 @@ clover-c1/
 │
 ├── agent/                    # Agent internals (extracted modules)
 │   ├── prompt_builder.py         # System prompt assembly (identity, skills, context files, memory)
-│   ├── background_review.py      # Post-turn forked review: saves memories and skills
 │   ├── context_compressor.py     # Auto-summarization when approaching context limits
 │   ├── auxiliary_client.py       # Resolves auxiliary OpenAI clients (summarization, vision)
 │   ├── display.py                # KawaiiSpinner, tool progress formatting
@@ -217,14 +235,14 @@ clover-c1/
 │   ├── main.py                   # Entry point, argument parsing, command dispatch
 │   ├── config.py                 # Config management, migration, env var definitions
 │   ├── setup.py                  # Interactive setup wizard
-│   ├── auth.py                   # Provider registry, OAuth, Clover Portal
+│   ├── auth.py                   # Provider resolution, OAuth, Clover Portal
 │   ├── models.py                 # OpenRouter model selection lists
 │   ├── banner.py                 # Welcome banner, ASCII art
 │   ├── commands.py               # Central slash command registry (CommandDef), autocomplete, gateway helpers
 │   ├── callbacks.py              # Interactive callbacks (clarify, sudo, approval)
 │   ├── doctor.py                 # Diagnostics
 │   ├── skills_hub.py             # Skills Hub CLI + /skills slash command
-│   └── skin_engine.py            # Skin/theme engine: data-driven CLI visual customization
+│   └── skin_engine.py            # Skin/theme engine — data-driven CLI visual customization
 │
 ├── tools/                    # Tool implementations (self-registering)
 │   ├── registry.py               # Central tool registry (schemas, handlers, dispatch)
@@ -237,21 +255,18 @@ clover-c1/
 │   ├── code_execution_tool.py    # Sandboxed Python with RPC tool access
 │   ├── session_search_tool.py    # Search past conversations with FTS5 + anchored windows
 │   ├── cronjob_tools.py          # Scheduled task management
-│   ├── skill_manager_tool.py     # Agent-managed skill creation and editing
+│   ├── skill_tools.py            # Skill search, load, manage
 │   └── environments/             # Terminal execution backends
 │       ├── base.py                   # BaseEnvironment ABC
-│       ├── local.py, docker.py, ssh.py, singularity.py, modal.py, daytona.py, vercel_sandbox.py
+│       ├── local.py, docker.py, ssh.py, singularity.py, modal.py, daytona.py
 │
 ├── gateway/                  # Messaging gateway
-│   ├── run.py                    # GatewayRunner: platform lifecycle, message routing, cron
+│   ├── run.py                    # GatewayRunner — platform lifecycle, message routing, cron
 │   ├── config.py                 # Platform configuration resolution
 │   ├── session.py                # Session store, context prompts, reset policies
-│   ├── platform_registry.py      # Lazy platform plugin discovery and loading
-│   └── platforms/                # In-tree adapters (signal, bluebubbles, weixin, yuanbao, webhook)
+│   └── platforms/                # Platform adapters
+│       ├── telegram.py, discord_adapter.py, slack.py, whatsapp.py
 │
-├── plugins/
-│   ├── platforms/            # Bundled platform plugins (telegram, discord, slack, whatsapp, ...)
-│   └── memory/               # Built-in memory providers (closed set: see above)
 ├── scripts/                  # Installer and bridge scripts
 │   ├── install.sh                # Linux/macOS installer
 │   ├── install.ps1               # Windows PowerShell installer
@@ -260,13 +275,13 @@ clover-c1/
 ├── skills/                   # Bundled skills (copied to ~/.clover/skills/ on install)
 ├── optional-skills/          # Official optional skills (discoverable via hub, not activated by default)
 ├── tests/                    # Test suite
-├── web/                      # Documentation site
+├── website/                  # Documentation site (clover-c1.)
 │
 ├── cli-config.yaml.example   # Example configuration (copied to ~/.clover/config.yaml)
 └── AGENTS.md                 # Development guide for AI coding assistants
 ```
 
-### User configuration in `~/.clover/`
+### User configuration (stored in `~/.clover/`)
 
 | Path | Purpose |
 |------|---------|
@@ -276,15 +291,15 @@ clover-c1/
 | `~/.clover/skills/` | All active skills (bundled + hub-installed + agent-created) |
 | `~/.clover/memories/` | Persistent memory (MEMORY.md, USER.md) |
 | `~/.clover/state.db` | SQLite session database |
-| `~/.clover/sessions/` | Gateway routing index (`sessions.json`), request-dump breadcrumbs, gateway `*.jsonl` transcripts, and optional per-session JSON snapshots when `sessions.write_json_snapshots: true`. Snapshots are off by default; state.db is canonical. |
+| `~/.clover/sessions/` | Gateway routing index (`sessions.json`), request-dump breadcrumbs, gateway `*.jsonl` transcripts, and (optionally) per-session JSON snapshots when `sessions.write_json_snapshots: true` is set. The per-session snapshots are off by default; state.db is canonical. |
 | `~/.clover/cron/` | Scheduled job data |
 | `~/.clover/whatsapp/session/` | WhatsApp bridge credentials |
 
 ---
 
-## Architecture
+## Architecture Overview
 
-### Core loop
+### Core Loop
 
 ```
 User message → AIAgent._run_agent_loop()
@@ -301,35 +316,34 @@ User message → AIAgent._run_agent_loop()
   └── Context compression if approaching token limit
 ```
 
-### Design patterns worth knowing before you edit
+### Key Design Patterns
 
-- **Self-registering tools.** Each tool file calls `registry.register()` at import time. `model_tools.py` triggers discovery by importing all tool modules. There is no manual import list to maintain.
-- **Toolset grouping.** Tools group into toolsets (`web`, `terminal`, `file`, `browser`) that can be enabled or disabled per platform.
-- **Session persistence.** Conversations live in SQLite (`clover_state.py`) with full-text search and unique session titles. Per-session JSON snapshots in `~/.clover/sessions/` were superseded by the SQLite store and are off by default. Opt back in with `sessions.write_json_snapshots: true` if external tooling consumes the JSON directly.
-- **Ephemeral injection.** System prompts and prefill messages are injected at API call time. They are never persisted to the database or logs.
-- **Provider abstraction.** The agent works with any OpenAI-compatible API. Provider resolution happens at init time: Clover Portal OAuth, an API key, or a custom endpoint.
-- **Provider routing.** On OpenRouter, `provider_routing` in config.yaml controls upstream selection (sort by throughput, latency, or price; allow or ignore specific providers; data retention policy). These become `extra_body.provider` in API requests.
-- **The self-improvement loop.** After a turn, `spawn_background_review()` forks the agent onto a daemon thread with a tool whitelist limited to memory and skill management. It never touches the main conversation or the prompt cache. If you are changing anything here, read `references/self-improvement-loop.md` in the `clover-c1-dev` skill for the invariants and the review criteria.
-
----
-
-## Code style
-
-- **PEP 8**, with practical exceptions. We do not enforce strict line length.
-- **Comments** explain non-obvious intent, trade-offs, or API quirks. Do not narrate the code. `# increment counter` adds nothing.
-- **Error handling:** catch specific exceptions. Log with `logger.warning()` or `logger.error()`, and use `exc_info=True` for unexpected errors so stack traces reach the logs.
-- **Cross-platform:** never assume Unix. See [Cross-platform compatibility](#cross-platform-compatibility).
+- **Self-registering tools**: Each tool file calls `registry.register()` at import time. `model_tools.py` triggers discovery by importing all tool modules.
+- **Toolset grouping**: Tools are grouped into toolsets (`web`, `terminal`, `file`, `browser`, etc.) that can be enabled/disabled per platform.
+- **Session persistence**: All conversations are stored in SQLite (`clover_state.py`) with full-text search and unique session titles. Per-session JSON snapshots in `~/.clover/sessions/` were superseded by the SQLite store and are off by default; opt back in with `sessions.write_json_snapshots: true` if you have external tooling that consumes the JSON files directly.
+- **Ephemeral injection**: System prompts and prefill messages are injected at API call time, never persisted to the database or logs.
+- **Provider abstraction**: The agent works with any OpenAI-compatible API. Provider resolution happens at init time (Clover Portal OAuth, OpenRouter API key, or custom endpoint).
+- **Provider routing**: When using OpenRouter, `provider_routing` in config.yaml controls provider selection (sort by throughput/latency/price, allow/ignore specific providers, data retention policies). These are injected as `extra_body.provider` in API requests.
 
 ---
 
-## Adding a tool
+## Code Style
 
-First, check again: [should this be a skill?](#skill-or-tool)
+- **PEP 8** with practical exceptions (we don't enforce strict line length)
+- **Comments**: Only when explaining non-obvious intent, trade-offs, or API quirks. Don't narrate what the code does — `# increment counter` adds nothing
+- **Error handling**: Catch specific exceptions. Log with `logger.warning()`/`logger.error()` — use `exc_info=True` for unexpected errors so stack traces appear in logs
+- **Cross-platform**: Never assume Unix. See [Cross-Platform Compatibility](#cross-platform-compatibility)
 
-Tools self-register. Each file co-locates its schema, handler, and registration:
+---
+
+## Adding a New Tool
+
+Before writing a tool, ask: [should this be a skill instead?](#should-it-be-a-skill-or-a-tool)
+
+Tools self-register with the central registry. Each tool file co-locates its schema, handler, and registration:
 
 ```python
-"""my_tool: Brief description of what this tool does."""
+"""my_tool — Brief description of what this tool does."""
 
 import json
 from tools.registry import registry
@@ -372,15 +386,24 @@ registry.register(
 )
 ```
 
-**Wire it into a toolset. This is required.** Any `tools/*.py` file with a top-level `registry.register(...)` call is auto-imported by `discover_builtin_tools()` in `tools/registry.py` when `model_tools` loads. Discovery is automatic; exposure is not. Add the tool name to the right list in `toolsets.py` (for example `_CLOVER_CORE_TOOLS` or a dedicated toolset), or it will register cleanly and the agent will never see it. New toolset? Add it in `toolsets.py` and wire it into the relevant platform presets.
+**Wire into a toolset (required):** Built-in tools are auto-discovered: any
+`tools/*.py` file that contains a top-level `registry.register(...)` call is
+imported by `discover_builtin_tools()` in `tools/registry.py` when `model_tools`
+loads. There is **no** manual import list in `model_tools.py` to maintain.
 
-See `AGENTS.md`, section **Adding New Tools**, for profile-aware paths and plugin versus core guidance.
+You must still add the tool name to the appropriate list in `toolsets.py`
+(for example `_CLOVER_CORE_TOOLS` or a dedicated toolset); otherwise the tool
+registers but is never exposed to the agent. If you introduce a new toolset,
+add it in `toolsets.py` and wire it into the relevant platform presets.
+
+See `AGENTS.md` (section **Adding New Tools**) for profile-aware paths and
+plugin vs core guidance.
 
 ---
 
-## Adding a skill
+## Adding a Skill
 
-Bundled skills live in `skills/`, organized by category. Official optional skills use the same structure in `optional-skills/`:
+Bundled skills live in `skills/` organized by category. Official optional skills use the same structure in `optional-skills/`:
 
 ```
 skills/
@@ -406,10 +429,10 @@ description: Brief description (shown in skill search results)
 version: 1.0.0
 author: Your Name
 license: MIT
-platforms: [macos, linux]          # Optional: restrict to specific OS platforms
+platforms: [macos, linux]          # Optional — restrict to specific OS platforms
                                    #   Valid: macos, linux, windows
                                    #   Omit to load on all platforms (default)
-required_environment_variables:    # Optional: secure setup-on-load metadata
+required_environment_variables:    # Optional — secure setup-on-load metadata
   - name: MY_API_KEY
     prompt: API key
     help: Where to get it
@@ -421,8 +444,8 @@ metadata:
   clover:
     tags: [Category, Subcategory, Keywords]
     related_skills: [other-skill-name]
-    fallback_for_toolsets: [web]       # Optional: show only when toolset is unavailable
-    requires_toolsets: [terminal]      # Optional: show only when toolset is available
+    fallback_for_toolsets: [web]       # Optional — show only when toolset is unavailable
+    requires_toolsets: [terminal]      # Optional — show only when toolset is available
 ---
 
 # Skill Title
@@ -430,7 +453,7 @@ metadata:
 Brief intro.
 
 ## When to Use
-Trigger conditions: when should the agent load this skill?
+Trigger conditions — when should the agent load this skill?
 
 ## Prerequisites
 Env vars, install steps, MCP setup, API key sourcing.
@@ -451,23 +474,23 @@ Known failure modes and how to handle them.
 How the agent confirms it worked.
 ```
 
-### Platform gating
+### Platform-specific skills
 
-Skills declare supported OS platforms via `platforms`. Gated skills are hidden from the system prompt, `skills_list()`, and slash commands on incompatible platforms.
+Skills can declare which OS platforms they support via the `platforms` frontmatter field. Skills with this field are automatically hidden from the system prompt, `skills_list()`, and slash commands on incompatible platforms.
 
 ```yaml
-platforms: [macos]            # macOS only (iMessage, Apple Reminders)
+platforms: [macos]            # macOS only (e.g., iMessage, Apple Reminders)
 platforms: [macos, linux]     # macOS and Linux
 platforms: [windows]          # Windows only
 ```
 
-Omit the field and the skill loads everywhere. See `skills/apple/` for macOS-only examples.
+If the field is omitted or empty, the skill loads on all platforms (backward compatible). See `skills/apple/` for examples of macOS-only skills.
 
-### Conditional activation
+### Conditional skill activation
 
-Skills can declare conditions based on which tools and toolsets exist in the current session. This is mostly for **fallback skills**: alternatives that should only appear when a primary tool is missing.
+Skills can declare conditions that control when they appear in the system prompt, based on which tools and toolsets are available in the current session. This is primarily used for **fallback skills** — alternatives that should only be shown when a primary tool is unavailable.
 
-Four fields under `metadata.clover`:
+Four fields are supported under `metadata.clover`:
 
 ```yaml
 metadata:
@@ -478,33 +501,36 @@ metadata:
     requires_tools: [terminal]        # Show ONLY when these specific tools are available
 ```
 
-- `fallback_for_*`: the skill is a backup. Hidden when the listed tools or toolsets are available, shown when they are not. Use it for free alternatives to premium tools.
-- `requires_*`: the skill needs those capabilities. Hidden when they are unavailable.
-- Both specified: both must be satisfied.
-- Neither specified: always shown.
+**Semantics:**
+- `fallback_for_*`: The skill is a backup. It is **hidden** when the listed tools/toolsets are available, and **shown** when they are unavailable. Use this for free alternatives to premium tools.
+- `requires_*`: The skill needs certain tools to function. It is **hidden** when the listed tools/toolsets are unavailable. Use this for skills that depend on specific capabilities (e.g., a skill that only makes sense with terminal access).
+- If both are specified, both conditions must be satisfied for the skill to appear.
+- If neither is specified, the skill is always shown (backward compatible).
+
+**Examples:**
 
 ```yaml
-# DuckDuckGo search: shown when Firecrawl (web toolset) is unavailable
+# DuckDuckGo search — shown when Firecrawl (web toolset) is unavailable
 metadata:
   clover:
     fallback_for_toolsets: [web]
 
-# Smart home skill: only useful when terminal is available
+# Smart home skill — only useful when terminal is available
 metadata:
   clover:
     requires_toolsets: [terminal]
 
-# Local browser fallback: shown when Browserbase is unavailable
+# Local browser fallback — shown when Browserbase is unavailable
 metadata:
   clover:
     fallback_for_toolsets: [browser]
 ```
 
-Filtering happens at prompt build time in `agent/prompt_builder.py`. `build_skills_system_prompt()` receives the available tools and toolsets and evaluates each skill through `_skill_should_show()`.
+The filtering happens at prompt build time in `agent/prompt_builder.py`. The `build_skills_system_prompt()` function receives the set of available tools and toolsets from the agent and uses `_skill_should_show()` to evaluate each skill's conditions.
 
-### Setup metadata
+### Skill setup metadata
 
-Skills declare secure setup-on-load metadata via `required_environment_variables`. Missing values do not hide the skill from discovery. They trigger a CLI-only secure prompt when the skill is loaded.
+Skills can declare secure setup-on-load metadata via the `required_environment_variables` frontmatter field. Missing values do not hide the skill from discovery; they trigger a CLI-only secure prompt when the skill is actually loaded.
 
 ```yaml
 required_environment_variables:
@@ -514,9 +540,9 @@ required_environment_variables:
     required_for: full functionality
 ```
 
-The user can skip setup and keep loading the skill. Clover exposes only metadata to the model (`stored_as`, `skipped`, `validated`), never the secret value.
+The user may skip setup and keep loading the skill. Clover only exposes metadata (`stored_as`, `skipped`, `validated`) to the model — never the secret value.
 
-Legacy `prerequisites.env_vars` still works and normalizes into the new representation.
+Legacy `prerequisites.env_vars` remains supported and is normalized into the new representation.
 
 ```yaml
 prerequisites:
@@ -524,18 +550,23 @@ prerequisites:
   commands: [curl, jq]            # Advisory CLI checks
 ```
 
-Gateway and messaging sessions never collect secrets in-band. They tell the user to run `clover setup` or edit `~/.clover/.env` locally.
+Gateway and messaging sessions never collect secrets in-band; they instruct the user to run `clover setup` or update `~/.clover/.env` locally.
 
-Declare required env vars when the skill uses a key that should be collected securely at load time, and can still degrade gracefully if the user skips. Declare command prerequisites when the skill leans on a CLI that may not be installed (`himalaya`, `openhue`, `ddgs`); treat those as guidance, not discovery-time hiding.
+**When to declare required environment variables:**
+- The skill uses an API key or token that should be collected securely at load time
+- The skill can still be useful if the user skips setup, but may degrade gracefully
+
+**When to declare command prerequisites:**
+- The skill relies on a CLI tool that may not be installed (e.g., `himalaya`, `openhue`, `ddgs`)
+- Treat command checks as guidance, not discovery-time hiding
 
 See `skills/gifs/gif-search/` and `skills/email/himalaya/` for examples.
 
-### Skill authoring standards (hardline)
+### Skill authoring standards (HARDLINE)
 
-Every new or modernized skill, bundled or optional or contributed, meets these before merge. Reviewers reject PRs that violate them.
+Every new or modernized skill — bundled, optional, or contributed — must meet these standards before merge. Reviewers reject PRs that violate them.
 
-1. **`description` is 60 characters or fewer, one sentence, ending in a period.** Long descriptions bloat the listing UI and dilute the model's attention when many skills load at once. State the capability, not the implementation. No marketing words ("powerful", "comprehensive", "seamless", "advanced"). Do not repeat the skill name. Verify:
-
+1. **`description` ≤ 60 characters, one sentence, ends with a period.** Long descriptions bloat the skill listing UI and dilute the model's attention when many skills are loaded. State the capability, not the implementation. No marketing words ("powerful", "comprehensive", "seamless", "advanced"). Don't repeat the skill name. Verify with:
    ```python
    import re, pathlib
    m = re.search(r'^description: (.*)$',
@@ -547,9 +578,9 @@ Every new or modernized skill, bundled or optional or contributed, meets these b
    Good: `Search arXiv papers by keyword, author, category, or ID.`
    Bad: `A powerful and comprehensive skill that allows the agent to search arXiv for relevant academic papers using various criteria including keywords, authors, and categories.`
 
-2. **Tools named in SKILL.md prose are native Clover tools or MCP servers the skill explicitly expects.** Point at the tool by name in backticks: `` `terminal` ``, `` `web_extract` ``, `` `web_search` ``, `` `read_file` ``, `` `write_file` ``, `` `patch` ``, `` `search_files` ``, `` `vision_analyze` ``, `` `browser_navigate` ``, `` `delegate_task` ``, `` `image_generate` ``, `` `text_to_speech` ``, `` `cronjob` ``, `` `memory` ``, `` `skill_view` ``, `` `todo` ``, `` `execute_code` ``.
+2. **Tools referenced in SKILL.md prose must be native Clover tools or MCP servers the skill explicitly expects.** When the skill needs a capability, point at the proper tool by name in backticks: `` `terminal` ``, `` `web_extract` ``, `` `web_search` ``, `` `read_file` ``, `` `write_file` ``, `` `patch` ``, `` `search_files` ``, `` `vision_analyze` ``, `` `browser_navigate` ``, `` `delegate_task` ``, `` `image_generate` ``, `` `text_to_speech` ``, `` `cronjob` ``, `` `memory` ``, `` `skill_view` ``, `` `todo` ``, `` `execute_code` ``.
 
-   Do not name shell utilities the agent already has wrapped:
+   Do NOT name shell utilities the agent already has wrapped:
 
    | Don't say | Say |
    |---|---|
@@ -560,43 +591,45 @@ Every new or modernized skill, bundled or optional or contributed, meets these b
    | `curl` for content extraction | `web_extract` |
    | `echo > file`, `cat <<EOF` | `write_file` |
 
-   If the skill depends on an MCP server, name it and document setup under `## Prerequisites`. Third-party CLIs (`ffmpeg`, `gh`, a specific SDK) are fine inside script files, but the prose should frame it as "invoke through the `terminal` tool", not as a manual shell session.
+   If the skill depends on an MCP server, name the MCP server and document its setup in `## Prerequisites`. Third-party CLIs (e.g. `ffmpeg`, `gh`, a specific SDK) are fine to invoke from inside script files, but the prose should frame the interaction as "invoke through the `terminal` tool", not as a manual shell session.
 
-3. **`platforms:` gating is audited against actual script imports.** Skills using POSIX-only primitives (`fcntl`, `termios`, `os.setsid`, `os.kill(pid, 0)` for liveness, `/proc`, hardcoded `/tmp` paths, `signal.SIGKILL`, bash heredocs, `osascript`, `apt`, `systemctl`) must declare `platforms:`. The default move is to fix it cross-platform first: `tempfile.gettempdir()`, `pathlib.Path`, `psutil.pid_exists()`, Python-level filtering instead of `grep`. Gate to a narrower set only when the dependency is genuinely platform-bound, like `osascript` on macOS or `/proc` on Linux.
+3. **`platforms:` gating audited against actual script imports.** Skills that use POSIX-only primitives (`fcntl`, `termios`, `os.setsid`, `os.kill(pid, 0)` for liveness, `/proc`, hardcoded `/tmp` paths, `signal.SIGKILL`, bash heredocs, `osascript`, `apt`, `systemctl`) must declare their supported platforms via the `platforms:` frontmatter. Default posture is to fix it cross-platform first — `tempfile.gettempdir()`, `pathlib.Path`, `psutil.pid_exists()`, Python-level filtering instead of `grep`. Gate to a narrower set only when the dependency is genuinely platform-bound (e.g. `osascript` is macOS-only, `/proc` is Linux-only).
 
-4. **`author` credits the human first.** For external contributions, the contributor's real name plus GitHub handle goes first (`Jane Doe (jane-doe)`), with "Clover Cognition" as secondary collaborator. If a commit shows "Clover Cognition" as author because the contributor used Clover to draft the skill, replace it with their actual name. Credit the person, not the tool.
+4. **`author` credits the human contributor first.** For external contributions, the contributor's real name + GitHub handle goes first (`Jane Doe (jane-doe)`); "Clover Cognition" is the secondary collaborator. If the contributor's commit shows "Clover Cognition" as author because they used Clover to draft the skill, replace it with their actual name — credit the human, not the tool.
 
-5. **The body uses the modern section order.** A `# <Skill> Skill` title, a 2 to 3 sentence intro covering what it does and what it does not do, then:
-   - `## When to Use`, trigger conditions
-   - `## Prerequisites`, env vars, install steps, MCP setup, API key sourcing
-   - `## How to Run`, canonical invocation through the `terminal` tool
-   - `## Quick Reference`, flat command and API reference
-   - `## Procedure`, numbered steps with copy-paste commands
-   - `## Pitfalls`, known limits, rate limits, things that look broken but are not
-   - `## Verification`, a single command that proves the skill works
+5. **SKILL.md body uses the modern section order.** `# <Skill> Skill` title, 2-3 sentence intro stating what it does and what it doesn't do, then:
+   - `## When to Use` — trigger conditions
+   - `## Prerequisites` — env vars, install steps, MCP setup, API key sourcing
+   - `## How to Run` — canonical invocation through the `terminal` tool
+   - `## Quick Reference` — flat command/API reference
+   - `## Procedure` — numbered steps with copy-paste commands
+   - `## Pitfalls` — known limits, rate limits, things that look broken but aren't
+   - `## Verification` — single command that proves the skill works
 
-   Aim for roughly 200 lines for a complex skill and 100 for a simple one. Cut intro fluff, marketing prose, and re-explanations of env vars already covered in `## Prerequisites`.
+   Target ~200 lines for a complex skill, ~100 lines for a simple one. Cut redundant intro fluff, marketing prose, and re-explanations of env vars already documented in `## Prerequisites`.
 
-6. **Scripts in `scripts/`, references in `references/`, templates in `templates/`.** Do not make the model inline-write parsers, XML walkers, or non-trivial logic on every call. Ship a helper script and reference it by path relative to the skill directory.
+6. **Scripts go in `scripts/`, references in `references/`, templates in `templates/`.** Don't expect the model to inline-write parsers, XML walkers, or non-trivial logic every call — ship a helper script. Reference scripts from SKILL.md by path relative to the skill directory.
 
-7. **Tests live at `tests/skills/test_<skill>_skill.py`** and use stdlib, pytest, and `unittest.mock` only. No live network calls. Run with `scripts/run_tests.sh tests/skills/test_<skill>_skill.py -q`. They must pass under the hermetic CI env, with no API keys leaking through. Use `monkeypatch` and `tmp_path` for env-var and filesystem dependencies.
+7. **Tests live at `tests/skills/test_<skill>_skill.py`** and use only stdlib + pytest + `unittest.mock`. No live network calls. Run via `scripts/run_tests.sh tests/skills/test_<skill>_skill.py -q`. Must pass under the hermetic CI env (no API keys leaking through). Use `monkeypatch` and `tmp_path` for any env-var or filesystem dependencies.
 
-8. **`.env.example` additions stay inside a clearly delimited block.** Do not touch the surrounding file. Contributor-supplied versions of `.env.example` are usually stale, and edits outside your skill's block get dropped during salvage. Comment all values with `#`, since this is documentation, not live config.
+8. **`.env.example` additions are isolated to a clearly delimited block.** Don't touch the surrounding file — contributor-supplied `.env.example` versions are usually stale, and edits outside the skill's own block will be dropped during salvage. Comment all values with `#` (it's documentation, not live config).
 
-### General skill guidelines
+### Skill guidelines
 
-- **Avoid external dependencies.** Prefer stdlib Python, curl, and existing Clover tools (`web_extract`, `terminal`, `read_file`).
-- **Progressive disclosure.** Most common workflow first. Edge cases at the bottom.
-- **Ship helper scripts** for parsing and complex logic.
-- **Test it for real.** Run `clover --toolsets skills -q "Use the X skill to do Y"` and watch whether the agent actually follows your instructions. This is where most skills fall over.
+- **No external dependencies unless absolutely necessary.** Prefer stdlib Python, curl, and existing Clover tools (`web_extract`, `terminal`, `read_file`).
+- **Progressive disclosure.** Put the most common workflow first. Edge cases and advanced usage go at the bottom.
+- **Include helper scripts** for XML/JSON parsing or complex logic — don't expect the LLM to write parsers inline every time.
+- **Test it.** Run `clover --toolsets skills -q "Use the X skill to do Y"` and verify the agent follows the instructions correctly.
 
 ---
 
-## Adding a skin
+## Adding a Skin / Theme
 
-The skin system is data-driven. New skins need no code changes.
+Clover uses a data-driven skin system — no code changes needed to add a new skin.
 
-**Option A: user skin.** Create `~/.clover/skins/<name>.yaml`:
+**Option A: User skin (YAML file)**
+
+Create `~/.clover/skins/<name>.yaml`:
 
 ```yaml
 name: mytheme
@@ -626,56 +659,87 @@ branding:
 tool_prefix: "╎"             # Tool output line prefix
 ```
 
-Every field is optional. Missing values inherit from the default skin.
+All fields are optional — missing values inherit from the default skin.
 
-**Option B: built-in skin.** Add to the `_BUILTIN_SKINS` dict in `clover_cli/skin_engine.py`, same schema as a Python dict. Built-ins ship with the package and are always available.
+**Option B: Built-in skin**
 
-**Activate:** `/skin mytheme` in the CLI, or `display: { skin: mytheme }` in config.yaml.
+Add to `_BUILTIN_SKINS` dict in `clover_cli/skin_engine.py`. Use the same schema as above but as a Python dict. Built-in skins ship with the package and are always available.
 
-See `clover_cli/skin_engine.py` for the full schema and existing examples.
+**Activating:**
+- CLI: `/skin mytheme` or set `display.skin: mytheme` in config.yaml
+- Config: `display: { skin: mytheme }`
+
+See `clover_cli/skin_engine.py` for the full schema and existing skins as examples.
 
 ---
 
-## Cross-platform compatibility
+## Cross-Platform Compatibility
 
-Clover runs on Linux, macOS, native Windows, and WSL2. Assume any platform can reach your code path.
+Clover runs on Linux, macOS, and native Windows (plus WSL2). When writing code
+that touches the OS, assume *any* platform can hit your code path.
 
-> **Before you PR:** run `scripts/check-windows-footguns.py` against your diff. It is grep-based and cheap, and CI runs it on every PR anyway.
+> **Before you PR:** run `scripts/check-windows-footguns.py` to catch the
+> common Windows-unsafe patterns in your diff. It's grep-based and cheap;
+> CI runs it on every PR too.
 
 ### Critical rules
 
-1. **Never call `os.kill(pid, 0)` for liveness checks.** On POSIX, signal 0 is a no-op permission check and this is the standard idiom. **On Windows it is not a no-op.** Python's Windows `os.kill` maps `sig=0` to `CTRL_C_EVENT` (they collide at integer 0) and routes it through `GenerateConsoleCtrlEvent(0, pid)`, which broadcasts Ctrl+C to the **entire console process group** containing the target PID. "Probe if alive" silently becomes "kill the target, plus unrelated processes sharing its console." See [bpo-14484](https://bugs.python.org/issue14484), open since 2012 and never getting fixed, for compatibility reasons.
+1. **Never call `os.kill(pid, 0)` for liveness checks.** `os.kill(pid, 0)`
+   is a standard POSIX idiom to check "is this PID alive" — the signal 0
+   is a no-op permission check. **On Windows it is NOT a no-op.** Python's
+   Windows `os.kill` maps `sig=0` to `CTRL_C_EVENT` (they collide at the
+   integer value 0) and routes it through `GenerateConsoleCtrlEvent(0, pid)`,
+   which broadcasts Ctrl+C to the **entire console process group** containing
+   the target PID. "Probe if alive" silently becomes "kill the target and
+   often unrelated processes sharing its console." See [bpo-14484](https://bugs.python.org/issue14484)
+   (open since 2012 — will never be fixed for compat reasons).
 
-   **Use `psutil`** instead. It is a core dependency, so it is always there:
+   **Preferred:** use `psutil` (a core dependency — always available):
 
    ```python
    import psutil
    if psutil.pid_exists(pid):
-       # process is alive: safe on every platform
+       # process is alive — safe on every platform
        ...
    ```
 
-   If you specifically need the Clover wrapper (it has a stdlib fallback for scaffold-phase imports before pip install finishes), use `gateway.status._pid_exists(pid)`. It calls `psutil.pid_exists` first and falls back to a hand-rolled `OpenProcess + WaitForSingleObject` dance on Windows only when psutil is somehow missing.
+   If you specifically need the clover wrapper (it has a stdlib fallback
+   for scaffold-phase imports before pip install finishes), use
+   `gateway.status._pid_exists(pid)`. It calls `psutil.pid_exists` first
+   and falls back to a hand-rolled `OpenProcess + WaitForSingleObject`
+   dance on Windows only when psutil is somehow missing.
 
-   Audit grep: `rg "os\.kill\([^,]+,\s*0\s*\)"`. Any hit in non-test code is presumptively a Windows silent-kill bug.
+   Audit grep for new callsites: `rg "os\.kill\([^,]+,\s*0\s*\)"`. Any hit
+   in non-test code is presumptively a Windows silent-kill bug.
 
-2. **Use `shutil.which()` before shelling out.** Windows does not have the tools Linux has. `wmic` was removed in Windows 10 21H1. `ps`, `kill`, `grep`, `awk`, `fuser`, `lsof`, `pgrep`, and most POSIX CLI tools do not exist there at all. Test with `shutil.which("tool")` and fall back to a Windows-native equivalent, usually PowerShell via `subprocess.run(["powershell", "-NoProfile", "-Command", ...])`.
+2. **Use `shutil.which()` before shelling out — don't assume Windows has
+   tools Linux has.** `wmic` was removed in Windows 10 21H1 and later. `ps`,
+   `kill`, `grep`, `awk`, `fuser`, `lsof`, `pgrep`, and most POSIX CLI tools
+   simply don't exist on Windows. Test availability with
+   `shutil.which("tool")` and fall back to a Windows-native equivalent —
+   usually PowerShell via `subprocess.run(["powershell", "-NoProfile",
+   "-Command", ...])`.
 
-   For process enumeration, PowerShell's `Get-CimInstance Win32_Process` replaces `wmic process`. See `clover_cli/gateway.py::_scan_gateway_pids` for the pattern.
+   For process enumeration: PowerShell's `Get-CimInstance Win32_Process` is
+   the modern replacement for `wmic process`. See
+   `clover_cli/gateway.py::_scan_gateway_pids` for the pattern.
+   ```
 
-3. **File encoding.** Windows may save `.env` files as `cp1252`. Handle it:
-
+3. **File encoding.** Windows may save `.env` files in `cp1252`. Always
+   handle encoding errors:
    ```python
    try:
        load_dotenv(env_path)
    except UnicodeDecodeError:
        load_dotenv(env_path, encoding="latin-1")
    ```
+   Config files (`config.yaml`) may be saved with a UTF-8 BOM by Notepad and
+   similar editors — use `encoding="utf-8-sig"` when reading files that
+   could have been touched by a Windows GUI editor.
 
-   Notepad and similar editors add a UTF-8 BOM to `config.yaml`. Use `encoding="utf-8-sig"` when reading files a Windows GUI editor could have touched.
-
-4. **Process management.** `os.setsid()`, `os.killpg()`, `os.fork()`, `os.getuid()`, and POSIX signal handling all differ on Windows. Guard with `platform.system()`, `sys.platform`, or `hasattr(os, "setsid")`:
-
+4. **Process management.** `os.setsid()`, `os.killpg()`, `os.fork()`,
+   `os.getuid()`, and POSIX signal handling differ on Windows. Guard with
+   `platform.system()`, `sys.platform`, or `hasattr(os, "setsid")`:
    ```python
    if platform.system() != "Windows":
        kwargs["preexec_fn"] = os.setsid
@@ -683,8 +747,8 @@ Clover runs on Linux, macOS, native Windows, and WSL2. Assume any platform can r
        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
    ```
 
-   To kill a process and its children (what `os.killpg` does on POSIX), use `psutil`. It works everywhere:
-
+   **Preferred:** for killing a process AND its children (what `os.killpg`
+   does on POSIX), use `psutil` — it works on every platform:
    ```python
    import psutil
    try:
@@ -697,112 +761,160 @@ Clover runs on Linux, macOS, native Windows, and WSL2. Assume any platform can r
        pass
    ```
 
-5. **Signals that do not exist on Windows: `SIGALRM`, `SIGCHLD`, `SIGHUP`, `SIGUSR1`, `SIGUSR2`, `SIGPIPE`, `SIGQUIT`, `SIGKILL`.** Python's `signal` module raises `AttributeError` at import time if you reference them there. Use `getattr(signal, "SIGKILL", signal.SIGTERM)` or gate the block behind a platform check. `loop.add_signal_handler` raises `NotImplementedError` on Windows, so always catch it.
+5. **Signals that don't exist on Windows: `SIGALRM`, `SIGCHLD`, `SIGHUP`,
+   `SIGUSR1`, `SIGUSR2`, `SIGPIPE`, `SIGQUIT`, `SIGKILL`.** Python's
+   `signal` module raises `AttributeError` at import time if you reference
+   them on Windows. Use `getattr(signal, "SIGKILL", signal.SIGTERM)` or
+   gate the whole block behind a platform check. `loop.add_signal_handler`
+   raises `NotImplementedError` on Windows — always catch it.
 
-6. **Path separators.** Use `pathlib.Path`, not string concatenation with `/`. Forward slashes work almost everywhere on Windows, but `subprocess.run(["cmd.exe", "/c", ...])` and other shell contexts can require backslashes. Convert with `str(path)` at the subprocess boundary, not inside Python logic.
+6. **Path separators.** Use `pathlib.Path` instead of string concatenation
+   with `/`. Forward slashes work almost everywhere on Windows, but
+   `subprocess.run(["cmd.exe", "/c", ...])` and other shell contexts can
+   require backslashes — convert with `str(path)` at the subprocess boundary,
+   not inside Python logic.
 
-7. **Symlinks need elevated privileges on Windows** unless Developer Mode is on. Tests that create symlinks need `@pytest.mark.skipif(sys.platform == "win32", reason="Symlinks require elevated privileges on Windows")`.
+7. **Symlinks need elevated privileges on Windows** (unless Developer Mode is
+   on). Tests that create symlinks need `@pytest.mark.skipif(sys.platform ==
+   "win32", reason="Symlinks require elevated privileges on Windows")`.
 
-8. **POSIX file modes are not enforced on NTFS.** Tests asserting on `stat().st_mode & 0o777` must skip on Windows, because the concept does not translate. Use ACLs (`icacls`, `pywin32`) for Windows secret-file protection if you need it.
+8. **POSIX file modes (0o600, 0o644, etc.) are NOT enforced on NTFS** by
+   default. Tests that assert on `stat().st_mode & 0o777` must skip on
+   Windows — the concept doesn't translate. Use ACLs (`icacls`, `pywin32`)
+   for Windows secret-file protection if needed.
 
-9. **Detached background daemons on Windows need `pythonw.exe`, not `python.exe`.** `python.exe` always allocates or attaches to a console, which makes it vulnerable to `CTRL_C_EVENT` broadcasts from any sibling process. `pythonw.exe` is the no-console variant. Combine with `CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB` in `subprocess.Popen(creationflags=...)`. See `clover_cli/gateway_windows.py::_spawn_detached`.
+9. **Detached background daemons on Windows need `pythonw.exe`, NOT
+    `python.exe`.** `python.exe` always allocates or attaches to a console,
+    which makes it vulnerable to `CTRL_C_EVENT` broadcasts from any sibling
+    process. `pythonw.exe` is the no-console variant. Combine with
+    `CREATE_NO_WINDOW | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP |
+    CREATE_BREAKAWAY_FROM_JOB` in `subprocess.Popen(creationflags=...)`.
+    See `clover_cli/gateway_windows.py::_spawn_detached` for the reference
+    implementation.
 
-10. **`subprocess.Popen` with `.cmd` or `.bat` shims needs `shutil.which` to resolve.** Passing `"agent-browser"` to `Popen` on Windows finds the extensionless POSIX shebang shim in `node_modules/.bin/`, which `CreateProcessW` cannot execute, and you get `WinError 193 "not a valid Win32 application"`. Use `shutil.which("agent-browser", path=local_bin)`, which honors PATHEXT and picks the `.CMD` variant.
+10. **`subprocess.Popen` with `.cmd` or `.bat` shims needs `shutil.which`
+    to resolve.** Passing `"agent-browser"` to `Popen` on Windows finds
+    the extensionless POSIX shebang shim in `node_modules/.bin/`, which
+    `CreateProcessW` can't execute — you'll get `WinError 193 "not a valid
+    Win32 application"`. Use `shutil.which("agent-browser", path=local_bin)`
+    which honors PATHEXT and picks the `.CMD` variant on Windows.
 
-11. **Shell shebangs are not a way to run Python.** `#!/usr/bin/env python` only works when a Unix shell executes the file. `subprocess.run(["./myscript.py"])` fails on Windows even with the shebang. Invoke Python explicitly: `[sys.executable, "myscript.py"]`.
+11. **Don't use shell shebangs as a way to run Python.** `#!/usr/bin/env
+    python` only works when the file is executed through a Unix shell.
+    `subprocess.run(["./myscript.py"])` on Windows fails even if the file
+    has a shebang line. Always invoke Python explicitly:
+    `[sys.executable, "myscript.py"]`.
 
-12. **Installer changes come in pairs.** If you change `scripts/install.sh`, make the equivalent change in `scripts/install.ps1`. These two are the canonical example of "works on Linux" not meaning "works on Windows", and they have drifted more than once. Keep them in lockstep.
+12. **Shell commands in installers.** If you change `scripts/install.sh`,
+    make the equivalent change in `scripts/install.ps1`. The two scripts
+    are the canonical example of "works on Linux does not mean works on
+    Windows" and have drifted multiple times — keep them in lockstep.
 
-13. **Some Windows paths are OneDrive-redirected:** Desktop, Documents, Pictures, Videos. With OneDrive Backup enabled the real path is `%USERPROFILE%\OneDrive\Desktop` and friends, while `%USERPROFILE%\Desktop` still exists as an empty husk. Resolve the real location with `ctypes` plus `SHGetKnownFolderPath`, or read the `Shell Folders` registry key. Never assume `~/Desktop`.
+13. **Known paths that are OneDrive-redirected on Windows:** Desktop,
+    Documents, Pictures, Videos. The "real" path when OneDrive Backup is
+    enabled is `%USERPROFILE%\OneDrive\Desktop` (etc.), NOT
+    `%USERPROFILE%\Desktop` (which exists as an empty husk). Resolve the
+    real location via `ctypes` + `SHGetKnownFolderPath` or by reading the
+    `Shell Folders` registry key — never assume `~/Desktop`.
 
-14. **CRLF vs LF in generated scripts.** `cmd.exe` and `schtasks` parse line by line, and LF-only or mixed line endings break multi-line `.cmd` and `.bat` files. Use `open(path, "w", encoding="utf-8", newline="\r\n")`, or `open(path, "wb")` with explicit bytes, when generating scripts Windows will execute.
+14. **CRLF vs LF in generated scripts.** Windows `cmd.exe` and `schtasks`
+    parse line-by-line; mixed or LF-only line endings can break multi-line
+    `.cmd` / `.bat` files. Use `open(path, "w", encoding="utf-8",
+    newline="\r\n")` — or `open(path, "wb")` + explicit bytes — when
+    generating scripts Windows will execute.
 
-15. **Two quoting schemes in one command line.** `subprocess.run(["schtasks", "/TR", some_cmd])` means schtasks parses `/TR`, and then `cmd.exe` re-parses `some_cmd` when the task fires. Different parsers, different escape rules. Use two separate quoting helpers and never cross them. See `clover_cli/gateway_windows.py::_quote_cmd_script_arg` and `_quote_schtasks_arg` for the reference pair.
+15. **Two different quoting schemes in one command line.** `subprocess.run
+    (["schtasks", "/TR", some_cmd])` → schtasks itself parses `/TR`, AND
+    the `some_cmd` string is re-parsed by `cmd.exe` when the task fires.
+    Different parsers, different escape rules. Use two separate quoting
+    helpers and never cross them. See `clover_cli/gateway_windows.py::
+    _quote_cmd_script_arg` and `_quote_schtasks_arg` for the reference
+    pair.
 
 ### Testing cross-platform
 
-Tests that exercise platform-specific behavior have to run on their target platform.
+Tests that excercise behavior on specific platforms must run on their target platforms.
 
 ```python
 @pytest.mark.linux_only
 @pytest.mark.macos_only
 @pytest.mark.windows_only
 ```
-
-Avoid monkeypatching `sys.platform` unless you have to. If you do, also patch `platform.system()`, `platform.release()`, and `platform.mac_ver()`. Symlinks, 0o600 permissions, SIGALRM, and `os.setsid`/`os.fork` are Unix-only.
+Avoid monkeypatching `sys.platform` unless absolutely needed, but if you do, also patch `platform.system()` / `platform.release()` / `platform.mac_ver()`.
+Symlinks, 0o600 permissions, SIGALRM, os.setsid/fork are all unix-only.
 
 ---
 
-## Security considerations
+## Security Considerations
 
-Clover has terminal access, so security is not a background concern here.
+Clover has terminal access. Security matters.
 
 ### Existing protections
 
 | Layer | Implementation |
 |-------|---------------|
-| **Sudo password piping** | `shlex.quote()` to prevent shell injection |
-| **Dangerous command detection** | Regex patterns in `tools/approval.py` with a user approval flow |
+| **Sudo password piping** | Uses `shlex.quote()` to prevent shell injection |
+| **Dangerous command detection** | Regex patterns in `tools/approval.py` with user approval flow |
 | **Cron prompt injection** | Scanner in `tools/cronjob_tools.py` blocks instruction-override patterns |
-| **Write deny list** | Protected paths (`~/.ssh/authorized_keys`, `/etc/shadow`) resolved through `os.path.realpath()` to prevent symlink bypass |
+| **Write deny list** | Protected paths (`~/.ssh/authorized_keys`, `/etc/shadow`) resolved via `os.path.realpath()` to prevent symlink bypass |
 | **Skills guard** | Security scanner for hub-installed skills (`tools/skills_guard.py`) |
-| **Code execution sandbox** | `execute_code` child process runs with API keys stripped from the environment |
+| **Code execution sandbox** | `execute_code` child process runs with API keys stripped from environment |
 | **Container hardening** | Docker: all capabilities dropped, no privilege escalation, PID limits, size-limited tmpfs |
 
 ### When contributing security-sensitive code
 
-- **Use `shlex.quote()`** whenever user input goes into a shell command.
-- **Resolve symlinks** with `os.path.realpath()` before any path-based access control check.
-- **Do not log secrets.** API keys, tokens, and passwords never appear in log output.
-- **Catch broad exceptions** around tool execution so one failure does not take down the agent loop.
-- **Test on all platforms** if your change touches file paths, process management, or shell commands.
+- **Always use `shlex.quote()`** when interpolating user input into shell commands
+- **Resolve symlinks** with `os.path.realpath()` before path-based access control checks
+- **Don't log secrets.** API keys, tokens, and passwords should never appear in log output
+- **Catch broad exceptions** around tool execution so a single failure doesn't crash the agent loop
+- **Test on all platforms** if your change touches file paths, process management, or shell commands
 
-Call it out explicitly in the PR description if your change affects security.
+If your PR affects security, note it explicitly in the description.
 
-### Dependency pinning policy
+### Dependency pinning policy (supply chain hardening)
 
-After the [litellm supply chain compromise](https://github.com/BerriAI/litellm/issues/24512) in March 2026 and the [Mini Shai-Hulud worm campaign](https://socket.dev/blog/tanstack-npm-packages-compromised-mini-shai-hulud-supply-chain-attack) in May 2026, every dependency follows these rules:
+After the [litellm supply chain compromise](https://github.com/BerriAI/litellm/issues/24512) in March 2026 and the [Mini Shai-Hulud worm campaign](https://socket.dev/blog/tanstack-npm-packages-compromised-mini-shai-hulud-supply-chain-attack) in May 2026, all dependencies must follow these rules:
 
 | Source type | Required treatment | Rationale |
 |---|---|---|
-| **PyPI package** | `>=floor,<next_major` | PyPI versions are immutable once published, but new versions can land inside your range. A `<next_major` ceiling stops a 1.x install from jumping to a malicious 2.0.0. |
-| **Git URL** (atroposlib, tinker, yc-bench, Baileys) | Full commit SHA | Branches and tags are mutable refs. A SHA is content-addressed. |
-| **GitHub Actions** | Full commit SHA plus version comment | Action tags are mutable refs (see tj-actions/changed-files, March 2025). Pin as `uses: owner/action@<sha>  # vX.Y.Z`. |
-| **CI-only pip installs** | `==exact` | Hermetic CI builds. Churn is acceptable. |
+| **PyPI package** | `>=floor,<next_major` | PyPI versions are immutable once published, but new versions can be pushed into your range. A `<next_major` ceiling stops a 1.x install from upgrading to a malicious 2.0.0. |
+| **Git URL** (atroposlib, tinker, yc-bench, Baileys) | Full commit SHA | Branches and tags are mutable refs; SHA is content-addressed. |
+| **GitHub Actions** | Full commit SHA + version comment | Action tags are mutable refs (e.g. tj-actions/changed-files March 2025). Pin as `uses: owner/action@<sha>  # vX.Y.Z` |
+| **CI-only pip installs** | `==exact` | Hermetic CI builds; churn is acceptable. |
 
-**Every new PyPI dependency needs a `<next_major` upper bound.** PRs with unbounded `>=X.Y.Z` specs get rejected. The `supply-chain-audit.yml` workflow also flags dependency manifest changes for manual review.
+**Every new PyPI dependency in a PR must have a `<next_major` upper bound.** PRs adding unbounded `>=X.Y.Z` specs will be rejected by reviewers. The `supply-chain-audit.yml` CI workflow also flags dependency manifest changes for manual review.
 
-Choosing the ceiling:
+**How to determine the ceiling:**
+- If the package is at version `1.x.y`, use `<2`.
+- If the package is at version `0.x.y` (pre-1.0), use `<0.(current_minor + 2)` — e.g. if current is `0.29.x`, use `<0.32`. This gives ~2 minor versions of headroom while keeping the window small enough that a hostile takeover version is unlikely to land inside it.
+- Exception: packages with very stable APIs (e.g. `aiohttp-socks`) can use `<1` at reviewer discretion.
 
-- Package at `1.x.y`: use `<2`.
-- Package at `0.x.y`: use `<0.(current_minor + 2)`. If current is `0.29.x`, use `<0.32`. That gives about two minor versions of headroom while keeping the window too small for a hostile takeover release to land inside it.
-- Exception: packages with very stable APIs (`aiohttp-socks`) can use `<1` at reviewer discretion.
-
+**Examples:**
 ```toml
-# ✅ Correct: post-1.0
+# ✅ Correct — post-1.0
 "openai>=2.21.0,<3"
 "pydantic>=2.12.5,<3"
 
-# ✅ Correct: pre-1.0 (tight minor window)
+# ✅ Correct — pre-1.0 (tight minor window)
 "asyncpg>=0.29,<0.32"
 "aiosqlite>=0.20,<0.23"
 "hindsight-client>=0.4.22,<0.5"
 
-# ❌ Rejected: no upper bound
+# ❌ Rejected — no upper bound
 "some-package>=1.2.3"
 
-# ❌ Rejected: too tight (blocks legitimate patches)
+# ❌ Rejected — too tight (blocks legitimate patches)
 "some-package==1.2.3"
 
-# ❌ Rejected: too loose for pre-1.0 (allows 80 minor versions)
+# ❌ Rejected — too loose for pre-1.0 (allows 80 minor versions)
 "some-package>=0.20,<1"
 ```
 
-Reference PRs: #2796 (litellm removal), #2810 (upper bounds pass), #9801 (SHA pinning plus supply-chain-audit CI).
+**Reference PRs:** #2796 (litellm removal), #2810 (upper bounds pass), #9801 (SHA pinning + supply-chain-audit CI).
 
 ---
 
-## Pull requests
+## Pull Request Process
 
 ### Branch naming
 
@@ -816,18 +928,26 @@ refactor/description   # Code restructuring
 
 ### Before submitting
 
-1. **Run tests:** `scripts/run_tests.sh` (matches CI), or `pytest tests/ -v` with the project venv active.
-2. **Test manually:** run `clover` and exercise the code path you changed. Tests passing is not the same as the feature working.
-3. **Check cross-platform impact:** if you touched file I/O, process management, or terminal handling, think about macOS, Linux, and Windows.
-4. **Keep it focused:** one logical change per PR. Do not mix a bug fix, a refactor, and a new feature.
+1. **Run tests**: `scripts/run_tests.sh` (recommended; same as CI) or `pytest tests/ -v` with the project venv activated
+2. **Test manually**: Run `clover` and exercise the code path you changed
+3. **Check cross-platform impact**: If you touch file I/O, process management, or terminal handling, consider macOS, Linux, and WSL2
+4. **Keep PRs focused**: One logical change per PR. Don't mix a bug fix with a refactor with a new feature.
 
 ### PR description
 
-Include what changed and why, how to test it (repro steps for bugs, usage examples for features), which platforms you tested on, and any related issues.
+Include:
+- **What** changed and **why**
+- **How to test** it (reproduction steps for bugs, usage examples for features)
+- **What platforms** you tested on
+- Reference any related issues
 
 ### Commit messages
 
-We use [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<scope>): <description>`
+We use [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<scope>): <description>
+```
 
 | Type | Use for |
 |------|---------|
@@ -835,11 +955,12 @@ We use [Conventional Commits](https://www.conventionalcommits.org/): `<type>(<sc
 | `feat` | New features |
 | `docs` | Documentation |
 | `test` | Tests |
-| `refactor` | Code restructuring, no behavior change |
+| `refactor` | Code restructuring (no behavior change) |
 | `chore` | Build, CI, dependency updates |
 
-Scopes: `cli`, `gateway`, `tools`, `skills`, `agent`, `install`, `whatsapp`, `security`, and so on.
+Scopes: `cli`, `gateway`, `tools`, `skills`, `agent`, `install`, `whatsapp`, `security`, etc.
 
+Examples:
 ```
 fix(cli): prevent crash in save_config_value when model is a string
 feat(gateway): add WhatsApp multi-user session isolation
@@ -849,21 +970,24 @@ test(tools): add unit tests for file_operations
 
 ---
 
-## Reporting issues
+## Reporting Issues
 
-Use GitHub Issues. Include your OS, Python version, Clover version (`clover --version`), the full traceback, and steps to reproduce. Check existing issues first.
-
-Report security vulnerabilities privately.
+- Use [GitHub Issues]()
+- Include: OS, Python version, Clover version (`clover --version`), full error traceback
+- Include steps to reproduce
+- Check existing issues before creating duplicates
+- For security vulnerabilities, please report privately
 
 ---
 
 ## Community
 
-- **GitHub Discussions** for design proposals and architecture debates
-- **Skills Hub** for sharing specialized skills
+- **Discord**: [discord.gg/cloverc1]() — for questions, showcasing projects, and sharing skills
+- **GitHub Discussions**: For design proposals and architecture discussions
+- **Skills Hub**: Upload specialized skills to a registry and share them with the community
 
 ---
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE).
+By contributing, you agree that your contributions will be licensed under the [MIT License](LICENSE).

@@ -8,7 +8,7 @@ Keep this tree for real shipped plugins (and the small authoring fixtures that
 dogfood the SDK). One-off demos that rebuild a core chrome piece 1:1 do not
 belong here — they double the UI and confuse Settings ▸ Plugins. Publish those
 in the companion
-`clover-example-plugins`
+[`clover-example-plugins`](https://github.com/cloverc1/clover-example-plugins)
 repo instead.
 
 User- and agent-authored plugins load at runtime from

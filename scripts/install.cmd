@@ -5,7 +5,7 @@ REM ============================================================================
 REM This batch file launches the PowerShell installer for users running CMD.
 REM
 REM Usage:
-REM   curl -fsSL https://raw.githubusercontent.com/clover-c1/main/scripts/install.cmd -o install.cmd && install.cmd && del install.cmd
+REM   curl -fsSL  -o install.cmd && install.cmd && del install.cmd
 REM
 REM Or if you're already in PowerShell, use the direct command instead:
 REM   iex (irm )

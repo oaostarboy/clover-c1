@@ -99,6 +99,18 @@ export function saveCloverConfig(config: CloverConfigRecord, profile?: null | st
   })
 }
 
+/** Capability-scoped counterpart of saveCloverConfig — writes the config of
+ *  the profile/connection the Capabilities scope selector points at (possibly
+ *  on another registered gateway), mirroring getCloverConfigRecord. */
+export function saveCloverConfigRecord(config: CloverConfigRecord, profile?: ProfileScope): Promise<{ ok: boolean }> {
+  return window.cloverDesktop.api<{ ok: boolean }>({
+    ...capabilityScoped(profile),
+    path: '/api/config',
+    method: 'PUT',
+    body: { config }
+  })
+}
+
 export function getEnvVars(profile?: null | string): Promise<Record<string, EnvVarInfo>> {
   return cloverApi<Record<string, EnvVarInfo>>({
     ...profileScoped(profile),

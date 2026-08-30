@@ -117,10 +117,17 @@ _BROWSER_CONTROL_PROTOCOL_VERSION = 1
 _BROWSER_CONTROL_WS_PROTOCOL = "clover-browser-control-v1"
 _BROWSER_CONTROL_TICKET_PROTOCOL_PREFIX = "clover-browser-control-ticket."
 
-def _approval_event_choices(*, smart_denied: bool, allow_permanent: bool) -> list[str]:
-    if smart_denied:
+
+def _approval_event_choices(
+    *, smart_denied: bool, allow_session: bool, allow_permanent: bool
+) -> list[str]:
+    if smart_denied or not allow_session:
         return ["once", "deny"]
-    return ["once", "session", "always", "deny"] if allow_permanent else ["once", "session", "deny"]
+    return (
+        ["once", "session", "always", "deny"]
+        if allow_permanent
+        else ["once", "session", "deny"]
+    )
 
 
 try:
@@ -4258,6 +4265,31 @@ class APIServerAdapter(BasePlatformAdapter):
         )
         if title_filter:
             sessions = [s for s in sessions if (s.get("title") or "").strip() == title_filter]
+            if not sessions:
+                # Recoverable-archive resurrection (#92687): a canonical Bot
+                # Chat archived by the ws-orphan reaper / older agent cleanup
+                # is invisible to list_sessions_rich (include_archived=False),
+                # which would fail `clover peer dm` resolution and mint
+                # transient sessions — same accident the tui_gateway lookups
+                # heal. Resurrect and re-list; deliberate archives stay put.
+                try:
+                    from tools.bot_mode_probe import BOT_CHAT_TITLE
+
+                    stale = db.get_session_by_title(title_filter) if title_filter == BOT_CHAT_TITLE else None
+                    if stale and stale.get("archived") and db.unarchive_recoverable_session(stale["id"]):
+                        sessions = await asyncio.to_thread(db.list_sessions_rich,
+                            source=source,
+                            limit=limit,
+                            offset=offset,
+                            include_children=include_children,
+                            order_by_last_active=True,
+                            include_pinned=True,
+                            search_query=title_filter,
+                            include_hidden=include_hidden,
+                        )
+                        sessions = [s for s in sessions if (s.get("title") or "").strip() == title_filter]
+                except Exception:
+                    pass  # resolution degrades to today's no-row behavior
         # Back-filled pins arrive PAST the limit, so counting them would report
         # another page that doesn't exist. Only the recency window decides.
         windowed = sum(1 for s in sessions if not s.get("pinned"))
@@ -6757,8 +6789,30 @@ class APIServerAdapter(BasePlatformAdapter):
         job_id, id_err = self._check_job_id(request)
         if id_err:
             return id_err
+        # Optional transient per-run context forwarded from a standalone
+        # `clover cron run` / cronjob(action='run', prompt=...) — same length
+        # cap and strict injection scan as a stored job prompt.
+        extra_prompt = None
         try:
-            job = _cron_trigger(job_id)
+            body = await request.json()
+        except Exception:
+            body = None
+        if isinstance(body, dict):
+            raw_prompt = body.get("prompt")
+            if raw_prompt is not None:
+                extra_prompt = str(raw_prompt)
+                if len(extra_prompt) > self._MAX_PROMPT_LENGTH:
+                    return web.json_response(
+                        {"error": f"Prompt must be ≤ {self._MAX_PROMPT_LENGTH} characters"},
+                        status=400,
+                    )
+                if extra_prompt and _scan_cron_prompt is not None:
+                    scan_error = _scan_cron_prompt(extra_prompt)
+                    if scan_error:
+                        return web.json_response({"error": scan_error}, status=400)
+                extra_prompt = extra_prompt or None
+        try:
+            job = _cron_trigger(job_id, extra_prompt=extra_prompt)
             if not job:
                 return web.json_response({"error": "Job not found"}, status=404)
             return web.json_response({"job": job})
@@ -7725,6 +7779,7 @@ class APIServerAdapter(BasePlatformAdapter):
                         "timestamp": time.time(),
                         "choices": _approval_event_choices(
                             smart_denied=bool(event.get("smart_denied")),
+                            allow_session=event.get("allow_session") is not False,
                             allow_permanent=event.get("allow_permanent") is not False,
                         ),
                     })
@@ -8398,6 +8453,10 @@ class APIServerAdapter(BasePlatformAdapter):
                         "firewalling this port to trusted networks only.",
                         self.name, self._host,
                     )
+
+            # Plugin-registered native handlers (aiohttp web.Application —
+            # router routes). Wired before AppRunner.setup() freezes the router.
+            self._wire_plugin_handlers(self._app)
 
             self._runner = web.AppRunner(self._app)
             await self._runner.setup()

@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { BUILTIN_THEME_LIST, DEFAULT_TYPOGRAPHY, EMOJI_FALLBACK } from './presets'
+import {
+  BUILTIN_THEME_LIST,
+  BUILTIN_THEMES,
+  DEFAULT_SKIN_NAME,
+  DEFAULT_TYPOGRAPHY,
+  EMOJI_FALLBACK,
+  cloverAltTheme
+} from './presets'
 
 // #40364: none of the UI text/mono fonts carry emoji glyphs, so every font
 // stack must end with a color-emoji fallback or emoji render as tofu on
@@ -29,5 +36,17 @@ describe('theme typography emoji fallback (#40364)', () => {
     expect(EMOJI_FALLBACK).toContain('Apple Color Emoji')
     expect(EMOJI_FALLBACK).toContain('Segoe UI Emoji')
     expect(EMOJI_FALLBACK).toContain('Noto Color Emoji')
+  })
+})
+
+// The pre-GitHub Clover palette stays available as clover-alt; the default name
+// still means GitHub chrome + brand blue.
+describe('clover-alt is the retired Clover, not the default', () => {
+  it('is registered under its own name and leaves clover as the default', () => {
+    expect(DEFAULT_SKIN_NAME).toBe('clover')
+    expect(BUILTIN_THEMES['clover-alt']).toBe(cloverAltTheme)
+    expect(BUILTIN_THEMES.clover).not.toBe(cloverAltTheme)
+    expect(cloverAltTheme.darkColors?.background).toBe('#0D2F86')
+    expect(BUILTIN_THEMES.clover.darkColors?.background).not.toBe(cloverAltTheme.darkColors?.background)
   })
 })

@@ -3,6 +3,7 @@
 <!-- Describe the change clearly. What problem does it solve? Why is this approach the right one? -->
 
 
+
 ## Related Issue
 
 <!-- Link the issue this PR addresses. If no issue exists, consider creating one first. -->
@@ -25,15 +26,15 @@ Fixes #
 
 <!-- List the specific changes. Include file paths for code changes. -->
 
--
+- 
 
 ## How to Test
 
 <!-- Steps to verify this change works. For bugs: reproduction steps + proof that the fix works. -->
 
-1.
-2.
-3.
+1. 
+2. 
+3. 
 
 ## Checklist
 
@@ -41,9 +42,9 @@ Fixes #
 
 ### Code
 
-- [ ] I've read the Contributing Guide
+- [ ] I've read the [Contributing Guide]()
 - [ ] My commit messages follow [Conventional Commits](https://www.conventionalcommits.org/) (`fix(scope):`, `feat(scope):`, etc.)
-- [ ] I searched for existing PRs to make sure this isn't a duplicate
+- [ ] I searched for [existing PRs]() to make sure this isn't a duplicate
 - [ ] My PR contains **only** changes related to this fix/feature (no unrelated commits)
 - [ ] I've run `pytest tests/ -q` and all tests pass
 - [ ] I've added tests for my changes (required for bug fixes, strongly encouraged for features)
@@ -56,15 +57,15 @@ Fixes #
 - [ ] I've updated relevant documentation (README, `docs/`, docstrings) — or N/A
 - [ ] I've updated `cli-config.yaml.example` if I added/changed config keys — or N/A
 - [ ] I've updated `CONTRIBUTING.md` or `AGENTS.md` if I changed architecture or workflows — or N/A
-- [ ] I've considered cross-platform impact (Windows, macOS) per the compatibility guide — or N/A
+- [ ] I've considered cross-platform impact (Windows, macOS) per the [compatibility guide]() — or N/A
 - [ ] I've updated tool descriptions/schemas if I changed tool behavior — or N/A
 
 ## For New Skills
 
 <!-- Only fill this out if you're adding a skill. Delete this section otherwise. -->
 
-- [ ] This skill is **broadly useful** to most users (if bundled) — see Contributing Guide
-- [ ] SKILL.md follows the standard format (frontmatter, trigger conditions, steps, pitfalls)
+- [ ] This skill is **broadly useful** to most users (if bundled) — see [Contributing Guide]()
+- [ ] SKILL.md follows the [standard format]() (frontmatter, trigger conditions, steps, pitfalls)
 - [ ] No external dependencies that aren't already available (prefer stdlib, curl, existing Clover tools)
 - [ ] I've tested the skill end-to-end: `clover --toolsets skills -q "Use the X skill to do Y"`
 

@@ -197,7 +197,7 @@ def test_pricing_fetch_seeds_the_mirror(cold_process, offline, monkeypatch):
         lambda req, *, timeout: _response(_CATALOG),
     )
     models_mod.fetch_models_with_pricing(
-        base_url="https://inference-api."
+        base_url=""
     )
 
     cold_process()

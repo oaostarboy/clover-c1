@@ -3,7 +3,7 @@
 Provider profile for Meta Superintelligence Labs' Muse Spark family, served
 via the OpenAI-compatible Meta Model API at ``https://api.meta.ai/v1``.
 
-Bundled from the community meta-provider plugin by @albertodepaola. Clover'
+Bundled from @albertodepaola Clover'
 provider discovery (``providers/__init__.py``) imports it on first
 ``get_provider_profile()`` / ``list_providers()`` call, and the module-level
 ``register_provider()`` below wires it into the registry.

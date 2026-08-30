@@ -4,21 +4,21 @@
 
 # Clover Cognition 🍀
 <p align="center">
-  <a href="#">Clover Cognition</a> | <a href="#">Clover Desktop</a>
+  <a href="">Clover Cognition</a> | <a href="">Clover Desktop</a>
 </p>
 <p align="center">
-  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--c1-FFD700?style=for-the-badge" alt="Documentación"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Licencia-MIT-green?style=for-the-badge" alt="Licencia: MIT"></a>
-  <a href="#"><img src="https://img.shields.io/badge/Creado%20por-Clover%20Research-blueviolet?style=for-the-badge" alt="Creado por Clover Cognition"></a>
+  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--agent.-FFD700?style=for-the-badge" alt="Documentación"></a>
+  <a href=""><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href=""><img src="https://img.shields.io/badge/Licencia-MIT-green?style=for-the-badge" alt="Licencia: MIT"></a>
+  <a href=""><img src="https://img.shields.io/badge/Creado%20por-Clover%20Research-blueviolet?style=for-the-badge" alt="Creado por Clover Cognition"></a>
   <a href="README.md"><img src="https://img.shields.io/badge/Lang-English-blue?style=for-the-badge" alt="English"></a>
   <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/Lang-中文-red?style=for-the-badge" alt="中文"></a>
   <a href="README.ur-pk.md"><img src="https://img.shields.io/badge/Lang-اردو-green?style=for-the-badge" alt="اردو"></a>
 </p>
 
-**El agente de IA con mejora continua creado por Clover Cognition.** Es el único agente con un bucle de aprendizaje integrado: crea habilidades a partir de la experiencia, las mejora durante el uso, se impulsa a sí mismo a persistir el conocimiento, busca en sus propias conversaciones pasadas y construye un modelo cada vez más profundo de quién eres a lo largo de las sesiones. Ejecútalo en un VPS de $5, un clúster de GPUs o infraestructura sin servidor que cuesta casi nada cuando está inactivo. No está atado a tu laptop — habla con él desde Telegram mientras trabaja en una VM en la nube.
+**El agente de IA con mejora continua creado por [Clover Cognition]().** Es el único agente con un bucle de aprendizaje integrado: crea habilidades a partir de la experiencia, las mejora durante el uso, se impulsa a sí mismo a persistir el conocimiento, busca en sus propias conversaciones pasadas y construye un modelo cada vez más profundo de quién eres a lo largo de las sesiones. Ejecútalo en un VPS de $5, un clúster de GPUs o infraestructura sin servidor que cuesta casi nada cuando está inactivo. No está atado a tu laptop — habla con él desde Telegram mientras trabaja en una VM en la nube.
 
-Usa cualquier modelo que quieras — Clover Portal, [OpenRouter](https://openrouter.ai) (más de 200 modelos), [NovitaAI](https://novita.ai), [NVIDIA NIM](https://build.nvidia.com) (Nemotron), [Xiaomi MiMo](https://platform.xiaomimimo.com), [z.ai/GLM](https://z.ai), [Kimi/Moonshot](https://platform.moonshot.ai), [MiniMax](https://www.minimax.io), [Hugging Face](https://huggingface.co), OpenAI, o tu propio endpoint. Cambia con `clover model` — sin cambios de código, sin dependencias.
+Usa cualquier modelo que quieras — [Clover Portal](), [OpenRouter](https://openrouter.ai) (más de 200 modelos), [NovitaAI](https://novita.ai), [NVIDIA NIM](https://build.nvidia.com) (Nemotron), [Xiaomi MiMo](https://platform.xiaomimimo.com), [z.ai/GLM](https://z.ai), [Kimi/Moonshot](https://platform.moonshot.ai), [MiniMax](https://www.minimax.io), [Hugging Face](https://huggingface.co), OpenAI, o tu propio endpoint. Cambia con `clover model` — sin cambios de código, sin dependencias.
 
 <table>
 <tr><td><b>Una interfaz de terminal real</b></td><td>TUI completa con edición multilínea, autocompletado de comandos, historial de conversaciones, interrupción y redirección, y salida de herramientas en streaming.</td></tr>
@@ -42,7 +42,7 @@ curl -fsSL  | bash
 
 ### Windows (nativo, PowerShell)
 
-> **Nota:** En Windows nativo, Clover funciona sin WSL — la CLI, el gateway, la TUI y las herramientas funcionan de forma nativa. Si prefieres usar WSL2, el comando de Linux/macOS de arriba también funciona allí. ¿Encontraste un error? Por favor crea un issue.
+> **Nota:** En Windows nativo, Clover funciona sin WSL — la CLI, el gateway, la TUI y las herramientas funcionan de forma nativa. Si prefieres usar WSL2, el comando de Linux/macOS de arriba también funciona allí. ¿Encontraste un error? Por favor [crea un issue]().
 
 Ejecuta esto en PowerShell:
 
@@ -87,7 +87,7 @@ clover doctor       # Diagnostica cualquier problema
 
 ## Evita la colección de claves API — Clover Portal
 
-Clover funciona con cualquier proveedor que quieras — eso no cambiará. Pero si prefieres no recopilar cinco claves API separadas para el modelo, búsqueda web, generación de imágenes, TTS y un navegador en la nube, **Clover Portal** las cubre todas bajo una sola suscripción:
+Clover funciona con cualquier proveedor que quieras — eso no cambiará. Pero si prefieres no recopilar cinco claves API separadas para el modelo, búsqueda web, generación de imágenes, TTS y un navegador en la nube, **[Clover Portal]()** las cubre todas bajo una sola suscripción:
 
 - **Más de 300 modelos** — elige cualquiera con `/model <nombre>`
 - **Tool Gateway** — búsqueda web (Firecrawl), generación de imágenes (FAL), texto a voz (OpenAI), navegador en la nube (Browser Use), todo enrutado a través de tu suscripción. Sin cuentas adicionales.
@@ -185,7 +185,7 @@ Consulta `clover claw migrate --help` para todas las opciones, o usa la habilida
 Inicio rápido para colaboradores — clona y comienza con `setup-clover.sh`:
 
 ```bash
-git clone
+git clone 
 cd clover-c1
 ./setup-clover.sh     # instala uv, crea venv, instala .[all], enlaza ~/.local/bin/clover
 ./clover              # detecta automáticamente el venv, no necesitas hacer `source` primero
@@ -204,11 +204,17 @@ scripts/run_tests.sh
 ---
 
 ## Comunidad
+
+- 💬 [Discord]()
 - 📚 [Skills Hub](https://agentskills.io)
+- 🐛 [Issues]()
+- 🔌 [computer-use-linux]() — Servidor MCP de control de escritorio Linux para Clover y otros hosts MCP, con árboles de accesibilidad AT-SPI, entrada Wayland/X11, capturas de pantalla y targeting de ventanas del compositor.
+- 🔌 [CloverClaw]() — Puente WeChat comunitario: Ejecuta Clover Cognition y OpenClaw en la misma cuenta de WeChat.
+
 ---
 
 ## Licencia
 
 MIT — ver [LICENSE](LICENSE).
 
-Creado por Clover Cognition.
+Creado por [Clover Cognition]().
