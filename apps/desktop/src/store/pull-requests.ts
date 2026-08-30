@@ -1,7 +1,7 @@
 import { atom } from 'nanostores'
 
-import type { CloverBranchPullRequest } from '@/global'
 import { scanSessionPullRequests, type SessionInfo } from '@/clover'
+import type { CloverBranchPullRequest } from '@/global'
 import { desktopGit } from '@/lib/desktop-git'
 import { Codecs, persistentAtom } from '@/lib/persisted'
 

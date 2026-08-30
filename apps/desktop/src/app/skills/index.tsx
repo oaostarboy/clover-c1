@@ -5,13 +5,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 
 import { ArchiveSkillConfirmDialog } from '@/app/learning/archive-skill-confirm-dialog'
-import { CodeEditor } from '@/components/chat/code-editor'
-import { PageLoader } from '@/components/page-loader'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { CountSkeleton } from '@/components/ui/skeleton'
-import type { DesktopRosterAgent } from '@/global'
 import {
   editLearningNode,
   getLearningNode,
@@ -25,6 +18,13 @@ import {
   setSkillEnabled,
   setToolsetEnabled
 } from '@/clover'
+import { CodeEditor } from '@/components/chat/code-editor'
+import { PageLoader } from '@/components/page-loader'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { CountSkeleton } from '@/components/ui/skeleton'
+import type { DesktopRosterAgent } from '@/global'
 import { useI18n } from '@/i18n'
 import { isDesktopToolsetVisible } from '@/lib/desktop-toolsets'
 import { compactNumber } from '@/lib/format'

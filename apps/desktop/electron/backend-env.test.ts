@@ -120,9 +120,7 @@ test('buildDesktopBackendEnv extends PYTHONPATH and backend PATH together', () =
 
   assert.equal(env.PYTHONPATH, '/repo/clover-c1:/existing/pythonpath')
   assert.ok(
-    env.PATH.startsWith(
-      '/Users/test/.clover/node/bin:/Users/test/.clover/node:/Users/test/.clover/clover-c1/venv/bin:'
-    )
+    env.PATH.startsWith('/Users/test/.clover/node/bin:/Users/test/.clover/node:/Users/test/.clover/clover-c1/venv/bin:')
   )
   assert.ok(env.PATH.includes('/opt/homebrew/bin'))
 })

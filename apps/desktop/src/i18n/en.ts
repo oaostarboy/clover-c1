@@ -1199,7 +1199,8 @@ export const en: Translations = {
       useBackend: 'Use this backend',
       cloverIncluded: 'Included with a Clover subscription — sign in to Clover Portal to activate.',
       cloverAuthNeededTitle: 'Sign in to Clover Portal',
-      cloverAuthNeededMessage: provider => `${provider} is saved but won't activate until you sign in to Clover Portal.`,
+      cloverAuthNeededMessage: provider =>
+        `${provider} is saved but won't activate until you sign in to Clover Portal.`,
       cloverAuthSignIn: 'Sign in',
       cloverAuthDoneTitle: 'Clover Portal connected',
       cloverAuthDoneMessage: 'Your subscription backends are now active.',

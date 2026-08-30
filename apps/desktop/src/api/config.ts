@@ -1,11 +1,11 @@
 import type {
+  CloverConfig,
+  CloverConfigRecord,
   ConfigSchemaResponse,
   CustomEndpointsResponse,
   CustomEndpointUpdate,
   CustomEndpointValidationResponse,
   EnvVarInfo,
-  CloverConfig,
-  CloverConfigRecord,
   LogsResponse,
   OAuthPollResponse,
   OAuthProvidersResponse,

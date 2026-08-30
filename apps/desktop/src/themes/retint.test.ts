@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { contrastRatio, hexToOklch, withHue } from './color'
-import { githubTheme, cloverTheme } from './presets'
+import { cloverTheme, githubTheme } from './presets'
 import { retintTheme, themeHue } from './retint'
 import type { DesktopThemeColors } from './types'
 

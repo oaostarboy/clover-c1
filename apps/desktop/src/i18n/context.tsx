@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 
-import { getCloverConfigRecord, type CloverConfigRecord, saveCloverConfig } from '@/clover'
+import { type CloverConfigRecord, getCloverConfigRecord, saveCloverConfig } from '@/clover'
 
 import { TRANSLATIONS } from './catalog'
 import { DEFAULT_LOCALE, localeConfigValue, normalizeLocale } from './languages'

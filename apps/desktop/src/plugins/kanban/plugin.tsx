@@ -12,9 +12,9 @@
 import './kanban.css'
 
 import {
+  type CloverPlugin,
   cn,
   Codicon,
-  type CloverPlugin,
   host,
   type KeybindContribution,
   KEYBINDS_AREA,

@@ -4,10 +4,10 @@ import type * as React from 'react'
 import { useCallback, useMemo } from 'react'
 
 import { SidebarPanelLabel } from '@/app/shell/sidebar-label'
+import type { SessionInfo } from '@/clover'
 import { DisclosureCaret } from '@/components/ui/disclosure-caret'
 import { SidebarGroup, SidebarGroupContent } from '@/components/ui/sidebar'
 import type { CloverGitWorktree } from '@/global'
-import type { SessionInfo } from '@/clover'
 import { useI18n } from '@/i18n'
 import { flattenSessionsWithBranches } from '@/lib/session-branch-tree'
 import {

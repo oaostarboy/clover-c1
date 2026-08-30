@@ -75,13 +75,9 @@ describe('resolveOauthPartition (#92183 per-connection cookie jars)', () => {
   })
 
   it('keeps cloud connections on the legacy partition (silent portal cascade needs the shared jar)', () => {
-    const reg = registry('local', [
-      { id: 'cloud-1', kind: 'cloud', url: 'https://agent.', authMode: 'oauth' }
-    ])
+    const reg = registry('local', [{ id: 'cloud-1', kind: 'cloud', url: 'https://agent.', authMode: 'oauth' }])
 
-    expect(resolveOauthPartition('https://agent./api/status', { registry: reg })).toBe(
-      LEGACY_OAUTH_PARTITION
-    )
+    expect(resolveOauthPartition('https://agent./api/status', { registry: reg })).toBe(LEGACY_OAUTH_PARTITION)
   })
 
   it('keeps token-auth registry remotes on the legacy partition (no cookies involved)', () => {
@@ -93,9 +89,7 @@ describe('resolveOauthPartition (#92183 per-connection cookie jars)', () => {
   it('falls back to the legacy partition for unmatched, portal, and malformed inputs', () => {
     const reg = registry('local', [remote('conn-a', 'https://gw-a.example.com')])
 
-    expect(resolveOauthPartition('', { registry: reg })).toBe(
-      LEGACY_OAUTH_PARTITION
-    )
+    expect(resolveOauthPartition('', { registry: reg })).toBe(LEGACY_OAUTH_PARTITION)
     expect(resolveOauthPartition('not a url', { registry: reg })).toBe(LEGACY_OAUTH_PARTITION)
     expect(resolveOauthPartition('', { registry: reg })).toBe(LEGACY_OAUTH_PARTITION)
     expect(resolveOauthPartition('https://gw-a.example.com', { registry: null as any })).toBe(LEGACY_OAUTH_PARTITION)

@@ -721,27 +721,17 @@ describe('buildManageSubscriptionUrl', () => {
   })
 
   it('appends plan=<tierId> when a tier is chosen', () => {
-    expect(
-      buildManageSubscriptionUrl(
-        { org_id: 'org_123', portal_url: '' },
-        null,
-        'tier_abc'
-      )
-    ).toBe('')
+    expect(buildManageSubscriptionUrl({ org_id: 'org_123', portal_url: '' }, null, 'tier_abc')).toBe('')
   })
 
   it('omits the plan param when no tier is given', () => {
-    expect(
-      buildManageSubscriptionUrl({ org_id: 'org_123', portal_url: '' }, null)
-    ).toBe('')
+    expect(buildManageSubscriptionUrl({ org_id: 'org_123', portal_url: '' }, null)).toBe('')
   })
 
   it('applies org_id + plan to the hard-coded portal fallback when no portal_url resolves', () => {
     // Regression: the fallback must be the last-resort ORIGIN, not a bare return that
     // silently drops org_id/plan.
-    expect(buildManageSubscriptionUrl({ org_id: 'org_z', portal_url: null }, null, 'tier_q')).toBe(
-      ''
-    )
+    expect(buildManageSubscriptionUrl({ org_id: 'org_z', portal_url: null }, null, 'tier_q')).toBe('')
   })
 })
 

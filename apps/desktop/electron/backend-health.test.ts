@@ -6,8 +6,8 @@ import {
   DEFAULT_HEALTH_PROBE_TIMEOUT_MS,
   isAuthRejectionError,
   isGatedMissingHealthError,
-  isMissingHealthEndpointError,
   isManagedCloudAgentUrl,
+  isMissingHealthEndpointError,
   isReauthRequiredError,
   isServerSideHttpError,
   makeManagedCloudBackendDownError,
@@ -529,10 +529,7 @@ test('makeManagedCloudBackendDownError returns null for a non-Cloud 503 (generic
 })
 
 test('makeManagedCloudBackendDownError preserves legacy string-prefix compatibility', () => {
-  const result = makeManagedCloudBackendDownError(
-    'https://ares-3009.agents.',
-    new Error('503: Service Unavailable')
-  )
+  const result = makeManagedCloudBackendDownError('https://ares-3009.agents.', new Error('503: Service Unavailable'))
 
   assert.ok(result)
   assert.equal((result as any).isCloudBackendDown, true)

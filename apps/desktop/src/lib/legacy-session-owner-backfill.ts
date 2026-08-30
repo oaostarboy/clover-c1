@@ -23,7 +23,7 @@
  * the next refresh retries; a backend without the endpoint (version skew)
  * stays armed-off for this renderer lifetime.
  */
-import { getApiRequestConnection, cloverApi } from '@/api/client'
+import { cloverApi, getApiRequestConnection } from '@/api/client'
 import { isMissingRestEndpoint } from '@/lib/gateway-rpc'
 import { resolveLegacyOwnerBackfillScope } from '@/lib/session-owner-stamp'
 import { $connectionsRegistry, hasRegistryTopology } from '@/store/connection-registry-state'

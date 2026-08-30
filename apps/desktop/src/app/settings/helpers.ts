@@ -1,5 +1,5 @@
 import { asText, normalize } from '@/lib/text'
-import type { ConfigFieldSchema, CloverConfigRecord, ToolsetInfo } from '@/types/clover'
+import type { CloverConfigRecord, ConfigFieldSchema, ToolsetInfo } from '@/types/clover'
 
 import { BUILTIN_PERSONALITIES, ENUM_OPTIONS, PROVIDER_GROUPS, SECTIONS } from './constants'
 

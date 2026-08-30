@@ -176,7 +176,7 @@ async function locateClover(ssh, remoteCloverPath) {
     //   - version checking: `<python> --version` printed "Python x.y.z" instead of
     //     the Clover version, and
     //   - capability probing: `<python> serve --help` failed entirely.
-    // See 
+    // See
     return candidate
   }
 

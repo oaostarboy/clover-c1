@@ -1,5 +1,5 @@
 import { profileScoped } from '@/api/client'
-import { getApiRequestConnection, getApiRequestProfile, cloverApi } from '@/clover'
+import { cloverApi, getApiRequestConnection, getApiRequestProfile } from '@/clover'
 
 /**
  * Client-direct voice: call the active profile's STT/TTS providers straight

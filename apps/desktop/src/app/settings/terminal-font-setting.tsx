@@ -6,9 +6,9 @@ import {
   setTerminalFontFamilyFromConfig,
   TERMINAL_FONT_SUGGESTIONS
 } from '@/app/right-sidebar/terminal/terminal-font'
+import { saveCloverConfig } from '@/clover'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { saveCloverConfig } from '@/clover'
 import { useI18n } from '@/i18n'
 import { notifyError } from '@/store/notifications'
 import type { CloverConfigRecord } from '@/types/clover'

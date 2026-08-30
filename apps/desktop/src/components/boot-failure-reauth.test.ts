@@ -151,10 +151,12 @@ describe('deriveProviderShape', () => {
   })
 
   it('OAuth shape when the provider is a redirect IDP', () => {
-    expect(deriveProviderShape([{ name: 'clover', displayName: 'Clover Cognition', supportsPassword: false }])).toEqual({
-      isPassword: false,
-      providerLabel: 'Clover Cognition'
-    })
+    expect(deriveProviderShape([{ name: 'clover', displayName: 'Clover Cognition', supportsPassword: false }])).toEqual(
+      {
+        isPassword: false,
+        providerLabel: 'Clover Cognition'
+      }
+    )
   })
 
   it('mixed deployment keeps generic OAuth copy (not every provider is password)', () => {

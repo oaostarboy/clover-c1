@@ -10,7 +10,7 @@ import type {
   SessionSearchResponse
 } from '@/types/clover'
 
-import { capabilityScoped, getApiRequestConnection, cloverApi, type ProfileScope, profileScoped } from './client'
+import { capabilityScoped, cloverApi, getApiRequestConnection, type ProfileScope, profileScoped } from './client'
 
 const SESSION_LIST_REQUEST_TIMEOUT_MS = 60_000
 

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import { getMemoryProviderConfig, saveMemoryProviderConfig } from '@/clover'
 import { PageLoader } from '@/components/page-loader'
 import { Button } from '@/components/ui/button'
 import { DisclosureCaret } from '@/components/ui/disclosure-caret'
-import { getMemoryProviderConfig, saveMemoryProviderConfig } from '@/clover'
 import { SlidersHorizontal } from '@/lib/icons'
 import { notifyError } from '@/store/notifications'
 import type { MemoryProviderConfig, MemoryProviderField } from '@/types/clover'

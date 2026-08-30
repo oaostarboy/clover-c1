@@ -1096,7 +1096,8 @@ export const ja = defineLocale({
       activeBackend: '使用中',
       activeBackendHint: 'これが現在アクティブなバックエンドです',
       useBackend: 'このバックエンドを使う',
-      cloverIncluded: 'Clover サブスクリプションに含まれています。有効にするには Clover Portal にサインインしてください。',
+      cloverIncluded:
+        'Clover サブスクリプションに含まれています。有効にするには Clover Portal にサインインしてください。',
       cloverAuthNeededTitle: 'Clover Portal にサインイン',
       cloverAuthNeededMessage: provider =>
         `${provider} は保存されましたが、Clover Portal にサインインするまで有効になりません。`,

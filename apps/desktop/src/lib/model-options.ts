@@ -1,4 +1,4 @@
-import { getGlobalModelOptions, type CloverGateway, type ModelOptionsResponse } from '@/clover'
+import { type CloverGateway, getGlobalModelOptions, type ModelOptionsResponse } from '@/clover'
 import type { ModelOptionProvider } from '@/types/clover'
 
 /**

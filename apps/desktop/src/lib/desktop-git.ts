@@ -1,3 +1,4 @@
+import { cloverApi } from '@/clover'
 import type {
   CloverGitBaseBranch,
   CloverGitBranch,
@@ -7,7 +8,6 @@ import type {
   CloverReviewList,
   CloverReviewShipInfo
 } from '@/global'
-import { cloverApi } from '@/clover'
 
 import { desktopFsProfile, isDesktopFsRemoteMode } from './desktop-fs'
 

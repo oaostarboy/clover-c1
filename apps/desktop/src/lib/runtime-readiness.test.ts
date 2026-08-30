@@ -89,7 +89,10 @@ describe('fetchRuntimeReadinessSignals', () => {
 
     await fetchRuntimeReadinessSignals(requestGateway, 'clover')
 
-    expect(calls).toEqual([{ method: 'setup.status' }, { method: 'setup.runtime_check', params: { provider: 'clover' } }])
+    expect(calls).toEqual([
+      { method: 'setup.status' },
+      { method: 'setup.runtime_check', params: { provider: 'clover' } }
+    ])
   })
 })
 

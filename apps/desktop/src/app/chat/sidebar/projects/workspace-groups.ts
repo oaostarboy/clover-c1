@@ -1,5 +1,5 @@
-import type { CloverGitWorktree } from '@/global'
 import type { ProjectInfo, SessionInfo } from '@/clover'
+import type { CloverGitWorktree } from '@/global'
 import { normalize } from '@/lib/text'
 
 import { rankSessions } from '../order'
