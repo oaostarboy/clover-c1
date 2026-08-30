@@ -96,8 +96,8 @@ All fields are optional. Missing values inherit from the ``default`` skin.
     branding:
       agent_name: "Clover Cognition"          # Banner title, status display
       welcome: "Welcome message"          # Shown at CLI startup
-      goodbye: "Goodbye! ⚕"              # Shown on exit
-      response_label: " ⚕ Clover "       # Response box header label
+      goodbye: "Goodbye! ☘"              # Shown on exit
+      response_label: " ☘ Clover "       # Response box header label
       prompt_symbol: "❯"                 # Input prompt symbol (bare token; renderers add trailing space)
       help_header: "(^_^)? Commands"      # /help header text
 
@@ -201,72 +201,72 @@ class SkinConfig:
 _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
     "default": {
         "name": "default",
-        "description": "Classic Clover — gold and kawaii",
+        "description": "Classic Clover - green and kawaii",
         # Dark-authored. Values match the TUI's DARK_THEME so the classic CLI
         # and the TUI render the same Clover gold.
         "colors": {
-            "banner_border": "#CD7F32",
-            "banner_title": "#FFD700",
-            "banner_accent": "#FFBF00",
-            "banner_dim": "#B8860B",
-            "banner_text": "#FFF8DC",
-            "ui_accent": "#FFBF00",
-            "ui_label": "#DAA520",
+            "banner_border": "#2E8B57",
+            "banner_title": "#00FF87",
+            "banner_accent": "#00D97E",
+            "banner_dim": "#1B7A4B",
+            "banner_text": "#E4FFF1",
+            "ui_accent": "#00D97E",
+            "ui_label": "#3FBF7F",
             "ui_ok": "#4caf50",
             "ui_error": "#ef5350",
             "ui_warn": "#ffa726",
-            "prompt": "#FFF8DC",
-            "input_rule": "#CD7F32",
-            "response_border": "#FFD700",
-            "status_bar_bg": "#1a1a2e",
+            "prompt": "#E4FFF1",
+            "input_rule": "#2E8B57",
+            "response_border": "#00FF87",
+            "status_bar_bg": "#0D1F17",
             "status_bar_text": "#C0C0C0",
-            "status_bar_strong": "#FFD700",
-            "status_bar_dim": "#8A7A4A",
+            "status_bar_strong": "#00FF87",
+            "status_bar_dim": "#5A7A68",
             "status_bar_good": "#8FBC8F",
-            "status_bar_warn": "#FFD700",
-            "status_bar_bad": "#FF8C00",
+            "status_bar_warn": "#FFC857",
+            "status_bar_bad": "#FF8C42",
             "status_bar_critical": "#FF6B6B",
-            "session_label": "#DAA520",
+            "session_label": "#3FBF7F",
             "session_border": "#8B8682",
-            "completion_menu_bg": "#1a1a2e",
-            "completion_menu_current_bg": "#333355",
-            "selection_bg": "#3a3a55",
+            "completion_menu_bg": "#0D1F17",
+            "completion_menu_current_bg": "#1F4436",
+            "selection_bg": "#20493A",
             "shell_dollar": "#4dabf7",
-            "voice_status_bg": "#1a1a2e",
+            "voice_status_bg": "#0D1F17",
         },
         # Light overlay (merged onto `colors`; dark mode renders the vivid
-        # block above untouched). The goldenrod ladder: on white, the vivid
-        # #FFD700/#FFBF00 read as glare and WCAG-darkened mustard (#867000)
-        # reads as mud — the sweet spot is the statusbar's goldenrod family
-        # (#B8860B/#DAA520): hue kept, saturation tamed, mid luminance.
+        # block above untouched). The forest-green ladder: on white, the vivid
+        # #00FF87/#00D97E read as glare, and a WCAG-darkened grey-green reads
+        # as sludge. The sweet spot is the forest family (#0F8A4D/#0B7A42):
+        # hue kept, saturation tamed, mid luminance.
         # Hierarchy on white: ink body 8.9:1 > fade 5.2 > label 3.7 >
         # muted 3.3 > title 2.7 > headers 2.4 (accents recede last, like
         # slate's pastels — the raw-canon look, just not neon).
         "light_colors": {
-            "banner_title": "#C8961E",
-            "banner_accent": "#D89B04",
-            "banner_dim": "#B8860B",
-            "banner_text": "#5C4718",
-            "ui_accent": "#D89B04",
-            "ui_label": "#A97E10",
+            "banner_title": "#0F8A4D",
+            "banner_accent": "#0B7A42",
+            "banner_dim": "#2E8B57",
+            "banner_text": "#12301F",
+            "ui_accent": "#0B7A42",
+            "ui_label": "#136B3F",
             "ui_ok": "#2E7D32",
             "ui_error": "#C62828",
             "ui_warn": "#D97706",
-            "prompt": "#5C4718",
-            "response_border": "#C8961E",
-            "session_label": "#A97E10",
+            "prompt": "#12301F",
+            "response_border": "#0F8A4D",
+            "session_label": "#136B3F",
             "status_bar_text": "#6F6F6F",
-            "status_bar_strong": "#C8961E",
-            "status_bar_dim": "#9A8A5A",
+            "status_bar_strong": "#0F8A4D",
+            "status_bar_dim": "#6E8A7B",
             "status_bar_good": "#2E7D32",
-            "status_bar_warn": "#C8961E",
+            "status_bar_warn": "#B4741A",
             "status_bar_bad": "#C2410C",
             "status_bar_critical": "#B91C1C",
             "shell_dollar": "#1E6FC0",
             # Fills: flip the dark navy surfaces to light polarity.
             "completion_menu_bg": "#F5F5F5",
-            "completion_menu_current_bg": "#E0D1BF",
-            "selection_bg": "#D4E4F7",
+            "completion_menu_current_bg": "#C9E8D8",
+            "selection_bg": "#CDECDC",
             "status_bar_bg": "#F5F5F5",
             "voice_status_bg": "#F5F5F5",
         },
@@ -276,8 +276,8 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         "branding": {
             "agent_name": "Clover Cognition",
             "welcome": "Welcome to Clover Cognition! Type your message or /help for commands.",
-            "goodbye": "Goodbye! ⚕",
-            "response_label": " ⚕ Clover ",
+            "goodbye": "Goodbye! ☘",
+            "response_label": " ☘ Clover ",
             "prompt_symbol": "❯",
             "help_header": "(^_^)? Available Commands",
         },
@@ -397,8 +397,8 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         "branding": {
             "agent_name": "Clover Cognition",
             "welcome": "Welcome to Clover Cognition! Type your message or /help for commands.",
-            "goodbye": "Goodbye! ⚕",
-            "response_label": " ⚕ Clover ",
+            "goodbye": "Goodbye! ☘",
+            "response_label": " ☘ Clover ",
             "prompt_symbol": "❯",
             "help_header": "[?] Available Commands",
         },
@@ -441,8 +441,8 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         "branding": {
             "agent_name": "Clover Cognition",
             "welcome": "Welcome to Clover Cognition! Type your message or /help for commands.",
-            "goodbye": "Goodbye! ⚕",
-            "response_label": " ⚕ Clover ",
+            "goodbye": "Goodbye! ☘",
+            "response_label": " ☘ Clover ",
             "prompt_symbol": "❯",
             "help_header": "(^_^)? Available Commands",
         },
@@ -487,8 +487,8 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         "branding": {
             "agent_name": "Clover Cognition",
             "welcome": "Welcome to Clover Cognition! Type your message or /help for commands.",
-            "goodbye": "Goodbye! ⚕",
-            "response_label": " ⚕ Clover ",
+            "goodbye": "Goodbye! ☘",
+            "response_label": " ☘ Clover ",
             "prompt_symbol": "❯",
             "help_header": "[?] Available Commands",
         },
@@ -976,7 +976,7 @@ def get_active_help_header(fallback: str = "(^_^)? Available Commands") -> str:
 
 
 
-def get_active_goodbye(fallback: str = "Goodbye! ⚕") -> str:
+def get_active_goodbye(fallback: str = "Goodbye! ☘") -> str:
     """Get the goodbye line from the active skin."""
     try:
         return get_active_skin().get_branding("goodbye", fallback)

@@ -3274,6 +3274,16 @@ _LIGHT_MODE_REMAP: dict[str, str] = {
     "#FFBF00": "#8A5A00",   # amber -> dark amber
     "#B8860B": "#5C4500",   # dark goldenrod -> deeper brown (more contrast)
     "#DAA520": "#6B4F00",   # goldenrod -> dark olive
+    # Clover green ladder: the default skin's dark-mode greens need the same
+    # treatment the golds got. Bright greens glare on white, so each maps to a
+    # forest tone that keeps the hue and gains contrast.
+    "#E4FFF1": "#12301F",   # mint white -> deep forest ink
+    "#00FF87": "#0F8A4D",   # spring green -> forest green
+    "#00D97E": "#0B7A42",   # green -> deep green
+    "#2ECC71": "#12703F",   # emerald -> darker emerald
+    "#2E8B57": "#1C5E3A",   # sea green -> deeper sea green
+    "#1B7A4B": "#124A2E",   # deep green -> darkest green
+    "#3FBF7F": "#136B3F",   # mid green -> forest label
     "#F1E6CF": "#1A1A1A",   # cream -> near-black
     "#c9d1d9": "#24292F",   # github-light fg
     "#EAF7FF": "#0F1B26",   # ice
@@ -4709,29 +4719,35 @@ class ChatConsole:
         yield self
 
 # ASCII Art - CLOVER_C1 logo (full width, single line - requires ~95 char terminal)
-CLOVER_AGENT_LOGO = """[bold #FFD700]██╗  ██╗███████╗██████╗ ███╗   ███╗███████╗███████╗       █████╗  ██████╗ ███████╗███╗   ██╗████████╗[/]
-[bold #FFD700]██║  ██║██╔════╝██╔══██╗████╗ ████║██╔════╝██╔════╝      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝[/]
-[#FFBF00]███████║█████╗  ██████╔╝██╔████╔██║█████╗  ███████╗█████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║[/]
-[#FFBF00]██╔══██║██╔══╝  ██╔══██╗██║╚██╔╝██║██╔══╝  ╚════██║╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║[/]
-[#CD7F32]██║  ██║███████╗██║  ██║██║ ╚═╝ ██║███████╗███████║      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║[/]
-[#CD7F32]╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚══════╝      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝[/]"""
+CLOVER_AGENT_LOGO = """[bold #00FF87] ██████╗██╗      ██████╗ ██╗   ██╗███████╗██████╗    ██████╗  ██╗[/]
+[bold #00FF87]██╔════╝██║     ██╔═══██╗██║   ██║██╔════╝██╔══██╗  ██╔════╝████║[/]
+[#00D97E]██║     ██║     ██║   ██║██║   ██║█████╗  ██████╔╝  ██║     ╚═██║[/]
+[#00D97E]██║     ██║     ██║   ██║╚██╗ ██╔╝██╔══╝  ██╔══██╗  ██║       ██║[/]
+[#2ECC71]╚██████╗███████╗╚██████╔╝ ╚████╔╝ ███████╗██║  ██║  ╚██████╗  ██║[/]
+[#2ECC71] ╚═════╝╚══════╝ ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝   ╚═════╝  ╚═╝[/]"""
 
 # ASCII Art - Clover Caduceus (compact, fits in left panel)
-CLOVER_CADUCEUS = """[#CD7F32]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⡀⠀⣀⣀⠀⢀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#CD7F32]⠀⠀⠀⠀⠀⠀⢀⣠⣴⣾⣿⣿⣇⠸⣿⣿⠇⣸⣿⣿⣷⣦⣄⡀⠀⠀⠀⠀⠀⠀[/]
-[#FFBF00]⠀⢀⣠⣴⣶⠿⠋⣩⡿⣿⡿⠻⣿⡇⢠⡄⢸⣿⠟⢿⣿⢿⣍⠙⠿⣶⣦⣄⡀⠀[/]
-[#FFBF00]⠀⠀⠉⠉⠁⠶⠟⠋⠀⠉⠀⢀⣈⣁⡈⢁⣈⣁⡀⠀⠉⠀⠙⠻⠶⠈⠉⠉⠀⠀[/]
-[#FFD700]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣴⣿⡿⠛⢁⡈⠛⢿⣿⣦⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#FFD700]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠿⣿⣦⣤⣈⠁⢠⣴⣿⠿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#FFBF00]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠻⢿⣿⣦⡉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#FFBF00]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⢷⣦⣈⠛⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#CD7F32]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣴⠦⠈⠙⠿⣦⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#CD7F32]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⣿⣤⡈⠁⢤⣿⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#B8860B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠷⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#B8860B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⠑⢶⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#B8860B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⠁⢰⡆⠈⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#B8860B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠳⠈⣡⠞⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#B8860B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]"""
+CLOVER_HERO = """[#00FF87]⠀⠀⠀⠀⠀⠀⠀⣀⣤⣶⣦⣄⡀⠀⠀⠀⠀⢀⣠⣴⣶⣤⣀⠀⠀⠀⠀⠀⠀⠀[/]
+[#00FF87]⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣦⡀⢠⣾⣿⣿⣿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀[/]
+[#00FF87]⠀⠀⠀⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠀⠀⠀[/]
+[#00FF87]⠀⠀⢰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡆⠀⠀[/]
+[#00D97E]⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀[/]
+[#00D97E]⠀⠀⠘⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠃⠀⠀[/]
+[#00D97E]⠀⠀⠀⠹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠀⠀⠀[/]
+[#00D97E]⠀⠀⠀⠀⠈⠻⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠟⠁⠀⠀⠀⠀[/]
+[#2ECC71]⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀[/]
+[#2ECC71]⠀⠀⠀⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠀⠀⠀[/]
+[#2ECC71]⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀[/]
+[#2E8B57]⠀⠀⠈⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠛⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠁⠀⠀[/]
+[#2E8B57]⠀⠀⠀⠈⠻⢿⣿⣿⣿⣿⡿⠟⠁⠀⠀⠀⠈⠻⢿⣿⣿⣿⣿⡿⠟⠁⠀⠀⠀⠀[/]
+[#2E8B57]⠀⠀⠀⠀⠀⠀⠀⠉⠉⠀⠀⠀⢠⣿⡄⠀⠀⠀⠀⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#1B7A4B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#1B7A4B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢿⣷⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#1B7A4B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⣿⣧⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#1B7A4B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠿⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]"""
+
+# Back-compat alias: the old name is still imported in places.
+CLOVER_CADUCEUS = CLOVER_HERO
 
 
 
@@ -4749,8 +4765,8 @@ def _build_compact_banner() -> str:
     dim_color = _skin.get_color("banner_dim", "#B8860B") if _skin else "#B8860B"
 
     if skin_name == "default":
-        line1 = "⚕ CLOVER CLOVER - AI Agent Framework"
-        tiny_line = "⚕ CLOVER CLOVER"
+        line1 = "☘ CLOVER CLOVER - AI Agent Framework"
+        tiny_line = "☘ CLOVER CLOVER"
     else:
         agent_name = _skin.get_branding("agent_name", "Clover Cognition") if _skin else "Clover Cognition"
         line1 = f"{agent_name} - AI Agent Framework"
@@ -7359,7 +7375,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             if width < 52:
                 segs = []
                 if _ok("model"):
-                    segs.append(f"⚕ {snapshot['model_short']}")
+                    segs.append(f"☘ {snapshot['model_short']}")
                 if _ok("duration"):
                     segs.append(duration_label)
                 if goal_segment:
@@ -7368,12 +7384,12 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     segs.append(focus_label)
                 if yolo_active and _ok("yolo"):
                     segs.append("⚠ YOLO")
-                text = battery_prefix + " · ".join(segs) if segs else f"{battery_prefix}⚕ {snapshot['model_short']}"
+                text = battery_prefix + " · ".join(segs) if segs else f"{battery_prefix}☘ {snapshot['model_short']}"
                 return self._right_align_status_title(text, session_title, width)
             if width < 76:
                 parts = []
                 if _ok("model"):
-                    parts.append(f"⚕ {snapshot['model_short']}")
+                    parts.append(f"☘ {snapshot['model_short']}")
                 if _ok("context_pct"):
                     parts.append(percent_label)
                 cache = self._cache_hit_rate(snapshot, precision=0)
@@ -7402,12 +7418,12 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 if yolo_active and _ok("yolo"):
                     parts.append("⚠ YOLO")
                 if not parts:
-                    parts = [f"⚕ {snapshot['model_short']}"]
+                    parts = [f"☘ {snapshot['model_short']}"]
                 return self._right_align_status_title(" · ".join(parts), session_title, width)
 
             parts = []
             if _ok("model"):
-                parts.append(f"⚕ {snapshot['model_short']}")
+                parts.append(f"☘ {snapshot['model_short']}")
             if _ok("context_detail"):
                 if snapshot["context_length"]:
                     ctx_total = _format_context_length(snapshot["context_length"])
@@ -7461,10 +7477,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             if total_tokens and field_set is not None and "total_tokens" in field_set:
                 parts.append(f"Σ{format_token_count_compact(total_tokens)}")
             if not parts:
-                parts = [f"⚕ {snapshot['model_short']}"]
+                parts = [f"☘ {snapshot['model_short']}"]
             return self._right_align_status_title(" │ ".join(parts), session_title, width)
         except Exception:
-            return f"⚕ {self.model if getattr(self, 'model', None) else 'Clover'}"
+            return f"☘ {self.model if getattr(self, 'model', None) else 'Clover'}"
 
     def _get_status_bar_fragments(self):
         if not self._status_bar_visible or getattr(self, '_model_picker_state', None) or getattr(self, '_command_palette_state', None):
@@ -7505,7 +7521,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             if width < 52:
                 frags = []
                 if _ok("model"):
-                    frags.append(("class:status-bar", " ⚕ "))
+                    frags.append(("class:status-bar", " ☘ "))
                     frags.append(("class:status-bar-strong", snapshot["model_short"]))
                 if _ok("duration"):
                     _append(frags, " · ", ("class:status-bar-dim", duration_label))
@@ -7517,7 +7533,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     _append(frags, " · ", ("class:status-bar-yolo", "⚠ YOLO"))
                 if not frags:
                     frags = [
-                        ("class:status-bar", " ⚕ "),
+                        ("class:status-bar", " ☘ "),
                         ("class:status-bar-strong", snapshot["model_short"]),
                     ]
                 frags.append(("class:status-bar", " "))
@@ -7531,7 +7547,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     bg_subagent_count = snapshot.get("active_background_subagents", 0)
                     frags = []
                     if _ok("model"):
-                        frags.append(("class:status-bar", " ⚕ "))
+                        frags.append(("class:status-bar", " ☘ "))
                         frags.append(("class:status-bar-strong", snapshot["model_short"]))
                     if _ok("context_pct"):
                         _append(frags, " · ", (self._status_bar_context_style(percent), percent_label))
@@ -7556,7 +7572,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         _append(frags, " · ", ("class:status-bar-yolo", "⚠ YOLO"))
                     if not frags:
                         frags = [
-                            ("class:status-bar", " ⚕ "),
+                            ("class:status-bar", " ☘ "),
                             ("class:status-bar-strong", snapshot["model_short"]),
                         ]
                     frags.append(("class:status-bar", " "))
@@ -7568,7 +7584,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     bg_subagent_count = snapshot.get("active_background_subagents", 0)
                     frags = []
                     if _ok("model"):
-                        frags.append(("class:status-bar", " ⚕ "))
+                        frags.append(("class:status-bar", " ☘ "))
                         frags.append(("class:status-bar-strong", snapshot["model_short"]))
                     if _ok("context_detail"):
                         if snapshot["context_length"]:
@@ -7628,7 +7644,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         _append(frags, " │ ", ("class:status-bar-dim", f"Σ{format_token_count_compact(total_tokens)}"))
                     if not frags:
                         frags = [
-                            ("class:status-bar", " ⚕ "),
+                            ("class:status-bar", " ☘ "),
                             ("class:status-bar-strong", snapshot["model_short"]),
                         ]
                     frags.append(("class:status-bar", " "))
@@ -7655,7 +7671,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     frags.append(("class:status-bar-strong", stash_indicator))
 
             # Battery is the first status-bar element when enabled: prepend it
-            # ahead of the leading ⚕ marker in whichever width tier ran above.
+            # ahead of the leading ☘ marker in whichever width tier ran above.
             if battery_label and _ok("battery"):
                 frags[0:0] = [
                     ("class:status-bar", " "),
@@ -8298,10 +8314,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             try:
                 from clover_cli.skin_engine import get_active_skin
                 _skin = get_active_skin()
-                label = _skin.get_branding("response_label", "⚕ Clover")
+                label = _skin.get_branding("response_label", "☘ Clover")
                 _text_hex = _skin.get_color("banner_text", "#FFF8DC")
             except Exception:
-                label = "⚕ Clover"
+                label = "☘ Clover"
                 _text_hex = "#FFF8DC"
             # Build a true-color ANSI escape for the response text color
             # so streamed content matches the Rich Panel appearance.
@@ -16912,7 +16928,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         if not _streaming_box_opened:
                             _streaming_box_opened = True
                             w = self._scrollback_box_width(getattr(self.console, "width", 80))
-                            label = " ⚕ Clover "
+                            label = " ☘ Clover "
                             if self.show_timestamps:
                                 label = f"{label}{datetime.now().strftime(getattr(self, 'timestamp_format', '%H:%M'))} "
                             fill = w - 2 - CloverCLI._status_bar_display_width(label)
@@ -17344,11 +17360,11 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 try:
                     from clover_cli.skin_engine import get_active_skin
                     _skin = get_active_skin()
-                    label = _skin.get_branding("response_label", "⚕ Clover")
+                    label = _skin.get_branding("response_label", "☘ Clover")
                     _resp_color = _maybe_remap_for_light_mode(_skin.get_color("response_border", "#CD7F32"))
                     _resp_text = _maybe_remap_for_light_mode(_skin.get_color("banner_text", "#FFF8DC"))
                 except Exception:
-                    label = "⚕ Clover"
+                    label = "☘ Clover"
                     _resp_color = _maybe_remap_for_light_mode("#CD7F32")
                     _resp_text = _maybe_remap_for_light_mode("#FFF8DC")
 
@@ -17712,9 +17728,9 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         else:
             try:
                 from clover_cli.skin_engine import get_active_goodbye
-                goodbye = get_active_goodbye("Goodbye! ⚕")
+                goodbye = get_active_goodbye("Goodbye! ☘")
             except Exception:
-                goodbye = "Goodbye! ⚕"
+                goodbye = "Goodbye! ☘"
             print(goodbye)
 
     def _get_tui_prompt_symbols(self) -> tuple[str, str]:
@@ -17803,7 +17819,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if self._command_running:
             return _state_fragment("class:prompt-working", self._command_spinner_frame())
         if self._agent_running:
-            return _state_fragment("class:prompt-working", "⚕")
+            return _state_fragment("class:prompt-working", "☘")
         if self._voice_mode:
             return _state_fragment("class:voice-prompt", "🎤")
         return [("class:prompt", symbol)]
