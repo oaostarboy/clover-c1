@@ -4,18 +4,19 @@
 
 # Clover Cognition 🍀
 <p align="center">
-  <a href="https://github.com/oaostarboy/clover-c1">Clover Cognition</a> | <a href="https://github.com/oaostarboy/clover-c1/tree/main/apps/desktop">Clover Desktop</a>
+  <a href="">Clover Cognition</a> | <a href="">Clover Desktop</a>
 </p>
 <p align="center">
-  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--agent-00D97E?style=for-the-badge" alt="Documentation"></a>
-  <a href="https://github.com/oaostarboy/clover-c1/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-2E8B57?style=for-the-badge" alt="License: MIT"></a>
-  <a href="https://github.com/oaostarboy/clover-c1"><img src="https://img.shields.io/badge/Built%20by-Anthony%20Nguyen-2E8B57?style=for-the-badge" alt="Built by Anthony Nguyen"></a>
+  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--agent.-FFD700?style=for-the-badge" alt="Documentation"></a>
+  <a href=""><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href=""><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
+  <a href=""><img src="https://img.shields.io/badge/Built%20by-Anthony%20Nguyen-blueviolet?style=for-the-badge" alt="Built by Anthony Nguyen"></a>
   <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/Lang-中文-red?style=for-the-badge" alt="中文"></a>
   <a href="README.ur-pk.md"><img src="https://img.shields.io/badge/Lang-اردو-green?style=for-the-badge" alt="اردو"></a>
   <a href="README.es.md"><img src="https://img.shields.io/badge/Lang-Español-orange?style=for-the-badge" alt="Español"></a>
 </p>
 
-**The self-improving AI agent built by Clover Cognition.** It's the only agent with a built-in learning loop — it creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
+**The self-improving AI agent built by [Clover Cognition]().** It's the only agent with a built-in learning loop — it creates skills from experience, improves them during use, nudges itself to persist knowledge, searches its own past conversations, and builds a deepening model of who you are across sessions. Run it on a $5 VPS, a GPU cluster, or serverless infrastructure that costs nearly nothing when idle. It's not tied to your laptop — talk to it from Telegram while it works on a cloud VM.
 
 Use any model you want — [Clover Portal](), OpenRouter, OpenAI, your own endpoint, and [many others](docs/integrations/providers). Switch with `clover model` — no code changes, no lock-in.
 
@@ -36,17 +37,17 @@ Use any model you want — [Clover Portal](), OpenRouter, OpenAI, your own endpo
 ### Linux, macOS, WSL2, Termux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oaostarboy/clover-c1/main/scripts/install.sh | bash
+curl -fsSL  | bash
 ```
 
 ### Windows (native, PowerShell)
 
-> **Heads up:** Native Windows runs Clover without WSL — CLI, gateway, TUI, and tools all work natively. If you'd rather use WSL2, the Linux/macOS one-liner above works there too. Found a bug? Please [file issues](https://github.com/oaostarboy/clover-c1/issues).
+> **Heads up:** Native Windows runs Clover without WSL — CLI, gateway, TUI, and tools all work natively. If you'd rather use WSL2, the Linux/macOS one-liner above works there too. Found a bug? Please [file issues]().
 
 Run this in PowerShell:
 
 ```powershell
-iex (irm https://raw.githubusercontent.com/oaostarboy/clover-c1/main/scripts/install.ps1)
+iex (irm )
 ```
 
 The installer handles everything: uv, Python 3.11, Node.js, ripgrep, ffmpeg, **and a portable Git Bash** (MinGit, unpacked to `%LOCALAPPDATA%\clover\git` — no admin required, completely isolated from any system Git install). Clover uses this bundled Git Bash to run shell commands.
@@ -99,42 +100,6 @@ If attestation says "Verification succeeded" and the last line prints `True`, yo
 
 For more context, see the upstream Astral reports: [astral-sh/uv#13553](https://github.com/astral-sh/uv/issues/13553), [astral-sh/uv#15011](https://github.com/astral-sh/uv/issues/15011), [astral-sh/uv#10079](https://github.com/astral-sh/uv/issues/10079).
 
-#### Diagnosing a failed Windows install
-
-The PowerShell installer has two built-in diagnostics.
-
-**Show the paths the installer resolved** — prints a JSON object to stdout and exits without installing anything. This is the first thing to check for any "a path doesn't exist" or long-path error:
-
-```powershell
-powershell -File install.ps1 -ShowResolvedPaths
-```
-
-**Watch stage-by-stage progress** — the installer runs as a sequence of named stages (`node-deps`, `repository`, and so on). Programmatic drivers (the desktop onboarding wizard, CI) use these flags to list stages and run them one at a time:
-
-```powershell
-powershell -File install.ps1 -Manifest -Json    # enumerate stages as JSON
-powershell -File install.ps1 -Stage node-deps   # run a single stage
-powershell -File install.ps1 -ProtocolVersion   # stage protocol version
-```
-
-**Installing from a fork** — every download URL derives from one owner/repo pair, so a fork retargets the installer without editing it:
-
-```powershell
-$env:CLOVER_REPO_OWNER = "your-org"
-$env:CLOVER_REPO_NAME  = "clover-c1"
-iex (irm https://raw.githubusercontent.com/your-org/clover-c1/main/scripts/install.ps1)
-```
-
-`CLOVER_REPO_URL_HTTPS` / `CLOVER_REPO_URL_SSH` override the full URLs directly. The same variables work in the Linux/macOS `install.sh`. An empty repository URL now aborts immediately with a clear message instead of failing three times over (SSH, then HTTPS, then the ZIP fallback).
-
-**Computer Use is opt-in on Windows.** The `cua-driver` component is third-party software that adds itself to your PATH, enables its own telemetry by default, and can register a logon scheduled task. The installer no longer provisions it unless you ask:
-
-```powershell
-powershell -File install.ps1 -ComputerUse   # or set CLOVER_ENABLE_COMPUTER_USE=1
-```
-
-Clover suppresses the driver's default autostart during install and registers it only after the driver passes a runtime check, so a broken driver never leaves a background task behind. To turn off the driver's telemetry: `cua-driver telemetry disable`. To inspect or remove autostart: `cua-driver autostart status` / `cua-driver autostart disable`.
-
 ---
 
 ## Getting Started
@@ -172,21 +137,6 @@ clover setup --portal
 That logs you in via OAuth, sets Clover as your provider, and turns on the Tool Gateway. Check what's wired up any time with `clover portal info`. Full details on the [Tool Gateway docs page](docs/user-guide/features/tool-gateway).
 
 You can still bring your own keys per-tool whenever you want — the gateway is per-backend, not all-or-nothing.
-
----
-
-## Already have a Claude subscription? No API key needed
-
-If you use the **Claude Code** CLI, Clover can reuse that login directly — your existing Claude Pro/Max subscription becomes Clover's Anthropic provider, with no `ANTHROPIC_API_KEY` to create, paste, or rotate.
-
-```bash
-clover config set model.provider anthropic   # opt in to using the Claude Code login
-clover auth status anthropic                 # confirm: should report logged in
-```
-
-**Why the extra step?** Clover will not borrow an ambient credential it wasn't pointed at. Discovery of `~/.claude/.credentials.json` is gated on you explicitly selecting the Anthropic provider — under the default `model.provider: auto`, the file is left alone even if it exists. Setting the provider *is* the consent. (`clover doctor` and `clover model` will tell you when a Claude Code login is present but unused, so you don't have to guess.)
-
-Once set, everything works through the native Anthropic API: OAuth tokens are refreshed automatically, and `clover auth status anthropic` shows the live state. To stop using it, switch providers or run `clover auth remove anthropic`.
 
 ---
 
@@ -274,7 +224,7 @@ full git checkout it creates at `$CLOVER_HOME/clover-c1` (usually
 managed venv, lazy dependencies, gateway, and docs tooling.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/oaostarboy/clover-c1/main/scripts/install.sh | bash
+curl -fsSL  | bash
 cd "${CLOVER_HOME:-$HOME/.clover}/clover-c1"
 uv pip install -e ".[all,dev]"
 scripts/run_tests.sh
@@ -299,10 +249,11 @@ scripts/run_tests.sh
 
 ## Community
 
+- 💬 [Discord]()
 - 📚 [Skills Hub](https://agentskills.io)
-- 🐛 [Issues](https://github.com/oaostarboy/clover-c1/issues)
-- 🔌 computer-use-linux — Linux desktop-control MCP server for Clover and other MCP hosts, with AT-SPI accessibility trees, Wayland/X11 input, screenshots, and compositor window targeting.
-- 🔌 CloverClaw — Community WeChat bridge: Run Clover Cognition and OpenClaw on the same WeChat account.
+- 🐛 [Issues]()
+- 🔌 [computer-use-linux]() — Linux desktop-control MCP server for Clover and other MCP hosts, with AT-SPI accessibility trees, Wayland/X11 input, screenshots, and compositor window targeting.
+- 🔌 [CloverClaw]() — Community WeChat bridge: Run Clover Cognition and OpenClaw on the same WeChat account.
 
 ---
 
@@ -310,4 +261,4 @@ scripts/run_tests.sh
 
 MIT — see [LICENSE](LICENSE).
 
-Built by Clover Cognition.
+Built by [Clover Cognition]().

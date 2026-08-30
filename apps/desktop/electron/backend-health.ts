@@ -104,8 +104,8 @@ export function isServerSideHttpError(error: unknown): {
  * isCloudBackendDown, statusCode, detail, and the original cause. The renderer
  * overlay keys on isCloudBackendDown/statusCode; main owns the classification.
  */
-export function makeManagedCloudBackendDownError(baseUrl: string, error: unknown): Error | null {
-  if (!isManagedCloudAgentUrl(baseUrl)) {
+export function makeNousCloudBackendDownError(baseUrl: string, error: unknown): Error | null {
+  if (!isNousCloudAgentUrl(baseUrl)) {
     return null
   }
 
@@ -120,7 +120,7 @@ export function makeManagedCloudBackendDownError(baseUrl: string, error: unknown
   try {
     hostname = new URL(baseUrl).hostname
   } catch {
-    // baseUrl is known to parse (isManagedCloudAgentUrl already did); keep the raw
+    // baseUrl is known to parse (isNousCloudAgentUrl already did); keep the raw
     // value as a last resort rather than throwing.
   }
 
@@ -129,7 +129,10 @@ export function makeManagedCloudBackendDownError(baseUrl: string, error: unknown
   const err = new Error(
     `Clover Cloud agent ${hostname} is down ` +
       `(HTTP ${serverError.statusCode}: server-side fault). ` +
-      'Switch to Local mode in Settings → Gateway to keep working. ' +
+      'Check  for backend status, ' +
+      'or switch to Local mode in Settings → Gateway. ' +
+      'You can also reach out on Discord at discord.gg/cloverc1 ' +
+      'for immediate assistance. ' +
       `Original detail: ${detail}`
   ) as any
 
@@ -145,9 +148,9 @@ export function makeManagedCloudBackendDownError(baseUrl: string, error: unknown
  * True when the backend URL points at a Clover-managed Clover Cloud instance
  * (e.g. ares-3009.agents.). These are Fly.io-hosted machines
  * the user cannot restart themselves — a 503 from one means the server is down
- * and the recovery path is to switch to Local mode or wait for the host.
+ * and the recovery path is Portal/Discord/wait.
  */
-export function isManagedCloudAgentUrl(baseUrl: string): boolean {
+export function isNousCloudAgentUrl(baseUrl: string): boolean {
   try {
     const host = new URL(baseUrl).hostname
 
@@ -304,7 +307,7 @@ export async function waitForCloverReady(baseUrl: string, options: CloverReadyOp
   // Surface an actionable error instead (#85335). This is the SAME factory
   // buildRemoteConnection uses at the OAuth WS-ticket-mint boundary, so both
   // startup paths produce the identical Cloud-down shape.
-  const cloudError = makeManagedCloudBackendDownError(baseUrl, lastError)
+  const cloudError = makeNousCloudBackendDownError(baseUrl, lastError)
 
   if (cloudError !== null) {
     throw cloudError

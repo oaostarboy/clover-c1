@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { makeManagedCloudBackendDownError } from './backend-health'
+import { makeNousCloudBackendDownError } from './backend-health'
 import {
   apiRequestRegistryConnectionId,
   AT_COOKIE_VARIANTS,
@@ -1291,7 +1291,7 @@ test('gatewayTicketFailure keeps 401 and 403 as reauth with needsOauthLogin', ()
 
 test('gatewayTicketFailure only copies an integer statusCode, not a message prefix', () => {
   // A legacy "503: ..." message carries no structured statusCode; the Cloud
-  // classifier (makeManagedCloudBackendDownError) handles the prefix at the mint
+  // classifier (makeNousCloudBackendDownError) handles the prefix at the mint
   // boundary. The wrapper must not invent an integer from the message.
   const source = new Error('503: Service Unavailable') as any
 
@@ -1313,7 +1313,7 @@ test('OAuth ticket-mint 503 surfaces the Cloud-down error (startup boundary)', (
   ticketErr.statusCode = 503
 
   // The exact production sequence from main.ts.
-  const cloudError = makeManagedCloudBackendDownError(baseUrl, ticketErr)
+  const cloudError = makeNousCloudBackendDownError(baseUrl, ticketErr)
 
   if (cloudError !== null) {
     assert.equal((cloudError as any).isCloudBackendDown, true)
@@ -1333,7 +1333,7 @@ test('OAuth ticket-mint 401 stays on the reauth path (never Cloud-down)', () => 
   const ticketErr = new Error('Unauthorized') as any
   ticketErr.statusCode = 401
 
-  const cloudError = makeManagedCloudBackendDownError(baseUrl, ticketErr)
+  const cloudError = makeNousCloudBackendDownError(baseUrl, ticketErr)
   assert.equal(cloudError, null, 'a 401 must not become a Cloud-down error')
 
   const wrapped = gatewayTicketFailure(ticketErr, 'auth message', 'transport message')

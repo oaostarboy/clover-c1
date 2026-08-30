@@ -339,7 +339,7 @@
         tier_part: tierPart,
         name: achievement.name,
       });
-      return tmpl;
+      return tmpl + "\n\n@cloverc1 · ";
     }
 
     function shareOnX() {

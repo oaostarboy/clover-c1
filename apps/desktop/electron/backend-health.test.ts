@@ -7,10 +7,10 @@ import {
   isAuthRejectionError,
   isGatedMissingHealthError,
   isMissingHealthEndpointError,
-  isManagedCloudAgentUrl,
+  isNousCloudAgentUrl,
   isReauthRequiredError,
   isServerSideHttpError,
-  makeManagedCloudBackendDownError,
+  makeNousCloudBackendDownError,
   makeUnsignedOauthError,
   waitForCloverReady
 } from './backend-health'
@@ -390,17 +390,17 @@ test('isServerSideHttpError detects 502/503/504', () => {
   assert.equal(isServerSideHttpError('503: something'), null) // not an Error
 })
 
-test('isManagedCloudAgentUrl detects cloud agent hosts', () => {
+test('isNousCloudAgentUrl detects cloud agent hosts', () => {
   // Positive cases
-  assert.equal(isManagedCloudAgentUrl('https://ares-3009.agents.'), true)
-  assert.equal(isManagedCloudAgentUrl('https://ares-3009.agents./api/health'), true)
-  assert.equal(isManagedCloudAgentUrl('http://test.agents.'), true)
+  assert.equal(isNousCloudAgentUrl('https://ares-3009.agents.'), true)
+  assert.equal(isNousCloudAgentUrl('https://ares-3009.agents./api/health'), true)
+  assert.equal(isNousCloudAgentUrl('http://test.agents.'), true)
 
   // Negative cases
-  assert.equal(isManagedCloudAgentUrl('http://127.0.0.1:9000'), false)
-  assert.equal(isManagedCloudAgentUrl('https://gateway.example.com'), false)
-  assert.equal(isManagedCloudAgentUrl(''), false)
-  assert.equal(isManagedCloudAgentUrl('not-a-url'), false)
+  assert.equal(isNousCloudAgentUrl('http://127.0.0.1:9000'), false)
+  assert.equal(isNousCloudAgentUrl('https://gateway.example.com'), false)
+  assert.equal(isNousCloudAgentUrl(''), false)
+  assert.equal(isNousCloudAgentUrl('not-a-url'), false)
 })
 
 test('waitForCloverReady surfaces actionable error for cloud agent 503', async () => {
@@ -433,7 +433,8 @@ test('waitForCloverReady surfaces actionable error for cloud agent 503', async (
   } catch (error: any) {
     assert.ok(error.message.includes('Clover Cloud agent'), `unexpected message: ${error.message}`)
     assert.ok(error.message.includes('503'), `should mention status code: ${error.message}`)
-    assert.ok(error.message.includes('Local mode'), `should offer the local fallback: ${error.message}`)
+    assert.ok(error.message.includes('portal.'), `should mention portal: ${error.message}`)
+    assert.ok(error.message.includes('discord.gg/cloverc1'), `should mention Discord: ${error.message}`)
     assert.equal(error.isCloudBackendDown, true)
     assert.equal(error.statusCode, 503)
     assert.ok(attempts > 1, 'should have retried before failing')
@@ -504,10 +505,10 @@ test('isServerSideHttpError structured path excludes 500/401/403/404/429 even wh
   }
 })
 
-test('makeManagedCloudBackendDownError produces the Cloud shape and preserves cause', () => {
+test('makeNousCloudBackendDownError produces the Cloud shape and preserves cause', () => {
   const err = new Error('upstream unavailable') as any
   err.statusCode = 503
-  const result = makeManagedCloudBackendDownError('https://ares-3009.agents.', err)
+  const result = makeNousCloudBackendDownError('https://ares-3009.agents.', err)
   assert.ok(result)
   assert.equal((result as any).isCloudBackendDown, true)
   assert.equal((result as any).statusCode, 503)
@@ -515,21 +516,21 @@ test('makeManagedCloudBackendDownError produces the Cloud shape and preserves ca
   assert.ok(result?.message.includes('Clover Cloud agent ares-3009.agents. is down'))
 })
 
-test('makeManagedCloudBackendDownError returns null for a Cloud 401 (routes to reauth)', () => {
+test('makeNousCloudBackendDownError returns null for a Cloud 401 (routes to reauth)', () => {
   const err = new Error('Unauthorized') as any
   err.statusCode = 401
-  assert.equal(makeManagedCloudBackendDownError('https://ares-3009.agents.', err), null)
+  assert.equal(makeNousCloudBackendDownError('https://ares-3009.agents.', err), null)
 })
 
-test('makeManagedCloudBackendDownError returns null for a non-Cloud 503 (generic remote failure)', () => {
+test('makeNousCloudBackendDownError returns null for a non-Cloud 503 (generic remote failure)', () => {
   const err = new Error('Service Unavailable') as any
   err.statusCode = 503
-  assert.equal(makeManagedCloudBackendDownError('https://gateway.example.com', err), null)
-  assert.equal(makeManagedCloudBackendDownError('http://127.0.0.1:9000', err), null)
+  assert.equal(makeNousCloudBackendDownError('https://gateway.example.com', err), null)
+  assert.equal(makeNousCloudBackendDownError('http://127.0.0.1:9000', err), null)
 })
 
-test('makeManagedCloudBackendDownError preserves legacy string-prefix compatibility', () => {
-  const result = makeManagedCloudBackendDownError(
+test('makeNousCloudBackendDownError preserves legacy string-prefix compatibility', () => {
+  const result = makeNousCloudBackendDownError(
     'https://ares-3009.agents.',
     new Error('503: Service Unavailable')
   )

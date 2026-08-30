@@ -7,7 +7,8 @@
   <a href="">Clover Cognition</a> | <a href="">Clover Desktop</a>
 </p>
 <p align="center">
-  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--agent-00D97E?style=for-the-badge" alt="Documentación"></a>
+  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--agent.-FFD700?style=for-the-badge" alt="Documentación"></a>
+  <a href=""><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href=""><img src="https://img.shields.io/badge/Licencia-MIT-green?style=for-the-badge" alt="Licencia: MIT"></a>
   <a href=""><img src="https://img.shields.io/badge/Creado%20por-Clover%20Research-blueviolet?style=for-the-badge" alt="Creado por Clover Cognition"></a>
   <a href="README.md"><img src="https://img.shields.io/badge/Lang-English-blue?style=for-the-badge" alt="English"></a>

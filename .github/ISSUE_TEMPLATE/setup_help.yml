@@ -12,7 +12,8 @@ body:
         - Run `clover debug share` and paste the links in the Debug Report section below
         - If you're in a chat session, you can use `/debug` instead — it does the same thing
         - Try `clover update` to get the latest version
-        - Check the [README troubleshooting section](https://github.com/oaostarboy/clover-c1#troubleshooting)
+        - Check the [README troubleshooting section]()
+        - For general questions, consider the [Clover Cognition Discord]() for faster help
 
   - type: textarea
     id: description

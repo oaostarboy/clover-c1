@@ -1,8 +1,11 @@
 blank_issues_enabled: true
 contact_links:
+  - name: 💬 Clover Cognition Discord
+    url: 
+    about: For quick questions, showcasing projects, sharing skills, and community chat.
   - name: 📖 Documentation
-    url: https://github.com/oaostarboy/clover-c1/tree/main/docs
+    url: 
     about: Check the README and docs before opening an issue.
   - name: 🤝 Contributing Guide
-    url: https://github.com/oaostarboy/clover-c1/blob/main/CONTRIBUTING.md
+    url: 
     about: Read this before submitting a PR.

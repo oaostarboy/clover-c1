@@ -1,12 +1,13 @@
 # Clover Desktop 🍀
 
 <p align="center">
-  <a href="https://github.com/oaostarboy/clover-c1/releases"><img src="https://img.shields.io/badge/Download-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-00D97E?style=for-the-badge" alt="Download"></a>
-  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--agent-00D97E?style=for-the-badge" alt="Documentation"></a>
-  <a href="https://github.com/oaostarboy/clover-c1/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-2E8B57?style=for-the-badge" alt="License: MIT"></a>
+  <a href=""><img src="https://img.shields.io/badge/Download-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-FFD700?style=for-the-badge" alt="Download"></a>
+  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--agent.-FFD700?style=for-the-badge" alt="Documentation"></a>
+  <a href=""><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href=""><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
 </p>
 
-**The native desktop app for [Clover Cognition](../../README.md) — the self-improving AI agent from Clover Cognition.** Same agent, same skills, same memory as the CLI and gateway, in a polished native window — chat with streaming tool output, side-by-side previews, a file browser, voice, and settings, no terminal required. Available for **macOS, Windows, and Linux**.
+**The native desktop app for [Clover Cognition](../../README.md) — the self-improving AI agent from [Clover Cognition]().** Same agent, same skills, same memory as the CLI and gateway, in a polished native window — chat with streaming tool output, side-by-side previews, a file browser, voice, and settings, no terminal required. Available for **macOS, Windows, and Linux**.
 
 <table>
 <tr><td><b>Chat with the full agent</b></td><td>Streaming responses, live tool activity, structured tool summaries, and the same conversation history as every other Clover surface.</td></tr>
@@ -33,7 +34,7 @@ It builds and launches the GUI against your existing install — same config, ke
 
 ### Prebuilt installers
 
-Prebuilt installers are published on the repository's [Releases page](https://github.com/oaostarboy/clover-c1/releases).
+Prebuilt installers are built and distributed via [the Clover Desktop website.]().
 
 ---
 
@@ -230,8 +231,9 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\clover\clover-c1\venv"
 
 ## Community
 
+- 💬 [Discord]()
 - 📖 [Documentation](docs/)
-- 🐛 [Issues](https://github.com/oaostarboy/clover-c1/issues)
+- 🐛 [Issues]()
 
 ---
 
@@ -239,4 +241,4 @@ Remove-Item -Recurse -Force "$env:LOCALAPPDATA\clover\clover-c1\venv"
 
 MIT — see [LICENSE](../../LICENSE).
 
-Built by Clover Cognition.
+Built by [Clover Cognition]().
