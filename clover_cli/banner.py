@@ -5,6 +5,7 @@ Pure display functions with no CloverCLI state dependency.
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -61,34 +62,72 @@ def _skin_color(key: str, fallback: str) -> str:
         return get_active_skin().get_color(key, fallback)
     except Exception:
         return fallback
+
+
+def _light_adapt_art(markup: str) -> str:
+    """Remap hardcoded art colors for a light terminal.
+
+    The banner art is Rich markup with literal hex colors, printed straight to
+    the console, so it never passed through cli.py's light-mode remap the way
+    ``_cprint`` output does. On a white background the bright brand greens sit
+    near 1.3:1 contrast and nearly vanish. (The previous gold art had the same
+    flaw at 1.40:1, so this is a long-standing gap, now closed.)
+
+    Reuses cli.py's ``_LIGHT_MODE_REMAP`` table so the art tracks the same
+    green ladder as every other surface, with one source of truth. Returns the
+    markup unchanged on dark terminals, or when the CLI module is unavailable.
+    """
+    try:
+        from cli import _detect_light_mode, _LIGHT_MODE_REMAP_UPPER
+    except Exception:
+        return markup
+    try:
+        if not _detect_light_mode():
+            return markup
+    except Exception:
+        return markup
+
+    def _swap(m):
+        return "[" + (m.group(1) or "") + _LIGHT_MODE_REMAP_UPPER.get(
+            m.group(2).upper(), m.group(2)
+        ) + "]"
+
+    return re.sub(r"\[(bold )?(#[0-9A-Fa-f]{6})\]", _swap, markup)
+
 # =========================================================================
 # ASCII Art & Branding
 # =========================================================================
 
 from clover_cli import __version__ as VERSION, __release_date__ as RELEASE_DATE
 
-CLOVER_AGENT_LOGO = """[bold #FFD700]██╗  ██╗███████╗██████╗ ███╗   ███╗███████╗███████╗       █████╗  ██████╗ ███████╗███╗   ██╗████████╗[/]
-[bold #FFD700]██║  ██║██╔════╝██╔══██╗████╗ ████║██╔════╝██╔════╝      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝[/]
-[#FFBF00]███████║█████╗  ██████╔╝██╔████╔██║█████╗  ███████╗█████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║[/]
-[#FFBF00]██╔══██║██╔══╝  ██╔══██╗██║╚██╔╝██║██╔══╝  ╚════██║╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║[/]
-[#CD7F32]██║  ██║███████╗██║  ██║██║ ╚═╝ ██║███████╗███████║      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║[/]
-[#CD7F32]╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝╚══════╝      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝[/]"""
+CLOVER_AGENT_LOGO = """[bold #00FF87] ██████╗██╗      ██████╗ ██╗   ██╗███████╗██████╗    ██████╗  ██╗[/]
+[bold #00FF87]██╔════╝██║     ██╔═══██╗██║   ██║██╔════╝██╔══██╗  ██╔════╝████║[/]
+[#00D97E]██║     ██║     ██║   ██║██║   ██║█████╗  ██████╔╝  ██║     ╚═██║[/]
+[#00D97E]██║     ██║     ██║   ██║╚██╗ ██╔╝██╔══╝  ██╔══██╗  ██║       ██║[/]
+[#2ECC71]╚██████╗███████╗╚██████╔╝ ╚████╔╝ ███████╗██║  ██║  ╚██████╗  ██║[/]
+[#2ECC71] ╚═════╝╚══════╝ ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝   ╚═════╝  ╚═╝[/]"""
 
-CLOVER_CADUCEUS = """[#CD7F32]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⡀⠀⣀⣀⠀⢀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#CD7F32]⠀⠀⠀⠀⠀⠀⢀⣠⣴⣾⣿⣿⣇⠸⣿⣿⠇⣸⣿⣿⣷⣦⣄⡀⠀⠀⠀⠀⠀⠀[/]
-[#FFBF00]⠀⢀⣠⣴⣶⠿⠋⣩⡿⣿⡿⠻⣿⡇⢠⡄⢸⣿⠟⢿⣿⢿⣍⠙⠿⣶⣦⣄⡀⠀[/]
-[#FFBF00]⠀⠀⠉⠉⠁⠶⠟⠋⠀⠉⠀⢀⣈⣁⡈⢁⣈⣁⡀⠀⠉⠀⠙⠻⠶⠈⠉⠉⠀⠀[/]
-[#FFD700]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣴⣿⡿⠛⢁⡈⠛⢿⣿⣦⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#FFD700]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠿⣿⣦⣤⣈⠁⢠⣴⣿⠿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#FFBF00]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠻⢿⣿⣦⡉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#FFBF00]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⢷⣦⣈⠛⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#CD7F32]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣴⠦⠈⠙⠿⣦⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#CD7F32]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠸⣿⣤⡈⠁⢤⣿⠇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#B8860B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠷⠄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#B8860B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⠑⢶⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#B8860B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣿⠁⢰⡆⠈⡿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#B8860B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠳⠈⣡⠞⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#B8860B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]"""
+CLOVER_HERO = """[#00FF87]⠀⠀⠀⠀⠀⠀⠀⣀⣤⣶⣦⣄⡀⠀⠀⠀⠀⢀⣠⣴⣶⣤⣀⠀⠀⠀⠀⠀⠀⠀[/]
+[#00FF87]⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣦⡀⢠⣾⣿⣿⣿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀[/]
+[#00FF87]⠀⠀⠀⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠀⠀⠀[/]
+[#00FF87]⠀⠀⢰⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡆⠀⠀[/]
+[#00D97E]⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀[/]
+[#00D97E]⠀⠀⠘⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠃⠀⠀[/]
+[#00D97E]⠀⠀⠀⠹⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠏⠀⠀⠀[/]
+[#00D97E]⠀⠀⠀⠀⠈⠻⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠟⠁⠀⠀⠀⠀[/]
+[#2ECC71]⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀[/]
+[#2ECC71]⠀⠀⠀⣼⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣧⠀⠀⠀[/]
+[#2ECC71]⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀[/]
+[#2E8B57]⠀⠀⠈⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠛⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠁⠀⠀[/]
+[#2E8B57]⠀⠀⠀⠈⠻⢿⣿⣿⣿⣿⡿⠟⠁⠀⠀⠀⠈⠻⢿⣿⣿⣿⣿⡿⠟⠁⠀⠀⠀⠀[/]
+[#2E8B57]⠀⠀⠀⠀⠀⠀⠀⠉⠉⠀⠀⠀⢠⣿⡄⠀⠀⠀⠀⠉⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#1B7A4B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#1B7A4B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢿⣷⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#1B7A4B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⣿⣧⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+[#1B7A4B]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠿⠆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]"""
+
+# Back-compat alias: the old name is still imported in places.
+CLOVER_CADUCEUS = CLOVER_HERO
 
 
 
@@ -1018,7 +1057,7 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
     except Exception:
         _bskin = None
         _hero = CLOVER_CADUCEUS
-    left_lines = ["", _hero, ""]
+    left_lines = ["", _light_adapt_art(_hero), ""]
     if (provider or "").strip().lower() == "moa":
         # MoA virtual provider: ``model`` is a preset name. Show the preset and
         # its aggregator so the banner is meaningful instead of a bare slug.
@@ -1295,8 +1334,9 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
 
     console.print()
     term_width = shutil.get_terminal_size().columns
-    if term_width >= 95:
+    # The Clover wordmark is 65 columns wide, so it shows on narrow terminals.
+    if term_width >= 67:
         _logo = _bskin.banner_logo if _bskin and hasattr(_bskin, 'banner_logo') and _bskin.banner_logo else CLOVER_AGENT_LOGO
-        console.print(_logo)
+        console.print(_light_adapt_art(_logo))
         console.print()
     console.print(outer_panel)
