@@ -50,7 +50,7 @@ import { BackendDialClaims } from './backend-dial-claim'
 import { buildDesktopBackendEnv, cloverManagedNodePathEntries, normalizeCloverHomeRoot } from './backend-env'
 import {
   isReauthRequiredError,
-  makeNousCloudBackendDownError,
+  makeManagedCloudBackendDownError,
   makeUnsignedOauthError,
   waitForCloverReady
 } from './backend-health'
@@ -9611,7 +9611,7 @@ async function buildRemoteConnection(
       // and the renderer would never see isCloudBackendDown. Preserve the
       // existing 401/403 reauth and generic transport behavior for everything
       // else (#85335).
-      const cloudError = makeNousCloudBackendDownError(baseUrl, error)
+      const cloudError = makeManagedCloudBackendDownError(baseUrl, error)
 
       if (cloudError !== null) {
         throw cloudError
