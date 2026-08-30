@@ -1,9 +1,9 @@
 """The collapsed per-turn summary card.
 
-Ported from the upstream fork on 2026-08-30. When ``cleanup_progress`` is on, a
-turn's temporary progress bubbles are not all deleted: the FIRST one is edited
-into a single expandable Telegram card ("🧠 23 thoughts · 🛠 35 tool calls ·
-⏱ 33m53s") and the rest are removed.
+Ported from the sibling agent fork on 2026-08-30. When ``cleanup_progress`` is
+on, a turn's temporary progress bubbles are not all deleted: the FIRST one is
+edited into a single expandable Telegram card ("🧠 23 thoughts · 🛠 35 tool
+calls · ⏱ 33m53s") and the rest are removed.
 
 The card is Telegram expandable-blockquote markup, and its two syntax rules are
 easy to break silently:
