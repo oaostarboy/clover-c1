@@ -60,6 +60,16 @@ class TurnContext:
     _cleanup_progress: bool = False
     _cleanup_msg_ids: List[str] = field(default_factory=list)
 
+    # --- collapsed turn-summary card -------------------------------------
+    # When cleanup_progress is on, the tracked bubbles are not simply deleted:
+    # the FIRST one is edited into a single collapsed card ("🧠 4 thoughts ·
+    # 🛠 3 tool calls · ⏱ 47s") and the rest are removed. These counters feed
+    # that card. Counting happens in the tool-progress callback, which already
+    # sees every tool.started and _thinking event.
+    _summary_thoughts: int = 0
+    _summary_tools: int = 0
+    _summary_t0: float = 0.0
+
     # --- progress threading metadata (assigned after construction, before
     #     send_progress_messages is scheduled) ----------------------------
     _progress_metadata: Optional[dict] = None

@@ -32,6 +32,7 @@ __all__ = [
     "TurnSummaryCollector",
     "TurnTally",
     "format_turn_summary",
+    "format_collapsed_turn_card",
     "format_token_flow",
     "format_elapsed",
 ]
@@ -218,6 +219,46 @@ class TurnSummaryCollector:
     def render(self, elapsed_seconds: float) -> str:
         """Render this turn's summary line (see :func:`format_turn_summary`)."""
         return format_turn_summary(elapsed_seconds, self._tally)
+
+
+def format_collapsed_turn_card(
+    thoughts: int,
+    tools: int,
+    elapsed_seconds: float,
+    detail_lines: list | None = None,
+) -> str:
+    """Render the collapsed per-turn summary card.
+
+    Telegram renders an expandable blockquote as: first 3 lines always
+    visible, everything from line 4 down hidden behind a tap. So the visible
+    budget is exactly one summary line here, and any detail goes below.
+
+    Returns "" when the turn did nothing worth summarising, so a plain chat
+    reply never grows a card.
+    """
+    segments = []
+    if thoughts > 0:
+        segments.append(f"🧠 {thoughts} thought{'s' if thoughts != 1 else ''}")
+    if tools > 0:
+        segments.append(f"🛠 {tools} tool call{'s' if tools != 1 else ''}")
+    if not segments:
+        return ""
+    if elapsed_seconds >= 0:
+        if elapsed_seconds < 60:
+            elapsed = f"{elapsed_seconds:.0f}s"
+        else:
+            _m, _s = divmod(int(round(elapsed_seconds)), 60)
+            elapsed = f"{_m}m{_s:02d}s"
+        segments.append(f"⏱ {elapsed}")
+
+    head = " · ".join(segments)
+    lines = [f"**> {head}"]
+    for _dl in (detail_lines or []):
+        _clean = str(_dl).replace("\n", " ").strip()
+        if _clean:
+            lines.append(f"> {_clean}")
+    # The || terminator must land on the LAST line of the block.
+    return "\n".join(lines) + "||"
 
 
 def format_elapsed(seconds: float) -> str:

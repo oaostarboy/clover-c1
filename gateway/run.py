@@ -4461,6 +4461,14 @@ class TurnRunner:
                     ctx._live_status_adapter.set_status_text(ctx.source.chat_id, None)
             except Exception as _ls_err:
                 logger.debug("live status update failed: %s", _ls_err)
+        # Count real work for the collapsed summary card. Done before any of
+        # the mode guards below so the tally reflects what the TURN did, not
+        # what the chat happened to render (progress_mode "new" shows one line
+        # for ten identical calls; the card must still say ten).
+        if event_type == "tool.started" and tool_name and tool_name != "_thinking":
+            ctx._summary_tools += 1
+        elif event_type == "_thinking" or tool_name == "_thinking":
+            ctx._summary_thoughts += 1
         # "log" mode: append tool.started lines to the log queue and stay
         # silent in chat. Handled before the progress_queue guard because
         # log mode runs without a chat progress queue.
@@ -29603,6 +29611,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _LONG_TOOL_THRESHOLD_S=_LONG_TOOL_THRESHOLD_S,
             _cleanup_progress=_cleanup_progress,
             _cleanup_msg_ids=_cleanup_msg_ids,
+            _summary_t0=time.monotonic(),
             message=message,
             AIAgent=AIAgent,
             resolve_display_setting=resolve_display_setting,
@@ -31124,10 +31133,44 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _chat_id_snapshot = source.chat_id
             _adapter_snapshot = _cleanup_adapter
             _loop_snapshot = asyncio.get_running_loop()
+            # Collapsed-card mode: instead of deleting every bubble, edit the
+            # FIRST one into a single expandable summary card and delete the
+            # rest. Falls back to plain deletion when the card is empty (a
+            # turn that did no real work) or the adapter cannot edit.
+            try:
+                from agent.turn_summary import format_collapsed_turn_card
+                _card_text = format_collapsed_turn_card(
+                    turn_ctx._summary_thoughts,
+                    turn_ctx._summary_tools,
+                    time.monotonic() - turn_ctx._summary_t0,
+                )
+            except Exception:
+                _card_text = ""
+            _card_edit = getattr(type(_adapter_snapshot), "edit_message", None)
+            _can_card = bool(_card_text) and _card_edit is not None
 
             def _cleanup_temp_bubbles() -> None:
                 async def _delete_all() -> None:
-                    for _mid in _ids_snapshot:
+                    _ids = list(_ids_snapshot)
+                    _keep = None
+                    if _can_card and _ids:
+                        _keep = _ids[0]
+                        try:
+                            # finalize=True is REQUIRED: without it the adapter
+                            # takes the streaming branch and pushes the text
+                            # through with NO parse_mode, so the card arrives
+                            # as literal "**> ... ||" markup in the chat.
+                            await _adapter_snapshot.edit_message(
+                                _chat_id_snapshot, _keep, _card_text,
+                                finalize=True,
+                            )
+                        except Exception:
+                            # Edit failed — fall back to deleting it too, so a
+                            # stale progress bubble is never left behind.
+                            _keep = None
+                    for _mid in _ids:
+                        if _keep is not None and _mid == _keep:
+                            continue
                         try:
                             await _adapter_snapshot.delete_message(
                                 _chat_id_snapshot, _mid
