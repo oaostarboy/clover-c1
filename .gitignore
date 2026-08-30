@@ -110,7 +110,7 @@ apps/shared/src/**/*.d.ts
 apps/desktop/release/
 *.tsbuildinfo
 
-# Web UI assets — synced from @clover/ui at build time via
+# Web UI assets — synced from @nous-research/ui at build time via
 # `npm run sync-assets` (see web/package.json).
 web/public/fonts/
 web/public/ds-assets/
@@ -212,4 +212,4 @@ native/fts5_cjk/*.so
 # interrupted; consumed by launch-time recovery. Never commit it (was tracked
 # by accident via 3a69e34702, removed in the #72002 salvage).
 .lazy-refresh-incomplete
-clover_c1.egg-info/
+.skills_prompt_snapshot.json

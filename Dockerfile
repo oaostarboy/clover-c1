@@ -298,7 +298,7 @@ RUN uv pip install --no-cache-dir --no-deps -e "."
 USER root
 RUN mkdir -p /opt/clover/bin && \
     cp /opt/clover/docker/clover-exec-shim.sh /opt/clover/bin/clover && \
-    chmod 0755 /opt/clover/bin/clover && \
+    chmod 0755 /opt/clover /opt/clover/bin/clover && \
     printf 'docker\n' > /opt/clover/.install_method
 # The ``.install_method`` stamp is baked next to the running code (the install
 # tree), NOT into $CLOVER_HOME. $CLOVER_HOME (/opt/data) is a shared data
@@ -311,7 +311,11 @@ RUN mkdir -p /opt/clover/bin && \
 # `s6-setuidgid clover` in its run script. If CLOVER_UID is unset, services
 # run as the default clover user (UID 10000).
 
-# ---------- Bake build-time git revision ----------
+# ---------- Bake image provenance + build-time git revision ----------
+# The versioned, non-secret provenance marker is the authoritative runtime
+# signal that this filesystem came from an immutable image.  It deliberately
+# lives outside both /opt/clover (which operators sometimes bind-mount as a
+# checkout) and /opt/data (the mutable CLOVER_HOME volume).
 # .dockerignore excludes .git, so `git rev-parse HEAD` from inside the
 # container always returns nothing — meaning `clover dump` reports
 # "(unknown)" and the startup banner drops its `· upstream <sha>` suffix.
@@ -324,14 +328,18 @@ RUN mkdir -p /opt/clover/bin && \
 # banner.get_git_banner_state() try the baked SHA first, then fall back
 # to live `git rev-parse` for source installs (unchanged behaviour).
 #
-# The arg is optional — local `docker build` without --build-arg simply
-# omits the file, and the runtime falls back to live-git lookup.  CI
+# The arg is optional — local `docker build` without --build-arg omits the
+# SHA file (and records a null provenance revision), so build-info falls back
+# to live-git lookup.  CI
 # (.github/workflows/docker.yml) passes ${{ github.sha }} so
 # every published image has it.
 ARG CLOVER_GIT_SHA=
-RUN if [ -n "${CLOVER_GIT_SHA}" ]; then \
+RUN set -eu; \
+    if [ -n "${CLOVER_GIT_SHA}" ]; then \
         printf '%s\n' "${CLOVER_GIT_SHA}" > /opt/clover/.clover_build_sha; \
-    fi
+    fi; \
+    mkdir -p /etc/clover; \
+    CLOVER_GIT_SHA="${CLOVER_GIT_SHA}" python3 -c 'import json, os, pathlib, tomllib; project = tomllib.loads(pathlib.Path("/opt/clover/pyproject.toml").read_text(encoding="utf-8"))["project"]; marker = pathlib.Path("/etc/clover/image-provenance.json"); marker.write_text(json.dumps({"schema": 1, "deployment_kind": "image", "manager": "docker", "image": "cloverc1/clover-c1", "version": project["version"], "revision": os.environ.get("CLOVER_GIT_SHA") or None}, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8"); marker.chmod(0o444)'
 
 # ---------- s6-overlay service wiring ----------
 # Static services declared at build time: main-clover + dashboard.

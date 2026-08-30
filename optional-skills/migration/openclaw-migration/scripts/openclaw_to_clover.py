@@ -539,39 +539,10 @@ def rebrand_text(text: str) -> str:
 
     Preserves case so filesystem-path matches (lowercase) don't become
     capitalized directory names that don't exist.
-
-    DO NOT call this on persona or memory BODY text — use
-    :func:`rebrand_identity_only`. See that docstring for why.
     """
     for pattern, replacement in _REBRAND_PATTERNS:
         text = pattern.sub(_case_preserving_replacement(replacement), text)
     return text
-
-
-def rebrand_identity_only(text: str) -> str:
-    """Rebrand harness references while leaving factual content alone.
-
-    A memory entry or a SOUL.md may legitimately DISCUSS OpenClaw: "the
-    OpenClaw gateway on port 18789 crash-looped", "Alfred runs OpenClaw
-    2026.7.1-2". Blanket-rewriting those to "Clover" turns an agent's true
-    notes into false ones, and the agent has no way to know. For a security
-    agent whose value is an accurate record, that is corruption, not a rename.
-
-    So: rewrite a brand name only where it is describing WHAT THIS AGENT RUNS ON
-    (an identity line like "You are running on OpenClaw"), and leave every other
-    occurrence exactly as written.
-    """
-    out_lines: List[str] = []
-    for line in text.splitlines():
-        stripped = line.strip().lower()
-        is_identity_line = (
-            stripped.startswith(("you are running on", "you run on",
-                                 "harness:", "runtime:", "platform:",
-                                 "you are powered by"))
-            or ("this agent runs on" in stripped)
-        )
-        out_lines.append(rebrand_text(line) if is_identity_line else line)
-    return "\n".join(out_lines) + ("\n" if text.endswith("\n") else "")
 
 
 def parse_existing_memory_entries(path: Path) -> List[str]:
@@ -615,79 +586,17 @@ def extract_markdown_entries(text: str) -> List[str]:
         else:
             entries.append(text_block)
 
-    # Fenced code blocks are PRESERVED (fixed 2026-08-24). They used to be
-    # dropped entirely — not even written to the overflow file. For an agent
-    # whose memory is largely "the exact command that worked", that silently
-    # deleted the most valuable half of its notes. A security agent's memory is
-    # mostly commands.
     in_code_block = False
-    code_lines: List[str] = []
-    code_fence_info = ""
-
-    # Markdown TABLES are preserved too (fixed 2026-08-24, same pass as the
-    # code fences above). A row starting and ending with `|` used to hit a
-    # bare `continue` and vanish — no entry, no overflow file, no warning.
-    # Tables are how an agent writes down the things it looks up most: host
-    # inventories, port maps, who-owns-what. Losing them quietly is the same
-    # class of failure as losing the commands.
-    table_lines: List[str] = []
-
-    def flush_code() -> None:
-        nonlocal code_lines, code_fence_info
-        if not code_lines:
-            code_fence_info = ""
-            return
-        body = "\n".join(code_lines).strip()
-        code_lines = []
-        lang = code_fence_info
-        code_fence_info = ""
-        if not body:
-            return
-        prefix = context_prefix()
-        block = f"```{lang}\n{body}\n```" if lang else f"```\n{body}\n```"
-        entries.append(f"{prefix}: {block}" if prefix else block)
-
-    def flush_table() -> None:
-        nonlocal table_lines
-        rows = table_lines
-        table_lines = []
-        if not rows:
-            return
-        # A separator-only table (header rule with no data) carries nothing.
-        data_rows = [
-            r for r in rows
-            if not re.fullmatch(r"\|[\s:\-|]+\|", r.strip())
-        ]
-        if not data_rows:
-            return
-        prefix = context_prefix()
-        block = "\n".join(rows)
-        entries.append(f"{prefix}: {block}" if prefix else block)
-
     for raw_line in text.splitlines():
         line = raw_line.rstrip()
         stripped = line.strip()
 
         if stripped.startswith("```"):
-            if in_code_block:
-                flush_code()
-                in_code_block = False
-            else:
-                flush_table()
-                flush_paragraph()
-                in_code_block = True
-                code_fence_info = stripped[3:].strip()
+            in_code_block = not in_code_block
+            flush_paragraph()
             continue
         if in_code_block:
-            code_lines.append(raw_line)
             continue
-
-        # Table rows accumulate; anything else closes the table first.
-        if stripped.startswith("|") and stripped.endswith("|") and len(stripped) > 1:
-            flush_paragraph()
-            table_lines.append(stripped)
-            continue
-        flush_table()
 
         heading_match = re.match(r"^(#{1,6})\s+(.*\S)\s*$", stripped)
         if heading_match:
@@ -711,12 +620,13 @@ def extract_markdown_entries(text: str) -> List[str]:
             flush_paragraph()
             continue
 
+        if stripped.startswith("|") and stripped.endswith("|"):
+            flush_paragraph()
+            continue
+
         paragraph_lines.append(stripped)
 
-    flush_table()
     flush_paragraph()
-    # An unterminated fence at EOF must not swallow the block.
-    flush_code()
 
     deduped: List[str] = []
     seen = set()
@@ -981,37 +891,6 @@ class Migrator:
         self.memory_limit = int(mem_cfg.get("memory_char_limit", DEFAULT_MEMORY_CHAR_LIMIT))
         self.user_limit = int(mem_cfg.get("user_char_limit", DEFAULT_USER_CHAR_LIMIT))
 
-        # MEMORY FIDELITY (fixed 2026-08-24).
-        #
-        # The limit above is the RUNTIME's steady-state budget, ~800 tokens. It
-        # was also being applied as a migration ceiling, so importing a real
-        # agent truncated its MEMORY.md to 2,200 characters and pushed the rest
-        # into an overflow file that nothing ever reads. A production agent with
-        # a 50 KB memory lost roughly 95% of itself and there was no error: it
-        # just woke up not knowing things.
-        #
-        # A migration is not a steady state. It is a one-time transfer, and the
-        # only correct behaviour is to carry everything across. So the ceiling
-        # is raised to fit what is actually being imported, and the new value is
-        # written into the target config (see _raise_target_memory_limit) so the
-        # runtime agrees with what is now on disk. Without that second half the
-        # import "succeeds" and then every future memory WRITE is refused for
-        # being over budget, which is its own silent failure.
-        self.memory_limit_floor = self.memory_limit
-        self.memory_limit_raised_to: Optional[int] = None
-
-    def _fit_memory_limit(self, incoming_chars: int) -> int:
-        """Grow the char ceiling to fit an incoming corpus. Never shrinks it."""
-        if incoming_chars <= self.memory_limit:
-            return self.memory_limit
-        # 25% headroom so the agent can still write the day it lands, rounded to
-        # something a human reading config.yaml will not find bizarre.
-        fitted = int(incoming_chars * 1.25)
-        fitted = ((fitted // 1000) + 1) * 1000
-        self.memory_limit = fitted
-        self.memory_limit_raised_to = fitted
-        return fitted
-
         if self.skill_conflict_mode not in SKILL_CONFLICT_MODES:
             raise ValueError(
                 "Unknown skill conflict mode: "
@@ -1087,22 +966,7 @@ class Migrator:
             # for multi-agent).  Try the new path as a fallback.
             if rel.startswith("workspace/"):
                 suffix = rel[len("workspace/"):]
-                # Named variants first (stable, predictable), then ANY
-                # workspace-* directory. The hardcoded pair used to be the whole
-                # list, so a real multi-agent install (workspace-alfred/,
-                # workspace-oracle/) reported "skipped: not found" and the agent
-                # lost its entire identity with no error. Sorted for determinism.
-                variants = ["workspace-main", "workspace-assistant"]
-                try:
-                    variants += sorted(
-                        d.name for d in self.source_root.iterdir()
-                        if d.is_dir()
-                        and d.name.startswith("workspace-")
-                        and d.name not in ("workspace-main", "workspace-assistant")
-                    )
-                except OSError:
-                    pass
-                for variant in variants:
+                for variant in ("workspace-main", "workspace-assistant"):
                     alt = self.source_root / variant / suffix
                     if alt.exists():
                         return alt
@@ -1142,71 +1006,12 @@ class Migrator:
             counter += 1
         return candidate
 
-    def warn_about_unmigrated_workspaces(self) -> None:
-        """Name every workspace this run is leaving behind.
-
-        In a multi-agent install (`workspace-alfred/`, `workspace-oracle/`)
-        `source_candidate` returns the FIRST match and the rest are simply not
-        looked at again. Before 2026-08-24 that was invisible: the other agents
-        produced no record of any kind, so a migration could report success
-        having transferred one of two production agents. Loud beats tidy.
-        """
-        try:
-            workspaces = sorted(
-                d.name for d in self.source_root.iterdir()
-                if d.is_dir() and (d.name == "workspace"
-                                   or d.name.startswith("workspace-")
-                                   or d.name.startswith("workspace."))
-                and d.name != "workspace-agents"
-            )
-        except OSError:
-            return
-
-        # Only those that actually hold an identity count as an agent.
-        agent_workspaces = [
-            n for n in workspaces
-            if any((self.source_root / n / f).exists()
-                   for f in ("SOUL.md", "MEMORY.md", "IDENTITY.md"))
-        ]
-        if len(agent_workspaces) <= 1:
-            return
-
-        chosen = None
-        for name in ("workspace", "workspace-main", "workspace-assistant"):
-            if name in agent_workspaces:
-                chosen = name
-                break
-        if chosen is None:
-            chosen = agent_workspaces[0]
-        left = [n for n in agent_workspaces if n != chosen]
-
-        self.record(
-            "multi-agent-workspaces", self.source_root, None, "error",
-            f"This install holds {len(agent_workspaces)} agent workspaces. "
-            f"This run migrates '{chosen}' ONLY. NOT migrated: "
-            + ", ".join(left)
-            + ". Each is a separate agent with its own SOUL/MEMORY — re-run the "
-              "migration once per agent with --source pointed at that workspace, "
-              "or those agents are left behind.",
-            workspaces=agent_workspaces,
-            migrated=chosen,
-            not_migrated=left,
-        )
-
     def migrate(self) -> Dict[str, Any]:
         if not self.source_root.exists():
-            self.record("source", self.source_root, None, "error",
-                        "OpenClaw directory does not exist")
+            self.record("source", self.source_root, None, "error", "OpenClaw directory does not exist")
             return self.build_report()
 
         config = self.load_openclaw_config()
-
-        # Before anything else: say out loud which agents this run will NOT
-        # carry. `source_candidate` picks ONE workspace; a multi-agent install
-        # has several, each with its own SOUL/MEMORY. Picking one quietly used
-        # to mean the others were reported as "skipped: not found" and their
-        # identities were simply left behind.
-        self.warn_about_unmigrated_workspaces()
 
         self.run_if_selected("soul", self.migrate_soul)
         self.run_if_selected("workspace-agents", self.migrate_workspace_agents)
@@ -1318,51 +1123,7 @@ class Migrator:
                 option_label=meta["label"],
             )
 
-    def _persist_memory_limit(self) -> None:
-        """Write a raised memory ceiling into the TARGET config.
-
-        Without this the import succeeds and then every future memory write is
-        refused for exceeding the runtime budget: the agent arrives with its
-        memory intact and immediately cannot learn anything new. Silent, and
-        very confusing to debug months later.
-        """
-        if not self.memory_limit_raised_to or not self.execute:
-            return
-        target_cfg = self.target_root / "config.yaml"
-        try:
-            config = load_yaml_file(target_cfg)
-        except Exception:
-            config = {}
-        if not isinstance(config, dict):
-            config = {}
-        mem = config.get("memory")
-        if not isinstance(mem, dict):
-            mem = {}
-        # Never lower a ceiling the user chose themselves.
-        current = int(mem.get("memory_char_limit") or 0)
-        if current >= self.memory_limit_raised_to:
-            return
-        mem["memory_char_limit"] = self.memory_limit_raised_to
-        config["memory"] = mem
-        try:
-            dump_yaml_file(target_cfg, config)
-            self.record(
-                "memory-char-limit", None, target_cfg, "migrated",
-                f"Raised memory_char_limit to {self.memory_limit_raised_to} to fit "
-                f"the imported memory (was {current or DEFAULT_MEMORY_CHAR_LIMIT}). "
-                "Without this the agent could not write new memories.",
-            )
-        except Exception as exc:
-            self.record(
-                "memory-char-limit", None, target_cfg, "error",
-                f"Imported memory needs memory_char_limit >= "
-                f"{self.memory_limit_raised_to} but the config could not be "
-                f"updated ({exc}). SET THIS BY HAND or the agent cannot write "
-                "new memories.",
-            )
-
     def build_report(self) -> Dict[str, Any]:
-        self._persist_memory_limit()
         summary: Dict[str, int] = {
             "migrated": 0,
             "archived": 0,
@@ -1539,15 +1300,9 @@ class Migrator:
         if not incoming:
             self.record(kind, source, destination, "skipped", "No importable entries found")
             return
-        # Facts, not marketing copy: see rebrand_identity_only.
-        incoming = [rebrand_identity_only(entry) for entry in incoming]
+        incoming = [rebrand_text(entry) for entry in incoming]
 
         existing = parse_existing_memory_entries(destination)
-        # See _fit_memory_limit: a migration carries everything, it does not
-        # clip to the runtime's steady-state budget. `limit` is the floor.
-        _incoming_chars = len(ENTRY_DELIMITER.join(existing + incoming))
-        if _incoming_chars > limit:
-            limit = self._fit_memory_limit(_incoming_chars)
         merged, stats, overflowed = merge_entries(existing, incoming, limit)
         details = {
             "existing_entries": stats["existing"],
@@ -1642,42 +1397,9 @@ class Migrator:
         else:
             self.record("command-allowlist", source, destination, "migrated", "Would merge patterns", added_patterns=added)
 
-    # `hermes.json` / `config.yaml` are here because Clover is a Hermes fork and
-    # a Hermes install is a legitimate migration source. `octaviaagents.json`
-    # covers the OctaviaAgents profile layout found on real boxes.
-    # ORDER IS A CORRECTNESS PROPERTY, not a style choice.
-    #
-    # A state dir can contain SEVERAL of these, and the older ones are stale
-    # leftovers. One agent's dir holds both `openclaw.json` (February, primary
-    # anthropic/claude-sonnet-4-6, no fallbacks) and `octaviaagents.json`
-    # (August, primary xai/grok-4.5 WITH a fallback). Her running container
-    # points at octaviaagents.json via OPENCLAW_CONFIG_PATH, but this list
-    # checked openclaw.json first and won — so the migration read a config six
-    # months out of date and reported "no fallbacks configured" for an agent
-    # that has one.
-    #
-    # Rule: newest/most-specific product name first, generic legacy names last.
-    _CONFIG_NAMES = (
-        "octaviaagents.json", "hermes.json",
-        "openclaw.json", "clawdbot.json", "moltbot.json",
-    )
-
     def load_openclaw_config(self) -> Dict[str, Any]:
-        # Announce ambiguity instead of silently picking. Choosing wrong here
-        # migrates a stale config and everything downstream inherits it.
-        present = [n for n in self._CONFIG_NAMES if (self.source_root / n).exists()]
-        if len(present) > 1 and not getattr(self, "_config_choice_reported", False):
-            self._config_choice_reported = True
-            chosen, *others = present
-            self.record(
-                "config-source", self.source_root / chosen, None, "migrated",
-                f"Multiple config files present ({', '.join(present)}). Using "
-                f"{chosen}; the others are treated as stale. If that is wrong, "
-                "remove or rename the stale ones and re-run.",
-            )
-
         # Check current name and legacy config filenames
-        for name in self._CONFIG_NAMES:
+        for name in ("openclaw.json", "clawdbot.json", "moltbot.json"):
             config_path = self.source_root / name
             if config_path.exists():
                 try:
@@ -1685,22 +1407,8 @@ class Migrator:
                     # UnicodeDecodeError; OSError covers unreadable/vanished files.
                     data = json.loads(config_path.read_text(encoding="utf-8", errors="replace"))
                     return data if isinstance(data, dict) else {}
-                except json.JSONDecodeError as exc:
-                    # A CORRUPT config must not look like an ABSENT one. This
-                    # used to `continue` silently, so a single stray comma
-                    # produced a migration where every option came back
-                    # "skipped" and the user was told nothing was found.
-                    raise RuntimeError(
-                        f"{config_path} exists but is not valid JSON "
-                        f"(line {exc.lineno}, col {exc.colno}: {exc.msg}). "
-                        "Fix or move it before migrating — continuing would "
-                        "silently migrate an agent with no configuration."
-                    ) from exc
-                except OSError as exc:
-                    raise RuntimeError(
-                        f"{config_path} exists but could not be read: {exc}. "
-                        "Refusing to migrate from a source that may be partial."
-                    ) from exc
+                except (json.JSONDecodeError, OSError):
+                    continue
         return {}
 
     def load_openclaw_env(self) -> Dict[str, str]:
@@ -2144,24 +1852,6 @@ class Migrator:
             self.record("model-config", source_path, destination, "conflict", "Model already set and overwrite is disabled", current=current_model, incoming=model_str)
             return
 
-        # The FALLBACK CHAIN moves with the model (added 2026-08-24).
-        #
-        # It was not migrated at all — the word "fallback" appeared nowhere in
-        # this script. A real agent (Alfred) carried SEVEN fallbacks and would
-        # have arrived with zero, which is precisely the state that silenced
-        # Clover for hours on 2026-08-23/24: primary fails, nothing to fall
-        # back to, "API call failed after 3 retries".
-        #
-        # OpenClaw writes them as "provider/model" strings, which is exactly the
-        # shape coerce_fallback_entry accepts, so they carry across as-is.
-        _fallbacks = []
-        if isinstance(model_value, dict):
-            raw_fb = model_value.get("fallbacks") or model_value.get("fallback")
-            if isinstance(raw_fb, str):
-                raw_fb = [raw_fb]
-            if isinstance(raw_fb, list):
-                _fallbacks = [f for f in raw_fb if isinstance(f, str) and f.strip()]
-
         if self.execute:
             backup_path = self.maybe_backup(destination)
             existing_model = clover_config.get("model")
@@ -2169,27 +1859,10 @@ class Migrator:
                 existing_model["default"] = model_str
             else:
                 clover_config["model"] = {"default": model_str}
-            if _fallbacks and not clover_config.get("fallback_providers"):
-                clover_config["fallback_providers"] = _fallbacks
             dump_yaml_file(destination, clover_config)
             self.record("model-config", source_path, destination, "migrated", backup=str(backup_path) if backup_path else "", model=model_str)
-            if _fallbacks:
-                self.record("fallback-chain", source_path, destination, "migrated",
-                            f"Carried {len(_fallbacks)} fallback model(s) across. "
-                            "Without these the agent has nowhere to go when its "
-                            "primary model fails.",
-                            fallbacks=_fallbacks)
-            else:
-                self.record("fallback-chain", source_path, destination, "skipped",
-                            "Source agent had no fallback models configured. "
-                            "Consider adding some: a single-model agent goes "
-                            "silent the moment that model is unavailable.")
         else:
             self.record("model-config", source_path, destination, "migrated", "Would set model", model=model_str)
-            if _fallbacks:
-                self.record("fallback-chain", source_path, destination, "migrated",
-                            f"Would carry {len(_fallbacks)} fallback model(s) across.",
-                            fallbacks=_fallbacks)
 
     def migrate_tts_config(self, config: Optional[Dict[str, Any]] = None) -> None:
         config = config or self.load_openclaw_config()
@@ -2295,23 +1968,9 @@ class Migrator:
         # Check all OpenClaw skill sources: managed, personal, project-level
         skill_sources = [
             (self.source_root / "skills", "shared-skills", "managed skills"),
-            # NOTE: `.agents/skills` is resolved against the SOURCE ROOT, never
-            # against Path.home().
-            #
-            # It used to read Path.home()/.agents/skills — the home of whoever
-            # RUNS the migration, which for a remote or cross-machine migration
-            # is a completely different agent. Measured 2026-08-24: migrating
-            # Alfred (a security agent, 9 skills incl. osint and
-            # pentest-osint-recon) from this operator box produced 469 skills,
-            # 464 of them the OPERATOR's marketing library. Alfred would have
-            # received a stranger's skills and lost his own.
-            (self.source_root / ".agents" / "skills", "personal-skills", "personal cross-project skills"),
+            (Path.home() / ".agents" / "skills", "personal-skills", "personal cross-project skills"),
             (self.source_root / "workspace" / ".agents" / "skills", "project-skills", "project-level shared skills"),
             (self.source_root / "workspace.default" / ".agents" / "skills", "project-skills", "project-level shared skills"),
-            # Skills kept loose in the workspace (workspace/<name>/SKILL.md).
-            # Alfred's `osint` and `pentest-osint-recon` live exactly here and
-            # were being missed entirely.
-            (self.source_root / "workspace", "workspace-skills", "skills kept in the workspace"),
         ]
         found_any = False
         for source_root, kind_label, desc in skill_sources:
@@ -2398,15 +2057,9 @@ class Migrator:
         if not all_incoming:
             self.record("daily-memory", source_dir, destination, "skipped", "No importable entries found in daily memory files")
             return
-        # Facts, not marketing copy: see rebrand_identity_only.
-        all_incoming = [rebrand_identity_only(entry) for entry in all_incoming]
+        all_incoming = [rebrand_text(entry) for entry in all_incoming]
 
         existing = parse_existing_memory_entries(destination)
-        # Fit the ceiling to what is actually arriving, so a real agent's memory
-        # is carried across whole instead of being clipped to ~800 tokens with
-        # the remainder dropped into an overflow file nothing reads.
-        _incoming_chars = len(ENTRY_DELIMITER.join(existing + all_incoming))
-        self._fit_memory_limit(_incoming_chars)
         merged, stats, overflowed = merge_entries(existing, all_incoming, self.memory_limit)
         details = {
             "source_files": len(md_files),
@@ -2547,59 +2200,9 @@ class Migrator:
 
         self.record(kind, source_root, destination_root, status, reason, copied_files=copied, unchanged_files=skipped, conflicts=conflicts)
 
-    @staticmethod
-    def _is_unfilled_template(path: Path) -> bool:
-        """True when a doc is still the shipped template nobody edited.
-
-        The starter IDENTITY.md is all prompts in italics: "_(pick something
-        you like)_". If those are still there and no field was answered, the
-        file carries no information and archiving it loses nothing.
-        """
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return False
-        placeholders = text.count("_(")
-        # A filled file has content after the "**Field:**" markers.
-        answered = 0
-        for line in text.splitlines():
-            m = re.match(r"^\s*-\s+\*\*[^*]+:\*\*\s*(.+?)\s*$", line)
-            if m and not m.group(1).startswith("_("):
-                answered += 1
-        return placeholders >= 3 and answered == 0
-
     def archive_docs(self) -> None:
-        # IDENTITY.md is handled separately: if the user FILLED IT IN it is
-        # persona, and archiving it silently drops who the agent thinks it is.
-        # Only an untouched template gets archived.
-        identity = self.source_candidate(
-            "workspace/IDENTITY.md", "workspace.default/IDENTITY.md"
-        )
-        if identity and not self._is_unfilled_template(identity):
-            dest = self.target_root / "memories" / "IDENTITY.md"
-            if self.execute:
-                try:
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    dest.write_text(
-                        rebrand_identity_only(
-                            identity.read_text(encoding="utf-8", errors="replace")
-                        ),
-                        encoding="utf-8",
-                    )
-                    self.record("identity", identity, dest, "migrated",
-                                "IDENTITY.md was filled in — carried across as persona "
-                                "rather than archived.")
-                except OSError as exc:
-                    self.record("identity", identity, dest, "error",
-                                f"Filled IDENTITY.md could not be copied: {exc}. "
-                                "Copy it by hand — it is the agent's persona.")
-            else:
-                self.record("identity", identity, dest, "migrated",
-                            "Would carry filled IDENTITY.md across as persona.")
-            identity = None  # already handled
-
         candidates = [
-            identity,
+            self.source_candidate("workspace/IDENTITY.md", "workspace.default/IDENTITY.md"),
             self.source_candidate("workspace/TOOLS.md", "workspace.default/TOOLS.md"),
             self.source_candidate("workspace/HEARTBEAT.md", "workspace.default/HEARTBEAT.md"),
             self.source_candidate("workspace/BOOTSTRAP.md", "workspace.default/BOOTSTRAP.md"),
@@ -2612,92 +2215,6 @@ class Migrator:
             candidate = self.source_root / rel
             if candidate.exists():
                 self.archive_path(candidate, reason="No direct Clover destination; archived for manual review")
-
-        # CUSTOM workspace docs. Everything above is a KNOWN filename; anything
-        # else the user wrote themselves used to be neither migrated NOR
-        # archived — it simply did not appear in the output or the report.
-        #
-        # Found on a real agent: one agent's `COMPANY_KNOWLEDGE_BASE.md` (5.9 KB of
-        # company positioning, her actual job) would have vanished without a
-        # line of output. An unknown file is not a worthless file, and a
-        # migration that quietly drops a user's own writing is not a migration.
-        _known = {
-            "SOUL.md", "MEMORY.md", "USER.md", "AGENTS.md", "IDENTITY.md",
-            "TOOLS.md", "HEARTBEAT.md", "BOOTSTRAP.md", "CLAUDE.md",
-        }
-
-        # WORK PRODUCT. An agent's workspace holds the things it MADE: reports,
-        # case folders, notes. Alfred's `osint/anne_nguyen_report.md` and his
-        # `cases/` directory were neither migrated nor archived — they did not
-        # appear anywhere in the output, and the only clue would have been
-        # noticing their absence months later.
-        #
-        # These are archived rather than migrated: they are not persona and not
-        # memory, so they should not be loaded into the agent's context. But
-        # they must SURVIVE and be findable.
-        _skip_dirs = {
-            ".agents", ".learnings", "memory", "node_modules", "__pycache__",
-            ".git", "media", "tmp", "cache",
-        }
-        for ws_name in ("workspace", "workspace-main", "workspace.default"):
-            ws = self.source_root / ws_name
-            if not ws.is_dir():
-                continue
-            try:
-                subdirs = sorted(
-                    d for d in ws.iterdir()
-                    if d.is_dir() and d.name not in _skip_dirs
-                    and not d.name.startswith(".")
-                )
-            except OSError:
-                continue
-            for sub in subdirs:
-                # A skill directory is handled by the skills importer.
-                if (sub / "SKILL.md").exists():
-                    continue
-                self.archive_path(
-                    sub,
-                    reason="Agent work product (reports, cases, notes) — archived "
-                           "so it survives the migration and stays findable.",
-                )
-        for ws_name in ("workspace", "workspace-main", "workspace.default"):
-            ws = self.source_root / ws_name
-            if not ws.is_dir():
-                continue
-            try:
-                extras = sorted(
-                    f for f in ws.iterdir()
-                    if f.is_file() and f.suffix.lower() == ".md"
-                    and f.name not in _known
-                )
-            except OSError:
-                continue
-            for extra in extras:
-                dest = self.target_root / "memories" / extra.name
-                if self.execute:
-                    try:
-                        dest.parent.mkdir(parents=True, exist_ok=True)
-                        if dest.exists():
-                            self.record("workspace-docs", extra, dest, "conflict",
-                                        "A file of this name already exists in the "
-                                        "target; not overwritten.")
-                            continue
-                        dest.write_text(
-                            rebrand_identity_only(
-                                extra.read_text(encoding="utf-8", errors="replace")
-                            ),
-                            encoding="utf-8",
-                        )
-                        self.record("workspace-docs", extra, dest, "migrated",
-                                    "Custom workspace document carried across "
-                                    "(unknown filename, but it is the user's own "
-                                    "content).")
-                    except OSError as exc:
-                        self.record("workspace-docs", extra, dest, "error",
-                                    f"Could not copy custom workspace doc: {exc}")
-                else:
-                    self.record("workspace-docs", extra, dest, "migrated",
-                                "Would carry custom workspace document across.")
 
         partially_extracted = [
             ("openclaw.json", "Selected Clover-compatible values were extracted; raw OpenClaw config was not copied."),

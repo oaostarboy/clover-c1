@@ -8,6 +8,8 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 // "Desktop IPC bridge is unavailable"). No reply means no glass, which degrades
 // to an ordinary opaque window rather than a page thinned over nothing.
 const translucencySupport = ipcRenderer.sendSync('clover:translucency:support')
+const hudWindowing = ipcRenderer.sendSync('clover:hud:windowing')
+const hudNativeDrag = hudWindowing?.nativeDrag === true
 
 contextBridge.exposeInMainWorld('cloverDesktop', {
   glassSupported: translucencySupport?.glass === true,
@@ -27,6 +29,13 @@ contextBridge.exposeInMainWorld('cloverDesktop', {
   openSessionWindow: (sessionId, opts) => ipcRenderer.invoke('clover:window:openSession', sessionId, opts),
   openSessionInTerminal: (sessionId, opts) => ipcRenderer.invoke('clover:window:openInTerminal', sessionId, opts),
   openWindow: () => ipcRenderer.invoke('clover:window:openInstance'),
+  openBrowserWindow: tabId => ipcRenderer.invoke('clover:window:openBrowser', tabId),
+  onBrowserPopoutClosed: callback => {
+    const listener = (_event, tabId) => callback(tabId)
+    ipcRenderer.on('clover:browser-popout:closed', listener)
+
+    return () => ipcRenderer.removeListener('clover:browser-popout:closed', listener)
+  },
   claimAmbientCue: key => ipcRenderer.invoke('clover:ambient:claim', key),
   wakeIndicator: {
     getState: () => ipcRenderer.invoke('clover:wake-indicator:get'),
@@ -70,11 +79,23 @@ contextBridge.exposeInMainWorld('cloverDesktop', {
   // sized as a floating bar, so it mounts the real composer. Main owns the
   // window; `onChanged` keeps every window's toggle truthful.
   hud: {
+    nativeDrag: hudNativeDrag,
+    windowing: {
+      clientPlacement: hudWindowing?.clientPlacement !== false,
+      controlDrag: hudWindowing?.controlDrag === true,
+      nativeDrag: hudNativeDrag,
+      solid: hudWindowing?.solid === true,
+      workspaceTransfer: hudWindowing?.workspaceTransfer === true
+    },
     open: request => ipcRenderer.invoke('clover:hud:open', request),
     close: () => ipcRenderer.invoke('clover:hud:close'),
     setIgnoreMouse: ignore => ipcRenderer.send('clover:hud:ignore-mouse', ignore),
+    beginMove: () => ipcRenderer.send('clover:hud:begin-move'),
+    endMove: () => ipcRenderer.send('clover:hud:end-move'),
     moveBy: delta => ipcRenderer.send('clover:hud:move-by', delta),
+    setWorkspaceTransfer: transferring => ipcRenderer.send('clover:hud:workspace-transfer', transferring),
     setBounds: bounds => ipcRenderer.send('clover:hud:set-bounds', bounds),
+    resetLayout: () => ipcRenderer.invoke('clover:hud:reset-layout'),
     // Whether the band covers the window below the bar. Main pairs it with the
     // user's translucency setting to decide the native frost (macOS vibrancy /
     // Windows 11 DWM backdrop) — see hudFrostFor.
@@ -103,6 +124,15 @@ contextBridge.exposeInMainWorld('cloverDesktop', {
       ipcRenderer.on('clover:hud:cursor', listener)
 
       return () => ipcRenderer.removeListener('clover:hud:cursor', listener)
+    },
+    // Main's game-overlay watch: whether a fullscreen app (a game) is under
+    // the HUD, so the renderer can step back to the low-opacity overlay
+    // treatment while one owns the screen.
+    onGameOverlay: callback => {
+      const listener = (_event, state) => callback(state)
+      ipcRenderer.on('clover:hud:game-overlay', listener)
+
+      return () => ipcRenderer.removeListener('clover:hud:game-overlay', listener)
     }
   },
   // Quick Entry: the global-hotkey mini composer window. Main owns the OS
@@ -145,6 +175,10 @@ contextBridge.exposeInMainWorld('cloverDesktop', {
   saveConnectionConfig: payload => ipcRenderer.invoke('clover:connection-config:save', payload),
   applyConnectionConfig: payload => ipcRenderer.invoke('clover:connection-config:apply', payload),
   testConnectionConfig: payload => ipcRenderer.invoke('clover:connection-config:test', payload),
+  // Opt-in OS-keychain encryption for stored gateway secrets (default off —
+  // see secret-storage-policy.ts). get never touches the OS keychain.
+  getSecretStorageEncryption: () => ipcRenderer.invoke('clover:secret-storage:get'),
+  setSecretStorageEncryption: (on: boolean) => ipcRenderer.invoke('clover:secret-storage:set', on),
   // v2 multi-connection registry: named agent sources (local / remote / cloud / ssh).
   connections: {
     list: () => ipcRenderer.invoke('clover:connections:list'),
@@ -154,6 +188,7 @@ contextBridge.exposeInMainWorld('cloverDesktop', {
     setLaunchMode: mode => ipcRenderer.invoke('clover:connections:set-launch-mode', mode),
     setLastUsed: id => ipcRenderer.invoke('clover:connections:set-last-used', id),
     test: id => ipcRenderer.invoke('clover:connections:test', id),
+    updateManaged: id => ipcRenderer.invoke('clover:connections:update-managed', id),
     // Fan out `clover update` to every eligible registered connection.
     // Optional excludeIds skips rows the caller updates through another path.
     updateAll: options => ipcRenderer.invoke('clover:connections:update-all', options),
@@ -183,6 +218,7 @@ contextBridge.exposeInMainWorld('cloverDesktop', {
   },
   profile: {
     get: () => ipcRenderer.invoke('clover:profile:get'),
+    remember: name => ipcRenderer.invoke('clover:profile:remember', name),
     set: name => ipcRenderer.invoke('clover:profile:set', name)
   },
   api: request => ipcRenderer.invoke('clover:api', request),
@@ -234,8 +270,17 @@ contextBridge.exposeInMainWorld('cloverDesktop', {
   setDisableF12: blocked => ipcRenderer.send('clover:devtools:disable-f12', blocked),
   setPreviewShortcutActive: active => ipcRenderer.send('clover:previewShortcutActive', Boolean(active)),
   openExternal: url => ipcRenderer.invoke('clover:openExternal', url),
+  mcpOauth: {
+    // One-shot loopback listener for MCP OAuth against remote backends: bind
+    // on this machine, hand redirectUri to mcp.servers.oauth.start, then wait
+    // for the provider redirect and relay code/state via oauth.callback.
+    listen: () => ipcRenderer.invoke('clover:mcp-oauth:listen'),
+    wait: (id, timeoutMs) => ipcRenderer.invoke('clover:mcp-oauth:wait', id, timeoutMs),
+    cancel: id => ipcRenderer.invoke('clover:mcp-oauth:cancel', id)
+  },
   openPreviewInBrowser: url => ipcRenderer.invoke('clover:openPreviewInBrowser', url),
   reachPreviewUrl: url => ipcRenderer.invoke('clover:preview:reach', url),
+  setActiveConnectionRoute: route => ipcRenderer.send('clover:connection:active-route', route),
   fetchLinkTitle: url => ipcRenderer.invoke('clover:fetchLinkTitle', url),
   resolveFavicon: url => ipcRenderer.invoke('clover:resolveFavicon', url),
   sanitizeWorkspaceCwd: cwd => ipcRenderer.invoke('clover:workspace:sanitize', cwd),

@@ -660,3 +660,4 @@ response = loaded_bot(message="I can't log in")
 
 - **Documentation**: https://dspy.ai
 - **Examples Repo**: https://github.com/stanfordnlp/dspy/tree/main/examples
+- **Discord**: https://discord.gg/XCGy2WDCQB

@@ -578,7 +578,7 @@ def test_cmd_model_forwards_clover_login_tls_options(monkeypatch):
     clover_main.cmd_model(
         SimpleNamespace(
             portal_url="",
-            inference_url="",
+            inference_url="https://inference./v1",
             client_id="clover-local",
             scope="openid profile",
             no_browser=True,
@@ -590,7 +590,7 @@ def test_cmd_model_forwards_clover_login_tls_options(monkeypatch):
 
     assert captured == {
         "portal_url": "",
-        "inference_url": "",
+        "inference_url": "https://inference./v1",
         "client_id": "clover-local",
         "scope": "openid profile",
         "no_browser": True,

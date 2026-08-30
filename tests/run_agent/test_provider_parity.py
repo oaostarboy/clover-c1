@@ -353,7 +353,7 @@ class TestBuildApiKwargsAIGateway:
         assert "web_search" in tool_names
 
 
-class TestBuildApiKwargsCloverPortal:
+class TestBuildApiKwargsNousPortal:
     def test_includes_clover_product_tags(self, monkeypatch):
         from agent.portal_tags import clover_portal_tags
         agent = _make_agent(

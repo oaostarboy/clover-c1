@@ -56,7 +56,7 @@ export function requestBillingSettings(): void {
  * billing page (falling back to the in-app surface only if we have no URL).
  */
 export function runBillingRecovery(block: BillingBlock): void {
-  if (block.is_clover_portal) {
+  if (block.is_clover) {
     requestBillingSettings()
 
     return
@@ -72,5 +72,5 @@ export function runBillingRecovery(block: BillingBlock): void {
 }
 
 export function billingCtaLabel(block: BillingBlock, copy: { addCredits: string; openBilling: string }): string {
-  return block.is_clover_portal ? copy.openBilling : copy.addCredits
+  return block.is_clover ? copy.openBilling : copy.addCredits
 }

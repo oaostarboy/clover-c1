@@ -90,7 +90,7 @@ except (ModuleNotFoundError, ImportError):
     def display_clover_home() -> str:
         home = get_clover_home()
         try:
-            return "~/" + str(home.relative_to(Path.home()))
+            return "~/" + home.relative_to(Path.home()).as_posix()
         except ValueError:
             return str(home)
 

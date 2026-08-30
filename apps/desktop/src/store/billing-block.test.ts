@@ -18,7 +18,7 @@ import {
 function makeBlock(overrides: Partial<BillingBlock> = {}): BillingBlock {
   return {
     billing_url: 'https://platform.openai.com/settings/organization/billing',
-    is_clover_portal: false,
+    is_clover: false,
     message: 'You are out of credits.',
     model: 'gpt-5',
     provider: 'openai',
@@ -55,7 +55,7 @@ test('clearBillingBlock with no arg clears any active block', () => {
 })
 
 test('runBillingRecovery routes Clover to in-app Settings, never an external link', () => {
-  runBillingRecovery(makeBlock({ is_clover_portal: true, provider: 'clover', provider_label: 'Clover Portal' }))
+  runBillingRecovery(makeBlock({ is_clover: true, provider: 'clover', provider_label: 'Clover Portal' }))
   expect($billingSettingsRequest.get()).toBe(1)
   expect(openExternalLink).not.toHaveBeenCalled()
 })
@@ -81,6 +81,6 @@ test('requestBillingSettings increments the intent counter', () => {
 
 test('billingCtaLabel picks the right verb per route', () => {
   const copy = { addCredits: 'Add credits', openBilling: 'Open billing' }
-  expect(billingCtaLabel(makeBlock({ is_clover_portal: true }), copy)).toBe('Open billing')
-  expect(billingCtaLabel(makeBlock({ is_clover_portal: false }), copy)).toBe('Add credits')
+  expect(billingCtaLabel(makeBlock({ is_clover: true }), copy)).toBe('Open billing')
+  expect(billingCtaLabel(makeBlock({ is_clover: false }), copy)).toBe('Add credits')
 })

@@ -13,8 +13,9 @@
  *   everforest ← sainnhe.everforest
  *   solarized  ← ryanolsonx.solarized
  *
- * Re-convert from the upstream extension rather than hand-editing hexes; hand
- * edits drift from upstream silently and can't be re-derived.
+ * Re-convert marketplace forks from the upstream extension rather than
+ * hand-editing hexes; hand edits drift from upstream silently and can't be
+ * re-derived. `clover-alt` is first-party — do not re-derive it from GitHub.
  */
 
 import type { DesktopTheme, DesktopThemeTypography } from './types'
@@ -586,7 +587,82 @@ export const solarizedTheme: DesktopTheme = {
   }
 }
 
-/** Warm crimson and bronze — forge vibes. Matches the CLI ares skin. */
+const CLOVER_ALT_BLUE = '#0053FD'
+const CLOVER_ALT_NAVY = '#1540B1'
+const CLOVER_ALT_CREAM = '#FFE6CB'
+
+const cloverAltTint = (pct: number) => `color-mix(in srgb, ${CLOVER_ALT_BLUE} ${pct}%, #FFFFFF)`
+const cloverAltTintTransparent = (pct: number) => `color-mix(in srgb, ${CLOVER_ALT_BLUE} ${pct}%, transparent)`
+
+/**
+ * Clover Alt — the hand-authored Clover from before the GitHub fork. Light is
+ * glass neutrals with brand blue; dark is cream on mission-blue.
+ */
+export const cloverAltTheme: DesktopTheme = {
+  name: 'clover-alt',
+  label: 'Clover Alt',
+  description: 'Glass neutrals, cream on mission-blue',
+  colors: {
+    background: '#F8FAFF',
+    foreground: '#17171A',
+    card: '#FFFFFF',
+    cardForeground: '#17171A',
+    muted: cloverAltTint(5),
+    mutedForeground: '#666678',
+    popover: '#FFFFFF',
+    popoverForeground: '#17171A',
+    primary: CLOVER_ALT_BLUE,
+    primaryForeground: '#FCFCFC',
+    secondary: cloverAltTint(7),
+    secondaryForeground: '#242432',
+    accent: cloverAltTint(10),
+    accentForeground: '#202030',
+    border: cloverAltTintTransparent(22),
+    input: cloverAltTintTransparent(30),
+    ring: CLOVER_ALT_BLUE,
+    midground: CLOVER_ALT_BLUE,
+    composerRing: CLOVER_ALT_BLUE,
+    destructive: '#C72E4D',
+    destructiveForeground: '#FFFFFF',
+    sidebarBackground: '#F3F7FF',
+    sidebarBorder: cloverAltTintTransparent(18),
+    userBubble: cloverAltTint(6),
+    userBubbleBorder: cloverAltTintTransparent(24)
+  },
+  darkColors: {
+    background: '#0D2F86',
+    foreground: CLOVER_ALT_CREAM,
+    card: '#12378F',
+    cardForeground: CLOVER_ALT_CREAM,
+    muted: '#183F9A',
+    mutedForeground: '#B5C7F3',
+    popover: '#123A96',
+    popoverForeground: CLOVER_ALT_CREAM,
+    primary: CLOVER_ALT_CREAM,
+    primaryForeground: '#0D2F86',
+    secondary: '#1B45A4',
+    secondaryForeground: '#E0E8FF',
+    accent: CLOVER_ALT_NAVY,
+    accentForeground: '#F0F4FF',
+    border: '#3158AD',
+    input: '#0B2566',
+    ring: CLOVER_ALT_CREAM,
+    midground: CLOVER_ALT_BLUE,
+    composerRing: CLOVER_ALT_CREAM,
+    destructive: '#C0473A',
+    destructiveForeground: '#FEF2F2',
+    sidebarBackground: '#09286F',
+    sidebarBorder: '#234A9C',
+    userBubble: '#143B91',
+    userBubbleBorder: '#3A63BD'
+  },
+  typography: {
+    fontSans: SYSTEM_SANS,
+    fontMono: SYSTEM_MONO,
+    fontUrl: 'https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&display=swap'
+  }
+}
+
 /**
  * Midnight — deep blue-violet, near-monotone. Dark only: it has no light
  * palette because the whole idea is the dark end of the spectrum.
@@ -775,6 +851,7 @@ export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
   catppuccin: catppuccinTheme,
   everforest: everforestTheme,
   solarized: solarizedTheme,
+  'clover-alt': cloverAltTheme,
   midnight: midnightTheme,
   ember: emberTheme,
   mono: monoTheme,

@@ -14,7 +14,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { makeCloverCloudBackendDownError } from './backend-health'
+import { makeNousCloudBackendDownError } from './backend-health'
 import {
   apiRequestRegistryConnectionId,
   AT_COOKIE_VARIANTS,
@@ -35,6 +35,7 @@ import {
   normalizeRemoteHeaders,
   normalizeSshConfig,
   normAuthMode,
+  pathForRegistryBackendRequest,
   pathWithGlobalRemoteProfile,
   pathWithProfileScope,
   profileHasRemoteConnection,
@@ -49,7 +50,8 @@ import {
   RT_COOKIE_VARIANTS,
   savedProfileSsh,
   tokenPreview,
-  translateSelfProfileQuery
+  translateSelfProfileQuery,
+  withTransientRetries
 } from './connection-config'
 
 // --- connectionScopeKey / normAuthMode ---
@@ -483,6 +485,35 @@ test('pathWithProfileScope keeps an explicit profile query and no-ops on empty p
   assert.equal(pathWithProfileScope('/api/cron/jobs', null), '/api/cron/jobs')
 })
 
+test('pathForRegistryBackendRequest uses the resolved registry backend scope', () => {
+  assert.equal(
+    pathForRegistryBackendRequest('/api/fs/read-data-url?path=%2Fsrv%2Fimage.png', 'research', {
+      sharedRemote: true
+    }),
+    '/api/fs/read-data-url?path=%2Fsrv%2Fimage.png&profile=research'
+  )
+  assert.equal(
+    pathForRegistryBackendRequest('/api/fs/download?path=%2Fsrv%2Freport.pdf&profile=mara', 'mara', {
+      remoteProfile: 'default'
+    }),
+    '/api/fs/download?path=%2Fsrv%2Freport.pdf&profile=default'
+  )
+  assert.equal(
+    pathForRegistryBackendRequest('/api/fs/download?path=%2Fsrv%2Freport.pdf', 'mara', {
+      remoteProfile: 'default'
+    }),
+    '/api/fs/download?path=%2Fsrv%2Freport.pdf'
+  )
+  assert.equal(
+    pathForRegistryBackendRequest(
+      '/api/profiles/sessions/sidebar?recents_profile=research&recents_exclude=cron%2Cdesktop',
+      'research',
+      { remoteProfile: 'remote-research' }
+    ),
+    '/api/profiles/sessions/sidebar?recents_profile=remote-research&recents_exclude=cron%2Cdesktop'
+  )
+})
+
 // --- pathWithGlobalRemoteProfile ---
 
 test('pathWithGlobalRemoteProfile appends profile in global remote mode', () => {
@@ -581,8 +612,23 @@ test('translateSelfProfileQuery rewrites the self-profile filter into the backen
   )
 })
 
+test('translateSelfProfileQuery rewrites sidebar recents_profile aliases for managed SSH', () => {
+  assert.equal(
+    translateSelfProfileQuery(
+      '/api/profiles/sessions/sidebar?recents_profile=research&recents_limit=20&cron_limit=50&messaging_limit=100',
+      'research',
+      'remote-research'
+    ),
+    '/api/profiles/sessions/sidebar?recents_profile=remote-research&recents_limit=20&cron_limit=50&messaging_limit=100'
+  )
+})
+
 test('translateSelfProfileQuery leaves cross-profile and unfiltered paths untouched', () => {
   assert.equal(translateSelfProfileQuery('/api/cron/jobs?profile=all', 'mara', 'default'), '/api/cron/jobs?profile=all')
+  assert.equal(
+    translateSelfProfileQuery('/api/profiles/sessions/sidebar?recents_profile=all', 'mara', 'default'),
+    '/api/profiles/sessions/sidebar?recents_profile=all'
+  )
   assert.equal(
     translateSelfProfileQuery('/api/cron/jobs?profile=worker', 'mara', 'default'),
     '/api/cron/jobs?profile=worker'
@@ -1134,6 +1180,54 @@ test('gateway ticket failures classify only explicit auth rejection statuses as 
   assert.equal(serverFailure.needsOauthLogin, undefined)
 })
 
+test('withTransientRetries retries transport blips but not auth rejections', async () => {
+  const sleeps: number[] = []
+  let transportAttempts = 0
+
+  const ticket = await withTransientRetries(
+    async () => {
+      transportAttempts += 1
+
+      if (transportAttempts < 3) {
+        throw Object.assign(new Error('500: unavailable'), { statusCode: 500 })
+      }
+
+      return 'tkt-ok'
+    },
+    {
+      delaysMs: [10, 10],
+      sleep: async (ms: number) => {
+        sleeps.push(ms)
+      }
+    }
+  )
+
+  assert.equal(ticket, 'tkt-ok')
+  assert.equal(transportAttempts, 3)
+  assert.deepEqual(sleeps, [10, 10])
+
+  let authAttempts = 0
+  await assert.rejects(
+    () =>
+      withTransientRetries(
+        async () => {
+          authAttempts += 1
+          throw Object.assign(new Error('401: rejected'), { statusCode: 401 })
+        },
+        {
+          delaysMs: [10],
+          sleep: async () => undefined
+        }
+      ),
+    (err: any) => {
+      assert.equal(err.statusCode, 401)
+
+      return true
+    }
+  )
+  assert.equal(authAttempts, 1)
+})
+
 test('gateway WS URL IPC result serializes success and the auth-vs-transport matrix', async () => {
   assert.deepEqual(await gatewayWsUrlIpcResult(async () => 'wss://gateway.example.com/api/ws?ticket=fresh'), {
     ok: true,
@@ -1197,7 +1291,7 @@ test('gatewayTicketFailure keeps 401 and 403 as reauth with needsOauthLogin', ()
 
 test('gatewayTicketFailure only copies an integer statusCode, not a message prefix', () => {
   // A legacy "503: ..." message carries no structured statusCode; the Cloud
-  // classifier (makeCloverCloudBackendDownError) handles the prefix at the mint
+  // classifier (makeNousCloudBackendDownError) handles the prefix at the mint
   // boundary. The wrapper must not invent an integer from the message.
   const source = new Error('503: Service Unavailable') as any
 
@@ -1219,7 +1313,7 @@ test('OAuth ticket-mint 503 surfaces the Cloud-down error (startup boundary)', (
   ticketErr.statusCode = 503
 
   // The exact production sequence from main.ts.
-  const cloudError = makeCloverCloudBackendDownError(baseUrl, ticketErr)
+  const cloudError = makeNousCloudBackendDownError(baseUrl, ticketErr)
 
   if (cloudError !== null) {
     assert.equal((cloudError as any).isCloudBackendDown, true)
@@ -1239,7 +1333,7 @@ test('OAuth ticket-mint 401 stays on the reauth path (never Cloud-down)', () => 
   const ticketErr = new Error('Unauthorized') as any
   ticketErr.statusCode = 401
 
-  const cloudError = makeCloverCloudBackendDownError(baseUrl, ticketErr)
+  const cloudError = makeNousCloudBackendDownError(baseUrl, ticketErr)
   assert.equal(cloudError, null, 'a 401 must not become a Cloud-down error')
 
   const wrapped = gatewayTicketFailure(ticketErr, 'auth message', 'transport message')

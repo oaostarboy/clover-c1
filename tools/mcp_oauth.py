@@ -424,7 +424,8 @@ def _write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Tighten parent dir to 0o700 so siblings can't traverse to the creds.
     # No-op on Windows (POSIX mode bits aren't enforced); ignore failures.
-    # secure_parent_dir refuses to chmod / or top-level dirs (#25821).
+    # secure_parent_dir refuses to chmod /, top-level dirs, or the
+    # clover-c1 install tree (#25821, #93050).
     secure_parent_dir(path)
     # Per-process random suffix avoids collisions between concurrent
     # writers and stale leftovers from a prior crashed write.
@@ -1305,7 +1306,7 @@ def remove_oauth_tokens(
 # (draft-ietf-oauth-client-id-metadata-document section 5), and
 # clover-c1./docs/* 301s here.
 _CIMD_CLIENT_METADATA_URL = (
-    "https://localhost/clover-c1/docs/oauth/client-metadata.json"
+    "https://cloverc1.github.io/clover-c1/docs/oauth/client-metadata.json"
 )
 
 # Loopback callback ports declared in that document. The redirect URI in the

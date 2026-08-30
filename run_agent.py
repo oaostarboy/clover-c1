@@ -162,6 +162,7 @@ from agent.usage_pricing import normalize_usage
 from agent.context_compressor import (  # noqa: F401
     COMPRESSED_SUMMARY_METADATA_KEY,
     ContextCompressor,
+    user_originated_turn_view,
 )
 from agent.retry_utils import jittered_backoff  # noqa: F401
 from agent.prompt_builder import (  # noqa: F401  # re-exported via _ra() / mock.patch("run_agent.<name>") / from run_agent import <name>
@@ -169,7 +170,6 @@ from agent.prompt_builder import (  # noqa: F401  # re-exported via _ra() / mock
     build_skills_system_prompt,
     build_context_files_prompt,
     build_environment_hints,
-    build_clover_subscription_prompt,
     load_soul_md,
 )
 from agent.process_bootstrap import _get_proxy_from_env  # noqa: F401
@@ -183,6 +183,7 @@ from agent.message_sanitization import (  # noqa: F401
     _strip_non_ascii,
     _sanitize_messages_non_ascii,
     _sanitize_tools_non_ascii,
+    _looks_like_image_content_rejection,
     _strip_images_from_messages,
     _sanitize_structure_non_ascii,
     coalesce_tool_call_id as _sanitize_coalesce_tool_call_id,
@@ -522,6 +523,7 @@ class AIAgent:
         checkpoint_max_file_size_mb: int = 10,
         pass_session_id: bool = False,
         requested_provider: str = None,
+        capabilities: Dict[str, bool] | None = None,
     ):
         """Forwarder — see ``agent.agent_init.init_agent``."""
         if tool_delay is not None:
@@ -538,6 +540,7 @@ class AIAgent:
             api_key=api_key,
             provider=provider,
             requested_provider=requested_provider,
+            capabilities=capabilities,
             api_mode=api_mode,
             acp_command=acp_command,
             acp_args=acp_args,
@@ -797,6 +800,11 @@ class AIAgent:
         self.session_estimated_cost_usd = 0.0
         self.session_cost_status = "unknown"
         self.session_cost_source = "none"
+
+        # Session boundary: the usage anchor describes the OLD session's
+        # transcript — a fresh/branched/resumed session must fall back to
+        # full estimation until its first provider response re-anchors.
+        self._usage_anchor = None
         
         # Turn counter (added after reset_session_state was first written — #2635)
         self._user_turn_count = 0
@@ -893,10 +901,26 @@ class AIAgent:
             return_load_result=True,
         )
 
-    def switch_model(self, new_model, new_provider, api_key='', base_url='', api_mode=''):
+    def switch_model(
+        self,
+        new_model,
+        new_provider,
+        api_key='',
+        base_url='',
+        api_mode='',
+        capabilities=None,
+    ):
         """Forwarder — see ``agent.agent_runtime_helpers.switch_model``."""
         from agent.agent_runtime_helpers import switch_model
-        return switch_model(self, new_model, new_provider, api_key, base_url, api_mode)
+        return switch_model(
+            self,
+            new_model,
+            new_provider,
+            api_key,
+            base_url,
+            api_mode,
+            capabilities,
+        )
 
     def _safe_print(self, *args, **kwargs):
         """Print that silently handles broken pipes / closed stdout.
@@ -969,7 +993,15 @@ class AIAgent:
         callers. The CLI may still want compact progress hints when no callback
         owns rendering. Embedded/library callers, on the other hand, expect
         quiet mode to be truly silent.
+
+        ``suppress_status_output`` (the strict machine-readable mode used by
+        ``clover chat -Q``) always wins: those flows neutralize the rendering
+        callbacks, and without this gate the "no callback owns rendering"
+        fallback would print ``[tool]``/``[done]`` spinner lines into the
+        captured stdout it exists to keep clean (#93220).
         """
+        if getattr(self, "suppress_status_output", False):
+            return False
         return (
             self.quiet_mode
             and not self.tool_progress_callback
@@ -1196,7 +1228,14 @@ class AIAgent:
                 # Clear before emitting so a (swallowed) callback error can't
                 # leave the notice set for a stale re-emit on a later turn.
                 self._pending_fallback_notice = None
-                self._emit_status(notice)
+                notices = notice if isinstance(notice, list) else [notice]
+                for item in notices:
+                    try:
+                        self._emit_status(str(item))
+                    except Exception:
+                        # A single surface callback failure must not hide later
+                        # switches from the same fallback chain.
+                        continue
         except Exception:
             # Never break the conversation loop on a notice hiccup.
             pass
@@ -1544,14 +1583,9 @@ class AIAgent:
         """
         if self.api_mode != "codex_responses":
             return None
-        is_codex_backend = (
-            self.provider == "openai-codex"
-            or (
-                getattr(self, "_base_url_hostname", "") == "chatgpt.com"
-                and "/backend-api/codex" in (getattr(self, "_base_url_lower", "") or "")
-            )
-        )
-        if not is_codex_backend:
+        from agent.codex_responses_adapter import classify_responses_route
+
+        if not classify_responses_route(self).is_codex_backend:
             return None
         eff_model = (model if model is not None else self.model) or ""
         model_lower = eff_model.lower()
@@ -2213,6 +2247,7 @@ class AIAgent:
                 while (
                     _scan_start < _limit
                     and messages[_scan_start] is _prev_prefix[_scan_start]
+                    and bool(messages[_scan_start].get(_DB_PERSISTED_MARKER))
                 ):
                     _scan_start += 1
 
@@ -2338,7 +2373,7 @@ class AIAgent:
                     ]
                 elif isinstance(msg.get("tool_calls"), list):
                     tool_calls_data = msg["tool_calls"]
-                _batch_rows.append({
+                _row = {
                     "role": role,
                     "content": content,
                     "tool_name": msg.get("tool_name"),
@@ -2352,6 +2387,7 @@ class AIAgent:
                     "reasoning_details": msg.get("reasoning_details"),
                     "codex_reasoning_items": msg.get("codex_reasoning_items"),
                     "codex_message_items": msg.get("codex_message_items"),
+                    "_compressed_summary": bool(msg.get(COMPRESSED_SUMMARY_METADATA_KEY)),
                     "timestamp": _row_timestamp,
                     "api_content": _row_api_content,
                     # Standalone reference handoffs are always hidden, even
@@ -2364,6 +2400,7 @@ class AIAgent:
                         "hidden"
                         if (
                             msg.get(COMPRESSED_SUMMARY_METADATA_KEY)
+                            and user_originated_turn_view(msg) is None
                             and (
                                 ContextCompressor.classify_summary_content(
                                     msg.get("content")
@@ -2377,7 +2414,10 @@ class AIAgent:
                         else msg.get("display_kind")
                     ),
                     "display_metadata": msg.get("display_metadata"),
-                })
+                }
+                if isinstance(msg.get("_row_id"), int):
+                    _row["_row_id"] = msg["_row_id"]
+                _batch_rows.append(_row)
                 _batch_msgs.append(msg)
             # One transaction for the whole turn's new rows (typically 3-8
             # messages): one BEGIN IMMEDIATE / commit — and, off WAL, one
@@ -2401,8 +2441,9 @@ class AIAgent:
                     )
                     or 300.0,
                 )
-                for _written in _batch_msgs:
-                    _written[_DB_PERSISTED_MARKER] = True
+                from agent.transcript_repair import sync_flushed_message_markers
+
+                sync_flushed_message_markers(_batch_msgs, _batch_rows)
             # The intrinsic markers are now the sole source of truth. Reset the
             # one-shot seed so no id() outlives this flush to alias a message
             # allocated next turn at a recycled address.
@@ -3255,7 +3296,13 @@ class AIAgent:
                 logging.warning(f"Failed to save session log: {e}")
 
 
-    def interrupt(self, message: Optional[str] = None, *, hard_cancel: bool = False) -> None:
+    def interrupt(
+        self,
+        message: Optional[str] = None,
+        *,
+        hard_cancel: bool = False,
+        tool_reason: Optional[str] = None,
+    ) -> None:
         """
         Request the agent to interrupt its current tool-calling loop.
         
@@ -3271,6 +3318,8 @@ class AIAgent:
             hard_cancel: Mark this as an explicit stop rather than a redirect or
                          incoming-message interrupt. Compression may honor this
                          atomic signal even while ordinary interrupts are masked.
+            tool_reason: Trusted fixed category safe to expose in tool output.
+                         Arbitrary diagnostic or caller text belongs in message.
         
         Example (CLI):
             # In a separate input thread:
@@ -3306,17 +3355,28 @@ class AIAgent:
                     )
             event.set()
 
+        # Keep tool cancellation attribution separate from _interrupt_message:
+        # ordinary interrupts may carry the user's full next message, which
+        # must not be copied into tool output.
+        tool_interrupt_reason = (
+            (tool_reason or "explicit stop requested")
+            if hard_cancel
+            else ("user sent a new message" if message else "user interrupt")
+        )
+
         _redirect_lock = getattr(self, "_pending_redirect_lock", None)
         if _redirect_lock is not None:
             with _redirect_lock:
                 self._interrupt_requested = True
                 self._interrupt_message = message
+                self._tool_interrupt_reason = tool_interrupt_reason
                 if hard_cancel:
                     _admit_hard_cancel()
                 self._pending_redirect = None
         else:
             self._interrupt_requested = True
             self._interrupt_message = message
+            self._tool_interrupt_reason = tool_interrupt_reason
             if hard_cancel:
                 _admit_hard_cancel()
             self._pending_redirect = None
@@ -3349,7 +3409,11 @@ class AIAgent:
         # Scope the interrupt to this agent's execution thread so other
         # agents running in the same process (gateway) are not affected.
         if self._execution_thread_id is not None:
-            _set_interrupt(True, self._execution_thread_id)
+            _set_interrupt(
+                True,
+                self._execution_thread_id,
+                reason=tool_interrupt_reason,
+            )
             self._interrupt_thread_signal_pending = False
         else:
             # The interrupt arrived before run_conversation() finished
@@ -3373,7 +3437,7 @@ class AIAgent:
                 _worker_tids = list(_tracker)
             for _wtid in _worker_tids:
                 try:
-                    _set_interrupt(True, _wtid)
+                    _set_interrupt(True, _wtid, reason=tool_interrupt_reason)
                 except Exception:
                     pass
         # Propagate interrupt to any running child agents (subagent delegation)
@@ -3382,7 +3446,11 @@ class AIAgent:
         for child in children_copy:
             try:
                 if hard_cancel:
-                    request_hard_interrupt(child, message)
+                    request_hard_interrupt(
+                        child,
+                        message,
+                        tool_reason=tool_interrupt_reason,
+                    )
                 else:
                     child.interrupt(message)
             except Exception as e:
@@ -3390,7 +3458,12 @@ class AIAgent:
         if not self.quiet_mode:
             print("\n⚡ Interrupt requested" + (f": '{message[:40]}...'" if message and len(message) > 40 else f": '{message}'" if message else ""))
 
-    def hard_interrupt(self, message: Optional[str] = None) -> None:
+    def hard_interrupt(
+        self,
+        message: Optional[str] = None,
+        *,
+        tool_reason: Optional[str] = None,
+    ) -> None:
         """Request an explicit stop while preserving ``interrupt()`` ABI.
 
         Frontends can feature-detect this method and fall back to the legacy
@@ -3399,7 +3472,12 @@ class AIAgent:
         # Deliberately bypass dynamic dispatch: subclasses written against the
         # legacy interrupt(message=None) ABI may override interrupt without the
         # newer keyword-only hard_cancel argument.
-        AIAgent.interrupt(self, message, hard_cancel=True)
+        AIAgent.interrupt(
+            self,
+            message,
+            hard_cancel=True,
+            tool_reason=tool_reason,
+        )
 
     def clear_interrupt(self, *, preserve_redirect: bool = False) -> bool:
         """Clear the interrupt request and per-thread tool signal.
@@ -3415,6 +3493,7 @@ class AIAgent:
                     return False
                 self._interrupt_requested = False
                 self._interrupt_message = None
+                self._tool_interrupt_reason = None
                 getattr(self, "_hard_interrupt_requested", threading.Event()).clear()
                 if not preserve_redirect:
                     self._pending_redirect = None
@@ -3423,6 +3502,7 @@ class AIAgent:
                 return False
             self._interrupt_requested = False
             self._interrupt_message = None
+            self._tool_interrupt_reason = None
             getattr(self, "_hard_interrupt_requested", threading.Event()).clear()
             if not preserve_redirect:
                 self._pending_redirect = None
@@ -3913,6 +3993,13 @@ class AIAgent:
                 prefix
                 + "an error occurred near the iteration limit before a final "
                 "answer. Check the tool output above, then send `continue`."
+            )
+        if reason.startswith("repeated_outer_errors"):
+            return (
+                prefix
+                + "the turn kept failing with repeated errors and was stopped "
+                "early instead of retrying forever. Check the errors above, "
+                "then send `continue` to retry."
             )
         if reason == "pending_tool_result":
             return (
@@ -4721,6 +4808,7 @@ class AIAgent:
 
         # Walk history backwards to find the most recent todo tool response
         last_todo_response = None
+        last_todo_revision = 0
         for idx in range(len(history) - 1, -1, -1):
             msg = history[idx]
             if msg.get("role") != "tool":
@@ -4746,15 +4834,32 @@ class AIAgent:
                 data = json.loads(content)
                 if "todos" in data and isinstance(data["todos"], list):
                     last_todo_response = data["todos"]
+                    last_todo_revision = data.get("revision", 1)
                     break
             except (json.JSONDecodeError, TypeError):
                 continue
 
-        if last_todo_response:
-            # Replay the items into the store (replace mode)
-            self._todo_store.write(last_todo_response, merge=False)
-            if not self.quiet_mode:
-                self._vprint(f"{self.log_prefix}📋 Restored {len(last_todo_response)} todo item(s) from history")
+        if last_todo_response is not None:
+            # Restore only when history carries a newer revision than the
+            # store already holds (a live store re-hydrated in place must not
+            # be rolled back by older history). Sessions that predate
+            # revisions default to 1 so they still hydrate. Empty lists
+            # matter: they are an authoritative clear after an earlier
+            # non-empty plan.
+            current_revision = int(
+                self._todo_store.snapshot().get("revision", 0) or 0
+            )
+            try:
+                history_revision = max(0, int(last_todo_revision or 0))
+            except (TypeError, ValueError):
+                history_revision = 1
+            if history_revision > current_revision:
+                self._todo_store.restore(
+                    last_todo_response,
+                    revision=history_revision,
+                )
+                if not self.quiet_mode:
+                    self._vprint(f"{self.log_prefix}📋 Restored {len(last_todo_response)} todo item(s) from history")
         _set_interrupt(False)
 
     @classmethod
@@ -5114,73 +5219,10 @@ class AIAgent:
 
     @staticmethod
     def _build_keepalive_http_client(base_url: str = "", *, verify: Any = True) -> Any:
-        """Build an httpx.Client with proactive idle-connection reaping.
+        """Build the shared OpenAI httpx client used by main and aux paths."""
+        from agent.process_bootstrap import build_keepalive_http_client
 
-        Previously this method injected a custom ``httpx.HTTPTransport``
-        with ``socket_options`` (``SO_KEEPALIVE``, ``TCP_KEEPIDLE``, …) to
-        prevent CLOSE-WAIT accumulation on long-lived connections (#10324).
-
-        That approach broke streaming for providers behind reverse proxies
-        (OpenResty, Cloudflare, etc.) because the custom socket options
-        conflict with the proxy's chunked-transfer handling (#54049,
-        #12952).  It also stripped ``TCP_NODELAY``, stalling TLS handshakes
-        and SSE encoding.
-
-        The fix moves connection lifecycle management from the socket layer
-        to the HTTP pool layer: ``keepalive_expiry=20.0`` tells httpx to
-        close idle pooled connections *before* a reverse proxy's typical
-        30–60 s timeout drops them, preventing CLOSE-WAIT accumulation
-        without modifying socket options.  The default httpx transport
-        preserves OS TCP defaults (including ``TCP_NODELAY``).
-
-        ``verify`` carries per-provider ``ssl_ca_cert`` / ``ssl_verify`` and
-        ``CLOVER_CA_BUNDLE`` settings.  It is passed on the client AND on
-        the plain no-proxy mounts (a mounted transport owns the SSL context
-        for its scheme).
-        """
-        try:
-            import httpx as _httpx
-
-            # Explicitly read proxy settings so requests route through
-            # HTTP_PROXY / HTTPS_PROXY / NO_PROXY correctly.
-            _proxy = _get_proxy_for_base_url(base_url)
-
-            # Proactive pool reaping: close idle connections at 20 s,
-            # before reverse proxies (30–60 s typical) send FIN and
-            # cause CLOSE-WAIT accumulation.
-            _limits = _httpx.Limits(
-                max_keepalive_connections=20,
-                max_connections=100,
-                keepalive_expiry=20.0,
-            )
-
-            # Timeouts: generous read=None for SSE streaming endpoints.
-            _timeout = _httpx.Timeout(
-                connect=15.0,
-                read=None,
-                write=15.0,
-                pool=10.0,
-            )
-
-            # When _proxy is None (NO_PROXY bypass or no proxy configured),
-            # mount plain transports to prevent httpx from reading env proxy
-            # vars and creating an HTTPProxy mount that would bypass our
-            # NO_PROXY resolution.
-            _mounts = {}
-            if _proxy is None:
-                _mounts = {
-                    "http://": _httpx.HTTPTransport(verify=verify),
-                    "https://": _httpx.HTTPTransport(verify=verify),
-                }
-            return _httpx.Client(
-                limits=_limits,
-                timeout=_timeout,
-                proxy=_proxy,
-                mounts=_mounts or None,
-                verify=verify,
-            )
-        except Exception:
-            return None
+        return build_keepalive_http_client(base_url, verify=verify)
 
     def _create_openai_client(self, client_kwargs: dict, *, reason: str, shared: bool) -> Any:
         """Forwarder — see ``agent.agent_runtime_helpers.create_openai_client``."""
@@ -5889,7 +5931,7 @@ class AIAgent:
             from clover_cli.auth import resolve_clover_runtime_credentials
 
             creds = resolve_clover_runtime_credentials(
-                timeout_seconds=env_float("CLOVER_PORTAL_TIMEOUT_SECONDS", 15),
+                timeout_seconds=env_float("CLOVER_CLOVER_TIMEOUT_SECONDS", 15),
                 force_refresh=force,
             )
         except Exception as exc:
@@ -6356,7 +6398,7 @@ class AIAgent:
         elif base_url_host_matches(base_url, "chatgpt.com"):
             from agent.auxiliary_client import _codex_cloudflare_headers
             self._client_kwargs["default_headers"] = _codex_cloudflare_headers(
-                self._client_kwargs.get("api_key", "")
+                self._client_kwargs.get("api_key", ""), base_url=base_url,
             )
         elif base_url_host_matches(base_url, "x.ai"):
             # Cover both provider=xai and provider=xai-oauth (api.x.ai).
@@ -7696,7 +7738,7 @@ class AIAgent:
             "google/gemini-2",
             "google/gemma-4",
             "qwen/qwen3",
-            "tencent/hy3",
+            "tencent/hy",
             "xiaomi/",
         )
         return any(model.startswith(prefix) for prefix in reasoning_model_prefixes)
@@ -8084,129 +8126,228 @@ class AIAgent:
 
             # Callers that already own a progress-aware wait (gateway session
             # hygiene) pass commit_fence and must not be double-wrapped.
-            if commit_fence is not None:
-                return _run(active_fence)
+            direct_path = commit_fence is not None
+            idle_timeout = total_ceiling = None
+            if not direct_path:
+                idle_timeout, total_ceiling = resolve_context_compression_timeouts()
+                if idle_timeout <= 0:
+                    direct_path = True
 
-            idle_timeout, total_ceiling = resolve_context_compression_timeouts()
-            if idle_timeout <= 0:
-                return _run(active_fence)
-
-            def _snapshot_worker(fence=None):
-                # #76354 review F3: the pooled worker must NEVER share the
-                # caller's live transcript. Plugin/legacy context engines are
-                # allowed to mutate their input list in place; after a host
-                # timeout the worker stays alive, so a shared list would let
-                # a late engine rewrite the live conversation (roles,
-                # ordering, persisted content) behind the caller's back.
-                # Deep-snapshot here, on the worker thread, so the caller's
-                # list object is never touched by pooled code. Results are
-                # published to caller-visible state only via the returned
-                # value of an ADMITTED commit (the host discards results on
-                # timeout/cancel); durable SessionDB mutation is already
-                # gated behind the commit fence inside compress_context.
-                snapshot = copy.deepcopy(messages)
-                result_msgs, result_prompt = _run(
-                    fence, target_messages=snapshot
-                )
-                if result_msgs is snapshot:
-                    # No-op/abort path returned the snapshot unchanged: hand
-                    # back the caller's ORIGINAL list so identity-based
-                    # semantics (len/identity no-op detection, flush dedup
-                    # by id()) keep working.
-                    return messages, result_prompt
-                return result_msgs, result_prompt
-
-            # Resolve the fallback prompt lazily on timeout only. Eager
-            # rebuild here would raise before compress_context runs whenever
-            # _cached_system_prompt is unset and _build_system_prompt fails
-            # (lock-refresher / noop-exception tests rely on that path).
-            def _fallback_prompt():
-                cached = getattr(self, "_cached_system_prompt", None)
-                if cached:
-                    return cached
-                try:
-                    return self._build_system_prompt(system_message)
-                except Exception:
-                    logger.debug(
-                        "compress_context timeout fallback prompt rebuild "
-                        "failed; using raw system_message",
-                        exc_info=True,
+            if direct_path:
+                result = _run(active_fence)
+            else:
+                def _snapshot_worker(fence=None):
+                    # #76354 review F3: the pooled worker must NEVER share the
+                    # caller's live transcript. Plugin/legacy context engines are
+                    # allowed to mutate their input list in place; after a host
+                    # timeout the worker stays alive, so a shared list would let
+                    # a late engine rewrite the live conversation (roles,
+                    # ordering, persisted content) behind the caller's back.
+                    # Deep-snapshot here, on the worker thread, so the caller's
+                    # list object is never touched by pooled code. Results are
+                    # published to caller-visible state only via the returned
+                    # value of an ADMITTED commit (the host discards results on
+                    # timeout/cancel); durable SessionDB mutation is already
+                    # gated behind the commit fence inside compress_context.
+                    snapshot = copy.deepcopy(messages)
+                    result_msgs, result_prompt = _run(
+                        fence, target_messages=snapshot
                     )
-                    return system_message or ""
+                    if result_msgs is snapshot:
+                        # No-op/abort path returned the snapshot unchanged: hand
+                        # back the caller's ORIGINAL list so identity-based
+                        # semantics (len/identity no-op detection, flush dedup
+                        # by id()) keep working.
+                        return messages, result_prompt
+                    return result_msgs, result_prompt
 
-            def _on_timeout(idle, waited, since_progress):
-                logger.warning(
-                    "Context compression made no progress for %.1fs "
-                    "(total wait %.1fs, ceiling %.1fs); continuing without "
-                    "compression",
-                    since_progress,
-                    waited,
-                    total_ceiling,
-                )
-                touch = getattr(self, "_touch_activity", None)
-                if callable(touch):
+                # Resolve the fallback prompt lazily on timeout only. Eager
+                # rebuild here would raise before compress_context runs whenever
+                # _cached_system_prompt is unset and _build_system_prompt fails
+                # (lock-refresher / noop-exception tests rely on that path).
+                def _fallback_prompt():
+                    cached = getattr(self, "_cached_system_prompt", None)
+                    if cached:
+                        return cached
                     try:
-                        touch(
-                            "context compression timed out",
-                            provenance=ActivityProvenance.AGENT_COMPRESSION_TIMEOUT,
-                        )
+                        return self._build_system_prompt(system_message)
                     except Exception:
                         logger.debug(
-                            "compress_context timeout activity touch failed",
+                            "compress_context timeout fallback prompt rebuild "
+                            "failed; using raw system_message",
                             exc_info=True,
                         )
-                # Same timeout cooldown ladder as summary-LLM timeouts
-                # (#62452): avoid re-burning the full idle budget every turn.
-                compressor = getattr(self, "context_compressor", None)
-                if compressor is not None:
-                    record = getattr(compressor, "record_timeout_failure", None)
-                    if callable(record):
+                        return system_message or ""
+
+                def _on_timeout(idle, waited, since_progress):
+                    logger.warning(
+                        "Context compression made no progress for %.1fs "
+                        "(total wait %.1fs, ceiling %.1fs); continuing without "
+                        "compression",
+                        since_progress,
+                        waited,
+                        total_ceiling,
+                    )
+                    touch = getattr(self, "_touch_activity", None)
+                    if callable(touch):
                         try:
-                            record(
-                                "host compress_context timeout "
-                                "(no summary progress)"
+                            touch(
+                                "context compression timed out",
+                                provenance=ActivityProvenance.AGENT_COMPRESSION_TIMEOUT,
                             )
                         except Exception:
                             logger.debug(
-                                "failed to record compress_context timeout "
-                                "cooldown",
+                                "compress_context timeout activity touch failed",
                                 exc_info=True,
                             )
-                emit = getattr(self, "_emit_warning", None)
-                if callable(emit):
-                    emit(
-                        "⚠ Context compression timed out "
-                        f"after {idle:.1f}s with no output from the summary "
-                        "model. No messages were dropped — continuing without "
-                        "compression. Run /compress to retry, /new for a clean "
-                        "session, or check auxiliary.compression."
-                    )
+                    # Same timeout cooldown ladder as summary-LLM timeouts
+                    # (#62452): avoid re-burning the full idle budget every turn.
+                    compressor = getattr(self, "context_compressor", None)
+                    if compressor is not None:
+                        record = getattr(compressor, "record_timeout_failure", None)
+                        if callable(record):
+                            try:
+                                record(
+                                    "host compress_context timeout "
+                                    "(no summary progress)"
+                                )
+                            except Exception:
+                                logger.debug(
+                                    "failed to record compress_context timeout "
+                                    "cooldown",
+                                    exc_info=True,
+                                )
+                    emit = getattr(self, "_emit_warning", None)
+                    if callable(emit):
+                        emit(
+                            "⚠ Context compression timed out "
+                            f"after {idle:.1f}s with no output from the summary "
+                            "model. No messages were dropped — continuing without "
+                            "compression. Run /compress to retry, /new for a clean "
+                            "session, or check auxiliary.compression."
+                        )
 
-            def _on_commit_overrun(waited, ceiling):
-                # Commit-phase ceiling breach: the SessionDB mutation is in
-                # flight and must complete (abandoning it mid-commit would
-                # diverge live messages from durable session state), so this
-                # only surfaces the overrun — it never cancels the commit.
-                emit = getattr(self, "_emit_warning", None)
-                if callable(emit):
-                    emit(
-                        "⚠ Context compression commit is taking unusually "
-                        f"long ({waited:.0f}s, ceiling {ceiling:.0f}s). "
-                        "Waiting for it to finish safely — if this persists, "
-                        "check SessionDB health (disk / lock contention)."
-                    )
+                def _on_commit_overrun(waited, ceiling):
+                    # Commit-phase ceiling breach: the SessionDB mutation is in
+                    # flight and must complete (abandoning it mid-commit would
+                    # diverge live messages from durable session state), so this
+                    # only surfaces the overrun — it never cancels the commit.
+                    emit = getattr(self, "_emit_warning", None)
+                    if callable(emit):
+                        emit(
+                            "⚠ Context compression commit is taking unusually "
+                            f"long ({waited:.0f}s, ceiling {ceiling:.0f}s). "
+                            "Waiting for it to finish safely — if this persists, "
+                            "check SessionDB health (disk / lock contention)."
+                        )
 
-            result = run_compress_context_with_progress_timeout(
-                worker=_snapshot_worker,
-                messages=messages,
-                system_prompt_fallback=_fallback_prompt,
-                idle_timeout_seconds=idle_timeout,
-                total_ceiling_seconds=total_ceiling,
-                on_timeout=_on_timeout,
-                on_commit_overrun=_on_commit_overrun,
-                fence=active_fence,
-                telemetry_agent=self,
+                def _publish_new_fence():
+                    # The stall-fallback retry (#78981) needs a fence the aborted
+                    # attempt cannot veto. Publish it on the same serialized slot
+                    # hard_interrupt() reads, so a /stop during the retry admits
+                    # against the attempt that is actually running. The finally
+                    # below restores whatever the caller had either way.
+                    retry_fence = CompressionCommitFence()
+                    with fence_registration_lock:
+                        self._active_compression_commit_fence = retry_fence
+                    return retry_fence
+
+                result = run_compress_context_with_progress_timeout(
+                    worker=_snapshot_worker,
+                    messages=messages,
+                    system_prompt_fallback=_fallback_prompt,
+                    idle_timeout_seconds=idle_timeout,
+                    total_ceiling_seconds=total_ceiling,
+                    on_timeout=_on_timeout,
+                    on_commit_overrun=_on_commit_overrun,
+                    fence=active_fence,
+                    telemetry_agent=self,
+                    new_fence=_publish_new_fence,
+                )
+            # _DB_PERSISTED_MARKER lives at module level in
+            # agent.context_compressor; conversation_compression only
+            # imports it locally (cannot be imported from there). Imported
+            # UNCONDITIONALLY (no fallback): both modules are already
+            # hard dependencies at this point — agent.context_compressor is
+            # imported at the top of this module (line ~162), and
+            # agent.conversation_compression is imported at the top of this
+            # very method and its compress_context is invoked below. The
+            # only way these imports can fail while the wrapper is
+            # functional is a renamed/removed symbol, and that must fail
+            # LOUDLY: a silent fallback literal ("_db_persisted") would
+            # split the stamping key from the flush's and quietly resurrect
+            # the duplicate-row bug this fix removed.
+            from agent.context_compressor import _DB_PERSISTED_MARKER
+            from agent.conversation_compression import (
+                _messages_match_scoped_identity,
+
             )
+
+            def _sync_persisted_markers(target_messages, source_messages):
+                if not isinstance(target_messages, list) or not isinstance(
+                    source_messages, list
+                ):
+                    return
+                # Compression runs against a deepcopy snapshot on the pooled
+                # worker path, so publish stamps land on the result list first.
+                # Mirror them back onto the live caller lists by scoped
+                # identity after publish succeeds; timestamp-less repeated
+                # content is ambiguous, so we stamp every scoped match instead
+                # of stopping at the first one.
+                for source_message in source_messages:
+                    if not (
+                        isinstance(source_message, dict)
+                        and source_message.get(_DB_PERSISTED_MARKER)
+                    ):
+                        continue
+                    source_timestamp = source_message.get("timestamp")
+                    matched_exact_timestamp = False
+                    if source_timestamp is not None:
+                        for target_message in target_messages:
+                            if not isinstance(target_message, dict):
+                                continue
+                            if target_message.get(_DB_PERSISTED_MARKER):
+                                continue
+                            if not _messages_match_scoped_identity(
+                                target_message, source_message
+                            ):
+                                continue
+                            if target_message.get("timestamp") != source_timestamp:
+                                continue
+                            target_message[_DB_PERSISTED_MARKER] = True
+                            matched_exact_timestamp = True
+                        if matched_exact_timestamp:
+                            continue
+                    for target_message in target_messages:
+                        if not isinstance(target_message, dict):
+                            continue
+                        if target_message.get(_DB_PERSISTED_MARKER):
+                            continue
+                        if not _messages_match_scoped_identity(
+                            target_message, source_message
+                        ):
+                            continue
+                        target_message[_DB_PERSISTED_MARKER] = True
+
+            if isinstance(result, tuple) and result:
+                result_messages = result[0]
+                if isinstance(result_messages, list):
+                    # Direct-path callers bypass the snapshot worker, so they
+                    # still need the same post-publish mirror onto the live
+                    # caller list even when the returned list already points at
+                    # the active transcript.
+                    if direct_path or result_messages is not messages:
+                        _sync_persisted_markers(messages, result_messages)
+                    session_messages = getattr(self, "_session_messages", None)
+                    if (
+                        isinstance(session_messages, list)
+                        and session_messages is not messages
+                    ):
+                        # Intentional: durable-parent adoption can leave
+                        # `_session_messages` on the pre-adoption live list
+                        # while `messages` now points at the adopted snapshot,
+                        # so both lists need the post-publish marker sync.
+                        _sync_persisted_markers(session_messages, result_messages)
             # compress_context ran on a daemon pool worker thread; the session
             # id rotation updated clover_logging._session_context (a
             # threading.local) on the WORKER thread, not this one. Propagate

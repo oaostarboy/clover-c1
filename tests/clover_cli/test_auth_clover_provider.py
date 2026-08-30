@@ -505,7 +505,7 @@ class TestLoginNousSkipKeepsCurrent:
         fake_auth_state = {
             "access_token": "fake-clover-token",
             "agent_key": "fake-agent-key",
-            "inference_base_url": "https://inference-api.",
+            "inference_base_url": "",
             "portal_base_url": "",
             "refresh_token": "fake-refresh",
             "token_expires_at": 9999999999,

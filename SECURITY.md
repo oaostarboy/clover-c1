@@ -6,7 +6,7 @@ scope for vulnerability reports.
 
 ## 1. Reporting a Vulnerability
 
-Report privately via GitHub Security Advisories
+Report privately via [GitHub Security Advisories]()
 or **security@**. Do not open public issues for
 security vulnerabilities. **Clover Cognition does not operate a bug
 bounty program.**

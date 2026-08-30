@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
-
-logger = logging.getLogger(__name__)
 
 
 def _normalized_base_url(value: Any) -> str:
@@ -43,91 +40,14 @@ def resolve_entry_api_key(entry: dict[str, Any] | None) -> str | None:
     return None
 
 
-def coerce_fallback_entry(entry: Any) -> dict[str, Any] | None:
-    """One raw fallback entry -> normalized dict, or None if unusable.
-
-    STRINGS ARE ACCEPTED ON PURPOSE. ``"anthropic/claude-opus-5"`` is the shape
-    every human writes, every doc example shows, and `clover fallback add`
-    prints back. Before 2026-08-24 a string was silently dropped by an
-    ``isinstance(dict)`` check, so a config that LOOKED like it had four
-    fallbacks produced a chain of length ZERO with no error and no warning.
-
-    That is the whole 2026-08-23/24 outage: the primary model started returning
-    `overloaded_error`, the loop went to switch models, found an empty chain,
-    and reported "API call failed after 3 retries" while four healthy models
-    sat unused in the config file.
-
-    A config that cannot be understood must be LOUD. Anything unusable is
-    logged at WARNING naming the exact entry, never dropped in silence.
-    """
-    if isinstance(entry, str):
-        text = entry.strip()
-        if not text:
-            return None
-        # "provider/model" — split on the FIRST slash only: model ids legally
-        # contain slashes (e.g. "openrouter/deepseek/deepseek-chat").
-        if "/" not in text:
-            logger.warning(
-                "fallback entry %r has no '/' — expected 'provider/model' "
-                "(e.g. 'anthropic/claude-opus-5'). Ignoring this entry.", entry,
-            )
-            return None
-        provider, _, model = text.partition("/")
-        entry = {"provider": provider.strip(), "model": model.strip()}
-
-    if not isinstance(entry, dict):
-        logger.warning(
-            "fallback entry %r is a %s — expected 'provider/model' string or a "
-            "mapping with provider+model keys. Ignoring this entry.",
-            entry, type(entry).__name__,
-        )
-        return None
-
-    provider = str(entry.get("provider") or "").strip()
-    model = str(entry.get("model") or "").strip()
-    if not provider or not model:
-        logger.warning(
-            "fallback entry %r is missing %s. Ignoring this entry.",
-            entry,
-            "provider" if not provider else "model",
-        )
-        return None
-
-    normalized = dict(entry)
-    normalized["provider"] = provider
-    normalized["model"] = model
-    base_url = _normalized_base_url(entry.get("base_url"))
-    if base_url:
-        normalized["base_url"] = base_url
-    return normalized
-
-
 def _iter_fallback_entries(raw: Any) -> list[dict[str, Any]]:
     if isinstance(raw, dict):
         candidates = [raw]
     elif isinstance(raw, list):
         candidates = raw
-    elif isinstance(raw, str):
-        candidates = [raw]
-    elif raw is None:
-        return []
     else:
-        logger.warning(
-            "fallback_providers is a %s — expected a list. Ignoring it.",
-            type(raw).__name__,
-        )
         return []
 
-    entries: list[dict[str, Any]] = []
-    for entry in candidates:
-        normalized = coerce_fallback_entry(entry)
-        if normalized is None:
-            continue
-        entries.append(normalized)
-    return entries
-
-
-def _unused_legacy_iter(candidates):
     entries: list[dict[str, Any]] = []
     for entry in candidates:
         if not isinstance(entry, dict):

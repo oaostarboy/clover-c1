@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  canOpenBrowserWindow,
   canOpenNewWindow,
   canOpenSessionWindow,
   isPeerInstanceWindow,
+  openBrowserInNewWindow,
   openNewWindow,
   openSessionInNewWindow
 } from './windows'
@@ -19,11 +21,13 @@ vi.mock('./notifications', () => ({
 
 function installBridge(
   openSessionWindow?: Window['cloverDesktop']['openSessionWindow'],
-  openWindow?: Window['cloverDesktop']['openWindow']
+  openWindow?: Window['cloverDesktop']['openWindow'],
+  openBrowserWindow?: Window['cloverDesktop']['openBrowserWindow']
 ) {
   desktopWindow.cloverDesktop = {
     ...(openSessionWindow ? { openSessionWindow } : {}),
-    ...(openWindow ? { openWindow } : {})
+    ...(openWindow ? { openWindow } : {}),
+    ...(openBrowserWindow ? { openBrowserWindow } : {})
   } as unknown as Window['cloverDesktop']
 }
 
@@ -170,6 +174,64 @@ describe('openNewWindow', () => {
 
     await openNewWindow()
 
+    expect(notifyError).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('canOpenBrowserWindow', () => {
+  it('is false when the desktop bridge is absent', () => {
+    delete desktopWindow.cloverDesktop
+    expect(canOpenBrowserWindow()).toBe(false)
+  })
+
+  it('is false when the bridge lacks openBrowserWindow', () => {
+    installBridge(vi.fn().mockResolvedValue({ ok: true }))
+    expect(canOpenBrowserWindow()).toBe(false)
+  })
+
+  it('is true when the bridge exposes openBrowserWindow', () => {
+    installBridge(undefined, undefined, vi.fn().mockResolvedValue({ ok: true }))
+    expect(canOpenBrowserWindow()).toBe(true)
+  })
+})
+
+describe('openBrowserInNewWindow', () => {
+  it('returns false without a tab id', async () => {
+    const open = vi.fn().mockResolvedValue({ ok: true })
+    installBridge(undefined, undefined, open)
+
+    expect(await openBrowserInNewWindow('')).toBe(false)
+    expect(open).not.toHaveBeenCalled()
+    expect(notifyError).not.toHaveBeenCalled()
+  })
+
+  it('returns false when the bridge is absent', async () => {
+    delete desktopWindow.cloverDesktop
+
+    expect(await openBrowserInNewWindow('tab-1')).toBe(false)
+    expect(notifyError).not.toHaveBeenCalled()
+  })
+
+  it('invokes the bridge with the tab id', async () => {
+    const open = vi.fn().mockResolvedValue({ ok: true })
+    installBridge(undefined, undefined, open)
+
+    expect(await openBrowserInNewWindow('tab-1')).toBe(true)
+    expect(open).toHaveBeenCalledWith('tab-1')
+    expect(notifyError).not.toHaveBeenCalled()
+  })
+
+  it('returns false and notifies on an ok:false result', async () => {
+    installBridge(undefined, undefined, vi.fn().mockResolvedValue({ ok: false, error: 'invalid-tab-id' }))
+
+    expect(await openBrowserInNewWindow('tab-1')).toBe(false)
+    expect(notifyError).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns false and notifies when the bridge throws', async () => {
+    installBridge(undefined, undefined, vi.fn().mockRejectedValue(new Error('boom')))
+
+    expect(await openBrowserInNewWindow('tab-1')).toBe(false)
     expect(notifyError).toHaveBeenCalledTimes(1)
   })
 })

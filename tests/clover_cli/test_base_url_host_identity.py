@@ -87,7 +87,7 @@ def test_clover_portal_host_detection():
 
     assert base_url_host_matches("", "")
     assert base_url_host_matches("", "")
-    assert not base_url_host_matches(".evil.io/v1", "")
+    assert not base_url_host_matches("", "")
     assert not base_url_host_matches("https://proxy.example//v1", "")
 
 

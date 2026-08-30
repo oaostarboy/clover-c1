@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 metadata:
   clover:
     tags: [skills, authoring, clover-c1, conventions, skill-md]
-    related_skills: [plan, requesting-code-review]
+    related_skills: [requesting-code-review]
 ---
 
 # Authoring clover-c1 Skills (in-repo)

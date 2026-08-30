@@ -55,16 +55,8 @@ logger = logging.getLogger(__name__)
 # script — memories/MEMORY.md entries are separated by bare "§" lines.
 ENTRY_DELIMITER = "\n§\n"
 
-# Character budget for merged memory files.
-#
-# This used to be 20_000 while the RUNTIME budget was 2_200
-# (clover_cli/config_defaults.py). An import would happily fill the store to
-# 20k, and then the running agent refused every subsequent memory write for
-# being 9x over budget: memory arrived and then froze, with no error that
-# pointed at the cause.
-#
-# The importer now raises the target's configured limit to fit what it wrote
-# (see _sync_memory_char_limit), so the runtime always agrees with disk.
+# Character budget for merged memory files (matches the openclaw script's
+# default memory limit).
 MEMORY_CHAR_LIMIT = 20_000
 
 SUPPORTED_AGENTS = ("claude-code", "codex")
@@ -600,45 +592,10 @@ class AgentImporter:
             return
         self._merge_memory_entries("memories", memories_dir, destination, incoming)
 
-    def _sync_memory_char_limit(self, written_chars: int) -> None:
-        """Make the runtime budget cover what we just imported.
-
-        The importer's ceiling (20k) is far above the runtime default (2.2k).
-        Without syncing, an import lands successfully and then every future
-        memory write is rejected for exceeding the budget — the agent keeps its
-        past and loses its ability to add to it.
-        """
-        if written_chars <= 0:
-            return
-        needed = ((int(written_chars * 1.25) // 1000) + 1) * 1000
-        try:
-            from clover_cli.config import load_config, save_config
-        except Exception:
-            return
-        try:
-            config = load_config() or {}
-            mem = config.get("memory")
-            if not isinstance(mem, dict):
-                mem = {}
-            if int(mem.get("memory_char_limit") or 0) >= needed:
-                return
-            mem["memory_char_limit"] = needed
-            config["memory"] = mem
-            save_config(config)
-            self.record("memory-char-limit", None, None, "migrated",
-                        f"Raised memory_char_limit to {needed} so the imported "
-                        "memory stays writable.")
-        except Exception as exc:
-            self.record("memory-char-limit", None, None, "error",
-                        f"Imported memory needs memory_char_limit >= {needed}; "
-                        f"could not update config ({exc}). Set it by hand or "
-                        "the agent cannot write new memories.")
-
     def _merge_memory_entries(self, kind: str, source: Path,
                               destination: Path, incoming: List[str]) -> None:
         existing = parse_existing_memory_entries(destination)
         merged, stats = merge_entries(existing, incoming, MEMORY_CHAR_LIMIT)
-        self._sync_memory_char_limit(len(ENTRY_DELIMITER.join(merged)) if merged else 0)
         details = {
             "existing_entries": stats["existing"],
             "added_entries": stats["added"],
@@ -738,45 +695,17 @@ class AgentImporter:
                         "No permissions.deny rules found")
             return
 
-        # DENY rules that do not map are RECORDED, never silently dropped.
-        #
-        # The allow side already tracked unmapped rules; the deny side threw
-        # them away. That makes an imported security posture quietly WEAKER
-        # than the source, in the one direction where quiet is unacceptable.
-        # Alfred is a security agent: a deny rule that vanishes is a permission
-        # that was granted by accident.
         patterns: List[str] = []
-        unmapped_deny: List[str] = []
         for rule in deny:
             if not isinstance(rule, str):
-                unmapped_deny.append(repr(rule))
                 continue
             pattern = claude_rule_to_command_pattern(rule)
             if pattern:
                 patterns.append(pattern)
-            else:
-                unmapped_deny.append(rule)
         patterns = sorted(dict.fromkeys(patterns))
-        unmapped_deny = sorted(dict.fromkeys(unmapped_deny))
-
-        if unmapped_deny:
-            self.record(
-                "command-denylist-unmapped", None, destination, "error",
-                f"{len(unmapped_deny)} deny rule(s) could NOT be translated and "
-                "are NOT enforced in the migrated agent. Re-add them by hand "
-                "before trusting this agent's permissions: "
-                + ", ".join(unmapped_deny[:10])
-                + (" ..." if len(unmapped_deny) > 10 else ""),
-                unmapped_rules=unmapped_deny,
-            )
-
         if not patterns:
-            self.record("command-denylist", None, destination,
-                        "error" if unmapped_deny else "skipped",
-                        f"No deny rules could be imported"
-                        + (f" ({len(unmapped_deny)} were dropped — see "
-                           "command-denylist-unmapped)" if unmapped_deny else
-                           "; source had no Bash(...) deny rules"))
+            self.record("command-denylist", None, destination, "skipped",
+                        "No Bash(...) deny rules to import")
             return
 
         config = self.load_target_config(

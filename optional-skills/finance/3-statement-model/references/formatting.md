@@ -68,7 +68,7 @@ The Balance Sheet check row (below Total Liabilities and Equity) uses conditiona
 | = 0 (balanced) | Black (standard) |
 | ≠ 0 (error) | Red |
 
-**Implementation:** Apply custom number format `[Red][0]0.00;[Red][0](0.00);0.00` or use Excel conditional formatting with the rule "Cell Value ≠ 0" → Red font.
+**Implementation:** Apply custom number format `[Red][<>0]0.00;[Red][<>0](0.00);0.00` or use Excel conditional formatting with the rule "Cell Value ≠ 0" → Red font.
 
 ## Margin Row Formatting
 

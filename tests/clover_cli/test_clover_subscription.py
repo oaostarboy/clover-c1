@@ -417,7 +417,7 @@ def _stt_features_stub(*, account_info):
     return ns.CloverSubscriptionFeatures(
         subscribed=True,
         clover_auth_present=True,
-        provider_is_clover_portal=True,
+        provider_is_clover=True,
         account_info=account_info,
         features={
             key: ns.CloverFeatureState(

@@ -382,6 +382,15 @@ DEFAULT_CONFIG = {
         # preserves the historical error + traceback behavior.
         "degraded_mode": "warn",
         "cwd": ".",  # Use current directory
+        # Root directory for Clover' terminal session temp files (background
+        # logs/pid/exit files, code-execution sandboxes, etc.). When empty,
+        # Clover uses TMPDIR/TMP/TEMP if set, otherwise a managed dir on real
+        # storage at CLOVER_HOME/cache/terminal (auto-pruned after 72h) — NOT
+        # tmpfs /tmp, which is RAM-capped and small on many distros (e.g.
+        # Arch-based setups) and fills up under load. Set this to redirect
+        # session temp anywhere else; must be an absolute POSIX path that
+        # exists. User-set paths are never auto-pruned.
+        "temp_dir": "",
         # Terminal font family for the desktop app's embedded xterm.js terminal.
         # When set (e.g. "'CaskaydiaCoveNerdFont', 'JetBrains Mono', monospace"),
         # the desktop terminal uses this as the CSS font-family value, with the
@@ -495,6 +504,9 @@ DEFAULT_CONFIG = {
         # When on, SETUID/SETGID caps are omitted from the container since
         # no privilege drop is needed.
         "docker_run_as_host_user": False,
+        # Explicit opt-in for trusted profiles to reuse the same Docker
+        # container identity. Empty preserves the active-profile boundary.
+        "docker_shared_container_key": "",
         # Persistent shell — keep a long-lived bash shell across execute() calls
         # so cwd/env vars/shell variables survive between commands.
         # Enabled by default for non-local backends (SSH); local is always opt-in
@@ -527,6 +539,22 @@ DEFAULT_CONFIG = {
         #           is also excluded from the keyless ring)
         #   unset — auto: keyed when the API key is present, else the ring
         "provider_tier": {},
+        # TTL result caching for web_search + web_extract. Repeat searches
+        # (same query, same provider) within the TTL are served from an
+        # in-process memo; repeat extracts of the same URL are served from
+        # the cache/web full-text store. Concurrent identical searches
+        # (parallel subagents) coalesce into one vendor request. Only
+        # successful responses are cached.
+        "cache_enabled": True,
+        "cache_ttl_minutes": 20,
+        # Hosts whose pages must always be fetched live, never from the
+        # extract cache — sites you're actively developing but testing over
+        # the public internet (staging deploys, tunnel URLs, preview
+        # builds). Entries match exactly, as "*.wildcard", or as a domain
+        # suffix ("mysite.dev" also covers "preview.mysite.dev").
+        # localhost/private-IP URLs are always exempt automatically.
+        #   cache_exempt_hosts: ["mysite.vercel.app", "*.ngrok-free.app"]
+        "cache_exempt_hosts": [],
     },
 
     "browser": {
@@ -543,6 +571,7 @@ DEFAULT_CONFIG = {
         "backend": "",
         "inactivity_timeout": 120,
         "command_timeout": 30,  # Timeout for browser commands in seconds (screenshot, navigate, etc.)
+        "snapshot_threshold": 15000,  # Max chars before snapshot truncate-and-store (min 1000)
         "record_sessions": False,  # Auto-record browser sessions as WebM videos
         "headed": False,  # Local mode: launch Chromium with a visible window (also skips per-turn cleanup so the window persists between turns; idle reaper still applies)
         "allow_private_urls": False,  # Allow navigating to private/internal IPs (localhost, 192.168.x.x, etc.)
@@ -555,6 +584,41 @@ DEFAULT_CONFIG = {
         "engine": "auto",
         "auto_local_for_private_urls": True,  # When a cloud provider is set, auto-spawn local Chromium for LAN/localhost URLs instead of sending them to the cloud
         "cdp_url": "",  # Optional persistent CDP endpoint for attaching to an existing Chromium/Chrome
+        # Consent to browse with the user's REAL logins for local browsing.
+        # When true, local browsing (the Browser Use CLI, or the built-in
+        # browser tools) runs on a Clover-managed SNAPSHOT of the user's
+        # ACTIVE default-Chromium profile (Local State -> profile.last_used) —
+        # its cookies, logins and preferences copied in and re-synced when a
+        # fresh session launches — driven by Clover' packaged Chromium. Only
+        # the active profile is copied. The snapshot is a non-default dir, so it
+        # sidesteps Chrome 136+'s block on debugging the default profile and
+        # never contends with the user's running browser. Turning this back off
+        # deletes the snapshot store (~/.clover/browser-profile/) so copied
+        # credentials don't outlive consent. Only Chromium-family default
+        # browsers are supported (Chrome, Edge, Brave, Brave Origin, Chromium); a non-Chromium
+        # default (e.g. Firefox) fails closed with a clear message. Default
+        # false. Also gates the browser_exec ``local`` argument, which forces a
+        # real-profile local session even under a cloud browser backend. Toggle
+        # in the desktop Settings → Browser section.
+        "use_real_profile": False,
+        # When real-profile browsing needs the browser closed (Windows: a
+        # running Chrome/Edge/Brave locks its cookie DB deny-all, so it must be
+        # fully quit before its profile can be copied), arm the "offer to close
+        # it" flow. This does NOT auto-kill: when the profile is locked the
+        # snapshot always blocks and the agent asks the user first; only on
+        # approval does it run `clover browser close-profile` (terminates the
+        # browser process tree bound to that profile, losing unsaved tabs) and
+        # retry. Still locked afterward → stays blocked, no loop, no auto-kill.
+        # OFF by default. No effect on macOS/Linux (copy-while-running works).
+        "real_profile_autoclose": False,
+        # Pin WHICH source browser profile directory gets snapshotted for
+        # real-profile browsing (e.g. "Profile 2"). Unset/empty: follows the
+        # browser's last-used profile (Local State → profile.last_used). On a
+        # machine with several profiles (work + personal), last-used roulette
+        # can silently hand the agent the wrong identity; a pin locks it. A pin
+        # naming a directory that doesn't exist FAILS CLOSED with a fixable
+        # message rather than falling back to last-used.
+        "real_profile_pin": "",
         "allow_unsafe_evaluate": False,  # Legacy override: when true, browser_console(expression=...) bypasses the restrict_evaluate denylist entirely
         "restrict_evaluate": False,  # Opt-in denylist blocking sensitive JS primitives (cookies/storage/clipboard/network/form values) in browser_console(expression=...)
         # CDP supervisor — dialog + frame detection via a persistent WebSocket.
@@ -742,6 +806,9 @@ DEFAULT_CONFIG = {
 
     "compression": {
         "enabled": True,
+        "checkpoint_required": False, # Fail closed before lossy compaction unless an
+                                      # active memory provider confirms checkpoint API
+                                      # compatibility and completes the checkpoint.
         "progress_notices": False,    # opt-in (#52995): when True, routine compression
                                       # progress statuses (compacting/preflight/pre-API/
                                       # idle/retry) are delivered to chat gateway
@@ -761,9 +828,8 @@ DEFAULT_CONFIG = {
                                       # threshold and this token count. Clamped to
                                       # the model's context length at apply-time.
         "target_ratio": 0.20,         # fraction of threshold to preserve as recent tail
-        "tail_mode": "legacy",        # tail retention policy (#87326):
-                                      #   "legacy" — 0.20×window verbatim tail (default)
-                                      #   "lean"   — clamped 2.5%-of-window tail
+        "tail_mode": "lean",          # tail retention policy (#87326):
+                                      #   "lean"   — clamped 2.5%-of-window tail (default)
                                       #              (10K floor / 25K cap) plus chunked
                                       #              digests, a mechanical anchor index,
                                       #              verbatim user messages, and
@@ -772,6 +838,9 @@ DEFAULT_CONFIG = {
                                       #              tokens after compaction; costs a few
                                       #              extra summarizer calls at the
                                       #              compaction boundary.
+                                      #   "legacy" — pre-#87326 0.20×threshold verbatim
+                                      #              tail (100-240K tokens on big-window
+                                      #              or raised-threshold setups).
         "protect_last_n": 20,         # minimum recent messages to keep uncompressed
         "min_tail_user_messages": 1,  # REAL (actionable) user messages guaranteed to
                                       # survive in the uncompressed tail. 1 = existing
@@ -840,6 +909,13 @@ DEFAULT_CONFIG = {
                                       # while tokens are still moving — bounds a degenerate
                                       # trickle stream. Clamped to >= hygiene_timeout_seconds.
         "hygiene_failure_cooldown_seconds": 300,  # skip repeated failed hygiene attempts for this session
+        "hygiene_max_turn_hold_seconds": 10,  # max seconds an ARRIVING user turn is held while a
+                                      # still-streaming hygiene summary finishes. Distinct from
+                                      # hygiene_timeout_seconds (compressor inactivity budget):
+                                      # this bounds user-visible latency once real input is
+                                      # waiting. Kept well under chat-transport idle timeouts
+                                      # (Telegram ~30s). On expiry the turn proceeds
+                                      # uncompressed — an availability boundary, not a failure.
         "context_timeout_seconds": 120,  # inactivity budget for in-agent compress_context
                                       # (conversation loop, /compress, preflight, etc.).
                                       # Same progress-aware semantics as hygiene_timeout_seconds:
@@ -908,10 +984,11 @@ DEFAULT_CONFIG = {
                                       # the ChatGPT Codex backend; every other
                                       # route/model is unaffected. Clover' local
                                       # compression stays armed as the fallback.
-        "codex_responses_compact_threshold": 200000,  # Server-side compaction trigger
-                                      # (input tokens). Clamped below the local
-                                      # compression threshold at request time so
-                                      # the server compacts before Clover does.
+        "codex_responses_compact_threshold": None,  # Optional absolute server compaction
+                                      # trigger in input tokens. None follows the
+                                      # resolved local compression trigger with a
+                                      # safety margin. Explicit values only clamp
+                                      # downward so the server compacts first.
         "in_place": True,             # When True, compaction rewrites the message
                                       # list and rebuilds the system prompt WITHOUT
                                       # rotating the session id — the conversation
@@ -1070,15 +1147,11 @@ DEFAULT_CONFIG = {
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
             "download_timeout": 30,  # seconds — image HTTP download timeout; increase for slow connections
         },
-        "web_extract": {
-            "provider": "auto",
-            "model": "",
-            "base_url": "",
-            "api_key": "",
-            "timeout": 360,        # seconds (6min) — per-attempt LLM summarization timeout; increase for slow local models
-            "extra_body": {},
-            "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
-        },
+        # Note: web_extract no longer uses an auxiliary LLM — pages are
+        # truncate-and-stored with a read_file pointer (no summarization),
+        # and browser snapshots follow the same pattern. The old
+        # ``auxiliary.web_extract.*`` block was removed here. Existing
+        # values in user config.yaml files are harmless leftovers and ignored.
         "compression": {
             "provider": "auto",
             "model": "",
@@ -1087,6 +1160,10 @@ DEFAULT_CONFIG = {
             "timeout": 120,        # seconds — compression summarises large contexts; increase for local models
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
+            # Guarded fast lane: only honored with a concrete provider/model
+            # and an explicit ``reasoning_effort: none`` certification.
+            # Zero preserves the historic uncapped compression request.
+            "max_output_tokens": 0,
         },
         # Note: session_search no longer uses an auxiliary LLM (PR #27590 —
         # single-shape tool returns DB content directly). The old
@@ -1109,6 +1186,20 @@ DEFAULT_CONFIG = {
             "timeout": 30,
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
+        },
+        # /review — the independent reviewer subagent's model. Unlike other
+        # aux tasks this is not a single LLM call: the reviewer is a full
+        # subagent (all normal subagent tools) spawned on the async
+        # delegation rail. provider/model/base_url/api_key/api_mode are
+        # resolved through the same credential system as delegation.provider
+        # pins. Leave provider "auto" + model empty to run the reviewer on
+        # the main agent's model.
+        "review": {
+            "provider": "auto",    # auto (= inherit main model) | openrouter | clover | anthropic | ...
+            "model": "",           # e.g. "anthropic/claude-opus-4.6" — a strong reviewer model
+            "base_url": "",        # direct OpenAI-compatible endpoint (takes precedence over provider)
+            "api_key": "",         # API key for base_url / provider override
+            "api_mode": "",        # force transport: chat_completions | anthropic_messages | codex_responses
         },
         "mcp": {
             "provider": "auto",
@@ -1252,6 +1343,16 @@ DEFAULT_CONFIG = {
             "timeout": 120,
             "extra_body": {},
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
+            # Aggregate INPUT-token budget for one review fork (issue #93057).
+            # The fork's FIRST request replays the full snapshot as a warm
+            # prompt-cache read (compaction is deferred until the first
+            # provider response arrives); after that it compacts an oversized
+            # snapshot in memory before further provider calls. This caps the
+            # SUM of input tokens replayed across the whole review tool loop
+            # (iterations are separately capped at 16). The loop stops before
+            # the provider call that would cross the budget. 0 or a negative
+            # value = unlimited.
+            "max_input_tokens": 600000,
         },
         "moa_reference": {
             "provider": "auto",
@@ -1497,6 +1598,10 @@ DEFAULT_CONFIG = {
             "telegram": {"streaming": True},
             "discord": {"streaming": False},
             "slack": {"streaming": False},
+            # WeCom uses native streaming (msgtype: "stream") via
+            # aibot_respond_msg — opt in by default so the WeCom client
+            # renders the typing animation and cumulative content updates.
+            "wecom": {"streaming": True},
         },
         # Gateway runtime-metadata footer appended to the FINAL message of a turn
         # (disabled by default to keep replies minimal). When enabled, renders
@@ -1505,6 +1610,20 @@ DEFAULT_CONFIG = {
         "runtime_footer": {
             "enabled": False,
             "fields": ["model", "context_pct", "cwd"],  # Order shown; drop any to hide
+        },
+        # CLI/TUI interactive status bar field customization (mirrors the
+        # runtime_footer.fields pattern above). When the list is non-empty,
+        # only the listed fields appear; the built-in order is preserved
+        # (the config controls visibility, not ordering). Empty = show the
+        # default set. Available: model, context_detail, context_pct,
+        # cache_hit, latency, tps, compressions, bg_tasks, bg_processes,
+        # bg_subagents, goal, duration, prompt_elapsed, idle_since, focus,
+        # yolo, stash, battery, title, total_tokens.
+        # total_tokens (session Σ) is opt-in only — it never shows unless
+        # listed here. Narrow terminals still drop wide-mode-only fields
+        # (context_detail, prompt_elapsed, idle_since) regardless of config.
+        "status_bar": {
+            "fields": [],  # empty = built-in defaults (all fields)
         },
         "copy_shortcut": "auto",  # "auto" (platform default) | "ctrl_c" | "ctrl_shift_c" | "disabled"
         # Petdex animated mascot (https://github.com/crafter-station/petdex).
@@ -1557,6 +1676,35 @@ DEFAULT_CONFIG = {
         # Set this to True to re-enable the surfaces with the understanding
         # that the numbers are a local lower-bound estimate, not billing.
         "show_token_analytics": False,
+        # IP addresses or bounded CIDR networks of reverse proxies allowed to
+        # supply X-Forwarded-Proto / X-Forwarded-For. Loopback remains trusted
+        # automatically. Wildcards and /0 networks are rejected so arbitrary
+        # clients cannot spoof their scheme or source address.
+        "trusted_proxies": [],
+        # WebSocket keepalive for the dashboard/desktop web server (#79635).
+        # Applied to NON-loopback binds only: loopback always disables the
+        # protocol ping (see clover_cli/web_server.py — an event-loop stall
+        # must never kill a healthy local connection). Values are seconds.
+        "ws_ping_interval": 20.0,
+        "ws_ping_timeout": 20.0,
+        # Grace window (seconds) before a WS-orphaned gateway session is
+        # interrupted/reaped after its client disconnects (#79635). The
+        # CLOVER_TUI_WS_ORPHAN_REAP_GRACE_S env var remains an internal
+        # override for backward compatibility. 0 disables the reap
+        # (park forever).
+        "ws_orphan_reap_grace_s": 20.0,
+        # Startup sweep of session rows orphaned by a dead gateway process
+        # (#65194).  The ws-orphan grace timer above is in-process, so a
+        # gateway restart (update, crash, systemd) leaves disconnected
+        # sessions ``ended_at IS NULL`` forever — phantom "active" rows in
+        # /resume and dashboards.  On every gateway boot (stdio TUI *and*
+        # the desktop/dashboard WS sidecar), tui/desktop/subagent rows whose
+        # start time AND newest message are both older than the session TTL
+        # (CLOVER_TUI_SESSION_TTL_S, default 6h) are closed with
+        # end_reason='startup_orphan_reap'.  Messaging-gateway sessions
+        # (telegram, discord, ...) are never touched; live in-memory
+        # sessions are excluded; swept sessions stay resumable.
+        "startup_orphan_sweep": True,
         # OAuth gate configuration (engaged when ``--host`` is set and
         # ``--insecure`` is not). The bundled Clover Portal plugin reads
         # both keys at startup; they are the canonical surface for these
@@ -1621,8 +1769,11 @@ DEFAULT_CONFIG = {
         # Public URL override (env: ``CLOVER_DASHBOARD_PUBLIC_URL``).
         # When set, this is the complete authority — scheme + host +
         # optional path prefix (e.g. ``https://example.com/clover``) —
-        # the OAuth ``redirect_uri`` is built from. Set this for deploys
-        # behind reverse proxies that don't reliably forward
+        # the OAuth ``redirect_uri`` is built from. Its exact hostname is also
+        # trusted by the HTTP Host / WebSocket Origin guards and engages the
+        # auth gate when it is non-loopback, even if the backend binds to
+        # loopback. Set this for deploys behind reverse proxies that don't
+        # reliably forward
         # ``X-Forwarded-Host`` / ``X-Forwarded-Proto`` / ``X-Forwarded-Prefix``
         # (manual nginx setups, on-prem ingresses, custom-domain Fly
         # deploys without proper proxy headers). When set,
@@ -1927,6 +2078,15 @@ DEFAULT_CONFIG = {
                            # "codex_responses", or "anthropic_messages". Empty = auto-detect
                            # from URL (e.g. /anthropic suffix → anthropic_messages). Set this
                            # explicitly for non-standard endpoints the heuristic can't detect.
+        # Per-child request settings sent on every delegation API call, on all
+        # three resolution branches (direct base_url, named provider, and
+        # parent-inherit). Top-level keys are API kwargs (e.g. service_tier);
+        # an "extra_body" sub-dict is merged into the request's extra_body —
+        # e.g. {"extra_body": {"provider": {"sort": "throughput"}}} routes
+        # OpenRouter delegation children to the fastest provider. Precedence:
+        # these explicit values merge OVER runtime/parent-derived overrides
+        # (explicit keys win; extra_body deep-merged one level).
+        "request_overrides": {},
         # When delegate_task narrows child toolsets explicitly, preserve any
         # MCP toolsets the parent already has enabled. On by default so
         # narrowing (e.g. toolsets=["web","browser"]) expresses "I want these
@@ -1977,6 +2137,16 @@ DEFAULT_CONFIG = {
         # Flip to true only if you trust delegated work to run dangerous cmds
         # without human review (cron pipelines, batch automation, etc.).
         "subagent_auto_approve": False,
+        # Background processes started by subagents (task_id "sa-...") route
+        # their notify_on_complete / watch_pattern notifications to the PARENT
+        # conversation (children consume their own waits; anything outliving
+        # the child needs a durable consumer). By default those parent-facing
+        # notifications are SUPPRESSED — the child's consolidated delegation
+        # result is the deliverable, and "npm ci finished" walls mid-chat are
+        # noise. Async-delegation results themselves are NEVER suppressed.
+        # Set to true to restore delivery of child process notifications
+        # (with subagent attribution lines).
+        "surface_child_process_notifications": False,
     },
 
     # Ephemeral prefill messages file — JSON list of {role, content} dicts
@@ -2426,6 +2596,16 @@ DEFAULT_CONFIG = {
     #         table_formatting skill instead of emitting a Markdown table.
     "platform_hints": {},
 
+    # Plugin system settings. ``enabled`` / ``disabled`` are written by
+    # ``clover plugins enable|disable`` and intentionally omitted here so an
+    # empty default does not clobber a user's allow-list on merge.
+    "plugins": {
+        # Wall-clock cap (seconds) for a single in-process Python plugin hook
+        # callback. Shell hooks keep their own per-entry ``timeout``. Set to 0
+        # to disable the cap (sync call on the agent thread). Capped at 600.
+        "hook_callback_timeout": 30,
+    },
+
     # Shell-script hooks — declarative bridge that invokes shell scripts
     # on plugin-hook events (pre_tool_call, post_tool_call, pre_llm_call,
     # subagent_stop, etc.).  Each entry maps an event name to a list of
@@ -2717,6 +2897,11 @@ DEFAULT_CONFIG = {
         # confusing zombie message. 0 disables drain-time expiry (the 6h
         # stale-artifact sweep still applies).
         "envelope_ttl_seconds": 900,
+        # How long a second delivery into an already-busy target profile
+        # queues behind the current turn before failing with a structured
+        # 'target_busy' error. Deliveries are serialized per profile with a
+        # cross-process file lock so two turns never race one Bot Chat.
+        "turn_wait_seconds": 120,
     },
 
     # execute_code settings — controls the tool used for programmatic tool calls.
@@ -2731,6 +2916,38 @@ DEFAULT_CONFIG = {
         # Env scrubbing (strips *_API_KEY, *_TOKEN, *_SECRET, ...) and the
         # tool whitelist apply identically in both modes.
         "mode": "project",
+        # Kernel lifetime:
+        #   per-call (default) — a fresh child process per execute_code call;
+        #     no state carries over. Today's behavior.
+        #   session            — one persistent kernel per (session owner,
+        #     mode, interpreter, cwd, tool-set): variables, imports, and
+        #     loaded data survive across calls AND across the user turns of
+        #     one conversation (the owner is the conversation's approval
+        #     session key; delegated subagent sessions get their own).
+        #     Kernels are disposed with their session (session clear/new),
+        #     reaped after kernel_idle_timeout seconds idle, and capped at
+        #     max_session_kernels live children process-wide (LRU evicted).
+        #     A timed-out or interrupted cell kills the kernel (state lost,
+        #     next call starts fresh), and the child environment is frozen
+        #     at kernel spawn — pass reset=true after changing env
+        #     passthrough. Tool RPC authority is rebound to each cell: a
+        #     later cell's tool calls run under that cell's approval and
+        #     session context, never the first cell's. Security scrubbing,
+        #     the tool whitelist, and output redaction are identical in
+        #     both modes. NOTE for per-script static policy (see
+        #     check_execute_code_guard): a persistent namespace lets cell
+        #     N+1 reach objects cell N created, which a single-cell static
+        #     scan cannot see — the runtime RPC boundary (allow-list, call
+        #     budget, per-cell authority) is the operative cross-cell
+        #     enforcement in this mode.
+        # kernel_mode is retired: session kernels are always on for local
+        # execution. Remote terminal backends still run per-call — their
+        # file-based RPC path has no kernel host yet (tracked follow-up,
+        # not a design limit). A leftover kernel_mode key in user config
+        # is ignored.
+        # Lifecycle bounds for session kernels.
+        "kernel_idle_timeout": 1800,
+        "max_session_kernels": 4,
     },
 
     # Tool Search (progressive disclosure for large tool surfaces).
@@ -2757,6 +2974,10 @@ DEFAULT_CONFIG = {
             #     model knows which domains are reachable; individual tools
             #     discoverable through tool_search only.
             # "auto"/"on" — activate when at least one deferrable tool exists.
+            #   Today "auto" is an alias of "on"; it stays the default so a
+            #   future budget-gated mode (inline schemas when they fit, defer
+            #   only when they don't) can land on "auto" without changing
+            #   behavior for anyone who pinned "on" or "off" explicitly.
             # "off" — disable entirely. Tools-array assembly is a pass-through.
             "enabled": "auto",
             # Listing budget as a percentage of the active model's context
@@ -2764,10 +2985,11 @@ DEFAULT_CONFIG = {
             # listing_max_tokens). Range 0..100.
             "threshold_pct": 5,
             # When the model calls tool_search without a ``limit`` argument,
-            # how many hits to return. Range 1..max_search_limit.
+            # how many hits to return PER QUERY. Range 1..max_search_limit.
             "search_default_limit": 5,
-            # Hard upper bound the model can request via ``limit``. Range 1..50.
-            "max_search_limit": 20,
+            # Hard upper bound the model can request via ``limit`` (per
+            # query). Range 1..50.
+            "max_search_limit": 25,
             # Skills-style catalog listing embedded in the tool_search bridge
             # description: every deferred tool's name + first sentence of its
             # description (≤60 chars), grouped by MCP server / toolset. Keeps
@@ -3538,10 +3760,7 @@ DEFAULT_CONFIG = {
         #   False = always enable the overlay
         "no_overlay": None,
         # cua-driver permission mode for each Clover computer-use runtime.
-        #   standard (default) — cua-driver's own approval boundary. Protected
-        #     operations (e.g. attaching to an existing signed-in browser
-        #     profile) fail closed unless grant_existing_profile is enabled
-        #     below.
+        #   standard (default) — cua-driver's own approval boundary.
         #   bounded — repeatable automation under a user-reviewed session
         #     capability manifest (set capability_manifest below). No runtime
         #     prompts; anything outside the manifest fails closed inside
@@ -3556,14 +3775,12 @@ DEFAULT_CONFIG = {
         # flags when it launches the runtime. See
         # https://cua.ai/docs/reference/cua-driver/permission-modes
         "capability_manifest": "",
-        # Pre-authorize existing-profile browser attachment in standard mode
-        # (cua-driver's trusted-launcher `--grant existing-profile`). When
-        # true, the agent can attach to your already-running, signed-in
-        # Chrome/Edge window — exposing that profile's live pages, cookies,
-        # and storage to the browser protocol — without a per-use prompt.
-        # Leave false to keep existing-profile attachment failing closed;
-        # isolated driver-owned profiles work either way.
-        "grant_existing_profile": False,
+        # macOS only: allow launching an UNSIGNED (ad-hoc / TeamIdentifier
+        # not set) CuaDriver.app for the private-session daemon. The default
+        # (false) fails closed unless the bundle is signed with the official
+        # cua-driver identity (com.trycua.driver / an official signing team).
+        # Enable only when developing the driver locally from source.
+        "allow_unsigned_driver": False,
     },
 
     # =========================================================================
@@ -3639,6 +3856,15 @@ DEFAULT_CONFIG = {
         # explicit ozone backend, or GPU workaround flags. A list of strings;
         # a single string is also accepted and shell-split.
         "electron_flags": [],
+        # Linux Ozone backend hint, bridged to ELECTRON_OZONE_PLATFORM_HINT
+        # at launch (an explicit env var still wins). "auto" is Chromium's
+        # default — Wayland on a Wayland session, X11 otherwise.
+        # Set "x11" to run under XWayland when a compositor ignores
+        # always-on-top for native Wayland clients (COSMIC, issue #84011).
+        # That also lands the HUD on the solid-window input path, because
+        # setIgnoreMouseEvents is a one-way door on X11.
+        # "wayland" forces a native Wayland surface.
+        "ozone_platform_hint": "auto",
         # GPU hardware acceleration policy for the desktop app:
         #   "auto"  - let the app detect remote displays (SSH/VNC/RDP) and
         #             disable GPU only then (default; current behavior).
@@ -3700,7 +3926,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 38,
+    "_config_version": 39,
 }
 
 # Optional environment variables that enhance functionality

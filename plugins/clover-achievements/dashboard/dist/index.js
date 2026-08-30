@@ -1,7 +1,7 @@
 (function () {
   "use strict";
   // clover-achievements dashboard plugin
-  // Originally authored by @PCinkusz — https://github.com/PCinkusz/clover-achievements (MIT).
+  // Originally authored by @PCinkusz — @PCinkusz (MIT).
   // Bundled into clover-c1. Upstream repo remains the staging ground for new
   // badges and UI iteration; the in-progress scan banner below is a small addition
   // layered on top of the original dist bundle.
@@ -339,7 +339,7 @@
         tier_part: tierPart,
         name: achievement.name,
       });
-      return tmpl + "\n\n@Clover Cognition · ";
+      return tmpl + "\n\n@cloverc1 · ";
     }
 
     function shareOnX() {

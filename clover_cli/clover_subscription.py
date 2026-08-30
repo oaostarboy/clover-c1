@@ -92,7 +92,7 @@ class CloverFeatureState:
 class CloverSubscriptionFeatures:
     subscribed: bool
     clover_auth_present: bool
-    provider_is_clover_portal: bool
+    provider_is_clover: bool
     features: Dict[str, CloverFeatureState]
     account_info: Optional[CloverPortalAccountInfo] = None
 
@@ -405,7 +405,7 @@ def get_clover_subscription_features(
         config = load_config() or {}
     config = dict(config)
     model_cfg = _model_config_dict(config)
-    provider_is_clover_portal = str(model_cfg.get("provider") or "").strip().lower() == "clover"
+    provider_is_clover = str(model_cfg.get("provider") or "").strip().lower() == "clover"
 
     try:
         if force_fresh:
@@ -427,7 +427,7 @@ def get_clover_subscription_features(
 
     def _entitled_for(category: str) -> bool:
         return bool(account_info and account_info.tool_gateway_entitled_for(category))
-    subscribed = provider_is_clover_portal or clover_auth_present
+    subscribed = provider_is_clover or clover_auth_present
 
     web_tool_enabled = _toolset_enabled(config, "web")
     image_tool_enabled = _toolset_enabled(config, "image_gen")
@@ -850,7 +850,7 @@ def get_clover_subscription_features(
     return CloverSubscriptionFeatures(
         subscribed=subscribed,
         clover_auth_present=clover_auth_present,
-        provider_is_clover_portal=provider_is_clover_portal,
+        provider_is_clover=provider_is_clover,
         features=features,
         account_info=account_info,
     )
@@ -872,7 +872,7 @@ def apply_clover_managed_defaults(
         and features.account_info.tool_gateway_entitled
     ):
         return set()
-    if not features.provider_is_clover_portal:
+    if not features.provider_is_clover:
         return set()
 
     selected_toolsets = set(enabled_toolsets or ())

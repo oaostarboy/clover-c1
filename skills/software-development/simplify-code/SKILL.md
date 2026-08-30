@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 metadata:
   clover:
     tags: [code-review, cleanup, refactor, delegation, subagent, parallel, simplify]
-    related_skills: [requesting-code-review, test-driven-development, plan]
+    related_skills: [requesting-code-review, test-driven-development]
 ---
 
 # Simplify Code — Parallel Review & Cleanup

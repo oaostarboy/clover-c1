@@ -632,6 +632,8 @@ def test_named_custom_provider_uses_saved_credentials(monkeypatch):
                     "name": "Local",
                     "base_url": "http://1.2.3.4:1234/v1",
                     "api_key": "local-provider-key",
+                    "model": "gpt-5.6",
+                    "capabilities": {"openai_native_compaction": True},
                 }
             ]
         },
@@ -653,7 +655,41 @@ def test_named_custom_provider_uses_saved_credentials(monkeypatch):
     assert resolved["base_url"] == "http://1.2.3.4:1234/v1"
     assert resolved["api_key"] == "local-provider-key"
     assert resolved["requested_provider"] == "local"
+    assert resolved["capabilities"] == {"openai_native_compaction": True}
     assert resolved["source"] == "custom_provider:Local"
+
+
+def test_named_custom_provider_filters_capabilities_at_lookup_boundary(monkeypatch):
+    monkeypatch.setattr(
+        rp,
+        "load_config",
+        lambda: {
+            "providers": {
+                "local": {
+                    "name": "Local",
+                    "base_url": "http://1.2.3.4:1234/v1",
+                    "capabilities": {
+                        "openai_native_compaction": True,
+                        "invalid-value": "yes",
+                        42: True,
+                    },
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(
+        rp,
+        "resolve_provider",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError(
+                "resolve_provider should not be called for named custom providers"
+            )
+        ),
+    )
+
+    provider = rp._get_named_custom_provider("local")
+
+    assert provider["capabilities"] == {"openai_native_compaction": True}
 
 
 def test_bare_custom_resolves_providers_dict_entry_named_custom(monkeypatch):
@@ -1677,3 +1713,73 @@ def test_resolve_runtime_provider_opencode_free_missing_env_still_resolves(monke
     assert resolved["provider"] == "opencode-free"
     assert resolved["api_key"] == "opencode-zen-free-keyless"
     assert resolved["base_url"] == "https://opencode.ai/zen/v1"
+
+
+def test_custom_provider_explicit_target_model_wins(monkeypatch):
+    """An explicit target_model must not be silently replaced by the custom
+    provider's configured default model (regression: auxiliary slots such as
+    background-review resolve a concrete model and got default_model instead)."""
+    monkeypatch.setattr(
+        rp,
+        "_get_named_custom_provider",
+        lambda p: {
+            "name": "myproxy",
+            "base_url": "http://127.0.0.1:10100/v1",
+            "api_key": "no-key-required",
+            "model": "default-model",
+        },
+    )
+
+    resolved = rp.resolve_runtime_provider(requested="myproxy", target_model="myproxy/gemini-flash")
+
+    assert resolved is not None
+    assert resolved["provider"] == "custom"
+    assert resolved["model"] == "myproxy/gemini-flash"
+    assert resolved["base_url"] == "http://127.0.0.1:10100/v1"
+
+
+def test_custom_provider_without_target_model_keeps_default(monkeypatch):
+    """No target_model -> the provider's configured model is preserved."""
+    monkeypatch.setattr(
+        rp,
+        "_get_named_custom_provider",
+        lambda p: {
+            "name": "myproxy",
+            "base_url": "http://127.0.0.1:10100/v1",
+            "api_key": "no-key-required",
+            "model": "default-model",
+        },
+    )
+
+    resolved = rp.resolve_runtime_provider(requested="myproxy")
+
+    assert resolved is not None
+    assert resolved["model"] == "default-model"
+
+
+def test_custom_provider_pool_target_model_wins(monkeypatch):
+    """Pooled-credentials path also honors target_model over the default."""
+    monkeypatch.setattr(
+        rp,
+        "_try_resolve_from_custom_pool",
+        lambda *a, **k: {
+            "provider": "custom",
+            "api_key": "pooled-key",
+            "base_url": "http://127.0.0.1:10100/v1",
+        },
+    )
+    monkeypatch.setattr(
+        rp,
+        "_get_named_custom_provider",
+        lambda p: {
+            "name": "myproxy",
+            "base_url": "http://127.0.0.1:10100/v1",
+            "api_key": "no-key-required",
+            "model": "default-model",
+        },
+    )
+
+    resolved = rp.resolve_runtime_provider(requested="myproxy", target_model="myproxy/gemini-flash")
+
+    assert resolved is not None
+    assert resolved["model"] == "myproxy/gemini-flash"
