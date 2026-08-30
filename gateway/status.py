@@ -1200,15 +1200,58 @@ def write_runtime_status(
         pass
 
 
-def read_runtime_status(path: Optional[Path] = None) -> Optional[dict[str, Any]]:
+def read_runtime_status(
+    path: Optional[Path] = None,
+    *,
+    reconcile: bool = True,
+) -> Optional[dict[str, Any]]:
     """Read the persisted gateway runtime health/status information.
 
     ``path`` is optional so callers that need to inspect a *different*
     profile's state file (e.g. the dashboard enumerating every profile)
     can do so without mutating ``CLOVER_HOME`` in-process.  Defaults to
     the active profile's ``gateway_state.json``.
+
+    LIVENESS RECONCILIATION (the force-kill lie).  ``gateway_state.json`` is
+    only advanced by the gateway process itself.  When that process dies
+    WITHOUT running its shutdown handler — ``taskkill /F`` from the Windows
+    auto-updater, SIGKILL, OOM killer, power loss — nothing ever rewrites the
+    file, so the last thing it says is whatever was true a moment before the
+    kill: ``"gateway_state": "running"``, with a live-looking PID.  It will say
+    that forever.  A real incident: PID 21200 gone, file still reading
+    ``running`` ten minutes later, misleading every external health check that
+    read the file directly.
+
+    This is the ONE chokepoint every consumer already funnels through, so the
+    reconciliation lives here rather than in ~15 call sites (``/health/detailed``,
+    the control socket's ``status`` answer, the OTLP health exporter, the
+    dashboard's messaging/topology payloads, ``clover status``...), most of
+    which read ``record["gateway_state"]`` verbatim and would each have to
+    re-derive the same check correctly.
+
+    When the recorded PID is *provably* gone the state is downgraded to
+    ``"stopped"``; the original claim is preserved verbatim under
+    ``gateway_state_reported`` and the verdict under ``liveness`` so
+    post-mortem tooling keeps everything it had.  Pass ``reconcile=False`` for
+    the raw on-disk bytes.
+
+    Deliberately READ-ONLY — the file is never rewritten to "self-heal".  A
+    reader with no write permission to another profile's home (the dashboard
+    enumerating profiles, a monitoring agent running as another user) must get
+    the same correct answer as root, and this is also a hot per-request path
+    where writing would race a gateway that is starting up at that instant.
     """
-    return _read_json_file(path or _get_runtime_status_path())
+    record = _read_json_file(path or _get_runtime_status_path())
+    if record is None or not reconcile:
+        return record
+    try:
+        return _reconcile_runtime_status_liveness(record)
+    except Exception:
+        # Reconciliation is a safety net, never a new failure mode: if the
+        # process-table probe misbehaves (exotic /proc, permissions, a
+        # Windows quirk) fall back to the raw record rather than raising
+        # into a status endpoint that previously could not fail.
+        return record
 
 
 # Max age of a persisted ``gateway_state.json`` snapshot before its liveness
@@ -1255,6 +1298,145 @@ def runtime_status_pid_is_live(record: Optional[dict[str, Any]]) -> bool:
     ):
         return False
     return True
+
+
+# Gateway states that ASSERT the writing process is still alive.  Only these
+# can be a lie after a force-kill, so only these are ever downgraded.
+#
+# Deliberately excludes "stopped" / "startup_failed" / None: those already
+# report "not running" truthfully, and rewriting them would destroy real
+# diagnostic signal ("startup_failed" tells an operator the gateway died
+# during boot, which is a different story from "it was killed while running").
+_RUNTIME_STATUS_LIVE_CLAIM_STATES = frozenset(
+    {"running", "starting", "draining", "stopping", "degraded"}
+)
+
+# The state a disproven live claim is rewritten to.  "stopped" is the existing
+# vocabulary — already in agent.monitoring.gateway_health._KNOWN_GATEWAY_STATES,
+# already in get_runtime_status_running_pid's reject-set, and already falsey for
+# derive_gateway_busy / derive_gateway_drainable — so every downstream consumer
+# handles it correctly today with no changes.
+_RUNTIME_STATUS_DEAD_STATE = "stopped"
+
+
+def _runtime_status_pid_liveness(record: Optional[dict[str, Any]]) -> str:
+    """Three-valued liveness verdict for a runtime-status record's PID.
+
+    Returns one of:
+
+    * ``"alive"``   — the PID is in the process table and (when both sides
+      recorded one) its start-time matches, so it is the same process.
+    * ``"dead"``    — a PID was recorded and the OS says it is gone.
+    * ``"reused"``  — the PID number is alive but its start-time does NOT match
+      the recorded one, i.e. the OS recycled the number onto an unrelated
+      process.  The original gateway is just as dead as in ``"dead"``.
+    * ``"unknown"`` — no usable PID in the record, or the probe could not
+      answer.  We cannot prove anything either way.
+
+    Why not just reuse :func:`runtime_status_pid_is_live`?  Because it collapses
+    "dead", "reused" AND "no PID recorded" into a single ``False``.  Downgrading
+    a record on that boolean would mean treating "we could not tell" as "it is
+    dead" — which would let a hand-written or partially-flushed record turn a
+    perfectly healthy gateway into a phantom outage.  Reconciliation must act
+    ONLY on positive proof of death, so the two cases have to stay separable.
+    """
+    pid = _pid_from_record(record)
+    if pid is None:
+        # Nothing to check against the process table. Absence of evidence.
+        return "unknown"
+    try:
+        if not _pid_exists(pid):
+            return "dead"
+    except Exception:
+        # The no-kill probe itself failed (exotic /proc, permission flip).
+        # Fail OPEN: never manufacture a "dead" verdict from a broken probe.
+        return "unknown"
+    recorded_start = (record or {}).get("start_time")
+    try:
+        current_start = _get_process_start_time(pid)
+    except Exception:
+        current_start = None
+    if (
+        recorded_start is not None
+        and current_start is not None
+        and current_start != recorded_start
+    ):
+        # Same PID number, different process — the original gateway exited and
+        # the OS handed its number to someone else. Same PID-reuse guard
+        # get_runtime_status_running_pid uses.
+        return "reused"
+    return "alive"
+
+
+def _reconcile_runtime_status_liveness(
+    record: dict[str, Any],
+    *,
+    ttl_s: int = _RUNTIME_STATUS_STALE_TTL_S,
+) -> dict[str, Any]:
+    """Return ``record`` with any *disproven* liveness claim corrected.
+
+    The core invariant this enforces: **a record whose process is provably gone
+    can never come back from a read claiming to be alive.**
+
+    TWO INDEPENDENT SIGNALS, DIFFERENT CONFIDENCE — and only one of them is
+    allowed to drive the downgrade:
+
+    * **PID liveness** is *proof*.  The OS process table is ground truth: if the
+      recorded PID is gone (or has been recycled onto another process), that
+      gateway is dead, and it does not matter whether it died one second ago or
+      one week ago.  This alone decides the downgrade.
+    * **TTL staleness** (``updated_at`` older than ``ttl_s``) is only a *hint*.
+      It is recorded as context on the annotation but is NEVER sufficient on
+      its own, because a perfectly healthy gateway sitting idle does not
+      rewrite the file — ``derive_gateway_busy`` already carries this exact
+      warning ("liveness keys off gateway_running, NEVER updated_at").  Letting
+      the TTL downgrade a record would report every quiet gateway as dead.
+
+    So the two awkward cases both come out right:
+
+    * *fresh but dead* (force-killed two seconds ago — the reported incident):
+      timestamp is well inside the TTL, PID is gone → DOWNGRADED.
+    * *old but alive* (idle gateway, last write hours ago): timestamp is way
+      past the TTL, PID is alive → LEFT ALONE, still reads ``running``.
+
+    The input dict is never mutated in place — callers such as
+    ``write_runtime_status``'s merge and the dashboard's cached payloads must
+    not see it change underneath them.
+    """
+    claimed = record.get("gateway_state")
+    if claimed not in _RUNTIME_STATUS_LIVE_CLAIM_STATES:
+        # Not asserting liveness (stopped / startup_failed / None / unknown
+        # value) — nothing to disprove, hand back the record untouched so the
+        # overwhelmingly common path stays allocation-free.
+        return record
+
+    verdict = _runtime_status_pid_liveness(record)
+    if verdict not in {"dead", "reused"}:
+        # "alive" -> the claim is true. "unknown" -> we could not prove it
+        # false, and an unprovable claim must be left standing rather than
+        # inventing an outage.
+        return record
+
+    # Shallow copy is enough: only top-level keys are rewritten, and nested
+    # values (platforms, session_store) are handed back by reference exactly
+    # as before so no consumer sees a behavior change there.
+    reconciled = dict(record)
+    reconciled["gateway_state"] = _RUNTIME_STATUS_DEAD_STATE
+    # Preserve the raw claim for post-mortem: "what did the file say at the
+    # moment its writer was killed" is the whole forensic value of the record.
+    reconciled["gateway_state_reported"] = claimed
+    reconciled["liveness"] = {
+        "reconciled": True,
+        "reported_state": claimed,
+        "verdict": verdict,
+        "recorded_pid": _pid_from_record(record),
+        # Context only — did NOT influence the downgrade above. A False here
+        # next to verdict "dead" is exactly the force-kill signature: the file
+        # is fresh, so it looks trustworthy, and it is wrong.
+        "stale": runtime_status_is_stale(record, ttl_s),
+        "checked_at": _utc_now_iso(),
+    }
+    return reconciled
 
 
 def parse_active_agents(raw: Any) -> int:

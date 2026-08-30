@@ -204,6 +204,37 @@ def finalize_update_receipt(
     _current = None
     if receipt is None:
         return None
+
+    # Mirror the outcome into the durable sidecar next to
+    # ``.clover-update-in-progress`` BEFORE writing the (larger, prunable)
+    # receipt. The receipt lives under logs/update_receipts/ and is rotated;
+    # the sidecar is the one small file the next startup reads to answer "how
+    # did the last update end?" after the in-progress marker is deleted.
+    # Best-effort: a failure here must never cost us the receipt itself.
+    try:
+        from clover_cli.update_lock import (
+            OUTCOME_FAILED,
+            OUTCOME_ROLLED_BACK,
+            OUTCOME_SUCCESS,
+            record_update_outcome,
+        )
+
+        _sidecar_outcome = {
+            "success": OUTCOME_SUCCESS,
+            "partial": OUTCOME_FAILED,
+            "failed": OUTCOME_FAILED,
+            "refused": OUTCOME_FAILED,
+            "rolled-back": OUTCOME_ROLLED_BACK,
+            "rolled_back": OUTCOME_ROLLED_BACK,
+        }.get(str(outcome), str(outcome))
+        record_update_outcome(
+            _sidecar_outcome,
+            detail=stop_reason or f"update receipt outcome={outcome}",
+            started_at=receipt.data.get("started_at_unix"),
+        )
+    except Exception as _outcome_exc:  # pragma: no cover - defensive
+        logger.debug("Could not mirror outcome to sidecar: %s", _outcome_exc)
+
     try:
         receipt.finalize(outcome)
         if stop_reason:
@@ -397,7 +428,14 @@ def collect_fleet_versions(
                     )
                     continue
             status_path = home / "gateway_state.json"
-            record = read_runtime_status(status_path)
+            # reconcile=False: this function is itself a liveness reconciler.
+            # It calls runtime_status_pid_is_live() below and then needs the
+            # ORIGINAL claimed gateway_state to tell "was claiming running when
+            # it died" (a DOWN row) apart from "stopped cleanly" (no row).
+            # read_runtime_status()'s default reconciliation rewrites a dead
+            # record's state to "stopped", which would erase exactly that
+            # distinction and silently drop every DOWN row.
+            record = read_runtime_status(status_path, reconcile=False)
             if not record:
                 continue
             pid = record.get("pid")
