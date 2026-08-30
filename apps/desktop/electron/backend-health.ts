@@ -129,10 +129,7 @@ export function makeNousCloudBackendDownError(baseUrl: string, error: unknown): 
   const err = new Error(
     `Clover Cloud agent ${hostname} is down ` +
       `(HTTP ${serverError.statusCode}: server-side fault). ` +
-      'Check  for backend status, ' +
-      'or switch to Local mode in Settings → Gateway. ' +
-      'You can also reach out on Discord at discord.gg/cloverc1 ' +
-      'for immediate assistance. ' +
+      'Switch to Local mode in Settings → Gateway to keep working. ' +
       `Original detail: ${detail}`
   ) as any
 

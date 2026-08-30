@@ -982,7 +982,7 @@ test(tools): add unit tests for file_operations
 
 ## Community
 
-- **Discord**: [discord.gg/cloverc1]() — for questions, showcasing projects, and sharing skills
+- **GitHub Issues**: For bug reports and feature requests
 - **GitHub Discussions**: For design proposals and architecture discussions
 - **Skills Hub**: Upload specialized skills to a registry and share them with the community
 

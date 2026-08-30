@@ -385,7 +385,7 @@ gateway:
     not_git_repo:            "✗ ليس مستودع git — لا يمكن التحديث."
     clover_cmd_not_found:    "✗ تعذّر تحديد موقع أمر `clover`. Clover يعمل، لكن أمر التحديث لم يجد الملف التنفيذي على PATH أو عبر مُفسّر Python الحالي. جرّب تشغيل `clover update` يدويًا في طرفيتك."
     start_failed:            "✗ فشل بدء التحديث: {error}"
-    starting:                "⚕ جارٍ بدء تحديث Clover… سأبثّ التقدّم هنا."
+    starting:                "☘ جارٍ بدء تحديث Clover… سأبثّ التقدّم هنا."
 
   usage:
     rate_limits:              "⏱️ **حدود المعدّل:** {state}"

@@ -433,8 +433,7 @@ test('waitForCloverReady surfaces actionable error for cloud agent 503', async (
   } catch (error: any) {
     assert.ok(error.message.includes('Clover Cloud agent'), `unexpected message: ${error.message}`)
     assert.ok(error.message.includes('503'), `should mention status code: ${error.message}`)
-    assert.ok(error.message.includes('portal.'), `should mention portal: ${error.message}`)
-    assert.ok(error.message.includes('discord.gg/cloverc1'), `should mention Discord: ${error.message}`)
+    assert.ok(error.message.includes('Local mode'), `should offer the local fallback: ${error.message}`)
     assert.equal(error.isCloudBackendDown, true)
     assert.equal(error.statusCode, 503)
     assert.ok(attempts > 1, 'should have retried before failing')

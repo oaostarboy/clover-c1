@@ -12,7 +12,7 @@ describe('ShimmerRows leniency (agent-authored calls)', () => {
       createElement(ShimmerRows, {
         rows: 3,
         width: 20,
-        t: { color: { completionBg: '#1a1a2e', label: '#DAA520', muted: '#B8860B' } }
+        t: { color: { completionBg: '#1a1a2e', label: '#3FBF7F', muted: '#1B7A4B' } }
       }),
       30
     )

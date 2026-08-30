@@ -591,7 +591,7 @@ test(tools): añadir tests unitarios para file_operations
 
 ## Comunidad
 
-- **Discord**: [discord.gg/cloverc1]() — para preguntas, mostrar proyectos y compartir habilidades
+- **GitHub Issues**: Para reportes de errores y solicitudes de funciones
 - **GitHub Discussions**: Para propuestas de diseño y discusiones de arquitectura
 - **Skills Hub**: Sube habilidades especializadas a un registro y compártelas con la comunidad
 

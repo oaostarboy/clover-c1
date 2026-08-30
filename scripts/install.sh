@@ -218,7 +218,7 @@ print_banner() {
     echo ""
     echo -e "${MAGENTA}${BOLD}"
     echo "┌─────────────────────────────────────────────────────────┐"
-    echo "│             ⚕ Clover Cognition Installer                    │"
+    echo "│             ☘ Clover Cognition Installer                    │"
     echo "├─────────────────────────────────────────────────────────┤"
     echo "│  An open source AI agent by Anthony Nguyen.              │"
     echo "└─────────────────────────────────────────────────────────┘"

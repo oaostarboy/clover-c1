@@ -396,7 +396,7 @@ gateway:
     not_git_repo:            "✗ Not a git repository — cannot update."
     clover_cmd_not_found:    "✗ Could not locate the `clover` command. Clover is running, but the update command could not find the executable on PATH or via the current Python interpreter. Try running `clover update` manually in your terminal."
     start_failed:            "✗ Failed to start update: {error}"
-    starting:                "⚕ Starting Clover update… I'll stream progress here."
+    starting:                "☘ Starting Clover update… I'll stream progress here."
 
   usage:
     rate_limits:              "⏱️ **Rate Limits:** {state}"

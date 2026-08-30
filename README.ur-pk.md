@@ -7,8 +7,7 @@
 # ہرمیس ایجنٹ 🍀 (Clover Cognition)
 
 <p align="center">
-  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--agent.-FFD700?style=for-the-badge" alt="Documentation"></a>
-  <a href=""><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
+  <a href="docs/"><img src="https://img.shields.io/badge/Docs-clover--agent.-00D97E?style=for-the-badge" alt="Documentation"></a>
   <a href=""><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
   <a href=""><img src="https://img.shields.io/badge/Built%20by-Anthony%20Nguyen-blueviolet?style=for-the-badge" alt="Built by Anthony Nguyen"></a>
   <a href="README.md"><img src="https://img.shields.io/badge/Lang-English-lightgrey?style=for-the-badge" alt="English"></a>

@@ -6,8 +6,6 @@
 
 Achievement system for the Clover Dashboard: collectible, tiered badges generated from real local Clover session history.
 
-![Clover Achievements dashboard](docs/assets/achievements-dashboard-hd.png)
-
 The screenshots use temporary demo tier data to show the full visual range. The plugin itself reads real local Clover session history by default.
 
 > **Update notice (2026-04-29):** If you installed this plugin before today, update to the latest version. The achievements scan path was refactored for much faster warm loads (snapshot cache + incremental checkpoint scan).

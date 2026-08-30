@@ -251,10 +251,10 @@ export function themeToneHex(tone: string): string {
 
 const BRAND: ThemeBrand = {
   name: 'Clover Cognition',
-  icon: '⚕',
+  icon: '☘',
   prompt: '❯',
   welcome: 'Type your message or /help for commands.',
-  goodbye: 'Goodbye! ⚕',
+  goodbye: 'Goodbye! ☘',
   tool: '┊',
   helpHeader: '(^_^)? Commands'
 }
@@ -368,25 +368,25 @@ export function buildPalette(seeds: ThemeSeeds, isLight: boolean): ThemeColors {
 }
 
 export const DARK_SEEDS: ThemeSeeds = {
-  accent: '#FFBF00',
+  accent: '#00D97E',
   // The classic Clover navy surfaces are IDENTITY, not derivation drift —
   // keep them as explicit fill seeds (the ladder derives them for skins
   // that don't care).
   activeRow: '#333355',
   bg: '#101014',
-  border: '#CD7F32',
+  border: '#2E8B57',
   error: '#ef5350',
   ok: '#4caf50',
-  primary: '#FFD700',
-  prompt: '#FFF8DC',
+  primary: '#00FF87',
+  prompt: '#E4FFF1',
   selection: '#3a3a55',
   shellDollar: '#4dabf7',
   statusBad: '#FF8C00',
   statusCritical: '#FF6B6B',
   statusGood: '#8FBC8F',
-  statusWarn: '#FFD700',
+  statusWarn: '#00FF87',
   surface: '#1a1a2e',
-  text: '#FFF8DC',
+  text: '#E4FFF1',
   warn: '#ffa726'
 }
 
@@ -399,18 +399,18 @@ export const DARK_SEEDS: ThemeSeeds = {
 // render the same thing Cursor always showed. Text/prompt stay ink — body
 // copy historically rendered in the terminal's default near-black fg.
 export const LIGHT_SEEDS: ThemeSeeds = {
-  accent: '#956E00',
+  accent: '#0B7A42',
   bg: '#ffffff',
-  border: '#A56628',
+  border: '#2E8B57',
   error: '#C14240',
   ok: '#367E39',
-  primary: '#867000',
+  primary: '#0F8A4D',
   prompt: '#2B2014',
   shellDollar: '#377BB3',
   statusBad: '#A65A00',
   statusCritical: '#B94D4D',
   statusGood: '#5C7A5C',
-  statusWarn: '#867000',
+  statusWarn: '#0F8A4D',
   text: '#3D2F13',
   warn: '#956115'
 }
@@ -453,7 +453,7 @@ export const LIGHT_THEME: Theme = {
 // hierarchy, not a bug. So the floors are barely-visible rescues only:
 //   * DISPLAY 1.45 sits just above slate-pastel territory (#c9d1d9 = 1.54,
 //     passes raw, byte-identical) but just below true invisibility
-//     (default's cream #FFF8DC = 1.08, gets rescued).
+//     (default's cream #E4FFF1 = 1.08, gets rescued).
 //   * SEMANTIC 2.2 for alert colors (ok/error/warn/status) — they carry
 //     meaning and must never vanish.
 // The lift itself is xterm.js's own multiplicative algorithm
@@ -465,10 +465,10 @@ export const LIGHT_THEME: Theme = {
 // terminal window compositing over a light editor, where xterm applies NO
 // contrast lift of its own (there is no solid bg to measure against) — the
 // beloved classic look is the authored palette rendered essentially RAW:
-// vivid #FFD700 gold (~1.36:1), not a WCAG-darkened mustard. So the light
-// floor is a near-invisible rescue only (catches cream #FFF8DC at 1.08 but
+// vivid #00FF87 gold (~1.36:1), not a WCAG-darkened mustard. So the light
+// floor is a near-invisible rescue only (catches cream #E4FFF1 at 1.08 but
 // leaves the golds untouched). Pixel-sampled target: #F5C242 (L61 S90),
-// which the previous 1.45 floor crushed to #867000 (L26) — the reported mud.
+// which the previous 1.45 floor crushed to #0F8A4D (L26) — the reported mud.
 const DISPLAY_MIN_CONTRAST = 1.45
 const SEMANTIC_MIN_CONTRAST = 2.2
 const LIGHT_DISPLAY_MIN_CONTRAST = 1.18
@@ -591,7 +591,7 @@ export interface ThemeTones {
  * "reproduces the original hand-tuned tones" test for the contract):
  *
  *   dark muted  #CC9B1F ≈ desaturate(mix(accent, bg, .19), .16)  (err 3)
- *   dark label  #DAA520 ≈ desaturate(mix(accent, bg, .13), .16)  (err 3)
+ *   dark label  #3FBF7F ≈ desaturate(mix(accent, bg, .13), .16)  (err 3)
  *   dark status #C0C0C0 = grayOf(mix(text, bg, .24))             (err 0)
  *   light muted #946C08 ≈ desaturate(accent, .05)                (err 2)
  *   light label #8E6B13 ≈ desaturate(mix(accent, text, .03), .15) (err 2)
