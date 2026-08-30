@@ -58,7 +58,11 @@ def _cmd_status(args) -> int:
             print(f"  API:     {inference}")
     else:
         print(f"  Auth:    {color('not logged in', Colors.YELLOW)}")
-        print(f"  Sign up: {SUBSCRIPTION_URL}")
+        # SUBSCRIPTION_URL is empty in this build, so printing it left a
+        # dangling "Sign up:" label on screen. Show the label only when
+        # there is a URL to put after it.
+        if SUBSCRIPTION_URL:
+            print(f"  Sign up: {SUBSCRIPTION_URL}")
         print("  Login:   clover portal")
 
     # Provider selection (independent of auth)

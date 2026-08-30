@@ -494,7 +494,7 @@ def _print_setup_summary(config: dict, clover_home):
 
     # Tool availability summary
     print()
-    print_header("Tool Availability Summary")
+    print_header("What it can reach")
 
     tool_status = []
     subscription_features = get_clover_subscription_features(config)
@@ -961,7 +961,7 @@ def setup_model_provider(config: dict, *, quick: bool = False):
     """
     from clover_cli.config import load_config, save_config
 
-    print_header("Inference Provider")
+    print_header("Which model should think for you")
     print_info("Choose how to connect to your main chat model.")
     print_info(f"   Guide: {_DOCS_BASE}/integrations/providers")
     print()
@@ -1172,7 +1172,7 @@ def _setup_tts_provider(config: dict):
     current_label = provider_labels.get(current_provider, current_provider)
 
     print()
-    print_header("Text-to-Speech Provider (optional)")
+    print_header("Giving it a voice (optional)")
     print_info(f"Current: {current_label}")
     print()
 
@@ -1401,7 +1401,7 @@ def setup_tts(config: dict):
 def setup_terminal_backend(config: dict):
     """Configure the terminal execution backend."""
     import platform as _platform
-    print_header("Terminal Backend")
+    print_header("Where it runs commands")
     print_info("Choose where Clover runs shell commands and code.")
     print_info("This affects tool execution, file access, and isolation.")
     print_info(f"   Guide: {_DOCS_BASE}/user-guide/configuration#terminal-backend-configuration")
@@ -1798,7 +1798,7 @@ def _apply_default_agent_settings(config: dict):
 def setup_agent_settings(config: dict):
     """Configure agent behavior: iterations, progress display, compression, session reset."""
 
-    print_header("Agent Settings")
+    print_header("How it behaves")
     print_info(f"   Guide: {_DOCS_BASE}/user-guide/configuration")
     print()
 
@@ -1850,7 +1850,7 @@ def setup_agent_settings(config: dict):
         print_warning(f"Unknown mode '{mode}', keeping '{current_mode}'")
 
     # ── Context Compression ──
-    print_header("Context Compression")
+    print_header("What happens when the conversation gets long")
     print_info("Automatically summarizes old messages when context gets too long.")
     print_info(
         "Higher threshold = compress later (use more context). Lower = compress sooner."
@@ -1872,7 +1872,7 @@ def setup_agent_settings(config: dict):
     )
 
     # ── Session Reset Policy ──
-    print_header("Session Reset Policy")
+    print_header("When to start fresh")
     print_info(
         "Messaging sessions (Telegram, Discord, etc.) accumulate context over time."
     )
@@ -2265,7 +2265,7 @@ def setup_gateway(config: dict):
     """Configure messaging platform integrations."""
     from clover_cli.gateway import _all_platforms, _platform_status, _configure_platform
 
-    print_header("Messaging Platforms")
+    print_header("Where you want to reach it")
     print_info("Connect to messaging platforms to chat with Clover from anywhere.")
     print_info("Toggle with Space, confirm with Enter.")
     print()
@@ -2904,7 +2904,7 @@ def _run_portal_one_shot(config: dict) -> None:
     print_info("    web search, image generation, TTS, browser automation")
     print_info("    — all routed through your Clover Portal sub.")
     print()
-    print_info("  Sign up: ")
+    print_info("  Sign in to route models and tools through a single account.")
     print()
 
     # _model_flow_clover handles BOTH the logged-out path (device-code OAuth,
@@ -3278,7 +3278,7 @@ def _run_setup_wizard_impl(args):
             return
 
     # ── Full Setup — run all sections ──
-    print_header("Configuration Location")
+    print_header("Where your settings live")
     print_info(f"Config file:  {get_config_path()}")
     print_info(f"Secrets file: {get_env_path()}")
     print_info(f"Data folder:  {clover_home}")
@@ -3370,7 +3370,7 @@ def _run_first_time_quick_setup(config: dict, clover_home, is_existing: bool):
     print_header("Clover Portal")
     print_info("One subscription, 300+ models, plus the Tool Gateway:")
     print_info("  web search, image generation, TTS, browser automation.")
-    print_info("Sign up: ")
+    print_info("Sign in to route models and tools through a single account.")
     print()
     try:
         from clover_cli.main import _model_flow_clover
@@ -3554,7 +3554,7 @@ def _run_blank_slate_setup(config: dict, clover_home, is_existing: bool):
     """
 
     print()
-    print_header("Blank Slate Setup")
+    print_header("Starting from nothing")
     print_info("Everything starts OFF. First we force-enable only what's required")
     print_info("to run an agent, then you choose whether to stop there or walk")
     print_info("through enabling more — opting in to exactly what you want.")

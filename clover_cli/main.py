@@ -35,7 +35,7 @@ Usage:
     clover honcho identity <file>          # Seed AI peer identity from a file (SOUL.md etc.)
     clover honcho migrate                  # Step-by-step migration guide: OpenClaw native → Clover + Honcho
     clover --version           Show version and update status
-    clover update              Update to latest version
+    clover update              Pull the newest version
     clover uninstall           Uninstall Clover Cognition
     clover acp                 Run as an ACP server for editor integration
     clover sessions browse     Interactive session picker with search

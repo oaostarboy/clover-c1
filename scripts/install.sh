@@ -6,7 +6,7 @@
 # Uses uv for desktop/server installs and Python's stdlib venv + pip on Termux.
 #
 # Usage:
-#   curl -fsSL  | bash
+#   curl -fsSL https://raw.githubusercontent.com/oaostarboy/clover-c1/main/scripts/install.sh | bash
 #
 # Or with options:
 #   curl -fsSL ... | bash -s -- --no-venv --skip-setup
@@ -216,13 +216,17 @@ done
 
 print_banner() {
     echo ""
-    echo -e "${MAGENTA}${BOLD}"
+    echo -e "${GREEN}${BOLD}"
     echo "┌─────────────────────────────────────────────────────────┐"
-    echo "│             ☘ Clover Cognition Installer                    │"
+    echo "│           ☘  C L O V E R   C O G N I T I O N            │"
     echo "├─────────────────────────────────────────────────────────┤"
-    echo "│  An open source AI agent by Anthony Nguyen.              │"
+    echo "│              An agent that remembers you.               │"
+    echo "│                Built by Anthony Nguyen.                 │"
     echo "└─────────────────────────────────────────────────────────┘"
     echo -e "${NC}"
+    echo -e "${CYAN}   Bringing its own Python, Node, and tools.${NC}"
+    echo -e "${CYAN}   Nothing already on this machine gets touched.${NC}"
+    echo ""
 }
 
 log_info() {
@@ -535,7 +539,7 @@ detect_os() {
             OS="windows"
             DISTRO="windows"
             log_error "Windows detected. Please use the PowerShell installer:"
-            log_info "  iex (irm )"
+            log_info "  iex (irm https://raw.githubusercontent.com/oaostarboy/clover-c1/main/scripts/install.ps1)"
             exit 1
             ;;
         *)
@@ -2895,13 +2899,13 @@ print_success() {
     echo ""
     echo -e "${GREEN}${BOLD}"
     echo "┌─────────────────────────────────────────────────────────┐"
-    echo "│              ✓ Installation Complete!                   │"
+    echo "│                 ☘  Clover is installed.                 │"
     echo "└─────────────────────────────────────────────────────────┘"
     echo -e "${NC}"
     echo ""
 
     # Show file locations
-    echo -e "${CYAN}${BOLD}📁 Your files:${NC}"
+    echo -e "${CYAN}${BOLD}Where everything lives${NC}"
     echo ""
     echo -e "   ${YELLOW}Config:${NC}    $CLOVER_HOME/config.yaml"
     echo -e "   ${YELLOW}API Keys:${NC}  $CLOVER_HOME/.env"
@@ -2911,14 +2915,14 @@ print_success() {
 
     echo -e "${CYAN}─────────────────────────────────────────────────────────${NC}"
     echo ""
-    echo -e "${CYAN}${BOLD}🚀 Commands:${NC}"
+    echo -e "${CYAN}${BOLD}Worth knowing${NC}"
     echo ""
-    echo -e "   ${GREEN}clover${NC}              Start chatting"
-    echo -e "   ${GREEN}clover setup${NC}        Configure API keys & settings"
-    echo -e "   ${GREEN}clover config${NC}       View/edit configuration"
-    echo -e "   ${GREEN}clover config edit${NC}  Open config in editor"
-    echo -e "   ${GREEN}clover gateway install${NC} Install gateway service (messaging + cron)"
-    echo -e "   ${GREEN}clover update${NC}       Update to latest version"
+    echo -e "   ${GREEN}clover${NC}              Start talking"
+    echo -e "   ${GREEN}clover setup${NC}        Answer a few questions, then you are running"
+    echo -e "   ${GREEN}clover config${NC}       See how it is set up"
+    echo -e "   ${GREEN}clover config edit${NC}  Change it by hand"
+    echo -e "   ${GREEN}clover gateway${NC}      Reach it from Telegram, Discord, Slack, and more"
+    echo -e "   ${GREEN}clover update${NC}       Get the latest"
     echo ""
 
     echo -e "${CYAN}─────────────────────────────────────────────────────────${NC}"
@@ -2930,7 +2934,7 @@ print_success() {
         echo -e "${YELLOW}⚡ 'clover' was linked into /usr/local/bin and is ready to use — no shell reload needed.${NC}"
         echo ""
     else
-        echo -e "${YELLOW}⚡ Reload your shell to use 'clover' command:${NC}"
+        echo -e "${YELLOW}One more step. Reload your shell:${NC}"
         echo ""
         LOGIN_SHELL="$(basename "${SHELL:-/bin/bash}")"
         if [ "$LOGIN_SHELL" = "zsh" ]; then

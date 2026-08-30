@@ -45,7 +45,7 @@ Las habilidades incluidas (en `skills/`) se envían con cada instalación de Clo
 
 Si tu habilidad es oficial y útil pero no universalmente necesaria (ej., una integración de servicio de pago, una dependencia pesada), ponla en **`optional-skills/`** — se envía con el repositorio pero no está activada por defecto. Los usuarios pueden descubrirla a través de `clover skills browse` (etiquetada como "oficial") e instalarla con `clover skills install` (sin advertencia de terceros, confianza integrada).
 
-Si tu habilidad es especializada, contribuida por la comunidad o de nicho, es mejor para un **Skills Hub** — súbela a un registro de habilidades y compártela en el [Discord de Clover Cognition](). Los usuarios pueden instalarla con `clover skills install`.
+Si tu habilidad es especializada, contribuida por la comunidad o de nicho, es mejor para un **Skills Hub** — súbela a un registro de habilidades y compártela en el [GitHub Discussions](https://github.com/oaostarboy/clover-c1/discussions). Los usuarios pueden instalarla con `clover skills install`.
 
 ---
 
@@ -581,7 +581,7 @@ test(tools): añadir tests unitarios para file_operations
 
 ## Reportar Issues
 
-- Usa [GitHub Issues]()
+- Usa [GitHub Issues](https://github.com/oaostarboy/clover-c1)
 - Incluye: SO, versión de Python, versión de Clover (`clover --version`), traza de error completa
 - Incluye pasos para reproducir
 - Verifica los issues existentes antes de crear duplicados
@@ -589,13 +589,6 @@ test(tools): añadir tests unitarios para file_operations
 
 ---
 
-## Comunidad
-
-- **GitHub Issues**: Para reportes de errores y solicitudes de funciones
-- **GitHub Discussions**: Para propuestas de diseño y discusiones de arquitectura
-- **Skills Hub**: Sube habilidades especializadas a un registro y compártelas con la comunidad
-
----
 
 ## Licencia
 

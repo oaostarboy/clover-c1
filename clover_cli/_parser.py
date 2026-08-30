@@ -97,33 +97,33 @@ Examples:
     clover --resume <session_id>  Resume a specific session by ID
     clover --resume latest        Resume the most recent session (same as -c)
     clover --tui --resume latest --in ./dir   Resume ./dir's latest session in the TUI
-    clover setup                  Run setup wizard
-    clover logout                 Clear stored authentication
+    clover setup                  Answer a few questions, then you are running
+    clover logout                 Forget your stored logins
     clover auth add <provider>    Add a pooled credential
     clover auth list              List pooled credentials
     clover auth remove <p> <t>    Remove pooled credential by index, id, or label
     clover auth reset <provider>  Clear exhaustion status for a provider
-    clover model                  Select default model
+    clover model                  Choose which model thinks for you
     clover fallback [list]        Show fallback provider chain
     clover fallback add           Add a fallback provider (same picker as `clover model`)
     clover fallback remove        Remove a fallback provider from the chain
-    clover config                 View configuration
+    clover config                 See how it is set up
     clover config edit            Edit config in $EDITOR
     clover config set model gpt-4 Set a config value
-    clover gateway                Run messaging gateway
+    clover gateway                Reach it from Telegram, Discord, Slack, and more
     clover -s clover-c1-dev,github-auth
     clover -w                     Start in isolated git worktree
     clover gateway install        Install gateway background service
-    clover sessions list          List past sessions
+    clover sessions list          Everything you have talked about
     clover sessions browse        Interactive session picker
     clover sessions rename ID T   Rename/title a session
-    clover logs                   View agent.log (last 50 lines)
+    clover logs                   What it has been doing
     clover logs -f                Follow agent.log in real time
     clover logs errors            View errors.log
     clover logs --since 1h        Lines from the last hour
     clover debug share             Upload debug report for support
     clover console                Open the safe Clover command console
-    clover update                 Update to latest version
+    clover update                 Pull the newest version
     clover dashboard              Start web UI dashboard (port 9119)
     clover dashboard --stop       Stop running dashboard processes
     clover dashboard --status     List running dashboard processes
@@ -142,7 +142,7 @@ def build_top_level_parser():
     """
     parser = argparse.ArgumentParser(
         prog="clover",
-        description="Clover Cognition - AI assistant with tool-calling capabilities",
+        description="Clover Cognition - an agent that remembers you, and gets better at its job",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_EPILOGUE,
     )
