@@ -6860,6 +6860,34 @@ def _refresh_bootstrap_cache_scripts(branch: str = "main") -> None:
     except Exception as exc:
         logger.debug("Could not refresh bootstrap-cache scripts after update: %s", exc)
 
+def _gateway_restart_argv_for_resume(token: dict | None) -> list[str]:
+    """Pick one command line that will bring a gateway back.
+
+    The resume token records every paused gateway. The watcher is a last
+    resort, so it only needs to restore ONE: a machine with a running gateway
+    is recoverable by hand, a machine with none is not. Prefers a mapped
+    profile gateway, then any unmapped one that recorded its argv.
+
+    Returns an empty list when nothing usable was captured, which the caller
+    treats as "cannot arm the watcher" rather than guessing at a command.
+    """
+    if not token:
+        return []
+    try:
+        profiles = token.get("profiles") or {}
+        for entry in profiles.values():
+            argv = list((entry or {}).get("argv") or [])
+            if argv:
+                return argv
+        for entry in token.get("unmapped") or []:
+            argv = list((entry or {}).get("argv") or [])
+            if argv:
+                return argv
+    except Exception:
+        return []
+    return []
+
+
 def _resume_windows_gateways_after_update(token: dict | None) -> None:
     """Restart Windows profile gateways previously paused for update."""
     if not token or not token.get("resume_needed"):
@@ -7382,6 +7410,46 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _m()._resume_windows_gateways_after_update,
             _windows_gateway_resume,
         )
+
+        # atexit alone loses the gateway when THIS process is killed rather
+        # than allowed to exit: Python skips atexit on a signal, on an OOM
+        # kill, and on a hard exit. Reported twice in one day on a Windows
+        # install, eleven hours apart, with identical logs: the updater
+        # stopped the gateway, then vanished. No gateway, no updater, no
+        # supervisor, no alert. The bot simply went quiet.
+        #
+        # So the recovery runs OUTSIDE this process. The watcher polls a
+        # beacon file; if this process stops refreshing it and no gateway is
+        # up, the watcher starts one. If the update finishes normally, the
+        # beacon is cleared and the watcher exits without acting.
+        try:
+            from clover_cli import update_restart_watcher as _urw
+
+            _restart_argv = _m()._gateway_restart_argv_for_resume(
+                _windows_gateway_resume
+            )
+            if _restart_argv:
+                _beacon = _urw.write_beacon(_restart_argv)
+                _watcher_kwargs = {"close_fds": True}
+                if _m()._is_windows():
+                    _watcher_kwargs["creationflags"] = (
+                        getattr(subprocess, "DETACHED_PROCESS", 0)
+                        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                    )
+                else:
+                    _watcher_kwargs["start_new_session"] = True
+                subprocess.Popen(
+                    [sys.executable, "-m",
+                     "clover_cli.update_restart_watcher", str(_beacon)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    **_watcher_kwargs,
+                )
+                _atexit.register(_urw.clear_beacon)
+        except Exception as _watch_err:
+            # The watcher is a safety net. Failing to arm it must never stop
+            # an update that would otherwise succeed.
+            logger.debug("Could not arm the update restart watcher: %s", _watch_err)
 
     # With gateways paused, anything still running from the venv interpreter
     # (most commonly the Desktop app's `clover serve` backend) will keep .pyd
