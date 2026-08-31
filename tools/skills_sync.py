@@ -46,7 +46,7 @@ for _stream in (sys.stdout, sys.stderr):
         except (ValueError, TypeError):
             pass
 from clover_constants import get_bundled_skills_dir, get_clover_home, get_optional_skills_dir
-from agent.skill_utils import is_excluded_skill_path
+from agent.skill_utils import EXCLUDED_SKILL_DIRS, is_excluded_skill_path
 from typing import Dict, List, Optional, Set, Tuple
 from utils import atomic_replace, atomic_write_text
 
@@ -288,14 +288,24 @@ def _compute_relative_dest(skill_dir: Path, bundled_dir: Path) -> Path:
 
 
 def _dir_hash(directory: Path) -> str:
-    """Compute a hash of all file contents in a directory for change detection."""
+    """Compute a hash of all file contents in a directory for change detection.
+
+    Generated caches (``__pycache__``, ``.pytest_cache``, ...) are skipped.
+    Python writes bytecode next to any skill script it imports, so counting
+    those bytes made an untouched skill hash differently from its own stock
+    copy. `clover update` reads that difference as "the user edited this
+    skill", keeps their copy, and stops shipping fixes to it.
+    """
     hasher = hashlib.md5()
     try:
         for fpath in sorted(directory.rglob("*")):
-            if fpath.is_file():
-                rel = fpath.relative_to(directory)
-                hasher.update(str(rel).encode("utf-8"))
-                hasher.update(fpath.read_bytes())
+            if not fpath.is_file():
+                continue
+            rel = fpath.relative_to(directory)
+            if any(part in EXCLUDED_SKILL_DIRS for part in rel.parts):
+                continue
+            hasher.update(str(rel).encode("utf-8"))
+            hasher.update(fpath.read_bytes())
     except (OSError, IOError):
         pass
     return hasher.hexdigest()
@@ -313,11 +323,19 @@ def _safe_rel_install_path(path: Path, base: Path) -> str:
 
 
 def _skill_file_list(skill_dir: Path) -> List[str]:
-    """List files inside a skill directory in lock-file format."""
+    """List files inside a skill directory in lock-file format.
+
+    Generated caches are skipped, for the same reason ``_dir_hash`` skips
+    them: a ``.pyc`` Python wrote by itself is not a file the user added.
+    """
     files: List[str] = []
     for fpath in sorted(skill_dir.rglob("*")):
-        if fpath.is_file():
-            files.append(fpath.relative_to(skill_dir).as_posix())
+        if not fpath.is_file():
+            continue
+        rel = fpath.relative_to(skill_dir)
+        if any(part in EXCLUDED_SKILL_DIRS for part in rel.parts):
+            continue
+        files.append(rel.as_posix())
     return files
 
 
