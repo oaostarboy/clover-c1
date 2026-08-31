@@ -26,35 +26,35 @@ All fields are optional. Missing values inherit from the ``default`` skin.
       background: "#0e0e12"               # App/base surface — the seed the TUI
                                           # status bar and the desktop GUI derive
                                           # their whole palette from (see below).
-      banner_border: "#CD7F32"            # Panel border color
-      banner_title: "#FFD700"             # Panel title text color
-      banner_accent: "#FFBF00"            # Section headers (Available Tools, etc.)
-      banner_dim: "#B8860B"               # Dim/muted text (separators, labels)
-      banner_text: "#FFF8DC"              # Body text (tool names, skill names)
-      ui_accent: "#FFBF00"               # General UI accent
+      banner_border: "#2E8B57"            # Panel border color
+      banner_title: "#00FF87"             # Panel title text color
+      banner_accent: "#00D97E"            # Section headers (Available Tools, etc.)
+      banner_dim: "#1B7A4B"               # Dim/muted text (separators, labels)
+      banner_text: "#E4FFF1"              # Body text (tool names, skill names)
+      ui_accent: "#00D97E"               # General UI accent
       ui_label: "#DAA520"                # UI labels (warm gold; teal clashed w/ default banner gold)
       ui_ok: "#4caf50"                   # Success indicators
       ui_error: "#ef5350"                # Error indicators
       ui_warn: "#ffa726"                 # Warning indicators
-      ui_tool: "#FFBF00"                 # Tool-call markers (● / spinner); falls back to ui_accent
+      ui_tool: "#00D97E"                 # Tool-call markers (● / spinner); falls back to ui_accent
       ui_thinking: "#CC9B1F"             # Reasoning/thinking text; falls back to banner_dim
       diff_added: "#dcffdc"              # Diff added-line background (TUI)
       diff_removed: "#ffdcdc"            # Diff removed-line background
       diff_added_word: "#248a3d"         # Diff added word-level foreground
       diff_removed_word: "#cf222e"       # Diff removed word-level foreground
-      syntax_string: "#FFBF00"           # Code strings; falls back to ui_accent
-      syntax_number: "#FFF8DC"           # Code numbers; falls back to ui_text
-      syntax_keyword: "#CD7F32"          # Code keywords; falls back to ui_border
+      syntax_string: "#00D97E"           # Code strings; falls back to ui_accent
+      syntax_number: "#E4FFF1"           # Code numbers; falls back to ui_text
+      syntax_keyword: "#2E8B57"          # Code keywords; falls back to ui_border
       syntax_comment: "#CC9B1F"          # Code comments; falls back to banner_dim
-      prompt: "#FFF8DC"                  # Prompt text color
-      input_rule: "#CD7F32"              # Input area horizontal rule
-      response_border: "#FFD700"         # Response box border (ANSI)
+      prompt: "#E4FFF1"                  # Prompt text color
+      input_rule: "#2E8B57"              # Input area horizontal rule
+      response_border: "#00FF87"         # Response box border (ANSI)
       status_bar_bg: "#1a1a2e"           # Status bar background
       status_bar_text: "#C0C0C0"         # Status bar default text
-      status_bar_strong: "#FFD700"       # Status bar highlighted text
+      status_bar_strong: "#00FF87"       # Status bar highlighted text
       status_bar_dim: "#8B8682"          # Status bar separators/muted text
       status_bar_good: "#8FBC8F"         # Healthy context usage
-      status_bar_warn: "#FFD700"         # Warning context usage
+      status_bar_warn: "#00FF87"         # Warning context usage
       status_bar_bad: "#FF8C00"          # High context usage
       status_bar_critical: "#FF6B6B"     # Critical context usage
       session_label: "#DAA520"           # Session label color
@@ -118,7 +118,7 @@ USAGE
     from clover_cli.skin_engine import get_active_skin, list_skins, set_active_skin
 
     skin = get_active_skin()
-    print(skin.colors["banner_title"])    # "#FFD700"
+    print(skin.colors["banner_title"])    # "#00FF87"
     print(skin.get_branding("agent_name"))  # "Clover Cognition"
 
     set_active_skin("ares")               # Switch to built-in ares skin
