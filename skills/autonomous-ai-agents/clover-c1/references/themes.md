@@ -3,7 +3,7 @@
 Author a Clover **skin** — one YAML file that themes the CLI, the TUI, and the
 desktop GUI at once. The skin engine (`clover_cli/skin_engine.py`) resolves the
 active skin and the gateway pushes it to every surface, so a file dropped in
-`~/.clover/skins/` is the theme analogue of a plugin: no code, all surfaces. This
+`$CLOVER_HOME/skins/` is the theme analogue of a plugin: no code, all surfaces. This
 skill covers writing a good skin and activating it; it does not build GUI theme
 editors or ship built-in presets.
 

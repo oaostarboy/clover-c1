@@ -3,13 +3,13 @@
 Official skills maintained by Anthony Nguyen that are **not activated by default**.
 
 These skills ship with the clover-c1 repository but are not copied to
-`~/.clover/skills/` during setup. They are discoverable via the Skills Hub:
+`$CLOVER_HOME/skills/` during setup. They are discoverable via the Skills Hub:
 
 ```bash
 clover skills browse               # browse all skills, official shown first
 clover skills browse --source official  # browse only official optional skills
 clover skills search <query>       # finds optional skills labeled "official"
-clover skills install <identifier> # copies to ~/.clover/skills/ and activates
+clover skills install <identifier> # copies to $CLOVER_HOME/skills/ and activates
 ```
 
 ## Why optional?

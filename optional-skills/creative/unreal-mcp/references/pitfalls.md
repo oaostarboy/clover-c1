@@ -39,7 +39,7 @@ compiling shaders.
 Common collisions: local dev servers, Jupyter, other MCP hosts. Symptom: the
 server fails to bind (Output Log) or Clover' probe times out. Fix: change
 Server Port Number in Editor Preferences > Model Context Protocol AND the
-`url` in `~/.clover/config.yaml` (`mcp_servers.unreal-engine`), then restart
+`url` in `$CLOVER_HOME/config.yaml` (`mcp_servers.unreal-engine`), then restart
 both sides. Verify: `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/mcp`
 (non-000 means something is listening; whether it's Unreal is a different
 question — check the Output Log).
@@ -55,7 +55,7 @@ if tools were lost).
 
 `ModelContextProtocol.GenerateClientConfig` writes config files for Claude
 Code/Cursor/VSCode/Gemini/Codex into the project root. Clover' connection
-lives in `~/.clover/config.yaml` via `clover mcp install unreal-engine`.
+lives in `$CLOVER_HOME/config.yaml` via `clover mcp install unreal-engine`.
 Running GenerateClientConfig neither helps nor harms Clover — just don't
 mistake it for the Clover setup step.
 

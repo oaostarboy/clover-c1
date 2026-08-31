@@ -93,7 +93,7 @@ Z={QUERY}
 
 ### As ephemeral system prompt (config.yaml)
 
-Pick a template above and set it in `~/.clover/config.yaml`:
+Pick a template above and set it in `$CLOVER_HOME/config.yaml`:
 
 ```yaml
 agent:

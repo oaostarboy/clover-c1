@@ -18,7 +18,7 @@ clover gateway setup
 Follow the prompts to enable webhooks, set the port, and set a global HMAC secret.
 
 ### Option 2: Manual config
-Add to `~/.clover/config.yaml`:
+Add to `$CLOVER_HOME/config.yaml`:
 ```yaml
 platforms:
   webhook:
@@ -74,7 +74,7 @@ Returns the webhook URL and HMAC secret. The user configures their service to PO
 Two mechanisms narrow broad event streams (e.g. Todoist/GitHub fire on every update) so only relevant payloads wake the agent:
 
 - **Declarative `filters`** (config.yaml routes only): list of conditions on payload fields, event type, or headers — operators `equals`, `not_equals`, `contains`, `exists`, `missing`, `in`, `in_file`, `regex`, with `all`/`any`/`not` grouping. Non-matching events are ignored with HTTP 200.
-- **Route scripts** (`--script` on subscribe, or `script:` on a config route): a script under `~/.clover/scripts/` receives the payload as JSON on stdin. JSON stdout replaces the payload before prompt templating; empty stdout, `[SILENT]`, or a nonzero exit ignores the webhook. `.sh`/`.bash` run with bash, everything else with Python. Scripts cannot live outside `~/.clover/scripts/` (path traversal is blocked).
+- **Route scripts** (`--script` on subscribe, or `script:` on a config route): a script under `$CLOVER_HOME/scripts/` receives the payload as JSON on stdin. JSON stdout replaces the payload before prompt templating; empty stdout, `[SILENT]`, or a nonzero exit ignores the webhook. `.sh`/`.bash` run with bash, everything else with Python. Scripts cannot live outside `$CLOVER_HOME/scripts/` (path traversal is blocked).
 
 ```bash
 clover webhook subscribe todoist-clover \
@@ -191,11 +191,11 @@ Requires `--deliver` to be a real target (telegram, discord, slack, github_comme
 - Each subscription gets an auto-generated HMAC-SHA256 secret (or provide your own with `--secret`)
 - The webhook adapter validates signatures on every incoming POST
 - Static routes from config.yaml cannot be overwritten by dynamic subscriptions
-- Subscriptions persist to `~/.clover/webhook_subscriptions.json`
+- Subscriptions persist to `$CLOVER_HOME/webhook_subscriptions.json`
 
 ## How It Works
 
-1. `clover webhook subscribe` writes to `~/.clover/webhook_subscriptions.json`
+1. `clover webhook subscribe` writes to `$CLOVER_HOME/webhook_subscriptions.json`
 2. The webhook adapter hot-reloads this file on each incoming request (mtime-gated, negligible overhead)
 3. When a POST arrives matching a route, the adapter formats the prompt and triggers an agent run
 4. The agent's response is delivered to the configured target (Telegram, Discord, GitHub comment, etc.)
@@ -206,7 +206,7 @@ If webhooks aren't working:
 
 1. **Is the gateway running?** Check with `systemctl --user status clover-gateway` or `ps aux | grep gateway`
 2. **Is the webhook server listening?** `curl http://localhost:8644/health` should return `{"status": "ok"}`
-3. **Check gateway logs:** `grep webhook ~/.clover/logs/gateway.log | tail -20`
+3. **Check gateway logs:** `grep webhook $CLOVER_HOME/logs/gateway.log | tail -20`
 4. **Signature mismatch?** Verify the secret in your service matches the one from `clover webhook list`. GitHub sends `X-Hub-Signature-256`, GitLab sends `X-Gitlab-Token`.
 5. **Firewall/NAT?** The webhook URL must be reachable from the service. For local development, use a tunnel (ngrok, cloudflared).
 6. **Wrong event type?** Check `--events` filter matches what the service sends. Use `clover webhook test <name>` to verify the route works.

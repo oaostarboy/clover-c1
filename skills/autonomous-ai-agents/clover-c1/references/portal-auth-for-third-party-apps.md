@@ -42,7 +42,7 @@ against. There is no shared cookie or session that browser-Portal-login
 extends to other apps on the same machine.
 
 What Clover Cognition has that *feels* like OAuth — `clover login --provider clover`
-opening a browser, user signs in, token lands in `~/.clover/auth.json` — is a
+opening a browser, user signs in, token lands in `$CLOVER_HOME/auth.json` — is a
 **Clover-specific browser flow**. Under the hood it produces a credential
 Clover uses as a bearer. It is not a public OAuth provider that Karakeep et al.
 can implement a client for, because it isn't an OAuth provider at all from the
@@ -55,7 +55,7 @@ outside.
 Yes. The pattern is a **local credential-broker proxy**. Even without a public
 OAuth flow, an app on the user's machine can:
 
-1. Read Clover's existing Portal credential out of `~/.clover/auth.json`.
+1. Read Clover's existing Portal credential out of `$CLOVER_HOME/auth.json`.
 2. Expose a local OpenAI-compatible endpoint at `http://localhost:NNNN/v1`.
 3. Forward incoming requests to `inference-api./v1` with that
    bearer attached.

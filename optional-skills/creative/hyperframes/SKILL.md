@@ -57,7 +57,7 @@ Full CLI reference: [references/cli.md](references/cli.md).
 ## Setup (one-time)
 
 ```bash
-bash "$(dirname "$(find ~/.clover/skills -path '*/hyperframes/SKILL.md' 2>/dev/null | head -1)")/scripts/setup.sh"
+bash "$(dirname "$(find $CLOVER_HOME/skills -path '*/hyperframes/SKILL.md' 2>/dev/null | head -1)")/scripts/setup.sh"
 ```
 
 The script:

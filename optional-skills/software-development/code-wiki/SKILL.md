@@ -38,7 +38,7 @@ Do NOT use this for:
 
 ## How to Run
 
-Invoke through the `terminal` tool from the target repo's root, then use `read_file` / `search_files` / `write_file` to produce the wiki. Default output location is `~/.clover/wikis/<repo-name>/`. Only write into the repo (`docs/wiki/`) when the user explicitly requests it.
+Invoke through the `terminal` tool from the target repo's root, then use `read_file` / `search_files` / `write_file` to produce the wiki. Default output location is `$CLOVER_HOME/wikis/<repo-name>/`. Only write into the repo (`docs/wiki/`) when the user explicitly requests it.
 
 ## Quick Reference
 
@@ -378,7 +378,7 @@ EOF
 State exactly what was generated and where:
 
 ```
-Generated wiki at ~/.clover/wikis/<repo-name>/:
+Generated wiki at $CLOVER_HOME/wikis/<repo-name>/:
   README.md                   project overview, module map
   architecture.md             system architecture + flowchart
   getting-started.md          setup, first run, workflows
@@ -418,7 +418,7 @@ Full incremental-regeneration is a future enhancement — for now, regenerating 
 - **Restating code as prose.** A module doc that says "the `process` function processes things by calling `process_item` on each item" is worse than just linking to the function.
 - **Mermaid > 50 nodes.** They don't render legibly. Split them.
 - **Documenting tests, generated code, or vendored deps as if they were product code.** Skip them.
-- **In-repo output without asking.** Default is `~/.clover/wikis/`. Only write into the repo when the user explicitly requests it.
+- **In-repo output without asking.** Default is `$CLOVER_HOME/wikis/`. Only write into the repo when the user explicitly requests it.
 - **Mermaid special chars need quotes:** `A["Tool / Agent"]` not `A[Tool / Agent]`. `<br>` for line breaks inside a node.
 - **Nested code fences in SKILL.md.** When writing a markdown example that contains a Mermaid block, use 4-backtick outer fences so the 3-backtick inner ` ```mermaid ` doesn't close the outer. (This SKILL.md does it.)
 - **classDiagram generics** render as `~T~` (e.g. `List~Tool~`), not `<T>`.

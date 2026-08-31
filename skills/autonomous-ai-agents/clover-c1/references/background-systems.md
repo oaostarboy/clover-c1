@@ -63,7 +63,7 @@ so nothing is lost.
   **off by default** — opt in with `curator.consolidate: true` or
   `clover curator run --consolidate`. Routine background curation costs
   zero tokens.
-- **Telemetry:** sidecar at `~/.clover/skills/.usage.json` holds
+- **Telemetry:** sidecar at `$CLOVER_HOME/skills/.usage.json` holds
   per-skill `use_count`, `view_count`, `patch_count`,
   `last_activity_at`, `state`, `pinned`.
 

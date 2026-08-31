@@ -389,7 +389,7 @@ This fix addresses edge cases where raw user conclusions containing markup or sp
 ## Troubleshooting
 
 ### "Honcho not configured"
-Run `clover honcho setup`. Ensure `memory.provider: honcho` is in `~/.clover/config.yaml`.
+Run `clover honcho setup`. Ensure `memory.provider: honcho` is in `$CLOVER_HOME/config.yaml`.
 
 ### Memory not persisting across sessions
 Check `clover honcho status` -- verify `saveMessages: true` and `writeFrequency` isn't `session` (which only writes on exit).

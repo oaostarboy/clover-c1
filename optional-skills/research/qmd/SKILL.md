@@ -226,7 +226,7 @@ without needing to load this skill.
 
 ### Option A: Stdio Mode (Simple)
 
-Add to `~/.clover/config.yaml`:
+Add to `$CLOVER_HOME/config.yaml`:
 
 ```yaml
 mcp_servers:

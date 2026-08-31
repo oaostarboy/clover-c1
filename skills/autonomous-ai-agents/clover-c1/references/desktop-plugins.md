@@ -5,7 +5,7 @@ command-palette commands, keybinds, routes, and themes. A plugin is a single
 plain-JavaScript ESM file the app loads at runtime — no build step, no repo
 changes. A plugin can also talk to its own Python backend namespace
 (`ctx.rest`/`ctx.socket` → `/api/plugins/<id>`); the general Python plugin
-system (`~/.clover/plugins/`) is otherwise documented separately.
+system (`$CLOVER_HOME/plugins/`) is otherwise documented separately.
 
 There are TWO on-disk doors, same contract and hot reload:
 
@@ -33,7 +33,7 @@ Full human reference (every export, area payloads, backend, security):
 
 - The Clover desktop app (it loads plugins; the CLI/gateway alone does not).
 - Write access to `$CLOVER_HOME/desktop-plugins/` (usually
-  `~/.clover/desktop-plugins/`).
+  `$CLOVER_HOME/desktop-plugins/`).
 
 ## How to Run
 
@@ -134,7 +134,7 @@ The ONLY import surface is `@clover/plugin-sdk` (plus `react` /
   React Query client — cache, dedupe, `refetchInterval`, invalidate like core;
   never hand-roll a poll loop), plus `atom`/`computed` for plugin-local state.
 - Backend: if the plugin ships a Python `plugin_api.py` (under
-  `~/.clover/plugins/<id>/dashboard/`, manifest `"api": "plugin_api.py"`), reach
+  `$CLOVER_HOME/plugins/<id>/dashboard/`, manifest `"api": "plugin_api.py"`), reach
   it with `ctx.rest('/path', { method?, body?, timeoutMs? })` and its live twin
   `ctx.socket('/events', onMessage)` — both scoped to `/api/plugins/<id>` by
   construction (traversal rejected). `ctx.socket` is a **no-op on OAuth

@@ -56,7 +56,7 @@ Override per task with `--ledger <path>` or `CLOVER_CITATION_LEDGER`.
 ## How to Run
 
 ```bash
-S=~/.clover/skills/research/grounded-citations/scripts/sources.py
+S=$CLOVER_HOME/skills/research/grounded-citations/scripts/sources.py
 
 python "$S" reset                                  # start a clean ledger
 python "$S" add https://example.com/a --title "A"  # prints: [1]

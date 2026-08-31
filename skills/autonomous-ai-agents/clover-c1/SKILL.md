@@ -1,6 +1,6 @@
 ---
 name: clover-c1
-description: "Use, configure, theme, extend, and orchestrate Clover Cognition."
+description: "Use, configure, extend, and orchestrate Clover Cognition."
 version: 3.2.0
 author: Clover Cognition + the maintainer
 license: MIT
@@ -68,18 +68,18 @@ clover proxy                   # OpenAI-compatible local proxy backed by your OA
 ## Key Paths
 
 ```
-~/.clover/config.yaml       Main configuration (settings — never secrets)
-~/.clover/.env              API keys and secrets ONLY (under $CLOVER_HOME if set)
+$CLOVER_HOME/config.yaml       Main configuration (settings — never secrets)
+$CLOVER_HOME/.env              API keys and secrets ONLY
 $CLOVER_HOME/skills/        Installed skills
-~/.clover/skins/            Custom themes (see references/themes.md)
-~/.clover/desktop-plugins/  Desktop app UI plugins (see references/desktop-plugins.md)
-~/.clover/tui-widgets/      TUI widget apps (see references/tui-widgets.md)
-~/.clover/pets/             Installed pet mascots (see references/petdex.md)
-~/.clover/state.db          Canonical session store (SQLite + FTS5)
-~/.clover/sessions/         Gateway routing index, request dumps, *.jsonl transcripts
-~/.clover/logs/             Gateway and error logs
-~/.clover/auth.json         OAuth tokens and credential pools
-~/.clover/clover-c1/     Source code (if git-installed)
+$CLOVER_HOME/skins/            Custom themes (see references/themes.md)
+$CLOVER_HOME/desktop-plugins/  Desktop app UI plugins (see references/desktop-plugins.md)
+$CLOVER_HOME/tui-widgets/      TUI widget apps (see references/tui-widgets.md)
+$CLOVER_HOME/pets/             Installed pet mascots (see references/petdex.md)
+$CLOVER_HOME/state.db          Canonical session store (SQLite + FTS5)
+$CLOVER_HOME/sessions/         Gateway routing index, request dumps, *.jsonl transcripts
+$CLOVER_HOME/logs/             Gateway and error logs
+$CLOVER_HOME/auth.json         OAuth tokens and credential pools
+$CLOVER_HOME/clover-c1/     Source code (if git-installed)
 ```
 
 Profiles use `~/.clover/profiles/<name>/` with the same layout. When a profile is active, resolve the real home from `$CLOVER_HOME` — never hardcode `~/.clover`.

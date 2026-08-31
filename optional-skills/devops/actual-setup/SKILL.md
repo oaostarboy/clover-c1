@@ -49,7 +49,7 @@ a human in a browser.
 ### Relay / API mode
 
 1. Put the key in `.env` (secrets only — never config.yaml):
-   append `ACTUAL_API_KEY=ac_...` to `~/.clover/.env`.
+   append `ACTUAL_API_KEY=ac_...` to `$CLOVER_HOME/.env`.
 2. Verify the key and discover models with `terminal`:
    ```bash
    curl -s https://api.actual.inc/v1/models -H "Authorization: Bearer $ACTUAL_API_KEY"
@@ -77,7 +77,7 @@ a human in a browser.
    ```
 3. Point Clover at the daemon. `ACTUAL_BASE_URL` with a loopback host flips the
    built-in provider into local no-auth mode automatically — no key needed:
-   append `ACTUAL_BASE_URL=http://127.0.0.1:8080` to `~/.clover/.env`, then:
+   append `ACTUAL_BASE_URL=http://127.0.0.1:8080` to `$CLOVER_HOME/.env`, then:
    ```bash
    clover config set model.provider actual
    clover config set model.default "INSTALLED_MODEL_NAME"

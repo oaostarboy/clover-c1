@@ -64,6 +64,7 @@ privvy*
 images/
 __pycache__/
 clover-c1.egg-info/
+clover_c1.egg-info/
 wandb/
 testlogs
 playwright-report/

@@ -146,5 +146,5 @@ Plugin- and provider-supplied subcommands (e.g. `clover photon setup`) only appe
 | Skills catalog | `clover skills browse` · [Skills catalog](docs/reference/skills-catalog) |
 | Provider setup | `clover model` · [Providers guide](docs/integrations/providers) |
 | Env variables | `clover config env-path` · [Env vars reference](docs/reference/environment-variables) |
-| Gateway logs | `~/.clover/logs/gateway.log` (or `clover logs`) |
+| Gateway logs | `$CLOVER_HOME/logs/gateway.log` (or `clover logs`) |
 | Sessions | `clover sessions browse` (reads state.db) |

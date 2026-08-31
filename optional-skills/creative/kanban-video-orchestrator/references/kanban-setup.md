@@ -62,7 +62,7 @@ The setup script does six things in order:
 1. **Create workspace tree** — all directories above
 2. **Create profiles** — `clover profile create <name> --clone`
 3. **Configure profiles** — patch each profile's
-   `~/.clover/profiles/<name>/config.yaml` to set toolsets, always_load skills,
+   `$CLOVER_HOME/profiles/<name>/config.yaml` to set toolsets, always_load skills,
    and `cwd`
 4. **Write SOUL.md per profile** — the personality + role definition
 5. **Copy any provided assets + write `brief.md`, `TEAM.md`, and `taste/`**
@@ -82,7 +82,7 @@ the profile already exists.
 
 ### Profile config patching
 
-Each profile has a YAML config at `~/.clover/profiles/<name>/config.yaml`. The
+Each profile has a YAML config at `$CLOVER_HOME/profiles/<name>/config.yaml`. The
 setup script edits exactly two keys:
 
 1. `toolsets:` — replace the default with the role's required toolsets
@@ -105,7 +105,8 @@ configure_profile() {
     python3 - "$profile" "$toolsets_json" "$skills_json" <<'PY'
 import json, os, sys, yaml
 profile, ts_json, sk_json = sys.argv[1:4]
-p = os.path.expanduser(f"~/.clover/profiles/{profile}/config.yaml")
+p = os.path.join(os.environ.get("CLOVER_HOME", os.path.expanduser("~/.clover")),
+                 "profiles", profile, "config.yaml")
 with open(p) as f:
     cfg = yaml.safe_load(f) or {}
 cfg["toolsets"] = json.loads(ts_json)
@@ -124,7 +125,7 @@ and comparing — see `assets/setup.sh.tmpl` for the validation pattern.
 
 ### SOUL.md per profile
 
-Each profile gets a `SOUL.md` at `~/.clover/profiles/<name>/SOUL.md` that
+Each profile gets a `SOUL.md` at `$CLOVER_HOME/profiles/<name>/SOUL.md` that
 defines its role, voice, and rules. See `assets/soul.md.tmpl` for the
 template. Customize per role and per project.
 

@@ -56,7 +56,7 @@ Blunt instruments: `web.cache_ttl_minutes: 1` (min) or
 ### Gateway issues
 Check logs first:
 ```bash
-grep -i "failed to send\|error" ~/.clover/logs/gateway.log | tail -20
+grep -i "failed to send\|error" $CLOVER_HOME/logs/gateway.log | tail -20
 ```
 
 Common gateway problems:

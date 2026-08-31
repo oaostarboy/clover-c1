@@ -60,7 +60,7 @@ registry.register(
 
 All handlers must return JSON strings. Use `get_clover_home()` for paths,
 never hardcode `~/.clover`. For custom/local-only tools, write a plugin in
-`~/.clover/plugins/` instead of editing core — see the developer docs.
+`$CLOVER_HOME/plugins/` instead of editing core — see the developer docs.
 
 ### Adding a Slash Command
 
