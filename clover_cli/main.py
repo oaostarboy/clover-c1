@@ -13547,10 +13547,15 @@ def main():
     build_peer_parser(subparsers)
 
     # =========================================================================
-    # portal command — Clover Portal status + Tool Gateway routing
+    # portal command — REMOVED 2026-08-30
     # =========================================================================
-    from clover_cli.portal_cli import add_parser as _add_portal_parser
-    _add_portal_parser(subparsers)
+    # Clover Portal is a hosted subscription service the upstream project runs
+    # and this fork does not. Its address is empty here, so `clover portal`
+    # printed a subscription pitch, started a login, failed with "Request URL
+    # is missing an 'http://' or 'https://' protocol", and then reported
+    # "Portal setup complete". Removing the command removes the only way a
+    # user could reach that. The provider plumbing stays: "clover" is also a
+    # provider name shared with code paths that work.
 
     # =========================================================================
     # kanban command — multi-profile collaboration board

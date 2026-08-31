@@ -490,7 +490,6 @@ def _print_setup_summary(config: dict, clover_home):
         print_warning("No inference provider is configured — Clover cannot chat yet.")
         print_info("  Finish this one step with either of:")
         print_info("    clover model            (pick any provider/model)")
-        print_info("    clover setup --portal   (Clover Portal OAuth, no API key)")
 
     # Tool availability summary
     print()
@@ -2900,9 +2899,6 @@ def _run_portal_one_shot(config: dict) -> None:
         )
     )
     print()
-    print_info("  One subscription, 300+ models, plus the Tool Gateway:")
-    print_info("    web search, image generation, TTS, browser automation")
-    print_info("    — all routed through your Clover Portal sub.")
     print()
     print_info("  Sign in to route models and tools through a single account.")
     print()
@@ -2924,13 +2920,13 @@ def _run_portal_one_shot(config: dict) -> None:
         # Treat all of these as a graceful cancel/abort for the portal flow.
         print()
         print_info("  Setup cancelled.")
-        print_info("  You can retry later with `clover portal`.")
+        print_info("  Configure a provider with `clover model`.")
         return
     except Exception as exc:
         logger.debug("_model_flow_clover error during `clover portal`: %s", exc)
         print()
         print_error(f"  Clover Portal setup encountered an error: {exc}")
-        print_info("  You can retry later with `clover portal`.")
+        print_info("  Configure a provider with `clover model`.")
         return
 
     # Re-sync the in-memory config from disk — _model_flow_clover (and the
@@ -3242,15 +3238,18 @@ def _run_setup_wizard_impl(args):
         if migration_ran:
             config = load_config()
 
+        # The Clover Portal option was removed on 2026-08-30: it fronted a
+        # hosted subscription this fork does not run, and it was the
+        # preselected recommendation, so a new user's default path ended in a
+        # login error. Full setup is the working route and is now first.
         setup_mode = prompt_choice(
             "How would you like to set up Clover?",
             [
-                "Quick Setup (Clover Portal) — free OAuth login, no API keys, model + tools (recommended)",
-                "Full setup — configure every provider, tool & option yourself (bring your own keys)",
+                "Full setup — configure every provider, tool & option yourself (recommended)",
                 "Blank Slate — everything off except the bare minimum; opt in to each capability",
             ],
             0,
-        )
+        ) + 1
 
         if setup_mode == 0:
             _run_setup_steps(
@@ -3368,8 +3367,6 @@ def _run_first_time_quick_setup(config: dict, clover_home, is_existing: bool):
     # Clover model picker). Provider is set to "clover" by the login/model save.
     print()
     print_header("Clover Portal")
-    print_info("One subscription, 300+ models, plus the Tool Gateway:")
-    print_info("  web search, image generation, TTS, browser automation.")
     print_info("Sign in to route models and tools through a single account.")
     print()
     try:

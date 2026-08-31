@@ -231,7 +231,7 @@ def invalidate_cached_token() -> None:
 def _billing_not_logged_in(exc: Optional[BaseException] = None) -> "BillingAuthError":
     """Build the canonical 'not logged in' BillingAuthError (single source)."""
     err = BillingAuthError(
-        "Not logged into Clover Portal — run `clover portal` to log in.",
+        "Subscriptions are not available in this build.",
         status=401,
         error="invalid_token",
     )

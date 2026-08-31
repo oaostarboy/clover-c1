@@ -57,11 +57,7 @@ def build_setup_parser(subparsers, *, cmd_setup: Callable) -> None:
         help="On existing installs: only prompt for items that are missing "
         "or unset, instead of running the full reconfigure wizard.",
     )
-    setup_parser.add_argument(
-        "--portal",
-        action="store_true",
-        help="One-shot Clover Portal setup: log in via OAuth, pick a Clover "
-        "model, set Clover as the inference provider, and opt into the Tool "
-        "Gateway. Skips the rest of the wizard.",
-    )
+    # --portal removed 2026-08-30: it ran a one-shot login against a hosted
+    # service this fork does not run, whose address is empty here, so the flag
+    # could only ever end in "Request URL is missing an 'http://' protocol".
     setup_parser.set_defaults(func=cmd_setup)
