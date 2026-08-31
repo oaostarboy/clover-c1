@@ -50,6 +50,7 @@ Two mechanisms recognize the orchestrating parent, and either suffices:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -80,6 +81,81 @@ HANDOFF_PID_ENV = "CLOVER_UPDATE_HANDOFF_PID"
 # to show "Clover is still running" instead of a generic failure. Naming it
 # here keeps the concurrent-update refusal on that same understood contract.
 UPDATE_EXIT_CONCURRENT = 2
+
+# How the last update ended. Written next to the marker as a small sidecar so
+# the next startup can answer "did the previous update finish?" after the
+# in-progress marker is gone. Reported 2026-08-31: an update that killed the
+# gateway left no record at all, so a crashed run and a run that never
+# happened were indistinguishable.
+OUTCOME_SUCCESS = "success"
+OUTCOME_FAILED = "failed"
+OUTCOME_ROLLED_BACK = "rolled-back"
+
+OUTCOME_NAME = ".clover-last-update"
+
+
+def outcome_path() -> Path:
+    """Path of the last-update outcome sidecar.
+
+    Sits beside the marker in the *process* Clover home for the same reason
+    ``update_marker_path`` does: the Rust updater and the desktop both resolve
+    that location, and a profile-scoped path would be invisible to them.
+    """
+    from clover_constants import get_process_clover_home
+
+    return get_process_clover_home() / OUTCOME_NAME
+
+
+def record_update_outcome(
+    outcome: str,
+    *,
+    detail: str = "",
+    started_at: float | int | None = None,
+) -> Path | None:
+    """Record how an update ended. Best-effort: never raises.
+
+    Called from ``update_receipt.finalize_update_receipt``. The receipt itself
+    is rotated and lives under ``logs/update_receipts/``; this is the one small
+    file the next startup reads, so it must survive receipt pruning.
+    """
+    try:
+        path = outcome_path()
+        payload = {
+            "outcome": str(outcome),
+            "detail": str(detail or ""),
+            "pid": os.getpid(),
+            "finished_at_unix": time.time(),
+        }
+        if started_at is not None:
+            try:
+                payload["started_at_unix"] = float(started_at)
+                payload["duration_seconds"] = round(
+                    payload["finished_at_unix"] - float(started_at), 3
+                )
+            except (TypeError, ValueError):
+                pass
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return path
+    except Exception:  # pragma: no cover - defensive, must never break update
+        return None
+
+
+def read_last_outcome(*, path: Path | None = None) -> dict | None:
+    """Read the last-update outcome, or None when no update has finished.
+
+    None means "no completed update on record" — which is exactly the state a
+    killed updater leaves behind, and why the caller should treat a live
+    marker with no outcome as an interrupted run.
+    """
+    try:
+        target = path or outcome_path()
+        if not target.exists():
+            return None
+        data = json.loads(target.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
 
 
 def update_marker_path() -> Path:

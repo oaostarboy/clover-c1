@@ -5114,6 +5114,8 @@ _LAZY_COMMAND_EXPORTS = {
         "_orphaned_desktop_backend_pids",
         "_pending_fleet_restart_needed",
         "_pause_windows_gateways_for_update",
+        "_arm_restart_watcher_before_pause",
+        "_gateway_restart_argv_for_running_gateway",
         "_print_curator_first_run_notice",
         "_print_curator_recent_run_notice",
         "_print_fts_optimize_available_notice",

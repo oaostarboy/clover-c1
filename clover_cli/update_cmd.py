@@ -6860,6 +6860,65 @@ def _refresh_bootstrap_cache_scripts(branch: str = "main") -> None:
     except Exception as exc:
         logger.debug("Could not refresh bootstrap-cache scripts after update: %s", exc)
 
+def _arm_restart_watcher_before_pause() -> bool:
+    """Arm the out-of-process restart watcher BEFORE stopping any gateway.
+
+    Reported 2026-08-31: across four updates in under 24 hours the updater
+    stopped the gateway and then died before restarting it, once leaving the
+    bot offline about nine hours overnight. The watcher that fixes this was
+    armed *after* the pause returned, so a kill during the pause, which is
+    what actually happened, hit a window with no gateway and no watcher.
+
+    Arming first closes that window. The watcher only acts when the beacon
+    goes stale AND no gateway is up, so arming early is safe: a normal update
+    clears the beacon on the way out and the watcher exits without acting.
+
+    Best-effort by design. The watcher is a safety net, and failing to arm it
+    must never stop an update that would otherwise succeed.
+
+    Returns True when a watcher was started.
+    """
+    if not _m()._is_windows():
+        return False
+
+    try:
+        from clover_cli import update_restart_watcher as _urw
+
+        # Capture the argv of a gateway that is still RUNNING. After the pause
+        # the processes are gone, which is why the old ordering had to work
+        # from the resume token instead.
+        argv = _m()._gateway_restart_argv_for_running_gateway()
+        if not argv:
+            return False
+
+        beacon = _urw.write_beacon(argv)
+
+        watcher_kwargs: dict = {"close_fds": True}
+        if _m()._is_windows():
+            watcher_kwargs["creationflags"] = (
+                getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            )
+        else:
+            watcher_kwargs["start_new_session"] = True
+
+        subprocess.Popen(
+            [sys.executable, "-m",
+             "clover_cli.update_restart_watcher", str(beacon)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            **watcher_kwargs,
+        )
+
+        import atexit as _atexit
+
+        _atexit.register(_urw.clear_beacon)
+        return True
+    except Exception as exc:
+        logger.debug("Could not pre-arm the update restart watcher: %s", exc)
+        return False
+
+
 def _gateway_restart_argv_for_resume(token: dict | None) -> list[str]:
     """Pick one command line that will bring a gateway back.
 
@@ -6881,6 +6940,38 @@ def _gateway_restart_argv_for_resume(token: dict | None) -> list[str]:
                 return argv
         for entry in token.get("unmapped") or []:
             argv = list((entry or {}).get("argv") or [])
+            if argv:
+                return argv
+    except Exception:
+        return []
+    return []
+
+
+def _gateway_restart_argv_for_running_gateway() -> list[str]:
+    """Capture a restart command line from a gateway that is still running.
+
+    The resume-token variant below can only run after the pause, because the
+    token is what the pause produces. Pre-arming the watcher needs the same
+    answer *before* anything is stopped, so this reads the live processes
+    directly.
+
+    Returns an empty list when nothing usable is found, which the caller
+    treats as "cannot arm the watcher" rather than guessing at a command.
+    """
+    try:
+        from clover_cli.gateway import (
+            _capture_gateway_argv,
+            find_profile_gateway_processes,
+        )
+    except Exception:
+        return []
+
+    try:
+        for proc in find_profile_gateway_processes(strict=True) or []:
+            try:
+                argv = list(_capture_gateway_argv(int(proc.pid)) or [])
+            except Exception:
+                continue
             if argv:
                 return argv
     except Exception:
@@ -7402,6 +7493,13 @@ def _cmd_update_impl(args, gateway_mode: bool):
     except Exception:
         pass
 
+    # Arm the restart watcher BEFORE stopping anything. The block further down
+    # arms it again from the resume token; this one closes the window between
+    # "gateway stopped" and "watcher running", which is where the reported
+    # nine-hour outage happened. write_beacon is idempotent, so the later
+    # arming simply refreshes it with the token-derived argv.
+    _pre_armed_watcher = _m()._arm_restart_watcher_before_pause()
+
     _windows_gateway_resume = _m()._pause_windows_gateways_for_update()
     if _windows_gateway_resume:
         import atexit as _atexit
@@ -7430,22 +7528,29 @@ def _cmd_update_impl(args, gateway_mode: bool):
             )
             if _restart_argv:
                 _beacon = _urw.write_beacon(_restart_argv)
-                _watcher_kwargs = {"close_fds": True}
-                if _m()._is_windows():
-                    _watcher_kwargs["creationflags"] = (
-                        getattr(subprocess, "DETACHED_PROCESS", 0)
-                        | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                    )
+                if _pre_armed_watcher:
+                    # A watcher is already running from the pre-pause arming
+                    # and polls this same beacon; refreshing the argv above is
+                    # all it needs. Spawning a second one would double the
+                    # restart attempts.
+                    _atexit.register(_urw.clear_beacon)
                 else:
-                    _watcher_kwargs["start_new_session"] = True
-                subprocess.Popen(
-                    [sys.executable, "-m",
-                     "clover_cli.update_restart_watcher", str(_beacon)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    **_watcher_kwargs,
-                )
-                _atexit.register(_urw.clear_beacon)
+                    _watcher_kwargs = {"close_fds": True}
+                    if _m()._is_windows():
+                        _watcher_kwargs["creationflags"] = (
+                            getattr(subprocess, "DETACHED_PROCESS", 0)
+                            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                        )
+                    else:
+                        _watcher_kwargs["start_new_session"] = True
+                    subprocess.Popen(
+                        [sys.executable, "-m",
+                         "clover_cli.update_restart_watcher", str(_beacon)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        **_watcher_kwargs,
+                    )
+                    _atexit.register(_urw.clear_beacon)
         except Exception as _watch_err:
             # The watcher is a safety net. Failing to arm it must never stop
             # an update that would otherwise succeed.
