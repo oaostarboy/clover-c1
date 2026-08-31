@@ -862,3 +862,57 @@ class TestLineEndingNormalisation:
             "blank padding must not trip the drift guard: "
             + str(result.get("error"))
         )
+
+
+class TestDriftBackupsArePruned:
+    """Drift-guard backups must not accumulate beside the live file.
+
+    Reported 2026-08-31: three ``MEMORY.md.bak.<epoch>`` files appeared in a
+    single session, were never mentioned again after the error, and nothing
+    ever removed them. They sit next to the live file, where a later glob or
+    a "restore from backup" step can pick up a stale one.
+    """
+
+    def test_only_the_newest_backups_survive(self, tmp_path):
+        import os
+
+        from tools.memory_tool import MemoryStore
+
+        live = tmp_path / "MEMORY.md"
+        live.write_text("live", encoding="utf-8")
+        for i in range(9):
+            b = tmp_path / f"MEMORY.md.bak.{1000 + i}"
+            b.write_text(f"backup {i}", encoding="utf-8")
+            os.utime(b, (1000 + i, 1000 + i))
+
+        MemoryStore._prune_drift_backups(live)
+
+        kept = sorted(p.name for p in tmp_path.glob("MEMORY.md.bak.*"))
+        assert len(kept) == 5
+        assert "MEMORY.md.bak.1008" in kept, "newest backup must be kept"
+        assert "MEMORY.md.bak.1000" not in kept, "oldest backup must be pruned"
+
+    def test_pruning_never_touches_the_live_file(self, tmp_path):
+        from tools.memory_tool import MemoryStore
+
+        live = tmp_path / "MEMORY.md"
+        live.write_text("live content", encoding="utf-8")
+        (tmp_path / "MEMORY.md.bak.1").write_text("old", encoding="utf-8")
+
+        MemoryStore._prune_drift_backups(live)
+
+        assert live.exists()
+        assert live.read_text(encoding="utf-8") == "live content"
+
+    def test_pruning_failure_never_raises(self, tmp_path, monkeypatch):
+        """Housekeeping must never break a memory write."""
+        from tools.memory_tool import MemoryStore
+
+        live = tmp_path / "MEMORY.md"
+        live.write_text("live", encoding="utf-8")
+
+        def boom(*a, **kw):
+            raise OSError("permission denied")
+
+        monkeypatch.setattr("pathlib.Path.glob", boom)
+        MemoryStore._prune_drift_backups(live)  # must not raise
