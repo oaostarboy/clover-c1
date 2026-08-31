@@ -114,6 +114,12 @@ def _normalize_provider(provider: str) -> str:
         return "openrouter"
     if normalized in {"grok-oauth", "xai-oauth", "x-ai-oauth", "xai-grok-oauth"}:
         return "xai-oauth"
+    # Users look for the product name they installed. The provider list holds
+    # 80 entries and none of them says "Claude Code", so someone wiring up
+    # their Claude subscription had to already know the answer was
+    # "anthropic". Accept what they will actually type.
+    if normalized in {"claude", "claude-code", "claudecode", "claude_code"}:
+        return "anthropic"
     # Check if it matches a custom provider name
     custom_key = _resolve_custom_provider_input(normalized)
     if custom_key:

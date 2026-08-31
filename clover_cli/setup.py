@@ -3106,6 +3106,15 @@ def _run_setup_wizard_impl(args):
     else:
         _backup_path = None
 
+    # `clover setup claude` connects Claude Code in one step. It runs BEFORE
+    # the non-interactive guard on purpose: it asks the user nothing, so it
+    # works over SSH, in Docker, and in CI. That is exactly where people wire
+    # up a headless agent, and where the old path was hardest.
+    if getattr(args, "section", None) == "claude":
+        from clover_cli.setup_claude_code import command as _claude_setup
+
+        raise SystemExit(_claude_setup(args))
+
     # Detect non-interactive environments (headless SSH, Docker, CI/CD)
     non_interactive = getattr(args, 'non_interactive', False)
     if not non_interactive and not is_interactive_stdin():
@@ -3117,13 +3126,9 @@ def _run_setup_wizard_impl(args):
         )
         return
 
-    # --portal: one-shot Clover Portal setup. Skips the rest of the wizard.
-    if bool(getattr(args, "portal", False)):
-        _run_portal_one_shot(config)
-        return
-
     # Check if a specific section was requested
     section = getattr(args, "section", None)
+
     if section:
         for key, label, func in SETUP_SECTIONS:
             if key == section:

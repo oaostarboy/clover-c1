@@ -143,6 +143,16 @@ clover model        # pick or change the default model
 clover fallback     # set the chain to fall back to when one is down
 ```
 
+Already have Claude Code installed? One command connects it:
+
+```bash
+clover setup claude
+```
+
+It finds the login already on your machine, sets the provider, and picks a
+model. Nothing to copy or paste. Clover reads Claude Code's own credential
+file, so a later `claude login` keeps working with nothing to redo.
+
 Mix providers freely. It is per-backend, not all-or-nothing: one model for chat,
 another for vision, your own local model for anything private.
 
