@@ -676,3 +676,93 @@ class TestRegistryBatchPassThrough:
         ))
         assert seen["questions"][0]["question"] == "Go?"
         assert result["responses"][0]["user_response"] == "yes"
+
+
+class TestGatewayTimeoutSentinelSetsFlag:
+    """The messaging gateway's timeout text must set ``timed_out``.
+
+    Reported from a Windows install on 2026-08-31. A two-question batch was
+    sent over Telegram. The user answered question 2 and never answered
+    question 1. The result carried the unanswered slot as the free-text
+    string ``[user did not respond within 60m]`` and NO ``timed_out`` field,
+    so the only way to detect a partial answer was to string-match a message
+    written for humans.
+
+    Root cause: ``gateway/run.py`` returns ``[user did not respond within
+    Nm]`` while the batch loop only recognises ``None`` and the CLI's
+    ``TIMEOUT_RESPONSE`` sentence. Two spellings of the same event, and the
+    gateway's spelling matched neither.
+    """
+
+    def _questions(self):
+        return [
+            {"id": "q1", "question": "How should I expose it?"},
+            {"id": "q2", "question": "Keep it running on lid close?"},
+        ]
+
+    def test_gateway_sentinel_sets_timed_out(self):
+        """A gateway timeout on the FIRST question must set the flag."""
+        replies = iter(["[user did not respond within 60m]"])
+
+        def cb(question, choices=None, multi_select=False):
+            return next(replies)
+
+        out = json.loads(
+            clarify_tool(question="", questions=self._questions(), callback=cb)
+        )
+
+        assert out.get("timed_out") is True, (
+            "gateway timeout text must set timed_out, got: " + json.dumps(out)
+        )
+
+    def test_answered_question_is_kept_when_a_later_one_times_out(self):
+        """Answers given before the timeout must survive."""
+        replies = iter(["websocket", "[user did not respond within 60m]"])
+
+        def cb(question, choices=None, multi_select=False):
+            return next(replies)
+
+        out = json.loads(
+            clarify_tool(question="", questions=self._questions(), callback=cb)
+        )
+
+        assert out.get("timed_out") is True
+        assert out["responses"][0]["user_response"] == "websocket"
+
+    def test_sentinel_does_not_land_in_the_answer_slot(self):
+        """The human-facing text must not be returned as if the user said it.
+
+        An unanswered question reads as empty. The fact that it timed out
+        lives in the flag, which is a structured field, so a reworded message
+        cannot silently break detection.
+        """
+        replies = iter(["[user did not respond within 60m]"])
+
+        def cb(question, choices=None, multi_select=False):
+            return next(replies)
+
+        out = json.loads(
+            clarify_tool(question="", questions=self._questions(), callback=cb)
+        )
+
+        for row in out["responses"]:
+            assert "did not respond" not in str(row["user_response"]), (
+                "timeout text leaked into an answer slot: " + json.dumps(row)
+            )
+
+    def test_any_timeout_wording_is_recognised(self):
+        """Detection must not depend on the exact minute count or wording."""
+        for text in (
+            "[user did not respond within 5m]",
+            "[user did not respond within 120m]",
+            "  [user did not respond within 60m]  ",
+        ):
+            replies = iter([text])
+
+            def cb(question, choices=None, multi_select=False):
+                return next(replies)
+
+            out = json.loads(
+                clarify_tool(question="", questions=self._questions(), callback=cb)
+            )
+            assert out.get("timed_out") is True, "not recognised: " + text

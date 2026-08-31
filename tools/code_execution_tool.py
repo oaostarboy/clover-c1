@@ -466,10 +466,21 @@ def _sandbox_failure_hint(stderr_text: str, enabled_tools=None) -> Optional[str]
             )
         m = re.search(r"ModuleNotFoundError: No module named '([\w.]+)'", window)
         if m:
+            # Name the interpreter that actually ran the code. Without it the
+            # only way to learn what the sandbox has is to import something
+            # and watch it fail, so every missing package costs a round trip.
+            # Reported 2026-08-31: "discovery is trial-and-error ... an
+            # intentional failed call is the documented discovery mechanism."
+            missing = m.group(1)
+            sandbox_python = sys.executable or "python3"
             return (
-                f"'{m.group(1)}' is not installed in the sandbox interpreter. "
-                "Use Python stdlib inside execute_code, or run the code via "
-                "terminal() with the project venv's python instead."
+                f"'{missing}' is not installed in the sandbox interpreter "
+                f"({sandbox_python}). Use Python stdlib inside execute_code, "
+                f"or run the code via terminal() with the project venv's "
+                f"python instead. To see what the sandbox does have, run: "
+                f"terminal(\"{sandbox_python} -m pip list\") — or check one "
+                f"package with importlib.util.find_spec('{missing}') before "
+                f"relying on it."
             )
         if re.search(r"TypeError: string indices must be integers|AttributeError: 'str' object has no attribute 'get'", window):
             return (

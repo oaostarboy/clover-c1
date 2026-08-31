@@ -15,6 +15,7 @@ a thin dispatcher that delegates to a platform-provided callback.
 """
 
 import json
+import re
 from typing import Dict, List, Optional, Callable
 
 
@@ -33,6 +34,33 @@ TIMEOUT_RESPONSE = (
     "The user did not provide a response within the time limit. "
     "Use your best judgement to make the choice and proceed."
 )
+
+# The messaging gateway spells the same event differently: it returns
+# ``[user did not respond within 15m]`` (gateway/run.py), with the minute
+# count baked into the text. Recognising only ``TIMEOUT_RESPONSE`` meant a
+# gateway timeout never set ``timed_out``, so a partially-answered batch
+# came back looking like a complete one whose blanks were deliberate skips.
+# Reported 2026-08-31: the only way to detect it was to string-match a
+# human-facing message inside an answer field.
+_GATEWAY_TIMEOUT_RE = re.compile(
+    r"^\[user did not respond within [^\]]*\]$", re.IGNORECASE
+)
+
+
+def _is_timeout_reply(raw) -> bool:
+    """True when a callback reply means "the user never answered".
+
+    Accepts every spelling the surfaces produce: ``None`` (direct callbacks),
+    the CLI's ``TIMEOUT_RESPONSE`` sentence, and the gateway's bracketed
+    ``[user did not respond within Nm]``. One predicate so a new surface
+    cannot reintroduce the split.
+    """
+    if raw is None:
+        return True
+    if not isinstance(raw, str):
+        return False
+    text = raw.strip()
+    return text == TIMEOUT_RESPONSE or bool(_GATEWAY_TIMEOUT_RE.match(text))
 
 # Suffix appended to the first choice so the user can see, at a glance, which
 # option the agent actually recommends. Applied here rather than per-surface so
@@ -296,7 +324,7 @@ def _run_batch(normalized: List[dict], callback, question: str) -> str:
 
         answers: dict = {}
         timed_out = False
-        if raw is None or (isinstance(raw, str) and raw.strip() == TIMEOUT_RESPONSE):
+        if _is_timeout_reply(raw):
             timed_out = True
         elif isinstance(raw, dict):
             answers = dict(raw.get("answers") or {})
@@ -319,7 +347,7 @@ def _run_batch(normalized: List[dict], callback, question: str) -> str:
         raw = _invoke_callback(
             callback, entry["question"], entry["choices"], entry["multi_select"],
         )
-        if raw is None or (isinstance(raw, str) and raw.strip() == TIMEOUT_RESPONSE):
+        if _is_timeout_reply(raw):
             timed_out = True
             break
         answers[entry["qid"]] = raw
