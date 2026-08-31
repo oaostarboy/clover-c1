@@ -28,13 +28,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cloverc1/clover-c1.git"
+    "url": "git+https://github.com/oaostarboy/clover-c1.git"
   },
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/cloverc1/clover-c1/issues"
+    "url": "https://github.com/oaostarboy/clover-c1/issues"
   },
-  "homepage": "https://github.com/cloverc1/clover-c1#readme",
+  "homepage": "https://github.com/oaostarboy/clover-c1#readme",
   "devDependencies": {
     "@eslint/js": "9.39.5",
     "typescript-eslint": "8.64.0",
