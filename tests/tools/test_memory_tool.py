@@ -706,3 +706,159 @@ class TestBomToleranceInMemoryFiles:
         raw, read_ok = MemoryStore._read_raw_checked(path)
         assert read_ok is False
         assert raw == ""
+
+
+# =========================================================================
+# Imported-profile regressions, reported from a Windows install 2026-08-31.
+#
+# A profile imported from another agent arrived as ONE 15,101-char blob
+# against a 2,200-char limit. Two separate defects then made memory
+# permanently unwritable, and the error blamed causes that were not the
+# cause. Both are about the same root shape: the store treats an oversized
+# IMPORTED file as if a rogue writer had corrupted it.
+# =========================================================================
+
+
+class TestOversizedImportedProfile:
+    """An imported over-budget file must stay editable and be reported honestly."""
+
+    def _plant_import(self, store, target="memory", size=4000):
+        """One entry, well-formed, far over the store's char limit.
+
+        This is what an imported profile looks like: no delimiters, because
+        the exporting tool never wrote any. It is NOT corruption.
+        """
+        path = store._path_for(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# Imported\n" + "x" * size, encoding="utf-8")
+        return path
+
+    def test_oversize_message_does_not_assert_a_cause_it_cannot_know(self, store):
+        """The refusal must not state a cause the tool cannot distinguish.
+
+        Reported: the error said the content was 'likely added by the patch
+        tool, a shell append, a manual edit, or a concurrent session' and
+        warned of silent data loss. The real cause was an imported profile.
+        None of the named causes applied and nothing had been lost, but the
+        operator followed the message into a long manual recovery.
+
+        An import and a rogue append are IDENTICAL on disk, so the honest
+        message names the measurable fact (the size) and gives both causes.
+        """
+        self._plant_import(store)
+        result = store.replace("memory", "Imported", "Something else")
+
+        assert result["success"] is False
+        err = result["error"]
+        assert "larger than" in err, "oversize must be named as the fact: " + err
+        assert "likely added by" not in err, (
+            "must not assert one cause as probable: " + err
+        )
+        assert "imported" in err.lower(), "must offer the import cause too: " + err
+
+    def test_reports_the_size_and_the_limit(self, store):
+        """The message must cite WHICH entry and by how much, not just 'drift'."""
+        self._plant_import(store, size=4000)
+        result = store.replace("memory", "Imported", "Something else")
+
+        assert result["success"] is False
+        assert "500" in result["error"], "must cite the limit"
+        assert any(
+            str(n) in result["error"] for n in (4011, 4000)
+        ), "must cite the actual size, got: " + result["error"]
+        assert result["oversize_entry_chars"] > 4000
+        assert result["char_limit"] == 500
+
+    def test_replace_still_refuses(self, store):
+        """Replace must stay blocked: it is what would truncate the entry.
+
+        Guards the fix against its own overreach. Letting replace through
+        because 'it shrinks the file' would silently discard an oversized
+        entry the user never named, which is the data loss the guard exists
+        to prevent.
+        """
+        path = self._plant_import(store, size=4000)
+        before = path.read_text(encoding="utf-8")
+
+        result = store.replace("memory", "Imported", "Something else")
+
+        assert result["success"] is False
+        assert path.read_text(encoding="utf-8") == before
+
+    def test_remove_works_on_oversized_file(self, store):
+        """Removing must work when the file is over budget.
+
+        This is the deadlock: the file is too big, so the tool refuses to
+        write, so the file can never be made smaller. Remove shrinks the
+        file, so it must always be allowed through.
+        """
+        path = self._plant_import(store, size=4000)
+        store.load_from_disk()
+        entries = store._entries_for("memory")
+        assert len(entries) == 1
+
+        result = store.remove("memory", "Imported")
+
+        assert result["success"] is True, (
+            "remove must not be blocked by an over-budget file: "
+            + str(result.get("error"))
+        )
+        assert "x" * 100 not in path.read_text(encoding="utf-8")
+
+    def test_batch_that_shrinks_the_file_is_allowed(self, store):
+        """A batch whose RESULT is smaller must apply, even if still over budget.
+
+        The tool advertises that a batch is checked on its final result, so a
+        user can remove and add together. With an imported profile at 7x the
+        budget, no batch can reach the limit in one step, so every attempt was
+        rejected and memory stayed frozen. Progress toward the limit must be
+        allowed.
+        """
+        self._plant_import(store, size=4000)
+        store.load_from_disk()
+
+        result = store.apply_batch(
+            "memory",
+            [
+                {"action": "remove", "old_text": "Imported"},
+                {"action": "add", "content": "Short kept fact."},
+            ],
+        )
+
+        assert result["success"] is True, (
+            "a shrinking batch must apply: " + str(result.get("error"))
+        )
+        assert "Short kept fact." in store._entries_for("memory")
+
+
+class TestLineEndingNormalisation:
+    """CRLF and blank padding must not read as corruption."""
+
+    def test_crlf_file_round_trips(self, store):
+        """A file written with Windows line endings is not drifted."""
+        store.add("memory", "First fact.")
+        store.add("memory", "Second fact.")
+        path = store._path_for("memory")
+        raw = path.read_text(encoding="utf-8")
+        path.write_bytes(raw.replace("\n", "\r\n").encode("utf-8"))
+
+        result = store.replace("memory", "First fact.", "First fact, revised.")
+
+        assert result["success"] is True, (
+            "CRLF must not trip the drift guard: " + str(result.get("error"))
+        )
+
+    def test_blank_padding_around_separator_round_trips(self, store):
+        """Extra blank lines around § are cosmetic, not drift."""
+        store.add("memory", "First fact.")
+        store.add("memory", "Second fact.")
+        path = store._path_for("memory")
+        raw = path.read_text(encoding="utf-8")
+        path.write_text(raw.replace("\n\u00a7\n", "\n\n\u00a7\n\n"), encoding="utf-8")
+
+        result = store.replace("memory", "First fact.", "First fact, revised.")
+
+        assert result["success"] is True, (
+            "blank padding must not trip the drift guard: "
+            + str(result.get("error"))
+        )

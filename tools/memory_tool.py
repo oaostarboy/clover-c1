@@ -26,6 +26,7 @@ Design:
 import copy
 import json
 import logging
+import re
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -76,6 +77,12 @@ MEMORY_BLOCK_HEADERS = {
 }
 
 ENTRY_DELIMITER = "\n§\n"
+
+# Prefix marking a drift-guard return as "oversized entry" rather than
+# "externally corrupted". Same refusal, opposite cause, different message.
+# Encoded into the returned string because the guard's contract is a single
+# optional path; callers split it back apart via ``_parse_drift_signal``.
+_OVERSIZE_PREFIX = "\x00oversize:"
 
 
 # ---------------------------------------------------------------------------
@@ -129,11 +136,80 @@ def _drift_error(path: "Path", bak_path: str) -> Dict[str, Any]:
     }
 
 
+def _oversize_error(
+    path: "Path", bak_path: str, entry_len: int, char_limit: int
+) -> Dict[str, Any]:
+    """Build the error returned when one entry exceeds the whole-file limit.
+
+    Kept separate from ``_drift_error`` because the two produce the same
+    refusal from opposite causes, and the operator's next move differs.
+
+    Note what this message must NOT do: claim to know which cause applies.
+    An imported profile and a sister session's append look identical on
+    disk — one entry, larger than the budget. The old message picked one
+    story ("likely added by the patch tool, a shell append, a manual edit,
+    or a concurrent session") and stated a data-loss risk as fact. Reported
+    from a Windows install on 2026-08-31, where a profile imported at
+    15,101 chars against a 2,200 limit sent the operator into a long manual
+    recovery for content that had never been lost.
+
+    So: name the measurable fact (the size), give both causes, and point at
+    the operation that actually works from here.
+    """
+    return {
+        "success": False,
+        "error": (
+            f"Refusing to rewrite {path.name}: one entry is {entry_len} chars, "
+            f"larger than the whole-file limit of {char_limit}. That happens "
+            f"when a profile is imported from another tool, or when something "
+            f"outside the memory tool appended to the file. Nothing has been "
+            f"lost, and rewriting from here is what would lose it. A snapshot "
+            f"was saved to {bak_path}. To get unstuck, shrink the store: "
+            f"memory(action=remove, ...) and batches that reduce the total "
+            f"are allowed while over budget, because they cannot truncate "
+            f"anything you have not named. (Guard history: issue #26045.)"
+        ),
+        "drift_backup": bak_path,
+        "oversize_entry_chars": entry_len,
+        "char_limit": char_limit,
+        "remediation": (
+            "Read the .bak file to see the full entry. Then either remove it "
+            "by name, or split it into separate facts with a batch whose "
+            "final total is smaller than what is on disk."
+        ),
+    }
+
+
 # Sentinel returned by ``_reload_target`` when the target file EXISTS but could
 # not be read. Distinct from a drift-backup path (``str``) and from a clean
 # reload (``None``): the caller must abort the mutation rather than persist over
 # an unreadable file.
 _READ_FAILED = object()
+
+
+def _parse_drift_signal(bak: str) -> "tuple[bool, str, int, int]":
+    """Split a drift-guard return into (is_oversize, bak_path, entry_len, limit).
+
+    ``_detect_external_drift`` returns one optional string. When the cause was
+    an oversized entry rather than external corruption it prefixes that string
+    with ``_OVERSIZE_PREFIX`` plus the two numbers, because the two cases need
+    opposite error messages and opposite permissions: corruption blocks every
+    rewrite, oversize blocks only the ones that would GROW the file.
+    """
+    if isinstance(bak, str) and bak.startswith(_OVERSIZE_PREFIX):
+        rest = bak[len(_OVERSIZE_PREFIX):]
+        entry_len_s, limit_s, path_s = rest.split(":", 2)
+        return True, path_s, int(entry_len_s), int(limit_s)
+    return False, bak, 0, 0
+
+
+def _guard_error(store, target: str, bak: str) -> Dict[str, Any]:
+    """Pick the right refusal message for a drift-guard trip."""
+    path = store._path_for(target)
+    is_oversize, bak_path, entry_len, limit = _parse_drift_signal(bak)
+    if is_oversize:
+        return _oversize_error(path, bak_path, entry_len, limit)
+    return _drift_error(path, bak_path)
 
 
 def _read_failed_error(path: "Path") -> Dict[str, Any]:
@@ -489,7 +565,13 @@ class MemoryStore:
             if bak is _READ_FAILED:
                 return _read_failed_error(self._path_for(target))
             if bak:
-                return _drift_error(self._path_for(target), bak)
+                # Replace rewrites the whole file from the parsed entry list.
+                # When one entry is oversized, that entry is exactly what a
+                # rewrite would truncate, and the tool cannot tell an imported
+                # profile from a sister session's append. So replace stays
+                # refused in BOTH cases. ``remove`` is the way out: it names
+                # what it deletes.
+                return _guard_error(self, target, bak)
 
             entries = self._entries_for(target)
             matches = [(i, e) for i, e in enumerate(entries) if old_text in e]
@@ -552,7 +634,14 @@ class MemoryStore:
             if bak is _READ_FAILED:
                 return _read_failed_error(self._path_for(target))
             if bak:
-                return _drift_error(self._path_for(target), bak)
+                is_oversize, _bak_path, _elen, _lim = _parse_drift_signal(bak)
+                if not is_oversize:
+                    return _guard_error(self, target, bak)
+                # Remove only ever shrinks the file, so an oversized entry is
+                # never a reason to block it. Blocking here is what made an
+                # over-budget imported profile permanently unwritable: the
+                # only operation that could fix the problem was refused
+                # because of the problem.
 
             entries = self._entries_for(target)
             matches = [(i, e) for i, e in enumerate(entries) if old_text in e]
@@ -614,7 +703,15 @@ class MemoryStore:
             if bak is _READ_FAILED:
                 return _read_failed_error(self._path_for(target))
             if bak:
-                return _drift_error(self._path_for(target), bak)
+                is_oversize, _bak_path, _elen, _lim = _parse_drift_signal(bak)
+                if not is_oversize:
+                    return _guard_error(self, target, bak)
+                # See ``replace``: an over-budget store must stay shrinkable,
+                # or a batch can never dig it out. The final-total check below
+                # accepts any batch that reduces the size.
+                shrink_only = True
+            else:
+                shrink_only = False
 
             # Work on a copy; only commit if the whole batch validates.
             working: List[str] = list(self._entries_for(target))
@@ -675,16 +772,22 @@ class MemoryStore:
             new_total = len(ENTRY_DELIMITER.join(working)) if working else 0
             if new_total > limit:
                 current = self._char_count(target)
-                return self._consolidation_failure({
-                    "success": False,
-                    "error": (
-                        f"After applying all {len(operations)} operations, memory would be at "
-                        f"{new_total:,}/{limit:,} chars -- over the limit. Remove or shorten more "
-                        f"entries in the same batch (see current_entries below), then retry."
-                    ),
-                    "current_entries": self._entries_for(target),
-                    "usage": f"{current:,}/{limit:,}",
-                })
+                # A store that arrived over budget cannot reach the limit in
+                # one batch, so refusing everything above it leaves memory
+                # permanently read-only. Accept any batch that makes real
+                # progress downward and report the remaining overage on the
+                # way out instead of blocking.
+                if not (shrink_only and new_total < current):
+                    return self._consolidation_failure({
+                        "success": False,
+                        "error": (
+                            f"After applying all {len(operations)} operations, memory would be at "
+                            f"{new_total:,}/{limit:,} chars -- over the limit. Remove or shorten more "
+                            f"entries in the same batch (see current_entries below), then retry."
+                        ),
+                        "current_entries": self._entries_for(target),
+                        "usage": f"{current:,}/{limit:,}",
+                    })
 
             # Commit.
             self._set_entries(target, working)
@@ -877,8 +980,22 @@ class MemoryStore:
         char_limit = self._char_limit(target)
         max_entry_len = max((len(e) for e in parsed), default=0)
 
-        drift_detected = (raw.strip() != roundtrip) or (max_entry_len > char_limit)
-        if not drift_detected:
+        # Compare on NORMALISED text. Line endings and blank padding around the
+        # separator are cosmetic: they change the bytes without changing a
+        # single entry. Reported from a Windows install on 2026-08-31, where
+        # the guard fired on padding and named causes ("patch tool, shell
+        # append, manual edit, concurrent session") that had not happened.
+        # The signal we want is a lost or mangled ENTRY, so strip the noise
+        # from both sides before deciding.
+        def _normalise(text: str) -> str:
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
+            # Collapse blank-line padding around the separator.
+            return re.sub(r"\n+\u00a7\n+", ENTRY_DELIMITER, text).strip()
+
+        content_drift = _normalise(raw) != _normalise(roundtrip)
+        oversize = max_entry_len > char_limit
+
+        if not (content_drift or oversize):
             return None
 
         # Drift confirmed — snapshot the file so the operator can recover
@@ -889,8 +1006,41 @@ class MemoryStore:
         try:
             bak_path.write_text(raw, encoding="utf-8")
         except (OSError, IOError):
-            return str(bak_path) + " (BACKUP FAILED — file unchanged on disk)"
+            bak_path = None
+            marker = "(BACKUP FAILED — file unchanged on disk)"
+            return (
+                _OVERSIZE_PREFIX + f"{max_entry_len}:{char_limit}:" + marker
+                if oversize and not content_drift
+                else marker
+            )
+        self._prune_drift_backups(path)
+        if oversize and not content_drift:
+            # Signal the CAUSE to the caller, which picks the message. An
+            # oversized entry is not corruption and must not be reported as
+            # such: same refusal, opposite diagnosis.
+            return _OVERSIZE_PREFIX + f"{max_entry_len}:{char_limit}:" + str(bak_path)
         return str(bak_path)
+
+    @staticmethod
+    def _prune_drift_backups(path: Path, keep: int = 5) -> None:
+        """Keep only the newest *keep* .bak snapshots beside *path*.
+
+        Every guard trip writes ``<name>.bak.<epoch>``. Three appeared in one
+        reported session and nothing ever removed them, so they accumulate
+        next to the live file where a future glob or a "restore from backup"
+        step can pick up a stale one.
+        """
+        try:
+            backups = sorted(
+                path.parent.glob(path.name + ".bak.*"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for old in backups[keep:]:
+                old.unlink(missing_ok=True)
+        except (OSError, IOError):
+            # Pruning is housekeeping. It must never break a memory write.
+            pass
 
     @staticmethod
     def _write_file(path: Path, entries: List[str]):
