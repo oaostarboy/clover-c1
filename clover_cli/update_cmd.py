@@ -2598,13 +2598,13 @@ def _discard_stashed_changes(
     return True
 
 OFFICIAL_REPO_URLS = {
-    "",
-    "git@github.com:clover-c1.git",
-    "",
-    "git@github.com:clover-c1",
+    "https://github.com/oaostarboy/clover-c1.git",
+    "https://github.com/oaostarboy/clover-c1",
+    "git@github.com:oaostarboy/clover-c1.git",
+    "git@github.com:oaostarboy/clover-c1",
 }
 
-OFFICIAL_REPO_URL = ""
+OFFICIAL_REPO_URL = "https://github.com/oaostarboy/clover-c1.git"
 
 SKIP_UPSTREAM_PROMPT_FILE = ".skip_upstream_prompt"
 

@@ -73,7 +73,7 @@ def media_base_url(relay_dial_url: str) -> str:
 # Discord CDN pass-through download (voice notes, images, documents): the
 # localizer kept the raw URL and downstream consumers then tried to open a URL
 # as a file path. Always send a descriptive UA.
-_MEDIA_USER_AGENT = "CloverAgent-Relay/1.0 (+)"
+_MEDIA_USER_AGENT = "CloverAgent-Relay/1.0 (+https://github.com/oaostarboy/clover-c1)"
 
 
 class RelayMediaClient:

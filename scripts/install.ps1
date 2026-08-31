@@ -383,8 +383,8 @@ $script:ResolvedPathReport = @{
 # Configuration
 # ============================================================================
 
-$RepoUrlSsh = "git@github.com:clover-c1.git"
-$RepoUrlHttps = ""
+$RepoUrlSsh = "git@github.com:oaostarboy/clover-c1.git"
+$RepoUrlHttps = "https://github.com/oaostarboy/clover-c1.git"
 $PythonVersion = "3.11"
 # Minor versions the installer accepts when the requested $PythonVersion isn't
 # available, in preference order.  uv discovers both uv-managed and system
