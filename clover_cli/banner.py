@@ -177,8 +177,8 @@ _UPDATE_CHECK_CACHE_SECONDS = 6 * 3600
 # (e.g. nix-built clover — no local git history to count against).
 UPDATE_AVAILABLE_NO_COUNT = -1
 
-_UPSTREAM_REPO_URL = ""
-_OFFICIAL_REPO_CANONICAL = "github.com/cloverc1/clover-c1"
+_UPSTREAM_REPO_URL = "https://github.com/oaostarboy/clover-c1.git"
+_OFFICIAL_REPO_CANONICAL = "github.com/oaostarboy/clover-c1"
 
 
 def _canonical_github_remote(url: str | None) -> str:
@@ -638,7 +638,7 @@ def _compute_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]
     return {"upstream": upstream, "local": local, "ahead": max(ahead, 0)}
 
 
-_RELEASE_URL_BASE = ""
+_RELEASE_URL_BASE = "https://github.com/oaostarboy/clover-c1/releases/tag"
 _latest_release_cache: Optional[tuple] = None  # (tag, url) once resolved
 
 
