@@ -8,6 +8,12 @@ import react, { reactCompilerPreset } from "@vitejs/plugin-react";
  *  module — which made the babel pass parse the whole codebase. */
 function compilerPreset() {
   const preset = reactCompilerPreset();
+  // `rolldown.filter` is optional in the plugin's type, so assigning straight
+  // into `filter.code` fails the type check (TS18048) and breaks `npm run
+  // build`. Create the objects when the preset does not supply them, rather
+  // than asserting they exist.
+  preset.rolldown ??= {};
+  preset.rolldown.filter ??= {};
   preset.rolldown.filter.code = /\/>|<\/|from\s*['"][^'"]*react/;
   return preset;
 }
