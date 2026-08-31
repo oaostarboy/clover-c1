@@ -1833,12 +1833,17 @@ PY
     install_tier() {
         local name="$1"; local spec="$2"
         log_info "Trying tier: $name ..."
+        # This resolves and builds the whole dependency tree with stderr
+        # redirected, so the screen sits still for minutes. Show a clock.
+        start_progress "Resolving Python packages ($name)"
         if $UV_CMD pip install -e "$spec" 2>"$ALL_INSTALL_LOG"; then
+            stop_progress
             log_success "Main package installed ($name)"
             _installed=true
             _tier_name="$name"
             return 0
         fi
+        stop_progress
         log_warn "Tier '$name' failed. Top of pip output:"
         head -5 "$ALL_INSTALL_LOG" | sed 's/^/    /' >&2
         return 1
@@ -2243,6 +2248,39 @@ run_browser_install_with_timeout() {
 # compares it arithmetically (the `timeout` binary would also accept suffixes
 # like 15m, but we normalize so both paths share one contract). On timeout the
 # return code is 124, matching GNU `timeout`.
+# Show that a long, quiet step is still working.
+#
+# The npm and dependency steps redirect their output to a log file, so the
+# terminal shows one line and then nothing for minutes. That is
+# indistinguishable from a hang, and users interrupt a healthy install
+# (reported 2026-08-30). This prints the elapsed time on a single line that
+# updates in place, so there is always visible movement.
+#
+# Only fires on a terminal: piped installs and CI logs stay clean.
+_progress_pid=""
+start_progress() {
+    local label="$1"
+    [ -t 2 ] || return 0
+    (
+        local n=0
+        while :; do
+            sleep 5
+            n=$(( n + 5 ))
+            printf '\r   %s ... %dm%02ds' "$label" "$(( n / 60 ))" "$(( n % 60 ))" >&2
+        done
+    ) &
+    _progress_pid=$!
+}
+
+stop_progress() {
+    [ -n "$_progress_pid" ] || return 0
+    kill "$_progress_pid" 2>/dev/null
+    wait "$_progress_pid" 2>/dev/null
+    _progress_pid=""
+    [ -t 2 ] && printf '\r\033[K' >&2
+    return 0
+}
+
 run_with_timeout() {
     local timeout_seconds="$1"
     shift
@@ -2459,6 +2497,7 @@ install_node_deps() {
 
     if [ -f "$INSTALL_DIR/package.json" ]; then
         log_info "Installing Node.js dependencies (browser tools)..."
+        log_info "  About 1,900 small packages. Two to eight minutes is normal."
         cd "$INSTALL_DIR"
         # Time-boxed: a stalled registry fetch would otherwise hang here with no
         # progress (same #39219 stall class as the desktop build below).
@@ -2468,8 +2507,10 @@ install_node_deps() {
         # Capture npm output so failures are diagnosable (#87340).
         local npm_log
         npm_log="$(mktemp)"
+        start_progress "Installing Node packages"
         if ! run_with_timeout "$NODE_DEPS_TIMEOUT" npm install --silent \
                 >"$npm_log" 2>&1; then
+            stop_progress
             log_error "npm install failed or timed out; Node.js dependencies were not installed"
             if [ -s "$npm_log" ]; then
                 log_error "npm output:"
@@ -2479,6 +2520,7 @@ install_node_deps() {
             restore_dirty_lockfiles "$INSTALL_DIR"
             return 1
         fi
+        stop_progress
         rm -f "$npm_log"
         log_success "Node.js dependencies installed"
 
