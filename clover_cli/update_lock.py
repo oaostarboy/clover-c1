@@ -293,6 +293,48 @@ def describe_holder(holder: UpdateHolder) -> str:
     )
 
 
+def updater_process_alive(clover_home: Path | None = None) -> bool:
+    """Best-effort liveness check for a detached ``clover update`` process.
+
+    Combines the two signals an updater leaves behind:
+
+    * the shared update marker (``.clover-update-in-progress``) — held for
+      the whole run, dead-pid and stale-age aware via :func:`read_live_update`;
+    * the restart-watcher beacon (``.clover-update-heartbeat.json``) — written
+      just before the updater stops the gateway, i.e. exactly the phase where
+      the updater is likely to be killed alongside it.
+
+    Unknown counts as ALIVE: cutting a live update short is worse than
+    waiting. Returns False only when both signals positively say "dead".
+    """
+    try:
+        marker = (clover_home / MARKER_NAME) if clover_home else None
+        if read_live_update(path=marker) is not None:
+            return True
+    except Exception:
+        return True
+
+    try:
+        from clover_cli import update_restart_watcher as _urw
+
+        raw = None
+        try:
+            raw = _urw.beacon_path(clover_home).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return False  # no beacon, no live marker: nothing says alive
+        data = json.loads(raw)
+        pid = int(data.get("updater_pid") or 0)
+        if pid > 0 and _urw._pid_alive(pid):
+            return True
+        if pid > 0:
+            return False  # beacon names a pid and it is dead
+    except Exception:
+        # Corrupt beacon / unreadable pid: unknown counts as alive.
+        return True
+
+    return False
+
+
 class UpdateLock:
     """Context manager owning the shared update marker for this process.
 

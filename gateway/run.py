@@ -25037,6 +25037,49 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
 
+        def _updater_alive() -> bool:
+            """Is the detached ``clover update`` process still running?
+
+            The updater's final step restarts the gateway. When the update
+            was launched FROM the gateway (``/update`` in a messenger), the
+            updater dies with the old gateway before it can write
+            ``.update_exit_code`` — the only file this watcher's exit
+            condition looks at. The new gateway then inherits the pending
+            marker and, without this check, waits the full timeout for a
+            result nobody is alive to write, and reports a false ❌ timeout
+            for an update that in fact succeeded (reported 2026-08-31, and
+            repeatedly before that).
+
+            Unknown counts as alive — a false "dead" would cut short a slow
+            but healthy update.
+            """
+            try:
+                from clover_cli.update_lock import updater_process_alive
+
+                return updater_process_alive(_clover_home)
+            except Exception:
+                return True
+
+        # The "dead" observation must hold for a grace window before we trust
+        # it: right at spawn the updater has not written its marker yet, and a
+        # marker being atomically rewritten can transiently read as absent.
+        updater_dead_since: float | None = None
+        updater_dead_grace = 15.0
+
+        def _updater_died_without_result() -> bool:
+            """True when the updater is confirmed gone with no exit code."""
+            nonlocal updater_dead_since
+            if exit_code_path.exists():
+                return False
+            if _updater_alive():
+                updater_dead_since = None
+                return False
+            now = loop.time()
+            if updater_dead_since is None:
+                updater_dead_since = now
+                return False
+            return (now - updater_dead_since) >= updater_dead_grace
+
         # Resolve the adapter and chat_id for sending messages
         adapter = None
         chat_id = None
@@ -25081,6 +25124,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # reconnects a few seconds after completion never gets notified.
             while (pending_path.exists() or claimed_path.exists()) and loop.time() < deadline:
                 if exit_code_path.exists() and await self._send_update_notification():
+                    return
+                if _updater_died_without_result():
+                    logger.warning(
+                        "Update watcher (completion-only): updater process died "
+                        "without writing an exit code; concluding from receipts")
+                    await self._conclude_update_after_updater_death(
+                        pending_path, claimed_path, output_path,
+                        exit_code_path, prompt_path,
+                        adapter=None, chat_id=None, session_key=None,
+                        metadata=None, platform=None,
+                    )
                     return
                 await asyncio.sleep(poll_interval)
             if (pending_path.exists() or claimed_path.exists()) and not exit_code_path.exists():
@@ -25245,6 +25299,29 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 except (json.JSONDecodeError, OSError) as e:
                     logger.debug("Failed to read update prompt: %s", e)
 
+            # A dead updater can no longer write the exit code this loop
+            # waits for. Conclude from what it left on disk instead of
+            # burning the rest of the 30-minute timeout on a ghost.
+            if _updater_died_without_result():
+                logger.warning(
+                    "Update watcher: updater process died without writing an "
+                    "exit code; concluding from receipts")
+                if output_path.exists():
+                    try:
+                        chunk, bytes_sent = _read_output_since(output_path, bytes_sent)
+                        if chunk:
+                            buffer += chunk
+                    except OSError:
+                        pass
+                await _flush_buffer()
+                await self._conclude_update_after_updater_death(
+                    pending_path, claimed_path, output_path,
+                    exit_code_path, prompt_path,
+                    adapter=adapter, chat_id=chat_id, session_key=session_key,
+                    metadata=metadata, platform=platform,
+                )
+                return
+
             await asyncio.sleep(poll_interval)
 
         # Timeout
@@ -25267,6 +25344,117 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _up_timeout_state = self._peek_session_state(session_key)
             if _up_timeout_state is not None:
                 _up_timeout_state.persistent.update_prompt_pending = False
+
+    async def _conclude_update_after_updater_death(
+        self,
+        pending_path: Path,
+        claimed_path: Path,
+        output_path: Path,
+        exit_code_path: Path,
+        prompt_path: Path,
+        *,
+        adapter,
+        chat_id,
+        session_key,
+        metadata,
+        platform,
+    ) -> None:
+        """Report an update whose process died before writing an exit code.
+
+        The updater's own last step restarts the gateway; when the update was
+        started from a messenger the updater is the old gateway's child and
+        dies with it. That is a NORMAL end of a successful run, not a
+        failure — but it leaves no ``.update_exit_code``, so the watcher used
+        to wait 30 minutes and then report a false timeout.
+
+        Instead of guessing, read the update receipt the updater wrote as it
+        went (``logs/update_receipts/latest.json``): a receipt whose
+        ``outcome`` is success — or one that recorded a post-update sha — is
+        proof the tree was updated even though the messenger never heard back.
+        """
+        verdict = "unknown"
+        detail = ""
+        try:
+            receipt_path = _clover_home / "logs" / "update_receipts" / "latest.json"
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            started_at = str(receipt.get("started_at") or "")
+            # Only trust a receipt from this update run: the pending marker
+            # is written before the updater starts, so any receipt started
+            # after the pending file was created belongs to this run.
+            pending_mtime = 0.0
+            for p in (claimed_path, pending_path):
+                try:
+                    pending_mtime = p.stat().st_mtime
+                    break
+                except OSError:
+                    continue
+            import datetime as _dt
+
+            recent = False
+            if started_at:
+                try:
+                    ts = _dt.datetime.fromisoformat(started_at).timestamp()
+                    recent = pending_mtime == 0.0 or ts >= (pending_mtime - 120)
+                except ValueError:
+                    recent = False
+            if recent:
+                outcome = str(receipt.get("outcome") or "")
+                post = receipt.get("post_update") or {}
+                if outcome == "success" or post.get("sha"):
+                    verdict = "success"
+                    detail = str(
+                        post.get("short_sha") or post.get("sha") or ""
+                    )[:12]
+                elif outcome:
+                    verdict = "failed"
+                    detail = outcome
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+
+        if verdict == "success":
+            text = (
+                "✅ Clover update finished. (The updater exited during its "
+                "gateway-restart step — this notice comes from the restarted "
+                "gateway.)"
+            )
+            if detail:
+                text += f" Now at {detail}."
+        elif verdict == "failed":
+            text = (
+                f"❌ Clover update did not complete (updater died; last "
+                f"recorded outcome: {detail}). Run `clover doctor` or retry."
+            )
+        else:
+            text = (
+                "⚠️ The update process ended without reporting a result. The "
+                "gateway restarted fine — run `clover --version` or retry the "
+                "update to confirm."
+            )
+
+        if adapter is not None and chat_id:
+            try:
+                await adapter.send(
+                    chat_id,
+                    text,
+                    metadata=_non_conversational_metadata(
+                        metadata, platform=platform
+                    ),
+                )
+            except Exception as e:
+                logger.warning("Post-death update notification failed: %s", e)
+        logger.info(
+            "Update concluded after updater death: verdict=%s detail=%s",
+            verdict, detail,
+        )
+
+        for p in (pending_path, claimed_path, output_path,
+                  exit_code_path, prompt_path):
+            p.unlink(missing_ok=True)
+        (_clover_home / ".update_response").unlink(missing_ok=True)
+        if session_key:
+            _st = self._peek_session_state(session_key)
+            if _st is not None:
+                _st.persistent.update_prompt_pending = False
 
     async def _send_update_notification(self) -> bool:
         """If an update finished, notify the user.
