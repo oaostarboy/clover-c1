@@ -267,6 +267,66 @@ def _has_provider_env_config(content: str) -> bool:
     return any(key in content for key in _PROVIDER_ENV_HINTS)
 
 
+def _resolve_venv_entry_point(project_root: Path) -> "Path | None":
+    """Locate the ``clover`` console script installed by pip.
+
+    The venv is NOT required to live inside the source tree: an editable
+    install (``pip install -e``) driven from an out-of-tree venv is fully
+    supported, and so is a venv the installer placed elsewhere. Trust the
+    running interpreter first — ``sys.prefix`` is the venv we were launched
+    from — and only then fall back to scanning the repo for a bundled venv.
+
+    Returns ``None`` when no entry point can be found anywhere.
+    """
+    candidates: list[Path] = []
+    if sys.prefix != sys.base_prefix:  # running inside a venv
+        candidates.append(Path(sys.prefix) / "bin" / "clover")
+    candidates.extend(
+        project_root / venv_name / "bin" / "clover" for venv_name in ("venv", ".venv")
+    )
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _has_stored_provider_credentials() -> bool:
+    """Return True when auth.json holds usable provider credentials.
+
+    ``.env`` is not the only place a provider can be configured: OAuth logins
+    and API keys added via ``clover auth add`` live in ``auth.json`` (under
+    ``providers`` or ``credential_pool``). Doctor must consult those before
+    telling a fully-authenticated user to "run clover setup".
+    """
+    try:
+        from clover_cli.auth import read_credential_pool
+
+        pool = read_credential_pool(None)
+        if isinstance(pool, dict) and any(
+            isinstance(entries, list) and entries for entries in pool.values()
+        ):
+            return True
+    except Exception:
+        pass
+
+    try:
+        import json as _json
+
+        auth_path = CLOVER_HOME / "auth.json"
+        if auth_path.exists():
+            store = _json.loads(auth_path.read_text(encoding="utf-8"))
+            if isinstance(store, dict):
+                providers = store.get("providers")
+                if isinstance(providers, dict) and providers:
+                    return True
+                if isinstance(providers, list) and providers:
+                    return True
+    except Exception:
+        pass
+
+    return False
+
+
 def _honcho_is_configured_for_doctor() -> bool:
     """Return True when Honcho is configured, even if this process has no active session."""
     try:
@@ -1470,6 +1530,8 @@ def run_doctor(args):
             content = env_path.read_text(encoding="latin-1")
         if _has_provider_env_config(content):
             check_ok("API key or custom endpoint configured")
+        elif _has_stored_provider_credentials():
+            check_ok("Provider credentials configured (auth.json)")
         else:
             check_warn(f"No API key found in {_DHH}/.env")
             issues.append("Run 'clover setup' to configure API keys")
@@ -1478,6 +1540,9 @@ def run_doctor(args):
         fallback_env = PROJECT_ROOT / '.env'
         if fallback_env.exists():
             check_ok(".env file exists (in project directory)")
+        elif _has_stored_provider_credentials():
+            # OAuth-only installs legitimately have no .env at all.
+            check_ok("Provider credentials configured (auth.json)")
         else:
             check_fail(f"{_DHH}/.env file missing")
             if should_fix:
@@ -2200,13 +2265,9 @@ def run_doctor(args):
 
     if sys.platform != "win32":
         _section("Command Installation")
-        # Determine the venv entry point location
-        _venv_bin = None
-        for _venv_name in ("venv", ".venv"):
-            _candidate = PROJECT_ROOT / _venv_name / "bin" / "clover"
-            if _candidate.exists():
-                _venv_bin = _candidate
-                break
+        # Determine the venv entry point location (see _resolve_venv_entry_point:
+        # the venv may legitimately live outside the source tree).
+        _venv_bin = _resolve_venv_entry_point(PROJECT_ROOT)
 
         # Determine the expected command link directory (mirrors install.sh logic)
         _prefix = os.environ.get("PREFIX", "")
@@ -2222,13 +2283,18 @@ def run_doctor(args):
         if _venv_bin is None:
             check_warn(
                 "Venv entry point not found",
-                "(clover not in venv/bin/ or .venv/bin/ — reinstall with pip install -e '.[all]')"
+                "(no clover script in the active venv or venv/bin — reinstall with pip install -e '.[all]')"
             )
             manual_issues.append(
                 f"Reinstall entry point: cd {PROJECT_ROOT} && source venv/bin/activate && pip install -e '.[all]'"
             )
         else:
-            check_ok(f"Venv entry point exists ({_venv_bin.relative_to(PROJECT_ROOT)})")
+            try:
+                _venv_display = str(_venv_bin.relative_to(PROJECT_ROOT))
+            except ValueError:
+                # Out-of-tree venv — show the absolute path instead of crashing.
+                _venv_display = str(_venv_bin)
+            check_ok(f"Venv entry point exists ({_venv_display})")
 
             # Check the symlink at the command link location
             if _cmd_link.is_symlink():
