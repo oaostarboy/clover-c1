@@ -1,5 +1,7 @@
 """Tests for clover_constants module."""
 
+import builtins
+import io
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -370,6 +372,77 @@ class TestIsContainer:
         # Even if we make os.path.exists return False, cached value wins
         monkeypatch.setattr(os.path, "exists", lambda p: False)
         assert is_container() is True
+
+    # ── mountinfo fallback: must not confuse a container HOST for a container ──
+
+    # A real /proc/self/mountinfo line for the root overlay inside a
+    # containerd-managed container: mount point (field 4) is "/".
+    _IN_CONTAINER_ROOT = (
+        "1785 1784 0:123 / / rw,relatime master:2 - overlay overlay "
+        "rw,lowerdir=/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs"
+        "/snapshots/41/fs,upperdir=/var/lib/containerd/io.containerd."
+        "snapshotter.v1.overlayfs/snapshots/42/fs\n"
+    )
+
+    # On a container HOST, "/" is an ordinary filesystem and the containerd
+    # strings appear only on the mounts the host makes for its containers.
+    _HOST_ROOT = "73 1 259:2 / / rw,relatime shared:1 - btrfs /dev/nvme0n1p2 rw\n"
+    _HOST_CONTAINER_MOUNTS = (
+        "662 73 0:81 / /var/lib/docker/rootfs/overlayfs/5cabe8fc rw,relatime "
+        "shared:592 - overlay overlay rw,lowerdir=/var/lib/containerd/"
+        "io.containerd.snapshotter.v1.overlayfs/snapshots/302/fs\n"
+        "676 73 0:82 / /var/lib/docker/rootfs/overlayfs/1806c522 rw,relatime "
+        "shared:606 - overlay overlay rw,lowerdir=/var/lib/containerd/"
+        "io.containerd.snapshotter.v1.overlayfs/snapshots/194/fs\n"
+    )
+
+    def _only_mountinfo(self, monkeypatch, content: str):
+        """Force detection down to the mountinfo fallback with *content*."""
+        self._reset_cache(monkeypatch)
+        monkeypatch.setattr(os.path, "exists", lambda p: False)
+        monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+
+        real_open = builtins.open
+
+        def fake_open(path, *args, **kwargs):
+            if path == "/proc/1/cgroup":
+                return io.StringIO("0::/init.scope\n")
+            if path == "/proc/self/mountinfo":
+                return io.StringIO(content)
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", fake_open)
+
+    def test_detects_container_from_root_overlay_mount(self, monkeypatch):
+        """cgroup-v2 container: the root mount itself is a containerd overlay."""
+        self._only_mountinfo(monkeypatch, self._IN_CONTAINER_ROOT)
+        assert is_container() is True
+
+    def test_container_host_is_not_a_container(self, monkeypatch):
+        """Regression: a Docker/containerd HOST must not detect as a container.
+
+        The host's mount table is full of "containerd" strings — one per
+        running container's rootfs under /var/lib/docker — but none of them
+        are the host's own "/". A whole-file substring scan reported every
+        container host as containerised, which silently switched Clover to
+        container-mode behaviour on bare metal.
+        """
+        self._only_mountinfo(
+            monkeypatch, self._HOST_ROOT + self._HOST_CONTAINER_MOUNTS
+        )
+        assert is_container() is False
+
+    def test_plain_host_with_no_container_mounts(self, monkeypatch):
+        """A machine that has never run a container is obviously not one."""
+        self._only_mountinfo(monkeypatch, self._HOST_ROOT)
+        assert is_container() is False
+
+    def test_malformed_mountinfo_lines_are_skipped(self, monkeypatch):
+        """Short/garbage lines must not raise IndexError during the scan."""
+        self._only_mountinfo(
+            monkeypatch, "garbage\n\n1 2 3\n" + self._HOST_ROOT
+        )
+        assert is_container() is False
 
 
 class TestParseReasoningEffort:

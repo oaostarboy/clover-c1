@@ -1631,12 +1631,26 @@ def is_container() -> bool:
     # cgroup v2: /proc/1/cgroup is just "0::/" with no marker. The container
     # runtime still shows up in the mount table (overlay rootfs, runtime mount
     # paths), so scan mountinfo as a last resort.
+    #
+    # This scan must be anchored to the ROOT mount. A container *host* also has
+    # "containerd"/"docker" all over its mount table — every running container's
+    # rootfs is mounted under /var/lib/docker/... or /var/lib/containerd/... on
+    # the host — so a substring search over the whole file reports every Docker
+    # host as being inside a container. What actually distinguishes a container
+    # is that its own "/" is the runtime-managed overlay, so only inspect the
+    # entry whose mount point is "/".
+    #
+    # mountinfo field layout (man 5 proc):
+    #   0:id 1:parent 2:dev 3:root 4:MOUNT-POINT 5:opts ... - fstype source opts
     try:
         with open("/proc/self/mountinfo", "r", encoding="utf-8") as f:
-            mountinfo = f.read()
-            if any(marker in mountinfo for marker in ("kubepods", "containerd", "crio")):
-                _container_detected = True
-                return True
+            for line in f:
+                fields = line.split()
+                if len(fields) < 5 or fields[4] != "/":
+                    continue
+                if any(marker in line for marker in ("kubepods", "containerd", "crio")):
+                    _container_detected = True
+                    return True
     except OSError:
         pass
     _container_detected = False
