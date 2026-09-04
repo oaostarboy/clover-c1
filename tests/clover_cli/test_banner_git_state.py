@@ -26,7 +26,7 @@ def test_get_git_banner_state_reads_origin_and_head(tmp_path):
     results = {
         ("git", "rev-parse", "--short=8", "origin/main"): MagicMock(returncode=0, stdout="b2f477a3\n"),
         ("git", "rev-parse", "--short=8", "HEAD"): MagicMock(returncode=0, stdout="af8aad31\n"),
-        ("git", "rev-list", "--count", "origin/main..HEAD"): MagicMock(returncode=0, stdout="3\n"),
+        ("git", "rev-list", "--left-right", "--count", "origin/main...HEAD"): MagicMock(returncode=0, stdout="0\t3\n"),
     }
 
     def fake_run(cmd, **kwargs):
@@ -38,7 +38,7 @@ def test_get_git_banner_state_reads_origin_and_head(tmp_path):
     with patch("clover_cli.banner.subprocess.run", side_effect=fake_run):
         state = banner.get_git_banner_state(repo_dir)
 
-    assert state == {"upstream": "b2f477a3", "local": "af8aad31", "ahead": 3}
+    assert state == {"upstream": "b2f477a3", "local": "af8aad31", "ahead": 3, "behind": 0}
 
 
 def test_check_via_local_git_ssh_fastpath_ahead_not_behind(tmp_path):
@@ -126,3 +126,57 @@ def test_check_via_local_git_ssh_fastpath_offline_keeps_sentinel(tmp_path):
         behind = banner._check_via_local_git(repo_dir)
 
     assert behind == banner.UPDATE_AVAILABLE_NO_COUNT
+
+
+def test_banner_names_a_behind_checkout_instead_of_calling_it_carried(tmp_path):
+    """A checkout that never received the update must not read as a dev checkout.
+
+    Reported 2026-09-04: on Windows the update ran in-process, the open
+    interpreter held the source files, `git reset --hard` silently no-opped,
+    and the banner still advertised the upstream SHA -- four times. The
+    checkout's history was unrelated to origin/main (no merge base), so every
+    local commit counted as "ahead" and the tree rendered as
+    "+1 carried commit" while being strictly BEHIND.
+
+    Counting only one direction cannot express that state, so the banner has
+    to count both and say which one it is.
+    """
+    from clover_cli import banner
+
+    repo_dir = tmp_path / "repo"
+    (repo_dir / ".git").mkdir(parents=True)
+
+    results = {
+        ("git", "rev-parse", "--short=8", "origin/main"): MagicMock(
+            returncode=0, stdout="4b53dd7b\n"
+        ),
+        ("git", "rev-parse", "--short=8", "HEAD"): MagicMock(
+            returncode=0, stdout="3787004e\n"
+        ),
+        # Unrelated histories: 1 commit each side, no merge base.
+        ("git", "rev-list", "--left-right", "--count", "origin/main...HEAD"): MagicMock(
+            returncode=0, stdout="1\t1\n"
+        ),
+    }
+
+    def fake_run(cmd, **kwargs):
+        key = tuple(cmd)
+        if key not in results:
+            raise AssertionError(f"unexpected command: {cmd}")
+        return results[key]
+
+    with patch("clover_cli.banner.subprocess.run", side_effect=fake_run):
+        state = banner.get_git_banner_state(repo_dir)
+
+    # The old single-direction count saw only ahead=1 and lost the failure.
+    assert state["ahead"] == 1
+    assert state["behind"] == 1
+
+    with patch("clover_cli.banner.get_git_banner_state", return_value=state):
+        label = banner.format_banner_version_label()
+
+    # Being behind is the headline: the user is NOT running 4b53dd7b.
+    assert "behind" in label
+    assert "update has not applied" in label
+    # And it must not present the stale tree as a healthy dev checkout.
+    assert "carried" not in label

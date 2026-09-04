@@ -619,10 +619,17 @@ def _compute_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]
             pass
         return None
 
+    # Count BOTH directions. `origin/main..HEAD` alone cannot distinguish a
+    # dev checkout carrying an unpushed commit from a checkout that simply
+    # never received the update -- and on unrelated histories (no merge base)
+    # every local commit reads as "ahead" even when the tree is fully behind.
+    # That is what let a failed update advertise the upstream SHA it had not
+    # applied (2026-09-04 Windows in-process update report).
     ahead = 0
+    behind = 0
     try:
         result = subprocess.run(
-            ["git", "rev-list", "--count", "origin/main..HEAD"],
+            ["git", "rev-list", "--left-right", "--count", "origin/main...HEAD"],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -631,11 +638,20 @@ def _compute_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]
             cwd=str(repo_dir),
         )
         if result.returncode == 0:
-            ahead = int((result.stdout or "0").strip() or "0")
+            parts = (result.stdout or "").split()
+            if len(parts) == 2:
+                behind = int(parts[0] or "0")
+                ahead = int(parts[1] or "0")
     except Exception:
         ahead = 0
+        behind = 0
 
-    return {"upstream": upstream, "local": local, "ahead": max(ahead, 0)}
+    return {
+        "upstream": upstream,
+        "local": local,
+        "ahead": max(ahead, 0),
+        "behind": max(behind, 0),
+    }
 
 
 _RELEASE_URL_BASE = "https://github.com/oaostarboy/clover-c1/releases/tag"
@@ -696,6 +712,18 @@ def format_banner_version_label() -> str:
     upstream = state["upstream"]
     local = state["local"]
     ahead = int(state.get("ahead") or 0)
+    behind = int(state.get("behind") or 0)
+
+    # Behind wins over ahead. A checkout that is missing upstream commits is
+    # not running `upstream`, so printing that SHA bare would advertise code
+    # the user does not have -- exactly the silent failure that made a no-op
+    # `clover update` invisible for four attempts. Say it plainly instead.
+    if behind > 0:
+        commit_word = "commit" if behind == 1 else "commits"
+        return (
+            f"{base} · upstream {upstream} · local {local} "
+            f"({behind} {commit_word} behind — update has not applied)"
+        )
 
     if ahead <= 0 or upstream == local:
         return f"{base} · upstream {upstream}"
