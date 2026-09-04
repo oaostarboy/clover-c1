@@ -123,11 +123,13 @@ class TestPlatformDefaults:
     """Built-in defaults reflect platform capability tiers."""
 
     def test_high_tier_platforms(self):
-        """Discord defaults to 'all'; Telegram defaults quiet for mobile."""
+        """Discord and Telegram both default to 'all' on tier-high transports."""
         from gateway.display_config import resolve_display_setting
 
-        # Telegram: tier_high transport, but quiet mobile default.
-        assert resolve_display_setting({}, "telegram", "tool_progress") == "off"
+        # Telegram: tier_high, and the reports accumulate into one editable
+        # bubble rather than posting per call, so 'all' is not noisy here.
+        assert resolve_display_setting({}, "telegram", "tool_progress") == "all"
+        assert resolve_display_setting({}, "telegram", "tool_progress_grouping") == "accumulate"
         # Discord: pure tier_high.
         assert resolve_display_setting({}, "discord", "tool_progress") == "all"
 
@@ -141,13 +143,20 @@ class TestPlatformDefaults:
 
 
     def test_telegram_mobile_chatter_defaults(self):
-        """Telegram keeps real mid-turn signal (interim commentary + heartbeats)
-        but skips the verbose busy-ack iteration counter by default."""
+        """Telegram folds mid-turn signal into ONE editable bubble rather than
+        narrating across several messages."""
         from gateway.display_config import resolve_display_setting
 
-        # Real model voice — keep on. Without this, Telegram users see
-        # "typing..." for the entire turn duration with no feedback.
-        assert resolve_display_setting({}, "telegram", "interim_assistant_messages") is True
+        # Mid-turn commentary is the one signal that cannot be folded into the
+        # progress bubble — each line ships as its own message. Off, so a turn
+        # is one updating bubble instead of a stream of narration.
+        assert resolve_display_setting({}, "telegram", "interim_assistant_messages") is False
+        # The bubble carries the signal instead: every tool call is reported
+        # ("all") into a single accumulating message, then collapsed into a
+        # summary card when the turn ends.
+        assert resolve_display_setting({}, "telegram", "tool_progress") == "all"
+        assert resolve_display_setting({}, "telegram", "tool_progress_grouping") == "accumulate"
+        assert resolve_display_setting({}, "telegram", "cleanup_progress") is True
         # Periodic "Working — N min" heartbeat — keep on. Otherwise long
         # turns appear completely silent.
         assert resolve_display_setting({}, "telegram", "long_running_notifications") is True
@@ -259,11 +268,15 @@ class TestCleanupProgress:
     """``cleanup_progress`` is off by default and resolvable per-platform."""
 
     def test_default_off_for_all_platforms(self):
-        """No config set → cleanup_progress resolves to False everywhere."""
+        """No config set → cleanup_progress is off except where a platform
+        opts in (Telegram collapses its bubbles into a summary card)."""
         from gateway.display_config import resolve_display_setting
 
-        for plat in ("telegram", "discord", "slack", "email"):
+        for plat in ("discord", "slack", "email"):
             assert resolve_display_setting({}, plat, "cleanup_progress") is False
+        # Telegram opts in: progress bubbles are replaced by one collapsed
+        # per-turn card, so a finished turn leaves a single artifact.
+        assert resolve_display_setting({}, "telegram", "cleanup_progress") is True
 
 
     def test_yaml_true_string_normalises_to_true(self):
