@@ -229,6 +229,15 @@ def get_loop_heartbeat_path(home: Optional[Path] = None) -> Path:
     return base.joinpath(*_HEARTBEAT_RELATIVE)
 
 
+class _LoopTickUnsupported(RuntimeError):
+    """The loop-tick witness cannot exist on this platform.
+
+    Distinct from a bind that *should* have worked and failed (permissions,
+    path length, leftover node): those stay at WARNING because they signal a
+    real problem. This one is expected and logs at DEBUG.
+    """
+
+
 def get_loop_tick_socket_path(
     home: Optional[Path] = None, pid: Optional[int] = None
 ) -> Path:
@@ -569,8 +578,25 @@ async def loop_heartbeat_forever(
                 logger.debug(
                     "stale loop-tick socket sweep failed", exc_info=True
                 )
+        if not hasattr(asyncio, "start_unix_server"):
+            # Windows: no AF_UNIX event-loop support, so the witness can never
+            # be armed here. This is the documented fail-safe above, NOT a
+            # misconfiguration -- attempting the bind anyway and logging the
+            # guaranteed AttributeError at WARNING with a traceback on every
+            # single start reads as a recurring defect and trains users to
+            # ignore their own logs (reported 2026-09-04).
+            raise _LoopTickUnsupported(
+                "asyncio.start_unix_server is unavailable on this platform"
+            )
         tick_server = await asyncio.start_unix_server(
             _tick_socket_handler, path=str(tick_socket_path)
+        )
+    except _LoopTickUnsupported as exc:
+        tick_server = None
+        logger.debug(
+            "Loop tick socket not armed (%s) — stale heartbeats will classify "
+            "UNKNOWN and keep the graceful-drain path, by design",
+            exc,
         )
     except Exception:
         tick_server = None

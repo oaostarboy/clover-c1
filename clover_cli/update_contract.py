@@ -136,3 +136,22 @@ def record_refusal_receipt(refusal: UpdateRefusal) -> None:
         finalize_update_receipt("refused", stop_reason=refusal.code)
     except Exception as exc:
         logger.debug("Could not record refusal receipt: %s", exc)
+
+
+# Exit code the updater uses to say "I declined to proceed", as distinct from
+# "I tried and broke". Emitted when a live process still holds the venv that
+# the update must replace: the updater resumes what it paused and changes
+# nothing (receipt outcome "refused", pre_update.sha == post_update.sha).
+#
+# This is a SAFE outcome. Anything rendering it to a user must not call it a
+# failure -- doing so sends people to hunt a breakage that never happened.
+UPDATE_EXIT_REFUSED = 2
+
+UPDATE_REFUSED_HEADLINE = "\u26a0\ufe0f Update skipped \u2014 nothing was changed."
+
+UPDATE_REFUSED_DETAIL = (
+    "The running gateway still holds the Python environment the update needs "
+    "to replace, so the updater declined rather than force-stopping it. Your "
+    "install is untouched and still running the previous version.\n\n"
+    "To apply it, run `clover update` from a terminal outside the gateway."
+)

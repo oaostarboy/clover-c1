@@ -25542,15 +25542,28 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # Strip ANSI escape codes for clean display
                 from tools.ansi_strip import strip_ansi
                 output = strip_ansi(output).strip()
+                from clover_cli.update_contract import (
+                    UPDATE_EXIT_REFUSED,
+                    UPDATE_REFUSED_DETAIL,
+                    UPDATE_REFUSED_HEADLINE,
+                )
+
                 if output:
                     if len(output) > 3500:
                         output = "…" + output[-3500:]
                     if exit_code == 0:
                         msg = f"✅ Clover update finished.\n\n```\n{output}\n```"
+                    elif exit_code == UPDATE_EXIT_REFUSED:
+                        msg = f"{UPDATE_REFUSED_HEADLINE}\n\n```\n{output}\n```"
                     else:
                         msg = f"❌ Clover update failed.\n\n```\n{output}\n```"
                 elif exit_code == 0:
                     msg = "✅ Clover update finished successfully."
+                elif exit_code == UPDATE_EXIT_REFUSED:
+                    # A refusal is a safe no-op, not a breakage. Saying
+                    # "failed" here sends the user hunting for damage that
+                    # does not exist -- reported 2026-09-04.
+                    msg = f"{UPDATE_REFUSED_HEADLINE}\n\n{UPDATE_REFUSED_DETAIL}"
                 else:
                     msg = "❌ Clover update failed. Check the gateway logs or run `clover update` manually for details."
                 await adapter.send(
