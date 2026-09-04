@@ -5098,6 +5098,43 @@ def _format_venv_python_holders_message(matches: list[tuple[int, str, str]]) -> 
     lines.append(
         "  dependency update would fail partway and leave a broken install."
     )
+
+    # When EVERY remaining holder is a gateway, the generic advice below is
+    # wrong in all three of its parts: there is no desktop app to close,
+    # re-running from the same place hits the identical wall forever, and
+    # --force-venv force-stops the gateway -- on a manual-process install
+    # (no service, no Scheduled Task) nothing brings it back. That is the
+    # exact sequence behind the 2026-08-30 outages, one of which ran nine
+    # hours overnight. Do not point the affected user at it.
+    subcommands = [_clover_holder_subcommand(cmdline) for _, _, cmdline in matches]
+    if subcommands and all(sub == "gateway" for sub in subcommands):
+        lines.append(
+            "  The blocker is the running gateway itself, so closing an app"
+        )
+        lines.append(
+            "  will not clear it and re-running here will refuse again."
+        )
+        lines.append("")
+        lines.append("  Run the update from a terminal OUTSIDE the gateway:")
+        lines.append("    clover update")
+        lines.append("")
+        lines.append(
+            "  Nothing has changed and the gateway is still running the"
+        )
+        lines.append("  previous version.")
+        lines.append("")
+        lines.append(
+            "  Avoid `--force-venv` here: it stops the gateway to proceed, and"
+        )
+        lines.append(
+            "  if this install has no supervisor (Windows service or Scheduled"
+        )
+        lines.append(
+            "  Task) nothing will restart it -- the assistant stays offline"
+        )
+        lines.append("  until someone notices.")
+        return "\n".join(lines)
+
     lines.append(
         "  Close the Clover desktop app / other Clover terminals, then re-run:"
     )
