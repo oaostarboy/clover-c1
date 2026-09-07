@@ -260,8 +260,15 @@ def cmd_peer(args) -> int:
             return 2
 
         base = _base_url(peer, profile)
+        explicit_session = (getattr(args, "session", "") or "").strip()
         try:
-            session_id = _ensure_bot_chat(base, key)
+            # An explicit --session delivers into the peer's own named session
+            # instead of its shared Bot Chat. This exists for the reply half of
+            # an async exchange: a peer that asks a question hands out the id of
+            # the session that asked, and the answer lands back in the
+            # conversation that has the context, not in the common mailbox
+            # where every agent's traffic is interleaved.
+            session_id = explicit_session or _ensure_bot_chat(base, key)
             result = _request(
                 f"{base}/api/sessions/{urllib.parse.quote(session_id, safe='')}/chat",
                 key,
@@ -270,6 +277,14 @@ def cmd_peer(args) -> int:
                 timeout=DM_TIMEOUT_S,
             )
         except urllib.error.HTTPError as exc:
+            if exc.code == 404 and explicit_session:
+                print(
+                    f"Peer '{peer_name}' has no session {explicit_session!r} (HTTP 404). "
+                    f"Session ids are per-machine — use the id the peer gave you, "
+                    f"or drop --session to deliver into its Bot Chat.",
+                    file=sys.stderr,
+                )
+                return 1
             print(f"Peer '{peer_name}' rejected the request (HTTP {exc.code}): {_http_error_detail(exc)}", file=sys.stderr)
             return 1
         except RuntimeError as exc:
@@ -337,6 +352,16 @@ def build_peer_parser(subparsers) -> None:
     )
     dm_p.add_argument("target", help="<peer> or <peer>/<agent> (named profile on a multiplexed peer)")
     dm_p.add_argument("message", nargs="?", default=None, help="Message text (or stdin)")
+    dm_p.add_argument(
+        "--session",
+        default="",
+        metavar="ID",
+        help=(
+            "Deliver into this session id on the peer instead of its shared Bot Chat. "
+            "Use the id the peer handed you when it asked, so your answer lands in the "
+            "conversation that has the context."
+        ),
+    )
     dm_p.add_argument("--json", action="store_true", default=False, help="Emit a JSON result")
 
     parser.set_defaults(func=cmd_peer)

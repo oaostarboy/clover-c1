@@ -320,3 +320,114 @@ def test_dm_older_peer_with_visible_bot_chat_still_works(monkeypatch, capsys, fa
     assert rc == 0
     assert json.loads(capsys.readouterr().out)["reply"] == "reply from the other machine"
     assert _FakePeer.sessions == ["bc_visible"]
+
+
+# ── explicit --session routing (async reply lands where the question was asked) ──
+
+
+class _SessionScopedPeer(_FakePeer):
+    """A peer that, like the real api_server, 404s a chat POST to a session id
+    it does not have. Records which session each turn ran on."""
+
+    chat_sessions: list = []
+    known: list = []
+
+    def do_POST(self):
+        type(self).auth_seen.append(self.headers.get("Authorization", ""))
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length) or b"{}")
+
+        if self.path == "/api/sessions":
+            type(self).sessions.append("bc_1")
+            return self._json({"object": "clover.session", "session": {"id": "bc_1", "title": body.get("title")}}, 201)
+
+        if self.path.startswith("/api/sessions/") and self.path.endswith("/chat"):
+            sid = self.path[len("/api/sessions/"):-len("/chat")]
+            if sid not in type(self).known:
+                return self._json({"error": {"message": f"Session {sid} not found"}}, 404)
+            type(self).chat_sessions.append(sid)
+            type(self).chats.append(body.get("message"))
+            return self._json(
+                {
+                    "object": "clover.session.chat.completion",
+                    "session_id": sid,
+                    "message": {"role": "assistant", "content": "reply from the other machine"},
+                }
+            )
+
+        return self._json({"error": {"message": "not found"}}, 404)
+
+
+@pytest.fixture()
+def session_scoped_peer_server():
+    _SessionScopedPeer.sessions = ["bc_existing"]
+    _SessionScopedPeer.known = ["bc_existing", "tg_ant_wger"]
+    _SessionScopedPeer.chats = []
+    _SessionScopedPeer.chat_sessions = []
+    _SessionScopedPeer.auth_seen = []
+    server = HTTPServer(("127.0.0.1", 0), _SessionScopedPeer)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_dm_with_session_targets_that_session_not_bot_chat(monkeypatch, capsys, session_scoped_peer_server):
+    """--session delivers into the named session. This is the whole point: an
+    answer to a question asked from a Telegram session must land back in THAT
+    session, not in the shared Bot Chat which has no memory of the question."""
+    monkeypatch.setattr(peer_cmd, "_load_peers", lambda: {"spark": {"url": session_scoped_peer_server}})
+    monkeypatch.setattr(peer_cmd, "_peer_secret", lambda name: "secret-key-123456")
+
+    rc = peer_cmd.cmd_peer(
+        SimpleNamespace(peer_action="dm", target="spark", message="here is your answer", session="tg_ant_wger", json=True)
+    )
+
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["session_id"] == "tg_ant_wger"
+    assert _SessionScopedPeer.chat_sessions == ["tg_ant_wger"]
+    # The Bot Chat was never consulted or created.
+    assert _SessionScopedPeer.sessions == ["bc_existing"]
+
+
+def test_dm_without_session_still_uses_bot_chat(monkeypatch, capsys, session_scoped_peer_server):
+    """Default behavior is unchanged when --session is absent."""
+    monkeypatch.setattr(peer_cmd, "_load_peers", lambda: {"spark": {"url": session_scoped_peer_server}})
+    monkeypatch.setattr(peer_cmd, "_peer_secret", lambda name: "secret-key-123456")
+
+    rc = peer_cmd.cmd_peer(SimpleNamespace(peer_action="dm", target="spark", message="ping", session="", json=True))
+
+    assert rc == 0
+    assert _SessionScopedPeer.chat_sessions == ["bc_existing"]
+
+
+def test_dm_missing_session_attr_defaults_to_bot_chat(monkeypatch, capsys, session_scoped_peer_server):
+    """Callers built before --session existed pass no 'session' attribute at all;
+    they must keep working rather than raising AttributeError."""
+    monkeypatch.setattr(peer_cmd, "_load_peers", lambda: {"spark": {"url": session_scoped_peer_server}})
+    monkeypatch.setattr(peer_cmd, "_peer_secret", lambda name: "secret-key-123456")
+
+    rc = peer_cmd.cmd_peer(SimpleNamespace(peer_action="dm", target="spark", message="ping", json=True))
+
+    assert rc == 0
+    assert _SessionScopedPeer.chat_sessions == ["bc_existing"]
+
+
+def test_dm_unknown_session_gives_actionable_error(monkeypatch, capsys, session_scoped_peer_server):
+    """A stale or foreign session id must say so plainly instead of leaking a
+    bare HTTP 404 — session ids are per-machine and easy to copy wrong."""
+    monkeypatch.setattr(peer_cmd, "_load_peers", lambda: {"spark": {"url": session_scoped_peer_server}})
+    monkeypatch.setattr(peer_cmd, "_peer_secret", lambda name: "secret-key-123456")
+
+    rc = peer_cmd.cmd_peer(
+        SimpleNamespace(peer_action="dm", target="spark", message="hi", session="gone_stale", json=False)
+    )
+
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "gone_stale" in err
+    assert "--session" in err
+    assert _SessionScopedPeer.chat_sessions == []
