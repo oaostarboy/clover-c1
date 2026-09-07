@@ -8950,6 +8950,41 @@ class TelegramAdapter(BasePlatformAdapter):
             return {str(part).strip() for part in raw if str(part).strip()}
         return {part.strip() for part in str(raw).split(",") if part.strip()}
 
+    def _telegram_group_default_policy(self) -> str:
+        """Return the posture for a group that is not explicitly configured.
+
+        ``read_only_chats`` is a denylist: it only mutes rooms an operator has
+        already named. That makes every NEW group default-open -- anyone who
+        adds the bot to a chat gets a fully active agent, including tool use,
+        before the operator has seen the room exists. For a bot whose whole
+        purpose in group chats is to observe, that default is backwards.
+
+        ``group_default: read_only`` inverts it: an unlisted group is muted and
+        must be opted IN via ``allowed_chats`` / ``free_response_chats``.
+        Default stays ``open`` so existing deployments are unchanged.
+
+        Configure via ``group_default`` or ``TELEGRAM_GROUP_DEFAULT``.
+        """
+        raw = self.config.extra.get("group_default")
+        if raw is None:
+            raw = _scoped_gate_env("TELEGRAM_GROUP_DEFAULT")
+        value = str(raw or "open").strip().lower()
+        return value if value in {"open", "read_only"} else "open"
+
+    def _telegram_group_is_muted(self, chat_id_str: str) -> bool:
+        """Return True when this group must never receive a dispatched reply.
+
+        Combines the explicit denylist with the default posture: a chat is
+        muted if it is named in ``read_only_chats``, OR if the default is
+        ``read_only`` and it has not been explicitly opted in.
+        """
+        if chat_id_str in self._telegram_read_only_chats():
+            return True
+        if self._telegram_group_default_policy() != "read_only":
+            return False
+        opted_in = self._telegram_allowed_chats() | self._telegram_free_response_chats()
+        return chat_id_str not in opted_in
+
     def _telegram_allowed_topics(self) -> set[str]:
         """Return the whitelist of Telegram forum topic IDs this bot handles.
 
@@ -9428,7 +9463,7 @@ class TelegramAdapter(BasePlatformAdapter):
         # bypass an @mention in a read-only chat would be dropped by BOTH the
         # dispatch gate and the observe gate, leaving a hole in the transcript
         # exactly where someone was trying to get the agent's attention.
-        if chat_id_str in self._telegram_read_only_chats():
+        if self._telegram_group_is_muted(chat_id_str):
             # Everything in a muted room is observation-only -- EXCEPT a
             # message from an exempt operator, which the dispatcher handles
             # normally. Observing that too would double-record it.
@@ -9809,7 +9844,7 @@ class TelegramAdapter(BasePlatformAdapter):
         # first check after chat resolution so no later branch can re-enable a
         # reply. Operators use it for rooms the agent must watch but never
         # speak in.
-        if chat_id_str in self._telegram_read_only_chats():
+        if self._telegram_group_is_muted(chat_id_str):
             # Narrow escape valve: an operator listed in
             # ``read_only_except_from`` can still trigger the bot in an
             # otherwise-muted chat, so the owner keeps a way to ask for a reply

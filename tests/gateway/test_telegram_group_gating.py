@@ -24,6 +24,7 @@ def _make_adapter(
     observe_unmentioned_group_messages=None,
     read_only_chats=None,
     read_only_except_from=None,
+    group_default=None,
     bot_username="clover_bot",
 ):
     from plugins.platforms.telegram.adapter import TelegramAdapter
@@ -76,6 +77,10 @@ def _make_adapter(
         extra["read_only_except_from"] = read_only_except_from
     else:
         extra["read_only_except_from"] = []
+    if group_default is not None:
+        extra["group_default"] = group_default
+    else:
+        extra["group_default"] = "open"
 
     adapter = object.__new__(TelegramAdapter)
     adapter.platform = Platform.TELEGRAM
@@ -1116,3 +1121,103 @@ def test_read_only_except_from_csv_string_is_parsed():
         read_only_except_from=f"{OWNER}, 999",
     )
     assert adapter._telegram_read_only_except_from() == {OWNER, "999"}
+
+
+# ---------------------------------------------------------------------------
+# group_default: read_only -- an UNLISTED group is muted
+#
+# Motivating incident (2026-09-07): read_only_chats is a denylist, so it only
+# protects rooms already named. The operator locked one group; someone then
+# added the bot to a SECOND group, and because that chat was not on the list it
+# was fully active on arrival -- it ran shell commands and posted a long
+# unprompted message about internal fleet topology before the operator knew the
+# room existed. Default-open is the wrong posture for an observe-first bot.
+# ---------------------------------------------------------------------------
+
+
+def test_unlisted_group_is_muted_under_read_only_default():
+    """The incident: a brand-new group nobody has configured yet."""
+    adapter = _make_adapter(require_mention=False, group_default="read_only")
+    brand_new = _group_message("meet Troy", chat_id=-1003984456028)
+    assert adapter._should_process_message(brand_new) is False
+
+
+def test_unlisted_group_muted_even_when_mentioned():
+    adapter = _make_adapter(require_mention=True, group_default="read_only")
+    text = "@clover_bot introduce yourself"
+    message = _group_message(text, chat_id=-999, entities=[_mention_entity(text)])
+    assert adapter._should_process_message(message) is False
+
+
+def test_opt_in_via_allowed_chats_restores_replies():
+    adapter = _make_adapter(
+        require_mention=False,
+        group_default="read_only",
+        allowed_chats=["-100"],
+    )
+    assert adapter._should_process_message(_group_message("hi", chat_id=-100)) is True
+    assert adapter._should_process_message(_group_message("hi", chat_id=-200)) is False
+
+
+def test_opt_in_via_free_response_chats_restores_replies():
+    adapter = _make_adapter(
+        require_mention=True,
+        group_default="read_only",
+        free_response_chats=["-100"],
+    )
+    assert adapter._should_process_message(_group_message("hi", chat_id=-100)) is True
+
+
+def test_read_only_chats_still_beats_an_opt_in():
+    """An explicit mute outranks an explicit opt-in -- deny wins."""
+    adapter = _make_adapter(
+        require_mention=False,
+        group_default="read_only",
+        allowed_chats=["-100"],
+        read_only_chats=["-100"],
+    )
+    assert adapter._should_process_message(_group_message("hi", chat_id=-100)) is False
+
+
+def test_operator_exemption_works_in_an_unlisted_group():
+    adapter = _make_adapter(
+        require_mention=False,
+        group_default="read_only",
+        read_only_except_from=["8172525590"],
+    )
+    owner = _group_message("announce it", chat_id=-777, from_user_id=8172525590)
+    other = _group_message("announce it", chat_id=-777, from_user_id=5451876900)
+    assert adapter._should_process_message(owner) is True
+    assert adapter._should_process_message(other) is False
+
+
+def test_default_open_preserves_existing_behavior():
+    """Backward compatibility: unset default must not mute anything."""
+    adapter = _make_adapter(require_mention=False)
+    assert adapter._telegram_group_default_policy() == "open"
+    assert adapter._should_process_message(_group_message("hi", chat_id=-12345)) is True
+
+
+def test_unknown_group_default_value_falls_back_to_open():
+    """A typo must not silently mute every group."""
+    adapter = _make_adapter(require_mention=False, group_default="readonly-ish")
+    assert adapter._telegram_group_default_policy() == "open"
+    assert adapter._should_process_message(_group_message("hi", chat_id=-1)) is True
+
+
+def test_read_only_default_does_not_mute_dms():
+    adapter = _make_adapter(require_mention=False, group_default="read_only")
+    assert adapter._should_process_message(_dm_message()) is True
+
+
+def test_unlisted_group_is_still_observed():
+    """Muted on arrival, but the operator can still read what happened."""
+    adapter = _make_adapter(
+        require_mention=False,
+        group_default="read_only",
+        group_allowed_chats=["-1003984456028"],
+        observe_unmentioned_group_messages=True,
+    )
+    message = _group_message("meet Troy", chat_id=-1003984456028)
+    assert adapter._should_process_message(message) is False
+    assert adapter._should_observe_unmentioned_group_message(message) is True

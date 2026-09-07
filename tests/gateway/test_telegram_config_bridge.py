@@ -56,6 +56,7 @@ GATING_KEYS = [
     "allowed_topics",
     "read_only_chats",
     "read_only_except_from",
+    "group_default",
     "free_response_chats",
     "free_response_topics",
     "ignored_threads",

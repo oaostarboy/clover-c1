@@ -1723,6 +1723,8 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["ignored_threads"] = platform_cfg["ignored_threads"]
                 if plat == Platform.TELEGRAM and "guest_mode" in platform_cfg:
                     bridged["guest_mode"] = platform_cfg["guest_mode"]
+                if plat == Platform.TELEGRAM and "group_default" in platform_cfg:
+                    bridged["group_default"] = platform_cfg["group_default"]
                 if "free_response_channels" in platform_cfg:
                     bridged["free_response_channels"] = platform_cfg["free_response_channels"]
                 if "mention_patterns" in platform_cfg:
