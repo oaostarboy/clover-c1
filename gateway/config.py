@@ -1711,6 +1711,18 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["group_allowed_chats"] = platform_cfg["group_allowed_chats"]
                 if plat == Platform.TELEGRAM and "allowed_topics" in platform_cfg:
                     bridged["allowed_topics"] = platform_cfg["allowed_topics"]
+                if plat == Platform.TELEGRAM and "read_only_chats" in platform_cfg:
+                    bridged["read_only_chats"] = platform_cfg["read_only_chats"]
+                if plat == Platform.TELEGRAM and "read_only_except_from" in platform_cfg:
+                    bridged["read_only_except_from"] = platform_cfg["read_only_except_from"]
+                if plat == Platform.TELEGRAM and "free_response_chats" in platform_cfg:
+                    bridged["free_response_chats"] = platform_cfg["free_response_chats"]
+                if plat == Platform.TELEGRAM and "free_response_topics" in platform_cfg:
+                    bridged["free_response_topics"] = platform_cfg["free_response_topics"]
+                if plat == Platform.TELEGRAM and "ignored_threads" in platform_cfg:
+                    bridged["ignored_threads"] = platform_cfg["ignored_threads"]
+                if plat == Platform.TELEGRAM and "guest_mode" in platform_cfg:
+                    bridged["guest_mode"] = platform_cfg["guest_mode"]
                 if "free_response_channels" in platform_cfg:
                     bridged["free_response_channels"] = platform_cfg["free_response_channels"]
                 if "mention_patterns" in platform_cfg:
