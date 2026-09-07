@@ -8927,6 +8927,29 @@ class TelegramAdapter(BasePlatformAdapter):
             return {str(part).strip() for part in raw if str(part).strip()}
         return {part.strip() for part in str(raw).split(",") if part.strip()}
 
+    def _telegram_read_only_except_from(self) -> set[str]:
+        """Return sender IDs exempt from the ``read_only_chats`` mute.
+
+        A read-only chat is silent for everyone by default. Listing an
+        operator's Telegram user ID here lets *that person* still trigger the
+        agent in the muted room -- to ask for a reply, or to have the agent
+        post an announcement -- while every other participant continues to get
+        silence.
+
+        The exemption is keyed to sender identity, never to mention state, so
+        other members cannot reach the agent by @-mentioning it. Empty (the
+        default) means the mute is absolute.
+
+        Configure via ``read_only_except_from`` (list or CSV) or
+        ``TELEGRAM_READ_ONLY_EXCEPT_FROM``.
+        """
+        raw = self.config.extra.get("read_only_except_from")
+        if raw is None:
+            raw = _scoped_gate_env("TELEGRAM_READ_ONLY_EXCEPT_FROM")
+        if isinstance(raw, list):
+            return {str(part).strip() for part in raw if str(part).strip()}
+        return {part.strip() for part in str(raw).split(",") if part.strip()}
+
     def _telegram_allowed_topics(self) -> set[str]:
         """Return the whitelist of Telegram forum topic IDs this bot handles.
 
@@ -9406,7 +9429,10 @@ class TelegramAdapter(BasePlatformAdapter):
         # dispatch gate and the observe gate, leaving a hole in the transcript
         # exactly where someone was trying to get the agent's attention.
         if chat_id_str in self._telegram_read_only_chats():
-            return True
+            # Everything in a muted room is observation-only -- EXCEPT a
+            # message from an exempt operator, which the dispatcher handles
+            # normally. Observing that too would double-record it.
+            return not self._should_process_message(message)
         if chat_id_str in self._telegram_free_response_chats():
             return False
         if self._telegram_is_free_response_topic(message):
@@ -9784,7 +9810,16 @@ class TelegramAdapter(BasePlatformAdapter):
         # reply. Operators use it for rooms the agent must watch but never
         # speak in.
         if chat_id_str in self._telegram_read_only_chats():
-            return False
+            # Narrow escape valve: an operator listed in
+            # ``read_only_except_from`` can still trigger the bot in an
+            # otherwise-muted chat, so the owner keeps a way to ask for a reply
+            # or an announcement in a room where everyone else gets silence.
+            # The exception is keyed to *sender identity*, not to mention state,
+            # so no other participant can reach the agent by @-mentioning it.
+            operators = self._telegram_read_only_except_from()
+            sender_id = str(getattr(getattr(message, "from_user", None), "id", ""))
+            if not operators or sender_id not in operators:
+                return False
 
         if self._telegram_exclusive_bot_mentions() and self._explicit_bot_mentions_exclude_self(message):
             return False

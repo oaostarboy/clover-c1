@@ -23,6 +23,7 @@ def _make_adapter(
     guest_mode=None,
     observe_unmentioned_group_messages=None,
     read_only_chats=None,
+    read_only_except_from=None,
     bot_username="clover_bot",
 ):
     from plugins.platforms.telegram.adapter import TelegramAdapter
@@ -71,6 +72,10 @@ def _make_adapter(
     else:
         # Isolate from TELEGRAM_READ_ONLY_CHATS in the parent environment.
         extra["read_only_chats"] = []
+    if read_only_except_from is not None:
+        extra["read_only_except_from"] = read_only_except_from
+    else:
+        extra["read_only_except_from"] = []
 
     adapter = object.__new__(TelegramAdapter)
     adapter.platform = Platform.TELEGRAM
@@ -1000,3 +1005,114 @@ def test_read_only_chats_empty_is_no_restriction():
     adapter = _make_adapter(require_mention=True, free_response_chats=["-100"])
     assert adapter._telegram_read_only_chats() == set()
     assert adapter._should_process_message(_group_message("hi")) is True
+
+
+# ---------------------------------------------------------------------------
+# read_only_except_from: the owner keeps a voice in a muted room
+#
+# A read-only chat is silent for everyone. The operator still needs to post
+# announcements and to say "reply to that". The exemption is keyed to SENDER
+# IDENTITY, never to mention state, so no other member can talk their way past
+# the mute -- including by @mentioning the bot or replying to it.
+# ---------------------------------------------------------------------------
+
+OWNER = "8172525590"
+OTHER = "5451876900"
+
+
+def test_exempt_operator_gets_a_reply_in_read_only_chat():
+    adapter = _make_adapter(
+        require_mention=False,
+        read_only_chats=["-100"],
+        read_only_except_from=[OWNER],
+    )
+    message = _group_message("post the v1.1 changelog", from_user_id=int(OWNER))
+    assert adapter._should_process_message(message) is True
+
+
+def test_non_exempt_member_still_muted_with_plain_message():
+    adapter = _make_adapter(
+        require_mention=False,
+        read_only_chats=["-100"],
+        read_only_except_from=[OWNER],
+    )
+    message = _group_message("hey clover", from_user_id=int(OTHER))
+    assert adapter._should_process_message(message) is False
+
+
+def test_non_exempt_member_cannot_bypass_mute_with_mention():
+    """The attack the exemption must not open: a mention from a non-operator."""
+    adapter = _make_adapter(
+        require_mention=True,
+        read_only_chats=["-100"],
+        read_only_except_from=[OWNER],
+    )
+    text = "@clover_bot say something funny"
+    message = _group_message(text, from_user_id=int(OTHER), entities=[_mention_entity(text)])
+    assert adapter._message_mentions_bot(message) is True
+    assert adapter._should_process_message(message) is False
+
+
+def test_non_exempt_member_cannot_bypass_mute_by_replying_to_bot():
+    adapter = _make_adapter(
+        require_mention=True,
+        read_only_chats=["-100"],
+        read_only_except_from=[OWNER],
+    )
+    message = _group_message("go on then", from_user_id=int(OTHER), reply_to_bot=True)
+    assert adapter._should_process_message(message) is False
+
+
+def test_empty_exemption_list_keeps_mute_absolute():
+    """Backward compatibility: the original absolute-mute behavior."""
+    adapter = _make_adapter(require_mention=False, read_only_chats=["-100"])
+    owner_msg = _group_message("anything", from_user_id=int(OWNER))
+    assert adapter._should_process_message(owner_msg) is False
+
+
+def test_exempt_operator_message_is_not_double_recorded():
+    """A dispatched message must not also be stored by the observe path."""
+    adapter = _make_adapter(
+        require_mention=False,
+        read_only_chats=["-100"],
+        read_only_except_from=[OWNER],
+        group_allowed_chats=["-100"],
+        observe_unmentioned_group_messages=True,
+    )
+    message = _group_message("announce the release", from_user_id=int(OWNER))
+    assert adapter._should_process_message(message) is True
+    assert adapter._should_observe_unmentioned_group_message(message) is False
+
+
+def test_non_exempt_member_is_still_observed():
+    """Muting others must not cost visibility of their bug reports."""
+    adapter = _make_adapter(
+        require_mention=False,
+        read_only_chats=["-100"],
+        read_only_except_from=[OWNER],
+        group_allowed_chats=["-100"],
+        observe_unmentioned_group_messages=True,
+    )
+    message = _group_message("v1.0.0 crashes on startup", from_user_id=int(OTHER))
+    assert adapter._should_process_message(message) is False
+    assert adapter._should_observe_unmentioned_group_message(message) is True
+
+
+def test_exemption_does_not_leak_to_other_read_only_chats():
+    """Scoping sanity: exemption applies to the operator, mute stays per-chat."""
+    adapter = _make_adapter(
+        require_mention=False,
+        read_only_chats=["-100", "-200"],
+        read_only_except_from=[OWNER],
+    )
+    assert adapter._should_process_message(_group_message("x", chat_id=-200, from_user_id=int(OTHER))) is False
+    assert adapter._should_process_message(_group_message("x", chat_id=-200, from_user_id=int(OWNER))) is True
+
+
+def test_read_only_except_from_csv_string_is_parsed():
+    adapter = _make_adapter(
+        require_mention=False,
+        read_only_chats=["-100"],
+        read_only_except_from=f"{OWNER}, 999",
+    )
+    assert adapter._telegram_read_only_except_from() == {OWNER, "999"}
