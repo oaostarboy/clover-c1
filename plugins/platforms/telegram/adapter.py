@@ -8907,6 +8907,26 @@ class TelegramAdapter(BasePlatformAdapter):
             return group_allowed & response_allowed
         return group_allowed
 
+    def _telegram_read_only_chats(self) -> set[str]:
+        """Return chat IDs the bot observes but never replies in.
+
+        A read-only chat is muted unconditionally: ``_should_process_message``
+        returns False before any mention, reply, guest-mode, or
+        ``free_response_chats`` branch can re-enable dispatch. Observation is
+        unaffected, so ``observe_unmentioned_group_messages`` still records the
+        transcript for later recall in another session.
+
+        Configure via ``allowed_chats``-style CSV or list in
+        ``config.yaml`` under the telegram platform's ``read_only_chats``, or
+        the ``TELEGRAM_READ_ONLY_CHATS`` environment variable.
+        """
+        raw = self.config.extra.get("read_only_chats")
+        if raw is None:
+            raw = _scoped_gate_env("TELEGRAM_READ_ONLY_CHATS")
+        if isinstance(raw, list):
+            return {str(part).strip() for part in raw if str(part).strip()}
+        return {part.strip() for part in str(raw).split(",") if part.strip()}
+
     def _telegram_allowed_topics(self) -> set[str]:
         """Return the whitelist of Telegram forum topic IDs this bot handles.
 
@@ -9379,6 +9399,14 @@ class TelegramAdapter(BasePlatformAdapter):
         # Only observe messages skipped by the require_mention gate.  If the
         # message would be processed normally, let the dispatcher handle it;
         # if require_mention is disabled, every group message is a request.
+        #
+        # Exception: a read-only chat never dispatches, so every message in it
+        # is observation-only regardless of mention/reply state. Without this
+        # bypass an @mention in a read-only chat would be dropped by BOTH the
+        # dispatch gate and the observe gate, leaving a hole in the transcript
+        # exactly where someone was trying to get the agent's attention.
+        if chat_id_str in self._telegram_read_only_chats():
+            return True
         if chat_id_str in self._telegram_free_response_chats():
             return False
         if self._telegram_is_free_response_topic(message):
@@ -9746,6 +9774,17 @@ class TelegramAdapter(BasePlatformAdapter):
             return True
 
         chat_id_str = str(getattr(getattr(message, "chat", None), "id", ""))
+
+        # read_only_chats: an unconditional mute. A chat listed here is never
+        # dispatched to the agent -- not by @mention, not by reply-to-bot, not
+        # by free_response_chats, not by guest_mode. Observation still works
+        # (see _should_observe_unmentioned_group_message), so the transcript is
+        # readable while the bot stays silent. This gate is deliberately the
+        # first check after chat resolution so no later branch can re-enable a
+        # reply. Operators use it for rooms the agent must watch but never
+        # speak in.
+        if chat_id_str in self._telegram_read_only_chats():
+            return False
 
         if self._telegram_exclusive_bot_mentions() and self._explicit_bot_mentions_exclude_self(message):
             return False

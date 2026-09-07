@@ -22,6 +22,7 @@ def _make_adapter(
     group_allowed_chats=None,
     guest_mode=None,
     observe_unmentioned_group_messages=None,
+    read_only_chats=None,
     bot_username="clover_bot",
 ):
     from plugins.platforms.telegram.adapter import TelegramAdapter
@@ -65,6 +66,11 @@ def _make_adapter(
         extra["guest_mode"] = guest_mode
     if observe_unmentioned_group_messages is not None:
         extra["observe_unmentioned_group_messages"] = observe_unmentioned_group_messages
+    if read_only_chats is not None:
+        extra["read_only_chats"] = read_only_chats
+    else:
+        # Isolate from TELEGRAM_READ_ONLY_CHATS in the parent environment.
+        extra["read_only_chats"] = []
 
     adapter = object.__new__(TelegramAdapter)
     adapter.platform = Platform.TELEGRAM
@@ -882,3 +888,115 @@ def test_identity_freshness_does_not_depend_on_host_uptime(monkeypatch):
 
     adapter._note_bot_username("new_helper_bot")
     assert adapter._bot_identity_is_fresh() is True
+
+
+# ---------------------------------------------------------------------------
+# read_only_chats: observe-but-never-reply rooms
+#
+# Motivating case: an operator adds the bot to a shared dev group so it can
+# read bug reports, but the bot must never post there. Config alone could not
+# express this -- require_mention still replies to an @mention, and
+# free_response_chats/guest_mode could re-enable dispatch. read_only_chats is
+# an unconditional mute checked before every one of those branches.
+# ---------------------------------------------------------------------------
+
+
+def test_read_only_chat_ignores_plain_message():
+    adapter = _make_adapter(require_mention=True, read_only_chats=["-100"])
+    assert adapter._should_process_message(_group_message("just chatting")) is False
+
+
+def test_read_only_chat_ignores_explicit_mention():
+    """The whole point: @mentioning the bot must NOT produce a reply."""
+    adapter = _make_adapter(require_mention=True, read_only_chats=["-100"])
+    text = "@clover_bot can you fix this"
+    message = _group_message(text, entities=[_mention_entity(text)])
+    assert adapter._message_mentions_bot(message) is True
+    assert adapter._should_process_message(message) is False
+
+
+def test_read_only_chat_ignores_reply_to_bot():
+    adapter = _make_adapter(require_mention=True, read_only_chats=["-100"])
+    message = _group_message("thanks!", reply_to_bot=True)
+    assert adapter._should_process_message(message) is False
+
+
+def test_read_only_chat_beats_free_response_chats():
+    """free_response_chats normally forces a reply; the mute must win."""
+    adapter = _make_adapter(
+        require_mention=True,
+        read_only_chats=["-100"],
+        free_response_chats=["-100"],
+    )
+    assert adapter._should_process_message(_group_message("hello")) is False
+
+
+def test_read_only_chat_beats_require_mention_disabled():
+    """With require_mention off every group message is normally a request."""
+    adapter = _make_adapter(require_mention=False, read_only_chats=["-100"])
+    assert adapter._should_process_message(_group_message("hello")) is False
+
+
+def test_read_only_chat_beats_guest_mode_mention():
+    adapter = _make_adapter(
+        require_mention=True,
+        read_only_chats=["-100"],
+        guest_mode=True,
+        allowed_chats=["-999"],
+    )
+    text = "@clover_bot help"
+    message = _group_message(text, entities=[_mention_entity(text)])
+    assert adapter._should_process_message(message) is False
+
+
+def test_read_only_chat_does_not_mute_other_chats():
+    """The mute is scoped to the listed chat, not global."""
+    adapter = _make_adapter(require_mention=True, read_only_chats=["-100"])
+    text = "@clover_bot help"
+    other = _group_message(text, chat_id=-200, entities=[_mention_entity(text)])
+    assert adapter._should_process_message(other) is True
+
+
+def test_read_only_chat_does_not_mute_dms():
+    """DMs are never filtered -- a read-only group must not silence Ant's DM."""
+    adapter = _make_adapter(require_mention=True, read_only_chats=["-100"])
+    assert adapter._should_process_message(_dm_message()) is True
+
+
+def test_read_only_chat_still_observes_plain_message():
+    """Silence must not cost visibility: the transcript still records."""
+    adapter = _make_adapter(
+        require_mention=True,
+        read_only_chats=["-100"],
+        group_allowed_chats=["-100"],
+        observe_unmentioned_group_messages=True,
+    )
+    assert adapter._should_observe_unmentioned_group_message(_group_message("bug report")) is True
+
+
+def test_read_only_chat_observes_mention_instead_of_dropping_it():
+    """Regression: an @mention in a read-only chat is muted for dispatch, so
+    the observe path must pick it up or the transcript loses the exact message
+    where someone tried to get the agent's attention."""
+    adapter = _make_adapter(
+        require_mention=True,
+        read_only_chats=["-100"],
+        group_allowed_chats=["-100"],
+        observe_unmentioned_group_messages=True,
+    )
+    text = "@clover_bot this crashed on v1.0.0"
+    message = _group_message(text, entities=[_mention_entity(text)])
+    assert adapter._should_process_message(message) is False
+    assert adapter._should_observe_unmentioned_group_message(message) is True
+
+
+def test_read_only_chats_csv_string_is_parsed():
+    adapter = _make_adapter(require_mention=True, read_only_chats="-100, -300")
+    assert adapter._telegram_read_only_chats() == {"-100", "-300"}
+    assert adapter._should_process_message(_group_message("hi")) is False
+
+
+def test_read_only_chats_empty_is_no_restriction():
+    adapter = _make_adapter(require_mention=True, free_response_chats=["-100"])
+    assert adapter._telegram_read_only_chats() == set()
+    assert adapter._should_process_message(_group_message("hi")) is True
