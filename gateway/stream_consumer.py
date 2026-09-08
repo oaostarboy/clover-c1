@@ -166,8 +166,8 @@ class StreamConsumerConfig:
     # fresh message if the original preview has been visible for at least
     # this many seconds.  This makes the platform's visible timestamp
     # reflect completion time instead of first-token time for long-running
-    # responses (e.g. reasoning models that stream slowly).  Ported from
-    # openclaw/openclaw#72038.  Default 0 = always edit in place (legacy
+    # responses (e.g. reasoning models that stream slowly).
+    # Default 0 = always edit in place (legacy
     # behavior).  The gateway enables this selectively per-platform.
     fresh_final_after_seconds: float = 0.0
     # Streaming transport selection:
@@ -279,8 +279,7 @@ class GatewayStreamConsumer:
         # Wall-clock timestamp (time.monotonic) when ``_message_id`` was
         # first assigned from a successful first-send.  Used by the
         # fresh-final logic to detect long-lived previews whose edit
-        # timestamps would be stale by completion time.  Ported from
-        # openclaw/openclaw#72038.
+        # timestamps would be stale by completion time.
         self._message_created_ts: Optional[float] = None
         # Every real preview message id the consumer has put on screen during
         # this response (first send + any continuation messages from oversized
@@ -2747,8 +2746,6 @@ class GatewayStreamConsumer:
         - We have a real preview message id (not the ``__no_edit__`` sentinel
           and not ``None``).
         - The preview has been visible for at least the configured threshold.
-
-        Ported from openclaw/openclaw#72038.
         """
         threshold = getattr(self.cfg, "fresh_final_after_seconds", 0.0) or 0.0
         if threshold <= 0:
@@ -2849,8 +2846,6 @@ class GatewayStreamConsumer:
         boundary (a preamble) rather than the turn-final answer; the
         final-delivery flag is then left unset so the gateway still delivers the
         real answer from the next API call (#29346).
-
-        Ported from openclaw/openclaw#72038.
         """
         # Every preview message the user has seen for this response: the
         # current one plus any continuation fragments tracked while streaming
@@ -3278,8 +3273,7 @@ class GatewayStreamConsumer:
                     # reply as a fresh message so the platform's visible
                     # timestamp reflects completion time instead of the
                     # preview creation time.  Best-effort cleanup of the
-                    # old preview follows.  Ported from
-                    # openclaw/openclaw#72038.  Gated by config so the
+                    # old preview follows.  Gated by config so the
                     # legacy edit-in-place path stays the default.
                     #
                     # Adapters can also opt in regardless of the time threshold

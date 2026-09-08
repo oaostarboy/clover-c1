@@ -261,8 +261,7 @@ def _strip_reasoning_tags(text: str) -> str:
 
     Also strips tool-call XML blocks some open models leak into visible
     content (``<tool_call>``, ``<function_calls>``, Gemma-style
-    ``<function name="…">…</function>``). Ported from
-    openclaw/openclaw#67318.
+    ``<function name="…">…</function>``).
     """
     cleaned = text
     for tag in _REASONING_TAGS:
@@ -287,7 +286,7 @@ def _strip_reasoning_tags(text: str) -> str:
             cleaned,
             flags=re.IGNORECASE,
         )
-    # Tool-call XML blocks (openclaw/openclaw#67318).
+    # Tool-call XML blocks.
     for tc_tag in ("tool_call", "tool_calls", "tool_result",
                    "function_call", "function_calls"):
         cleaned = re.sub(

@@ -735,8 +735,8 @@ def uniquify_tool_call_ids(tool_calls: list) -> list:
 
     Some models/providers reuse one call id across different calls in a
     single batch (observed with native Kimi Responses replays, Ollama-
-    compatible endpoints, and degraded models at long context; same bug
-    class as openclaw/openclaw#110518 / #110956). Duplicate ids are lossy
+    compatible endpoints, and degraded models at long context).
+    Duplicate ids are lossy
     downstream: the pre-API sanitizer keeps only the first call/result
     pair per id (#58327), so the later call's result silently vanishes
     from every replayed payload, and strict providers (Anthropic

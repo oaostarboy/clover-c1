@@ -4,7 +4,7 @@ Exercises the real ``httpx`` streaming path against an in-process socket server
 (no mocks) so the byte-cap and hard-deadline contracts are validated end to end,
 the way they behave against a real misbehaving provider.
 
-Covers the bug class ported from openclaw/openclaw#95108: an unbounded
+Covers the bug class where an unbounded
 ``response.read()`` on a non-OK streaming response can balloon memory (huge
 body) or hang forever (body opens then stalls).
 """

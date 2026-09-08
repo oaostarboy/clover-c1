@@ -794,7 +794,7 @@ class StreamingConfig:
     edit_interval: float = DEFAULT_STREAMING_EDIT_INTERVAL
     buffer_threshold: int = DEFAULT_STREAMING_BUFFER_THRESHOLD
     cursor: str = DEFAULT_STREAMING_CURSOR
-    # Ported from openclaw/openclaw#72038.  When >0, the final edit for
+    # When >0, the final edit for
     # a long-running streamed response is delivered as a fresh message
     # if the original preview has been visible for at least this many
     # seconds, so the platform's visible timestamp reflects completion
@@ -1953,7 +1953,7 @@ def _validate_gateway_config(config: "GatewayConfig") -> None:
             )
 
     # Reject known-weak placeholder tokens.
-    # Ported from openclaw/openclaw#64586: users who copy .env.example
+    # Users who copy .env.example
     # without changing placeholder values get a clear startup error instead
     # of a confusing "auth failed" from the platform API.
     try:
