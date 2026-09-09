@@ -341,7 +341,7 @@ class TestRoutingIntents:
 
 
 class TestDeliverResultWrapping:
-    """Verify that cron deliveries are wrapped with header/footer and no longer mirrored."""
+    """Verify cron delivery wrapping is opt-in and never affects mirroring."""
 
     def _safe_media_path(self, tmp_path, monkeypatch, name, data=b"media"):
         root = tmp_path / "media-cache"
@@ -354,8 +354,8 @@ class TestDeliverResultWrapping:
         )
         return media_file.resolve()
 
-    def test_delivery_wraps_content_with_header_and_footer(self):
-        """Delivered content should include task name header and agent-invisible note."""
+    def test_delivery_is_clean_by_default(self):
+        """Delivered content should omit cron metadata unless wrapping is enabled."""
         from gateway.config import Platform
 
         pconfig = MagicMock()
@@ -374,6 +374,60 @@ class TestDeliverResultWrapping:
             _deliver_result(job, "Here is today's summary.")
 
         send_mock.assert_called_once()
+        sent_content = send_mock.call_args.kwargs.get("content") or send_mock.call_args[0][-1]
+        assert sent_content == "Here is today's summary."
+
+    @pytest.mark.parametrize(
+        "config_patch",
+        [
+            patch("cron.scheduler.load_config", return_value={"cron": {}}),
+            patch("cron.scheduler.load_config", side_effect=RuntimeError("config unavailable")),
+        ],
+        ids=["missing-key", "config-load-failure"],
+    )
+    def test_delivery_fallback_is_clean(self, config_patch):
+        """Partial or unavailable config must not restore the legacy wrapper."""
+        from gateway.config import Platform
+
+        pconfig = MagicMock()
+        pconfig.enabled = True
+        mock_cfg = MagicMock()
+        mock_cfg.platforms = {Platform.TELEGRAM: pconfig}
+
+        with patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
+             config_patch, \
+             patch("tools.send_message_tool._send_to_platform", new=AsyncMock(return_value={"success": True})) as send_mock:
+            job = {
+                "id": "test-job",
+                "name": "daily-report",
+                "deliver": "origin",
+                "origin": {"platform": "telegram", "chat_id": "123"},
+            }
+            _deliver_result(job, "Here is today's summary.")
+
+        sent_content = send_mock.call_args.kwargs.get("content") or send_mock.call_args[0][-1]
+        assert sent_content == "Here is today's summary."
+
+    def test_delivery_wrapper_can_be_enabled(self):
+        """Explicit opt-in should retain cron provenance metadata."""
+        from gateway.config import Platform
+
+        pconfig = MagicMock()
+        pconfig.enabled = True
+        mock_cfg = MagicMock()
+        mock_cfg.platforms = {Platform.TELEGRAM: pconfig}
+
+        with patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
+             patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": True}}), \
+             patch("tools.send_message_tool._send_to_platform", new=AsyncMock(return_value={"success": True})) as send_mock:
+            job = {
+                "id": "test-job",
+                "name": "daily-report",
+                "deliver": "origin",
+                "origin": {"platform": "telegram", "chat_id": "123"},
+            }
+            _deliver_result(job, "Here is today's summary.")
+
         sent_content = send_mock.call_args.kwargs.get("content") or send_mock.call_args[0][-1]
         assert "Cronjob Response: daily-report" in sent_content
         assert "(job_id: test-job)" in sent_content
