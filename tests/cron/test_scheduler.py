@@ -377,6 +377,37 @@ class TestDeliverResultWrapping:
         sent_content = send_mock.call_args.kwargs.get("content") or send_mock.call_args[0][-1]
         assert sent_content == "Here is today's summary."
 
+    @pytest.mark.parametrize(
+        "config_patch",
+        [
+            patch("cron.scheduler.load_config", return_value={"cron": {}}),
+            patch("cron.scheduler.load_config", side_effect=RuntimeError("config unavailable")),
+        ],
+        ids=["missing-key", "config-load-failure"],
+    )
+    def test_delivery_fallback_is_clean(self, config_patch):
+        """Partial or unavailable config must not restore the legacy wrapper."""
+        from gateway.config import Platform
+
+        pconfig = MagicMock()
+        pconfig.enabled = True
+        mock_cfg = MagicMock()
+        mock_cfg.platforms = {Platform.TELEGRAM: pconfig}
+
+        with patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
+             config_patch, \
+             patch("tools.send_message_tool._send_to_platform", new=AsyncMock(return_value={"success": True})) as send_mock:
+            job = {
+                "id": "test-job",
+                "name": "daily-report",
+                "deliver": "origin",
+                "origin": {"platform": "telegram", "chat_id": "123"},
+            }
+            _deliver_result(job, "Here is today's summary.")
+
+        sent_content = send_mock.call_args.kwargs.get("content") or send_mock.call_args[0][-1]
+        assert sent_content == "Here is today's summary."
+
     def test_delivery_wrapper_can_be_enabled(self):
         """Explicit opt-in should retain cron provenance metadata."""
         from gateway.config import Platform
