@@ -37,10 +37,11 @@ the `cronjob` tool, the `clover cron` CLI (`list`, `add`, `edit`,
   (run in a specific dir with its `AGENTS.md` / `CLAUDE.md` loaded),
   multi-platform delivery.
 - **Invariants:** 3-minute hard interrupt per run, `.tick.lock` file
-  prevents duplicate ticks across processes, cron sessions pass
-  `skip_memory=True` by default, and cron deliveries are framed with a
-  header/footer instead of being mirrored into the target gateway
-  session (keeps role alternation intact).
+  prevents duplicate ticks across processes, and cron sessions pass
+  `skip_memory=True` by default. Deliveries are clean agent output by default;
+  set `cron.wrap_response: true` to add the task name, job ID, separators, and
+  management footer. Delivery remains isolated from the target gateway session
+  unless continuable delivery is enabled.
 
 User docs: docs/user-guide/features/cron
 

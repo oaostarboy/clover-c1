@@ -200,6 +200,13 @@ def test_default_config_cron_provider_is_empty():
     assert DEFAULT_CONFIG["cron"]["provider"] == ""
 
 
+def test_default_config_cron_delivery_is_unwrapped():
+    """Cron output should read like a normal message unless metadata is requested."""
+    from clover_cli.config import DEFAULT_CONFIG
+
+    assert DEFAULT_CONFIG["cron"]["wrap_response"] is False
+
+
 def test_discover_cron_schedulers_returns_list():
     """Discovery returns bundled non-default providers.
 
