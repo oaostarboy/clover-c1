@@ -1405,7 +1405,6 @@ class ProcessRegistry:
         # mojibake. The incremental decoder holds the partial sequence until
         # the continuation bytes arrive — same treatment the foreground path
         # already has in ``tools/environments/base.py::_wait_for_process``.
-        # (Ported from openclaw/openclaw#112325.)
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
         def _append_chunk(chunk: str):
@@ -1570,7 +1569,6 @@ class ProcessRegistry:
         pty = session._pty
         # PTY reads can split a multibyte UTF-8 character across chunks just
         # like pipe reads — hold partial sequences until the rest arrives.
-        # (Ported from openclaw/openclaw#112325.)
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
         def _append_text(text: str):

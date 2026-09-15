@@ -28,8 +28,7 @@ for the full rationale):
       name + tool count) so the model still knows WHICH domains are
       reachable; individual tools are discoverable only via ``tool_search``.
 * The catalog is stateless across turns and tools-array assemblies. It is
-  rebuilt from the current tool-defs list every time. This is the lesson
-  from OpenClaw's cron regression (openclaw/openclaw#84141): a session-keyed
+  rebuilt from the current tool-defs list every time. A session-keyed
   catalog that drifts out of sync with the live tool registry produces
   silent tool dropouts.
 * Bridge tools route through ``model_tools.handle_function_call`` exactly

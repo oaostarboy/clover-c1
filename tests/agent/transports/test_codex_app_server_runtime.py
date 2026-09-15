@@ -117,11 +117,10 @@ class TestSpawnEnvIsolation:
     config in the real user $HOME. CODEX_HOME isolates codex's own state,
     HOME stays unchanged.
 
-    OpenClaw hit this footgun (openclaw/openclaw#81562) — they were
-    rewriting HOME to a synthetic per-agent dir alongside CODEX_HOME,
-    and then `gh auth status` / git config / etc. all broke inside codex
-    shell calls. We avoid the same bug by only overlaying CODEX_HOME and
-    RUST_LOG on top of os.environ.copy().
+    This is a known footgun: rewriting HOME to a synthetic per-agent dir
+    alongside CODEX_HOME breaks `gh auth status` / git config / etc.
+    inside codex shell calls. We avoid it by only overlaying CODEX_HOME
+    and RUST_LOG on top of os.environ.copy().
     """
 
     def test_spawn_env_preserves_HOME(self, monkeypatch):

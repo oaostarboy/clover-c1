@@ -4245,8 +4245,8 @@ class BasePlatformAdapter(ABC):
         support deletion return ``False`` and callers fall back to leaving
         the message in place.
 
-        Used by the stream consumer's fresh-final cleanup path (see
-        openclaw/openclaw#72038) to remove long-lived preview messages
+        Used by the stream consumer's fresh-final cleanup path to
+        remove long-lived preview messages
         after sending the completed reply as a fresh message so the
         platform's visible timestamp reflects completion time.
 

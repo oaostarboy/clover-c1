@@ -1,6 +1,6 @@
 """Regression tests for the fresh-final-for-long-lived-previews path.
 
-Ported from openclaw/openclaw#72038.  When a streamed preview has been
+When a streamed preview has been
 visible long enough that the platform's edit timestamp would be
 noticeably stale by completion time, the stream consumer delivers the
 final reply as a brand-new message and best-effort deletes the old
@@ -332,7 +332,7 @@ class TestTelegramAdapterDeleteMessage:
         cls = telegram.TelegramAdapter
         assert hasattr(cls, "delete_message"), (
             "TelegramAdapter.delete_message is required for the fresh-final "
-            "cleanup path (openclaw/openclaw#72038 port)."
+            "cleanup path."
         )
         sig = inspect.signature(cls.delete_message)
         params = list(sig.parameters)

@@ -3103,13 +3103,14 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
     from gateway.config import load_gateway_config, Platform
 
     # Optionally wrap the content with a header/footer so the user knows this
-    # is a cron delivery.  Wrapping is on by default; set cron.wrap_response: false
-    # in config.yaml for clean output.
-    wrap_response = True
+    # is a cron delivery.  Wrapping is OFF by default so a scheduled message
+    # reads like a normal conversational message; set cron.wrap_response: true
+    # in config.yaml to opt into the provenance/debug metadata.
+    wrap_response = False
     user_cfg = None
     try:
         user_cfg = load_config()
-        wrap_response = user_cfg.get("cron", {}).get("wrap_response", True)
+        wrap_response = user_cfg.get("cron", {}).get("wrap_response", False)
     except Exception:
         pass
 

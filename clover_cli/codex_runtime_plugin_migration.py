@@ -496,9 +496,8 @@ def _query_codex_plugins(
                 continue
             # Skip plugins codex itself reports as unavailable (broken
             # install, missing OAuth, removed from marketplace, etc.).
-            # Cf. openclaw/openclaw#80815 — OpenClaw learned to gate
-            # migration on app readiness to avoid writing config that
-            # would fail at activation time. Our migration writes to
+            # Gating migration on app readiness avoids writing config
+            # that would fail at activation time. Our migration writes to
             # codex's config.toml directly, so a broken plugin would
             # surface as a codex error on first use. Skipping it here
             # keeps the migrated config clean and the user's first

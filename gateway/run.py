@@ -29033,7 +29033,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # platforms either edit in place cheaply (Discord,
         # Slack) or don't have the timestamp-on-edit /
         # edit-timestamp-stays-stale problem.
-        # (Ported from openclaw/openclaw#72038.)
         _fresh_final_secs = (
             float(getattr(scfg, "fresh_final_after_seconds", 0.0) or 0.0)
             if source.platform == Platform.TELEGRAM
