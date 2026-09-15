@@ -355,7 +355,7 @@ class TestDeliverResultWrapping:
         return media_file.resolve()
 
     def test_delivery_wraps_content_with_header_and_footer(self):
-        """Delivered content should include task name header and agent-invisible note."""
+        """With wrap_response enabled, delivered content includes task name header and agent-invisible note."""
         from gateway.config import Platform
 
         pconfig = MagicMock()
@@ -364,6 +364,7 @@ class TestDeliverResultWrapping:
         mock_cfg.platforms = {Platform.TELEGRAM: pconfig}
 
         with patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
+             patch("cron.scheduler.load_config", return_value={"cron": {"wrap_response": True}}), \
              patch("tools.send_message_tool._send_to_platform", new=AsyncMock(return_value={"success": True})) as send_mock:
             job = {
                 "id": "test-job",
@@ -380,6 +381,39 @@ class TestDeliverResultWrapping:
         assert "-------------" in sent_content
         assert "Here is today's summary." in sent_content
         assert "To stop or manage this job" in sent_content
+
+
+    def test_delivery_is_unwrapped_by_default(self):
+        """Default config (no cron.wrap_response) delivers raw agent output.
+
+        Ant's UX feedback: a scheduled message should read like a normal
+        conversational message, not announce itself as a cron job.  Wrapping is
+        opt-in for users who want provenance/debug metadata.
+        """
+        from gateway.config import Platform
+
+        pconfig = MagicMock()
+        pconfig.enabled = True
+        mock_cfg = MagicMock()
+        mock_cfg.platforms = {Platform.TELEGRAM: pconfig}
+
+        with patch("gateway.config.load_gateway_config", return_value=mock_cfg), \
+             patch("cron.scheduler.load_config", return_value={}), \
+             patch("tools.send_message_tool._send_to_platform", new=AsyncMock(return_value={"success": True})) as send_mock:
+            job = {
+                "id": "test-job",
+                "name": "daily-report",
+                "deliver": "origin",
+                "origin": {"platform": "telegram", "chat_id": "123"},
+            }
+            _deliver_result(job, "Here is today's summary.")
+
+        send_mock.assert_called_once()
+        sent_content = send_mock.call_args.kwargs.get("content") or send_mock.call_args[0][-1]
+        assert sent_content == "Here is today's summary."
+        assert "Cronjob Response" not in sent_content
+        assert "(job_id: test-job)" not in sent_content
+        assert "To stop or manage this job" not in sent_content
 
 
     def test_relay_fronted_home_uses_relay_config_and_live_adapter(self, monkeypatch, tmp_path):
