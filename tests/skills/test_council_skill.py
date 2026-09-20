@@ -150,6 +150,11 @@ def test_chairman_verdict_parser_accepts_plain_or_markdown_labels():
         "build the smaller version", "run one pilot", "scale may suffer"
     )
 
+    direct = "VERDICT: Iron Man wins\nWHY: Better speed and armor\nCAVEAT: Long prep can favor Batman"
+    assert runner.parse_verdict(direct) == (
+        "Iron Man wins", "Better speed and armor", "Long prep can favor Batman"
+    )
+
 
 def test_historian_prompt_uses_active_clover_home(tmp_path):
     runner = _load_runner()
@@ -169,8 +174,8 @@ def test_report_exposes_final_verdict_for_the_calling_agent(tmp_path):
         question="Should we ship?",
         mode="quick",
         verdict="ship the pilot",
-        next_step="deploy to ten users",
-        dissent="small sample",
+        next_step="the pilot limits exposure",
+        dissent="a larger sample could reverse it",
         chairman_text="VERDICT: ship the pilot",
         elapsed_s=42,
         returned=3,
@@ -179,8 +184,8 @@ def test_report_exposes_final_verdict_for_the_calling_agent(tmp_path):
     )
     text = report.read_text(encoding="utf-8")
     assert "VERDICT: ship the pilot" in text
-    assert "NEXT: deploy to ten users" in text
-    assert "DISSENT: small sample" in text
+    assert "WHY: the pilot limits exposure" in text
+    assert "CAVEAT: a larger sample could reverse it" in text
     assert "42s" in text
 
 

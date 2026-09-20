@@ -172,7 +172,7 @@ def parse_verdict(text: str) -> tuple[str, str, str]:
         match = re.search(rf"^\**\s*{key}\s*:\**\s*(.+)$", text, re.I | re.M)
         return match.group(1).strip().strip("*").strip() if match else ""
 
-    return grab("VERDICT"), grab("NEXT"), grab("DISSENT")
+    return grab("VERDICT"), grab("WHY") or grab("NEXT"), grab("CAVEAT") or grab("DISSENT")
 
 
 def parse_severity(text: str) -> str:
@@ -252,20 +252,24 @@ def chairman_task(
         "Use ASD-STE100 Simplified Technical English. Use common words and short sentences. "
         "Put one instruction in each sentence. Do not use jargon, semicolons, dashes, "
         "parentheses, or dense clauses.\n\n"
+        "Answer the question the user meant. Do not answer 'underdetermined' and do not ask "
+        "for missing details when reasonable default assumptions let you decide. State the "
+        "important assumptions briefly, then commit. For fictional matchups, use mainstream "
+        "versions, equal prep time, standard gear, a neutral battlefield, no outside allies, "
+        "and victory by incapacitation unless the user says otherwise. Always name the winner first.\n\n"
         f"Write to {output}. The first three lines must be exactly:\n"
         "VERDICT: <committed decision; at most 35 words and two short sentences>\n"
-        "NEXT: <one concrete action; at most 20 words and one sentence>\n"
-        "DISSENT: <main risk this verdict rejects; at most 25 words and one sentence>\n\n"
+        "WHY: <strongest reason; at most 20 words and one sentence>\n"
+        "CAVEAT: <one fact that could change the answer; at most 25 words and one sentence>\n\n"
         "Then under 220 words cover agreement, clashes, review-found blind spots, and "
-        "which answer ranked strongest. If one missing fact decides it, make obtaining "
-        f"that fact the NEXT action. Create {output}.done when final.\n\n{NO_CHAT}"
+        f"which answer ranked strongest. Create {output}.done when final.\n\n{NO_CHAT}"
     )
 
 
 def attack_task(question: str, brief: Path, verdict: str, next_step: str, output: Path) -> str:
     return (
         "COUNCIL POST-VERDICT ATTACK. Break the chairman's verdict if evidence permits.\n\n"
-        f"Decision: {question}\nVERDICT: {verdict}\nNEXT: {next_step}\nRead {brief}.\n\n"
+        f"Decision: {question}\nVERDICT: {verdict}\nWHY: {next_step}\nRead {brief}.\n\n"
         f"Write to {output}. First lines: GIST: <strongest attack or survives> and "
         "SEVERITY: <FATAL|SERIOUS|MINOR|SURVIVES>. Then under 200 words give evidence "
         f"and a replacement if needed. Create {output}.done.\n\n{NO_CHAT}"
@@ -283,14 +287,16 @@ def ruling_task(
 ) -> str:
     return (
         f"COUNCIL CHAIRMAN RULING. Reconsider your verdict on `{question}` after a "
-        f"{severity} attack. Original VERDICT: {verdict}\nOriginal NEXT: {next_step}\n"
+        f"{severity} attack. Original VERDICT: {verdict}\nOriginal WHY: {next_step}\n"
         f"Read {brief} and {attack}; verify claims. Use ASD-STE100 Simplified Technical "
         "English with common words and short sentences.\n\n"
+        "Do not retreat to 'underdetermined' when reasonable default assumptions permit a "
+        "direct answer. Name the answer or winner first.\n\n"
         f"Write to {output}. First four lines:\n"
         "RULING: <HOLD|REVISE>\n"
         "VERDICT: <full final verdict; at most 35 words and two short sentences>\n"
-        "NEXT: <one action; at most 20 words and one sentence>\n"
-        "DISSENT: <main rejected risk; at most 25 words and one sentence>\n\n"
+        "WHY: <strongest reason; at most 20 words and one sentence>\n"
+        "CAVEAT: <one fact that could change the answer; at most 25 words and one sentence>\n\n"
         "Then under 180 words explain verified and "
         f"rejected attack claims. Create {output}.done.\n\n{NO_CHAT}"
     )
@@ -428,8 +434,8 @@ def write_final_report(
     _append_report(
         report,
         "FINAL VERDICT",
-        f"Question: {question}\nMode: {mode}\n\nVERDICT: {verdict}\nNEXT: {next_step}\n"
-        f"DISSENT: {dissent}\n\nReturned: {returned}/{expected}; reviews: {reviews}; "
+        f"Question: {question}\nMode: {mode}\n\nVERDICT: {verdict}\nWHY: {next_step}\n"
+        f"CAVEAT: {dissent}\n\nReturned: {returned}/{expected}; reviews: {reviews}; "
         f"elapsed: {elapsed_s}s\n\n### Chairman, full\n\n{chairman_text}",
     )
 
@@ -696,6 +702,8 @@ def run_council(
         "run_id": run_id,
         "mode": mode,
         "verdict": verdict,
+        "why": next_step,
+        "caveat": dissent,
         "next": next_step,
         "dissent": dissent,
         "stalled": sorted(set(stalled1 + stalled2)),
@@ -729,8 +737,8 @@ def main() -> None:
         print(f"COUNCIL_FAILED stage={summary.get('stage', 'unknown')}")
     else:
         print(f"VERDICT: {summary['verdict']}")
-        print(f"NEXT: {summary['next']}")
-        print(f"DISSENT: {summary['dissent']}")
+        print(f"WHY: {summary['why']}")
+        print(f"CAVEAT: {summary['caveat']}")
         if summary["stalled"]:
             print("STALLED: " + ", ".join(summary["stalled"]))
         if summary["attack_severity"]:

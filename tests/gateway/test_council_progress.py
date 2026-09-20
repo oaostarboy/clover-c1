@@ -145,12 +145,12 @@ def test_final_reply_keeps_verdict_out_of_compact_card():
         }
     )
     assert reply == (
-        "🏛 **Council decision**\n\n"
-        "**Decision**\n"
+        "🏛 **Council answer**\n\n"
+        "**Answer**\n"
         "• Ship the small version.\n\n"
-        "**Do this now**\n"
+        "**Why**\n"
         "• Run one pilot.\n\n"
-        "**Main risk**\n"
+        "**What could change it**\n"
         "• The pilot may understate scale risk.\n\n"
         "*Full council · all seats returned*"
     )
@@ -190,6 +190,23 @@ def test_chairman_prompt_requires_simplified_english(tmp_path):
     assert "ASD-STE100" in prompt
     assert "short sentences" in prompt
     assert "VERDICT" in prompt and "35 words" in prompt
+
+
+def test_chairman_must_answer_underspecified_hypotheticals_instead_of_refusing(tmp_path):
+    runner = _load_runner()
+    prompt = runner.chairman_task(
+        "Batman with prep time vs Ironman.",
+        tmp_path / "brief.md",
+        tmp_path / "chair.md",
+        "deep",
+        [],
+    )
+    assert "Do not answer 'underdetermined'" in prompt
+    assert "reasonable default assumptions" in prompt
+    assert "mainstream versions" in prompt
+    assert "name the winner first" in prompt
+    assert "WHY:" in prompt
+    assert "CAVEAT:" in prompt
 
 
 def test_runner_progress_file_is_atomic_and_machine_readable(tmp_path):
@@ -289,8 +306,8 @@ async def test_gateway_edits_one_council_card_then_returns_verdict(tmp_path):
 
     reply = await Runner()._handle_council_command(event)
 
-    assert reply.startswith("🏛 **Council decision**")
-    assert "**Decision**\n• Ship it." in reply
+    assert reply.startswith("🏛 **Council answer**")
+    assert "**Answer**\n• Ship it." in reply
     assert len({update[1] for update in adapter.updates}) == 1
     assert adapter.updates[0][2].startswith("🏛 Council · Quick")
     assert any("◉ Chairman" in update[2] for update in adapter.updates)

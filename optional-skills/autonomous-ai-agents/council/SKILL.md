@@ -49,9 +49,9 @@ python "$CLOVER_HOME/skills/autonomous-ai-agents/council/scripts/council_run.py"
 
 Use a timeout of at least 1800 seconds. The runner prints the final verdict and
 an absolute `COUNCIL_REPORT=` path. Read that report only when the user asks for
-the complete debate; otherwise return the verdict, next action, dissent, mode,
+the complete debate; otherwise return the answer, reason, caveat, mode,
 and any stalled seats. On Telegram, keep the result in three short sections:
-**Decision**, **Do this now**, and **Main risk**. Never paste the chairman's full
+**Answer**, **Why**, and **What could change it**. Never paste the chairman's full
 analysis into the chat unless the user explicitly asks for it.
 
 ## Seats
@@ -75,7 +75,7 @@ must be disclosed.
    PREMISE seat sees it.
 2. Run the script once in the requested mode. Completion means it exits zero and
    prints `COUNCIL_REPORT=`.
-3. Report the chairman's final `VERDICT`, `NEXT`, and `DISSENT`. State missing or
+3. Report the chairman's final `VERDICT`, `WHY`, and `CAVEAT`. State missing or
    stalled seats. Completion means the user can distinguish council output from
    your own recommendation.
 4. If the runner fails, state the failed stage and provider/seat. Do not answer as
@@ -98,7 +98,7 @@ A successful run must have all three:
 
 - process exit code `0`;
 - a report path that exists;
-- parseable `VERDICT`, `NEXT`, and `DISSENT` lines.
+- parseable `VERDICT`, `WHY`, and `CAVEAT` lines.
 
 For route verification, run the quick council on a reversible test question and
 confirm the report names the configured model for every returned seat.
