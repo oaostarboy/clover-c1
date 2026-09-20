@@ -249,10 +249,14 @@ def chairman_task(
     return (
         f"COUNCIL CHAIRMAN ({mode}). Commit to one result; hedging has failed.\n\n"
         f"DECISION:\n{question}\n{missing}\nRead {brief}.\n\n"
+        "Use ASD-STE100 Simplified Technical English. Use common words and short sentences. "
+        "Put one instruction in each sentence. Do not use jargon, semicolons, dashes, "
+        "parentheses, or dense clauses.\n\n"
         f"Write to {output}. The first three lines must be exactly:\n"
-        "VERDICT: <committed decision>\nNEXT: <one concrete action>\n"
-        "DISSENT: <strongest point this verdict rejects>\n\n"
-        "Then under 400 words cover agreement, clashes, review-found blind spots, and "
+        "VERDICT: <committed decision; at most 35 words and two short sentences>\n"
+        "NEXT: <one concrete action; at most 20 words and one sentence>\n"
+        "DISSENT: <main risk this verdict rejects; at most 25 words and one sentence>\n\n"
+        "Then under 220 words cover agreement, clashes, review-found blind spots, and "
         "which answer ranked strongest. If one missing fact decides it, make obtaining "
         f"that fact the NEXT action. Create {output}.done when final.\n\n{NO_CHAT}"
     )
@@ -280,9 +284,14 @@ def ruling_task(
     return (
         f"COUNCIL CHAIRMAN RULING. Reconsider your verdict on `{question}` after a "
         f"{severity} attack. Original VERDICT: {verdict}\nOriginal NEXT: {next_step}\n"
-        f"Read {brief} and {attack}; verify claims.\n\nWrite to {output}. First four lines:\n"
-        "RULING: <HOLD|REVISE>\nVERDICT: <full final verdict>\nNEXT: <one action>\n"
-        "DISSENT: <strongest rejected point>\n\nThen under 250 words explain verified and "
+        f"Read {brief} and {attack}; verify claims. Use ASD-STE100 Simplified Technical "
+        "English with common words and short sentences.\n\n"
+        f"Write to {output}. First four lines:\n"
+        "RULING: <HOLD|REVISE>\n"
+        "VERDICT: <full final verdict; at most 35 words and two short sentences>\n"
+        "NEXT: <one action; at most 20 words and one sentence>\n"
+        "DISSENT: <main rejected risk; at most 25 words and one sentence>\n\n"
+        "Then under 180 words explain verified and "
         f"rejected attack claims. Create {output}.done.\n\n{NO_CHAT}"
     )
 

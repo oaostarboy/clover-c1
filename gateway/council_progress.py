@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Mapping
 
 
@@ -107,10 +108,22 @@ def render_council_card(state: Mapping[str, Any]) -> str:
 
 def format_council_result(summary: Mapping[str, Any]) -> str:
     """Format the actual reply; the compact card deliberately omits the verdict."""
-    mode = str(summary.get("mode") or "full")
-    verdict = str(summary.get("verdict") or "No verdict returned.")
-    next_step = str(summary.get("next") or "No next action returned.")
-    dissent = str(summary.get("dissent") or "No dissent returned.")
+    mode = str(summary.get("mode") or "full").title()
+    verdict = _compact_council_text(
+        summary.get("verdict") or "No verdict returned.",
+        max_chars=180,
+        max_sentences=2,
+    )
+    next_step = _compact_council_text(
+        summary.get("next") or "No next action returned.",
+        max_chars=120,
+        max_sentences=1,
+    )
+    dissent = _compact_council_text(
+        summary.get("dissent") or "No dissent returned.",
+        max_chars=150,
+        max_sentences=1,
+    )
     stalled = [str(item) for item in (summary.get("stalled") or []) if item]
     seat_note = (
         "stalled: " + ", ".join(stalled)
@@ -118,9 +131,28 @@ def format_council_result(summary: Mapping[str, Any]) -> str:
         else "all seats returned"
     )
     return (
-        "🏛 **Council verdict**\n\n"
-        f"**VERDICT:** {verdict}\n"
-        f"**NEXT:** {next_step}\n"
-        f"**DISSENT:** {dissent}\n\n"
-        f"Mode: {mode} · {seat_note}"
+        "🏛 **Council decision**\n\n"
+        "**Decision**\n"
+        f"• {verdict}\n\n"
+        "**Do this now**\n"
+        f"• {next_step}\n\n"
+        "**Main risk**\n"
+        f"• {dissent}\n\n"
+        f"*{mode} council · {seat_note}*"
     )
+
+
+def _compact_council_text(value: Any, *, max_chars: int, max_sentences: int) -> str:
+    """Turn model prose into a bounded mobile-friendly field."""
+    text = " ".join(str(value or "").split())
+    if not text:
+        return "Not provided."
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    selected = " ".join(sentences[:max_sentences]).strip()
+    omitted = len(sentences) > max_sentences
+    if len(selected) > max_chars:
+        selected = selected[: max_chars + 1].rsplit(" ", 1)[0].rstrip(" .!?;:")
+        omitted = True
+    if omitted:
+        selected = selected.rstrip(" .!?;:") + "…"
+    return selected
