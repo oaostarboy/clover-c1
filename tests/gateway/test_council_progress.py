@@ -145,12 +145,51 @@ def test_final_reply_keeps_verdict_out_of_compact_card():
         }
     )
     assert reply == (
-        "🏛 **Council verdict**\n\n"
-        "**VERDICT:** Ship the small version.\n"
-        "**NEXT:** Run one pilot.\n"
-        "**DISSENT:** The pilot may understate scale risk.\n\n"
-        "Mode: full · all seats returned"
+        "🏛 **Council decision**\n\n"
+        "**Decision**\n"
+        "• Ship the small version.\n\n"
+        "**Do this now**\n"
+        "• Run one pilot.\n\n"
+        "**Main risk**\n"
+        "• The pilot may understate scale risk.\n\n"
+        "*Full council · all seats returned*"
     )
+
+
+def test_final_reply_compacts_a_model_that_ignores_length_rules():
+    long_verdict = (
+        "This answers same-day liquidity, not new income. "
+        "Spend at most 30 minutes checking two things from records already in hand. "
+        "Check balances that already cleared and receivables that are due and approved. "
+        "Then act on the shortest path to cleared funds instead of waiting for a complete picture."
+    )
+    reply = format_council_result(
+        {
+            "mode": "full",
+            "verdict": long_verdict,
+            "next": long_verdict,
+            "dissent": long_verdict,
+            "stalled": [],
+        }
+    )
+    assert len(reply) < 700
+    assert reply.count("\n\n") == 4
+    assert "waiting for a complete picture" not in reply
+    assert "…" in reply
+
+
+def test_chairman_prompt_requires_simplified_english(tmp_path):
+    runner = _load_runner()
+    prompt = runner.chairman_task(
+        "What should we do?",
+        tmp_path / "brief.md",
+        tmp_path / "chair.md",
+        "full",
+        [],
+    )
+    assert "ASD-STE100" in prompt
+    assert "short sentences" in prompt
+    assert "VERDICT" in prompt and "35 words" in prompt
 
 
 def test_runner_progress_file_is_atomic_and_machine_readable(tmp_path):
@@ -250,8 +289,8 @@ async def test_gateway_edits_one_council_card_then_returns_verdict(tmp_path):
 
     reply = await Runner()._handle_council_command(event)
 
-    assert reply.startswith("🏛 **Council verdict**")
-    assert "**VERDICT:** Ship it." in reply
+    assert reply.startswith("🏛 **Council decision**")
+    assert "**Decision**\n• Ship it." in reply
     assert len({update[1] for update in adapter.updates}) == 1
     assert adapter.updates[0][2].startswith("🏛 Council · Quick")
     assert any("◉ Chairman" in update[2] for update in adapter.updates)

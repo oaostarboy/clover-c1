@@ -50,7 +50,9 @@ python "$CLOVER_HOME/skills/autonomous-ai-agents/council/scripts/council_run.py"
 Use a timeout of at least 1800 seconds. The runner prints the final verdict and
 an absolute `COUNCIL_REPORT=` path. Read that report only when the user asks for
 the complete debate; otherwise return the verdict, next action, dissent, mode,
-and any stalled seats.
+and any stalled seats. On Telegram, keep the result in three short sections:
+**Decision**, **Do this now**, and **Main risk**. Never paste the chairman's full
+analysis into the chat unless the user explicitly asks for it.
 
 ## Seats
 
