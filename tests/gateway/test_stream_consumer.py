@@ -831,6 +831,28 @@ class TestInterimCommentaryMessages:
         assert sent_texts == ["I'll inspect the repository first.", "Done."]
         assert consumer.final_response_sent is True
 
+    @pytest.mark.asyncio
+    async def test_commentary_reports_platform_message_id(self):
+        adapter = MagicMock()
+        adapter.send = AsyncMock(return_value=SimpleNamespace(
+            success=True, message_id="commentary_42",
+        ))
+        adapter.edit_message = AsyncMock(return_value=SimpleNamespace(success=True))
+        adapter.MAX_MESSAGE_LENGTH = 4096
+        message_ids = []
+        consumer = GatewayStreamConsumer(
+            adapter,
+            "chat_123",
+            StreamConsumerConfig(edit_interval=0.01, buffer_threshold=5),
+            on_interim_message=message_ids.append,
+        )
+
+        consumer.on_commentary("Checking the live configuration.")
+        consumer.finish()
+        await consumer.run()
+
+        assert message_ids == ["commentary_42"]
+
 
 class TestCancelledConsumerSetsFlags:
     """Cancellation must set final_response_sent when already_sent is True.

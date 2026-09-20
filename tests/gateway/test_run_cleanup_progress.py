@@ -143,6 +143,20 @@ class FailingAgent:
         }
 
 
+class InterimAgent:
+    """Emits visible commentary before returning the final response."""
+
+    def __init__(self, **kwargs):
+        self.interim_assistant_callback = kwargs.get("interim_assistant_callback")
+        self.tools = []
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        if self.interim_assistant_callback is not None:
+            self.interim_assistant_callback("Checking the live configuration.")
+            time.sleep(0.2)
+        return {"final_response": "done", "messages": [], "api_calls": 1}
+
+
 def _make_runner(adapter):
     gateway_run = importlib.import_module("gateway.run")
     GatewayRunner = gateway_run.GatewayRunner
@@ -171,6 +185,7 @@ def _install_fakes(
     agent_cls,
     *,
     cleanup_on: bool,
+    interim_on: bool = False,
     cleanup_platform: Platform = Platform.TELEGRAM,
 ):
     """Wire up the module stubs every _run_agent test needs."""
@@ -190,13 +205,14 @@ def _install_fakes(
 
     # Wire the per-platform cleanup_progress flag via the config loader the
     # gateway actually reads (``_load_gateway_config`` returns user config).
+    platform_display = {}
+    if cleanup_on:
+        platform_display["cleanup_progress"] = True
+    if interim_on:
+        platform_display["interim_assistant_messages"] = True
     cfg = {
-        "display": {
-            "platforms": {
-                cleanup_platform.value: {"cleanup_progress": True},
-            }
-        }
-    } if cleanup_on else {}
+        "display": {"platforms": {cleanup_platform.value: platform_display}}
+    } if platform_display else {}
     monkeypatch.setattr(gateway_run, "_load_gateway_config", lambda: cfg)
     return gateway_run
 
@@ -204,6 +220,44 @@ def _install_fakes(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cleanup_removes_interim_commentary_after_final_delivery(monkeypatch, tmp_path):
+    adapter = CleanupCaptureAdapter()
+    runner = _make_runner(adapter)
+    gateway_run = _install_fakes(
+        monkeypatch, InterimAgent, cleanup_on=True, interim_on=True,
+    )
+    monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="-1001")
+    session_key = "agent:main:telegram:group:-1001"
+
+    result = await runner._run_agent(
+        message="hello",
+        context_prompt="",
+        history=[],
+        source=source,
+        session_id="sess-interim-cleanup",
+        session_key=session_key,
+    )
+    assert result["final_response"] == "done"
+    commentary = next(
+        item for item in adapter.sent
+        if item["content"] == "Checking the live configuration."
+    )
+
+    cb = adapter.pop_post_delivery_callback(session_key)
+    assert callable(cb)
+    await _fire_post_delivery_cb(cb)
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+        if adapter.deleted:
+            break
+
+    assert commentary["message_id"] in {
+        item["message_id"] for item in adapter.deleted
+    }
 
 
 @pytest.mark.asyncio

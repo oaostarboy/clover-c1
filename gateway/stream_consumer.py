@@ -240,6 +240,7 @@ class GatewayStreamConsumer:
         config: Optional[StreamConsumerConfig] = None,
         metadata: Optional[dict] = None,
         on_new_message: Optional[callable] = None,
+        on_interim_message: Optional[Callable[[str], Any]] = None,
         on_before_finalize: Optional[Callable[[], Any]] = None,
         initial_reply_to_id: Optional[str] = None,
         run_still_current: Optional[Callable[[], bool]] = None,
@@ -256,6 +257,10 @@ class GatewayStreamConsumer:
         # the content, not edit the old bubble above it.
         # Called with no arguments. Exceptions are swallowed.
         self._on_new_message = on_new_message
+        # Fired with the platform message id after an interim commentary send.
+        # Gateway cleanup uses this to make live narration temporary when
+        # cleanup_progress is enabled.
+        self._on_interim_message = on_interim_message
         # Fired once when the stream transitions into its finalization path.
         # Gateway callers use this to pause typing refreshes before a slow
         # final rich-text edit (Telegram MarkdownV2 finalize, etc.).
@@ -2725,6 +2730,11 @@ class GatewayStreamConsumer:
             # the final response to be incorrectly suppressed when there are
             # multiple tool calls. See: 
             if result.success:
+                if result.message_id and self._on_interim_message is not None:
+                    try:
+                        self._on_interim_message(str(result.message_id))
+                    except Exception:
+                        logger.debug("on_interim_message callback error", exc_info=True)
                 # Commentary counts as fresh content — close off any
                 # stale tool bubble above it so the next tool starts a
                 # new bubble below.

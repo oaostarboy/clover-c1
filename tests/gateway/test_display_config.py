@@ -143,17 +143,15 @@ class TestPlatformDefaults:
 
 
     def test_telegram_mobile_chatter_defaults(self):
-        """Telegram folds mid-turn signal into ONE editable bubble rather than
-        narrating across several messages."""
+        """Telegram shows live context but cleans it up after the final reply."""
         from gateway.display_config import resolve_display_setting
 
-        # Mid-turn commentary is the one signal that cannot be folded into the
-        # progress bubble — each line ships as its own message. Off, so a turn
-        # is one updating bubble instead of a stream of narration.
-        assert resolve_display_setting({}, "telegram", "interim_assistant_messages") is False
-        # The bubble carries the signal instead: every tool call is reported
-        # ("all") into a single accumulating message, then collapsed into a
-        # summary card when the turn ends.
+        # Mid-turn commentary is visible while work is happening, then
+        # cleanup_progress removes it after the final response lands.
+        assert resolve_display_setting({}, "telegram", "interim_assistant_messages") is True
+        # Every tool call is reported into one accumulating bubble; commentary
+        # is separate while live. Cleanup folds the temporary messages into a
+        # single summary card when the turn ends.
         assert resolve_display_setting({}, "telegram", "tool_progress") == "all"
         assert resolve_display_setting({}, "telegram", "tool_progress_grouping") == "accumulate"
         assert resolve_display_setting({}, "telegram", "cleanup_progress") is True
