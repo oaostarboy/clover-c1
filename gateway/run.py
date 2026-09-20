@@ -5621,6 +5621,11 @@ class TurnRunner:
                             if ctx.progress_queue is not None
                             else None
                         ),
+                        on_interim_message=(
+                            (lambda message_id: ctx._cleanup_msg_ids.append(str(message_id)))
+                            if ctx._cleanup_progress
+                            else None
+                        ),
                         on_before_finalize=_pause_typing_before_finalize,
                         initial_reply_to_id=ctx.event_message_id,
                         run_still_current=ctx._run_still_current,
@@ -5656,12 +5661,20 @@ class TurnRunner:
                 return
             if already_streamed or not ctx._status_adapter or not str(display_text or "").strip():
                 return
-            safe_schedule_threadsafe(
-                ctx._status_adapter.send(
+            async def _send_interim_message() -> None:
+                result = await ctx._status_adapter.send(
                     ctx._status_chat_id,
                     display_text,
                     metadata=ctx._status_thread_metadata,
-                ),
+                )
+                if (
+                    ctx._cleanup_progress
+                    and getattr(result, "success", False)
+                    and getattr(result, "message_id", None)
+                ):
+                    ctx._cleanup_msg_ids.append(str(result.message_id))
+            safe_schedule_threadsafe(
+                _send_interim_message(),
                 ctx._loop_for_step,
                 logger=logger,
                 log_message="interim_assistant_callback scheduling error",

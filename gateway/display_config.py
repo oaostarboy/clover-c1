@@ -130,11 +130,10 @@ _PLATFORM_DEFAULTS: dict[str, dict[str, Any]] = {
     #       signal; "new" suppressed repeats, so a long run of back-to-back
     #       terminal calls froze the bubble on one line and read as a hang.
     #   interim_assistant_messages False
-    #       mid-turn assistant commentary is the one thing that CANNOT be
-    #       folded into the progress bubble — each line ships as its own
-    #       message, which is what actually made turns feel spammy. Tool
-    #       progress was blamed for it repeatedly. The final response still
-    #       arrives in full; only the running narration is suppressed.
+    #       mid-turn commentary ships as standalone live messages. When users
+    #       opt it back on alongside cleanup_progress, those messages are
+    #       temporary: visible during the run, then folded into the collapsed
+    #       summary cleanup after the final response lands.
     #   cleanup_progress True
     #       on completion the bubbles are replaced by one expandable card
     #       (thoughts, tool calls, elapsed), so a finished turn leaves a
