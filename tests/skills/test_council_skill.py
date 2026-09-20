@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import shutil
+import stat
+import sys
 from pathlib import Path
 
 import pytest
@@ -177,3 +179,43 @@ def test_report_exposes_final_verdict_for_the_calling_agent(tmp_path):
     assert "NEXT: deploy to ten users" in text
     assert "DISSENT: small sample" in text
     assert "42s" in text
+
+
+def test_quick_run_survives_one_stalled_seat_and_names_it(tmp_path):
+    runner = _load_runner()
+    fake = tmp_path / "fake-clover"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        "import json, re, sys\n"
+        "args=sys.argv[1:]\n"
+        "task=args[args.index('-z')+1]\n"
+        "provider=args[args.index('--provider')+1]\n"
+        "model=args[args.index('-m')+1]\n"
+        "usage=args[args.index('--usage-file')+1]\n"
+        "open(usage,'w').write(json.dumps({'completed':True,'provider':provider,'model':model}))\n"
+        "if 'COUNCIL SEAT — PROSECUTOR' in task: sys.exit(0)\n"
+        "m=re.search(r'Write to ([^\\s]+\\.md)', task)\n"
+        "out=m.group(1)\n"
+        "text=('VERDICT: ship the skill\\nNEXT: restart gateway\\nDISSENT: core contract risk' "
+        "if 'COUNCIL CHAIRMAN' in task else 'GIST: use the skill\\n\\nIt is reversible.')\n"
+        "open(out,'w').write(text)\n"
+        "open(out+'.done','w').write('done')\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+
+    code, report, summary = runner.run_council(
+        "Should we ship?",
+        "quick",
+        home=tmp_path / "home",
+        clover_bin=str(fake),
+        run_id="stall-test",
+        timeout_s=0.5,
+        poll_s=0.01,
+        settle_s=0,
+    )
+
+    assert code == 0
+    assert summary["verdict"] == "ship the skill"
+    assert summary["stalled"] == ["PROSECUTOR"]
+    assert "STAGE 1 · PROSECUTOR" in report.read_text(encoding="utf-8")
