@@ -32,7 +32,7 @@ council of models, not a panel of people or independent legal/financial experts.
 
 ## How to Run
 
-Telegram and gateway syntax:
+Telegram and gateway syntax (this path uses one editable `🏛 Council` stage card and collapses it after the verdict):
 
 - `/council <question>` — full council.
 - `/council quick <question>` — three blind seats, then chairman.

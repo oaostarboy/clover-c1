@@ -69,6 +69,7 @@ it. New commands land often; `/help` in-session is always authoritative.
 /curator [sub]           Skill maintenance (status, run, pin, archive, …)
 /kanban [sub]            Multi-profile collaboration board
 /moa <prompt>            One prompt through the Mixture-of-Agents preset
+/council [mode] <question> Run the adversarial multi-model council (GW)
 /reload                  Reload .env into the running session (CLI)
 /reload-mcp              Reload MCP servers
 /reload-skills           Re-scan skills directory
