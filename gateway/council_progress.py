@@ -114,13 +114,13 @@ def format_council_result(summary: Mapping[str, Any]) -> str:
         max_chars=180,
         max_sentences=2,
     )
-    next_step = _compact_council_text(
-        summary.get("next") or "No next action returned.",
+    why = _compact_council_text(
+        summary.get("why") or summary.get("next") or "No reason returned.",
         max_chars=120,
         max_sentences=1,
     )
-    dissent = _compact_council_text(
-        summary.get("dissent") or "No dissent returned.",
+    caveat = _compact_council_text(
+        summary.get("caveat") or summary.get("dissent") or "No caveat returned.",
         max_chars=150,
         max_sentences=1,
     )
@@ -131,13 +131,13 @@ def format_council_result(summary: Mapping[str, Any]) -> str:
         else "all seats returned"
     )
     return (
-        "🏛 **Council decision**\n\n"
-        "**Decision**\n"
+        "🏛 **Council answer**\n\n"
+        "**Answer**\n"
         f"• {verdict}\n\n"
-        "**Do this now**\n"
-        f"• {next_step}\n\n"
-        "**Main risk**\n"
-        f"• {dissent}\n\n"
+        "**Why**\n"
+        f"• {why}\n\n"
+        "**What could change it**\n"
+        f"• {caveat}\n\n"
         f"*{mode} council · {seat_note}*"
     )
 
