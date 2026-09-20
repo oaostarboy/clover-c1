@@ -129,21 +129,20 @@ _PLATFORM_DEFAULTS: dict[str, dict[str, Any]] = {
     #       bubble. "off" left the user staring at "typing..." with no
     #       signal; "new" suppressed repeats, so a long run of back-to-back
     #       terminal calls froze the bubble on one line and read as a hang.
-    #   interim_assistant_messages False
-    #       mid-turn commentary ships as standalone live messages. When users
-    #       opt it back on alongside cleanup_progress, those messages are
-    #       temporary: visible during the run, then folded into the collapsed
-    #       summary cleanup after the final response lands.
+    #   interim_assistant_messages True + cleanup_progress True
+    #       useful mid-turn commentary stays visible while work is happening,
+    #       then becomes temporary cleanup material after the final response
+    #       lands. Users see the agent's plan without permanent chat clutter.
     #   cleanup_progress True
     #       on completion the bubbles are replaced by one expandable card
     #       (thoughts, tool calls, elapsed), so a finished turn leaves a
     #       single tidy artifact instead of scrollback.
     #
-    # Net effect: one bubble that updates live, then one summary card.
-    # Opt back into the chatty behaviour per-platform in config.yaml.
+    # Net effect: live tool progress plus useful commentary during the turn,
+    # then one summary card and the final response after completion.
     "telegram":    {
         **_TIER_HIGH,
-        "interim_assistant_messages": False,
+        "interim_assistant_messages": True,
         "cleanup_progress": True,
         "busy_ack_detail": False,
     },
