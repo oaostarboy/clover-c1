@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from clover_cli.commands import resolve_command
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SKILL_DIR = ROOT / "optional-skills" / "autonomous-ai-agents" / "council"
@@ -35,7 +37,7 @@ def test_skill_registers_as_council_slash_command():
     assert "/council" in text
 
 
-def test_harness_scanner_exposes_council_slash_command(tmp_path, monkeypatch):
+def test_harness_keeps_skill_loadable_when_native_command_owns_slash(tmp_path, monkeypatch):
     from agent import skill_commands, skill_utils
     from tools import skills_tool
 
@@ -51,8 +53,9 @@ def test_harness_scanner_exposes_council_slash_command(tmp_path, monkeypatch):
 
     commands = skill_commands.scan_skill_commands()
 
-    assert commands["/council"]["name"] == "council"
-    assert skill_commands.resolve_skill_command_key("council") == "/council"
+    assert "/council" not in commands
+    assert resolve_command("council") is not None
+    assert (installed / "SKILL.md").is_file()
 
 
 def test_roster_matches_ant_and_octavias_evidence_backed_assignments():

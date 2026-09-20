@@ -18417,6 +18417,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     canonical = _cmd_def.name if _cmd_def else command
                     break
 
+        if canonical == "council":
+            return await self._handle_council_command(event)
+
         plain_handler = self._gateway_plain_command_handlers().get(canonical)
         if plain_handler is not None:
             return await plain_handler(event)

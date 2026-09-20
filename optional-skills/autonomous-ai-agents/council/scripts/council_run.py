@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
@@ -59,6 +59,40 @@ NO_CHAT = (
 
 def clover_home() -> Path:
     return Path(os.environ.get("CLOVER_HOME", str(Path.home() / ".clover"))).expanduser()
+
+
+def write_progress(
+    work: Path,
+    *,
+    status: str,
+    mode: str,
+    stage: str,
+    seat_done: int = 0,
+    seat_total: int = 0,
+    review_done: int = 0,
+    review_total: int = 0,
+    stalled: list[str] | None = None,
+    started_at: float,
+    now: float | None = None,
+) -> None:
+    """Atomically publish the small state consumed by gateway progress cards."""
+    now = time.time() if now is None else now
+    payload = {
+        "status": status,
+        "mode": mode,
+        "stage": stage,
+        "seat_done": seat_done,
+        "seat_total": seat_total,
+        "review_done": review_done,
+        "review_total": review_total,
+        "stalled": stalled or [],
+        "elapsed_s": max(0, int(now - started_at)),
+    }
+    work.mkdir(parents=True, exist_ok=True)
+    target = work / "progress.json"
+    temporary = work / "progress.json.tmp"
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(target)
 
 
 def load_roster(path: Path = DEFAULT_ROSTER_PATH) -> dict[str, dict[str, str]]:
@@ -269,6 +303,7 @@ def _collect(
     timeout_s: float,
     poll_s: float,
     settle_s: float,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> tuple[dict[str, str], list[str]]:
     deadline = time.time() + timeout_s
     pending = dict(files)
@@ -284,6 +319,8 @@ def _collect(
             if text:
                 results[seat] = text
                 pending.pop(seat)
+                if on_progress is not None:
+                    on_progress(len(results), len(files))
         if pending:
             time.sleep(poll_s)
     return results, sorted(pending)
@@ -418,6 +455,32 @@ def run_council(
         f"Seats: {', '.join(seats)}\n",
         encoding="utf-8",
     )
+    progress_state = {
+        "stage": "arguments",
+        "seat_done": 0,
+        "seat_total": len(seats),
+        "review_done": 0,
+        "review_total": 0 if mode == "quick" else len(seats),
+        "stalled": [],
+    }
+
+    def publish(stage: str, status: str = "running", **updates: Any) -> None:
+        progress_state["stage"] = stage
+        progress_state.update(updates)
+        write_progress(
+            work,
+            status=status,
+            mode=mode,
+            stage=stage,
+            seat_done=progress_state["seat_done"],
+            seat_total=progress_state["seat_total"],
+            review_done=progress_state["review_done"],
+            review_total=progress_state["review_total"],
+            stalled=progress_state["stalled"],
+            started_at=started,
+        )
+
+    publish("arguments")
 
     stage1_files = {seat: work / f"stage1-{seat}.md" for seat in seats}
     dispatched = [
@@ -433,14 +496,20 @@ def run_council(
         )
     ]
     answers, stalled1 = _collect(
-        stage1_files, timeout_s=timeout_s, poll_s=poll_s, settle_s=settle_s
+        stage1_files,
+        timeout_s=timeout_s,
+        poll_s=poll_s,
+        settle_s=settle_s,
+        on_progress=lambda done, _total: publish("arguments", seat_done=done),
     )
+    publish("arguments", seat_done=len(answers), stalled=stalled1)
     returned_route_seats = set(answers)
     for seat in seats:
         text = answers.get(seat, "STALLED — no answer")
         _append_report(report, f"STAGE 1 · {seat}", text)
     if not answers:
         _append_report(report, "RUN FAILED", "No council seat returned an answer.")
+        publish("arguments", status="failed", stalled=stalled1)
         return 1, report, {"stage": "stage1", "stalled": stalled1, "dispatched": dispatched}
 
     reviews: dict[str, str] = {}
@@ -448,6 +517,7 @@ def run_council(
     mapping: dict[str, str] = {}
     letters: list[str] = []
     if mode != "quick" and len(answers) >= 2:
+        publish("cross_review", review_total=len(answers))
         order = list(answers)
         random.shuffle(order)
         letters = [chr(ord("A") + index) for index in range(len(order))]
@@ -472,7 +542,16 @@ def run_council(
                 usage_records=usage_records,
             )
         reviews, stalled2 = _collect(
-            review_files, timeout_s=timeout_s, poll_s=poll_s, settle_s=settle_s
+            review_files,
+            timeout_s=timeout_s,
+            poll_s=poll_s,
+            settle_s=settle_s,
+            on_progress=lambda done, _total: publish("cross_review", review_done=done),
+        )
+        publish(
+            "cross_review",
+            review_done=len(reviews),
+            stalled=sorted(set(stalled1 + stalled2)),
         )
         returned_route_seats.update(reviews)
         _append_report(
@@ -495,6 +574,7 @@ def run_council(
     brief.write_text("\n\n".join(brief_parts), encoding="utf-8")
 
     chairman_output = work / "stage3-CHAIRMAN.md"
+    publish("chairman", stalled=sorted(set(stalled1 + stalled2)))
     _dispatch(
         "CHAIRMAN",
         chairman_task(question, brief, chairman_output, mode, stalled1 + stalled2),
@@ -512,17 +592,20 @@ def run_council(
     )
     if chair_stalled:
         _append_report(report, "RUN FAILED", "Chairman did not return a verdict.")
+        publish("chairman", status="failed")
         return 1, report, {"stage": "chairman", "stalled": chair_stalled}
     chairman_text = chair_results["CHAIRMAN"]
     returned_route_seats.add("CHAIRMAN")
     verdict, next_step, dissent = parse_verdict(chairman_text)
     if not verdict or not next_step or not dissent:
         _append_report(report, "RUN FAILED", "Chairman output was not parseable.\n\n" + chairman_text)
+        publish("chairman", status="failed")
         return 1, report, {"stage": "chairman-parse", "stalled": []}
 
     attack_severity = ""
     ruling = ""
     if mode == "deep":
+        publish("attack")
         attack_output = work / "stage4-ATTACK.md"
         _dispatch(
             "ATTACK",
@@ -545,6 +628,7 @@ def run_council(
             attack_severity = parse_severity(attack_text)
             _append_report(report, f"STAGE 4 ATTACK · {attack_severity}", attack_text)
             if attack_severity in {"FATAL", "SERIOUS"}:
+                publish("ruling")
                 ruling_output = work / "stage5-CHAIRMAN.md"
                 _dispatch(
                     "CHAIRMAN",
@@ -582,6 +666,7 @@ def run_council(
         _validate_usage_records(usage_records, roster, returned_route_seats)
     except RuntimeError as exc:
         _append_report(report, "RUN FAILED", str(exc))
+        publish(str(progress_state["stage"]), status="failed")
         return 1, report, {"stage": "route-verification", "error": str(exc)}
 
     elapsed = int(time.time() - started)
@@ -610,6 +695,7 @@ def run_council(
         "elapsed_s": elapsed,
     }
     (work / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    publish("ruling" if ruling else "attack" if attack_severity else "chairman", status="done")
     return 0, report, summary
 
 

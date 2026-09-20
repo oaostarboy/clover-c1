@@ -19,6 +19,7 @@ import asyncio
 import dataclasses
 import hashlib
 import inspect
+import json
 import logging
 import os
 import re
@@ -127,6 +128,137 @@ class GatewaySlashCommandsMixin:
     """In-session slash-command handlers for GatewayRunner."""
 
     async_session_store: AsyncSessionStore
+
+    async def _handle_council_command(self, event: MessageEvent) -> str:
+        """Run the installed council with one editable, council-specific card."""
+        from gateway.council_progress import (
+            format_council_result,
+            parse_council_args,
+            render_council_card,
+        )
+        from tools.environments.local import build_subprocess_env
+
+        try:
+            mode, question = parse_council_args(event.get_command_args() or "")
+        except ValueError as exc:
+            return str(exc)
+
+        source = event.source
+        profile_home = self._resolve_profile_home_for_source(source)
+        script = (
+            profile_home
+            / "skills"
+            / "autonomous-ai-agents"
+            / "council"
+            / "scripts"
+            / "council_run.py"
+        )
+        if not script.is_file():
+            return "Council is not installed for this profile."
+
+        run_id = f"council-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000:06d}"
+        work = profile_home / "council" / "runs" / run_id
+        progress_path = work / "progress.json"
+        summary_path = work / "summary.json"
+        status_key = f"council:{run_id}"
+        metadata = self._thread_metadata_for_source(source)
+        adapter = self._adapter_for_source(source)
+        last_card = ""
+
+        async def publish(state: dict) -> None:
+            nonlocal last_card
+            if adapter is None:
+                return
+            card = render_council_card(state)
+            if card == last_card:
+                return
+            first_card = not last_card
+            last_card = card
+            updater = getattr(adapter, "send_or_update_status", None)
+            if callable(updater):
+                result = updater(
+                    str(source.chat_id), status_key, card, metadata=metadata
+                )
+                if inspect.isawaitable(result):
+                    await result
+            elif first_card:
+                result = adapter.send(str(source.chat_id), card, metadata=metadata)
+                if inspect.isawaitable(result):
+                    await result
+
+        initial_state = {
+            "status": "running",
+            "mode": mode,
+            "stage": "arguments",
+            "seat_done": 0,
+            "seat_total": 3 if mode == "quick" else 6 if mode == "deep" else 5,
+            "review_done": 0,
+            "review_total": 0 if mode == "quick" else 6 if mode == "deep" else 5,
+            "elapsed_s": 0,
+        }
+        await publish(initial_state)
+
+        env = build_subprocess_env()
+        env["CLOVER_HOME"] = str(profile_home)
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(script),
+            "--mode",
+            mode,
+            "--id",
+            run_id,
+            question,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        communicate = asyncio.create_task(process.communicate())
+        last_state = initial_state
+        while not communicate.done():
+            try:
+                if progress_path.is_file():
+                    state = json.loads(progress_path.read_text(encoding="utf-8"))
+                    if isinstance(state, dict):
+                        last_state = state
+                        await publish(state)
+            except (OSError, ValueError):
+                logger.debug("Council progress read failed", exc_info=True)
+            await asyncio.wait({communicate}, timeout=1.0)
+
+        stdout, stderr = await communicate
+        try:
+            if progress_path.is_file():
+                state = json.loads(progress_path.read_text(encoding="utf-8"))
+                if isinstance(state, dict):
+                    last_state = state
+        except (OSError, ValueError):
+            pass
+
+        if process.returncode != 0:
+            failed = dict(last_state)
+            failed["status"] = "failed"
+            await publish(failed)
+            logger.warning(
+                "Council %s failed rc=%s stdout=%s stderr=%s",
+                run_id,
+                process.returncode,
+                (stdout or b"").decode(errors="replace")[-500:],
+                (stderr or b"").decode(errors="replace")[-500:],
+            )
+            return "🏛 Council failed. The stage is preserved in the council card."
+
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            failed = dict(last_state)
+            failed["status"] = "failed"
+            await publish(failed)
+            return "🏛 Council finished without a readable verdict."
+
+        done = dict(last_state)
+        done["status"] = "done"
+        await publish(done)
+        return format_council_result(summary)
 
     def _typed_command_prefix_for(self, platform) -> str:
         """Return the prefix users can always type to reach Clover commands.
