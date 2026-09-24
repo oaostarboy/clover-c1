@@ -417,6 +417,11 @@ class CLIAgentSetupMixin:
             prior_resume_error = getattr(self, "_resume_history_error", None)
             if prior_resume_error:
                 return False
+            owner = self._session_db.get_handoff_state(self.session_id)
+            if owner and (owner.get("state") in ("pending", "running") or
+                          (owner.get("state") == "completed" and owner.get("platform") not in (None, "cli"))):
+                _cprint("Session is still on the messaging platform. Send /mirror cli there first.")
+                return False
             # This path loads only the TIP session's rows (no ancestors),
             # so guard with a tip-only count — the full-lineage count would
             # over-reject heavily-compressed sessions with a small tip.
@@ -684,6 +689,16 @@ class CLIAgentSetupMixin:
             resolved_meta = self._session_db.get_session(self.session_id)
             if resolved_meta:
                 session_meta = resolved_meta
+
+        owner = self._session_db.get_handoff_state(self.session_id)
+        if owner and owner.get("state") in ("pending", "running"):
+            self._resume_history_error = "Session transfer is still in progress."
+            self._console_print(f"[bold red]{self._resume_history_error}[/]")
+            return False
+        if owner and owner.get("state") == "completed" and owner.get("platform") not in (None, "cli"):
+            self._resume_history_error = "Session is active on Telegram; send /mirror cli there first."
+            self._console_print(f"[bold red]{self._resume_history_error}[/]")
+            return False
 
         resume_limit_error = self._resume_history_limit_error()
         if resume_limit_error:

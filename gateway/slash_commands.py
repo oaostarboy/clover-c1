@@ -5206,6 +5206,25 @@ class GatewaySlashCommandsMixin:
             else:
                 return t("gateway.title.current_no_title", session_id=session_id)
 
+    async def _handle_mirror_command(self, event: MessageEvent) -> str:
+        """Release the current Telegram conversation for an explicit CLI resume."""
+        if event.source.platform != Platform.TELEGRAM:
+            return "/mirror cli is available in Telegram; use /mirror in the CLI."
+        if event.get_command_args().strip().lower() not in ("", "cli"):
+            return "Usage: /mirror [cli]"
+        if not self._session_db:
+            return "Session database is unavailable; conversation remains on Telegram."
+        key = self._session_key_for_source(event.source)
+        state = self._peek_session_state(key)
+        if self._is_session_running(key) or (state is not None and state.turn.agent is not None):
+            return "This conversation is busy. Wait for the turn to finish and retry /mirror."
+        entry = await self.async_session_store.get_or_create_session(event.source)
+        session_id = await self._session_db.resolve_resume_session_id(entry.session_id)
+        if not await self._session_db.mirror_to_cli(session_id, "telegram"):
+            return "Cannot mirror this session: another handoff is in progress or it is already on the CLI."
+        self._evict_cached_agent(key)
+        return f"Conversation released to CLI. Run: clover --resume {session_id}"
+
     async def _handle_resume_command(self, event: MessageEvent) -> str:
         """Handle /resume command — list or switch to a previous session."""
         if not self._session_db:
@@ -5325,6 +5344,10 @@ class GatewaySlashCommandsMixin:
             # non-Matrix adapter so one user can't attach to another's
             # persisted transcript.
             return t("gateway.resume.blocked_not_owner", name=name)
+
+        ownership = await self._session_db.get_handoff_state(target_id)
+        if ownership and ownership.get("state") == "completed" and ownership.get("platform") == "cli":
+            return f"This conversation is on the CLI. Run: clover --resume {target_id}"
 
         # Check if already on that session
         current_entry = await self.async_session_store.get_or_create_session(source)

@@ -168,6 +168,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                args_hint="[N]"),
     CommandDef("title", "Set a title for the current session", "Session",
                args_hint="[name]"),
+    CommandDef("mirror", "Move this conversation between the CLI and Telegram", "Session",
+               args_hint="[telegram|cli]", busy_policy="reject"),
     CommandDef("handoff", "Hand off this session to a messaging platform (Telegram, Discord, etc.)", "Session",
                args_hint="<platform>", cli_only=True, argument_mode="options"),
     CommandDef("branch", "Branch the current session (explore a different path)", "Session",

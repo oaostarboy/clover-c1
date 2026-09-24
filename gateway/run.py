@@ -17815,6 +17815,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Otherwise control/session commands like /new or /help get silently
         # consumed as update answers instead of being dispatched normally.
         _quick_key = self._session_key_for_source(source)
+        # A released mirror remains bound for later return, but Telegram must
+        # not write another turn into the CLI-owned transcript. /new can still
+        # start a different conversation; /resume is checked at its target.
+        if not is_internal and event.get_command() not in ("new", "reset", "resume"):
+            _peek_id = getattr(getattr(self, "session_store", None), "peek_session_id", None)
+            _bound_id = _peek_id(_quick_key) if callable(_peek_id) else None
+            if isinstance(_bound_id, str) and _bound_id and self._session_db:
+                _bound_id = await self._session_db.resolve_resume_session_id(_bound_id)
+                _owner = await self._session_db.get_handoff_state(_bound_id)
+                if _owner and _owner.get("state") == "completed" and _owner.get("platform") == "cli":
+                    return f"This conversation is on the CLI. Run: clover --resume {_bound_id}"
         allow_gateway_control = event.allow_gateway_control
         _up_state = self._peek_session_state(_quick_key)
         if (
@@ -18659,6 +18670,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "title":
             return await self._handle_title_command(event)
 
+        if canonical == "mirror":
+            return await self._handle_mirror_command(event)
         if canonical == "resume":
             return await self._handle_resume_command(event)
 
