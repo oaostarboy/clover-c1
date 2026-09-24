@@ -165,7 +165,7 @@ SessionStore(sessions_dir: Path, config: GatewayConfig, has_active_processes_fn=
 | `get_or_create_session(source, force_new=False)` | Core entry point. Returns existing or creates new `SessionEntry`. Evaluates `suspended`, `resume_pending`, and reset policy. Creates/ends SQLite records. |
 | `update_session(session_key, last_prompt_tokens=None)` | Lightweight metadata update after an interaction. Bumps `updated_at`, optionally records `last_prompt_tokens`. |
 | `reset_session(session_key, display_name=None)` | Explicit reset (from `/new` or `/reset`). Creates new `session_id`, sets `is_fresh_reset=True`. Ends old SQLite session, creates new one. |
-| `switch_session(session_key, target_session_id)` | Switch to a different existing session ID (from `/resume`). Ends current SQLite session, reopens target. |
+| `switch_session(session_key, target_session_id)` | Switch to a different existing session ID (from `/resume` or `/mirror`). Ends current SQLite session, reopens target. |
 | `suspend_session(session_key)` | Mark session as `suspended=True` (from `/stop`). Forces auto-reset on next access. |
 | `mark_resume_pending(session_key, reason)` | Mark session as `resume_pending=True` (from drain timeout). Preserves session_id on next access. Will NOT override `suspended=True`. |
 | `clear_resume_pending(session_key)` | Clear `resume_pending` after a successful resumed turn. Called from gateway after `run_conversation()` returns. |
@@ -178,6 +178,25 @@ SessionStore(sessions_dir: Path, config: GatewayConfig, has_active_processes_fn=
 | `rewrite_transcript(session_id, messages)` | Full replacement of session transcript (used by `/retry`, `/undo`, `/compress`). |
 | `load_transcript(session_id)` | Load all messages from a session's SQLite transcript. |
 | `rewind_session(session_id, n=1)` | Back up `n` user turns via soft-delete (keeps audit trail). Returns `{rewound_count, turns_undone, target_text}`. |
+
+### Mirroring between CLI and Telegram
+
+In a CLI conversation, `/mirror` (or `/mirror telegram`) uses the existing
+`/handoff telegram` watcher to bind the Telegram home chat to the same session
+ID and transcript. The CLI exits only after the gateway completes delivery.
+In that Telegram chat, `/mirror` (or `/mirror cli`) releases the conversation
+and replies with `clover --resume <session-id>`; paste that command in a
+terminal. Repeat `/mirror` from the CLI to go back. A compressed session
+resolves to its live continuation ID before returning the CLI command, and
+both resume paths load the persisted effective history.
+
+The `sessions.handoff_state` and `handoff_platform` fields also mark the
+current surface: `completed/cli` blocks Telegram messages against the old
+routing key; `completed/telegram` prevents a CLI resume until Telegram
+releases it. Pending/running transfers cannot be released. This is a
+cooperative surface handoff, not a way to run two CLI processes against one
+session simultaneously. A configured Telegram home channel and running
+gateway are required; use `/sethome` in the destination chat first.
 
 ### Internal Helpers
 

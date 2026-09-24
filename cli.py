@@ -12582,6 +12582,12 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             else:
                 from clover_state import format_session_db_unavailable
                 _cprint(f"  {format_session_db_unavailable()}")
+        elif canonical == "mirror":
+            target = cmd_original.partition(" ")[2].strip().lower()
+            if target not in ("", "telegram"):
+                _cprint("  Usage: /mirror [telegram] (from CLI); /mirror cli (from Telegram)")
+            elif not self._handle_handoff_command("/handoff telegram"):
+                return False
         elif canonical == "handoff":
             if not self._handle_handoff_command(cmd_original):
                 return False
