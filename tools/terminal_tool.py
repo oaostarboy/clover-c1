@@ -2828,6 +2828,7 @@ def terminal_tool(
     notify_on_complete: bool = False,
     watch_patterns: Optional[List[str]] = None,
     _host_local: bool = False,
+    agent_job: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Execute a command in the configured terminal environment.
@@ -3538,6 +3539,19 @@ def terminal_tool(
                             "parent_session_id": proc_session.parent_session_id,
                         })
 
+                # Explicit agent-job registration (tools/agent_job_observer.py):
+                # the observer reports this job's titled activity to the
+                # current gateway turn's activity surface only. Best-effort —
+                # never affects the process itself.
+                if agent_job and background:
+                    try:
+                        from tools.agent_job_observer import register_agent_job
+
+                        result_data["agent_job"] = register_agent_job(proc_session, agent_job)
+                    except Exception as _aj_err:
+                        logger.debug("agent job registration failed: %s", _aj_err)
+                        result_data["agent_job"] = {"observed": False, "reason": "registration failed"}
+
                 # Set watch patterns for output monitoring
                 if watch_patterns and background:
                     proc_session.watch_patterns = list(watch_patterns)
@@ -4127,6 +4141,16 @@ TERMINAL_SCHEMA = {
                 "description": "With background=true: run in a pseudo-terminal for interactive CLI tools (Codex, Claude Code, Python REPL). Local backend only. Default: false.",
                 "default": False
             },
+            "agent_job": {
+                "type": "object",
+                "description": "With background=true, for an agent CLI worker (Claude, Codex, Clover): register it so the user sees its titled activity in chat. parser: 'claude-stream-json' (claude -p --output-format stream-json --verbose), 'clover-activity' (clover -z ... --activity-events), or 'none' (lifecycle only, no tool visibility).",
+                "properties": {
+                    "title": {"type": "string", "description": "Short label (<=60 chars)."},
+                    "model": {"type": "string"},
+                    "parser": {"type": "string", "enum": ["claude-stream-json", "clover-activity", "none"]},
+                },
+                "required": ["title"],
+            },
             "notify": {
                 "description": "With background=true: notify=true fires exactly one notification when the process exits (the right choice for nearly every bounded task — builds, tests, deploys). notify=['pattern', ...] instead notifies when a line matches a pattern — ONLY for one-shot readiness signals on processes that never exit (e.g. ['Application startup complete']); rate-limited and auto-disabled if it over-fires. Omit for silent daemons.",
                 "anyOf": [
@@ -4170,6 +4194,12 @@ def _handle_terminal(args, **kw):
                 "results return directly). Either drop notify, or run as "
                 "terminal(command=..., background=true, notify=...)."
             )
+        if args.get("agent_job"):
+            return tool_error(
+                "agent_job requires background=true (an agent job is a tracked "
+                "background process). Retry as terminal(command=..., "
+                "background=true, agent_job={...})."
+            )
         if args.get("pty", False):
             return tool_error(
                 "pty requires background=true (a PTY session is interacted "
@@ -4189,6 +4219,13 @@ def _handle_terminal(args, **kw):
                 "notify must be true/false (notify on exit) or a list of "
                 "strings (notify on output pattern match)."
             )
+    agent_job = None
+    if args.get("agent_job") is not None:
+        from tools.agent_job_observer import validate_agent_job_spec
+
+        agent_job, agent_job_error = validate_agent_job_spec(args.get("agent_job"))
+        if agent_job_error:
+            return tool_error(agent_job_error)
     return terminal_tool(
         command=args.get("command"),
         background=args.get("background", False),
@@ -4199,6 +4236,7 @@ def _handle_terminal(args, **kw):
         pty=args.get("pty", False),
         notify_on_complete=notify_on_complete,
         watch_patterns=watch_patterns,
+        agent_job=agent_job,
     )
 
 

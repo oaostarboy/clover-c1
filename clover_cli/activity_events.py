@@ -1,0 +1,100 @@
+"""Structured activity events for Clover CLI workers (``clover -z --activity-events``).
+
+When a parent Clover session runs another Clover agent as an external worker
+(for example a Luna profile: ``clover -p luna -z "…" --activity-events``) and
+registers it with ``terminal(background=true, agent_job={"parser":
+"clover-activity", …})``, the parent's chat can show the worker's real tool
+calls and public progress notes instead of just "running".
+
+Wire format — one JSON object per line on **stderr** (stdout keeps carrying
+only the final answer, so existing pipelines are unaffected)::
+
+    {"clover_activity": 1, "event": "start", "model": "…"}
+    {"clover_activity": 1, "event": "tool.started", "tool": "terminal", "summary": "pytest -q"}
+    {"clover_activity": 1, "event": "tool.completed", "tool": "terminal", "duration": 2.1, "is_error": false}
+    {"clover_activity": 1, "event": "note", "text": "Checking the scheduler lock next."}
+    {"clover_activity": 1, "event": "result", "status": "completed", "text": "…"}
+
+Guarantees: summaries and notes are redacted then truncated before they are
+written; notes come only from the agent's *visible* interim commentary
+(``interim_assistant_callback``, reasoning blocks already stripped, plus a
+second block strip here) — reasoning events are never written; tool output is
+never written, only the outcome. Consumers must ignore unknown events and
+unknown versions (``tools/agent_job_observer.py`` does).
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+from typing import Any, Optional, TextIO
+
+ACTIVITY_EVENTS_VERSION = 1
+_SUMMARY_MAX = 120
+_NOTE_MAX = 200
+_RESULT_MAX = 600
+
+
+class ActivityEventWriter:
+    def __init__(self, stream: TextIO) -> None:
+        self._stream = stream
+        self._lock = threading.Lock()
+        self._broken = False
+
+    def _write(self, event: str, **fields: Any) -> None:
+        if self._broken:
+            return
+        payload = {"clover_activity": ACTIVITY_EVENTS_VERSION, "event": event}
+        payload.update({k: v for k, v in fields.items() if v is not None})
+        try:
+            line = json.dumps(payload, ensure_ascii=False)
+            with self._lock:
+                self._stream.write(line + "\n")
+                self._stream.flush()
+        except Exception:
+            # A closed pipe must never take the worker down with it.
+            self._broken = True
+
+    def start(self, model: Optional[str]) -> None:
+        from agent.delegation_activity import sanitize_text
+
+        self._write("start", model=sanitize_text(model, 80) or None)
+
+    def tool_progress_callback(self, event_type: str, tool_name: Any = None,
+                               preview: Any = None, args: Any = None, **kw: Any) -> None:
+        from agent.delegation_activity import sanitize_text, summarize_tool_call
+
+        if not tool_name or tool_name == "_thinking":
+            return  # scratch / reasoning relays are never written
+        if event_type == "tool.started":
+            self._write(
+                "tool.started",
+                tool=sanitize_text(tool_name, 40),
+                summary=summarize_tool_call(tool_name, preview, args, limit=_SUMMARY_MAX) or None,
+                call_id=str(kw["tool_call_id"]) if kw.get("tool_call_id") else None,
+            )
+        elif event_type == "tool.completed":
+            duration = kw.get("duration")
+            self._write(
+                "tool.completed",
+                tool=sanitize_text(tool_name, 40),
+                duration=round(float(duration), 2) if isinstance(duration, (int, float)) else None,
+                is_error=bool(kw.get("is_error")),
+                call_id=str(kw["tool_call_id"]) if kw.get("tool_call_id") else None,
+            )
+
+    def interim_callback(self, text: Any, already_streamed: bool = False) -> None:
+        from agent.delegation_activity import extract_progress_note, sanitize_text
+
+        note = sanitize_text(extract_progress_note(text), _NOTE_MAX)
+        if note:
+            self._write("note", text=note)
+
+    def result(self, text: Any, status: str) -> None:
+        from agent.delegation_activity import extract_progress_note, sanitize_text
+
+        self._write(
+            "result",
+            status=status,
+            text=sanitize_text(extract_progress_note(text), _RESULT_MAX) or None,
+        )

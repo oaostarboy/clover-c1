@@ -1,10 +1,15 @@
-"""Observed, titled state for delegated subagents — pure tracker + renderer.
+"""Observed, titled activity of delegated agents — pure tracker + renderer.
 
-Consumes the ``subagent.*`` events that ``tools.delegate_tool`` relays to the
-parent's ``tool_progress_callback`` and folds them into one truthful state
-per child, grouped by delegation (one ``delegate_task`` call). Rendering is a
-pure function of that state, so every surface that wants a roster (gateway
-cards today) shows the same thing.
+Consumes ``subagent.*`` events — relayed by ``tools.delegate_tool`` for
+in-process children, or synthesized by ``tools.agent_job_observer`` for
+explicitly registered external agent CLIs — and folds them into one truthful
+state per worker plus a short public activity feed, grouped by delegation.
+
+Rendering is activity-first, not a roll call: a counts-only header, one
+"now" line per *active* worker, and the latest attributed events (tool
+results with rapid repeats coalesced, public notes). Finished workers leave
+the live view; their result is raised once (finding / alert) and kept for the
+final summary the card becomes when every worker is done.
 
 Contract:
 
@@ -28,6 +33,7 @@ from __future__ import annotations
 import re
 import threading
 import time
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
@@ -75,7 +81,6 @@ _NOTE_MAX = 110
 _TOOL_MAX = 72
 _REASON_MAX = 120
 _SUMMARY_MAX = 160
-_MAX_DETAILED_CHILDREN = 8
 _CARD_MAX_CHARS = 3500
 
 _REASONING_TAGS = r"(?:think|thinking|reasoning|reflection|REASONING_SCRATCHPAD)"
@@ -96,8 +101,29 @@ _ARG_SUMMARY_KEYS = (
     "pattern",
     "name",
     "goal",
+    "description",
     "action",
 )
+
+
+# ---------------------------------------------------------------------------
+# Turn-scoped activity sink
+# ---------------------------------------------------------------------------
+
+# The gateway binds its per-turn DelegationActivityPublisher here inside the
+# turn's copied context, so tools running for that turn (e.g. a terminal
+# registering an external agent job) reach exactly that chat's publisher and
+# nothing else. Unset everywhere else (CLI, cron, tests) -> None.
+_ACTIVITY_SINK: ContextVar[Any] = ContextVar("clover_delegation_activity_sink", default=None)
+
+
+def bind_activity_sink(sink: Any) -> Any:
+    """Bind ``sink`` for the current context; returns the reset token."""
+    return _ACTIVITY_SINK.set(sink)
+
+
+def current_activity_sink() -> Any:
+    return _ACTIVITY_SINK.get()
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +246,36 @@ def _as_float(value: Any) -> Optional[float]:
 # State
 # ---------------------------------------------------------------------------
 
+_FEED_KEEP = 40            # activity entries retained per group
+_FEED_SHOWN = 5            # recent activity lines rendered while active
+_MAX_ACTIVE_LINES = 6      # "now" lines rendered while active
+_COALESCE_WINDOW = 30.0    # seconds: repeated same-tool calls merge in the feed
+_FEED_TITLE_MAX = 32
+_MODEL_MAX = 24
+
+
+@dataclass
+class OpenTool:
+    call_id: str
+    name: str
+    summary: str
+    started_at: float
+
+
+@dataclass
+class FeedEntry:
+    """One public, attributed activity line (a finished tool or a note)."""
+
+    child_key: str
+    kind: str                 # "tool" | "note"
+    at: float
+    tool: str = ""
+    summary: str = ""
+    text: str = ""
+    count: int = 1
+    ok: Optional[bool] = None  # tool outcome; None = unknown
+    duration: Optional[float] = None
+
 
 @dataclass
 class ChildActivity:
@@ -231,15 +287,17 @@ class ChildActivity:
     model: str = ""
     provider: str = ""
     depth: int = 0
+    # "tools" = tool-level events are observable; "lifecycle" = only
+    # start/exit/output growth (plain external CLI output). Rendered so the
+    # card never implies tool visibility it does not have.
+    visibility: str = "tools"
     state: str = "queued"
     reason: Optional[str] = None
     first_seen: float = 0.0
     started_at: Optional[float] = None
     ended_at: Optional[float] = None
     last_event_at: float = 0.0
-    current_tool: Optional[str] = None
-    tool_summary: str = ""
-    tool_started_at: Optional[float] = None
+    open_tools: Dict[str, OpenTool] = field(default_factory=dict)
     tools_ok: int = 0
     tools_failed: int = 0
     last_tool_result: Optional[str] = None
@@ -248,10 +306,34 @@ class ChildActivity:
     files_written: List[str] = field(default_factory=list)
     duration_s: Optional[float] = None
     alerted: Set[str] = field(default_factory=set)
+    _auto_call: int = 0
 
     @property
     def started(self) -> bool:
         return self.started_at is not None
+
+    @property
+    def current_tool(self) -> Optional[str]:
+        latest = self._latest_open()
+        return latest.name if latest else None
+
+    @property
+    def tool_summary(self) -> str:
+        latest = self._latest_open()
+        return latest.summary if latest else ""
+
+    def _latest_open(self) -> Optional[OpenTool]:
+        latest: Optional[OpenTool] = None
+        for tool in self.open_tools.values():  # insertion order breaks ties
+            if latest is None or tool.started_at >= latest.started_at:
+                latest = tool
+        return latest
+
+    @property
+    def label(self) -> str:
+        title = _truncate_words(self.title, _FEED_TITLE_MAX)
+        model = _short_model(self.model)
+        return f"#{self.index + 1} {title}" + (f" · {model}" if model else "")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -260,10 +342,12 @@ class ChildActivity:
             "title": self.title,
             "model": self.model,
             "provider": self.provider,
+            "visibility": self.visibility,
             "state": self.state,
             "reason": self.reason,
             "current_tool": self.current_tool,
             "tool_summary": self.tool_summary,
+            "open_tools": len(self.open_tools),
             "tools_ok": self.tools_ok,
             "tools_failed": self.tools_failed,
             "note": self.note,
@@ -273,11 +357,19 @@ class ChildActivity:
         }
 
 
+def _short_model(model: str) -> str:
+    text = (model or "").strip()
+    if "/" in text:
+        text = text.rsplit("/", 1)[-1]
+    return _truncate_words(text, _MODEL_MAX) if text else ""
+
+
 @dataclass
 class DelegationGroup:
     group_id: str
     created_at: float
     children: Dict[str, ChildActivity] = field(default_factory=dict)
+    feed: List[FeedEntry] = field(default_factory=list)
 
     def ordered(self) -> List[ChildActivity]:
         return sorted(self.children.values(), key=lambda c: (c.index, c.key))
@@ -287,6 +379,11 @@ class DelegationGroup:
         return bool(self.children) and all(
             c.state in TERMINAL_STATES for c in self.children.values()
         )
+
+    def push(self, entry: FeedEntry) -> None:
+        self.feed.append(entry)
+        if len(self.feed) > _FEED_KEEP:
+            del self.feed[: len(self.feed) - _FEED_KEEP]
 
 
 LivenessProbe = Callable[[str], Optional[Dict[str, Any]]]
@@ -316,6 +413,17 @@ class DelegationActivityTracker:
         with self._lock:
             group = self._groups.get(group_id)
             return [c.to_dict() for c in group.ordered()] if group else []
+
+    def feed_snapshot(self, group_id: str) -> List[Dict[str, Any]]:
+        with self._lock:
+            group = self._groups.get(group_id)
+            if not group:
+                return []
+            return [
+                {"child": e.child_key, "kind": e.kind, "tool": e.tool,
+                 "summary": e.summary, "text": e.text, "count": e.count, "ok": e.ok}
+                for e in group.feed
+            ]
 
     def group_ids(self) -> List[str]:
         with self._lock:
@@ -349,11 +457,8 @@ class DelegationActivityTracker:
             group_id = str(kw.get("delegation_id") or "delegation")
             group = self._groups.get(group_id)
             if group is None:
-                if et in {"subagent.complete", "subagent.progress", "subagent.text"}:
-                    # A completion for a group we never saw start carries no
-                    # truthful roster to show; don't open a card for it.
-                    if et != "subagent.complete":
-                        return None, []
+                if et in {"subagent.progress", "subagent.text"}:
+                    return None, []
                 group = DelegationGroup(group_id=group_id, created_at=now)
                 self._groups[group_id] = group
             child = self._child_for(group, kw, now)
@@ -361,7 +466,7 @@ class DelegationActivityTracker:
             if child.state in TERMINAL_STATES:
                 return None, []  # final: late/replayed events cannot regress it
             alerts: List[str] = []
-            changed = self._apply(child, et, tool_name, preview, args, kw, now, alerts)
+            changed = self._apply(group, child, et, tool_name, preview, args, kw, now, alerts)
             if changed:
                 child.last_event_at = now
                 return group_id, alerts
@@ -398,6 +503,8 @@ class DelegationActivityTracker:
             child.depth = max(0, _as_int(kw.get("depth"), 0))
         if kw.get("task_count"):
             child.count = max(1, _as_int(kw.get("task_count"), child.count))
+        if kw.get("visibility") in {"tools", "lifecycle"}:
+            child.visibility = kw["visibility"]
 
     def _start(self, child: ChildActivity, now: float) -> None:
         if child.started_at is None:
@@ -405,8 +512,13 @@ class DelegationActivityTracker:
         if child.state == "queued":
             child.state = "starting"
 
+    def _settle_state(self, child: ChildActivity) -> None:
+        child.state = "tool-running" if child.open_tools else "running"
+        child.reason = None
+
     def _apply(
         self,
+        group: DelegationGroup,
         child: ChildActivity,
         et: str,
         tool_name: Any,
@@ -428,26 +540,40 @@ class DelegationActivityTracker:
             if kw.get("note_kind") != "note":
                 return False  # reasoning / spinner chatter: never shown
             note = sanitize_text(extract_progress_note(preview or tool_name), _NOTE_MAX)
-            if not note:
+            if not note or note == child.note:
                 return False
             self._start(child, now)
             child.note = note
-            if child.state != "tool-running":
-                child.state = "running"
-                child.reason = None
+            group.push(FeedEntry(child_key=child.key, kind="note", at=now, text=note))
+            self._settle_state(child)
             return True
         if et == "subagent.tool":
             self._start(child, now)
-            child.state = "tool-running"
-            child.reason = None
-            child.current_tool = sanitize_text(tool_name or "tool", 40)
-            child.tool_summary = summarize_tool_call(tool_name, preview, args)
-            child.tool_started_at = now
+            name = sanitize_text(tool_name or "tool", 40)
+            call_id = str(kw.get("tool_call_id") or "")
+            if call_id and call_id in child.open_tools:
+                return False  # duplicate start for an already-open call
+            if not call_id:
+                child._auto_call += 1
+                call_id = f"auto{child._auto_call}"
+            child.open_tools[call_id] = OpenTool(
+                call_id=call_id,
+                name=name,
+                summary=summarize_tool_call(tool_name, preview, args),
+                started_at=now,
+            )
+            self._settle_state(child)
             return True
         if et == "subagent.tool_done":
+            call_id = kw.get("tool_call_id")
+            if call_id and str(call_id) not in child.open_tools:
+                return False  # duplicate / replayed result for a closed call
             self._start(child, now)
-            name = sanitize_text(tool_name or child.current_tool or "tool", 40)
+            opened = self._pop_open_tool(child, tool_name, call_id)
+            name = opened.name if opened else sanitize_text(tool_name or "tool", 40)
             dur = _as_float(kw.get("duration_seconds"))
+            if dur is None and opened is not None:
+                dur = max(0.0, now - opened.started_at)
             failed = bool(kw.get("is_error"))
             if failed:
                 child.tools_failed += 1
@@ -457,19 +583,56 @@ class DelegationActivityTracker:
                 f"{name} {'failed' if failed else 'ok'}"
                 + (f" in {format_duration(dur)}" if dur is not None else "")
             )
-            child.current_tool = None
-            child.tool_summary = ""
-            child.tool_started_at = None
-            child.state = "running"
-            child.reason = None
+            self._record_tool(group, child, name, opened.summary if opened else "",
+                              not failed, dur, now)
+            self._settle_state(child)
             return True
         if et == "subagent.complete":
-            self._complete(child, preview, kw, now, alerts)
+            self._complete(group, child, preview, kw, now, alerts)
             return True
         return False  # subagent.progress / subagent.text / unknown: no state
 
+    @staticmethod
+    def _pop_open_tool(child: ChildActivity, tool_name: Any, call_id: Any) -> Optional[OpenTool]:
+        if call_id and str(call_id) in child.open_tools:
+            return child.open_tools.pop(str(call_id))
+        if tool_name:
+            name = sanitize_text(tool_name, 40)
+            same = [t for t in child.open_tools.values() if t.name == name]
+            if same:
+                oldest = min(same, key=lambda t: t.started_at)
+                return child.open_tools.pop(oldest.call_id)
+        if child.open_tools:
+            latest = child._latest_open()
+            return child.open_tools.pop(latest.call_id) if latest else None
+        return None
+
+    @staticmethod
+    def _record_tool(group: DelegationGroup, child: ChildActivity, name: str,
+                     summary: str, ok: bool, dur: Optional[float], now: float) -> None:
+        last = group.feed[-1] if group.feed else None
+        if (
+            last is not None
+            and last.kind == "tool"
+            and last.child_key == child.key
+            and last.tool == name
+            and last.ok is True
+            and ok
+            and now - last.at <= _COALESCE_WINDOW
+        ):
+            # Rapid repeats of the same successful tool collapse into one
+            # line ("read_file ×4 'last.py'") instead of a scrolling list.
+            last.count += 1
+            last.summary = summary or last.summary
+            last.at = now
+            last.duration = dur
+            return
+        group.push(FeedEntry(child_key=child.key, kind="tool", at=now, tool=name,
+                             summary=summary, ok=ok, duration=dur))
+
     def _complete(
         self,
+        group: DelegationGroup,
         child: ChildActivity,
         preview: Any,
         kw: Dict[str, Any],
@@ -480,8 +643,7 @@ class DelegationActivityTracker:
         state = _COMPLETE_STATUS.get(status, "failed")
         child.state = state
         child.ended_at = now
-        child.current_tool = None
-        child.tool_summary = ""
+        child.open_tools.clear()
         dur = _as_float(kw.get("duration_seconds"))
         child.duration_s = dur
         if child.started_at is None:
@@ -491,7 +653,7 @@ class DelegationActivityTracker:
             child.reason = None
             child.summary = sanitize_text(summary_raw, _SUMMARY_MAX) or None
         elif state == "cancelled":
-            child.reason = "stopped before finishing"
+            child.reason = sanitize_text(kw.get("reason") or "", _REASON_MAX) or "stopped before finishing"
         elif status == "timeout":
             child.reason = f"timed out after {format_duration(dur)}"
         else:
@@ -503,8 +665,10 @@ class DelegationActivityTracker:
                 for p in files[:20]
                 if p
             ]
-        if state in {"failed", "cancelled"}:
-            self._alert(child, state, alerts)
+        # Finished workers leave the live feed; their result is delivered
+        # once (finding / alert) and kept for the final summary.
+        group.feed = [e for e in group.feed if e.child_key != child.key]
+        self._alert(child, state, alerts)
 
     # -- heartbeat -------------------------------------------------------
 
@@ -526,6 +690,8 @@ class DelegationActivityTracker:
                     raised: List[str] = []
                     if self._classify(child, now, probe, raised):
                         changed.add(gid)
+                    if child.state in TERMINAL_STATES:
+                        group.feed = [e for e in group.feed if e.child_key != child.key]
                     alerts.extend((gid, text) for text in raised)
         return changed, alerts
 
@@ -558,14 +724,30 @@ class DelegationActivityTracker:
             child.state = "failed"
             child.reason = "worker ended without a completion report"
             child.ended_at = now
-            child.current_tool = None
+            child.open_tools.clear()
             self._alert(child, "failed", alerts)
             return True
-        if child.state == "tool-running":
-            return False  # an in-flight tool is observed work, not a stall
         activity_age = _as_float((info or {}).get("seconds_since_activity"))
-        idle = quiet if activity_age is None else min(quiet, activity_age)
         before = (child.state, child.reason)
+        if child.open_tools:
+            return False  # an in-flight tool is observed work, not a stall
+        if (info or {}).get("external"):
+            # External CLI worker: activity = its own output growth.
+            age = quiet if activity_age is None else activity_age
+            if age >= self.stall_seconds:
+                child.state = "blocked"
+                child.reason = f"no output for {format_duration(age)}"
+                self._alert(child, "blocked", alerts)
+            elif self.heartbeat_seconds and age >= self.heartbeat_seconds:
+                child.state = "waiting"
+                child.reason = f"no new output for {format_duration(age)}"
+            else:
+                child.state = "running"
+                child.reason = (
+                    f"output {format_duration(age)} ago" if activity_age is not None else None
+                )
+            return (child.state, child.reason) != before
+        idle = quiet if activity_age is None else min(quiet, activity_age)
         if idle >= self.stall_seconds:
             desc = sanitize_text((info or {}).get("activity") or "", 60)
             child.state = "blocked"
@@ -581,26 +763,39 @@ class DelegationActivityTracker:
             )
         return (child.state, child.reason) != before
 
-    # -- alerts ----------------------------------------------------------
+    # -- alerts / findings -------------------------------------------------
 
     def _alert(self, child: ChildActivity, kind: str, alerts: List[str]) -> None:
         if kind in child.alerted:
             return
         child.alerted.add(kind)
-        label = f"Subagent #{child.index + 1} “{child.title}”"
+        label = f"#{child.index + 1} “{child.title}”" + (
+            f" ({_short_model(child.model)})" if child.model else ""
+        )
         elapsed = format_duration(
             child.duration_s
             if child.duration_s is not None
             else (child.ended_at or self._clock()) - (child.started_at or child.first_seen)
         )
-        if kind == "cancelled":
-            alerts.append(f"⏹ {label} was cancelled after {elapsed}.")
+        if kind == "completed":
+            finding = f": {child.summary}" if child.summary else "."
+            files = ""
+            if child.files_written:
+                shown = ", ".join(child.files_written[:3])
+                more = len(child.files_written) - 3
+                files = f" 📄 {shown}" + (f" +{more}" if more > 0 else "")
+            alerts.append(
+                f"✅ Subagent {label} reported done in {elapsed}{finding}{files}"
+                " — awaiting parent review."
+            )
+        elif kind == "cancelled":
+            alerts.append(f"⏹ Subagent {label} was cancelled after {elapsed}: {child.reason}.")
         elif kind == "blocked":
             alerts.append(
-                f"⚠️ {label} looks stalled: {child.reason}. It is still running; nothing was stopped."
+                f"⚠️ Subagent {label} looks stalled: {child.reason}. It is still running; nothing was stopped."
             )
         else:
-            alerts.append(f"❌ {label} failed after {elapsed}: {child.reason}")
+            alerts.append(f"❌ Subagent {label} failed after {elapsed}: {child.reason}")
 
     # -- rendering -------------------------------------------------------
 
@@ -614,7 +809,9 @@ class DelegationActivityTracker:
                 stamp = time.strftime("%H:%M %Z", time.localtime(self._wall_clock())).strip()
             except Exception:
                 stamp = ""
-            return _render_group(group, now, stamp)
+            if group.finished:
+                return _render_final(group, now, stamp)
+            return _render_active(group, now, stamp)
 
 
 def _state_counts(children: List[ChildActivity]) -> str:
@@ -629,7 +826,7 @@ def _state_counts(children: List[ChildActivity]) -> str:
     if queued:
         parts.append(f"{queued} queued")
     if done:
-        parts.append(f"{done} reported done")
+        parts.append(f"{done} done")
     if failed:
         parts.append(f"{failed} failed")
     if cancelled:
@@ -637,96 +834,120 @@ def _state_counts(children: List[ChildActivity]) -> str:
     return " · ".join(parts)
 
 
-def _render_child(child: ChildActivity, now: float, detailed: bool) -> List[str]:
-    icon = _ICONS.get(child.state, "•")
-    head = f"{icon} #{child.index + 1} {child.title}"
-    if child.state == "queued":
-        return [f"{head} · queued"]
-    ident = " · ".join(p for p in (child.model, child.provider) if p) or "model unknown"
-    tools = child.tools_ok + child.tools_failed + (1 if child.current_tool else 0)
-    tool_bit = f"{tools} tool{'s' if tools != 1 else ''}" if tools else ""
-    if child.tools_failed:
-        tool_bit += f" ({child.tools_failed} failed)"
-    started = child.started_at if child.started_at is not None else child.first_seen
+def _footer(stamp: str) -> str:
+    # The timestamp makes a card frozen by a gateway restart visibly stale.
+    footer = "subagent activity · not the main agent"
+    return f"{footer} · updated {stamp}" if stamp else footer
 
-    if child.state in TERMINAL_STATES:
+
+def _now_line(child: ChildActivity, now: float) -> str:
+    """What one active worker is doing right now (one line)."""
+    latest = child._latest_open()
+    if latest is not None:
+        extra = len(child.open_tools) - 1
+        bit = f"🔧 {latest.name}"
+        if latest.summary:
+            bit += f" `{latest.summary}`"
+        bit += f" {format_duration(now - latest.started_at)}"
+        if extra > 0:
+            bit += f" (+{extra} more)"
+    elif child.state in {"waiting", "blocked"} and child.reason:
+        bit = f"{_ICONS[child.state]} {child.reason}"
+    elif child.state == "starting":
+        bit = "🚀 starting"
+    else:
+        bit = "▶️ working"
+        if child.reason:
+            bit += f" · {child.reason}"
+    if child.visibility == "lifecycle":
+        bit += " · lifecycle only (no tool visibility)"
+    started = child.started_at if child.started_at is not None else child.first_seen
+    label = child.label + (f" ({child.provider})" if child.provider else "")
+    return f"▸ {label} [{format_duration(now - started)}] — {bit}"
+
+
+def _feed_line(entry: FeedEntry, child: ChildActivity) -> str:
+    if entry.kind == "note":
+        body = f"📝 {entry.text}"
+    else:
+        body = f"🔧 {entry.tool}"
+        if entry.count > 1:
+            body += f" ×{entry.count}"
+        if entry.summary:
+            body += f" `{entry.summary}`"
+        if entry.ok is True:
+            body += " ✓"
+        elif entry.ok is False:
+            body += " ✗ failed"
+        if entry.duration is not None and entry.count == 1:
+            body += f" {format_duration(entry.duration)}"
+    return f"· {child.label} — {body}"
+
+
+def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
+    children = group.ordered()
+    active = [c for c in children if c.state in _ACTIVE_STATES]
+    lines = [
+        " · ".join(
+            p for p in ("🔀 Subagents", _state_counts(children),
+                        format_duration(now - group.created_at)) if p
+        )
+    ]
+    for child in active[:_MAX_ACTIVE_LINES]:
+        lines.append(_now_line(child, now))
+    if len(active) > _MAX_ACTIVE_LINES:
+        lines.append(f"+{len(active) - _MAX_ACTIVE_LINES} more active")
+    active_keys = {c.key for c in active}
+    recent = [e for e in group.feed if e.child_key in active_keys][-_FEED_SHOWN:]
+    if recent:
+        lines.append("Recent:")
+        for entry in recent:
+            lines.append(_feed_line(entry, group.children[entry.child_key]))
+    lines.append(_footer(stamp))
+    text = "\n".join(lines)
+    if len(text) > _CARD_MAX_CHARS:
+        text = text[: _CARD_MAX_CHARS - 1].rsplit("\n", 1)[0] + "\n…"
+    return text
+
+
+def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
+    children = group.ordered()
+    end = max((c.ended_at or now) for c in children)
+    lines = [
+        " · ".join(
+            p for p in ("🔀 Subagents finished", _state_counts(children),
+                        format_duration(end - group.created_at)) if p
+        )
+    ]
+    for child in children:
+        started = child.started_at if child.started_at is not None else child.first_seen
         dur = format_duration(
             child.duration_s if child.duration_s is not None else (child.ended_at or now) - started
         )
-        verb = {
-            "completed": f"reported done in {dur}",
-            "failed": f"failed after {dur}",
-            "cancelled": f"cancelled after {dur}",
-        }[child.state]
-        lines = [head, "   " + " · ".join(p for p in (ident, verb, tool_bit) if p)]
+        tools = child.tools_ok + child.tools_failed
+        tool_bit = f" · {tools} tool{'s' if tools != 1 else ''}" if tools else ""
+        if child.tools_failed:
+            tool_bit += f" ({child.tools_failed} failed)"
+        icon = _ICONS.get(child.state, "•")
         if child.state == "completed":
+            lines.append(f"{icon} {child.label} — done in {dur}{tool_bit}")
             if child.summary:
                 lines.append(f"   ↳ {child.summary}")
             if child.files_written:
                 shown = ", ".join(child.files_written[:3])
                 more = len(child.files_written) - 3
-                lines.append(
-                    f"   📄 {len(child.files_written)} file"
-                    f"{'s' if len(child.files_written) != 1 else ''}: {shown}"
-                    + (f" +{more}" if more > 0 else "")
-                )
-            lines.append("   awaiting parent review")
-        elif child.reason:
-            lines.append(f"   ↳ {child.reason}")
-        return lines
-
-    label = {
-        "starting": "starting",
-        "running": "running",
-        "tool-running": "running a tool",
-        "waiting": "waiting",
-        "blocked": "blocked",
-    }.get(child.state, child.state)
-    lines = [
-        head,
-        "   " + " · ".join(p for p in (ident, f"{label} {format_duration(now - started)}", tool_bit) if p),
-    ]
-    if not detailed:
-        return lines
-    if child.current_tool:
-        tool_line = f"   🔧 {child.current_tool}"
-        if child.tool_summary:
-            tool_line += f": `{child.tool_summary}`"
-        if child.tool_started_at is not None:
-            tool_line += f" · {format_duration(now - child.tool_started_at)}"
-        lines.append(tool_line)
-    elif child.last_tool_result:
-        lines.append(f"   last: {child.last_tool_result}")
-    if child.reason and child.state in {"waiting", "blocked"}:
-        lines.append(f"   ↳ {child.reason}")
-    if child.note:
-        lines.append(f"   📝 {child.note}")
-    return lines
-
-
-def _render_group(group: DelegationGroup, now: float, stamp: str = "") -> str:
-    children = group.ordered()
-    finished = group.finished
-    elapsed = format_duration(
-        (max((c.ended_at or now) for c in children) if finished and children else now)
-        - group.created_at
-    )
-    header = "🔀 Subagents" + (" · finished" if finished else "")
-    counts = _state_counts(children)
-    lines = [" · ".join(p for p in (header, counts, elapsed) if p)]
-    detailed_budget = _MAX_DETAILED_CHILDREN
-    hidden_terminal = 0
-    for child in children:
-        if detailed_budget <= 0 and child.state in TERMINAL_STATES:
-            hidden_terminal += 1
-            continue
-        lines.extend(_render_child(child, now, detailed=detailed_budget > 0))
-        detailed_budget -= 1
-    if hidden_terminal:
-        lines.append(f"… +{hidden_terminal} more finished")
-    # The timestamp makes a card frozen by a gateway restart visibly stale.
-    footer = "child activity only · the main agent's own steps are separate"
-    lines.append(f"{footer} · updated {stamp}" if stamp else footer)
+                lines.append(f"   📄 {shown}" + (f" +{more}" if more > 0 else ""))
+        elif child.state == "cancelled":
+            lines.append(f"{icon} {child.label} — cancelled after {dur}{tool_bit}")
+            if child.reason:
+                lines.append(f"   ↳ {child.reason}")
+        else:
+            lines.append(f"{icon} {child.label} — failed after {dur}{tool_bit}")
+            if child.reason:
+                lines.append(f"   ↳ {child.reason}")
+    if any(c.state == "completed" for c in children):
+        lines.append("Reported results are awaiting parent review.")
+    lines.append(_footer(stamp))
     text = "\n".join(lines)
     if len(text) > _CARD_MAX_CHARS:
         text = text[: _CARD_MAX_CHARS - 1].rsplit("\n", 1)[0] + "\n…"

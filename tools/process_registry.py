@@ -429,6 +429,14 @@ class ProcessSession:
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _reader_thread: Optional[threading.Thread] = field(default=None, repr=False)
     _pty: Any = field(default=None, repr=False)  # ptyprocess handle (when use_pty=True)
+    # Explicitly registered external agent job observer
+    # (tools/agent_job_observer.py). None for ordinary processes; never
+    # attached automatically and not persisted across restarts.
+    agent_job: Any = field(default=None, repr=False)
+    # Set by kill_process() BEFORE it signals the process: the reader thread
+    # can observe the exit first and finalize with reason "exited", so an
+    # observer needs the intent to report a cancellation truthfully.
+    _kill_requested: bool = field(default=False, repr=False)
 
 
 class ProcessRegistry:
@@ -516,6 +524,12 @@ class ProcessRegistry:
     def _emit_output(self, session: ProcessSession, chunk: str) -> None:
         """Forward a freshly-read chunk to the live-output sink, if one is set.
         Called from reader threads; never raise into the read loop."""
+        observer = session.agent_job
+        if observer is not None and chunk:
+            try:
+                observer.feed(chunk)
+            except Exception:
+                pass
         sink = self.on_output
         if sink is None or not chunk:
             return
@@ -1626,6 +1640,17 @@ class ProcessRegistry:
         with self._lock:
             was_running = self._running.pop(session.id, None) is not None
             self._finished[session.id] = session
+        # Report an observed agent job's exit before waiters are released, so
+        # anything that waits on this process sees an already-final card.
+        observer = session.agent_job
+        if was_running and observer is not None:
+            try:
+                observer.finish(
+                    session.exit_code,
+                    "killed" if session._kill_requested else session.completion_reason,
+                )
+            except Exception:
+                logger.debug("agent job finish failed for %s", session.id, exc_info=True)
         session._completion_event.set()
         self._write_checkpoint()
 
@@ -2351,6 +2376,7 @@ class ProcessRegistry:
             return result
 
         # Kill via PTY, Popen (local), or env execute (non-local)
+        session._kill_requested = True
         try:
             if session._pty:
                 # PTY process -- terminate via ptyprocess

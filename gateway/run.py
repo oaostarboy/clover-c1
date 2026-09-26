@@ -6007,6 +6007,12 @@ class TurnRunner:
         agent.tool_progress_callback = (
             ctx.progress_callback if _needs_agent_progress_callback(ctx) else None
         )
+        # Expose this turn's delegation publisher to tools running in this
+        # turn (external agent-job registration). run_sync executes inside a
+        # per-turn copy_context(), so the binding cannot leak across turns.
+        from agent.delegation_activity import bind_activity_sink
+
+        bind_activity_sink(ctx.delegation_activity)
         # Compose ID-bearing lifecycle consumers: Discord's one-time voice
         # ack and Slack's native task cards both ride the authoritative
         # start callback, so neither has to infer identity from tool names.

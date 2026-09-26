@@ -239,11 +239,11 @@ async def test_progress_note_is_attributed_to_child_and_reasoning_is_never_shown
     assert snap["sa-1"]["note"] == "Checking token scoping in the authz mixin"
     assert snap["sa-2"]["note"] is None
     # The note line sits under child A's title, not child B's.
-    lines = card.splitlines()
-    a_idx = next(i for i, l in enumerate(lines) if "Audit gateway auth" in l)
-    b_idx = next(i for i, l in enumerate(lines) if "Draft changelog" in l)
-    note_idx = next(i for i, l in enumerate(lines) if "Checking token scoping" in l)
-    assert a_idx < note_idx < b_idx or b_idx < a_idx < note_idx
+    # The note is an activity line attributed to child A (title + model) —
+    # never to child B.
+    note_line = next(l for l in card.splitlines() if "Checking token scoping" in l)
+    assert "#1 Audit gateway auth" in note_line and "claude-opus-5-5" in note_line
+    assert "Draft changelog" not in note_line
     await pub.aclose()
 
 
@@ -428,11 +428,16 @@ async def test_completion_error_and_cancellation_final_states():
     # A child reporting done is NOT parent approval.
     assert "parent review" in card.lower()
     assert "approved" not in card.lower()
-    # Failures and cancellations get one concise alert each; success does not.
+    # Follow-up contract (activity-first): finished workers leave the live
+    # card, so each result is delivered ONCE as it happens — a finding for
+    # success (still "awaiting parent review"), an alert for failure/cancel.
     alerts = [s["content"] for s in adapter.sends]
-    assert len(alerts) == 2
+    assert len(alerts) == 3
+    assert any("Fix auth" in m and "Fixed the scope leak" in m and "parent review" in m
+               for m in alerts)
     assert any("Port tests" in m and "failed" in m.lower() for m in alerts)
     assert any("Update docs" in m and "cancel" in m.lower() for m in alerts)
+    assert SECRET not in "\n".join(alerts)
     assert pub.tracker.group_finished("deleg_aaaa0001")
     await pub.aclose()
 
@@ -570,7 +575,9 @@ async def test_stale_and_replayed_events_cannot_regress_final_state():
     await pub.drain()
     snap = pub.tracker.snapshot("deleg_aaaa0001")[0]
     assert snap["state"] == "completed"
-    assert adapter.sends == []
+    # Exactly one finding for the real completion; the replayed "failed"
+    # completion produced no second message.
+    assert len(adapter.sends) == 1 and "all good" in adapter.sends[0]["content"]
     assert "rm -rf build" not in adapter.card()
     await pub.aclose()
 
@@ -714,3 +721,107 @@ def test_liveness_probe_reads_live_registry_only():
     finally:
         delegate_tool._unregister_subagent("sa-live")
     assert delegate_tool.get_subagent_liveness("sa-live") == {"registered": False}
+
+
+# ---------------------------------------------------------------------------
+# Activity-first presentation (follow-up acceptance): rendered frames
+# ---------------------------------------------------------------------------
+
+
+def _card_lines(adapter):
+    return adapter.card().splitlines()
+
+
+@pytest.mark.asyncio
+async def test_rendered_frames_finished_workers_leave_the_active_feed():
+    clock = FakeClock()
+    adapter = FakeTelegramAdapter()
+    pub = _make_publisher(adapter, clock=clock,
+                          probe=lambda sid: {"registered": True, "seconds_since_activity": 2.0})
+    runner = _turn_runner(pub)
+    a = _child_cb(runner, index=0, count=3, subagent_id="sa-a", title="Audit auth scoping")
+    b = _child_cb(runner, index=1, count=3, subagent_id="sa-b", title="Port cron tests",
+                  model="gpt-5.5", provider="openrouter")
+    c = _child_cb(runner, index=2, count=3, subagent_id="sa-c", title="Draft release notes")
+    for cb in (a, b, c):
+        cb("subagent.queued", preview="g")
+    a("subagent.start", preview="g")
+    b("subagent.start", preview="g")
+
+    # Frame 1: rapid identical tools coalesce into ONE attributed line.
+    for path in ("a.py", "b.py", "c.py", "d.py"):
+        a("tool.started", "read_file", path, {"path": path})
+        clock.advance(1)
+        a("tool.completed", "read_file", None, None, duration=0.1, is_error=False)
+    a("_thinking", "Scoping check looks wrong in authz_mixin")
+    b("tool.started", "terminal", "pytest", {"command": "pytest tests/cron -q"})
+    await pub.drain()
+    frame1 = _card_lines(adapter)
+    assert frame1[0].startswith("🔀 Subagents") and "2 active" in frame1[0] and "1 queued" in frame1[0]
+    # Queued workers are a count, not a listed row.
+    assert not any("Draft release notes" in l for l in frame1)
+    read_lines = [l for l in frame1 if "read_file" in l]
+    assert len(read_lines) == 1 and "×4" in read_lines[0] and "d.py" in read_lines[0]
+    assert "#1 Audit auth scoping · claude-opus-5-5" in read_lines[0]
+    # b's in-flight tool is on its "now" line, attributed with model/provider.
+    now_b = next(l for l in frame1 if l.startswith("▸ #2 Port cron tests"))
+    assert "gpt-5.5" in now_b and "openrouter" in now_b and "terminal" in now_b
+
+    # Frame 2: b finishes -> gone from the live card entirely; its finding is
+    # delivered once as its own message.
+    clock.advance(3)
+    b("tool.completed", "terminal", None, None, duration=3.0, is_error=False)
+    b("_thinking", "All cron tests pass on the fixed branch")
+    b("subagent.complete", status="completed", duration_seconds=10,
+      summary="Ported 14 cron tests; all pass.")
+    c("subagent.start", preview="g")
+    await pub.drain()
+    frame2 = _card_lines(adapter)
+    assert not any("Port cron tests" in l for l in frame2)
+    assert "1 done" in frame2[0]
+    assert len(adapter.sends) == 1 and "Ported 14 cron tests" in adapter.sends[0]["content"]
+    recent = frame2[frame2.index("Recent:") + 1: -1]
+    assert 1 <= len(recent) <= 5
+    assert all(("Audit auth scoping" in l) or ("Draft release notes" in l) for l in recent)
+
+    # Frame 3 (heartbeat): says what is pending instead of re-listing.
+    clock.advance(70)
+    await pub.heartbeat_tick()
+    frame3 = _card_lines(adapter)
+    now_a = next(l for l in frame3 if l.startswith("▸ #1 Audit auth scoping"))
+    assert "waiting for model response" in now_a
+    assert not any("Port cron tests" in l for l in frame3)
+    assert len(frame3) <= len(frame2)
+    assert len(adapter.sends) == 1  # heartbeats never post messages
+
+    # Final frame: the detailed per-worker record lives in ONE final summary.
+    a("subagent.complete", status="completed", duration_seconds=80, summary="Found the leak.")
+    c("subagent.complete", status="failed", duration_seconds=70, summary="network error")
+    await pub.drain()
+    final = adapter.card()
+    assert final.startswith("🔀 Subagents finished")
+    for title in ("Audit auth scoping", "Port cron tests", "Draft release notes"):
+        assert title in final
+    assert "Recent:" not in final and "▸" not in final
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_active_card_stays_compact_with_many_workers():
+    adapter = FakeTelegramAdapter()
+    pub = _make_publisher(adapter)
+    runner = _turn_runner(pub)
+    cbs = [_child_cb(runner, index=i, count=12, subagent_id=f"sa-{i}", title=f"Worker {i}")
+           for i in range(12)]
+    for i, cb in enumerate(cbs):
+        cb("subagent.start", preview="g")
+        cb("tool.started", "web_search", f"q{i}", {"query": f"q{i}"})
+        cb("tool.completed", "web_search", None, None, duration=0.2, is_error=False)
+    for cb in cbs[:6]:
+        cb("subagent.complete", status="completed", duration_seconds=5, summary="ok")
+    await pub.drain()
+    lines = _card_lines(adapter)
+    # header + <=6 now lines + overflow + "Recent:" + <=5 + footer
+    assert len(lines) <= 1 + 6 + 1 + 1 + 5 + 1
+    assert not any(f"Worker {i} " in l or l.endswith(f"Worker {i}") for i in range(6) for l in lines[1:])
+    await pub.aclose()

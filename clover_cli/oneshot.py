@@ -206,6 +206,7 @@ def run_oneshot(
     toolsets: object = None,
     skills: object = None,
     usage_file: Optional[str] = None,
+    activity_events: bool = False,
 ) -> int:
     """Execute a single prompt and print only the final content block.
 
@@ -269,6 +270,13 @@ def run_oneshot(
     real_stdout = sys.stdout
     real_stderr = sys.stderr
     devnull = open(os.devnull, "w", encoding="utf-8")
+    # --activity-events: structured worker activity on the REAL stderr (the
+    # call tree's stderr goes to devnull). See clover_cli/activity_events.py.
+    activity_writer = None
+    if activity_events:
+        from clover_cli.activity_events import ActivityEventWriter
+
+        activity_writer = ActivityEventWriter(real_stderr)
 
     response: Optional[str] = None
     result: dict = {}
@@ -283,6 +291,7 @@ def run_oneshot(
                     toolsets=explicit_toolsets,
                     use_config_toolsets=use_config_toolsets,
                     skills=skills,
+                    activity_writer=activity_writer,
                 )
             except BaseException as exc:  # noqa: BLE001
                 # Capture anything that escapes the agent (including OSError
@@ -298,6 +307,10 @@ def run_oneshot(
             devnull.close()
         except Exception:
             pass
+
+    if activity_writer is not None:
+        _ok = failure is None and bool((response or "").strip()) and not result.get("failed")
+        activity_writer.result(response if _ok else "", "completed" if _ok else "failed")
 
     if failure is not None:
         # Re-raise control-flow exceptions so the parent handles them as usual
@@ -361,6 +374,7 @@ def _run_agent(
     toolsets: object = None,
     use_config_toolsets: bool = True,
     skills: object = None,
+    activity_writer: object = None,
 ) -> tuple[str, dict]:
     """Build an AIAgent exactly like a normal CLI chat turn would, then
     run a single conversation.  Returns ``(final_response, run_result)``."""
@@ -506,6 +520,11 @@ def _run_agent(
         agent.suppress_status_output = True
         agent.stream_delta_callback = None
         agent.tool_gen_callback = None
+        if activity_writer is not None:
+            # Structured, redacted worker activity for a parent session.
+            agent.tool_progress_callback = activity_writer.tool_progress_callback
+            agent.interim_assistant_callback = activity_writer.interim_callback
+            activity_writer.start(effective_model)
 
         result = agent.run_conversation(prompt)
         return (result.get("final_response") or "", result)
