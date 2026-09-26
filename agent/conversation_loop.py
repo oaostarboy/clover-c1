@@ -6971,6 +6971,13 @@ def run_conversation(
                 # For subagents: relay first line to parent display (existing behaviour).
                 # For all agents with a structured callback: emit reasoning.available event.
                 first_line = _think_text.split('\n')[0][:80] if _think_text else ""
+                if getattr(agent, '_delegate_depth', 0) > 0:
+                    # The tag strip above keeps the TEXT inside inline
+                    # <think>…</think> blocks; a subagent's note is relayed to
+                    # user-facing surfaces, so drop reasoning blocks entirely.
+                    from agent.delegation_activity import extract_progress_note
+
+                    first_line = extract_progress_note(assistant_message.content)[:80]
                 if first_line and getattr(agent, '_delegate_depth', 0) > 0:
                     try:
                         agent.tool_progress_callback("_thinking", first_line)
