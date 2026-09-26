@@ -1,8 +1,10 @@
-"""Live delegation roster cards for gateway chats.
+"""Live delegation activity cards for gateway chats.
 
-One editable card per delegation group (one ``delegate_task`` call), fed by
-the ``subagent.*`` events the turn's ``TurnRunner.progress_callback`` already
-receives. Delivery reuses the adapter's edit-in-place transport
+One editable card per delegation group (one ``delegate_task`` call, or the
+external agent jobs registered in one turn), fed by the ``subagent.*`` events
+the turn's ``TurnRunner.progress_callback`` already receives and by external
+job observers bound to this turn's activity sink. Findings and alerts (worker
+done / failed / cancelled / stalled) are sent once as short messages. Delivery reuses the adapter's edit-in-place transport
 (``send_or_update_status`` — Telegram, Slack) or send+edit where only
 ``edit_message`` exists.
 
@@ -32,6 +34,7 @@ import inspect
 import logging
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -42,7 +45,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_HEARTBEAT_SECONDS = 60
 DEFAULT_STALL_SECONDS = 600
 DEFAULT_MIN_INTERVAL = 4.0
-_MAX_ALERTS_PER_GROUP = 5
+_MAX_ALERTS_PER_GROUP = 12
 # Stop heartbeat refreshes for a group that has produced no event for this
 # long (a worker lost without any observable signal). Observation continues.
 _HEARTBEAT_MAX_QUIET = 6 * 3600
@@ -131,6 +134,21 @@ class DelegationActivityPublisher:
         self._pump_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._closed = False
+        self._jobs_group: Optional[str] = None
+        self._jobs_count = 0
+
+    def external_job_identity(self) -> Tuple[str, int]:
+        """Group id + index for an external agent job registered this turn.
+
+        Unique per publisher so a later turn's jobs never share (and edit)
+        this turn's card on adapters that key status messages by name.
+        """
+        with self._state_lock:
+            if self._jobs_group is None:
+                self._jobs_group = f"jobs_{uuid.uuid4().hex[:8]}"
+            index = self._jobs_count
+            self._jobs_count += 1
+            return self._jobs_group, index
 
     # -- producer side (any thread) --------------------------------------
 
@@ -396,6 +414,17 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
+def _combined_liveness_probe(worker_id: str) -> Dict[str, Any]:
+    """Liveness for in-process children and registered external agent jobs."""
+    if str(worker_id).startswith("proc_"):
+        from tools.agent_job_observer import agent_job_liveness
+
+        return agent_job_liveness(worker_id)
+    from tools.delegate_tool import get_subagent_liveness
+
+    return get_subagent_liveness(worker_id)
+
+
 def build_turn_publisher(
     runner: Any,
     source: Any,
@@ -414,10 +443,7 @@ def build_turn_publisher(
         metadata = runner._thread_metadata_for_source(source)
     except Exception:
         metadata = None
-    try:
-        from tools.delegate_tool import get_subagent_liveness as probe
-    except Exception:
-        probe = None
+    probe = _combined_liveness_probe
     return DelegationActivityPublisher(
         adapter=adapter,
         chat_id=source.chat_id,

@@ -1627,15 +1627,16 @@ display:
   #         cleanup_progress: true
   cleanup_progress: false
 
-  # Live delegation roster (gateway only). When the agent delegates work with
-  # delegate_task, the chat gets ONE editable card per delegation showing each
-  # subagent's title, model/provider, state (queued, starting, running,
-  # running a tool, waiting, blocked, done, failed, cancelled), current tool
-  # with a redacted one-line argument summary, tool outcomes, elapsed time,
-  # and the child's own progress notes. Private reasoning and raw tool output
-  # are never shown. A finished child reads "reported done · awaiting parent
-  # review" — the parent agent still reviews it. Failures, cancellations and
-  # stalls also post one short alert message each.
+  # Live delegation activity (gateway only). When the agent delegates work
+  # (delegate_task, or agent CLIs registered with terminal(agent_job=...)),
+  # the chat gets ONE editable card per delegation: a counts-only header, what
+  # each ACTIVE worker is doing now (title, model, current tool with a
+  # redacted one-line summary, or what it is waiting on), and the latest
+  # attributed tool results and public progress notes. Finished workers leave
+  # the card; each result arrives once as a short message ("reported done …
+  # awaiting parent review", failed, cancelled, stalled). The card ends as one
+  # final summary. Private reasoning and raw tool output are never shown.
+  # See docs/delegation-activity.md.
   #   auto: shown wherever tool_progress is shown in chat; silent where
   #         tool_progress is off or log (default — existing opt-outs stay quiet)
   #   on:   always show (even with tool_progress off)

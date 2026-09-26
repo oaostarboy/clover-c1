@@ -174,6 +174,17 @@ def build_top_level_parser():
             "can always account for spend. No effect outside -z/--oneshot."
         ),
     )
+    parser.add_argument(
+        "--activity-events",
+        action="store_true",
+        default=False,
+        help=(
+            "One-shot mode only: write structured JSONL activity events "
+            "(tool calls, tool outcomes, public progress notes; never "
+            "reasoning or tool output) to stderr so a parent Clover session "
+            "can show this worker's activity. See clover_cli/activity_events.py."
+        ),
+    )
     # --model / --provider are accepted at the top level so they can pair
     # with -z without needing the `chat` subcommand.  If neither -z nor a
     # subcommand consumes them, they fall through harmlessly as None.
