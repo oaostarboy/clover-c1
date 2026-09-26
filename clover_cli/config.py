@@ -2386,7 +2386,7 @@ def _persist_migration(config: Dict[str, Any]) -> None:
     just deleted. Partial-save preservation for unrelated top-level sections
     belongs on ``save_config(..., merge_existing=True)``, not here.
     """
-    save_config(config)
+    save_config(config, preserve_comments=True)
 
 
 def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, Any]:
@@ -4029,6 +4029,7 @@ def save_config(
     strip_defaults: bool = True,
     preserve_keys: Optional[Set[Tuple[str, ...]]] = None,
     merge_existing: bool = False,
+    preserve_comments: bool = False,
 ):
     """Save configuration to ~/.clover/config.yaml.\n
 
@@ -4043,6 +4044,9 @@ def save_config(
     ``_persist_migration``) cannot drop unrelated sections the caller omitted.
     Full-document replacement callers (dashboard raw YAML editor, callers that
     already deep-merge) must leave this False so intentional deletions survive.
+    ``preserve_comments`` uses the YAML round-trip writer while retaining this
+    function's normalization/default-stripping behavior; migrations use it so
+    schema updates do not discard operator-authored comments.
     """
     with _CONFIG_LOCK:
         if is_managed():
@@ -4129,11 +4133,16 @@ def save_config(
         if not fb_is_valid:
             parts.append(_FALLBACK_COMMENT)
 
-        atomic_yaml_write(
-            config_path,
-            normalized,
-            extra_content="".join(parts) if parts else None,
-        )
+        if preserve_comments:
+            from utils import atomic_roundtrip_yaml_save
+
+            atomic_roundtrip_yaml_save(config_path, normalized)
+        else:
+            atomic_yaml_write(
+                config_path,
+                normalized,
+                extra_content="".join(parts) if parts else None,
+            )
         _secure_file(config_path)
         _RAW_CONFIG_CACHE.pop(str(config_path), None)
         _LAST_EXPANDED_CONFIG_BY_PATH[str(config_path)] = copy.deepcopy(current_normalized)

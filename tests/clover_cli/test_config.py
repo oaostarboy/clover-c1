@@ -791,6 +791,20 @@ class TestConfigSupportFloor:
         config_path.write_text(text, encoding="utf-8")
         return config_path, text
 
+    def test_migration_preserves_user_yaml_comments(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "# operator note must survive migration\n"
+            "_config_version: 38\n"
+            "custom_operator_field: keep-me\n",
+            encoding="utf-8",
+        )
+        with patch.dict(os.environ, {"CLOVER_HOME": str(tmp_path)}):
+            migrate_config(interactive=False, quiet=True)
+        migrated = config_path.read_text(encoding="utf-8")
+        assert "# operator note must survive migration" in migrated
+        assert "custom_operator_field: keep-me" in migrated
+
     def test_v11_config_is_refused_and_untouched(self, tmp_path, capsys):
         config_path, original = self._write_config(
             tmp_path,
