@@ -353,6 +353,34 @@ def _capture_gateway_steer_authority(
         return None, None
 
 
+def get_subagent_liveness(subagent_id: str) -> Dict[str, Any]:
+    """Observed liveness of a running child, for progress surfaces.
+
+    ``{"registered": False}`` when the id is not in the live registry (never
+    started, or already finished/unregistered). Otherwise the child's own
+    activity snapshot: seconds since its last activity, the tool it is in,
+    and a short description. Read-only; safe from any thread.
+    """
+    with _active_subagents_lock:
+        record = _active_subagents.get(subagent_id)
+        agent = record.get("agent") if record is not None else None
+    if record is None:
+        return {"registered": False}
+    info: Dict[str, Any] = {"registered": True}
+    summary_fn = getattr(agent, "get_activity_summary", None)
+    if callable(summary_fn):
+        try:
+            summary = summary_fn() or {}
+        except Exception:
+            summary = {}
+        info["seconds_since_activity"] = summary.get("seconds_since_activity")
+        info["current_tool"] = summary.get("current_tool")
+        info["activity"] = summary.get("last_activity_desc") or summary.get(
+            "description"
+        )
+    return info
+
+
 def list_active_subagents() -> List[Dict[str, Any]]:
     """Snapshot of the currently running subagent tree.
 
@@ -1427,6 +1455,13 @@ def _build_child_progress_callback(
         # event lets UIs open/inspect the subagent's session directly.
         if session_ref and session_ref.get("session_id"):
             kw["child_session_id"] = str(session_ref["session_id"])
+        # Presentation identity filled after construction: the delegation
+        # group (one delegate_task call), a short human title, and the
+        # resolved provider. Additive kwargs — consumers ignore unknown keys.
+        if session_ref:
+            for _ref_key in ("delegation_id", "title", "provider"):
+                if session_ref.get(_ref_key):
+                    kw[_ref_key] = str(session_ref[_ref_key])
         kw["tool_count"] = _tool_count[0]
         return kw
 
@@ -1463,6 +1498,12 @@ def _build_child_progress_callback(
             _relay("subagent.complete", preview=preview, **kwargs)
             return
 
+        if event_type == "subagent.queued":
+            # Built and waiting for a concurrency slot. Gateway-only signal:
+            # the child has not started and holds no session yet.
+            _relay("subagent.queued", preview=preview or goal_label or "")
+            return
+
         if event_type == "subagent.text":
             # Streamed assistant reply text from the child. Relay verbatim so a
             # gateway watch window can mirror the child "talking" as it streams.
@@ -1494,10 +1535,29 @@ def _build_child_progress_callback(
                     spinner.print_above(f' {prefix}├─ 💭 "{short}"')
                 except Exception as e:
                     logger.debug("Spinner print_above failed: %s", e)
-            _relay("subagent.thinking", preview=text)
+            # Provenance for renderers that must never show private
+            # reasoning: "note" is the child's visible interim content,
+            # "reasoning" is a reasoning block, "status" is spinner chatter.
+            if event_type == "reasoning.available":
+                note_kind = "reasoning"
+            elif kwargs.get("spinner"):
+                note_kind = "status"
+            else:
+                note_kind = "note"
+            _relay("subagent.thinking", preview=text, note_kind=note_kind)
             return
 
         if event == DelegateEvent.TASK_TOOL_COMPLETED:
+            # Outcome only — never the tool's output. Raw output stays in the
+            # redacted live transcript (tools/delegation_live_log.py).
+            _relay(
+                "subagent.tool_done",
+                tool_name,
+                None,
+                None,
+                duration_seconds=kwargs.get("duration"),
+                is_error=bool(kwargs.get("is_error")),
+            )
             return
 
         if event == DelegateEvent.TASK_PROGRESS:
@@ -1797,7 +1857,9 @@ def _build_child_agent(
             if not text:
                 return
             try:
-                child_progress_cb("_thinking", text)
+                # thinking_callback carries spinner text ("(◕‿◕) pondering..."),
+                # not content — mark it so renderers can drop it.
+                child_progress_cb("_thinking", text, spinner=True)
             except Exception as e:
                 logger.debug("Child thinking callback relay failed: %s", e)
 
@@ -2065,6 +2127,11 @@ def _build_child_agent(
     # Now the child exists, its session id can ride on every relayed event
     # (including the spawn_requested below — first emit happens after this).
     child_session_ref["session_id"] = getattr(child, "session_id", "") or ""
+    if effective_provider and isinstance(effective_provider, str):
+        child_session_ref.setdefault("provider", effective_provider)
+    # Exposed so delegate_task can attach the group id and title after
+    # construction (the progress callback reads the ref lazily per event).
+    child._progress_identity_ref = child_session_ref
     # Set delegation depth so children can't spawn grandchildren
     child._delegate_depth = child_depth
     # Stash the post-degrade role for introspection (leaf if the
@@ -3970,7 +4037,25 @@ def delegate_task(
         # attribution (child-started background processes report under it).
         if live_deleg_id:
             setattr(child, "_delegation_id", live_deleg_id)
+        _identity_ref = getattr(child, "_progress_identity_ref", None)
+        if isinstance(_identity_ref, dict):
+            from agent.delegation_activity import derive_task_title
+
+            _identity_ref["title"] = derive_task_title(t.get("goal"), t.get("title"))
+            if live_deleg_id:
+                _identity_ref["delegation_id"] = live_deleg_id
         children.append((i, t, child))
+
+    # Announce every built child as queued before any runs, so progress
+    # surfaces can show the whole roster (children beyond the concurrency cap
+    # wait here). Best-effort; never blocks dispatch.
+    for _qi, _qt, _qchild in children:
+        _qcb = getattr(_qchild, "tool_progress_callback", None)
+        if callable(_qcb):
+            try:
+                _qcb("subagent.queued", preview=_qt.get("goal"))
+            except Exception as e:
+                logger.debug("Progress callback queued relay failed: %s", e)
 
     def _execute_and_aggregate(*, honor_parent_interrupt: bool = True) -> dict:
         """Run all built children (1 or N), join on them, aggregate results,
@@ -4968,6 +5053,13 @@ DELEGATE_TASK_SCHEMA = {
                                 "What this subagent should accomplish. Be "
                                 "specific and self-contained — it knows "
                                 "nothing about your conversation history."
+                            ),
+                        },
+                        "title": {
+                            "type": "string",
+                            "description": (
+                                "Short label (≤60 chars) shown to the user "
+                                "while this child runs."
                             ),
                         },
                         "context": {

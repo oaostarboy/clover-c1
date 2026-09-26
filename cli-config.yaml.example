@@ -1627,6 +1627,26 @@ display:
   #         cleanup_progress: true
   cleanup_progress: false
 
+  # Live delegation roster (gateway only). When the agent delegates work with
+  # delegate_task, the chat gets ONE editable card per delegation showing each
+  # subagent's title, model/provider, state (queued, starting, running,
+  # running a tool, waiting, blocked, done, failed, cancelled), current tool
+  # with a redacted one-line argument summary, tool outcomes, elapsed time,
+  # and the child's own progress notes. Private reasoning and raw tool output
+  # are never shown. A finished child reads "reported done · awaiting parent
+  # review" — the parent agent still reviews it. Failures, cancellations and
+  # stalls also post one short alert message each.
+  #   auto: shown wherever tool_progress is shown in chat; silent where
+  #         tool_progress is off or log (default — existing opt-outs stay quiet)
+  #   on:   always show (even with tool_progress off)
+  #   off:  never show
+  # Per-platform override: display.platforms.<platform>.delegation_activity
+  delegation_activity: auto
+  # Quiet-period refresh of delegation cards, in seconds (edits only, never new
+  # messages). Keeps elapsed time and waiting/stalled status truthful.
+  # 0 disables the heartbeat.
+  delegation_heartbeat_seconds: 60
+
   # Natural mid-turn assistant updates.
   # On gateway platforms, when true, completed assistant status messages are
   # sent as separate chat messages. On the Desktop app, when true, mid-turn

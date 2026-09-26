@@ -68,6 +68,15 @@ _GLOBAL_DEFAULTS: dict[str, Any] = {
     # (Slack's default), and costs no extra API calls — the existing typing
     # refresh cadence just renders different text.
     "live_status": "full",
+    # Live, titled roster card for delegated subagents (one editable card per
+    # delegate_task call). "auto" follows tool_progress: shown wherever tool
+    # progress is shown in chat, silent where the user or platform chose
+    # silence — so upgrades never add noise to an opted-out chat.
+    # "on" / "off" override that.
+    "delegation_activity": "auto",
+    # Seconds between quiet-period refreshes of a delegation card (elapsed
+    # time, waiting/stalled classification). Edits only; 0 disables.
+    "delegation_heartbeat_seconds": 60,
 }
 
 # ---------------------------------------------------------------------------
@@ -316,6 +325,24 @@ def _normalise(setting: str, value: Any) -> Any:
         if val in {"false", "0", "no"}:
             return "off"
         return val if val in {"full", "verb", "off"} else "full"
+    if setting == "delegation_activity":
+        if value is True:
+            return "on"
+        if value is False:
+            return "off"
+        val = str(value).strip().lower()
+        if val in {"true", "1", "yes", "on", "all"}:
+            return "on"
+        if val in {"false", "0", "no", "off"}:
+            return "off"
+        return "auto"
+    if setting == "delegation_heartbeat_seconds":
+        if isinstance(value, bool):
+            return None
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            return None
     if setting == "tool_progress_grouping":
         val = str(value).lower()
         return val if val in ("accumulate", "separate") else "accumulate"

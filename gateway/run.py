@@ -4416,6 +4416,21 @@ def _reconnect_needs_attention(info: dict, now: float) -> bool:
     return (now - queued_at) >= _RECONNECT_ATTENTION_AFTER_SECONDS
 
 
+def _needs_agent_progress_callback(ctx: TurnContext) -> bool:
+    """Whether the turn's agent needs ``tool_progress_callback`` at all.
+
+    Delegation roster cards consume relayed ``subagent.*`` events on the same
+    callback, so an explicit ``delegation_activity: on`` must attach it even
+    when tool progress and thinking progress are both off.
+    """
+    return bool(
+        ctx.needs_progress_queue
+        or ctx.log_mode_enabled
+        or ctx._live_status_adapter is not None
+        or ctx.delegation_activity is not None
+    )
+
+
 class TurnRunner:
     """Per-turn collaborator carrying the tool-progress callbacks that used to
     be nested closures inside ``GatewayRunner._run_agent_inner``.
@@ -4435,6 +4450,21 @@ class TurnRunner:
     def progress_callback(self, event_type: str, tool_name: str = None, preview: str = None, args: dict = None, **kwargs):
         """Callback invoked by agent on tool lifecycle events."""
         ctx = self._ctx
+        # Delegated-child activity feeds the turn's roster card. Out of band:
+        # the publisher only folds state here (no I/O on the child's thread)
+        # and never raises. Handled before the run-currency guards so a
+        # background delegation can still finish a card it already posted.
+        if (
+            ctx.delegation_activity is not None
+            and isinstance(event_type, str)
+            and event_type.startswith("subagent.")
+        ):
+            try:
+                ctx.delegation_activity.observe(
+                    event_type, tool_name, preview, args, **kwargs
+                )
+            except Exception as _da_err:
+                logger.debug("delegation activity observe failed: %s", _da_err)
         # Live status line (Slack's assistant status): stash the current
         # tool phrase on the adapter; the _keep_typing refresh renders it
         # within a couple of seconds. Handled before every other gate
@@ -5975,13 +6005,7 @@ class TurnRunner:
         # None callback — so _thinking scratch bubbles never relayed even
         # though the progress queue was created for them.
         agent.tool_progress_callback = (
-            ctx.progress_callback
-            if (
-                ctx.needs_progress_queue
-                or ctx.log_mode_enabled
-                or ctx._live_status_adapter is not None
-            )
-            else None
+            ctx.progress_callback if _needs_agent_progress_callback(ctx) else None
         )
         # Compose ID-bearing lifecycle consumers: Discord's one-time voice
         # ack and Slack's native task cards both ride the authoritative
@@ -29809,9 +29833,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         long_tool_hint_fired = [False]
         _LONG_TOOL_THRESHOLD_S = 30.0
 
+        # Delegation roster card: one editable, titled card per delegate_task
+        # call in this chat/thread (display.delegation_activity). Bound to
+        # this turn's adapter + thread metadata so child activity can never
+        # land in another chat or profile.
+        _delegation_activity = None
+        if source.platform != Platform.WEBHOOK:
+            try:
+                from gateway.delegation_activity import build_turn_publisher
+
+                _delegation_activity = build_turn_publisher(
+                    self, source, user_config, platform_key, _run_still_current
+                )
+            except Exception:
+                logger.debug("delegation activity publisher setup failed", exc_info=True)
+
         turn_ctx = TurnContext(
             source=source,
             _run_still_current=_run_still_current,
+            delegation_activity=_delegation_activity,
             _live_status_adapter=_live_status_adapter,
             _live_status_mode=_live_status_mode,
             _thinking_enabled=_thinking_enabled,

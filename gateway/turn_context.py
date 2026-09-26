@@ -151,5 +151,12 @@ class TurnContext:
     # published by TurnRunner (like voice_ack_callback above) so tool starts
     # and completions correlate by real tool-call ID instead of tool name.
     _native_slack_task_cards: bool = False
+
+    # --- delegation roster card (gateway/delegation_activity.py) -----------
+    # Per-turn publisher bound to this turn's adapter/chat/thread; None when
+    # display.delegation_activity resolves off. Receives relayed subagent.*
+    # events from progress_callback; may outlive the turn for background
+    # delegations (it finishes cards it already posted, never opens new ones).
+    delegation_activity: Any = None
     native_tool_start_callback: Optional[Callable] = None
     native_tool_complete_callback: Optional[Callable] = None

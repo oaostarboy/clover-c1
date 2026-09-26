@@ -1554,6 +1554,18 @@ DEFAULT_CONFIG = {
         # applies where tool_progress is already enabled. Per-platform override
         # via display.platforms.<platform>.tool_progress_grouping.
         "tool_progress_grouping": "accumulate",
+        # Live, titled roster card for delegated subagents in messaging
+        # gateways: one editable card per delegate_task call showing each
+        # child's title, model/provider, state, current tool and elapsed time,
+        # plus a short alert when a child fails, is cancelled or stalls.
+        # "auto" (default) shows it wherever tool_progress is shown in chat and
+        # stays silent where tool_progress is off/log — existing opt-outs are
+        # preserved. "on"/"off" override; per-platform via
+        # display.platforms.<platform>.delegation_activity.
+        "delegation_activity": "auto",
+        # Quiet-period refresh interval (seconds) for delegation cards; edits
+        # only, never new messages. 0 disables the heartbeat.
+        "delegation_heartbeat_seconds": 60,
         # Optional custom phrases for generic long-running status messages.
         # Built-in defaults live in gateway/assets/status_phrases.yaml. Users
         # can set `path`/`paths` to CLOVER_HOME-relative YAML files/directories

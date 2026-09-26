@@ -7849,6 +7849,9 @@ def _on_tool_complete(sid: str, tool_call_id: str, name: str, args: dict, result
         _emit("todo.updated", sid, todo_state)
 
 
+_GATEWAY_ONLY_SUBAGENT_EVENTS = frozenset({"subagent.queued", "subagent.tool_done"})
+
+
 def _on_tool_progress(
     sid: str,
     event_type: str,
@@ -7939,6 +7942,12 @@ def _on_tool_progress(
         _emit("moa.phase", sid, phase_payload)
         return
     if event_type.startswith("subagent."):
+        # Chat-roster signals (queued / per-tool outcome) feed the gateway's
+        # delegation card. The TUI and desktop already track children through
+        # their own spawn tree and would misread an unknown subagent.* frame
+        # (desktop marks any subagent event as running), so don't forward.
+        if event_type in _GATEWAY_ONLY_SUBAGENT_EVENTS:
+            return
         payload = {
             "goal": str(_kwargs.get("goal") or ""),
             "task_count": int(_kwargs.get("task_count") or 1),
