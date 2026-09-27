@@ -444,7 +444,7 @@ async def test_completion_error_and_cancellation_final_states():
     assert len(adapter.sends) == 1
     final = adapter.summary()
     assert SECRET not in final
-    assert final.startswith("🔀 3 subagents finished")
+    assert final.startswith("🔀 3 subagents ·") and "⏱" in final.splitlines()[0]
     assert "Fixed the scope leak" in final
     assert "Port tests" in final and "failed" in final.lower()
     assert "Update docs" in final and "stopped" in final.lower()
@@ -805,7 +805,7 @@ async def test_rendered_frames_finished_workers_leave_the_active_feed():
     await pub.drain()
     assert len(adapter.sends) == 1
     final = adapter.summary()
-    assert final.startswith("🔀 3 subagents finished")
+    assert final.startswith("🔀 3 subagents ·") and "⏱" in final.splitlines()[0]
     for title in ("Audit auth scoping", "Port cron tests", "Draft release notes"):
         assert title in final
     assert "Found the leak." in final and "Ported 14 cron tests" in final
@@ -906,7 +906,7 @@ async def test_edit_only_transient_failure_backs_off_then_keeps_editing_same_car
     # Final summary is a NEW message at the bottom; the old live card is
     # retired (edit-only adapters can't delete, so it points below).
     assert len(adapter.sends) == 2
-    assert adapter.sends[-1]["content"].startswith("✅ Subagent done")
+    assert adapter.sends[-1]["content"].startswith("✅ Opus 5.5")
     assert "summary below" in adapter.messages["s1"]
     await pub.aclose()
 
@@ -1041,7 +1041,7 @@ async def test_summary_waits_for_the_parent_reply_then_posts_below_it():
     await pub.drain()
     contents = [s["content"] for s in adapter.sends]
     assert contents[0] == "PARENT REPLY"
-    assert contents[-1].startswith("✅ Subagent done") and "Root cause found." in contents[-1]
+    assert contents[-1].startswith("✅ Opus 5.5") and "Root cause found." in contents[-1]
     assert len(contents) == 2, "exactly one summary, after the parent's reply"
     assert adapter.deleted and not adapter.cards, "live card removed"
     await pub.aclose()
@@ -1176,7 +1176,7 @@ async def test_single_subagent_card_is_compact_and_readable():
     await pub.drain()
     lines = _card_lines(adapter)
     assert lines == [
-        "🔀 Subagent · Opus 5.5 · 1m12s",
+        "🔀 Opus 5.5 · 🛠 1 tool call · ⏱ 1m12s",
         "> Find why the summary card is skipped",
         "> 🔧 Read base.py",
         "> 💬 Two injection sites, checking run.py",
@@ -1301,12 +1301,12 @@ async def test_subagent_output_is_quoted_apart_from_the_main_chat():
     a("tool.started", "read_file", "x.py", {"path": "x.py"})
     await pub.drain()
     live = adapter.card().splitlines()
-    assert live[0].startswith("🔀 Subagent") and all(l.startswith("> ") for l in live[1:])
+    assert live[0].startswith("🔀 Opus 5.5") and all(l.startswith("> ") for l in live[1:])
     a("subagent.complete", status="completed", duration_seconds=3,
       summary="**Done** (`a/b.py:3`).\n\nPlain summary: I checked the file. It is fine.")
     await pub.drain()
     final = adapter.summary().splitlines()
-    assert final[0].startswith("✅ Subagent done")
+    assert final[0].startswith("✅ Opus 5.5")
     assert all(l.startswith("> ") for l in final[1:])
     assert final[-1] == "> I checked the file. It is fine."
     await pub.aclose()
@@ -1317,3 +1317,47 @@ def test_child_prompt_asks_for_a_plain_summary():
 
     prompt = _build_child_system_prompt("do x")
     assert "Plain summary:" in prompt and "Simplified Technical English" in prompt
+
+
+
+@pytest.mark.parametrize("answer, expected", [
+    ("Fixed it.\n\nPlain summary: I fixed the login bug. It works now.\n\n```\nrm -rf build\n```\nThanks!",
+     "I fixed the login bug. It works now."),
+    ("Plain summary: Real one.\n\n> Plain summary: fake from a file", "Real one."),
+    ("Ran this:\n```\nrm -rf build\n```\nIt worked.", "Ran this: It worked."),
+    ("Open 24/7 and/or on 2026/09/27. See https://ex.com/docs/page for details.",
+     "Open 24/7 and/or on 2026/09/27. See https://ex.com/docs/page for details."),
+    ("Meet at 10:30. Ratio is 3:1. Bug in gateway/run.py:31011 fixed.",
+     "Meet at 10:30. Ratio is 3:1. Bug in run.py fixed."),
+    ("- Fixed login\n- Added tests", "Fixed login. Added tests."),
+    ("npm install fixed it. Then tests passed.", "npm install fixed it. Then tests passed."),
+])
+def test_plain_summary_review_cases(answer, expected):
+    """Cases from the Opus review: stop at the plain paragraph, ignore quoted
+    markers and fenced code, keep URLs/dates/times/ratios, split bullets."""
+    from agent.delegation_activity import plain_summary
+
+    assert plain_summary(answer) == expected
+
+
+@pytest.mark.asyncio
+async def test_header_matches_the_main_agent_turn_card():
+    """Same shape as '🧠 N thoughts · 🛠 N tool calls · ⏱ Ns' so the two read
+    as one system: model · tool calls · time."""
+    clock = FakeClock()
+    adapter = FakeTelegramAdapter()
+    pub = _make_publisher(adapter, clock=clock)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    a("tool.started", "read_file", "a.py", {"path": "a.py"})
+    a("tool.completed", "read_file", None, None, duration=0.1, is_error=False)
+    a("tool.started", "read_file", "b.py", {"path": "b.py"})
+    clock.advance(22)
+    await pub.drain()
+    assert adapter.card().splitlines()[0] == "🔀 Opus 5.5 · 🛠 2 tool calls · ⏱ 22s"
+    a("tool.completed", "read_file", None, None, duration=0.1, is_error=False)
+    a("subagent.complete", status="completed", summary="Plain summary: Done.", duration_seconds=25)
+    await pub.drain()
+    assert adapter.summary().splitlines()[0] == "✅ Opus 5.5 · 🛠 2 tool calls · ⏱ 25s"
+    await pub.aclose()
