@@ -1064,24 +1064,100 @@ async def test_summary_posts_immediately_when_parent_is_idle():
 
 
 @pytest.mark.asyncio
-async def test_summary_falls_back_if_the_parent_reply_never_releases_it():
-    """A parent that crashes or never delivers must not strand the summary."""
+async def test_summary_falls_back_if_the_parent_reply_never_releases_it(monkeypatch):
+    """A parent that crashes or never delivers must not strand the summary:
+    the hard cap releases it, and a late hook after that doesn't double-post."""
+    import gateway.delegation_activity as da
+
+    monkeypatch.setattr(da, "_SUMMARY_POLL_SECONDS", 0.01)
+    clock = FakeClock()
     adapter = FakeTelegramAdapter()
-    pub, state = _busy_publisher(adapter, max_final_defer=0.05)
+    pub, state = _busy_publisher(adapter, clock=clock, max_final_defer=60)
     runner = _turn_runner(pub)
     a = _child_cb(runner)
     a("subagent.start", preview="g")
     await pub.drain()
     a("subagent.complete", status="completed", summary="Still delivered.", duration_seconds=3)
     await pub.drain()
-    assert adapter.sends == []
-    await asyncio.sleep(0.15)  # bounded fallback fires; parent still "busy"
+    await asyncio.sleep(0.05)
+    await pub.drain()
+    assert adapter.sends == [], "busy and under the cap: keep holding"
+    clock.advance(61)
+    await asyncio.sleep(0.05)
     await pub.drain()
     assert len(adapter.sends) == 1 and "Still delivered." in adapter.summary()
-    # A late release after the fallback does not post twice.
     state["released"][0]()
     await pub.drain()
     assert len(adapter.sends) == 1
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_lost_hook_still_posts_once_parent_goes_idle(monkeypatch):
+    """The post-delivery hook can be overwritten by a newer run or never
+    fire; polling must release the summary once the parent is idle, and
+    never while it's still working."""
+    import gateway.delegation_activity as da
+
+    monkeypatch.setattr(da, "_SUMMARY_POLL_SECONDS", 0.01)
+    adapter = FakeTelegramAdapter()
+    pub, state = _busy_publisher(adapter)  # hook registered, never called
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    a("subagent.complete", status="completed", summary="Polled out.", duration_seconds=3)
+    await pub.drain()
+    for _ in range(5):
+        await asyncio.sleep(0.02)
+        await pub.drain()
+    assert adapter.sends == [], "never posted while the parent is still working"
+    state["busy"] = False
+    for _ in range(5):
+        await asyncio.sleep(0.02)
+        await pub.drain()
+    assert len(adapter.sends) == 1 and "Polled out." in adapter.summary()
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_held_summary_shows_result_on_live_card_while_parent_works():
+    adapter = FakeTelegramAdapter()
+    pub, state = _busy_publisher(adapter)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    a("subagent.complete", status="completed", summary="Visible early.", duration_seconds=3)
+    await pub.drain()
+    assert adapter.sends == []
+    assert "Visible early." in adapter.card()
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_summary_send_error_is_not_retried():
+    """A send that raises may still have been accepted (timeout): retrying
+    could post the summary twice."""
+
+    class _FlakySend(FakeTelegramAdapter):
+        calls = 0
+
+        async def send(self, chat_id, content, reply_to=None, metadata=None):
+            type(self).calls += 1
+            raise TimeoutError("read timeout")
+
+    adapter = _FlakySend()
+    pub = _make_publisher(adapter)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    a("subagent.complete", status="completed", summary="x", duration_seconds=1)
+    await pub.drain()
+    await pub.flush()
+    await pub.flush()
+    assert _FlakySend.calls == 1
     await pub.aclose()
 
 
