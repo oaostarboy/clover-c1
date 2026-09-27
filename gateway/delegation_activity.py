@@ -122,6 +122,7 @@ class DelegationActivityPublisher:
         is_parent_busy: Optional[Callable[[], bool]] = None,
         defer_final: Optional[Callable[[Callable[[], None]], bool]] = None,
         max_final_defer: float = DEFAULT_MAX_FINAL_DEFER,
+        expandable: bool = False,
     ) -> None:
         self._adapter = adapter
         self._chat_id = str(chat_id)
@@ -133,6 +134,9 @@ class DelegationActivityPublisher:
         self._probe = liveness_probe
         self._clock = clock
         self._auto_heartbeat = auto_heartbeat
+        # Telegram: render cards as a collapsible quote, like the main
+        # agent's turn card (header visible, details behind a tap).
+        self._expandable = bool(expandable)
         # When the parent turn is still running, the final summary waits for
         # its reply (so tool bubbles, the reply and the summary never
         # interleave). ``defer_final(release)`` registers ``release`` to run
@@ -343,7 +347,7 @@ class DelegationActivityPublisher:
         if self.tracker.group_finished(gid):
             await self._deliver_summary(gid, card)
             return
-        text = _fit_to_limit(self.tracker.render(gid), self._message_limit())
+        text = self._render(gid)
         with self._state_lock:
             if not text or text == card.last_text:
                 card.dirty = False
@@ -496,7 +500,7 @@ class DelegationActivityPublisher:
                     pass
                 # Meanwhile show the result in place on the live card, so a
                 # long parent turn doesn't hide it.
-                held = _fit_to_limit(self.tracker.render(gid), self._message_limit())
+                held = self._render(gid)
                 if held and held != card.last_text and card.posted:
                     try:
                         res = await self._send_card(gid, card, held, True)
@@ -506,7 +510,7 @@ class DelegationActivityPublisher:
                     except Exception:
                         logger.debug("held summary edit failed", exc_info=True)
             return
-        text = _fit_to_limit(self.tracker.render(gid), self._message_limit())
+        text = self._render(gid)
         if not text:
             return
         with self._state_lock:
@@ -564,6 +568,11 @@ class DelegationActivityPublisher:
         except Exception:
             logger.debug("removing live delegation card failed", exc_info=True)
 
+    def _render(self, gid: str) -> str:
+        limit = self._message_limit()
+        text = _fit_to_limit(self.tracker.render(gid), limit - (8 if self._expandable else 0))
+        return _to_expandable(text) if self._expandable and text else text
+
     def _message_limit(self) -> int:
         adapter = self._adapter
         try:
@@ -601,6 +610,15 @@ _GONE_MARKERS = (
     "deleted",
     "404",
 )
+
+
+def _to_expandable(text: str) -> str:
+    """Header + "> " detail lines -> one Telegram expandable blockquote:
+    ``**> header`` / ``> detail`` / ... with ``||`` closing the last line."""
+    lines = text.split("\n")
+    body = [ln[2:] if ln.startswith("> ") else ln for ln in lines[1:]]
+    out = [f"**> {lines[0]}"] + [f"> {ln}" for ln in body if ln.strip()]
+    return "\n".join(out) + "||"
 
 
 def _message_gone(result: Any) -> bool:
@@ -656,41 +674,6 @@ def build_turn_publisher(
     except Exception:
         metadata = None
     probe = _combined_liveness_probe
-    try:
-        session_key = runner._session_key_for_source(source)
-    except Exception:
-        session_key = None
-
-    def _parent_busy() -> bool:
-        # The parent turn (or a queued follow-up for it) is still working in
-        # this chat: its tool bubbles and reply are still coming.
-        if not session_key:
-            return False
-        active = getattr(adapter, "_active_sessions", None)
-        return bool(isinstance(active, dict) and session_key in active)
-
-    def _defer_final(release: Callable[[], None]) -> bool:
-        # Fire after the parent's reply is delivered (same slot the summary
-        # card cleanup uses; callbacks chain, so neither clobbers the other).
-        register = getattr(adapter, "register_post_delivery_callback", None)
-        if not session_key or not callable(register):
-            return False
-        try:
-            event = getattr(adapter, "_active_sessions", {}).get(session_key)
-            generation = getattr(event, "_clover_run_generation", None)
-        except Exception:
-            generation = None
-        if generation is None:
-            # Registering without the run's generation would replace the
-            # generation-tagged slot and strand the turn's own cleanup; fall
-            # back to polling instead.
-            return False
-        try:
-            register(session_key, release, generation=int(generation))
-        except Exception:
-            return False
-        return True
-
     return DelegationActivityPublisher(
         adapter=adapter,
         chat_id=source.chat_id,
@@ -699,6 +682,7 @@ def build_turn_publisher(
         is_current=run_still_current,
         heartbeat_seconds=heartbeat,
         liveness_probe=probe,
-        is_parent_busy=_parent_busy,
-        defer_final=_defer_final,
+        # Posted as soon as the subagent finishes, so its summary sits ABOVE
+        # the parent's next reply (which then needn't repeat it).
+        expandable=getattr(getattr(source, "platform", None), "value", None) == "telegram",
     )

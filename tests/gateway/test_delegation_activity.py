@@ -1216,23 +1216,15 @@ async def test_without_a_delivery_hook_summary_polls_until_parent_is_idle(monkey
 
 
 @pytest.mark.asyncio
-async def test_defer_final_only_registers_with_the_run_generation(monkeypatch):
-    """Registering the summary release without the run generation would
-    overwrite the turn's generation-tagged slot and drop its summary card."""
+async def test_gateway_posts_summary_as_soon_as_the_subagent_finishes(monkeypatch):
+    """Production wiring: the summary lands right when the worker is done,
+    so it sits ABOVE the parent's next reply instead of repeating after it.
+    On Telegram it is a collapsible quote like the turn card."""
     import gateway.delegation_activity as da
 
     monkeypatch.setattr(da, "resolve_delegation_activity", lambda cfg, key: (True, 60))
-    registered = []
-
-    class _Adapter(FakeTelegramAdapter):
-        def __init__(self):
-            super().__init__()
-            self._active_sessions = {}
-
-        def register_post_delivery_callback(self, key, cb, *, generation=None):
-            registered.append((key, generation))
-
-    adapter = _Adapter()
+    adapter = FakeTelegramAdapter()
+    adapter._active_sessions = {"sk": asyncio.Event()}  # parent still busy
 
     class _Runner:
         def _adapter_for_source(self, source):
@@ -1241,20 +1233,16 @@ async def test_defer_final_only_registers_with_the_run_generation(monkeypatch):
         def _thread_metadata_for_source(self, source):
             return None
 
-        def _session_key_for_source(self, source):
-            return "sk"
-
     pub = da.build_turn_publisher(_Runner(), _source(), {}, "telegram", lambda: True)
-    event = asyncio.Event()
-    adapter._active_sessions["sk"] = event
-    assert pub._parent_busy() is True
-    assert pub._defer_final(lambda: None) is False, "no generation bound: must not register"
-    assert registered == []
-    event._clover_run_generation = 7
-    assert pub._defer_final(lambda: None) is True
-    assert registered == [("sk", 7)]
-    del adapter._active_sessions["sk"]
-    assert pub._parent_busy() is False
+    pub._min_interval = 0.0
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    a("subagent.complete", status="completed", summary="Plain summary: Done early.", duration_seconds=2)
+    await pub.drain()
+    assert len(adapter.sends) == 1
+    assert adapter.summary().startswith("**> ✅") and "Done early." in adapter.summary()
     await pub.aclose()
 
 
@@ -1408,3 +1396,44 @@ async def test_group_header_shows_failure_not_running_icon():
     await pub.drain()
     assert adapter.summary().startswith("❌ 2 subagents")
     await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_telegram_cards_are_collapsible_quotes_like_the_turn_card():
+    from gateway.delegation_activity import DelegationActivityPublisher
+
+    adapter = FakeTelegramAdapter()
+    pub = DelegationActivityPublisher(
+        adapter=adapter, chat_id="chat-A", loop=asyncio.get_running_loop(),
+        min_interval=0.0, clock=FakeClock(), auto_heartbeat=False, expandable=True,
+    )
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    a("tool.started", "read_file", "x.py", {"path": "x.py"})
+    await pub.drain()
+    live = adapter.card().splitlines()
+    assert live[0].startswith("**> 🔀 Opus 5.5 · 🛠 1 tool call")
+    assert all(l.startswith("> ") for l in live[1:]) and live[-1].endswith("||")
+    a("subagent.complete", status="completed", duration_seconds=3,
+      summary="Plain summary: I checked it. It is fine.")
+    await pub.drain()
+    final = adapter.summary()
+    assert final.startswith("**> ✅ Opus 5.5") and final.endswith("It is fine.||")
+    await pub.aclose()
+
+
+def test_telegram_formats_multiline_expandable_quote():
+    """The || terminator on the last line of a multi-line **> quote must
+    survive MarkdownV2 escaping; before, only single-line cards worked."""
+    from plugins.platforms.telegram.adapter import TelegramAdapter
+
+    fmt = TelegramAdapter.format_message(
+        object.__new__(TelegramAdapter),
+        "**> ✅ Opus 5.5 · 🛠 2 tool calls\n> Title\n> It is (fine).||",
+    )
+    assert fmt.endswith("It is \\(fine\\)\\.||")
+    assert "\\|\\|" not in fmt
+    # A plain quote ending in || (not expandable) is still escaped.
+    plain = TelegramAdapter.format_message(object.__new__(TelegramAdapter), "> odd||")
+    assert plain.endswith("\\|\\|")
