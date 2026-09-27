@@ -3130,7 +3130,14 @@ function Install-CloverCommandLaunchers {
         if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { continue }
         if ($venvRelocatable) {
             Remove-Item (Join-Path $Destination "$launcher.exe") -Force -ErrorAction SilentlyContinue
-            Set-Content -Path (Join-Path $Destination "$launcher.cmd") -Value "@echo off`r`n`"$src`" %*" -Encoding Ascii
+            Set-Content -Path (Join-Path $Destination "$launcher.cmd") -Value @"
+@echo off
+if not exist "$src" (
+    echo clover: Python interpreter missing or broken -- repair with: re-run install.ps1
+    exit /b 1
+)
+"$src" %*
+"@ -Encoding Ascii
         } else {
             Remove-Item (Join-Path $Destination "$launcher.cmd") -Force -ErrorAction SilentlyContinue
             Copy-Item -Force -LiteralPath $src -Destination (Join-Path $Destination "$launcher.exe")
