@@ -45,6 +45,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_HEARTBEAT_SECONDS = 60
 DEFAULT_STALL_SECONDS = 600
 DEFAULT_MIN_INTERVAL = 4.0
+# Longest a finished summary waits for the parent's reply before posting anyway.
+DEFAULT_MAX_FINAL_DEFER = 90.0
 _MAX_ALERTS_PER_GROUP = 12
 # Stop heartbeat refreshes for a group that has produced no event for this
 # long (a worker lost without any observable signal). Observation continues.
@@ -90,6 +92,12 @@ class _CardState:
     failures: int = 0
     message_id: Optional[str] = None
     alerts_sent: int = 0
+    # Final summary: posted once as a NEW message at the bottom of the chat
+    # (then the live card is removed), after the parent's own reply lands.
+    summary_posted: bool = False
+    summary_released: bool = False
+    summary_waiting: bool = False
+    summary_deadline: float = float("inf")
 
 
 class DelegationActivityPublisher:
@@ -109,6 +117,9 @@ class DelegationActivityPublisher:
         liveness_probe: Optional[LivenessProbe] = None,
         clock: Callable[[], float] = time.monotonic,
         auto_heartbeat: bool = True,
+        is_parent_busy: Optional[Callable[[], bool]] = None,
+        defer_final: Optional[Callable[[Callable[[], None]], bool]] = None,
+        max_final_defer: float = DEFAULT_MAX_FINAL_DEFER,
     ) -> None:
         self._adapter = adapter
         self._chat_id = str(chat_id)
@@ -120,6 +131,13 @@ class DelegationActivityPublisher:
         self._probe = liveness_probe
         self._clock = clock
         self._auto_heartbeat = auto_heartbeat
+        # When the parent turn is still running, the final summary waits for
+        # its reply (so tool bubbles, the reply and the summary never
+        # interleave). ``defer_final(release)`` registers ``release`` to run
+        # after the parent's reply is delivered; returns False if it cannot.
+        self._is_parent_busy = is_parent_busy or (lambda: False)
+        self._defer_final = defer_final
+        self._max_final_defer = max(0.0, float(max_final_defer))
         self.tracker = DelegationActivityTracker(
             clock=clock,
             heartbeat_seconds=self._heartbeat_seconds,
@@ -320,6 +338,9 @@ class DelegationActivityPublisher:
 
     async def _deliver_card(self, gid: str) -> None:
         card = self._cards[gid]
+        if self.tracker.group_finished(gid):
+            await self._deliver_summary(gid, card)
+            return
         text = _fit_to_limit(self.tracker.render(gid), self._message_limit())
         with self._state_lock:
             if not text or text == card.last_text:
@@ -373,9 +394,12 @@ class DelegationActivityPublisher:
         adapter = self._adapter
         updater = getattr(adapter, "send_or_update_status", None)
         if callable(updater):
-            return await _maybe_await(
+            result = await _maybe_await(
                 updater(self._chat_id, f"delegation:{gid}", text, metadata=self._metadata)
             )
+            if getattr(result, "success", False) and getattr(result, "message_id", None):
+                card.message_id = str(result.message_id)
+            return result
         editor = getattr(adapter, "edit_message", None)
         if card.message_id and callable(editor):
             result = await _maybe_await(
@@ -401,6 +425,124 @@ class DelegationActivityPublisher:
         if getattr(result, "success", False) and getattr(result, "message_id", None):
             card.message_id = str(result.message_id)
         return result
+
+    # -- final summary -----------------------------------------------------
+
+    def _parent_busy(self) -> bool:
+        try:
+            return bool(self._is_parent_busy())
+        except Exception:
+            return False
+
+    def _release_summary(self, gid: str) -> None:
+        with self._state_lock:
+            card = self._cards.get(gid)
+            if card is None or card.summary_posted:
+                return
+            card.summary_released = True
+            card.dirty = True
+        self._schedule()
+
+    def _recheck_summary(self, gid: str) -> None:
+        """No post-delivery hook available: poll until the parent is idle."""
+        with self._state_lock:
+            card = self._cards.get(gid)
+            if card is None or card.summary_posted:
+                return
+            if self._clock() >= card.summary_deadline:
+                card.summary_released = True
+            card.summary_waiting = False
+            card.dirty = True
+        self._schedule()
+
+    async def _deliver_summary(self, gid: str, card: _CardState) -> None:
+        """Post the finished group's summary once, at the bottom of the chat.
+
+        Ordering contract: while the parent turn is still working, the
+        summary is held until the parent's reply has been delivered (or a
+        bounded fallback fires), so it never lands between the parent's tool
+        bubbles and its answer. Then the live card is removed, leaving one
+        clean summary message after the parent's reply.
+        """
+        with self._state_lock:
+            card.dirty = False
+            if card.summary_posted:
+                return
+            waiting = card.summary_waiting
+            released = card.summary_released
+        if not released and self._parent_busy():
+            if not waiting:
+                with self._state_lock:
+                    card.summary_waiting = True
+                    card.summary_deadline = self._clock() + self._max_final_defer
+                registered = False
+                if self._defer_final is not None:
+                    try:
+                        registered = bool(self._defer_final(lambda: self._release_summary(gid)))
+                    except Exception:
+                        logger.debug("delegation summary defer failed", exc_info=True)
+                try:
+                    if registered:
+                        # Bounded fallback: a parent that never delivers must
+                        # not strand the summary.
+                        self._loop.call_later(self._max_final_defer, self._release_summary, gid)
+                    else:
+                        self._loop.call_later(2.0, self._recheck_summary, gid)
+                except RuntimeError:
+                    pass
+            return
+        text = _fit_to_limit(self.tracker.render(gid), self._message_limit())
+        if not text:
+            return
+        with self._state_lock:
+            card.last_attempt = self._clock()
+        try:
+            result = await _maybe_await(
+                self._adapter.send(self._chat_id, text, metadata=self._metadata)
+            )
+        except Exception as exc:
+            self._record_failure(card, None, f"{type(exc).__name__}: {exc}")
+            return
+        if not getattr(result, "success", False):
+            self._record_failure(card, result, getattr(result, "error", "send failed"))
+            return
+        with self._state_lock:
+            card.summary_posted = True
+            card.posted = True
+            card.last_text = text
+            card.last_publish = self._clock()
+            card.failures = 0
+            old_id = card.message_id
+            card.message_id = str(getattr(result, "message_id", "") or "") or None
+        await self._remove_live_card(gid, old_id)
+
+    async def _remove_live_card(self, gid: str, message_id: Optional[str]) -> None:
+        adapter = self._adapter
+        status_ids = getattr(adapter, "_status_message_ids", None)
+        if isinstance(status_ids, dict):
+            key_id = status_ids.pop((self._chat_id, f"delegation:{gid}"), None)
+            message_id = message_id or (str(key_id) if key_id else None)
+        if not message_id:
+            return
+        deleter = getattr(type(adapter), "delete_message", None)
+        try:
+            from gateway.platforms.base import BasePlatformAdapter
+
+            can_delete = deleter is not None and deleter is not BasePlatformAdapter.delete_message
+        except Exception:
+            can_delete = deleter is not None
+        try:
+            if can_delete:
+                await _maybe_await(adapter.delete_message(self._chat_id, message_id))
+                return
+            editor = getattr(adapter, "edit_message", None)
+            if callable(editor):
+                await _maybe_await(editor(
+                    self._chat_id, message_id, "🔀 Subagent finished · summary below",
+                    finalize=True, metadata=self._metadata,
+                ))
+        except Exception:
+            logger.debug("removing live delegation card failed", exc_info=True)
 
     def _message_limit(self) -> int:
         adapter = self._adapter
@@ -494,6 +636,41 @@ def build_turn_publisher(
     except Exception:
         metadata = None
     probe = _combined_liveness_probe
+    try:
+        session_key = runner._session_key_for_source(source)
+    except Exception:
+        session_key = None
+
+    def _parent_busy() -> bool:
+        # The parent turn (or a queued follow-up for it) is still working in
+        # this chat: its tool bubbles and reply are still coming.
+        if not session_key:
+            return False
+        active = getattr(adapter, "_active_sessions", None)
+        return bool(isinstance(active, dict) and session_key in active)
+
+    def _defer_final(release: Callable[[], None]) -> bool:
+        # Fire after the parent's reply is delivered (same slot the summary
+        # card cleanup uses; callbacks chain, so neither clobbers the other).
+        register = getattr(adapter, "register_post_delivery_callback", None)
+        if not session_key or not callable(register):
+            return False
+        try:
+            event = getattr(adapter, "_active_sessions", {}).get(session_key)
+            generation = getattr(event, "_clover_run_generation", None)
+        except Exception:
+            generation = None
+        if generation is None:
+            # Registering without the run's generation would replace the
+            # generation-tagged slot and strand the turn's own cleanup; fall
+            # back to polling instead.
+            return False
+        try:
+            register(session_key, release, generation=int(generation))
+        except Exception:
+            return False
+        return True
+
     return DelegationActivityPublisher(
         adapter=adapter,
         chat_id=source.chat_id,
@@ -502,4 +679,6 @@ def build_turn_publisher(
         is_current=run_still_current,
         heartbeat_seconds=heartbeat,
         liveness_probe=probe,
+        is_parent_busy=_parent_busy,
+        defer_final=_defer_final,
     )
