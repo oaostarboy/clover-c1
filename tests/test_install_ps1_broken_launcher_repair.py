@@ -66,3 +66,25 @@ def test_cmd_delegator_still_invokes_launcher_on_success_path(source: str):
     cmd_value = body[cmd_value_start : cmd_value_start + 600]
 
     assert '"$src" %*' in cmd_value
+
+
+def test_cmd_delegator_repair_command_is_exact_and_runnable(source: str):
+    """The printed repair line must be a command the user can run as-is —
+    a resolved path to *this* checkout's install.ps1, the same precision
+    the bash launcher already has (``bash "$INSTALL_DIR/scripts/install.sh"``
+    in ``setup_path()``'s equivalent guard). A bare "re-run install.ps1"
+    with no path forces the user to go find the script themselves.
+    """
+    body = _function_body(source, "Install-CloverCommandLaunchers")
+    cmd_value_start = body.index('Set-Content -Path (Join-Path $Destination "$launcher.cmd")')
+    cmd_value = body[cmd_value_start : cmd_value_start + 600]
+
+    assert "scripts\\install.ps1" in cmd_value, (
+        "the repair line must reference the concrete path to this "
+        "checkout's scripts\\install.ps1, not just the bare filename"
+    )
+    assert "$Root" in cmd_value, (
+        "the repair path must be resolved from $Root (the install "
+        "directory this function was called with), so it is exact "
+        "regardless of the user's current working directory"
+    )

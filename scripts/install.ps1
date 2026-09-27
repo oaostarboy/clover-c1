@@ -3130,10 +3130,14 @@ function Install-CloverCommandLaunchers {
         if (-not (Test-Path -LiteralPath $src -PathType Leaf)) { continue }
         if ($venvRelocatable) {
             Remove-Item (Join-Path $Destination "$launcher.exe") -Force -ErrorAction SilentlyContinue
+            # Exact, resolved path so the repair line is copy-pasteable
+            # regardless of the user's current working directory -- matches
+            # the precision of the bash launcher's
+            # `bash "$INSTALL_DIR/scripts/install.sh"` guard.
             Set-Content -Path (Join-Path $Destination "$launcher.cmd") -Value @"
 @echo off
 if not exist "$src" (
-    echo clover: Python interpreter missing or broken -- repair with: re-run install.ps1
+    echo clover: Python interpreter missing or broken -- repair with: powershell -ExecutionPolicy Bypass -File "$Root\scripts\install.ps1"
     exit /b 1
 )
 "$src" %*
