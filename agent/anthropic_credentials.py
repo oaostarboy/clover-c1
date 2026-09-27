@@ -32,6 +32,7 @@ import secrets
 import stat
 import subprocess
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -131,6 +132,38 @@ _SPENT_ROTATION_LOCK = threading.Lock()
 _SPENT_ROTATION_FINGERPRINTS: "OrderedDict[str, None]" = OrderedDict()
 _SPENT_ROTATION_MAX_TRACKED = 64
 _SPENT_ROTATION_SIDECAR_VERSION = 1
+
+
+# A headless launchd gateway has no unlocked login-keychain session, so every
+# ``security find-generic-password`` call blocks for the full 5s timeout
+# before failing. ``read_claude_code_credentials()`` runs on every credential
+# refresh, so without a cache that 5s stall repeats on every refresh for the
+# life of the process. Cache the "unavailable" verdict for a few minutes so a
+# stuck headless gateway pays the timeout once per window instead of once per
+# refresh; a later refresh still retries in case the session becomes available
+# (e.g. the keychain is unlocked interactively).
+#
+# ``now`` is accepted as an optional parameter (rather than always reading
+# ``time.monotonic()`` internally) so these two functions are testable as pure
+# functions without needing to fake wall-clock time.
+_KEYCHAIN_UNAVAILABLE_LOCK = threading.Lock()
+_keychain_unavailable_until: float = 0.0
+_KEYCHAIN_UNAVAILABLE_CACHE_SECONDS = 300.0
+
+
+def _keychain_marked_unavailable(*, now: Optional[float] = None) -> bool:
+    """True while a prior Keychain failure's cache window is still open."""
+    check_time = time.monotonic() if now is None else now
+    with _KEYCHAIN_UNAVAILABLE_LOCK:
+        return check_time < _keychain_unavailable_until
+
+
+def _mark_keychain_unavailable(*, now: Optional[float] = None) -> None:
+    """Record a Keychain failure so refreshes skip it for a few minutes."""
+    global _keychain_unavailable_until
+    start_time = time.monotonic() if now is None else now
+    with _KEYCHAIN_UNAVAILABLE_LOCK:
+        _keychain_unavailable_until = start_time + _KEYCHAIN_UNAVAILABLE_CACHE_SECONDS
 
 
 def _spent_rotation_sidecar_path(source_path: Path) -> Path:
@@ -276,6 +309,19 @@ def _read_claude_code_credentials_from_keychain() -> Optional[Dict[str, Any]]:
     """
     if platform.system() != "Darwin":
         return None
+    return _read_keychain_generic_password()
+
+
+def _read_keychain_generic_password() -> Optional[Dict[str, Any]]:
+    """Query the "Claude Code-credentials" Keychain entry, cache-aware.
+
+    Split out from the Darwin gate in ``_read_claude_code_credentials_from_keychain``
+    so this subprocess/caching logic is testable directly without needing to
+    fake ``platform.system()`` (this function makes no platform check itself).
+    """
+    if _keychain_marked_unavailable():
+        logger.debug("Keychain: skipping lookup, marked unavailable after a recent failure")
+        return None
 
     try:
         # Read the "Claude Code-credentials" generic password entry
@@ -290,6 +336,7 @@ def _read_claude_code_credentials_from_keychain() -> Optional[Dict[str, Any]]:
         )
     except (OSError, subprocess.TimeoutExpired):
         logger.debug("Keychain: security command not available or timed out")
+        _mark_keychain_unavailable()
         return None
 
     if result.returncode != 0:
