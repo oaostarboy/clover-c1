@@ -8723,12 +8723,19 @@ class TelegramAdapter(BasePlatformAdapter):
         # 9) Convert blockquotes: > at line start → protect > from escaping
         #    Handle both regular blockquotes (> text) and expandable blockquotes
         #    (Telegram MarkdownV2: **> for expandable start, || to end the quote)
+        # An expandable quote opens with **> and may span several > lines;
+        # its || terminator sits on the LAST line, not necessarily the first.
+        _expandable_open = [False]
+
         def _convert_blockquote(m):
             prefix = m.group(1)  # >, >>, >>>, **>, or **>> etc.
             content = m.group(2)
-            # Check if content ends with || (expandable blockquote end marker)
-            # In this case, preserve the trailing || unescaped for Telegram
-            if prefix.startswith('**') and content.endswith('||'):
+            if prefix.startswith('**'):
+                _expandable_open[0] = True
+            # Preserve the trailing || (expandable blockquote end marker)
+            # unescaped for Telegram when it closes an open expandable quote.
+            if _expandable_open[0] and content.endswith('||'):
+                _expandable_open[0] = False
                 return _ph(f'{prefix} {_escape_mdv2(content[:-2])}||')
             return _ph(f'{prefix} {_escape_mdv2(content)}')
 
