@@ -349,3 +349,77 @@ async def test_cleanup_chains_with_existing_callback(monkeypatch, tmp_path):
     # deletes at least one progress bubble.
     assert pre_existing_fired == [True]
     assert len(adapter.deleted) >= 1
+
+
+class FinalizingCleanupAdapter(CleanupCaptureAdapter):
+    """Accepts ``finalize=`` like the real Telegram adapter does."""
+
+    async def edit_message(self, chat_id, message_id, content, *, finalize=False,
+                           metadata=None) -> SendResult:
+        return await super().edit_message(chat_id, message_id, content)
+
+
+class QueuesFollowUpAgent(ProgressAgent):
+    """First run emits tool progress, then a follow-up lands in the queue
+    (the shape of an async delegation result arriving mid-turn). The
+    follow-up run does no tool work."""
+
+    adapter = None
+    session_key = None
+    runs = 0
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        type(self).runs += 1
+        if type(self).runs == 1:
+            result = super().run_conversation(message, conversation_history, task_id)
+            from gateway.platforms.base import MessageEvent
+
+            src = SessionSource(platform=Platform.TELEGRAM, chat_id="-1001")
+            type(self).adapter._pending_messages[type(self).session_key] = MessageEvent(
+                text="[ASYNC DELEGATION BATCH COMPLETE — deleg_x]", source=src,
+            )
+            return result
+        return {"final_response": "follow-up handled", "messages": [], "api_calls": 1}
+
+
+@pytest.mark.asyncio
+async def test_queued_follow_up_still_collapses_first_turn_into_card(monkeypatch, tmp_path):
+    """Regression: the queued follow-up branch returned before the cleanup
+    callback was registered, so the first turn's tool bubbles were never
+    collapsed into the summary card."""
+    adapter = FinalizingCleanupAdapter()
+    runner = _make_runner(adapter)
+    gateway_run = _install_fakes(monkeypatch, QueuesFollowUpAgent, cleanup_on=True)
+    monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="-1001")
+    session_key = "agent:main:telegram:group:-1001"
+    QueuesFollowUpAgent.adapter = adapter
+    QueuesFollowUpAgent.session_key = session_key
+    QueuesFollowUpAgent.runs = 0
+
+    await runner._run_agent(
+        message="hello",
+        context_prompt="",
+        history=[],
+        source=source,
+        session_id="sess-queued-card",
+        session_key=session_key,
+    )
+    assert QueuesFollowUpAgent.runs == 2, "the queued follow-up must have run"
+    progress_ids = {
+        item["message_id"] for item in adapter.sent if item["content"] not in ("done", "follow-up handled")
+    }
+    assert progress_ids, "first turn must have posted tool progress"
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if any("tool call" in e["content"] for e in adapter.edits):
+            break
+    touched = {e["message_id"] for e in adapter.edits} | {
+        d["message_id"] for d in adapter.deleted
+    }
+    assert progress_ids <= touched, (
+        "first turn's progress bubbles were left in the chat: "
+        f"{progress_ids - touched}"
+    )
+    cards = [e["content"] for e in adapter.edits if "tool call" in e["content"]]
+    assert cards, "first turn's progress must collapse into the summary card"
