@@ -185,7 +185,7 @@
     "wait-on": "9.0.10"
   },
   "build": {
-    "electronVersion": "40.10.2",
+    "electronVersion": "41.10.5",
     "appId": "com.cloverc1.clover",
     "productName": "Clover",
     "executableName": "Clover",
