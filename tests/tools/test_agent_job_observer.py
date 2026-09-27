@@ -140,9 +140,9 @@ async def test_two_concurrent_external_workers_attributed_and_redacted(hermetic_
     )
     # Tool calls are visible and attributed by title + model.
     assert "Bash" in everything and "Read" in everything and "terminal" in everything
-    assert any("Audit cron locking · Opus 5.5" in c["content"] and "Bash" in c["content"]
+    assert any("**Audit cron locking** · Opus 5.5" in c["content"] and "Bash" in c["content"]
                for c in adapter.status_calls)
-    assert any("Fix DST catchup · luna-large" in c["content"] for c in adapter.status_calls)
+    assert any("**Fix DST catchup** · luna-large" in c["content"] for c in adapter.status_calls)
     # Public notes surface; private thinking, tool output, stray stdout never do.
     assert "Reading the scheduler lock code." in everything
     assert "Cron catchup skips DST jobs" in everything
