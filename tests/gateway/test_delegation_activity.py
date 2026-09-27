@@ -635,8 +635,9 @@ def test_default_and_opt_out_resolution():
     # Fresh install: Telegram shows the card (tool progress is on there).
     on, hb = resolve_delegation_activity({}, "telegram")
     assert on is True and hb == 60
-    # Slack keeps tool progress off by default -> auto stays quiet.
-    assert resolve_delegation_activity({}, "slack")[0] is False
+    # Slack's Bolt adapter really supports chat.update, so tool progress is
+    # on (medium tier) by default -> auto shows the delegation card too.
+    assert resolve_delegation_activity({}, "slack")[0] is True
     # Existing install that opted out of tool progress keeps its silence.
     cfg = {"display": {"platforms": {"telegram": {"tool_progress": "off"}}}}
     assert resolve_delegation_activity(cfg, "telegram")[0] is False

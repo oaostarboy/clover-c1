@@ -168,12 +168,21 @@ class TestPlatformDefaults:
         assert resolve_display_setting({}, "discord", "busy_ack_detail") is True
 
     def test_slack_workspace_chatter_defaults(self):
-        """Slack should not leave permanent heartbeat/debug breadcrumbs in channels."""
+        """Slack should not leave permanent heartbeat/debug breadcrumbs in
+        channels, but DOES support editing (Bolt's chat.update), so tool
+        progress uses the medium tier ("new") rather than being forced off."""
         from gateway.display_config import resolve_display_setting
 
-        assert resolve_display_setting({}, "slack", "tool_progress") == "off"
+        assert resolve_display_setting({}, "slack", "tool_progress") == "new"
         assert resolve_display_setting({}, "slack", "long_running_notifications") is False
         assert resolve_display_setting({}, "slack", "busy_ack_detail") is False
+
+    def test_slack_tool_progress_still_overridable_off(self):
+        """Users who prefer silence can still turn it off explicitly."""
+        from gateway.display_config import resolve_display_setting
+
+        config = {"display": {"platforms": {"slack": {"tool_progress": "off"}}}}
+        assert resolve_display_setting(config, "slack", "tool_progress") == "off"
 
 
 class TestShowReasoningDefault:

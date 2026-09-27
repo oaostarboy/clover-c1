@@ -166,11 +166,14 @@ _PLATFORM_DEFAULTS: dict[str, dict[str, Any]] = {
     "discord":     {**_TIER_HIGH, "reasoning_style": "subtext"},
 
     # Tier 2 — edit support, often customer/workspace channels
-    # Slack: tool_progress off by default — Bolt posts cannot be edited like CLI;
-    # "new"/"all" spam permanent lines in channels (clover-c1#14663).
+    # Slack's Bolt adapter really implements chat.update (edit_message), so
+    # it keeps the medium tier's "new" tool_progress (one line per NEW tool
+    # call, edited in place — not the permanent-line spam clover-c1#14663
+    # worried about, since edits don't post new lines). This also means
+    # subagent delegation cards ("auto") show here, since they follow
+    # tool_progress.
     "slack":           {
         **_TIER_MEDIUM,
-        "tool_progress": "off",
         "long_running_notifications": False,
         "busy_ack_detail": False,
     },
