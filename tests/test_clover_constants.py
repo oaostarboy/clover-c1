@@ -3,6 +3,7 @@
 import builtins
 import io
 import os
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,6 +24,7 @@ from clover_constants import (
     clover_managed_node_tree_present,
     iter_clover_node_dirs,
     is_container,
+    mkdir_under_clover_home,
     node_tool_runnable,
     parse_reasoning_effort,
     reset_clover_home_override,
@@ -710,6 +712,44 @@ class TestSecureParentDir:
         secure_parent_dir(link_target)
         assert len(called_with) == 1
         assert called_with[0] == (str(real_dir), 0o700)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits; Windows chmod semantics differ")
+class TestMkdirUnderCloverHome:
+    """mkdir_under_clover_home() must create owner-only (0700) directories.
+
+    Runtime-created CLOVER_HOME subdirs (logs, sessions, memories, pairing,
+    ...) hold sensitive data (conversation history, credentials, pairing
+    tokens). A permissive umask (e.g. 022) must not leave them group/world
+    readable. See install.sh's copy_config_templates() for the equivalent
+    install-time hardening.
+    """
+
+    def test_new_dir_created_owner_only(self, tmp_path):
+        old_umask = os.umask(0o022)
+        try:
+            target = mkdir_under_clover_home(tmp_path / "sessions")
+        finally:
+            os.umask(old_umask)
+        assert target.is_dir()
+        assert stat.S_IMODE(target.stat().st_mode) == 0o700
+
+    def test_existing_lax_dir_is_tightened(self, tmp_path):
+        target_path = tmp_path / "memories"
+        target_path.mkdir(mode=0o755)
+        os.chmod(target_path, 0o755)
+        assert stat.S_IMODE(target_path.stat().st_mode) == 0o755
+
+        target = mkdir_under_clover_home(target_path)
+        assert stat.S_IMODE(target.stat().st_mode) == 0o700
+
+    def test_windows_is_a_noop(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(clover_constants.sys, "platform", "win32")
+        chmod_calls = []
+        monkeypatch.setattr(os, "chmod", lambda p, m: chmod_calls.append((str(p), m)))
+        target = mkdir_under_clover_home(tmp_path / "pairing")
+        assert target.is_dir()
+        assert chmod_calls == []
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shell stubs; Windows uses .cmd shims")
