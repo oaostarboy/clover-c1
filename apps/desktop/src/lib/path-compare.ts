@@ -5,14 +5,17 @@
  *  case. Compare through these rather than `===` / `startsWith`.
  */
 
+import { isMacPlatform } from './platform'
+
 /** POSIX-style spelling: one separator, no trailing slash. */
 export const cleanPath = (path: string): string => path.trim().replace(/\\/g, '/').replace(/\/+$/, '') || '/'
 
-/** Case-folded comparison key. Windows drive/UNC paths are case-insensitive;
- *  POSIX paths are not, and callers that display a path want its real spelling,
- *  so fold only the key. Expects an already-`cleanPath`ed value. */
+/** Case-folded comparison key. Windows drive/UNC paths and macOS's default
+ *  (case-insensitive, case-preserving) volumes fold; other POSIX paths don't,
+ *  and callers that display a path want its real spelling, so fold only the
+ *  key. Expects an already-`cleanPath`ed value. */
 export const comparisonPath = (path: string): string =>
-  /^[A-Za-z]:(?:\/|$)/.test(path) || path.startsWith('//') ? path.toLowerCase() : path
+  /^[A-Za-z]:(?:\/|$)/.test(path) || path.startsWith('//') || isMacPlatform() ? path.toLowerCase() : path
 
 /** True when `child` IS `parent` or lives underneath it. */
 export const isUnderPath = (parent: string, child: string): boolean => {
