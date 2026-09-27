@@ -45,8 +45,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_HEARTBEAT_SECONDS = 60
 DEFAULT_STALL_SECONDS = 600
 DEFAULT_MIN_INTERVAL = 4.0
-# Longest a finished summary waits for the parent's reply before posting anyway.
-DEFAULT_MAX_FINAL_DEFER = 90.0
+# Hard cap on how long a finished summary waits for a busy parent (the live
+# card already shows the result in place while it waits).
+DEFAULT_MAX_FINAL_DEFER = 1800.0
+_SUMMARY_POLL_SECONDS = 2.0
 _MAX_ALERTS_PER_GROUP = 12
 # Stop heartbeat refreshes for a group that has produced no event for this
 # long (a worker lost without any observable signal). Observation continues.
@@ -444,16 +446,20 @@ class DelegationActivityPublisher:
         self._schedule()
 
     def _recheck_summary(self, gid: str) -> None:
-        """No post-delivery hook available: poll until the parent is idle."""
+        """Poll while held: release once the parent is idle (covers a lost or
+        never-fired post-delivery hook) or the hard cap passes."""
         with self._state_lock:
             card = self._cards.get(gid)
-            if card is None or card.summary_posted:
+            if card is None or card.summary_posted or card.summary_released:
                 return
-            if self._clock() >= card.summary_deadline:
-                card.summary_released = True
-            card.summary_waiting = False
-            card.dirty = True
-        self._schedule()
+            expired = self._clock() >= card.summary_deadline
+        if expired or not self._parent_busy():
+            self._release_summary(gid)
+            return
+        try:
+            self._loop.call_later(_SUMMARY_POLL_SECONDS, self._recheck_summary, gid)
+        except RuntimeError:
+            pass
 
     async def _deliver_summary(self, gid: str, card: _CardState) -> None:
         """Post the finished group's summary once, at the bottom of the chat.
@@ -475,21 +481,30 @@ class DelegationActivityPublisher:
                 with self._state_lock:
                     card.summary_waiting = True
                     card.summary_deadline = self._clock() + self._max_final_defer
-                registered = False
                 if self._defer_final is not None:
                     try:
-                        registered = bool(self._defer_final(lambda: self._release_summary(gid)))
+                        # Preferred release: right after the parent's reply.
+                        self._defer_final(lambda: self._release_summary(gid))
                     except Exception:
                         logger.debug("delegation summary defer failed", exc_info=True)
+                # Always poll too: releases once the parent goes idle even if
+                # the hook was overwritten or never fires, without ever
+                # posting while the parent is still working (until the cap).
                 try:
-                    if registered:
-                        # Bounded fallback: a parent that never delivers must
-                        # not strand the summary.
-                        self._loop.call_later(self._max_final_defer, self._release_summary, gid)
-                    else:
-                        self._loop.call_later(2.0, self._recheck_summary, gid)
+                    self._loop.call_later(_SUMMARY_POLL_SECONDS, self._recheck_summary, gid)
                 except RuntimeError:
                     pass
+                # Meanwhile show the result in place on the live card, so a
+                # long parent turn doesn't hide it.
+                held = _fit_to_limit(self.tracker.render(gid), self._message_limit())
+                if held and held != card.last_text and card.posted:
+                    try:
+                        res = await self._send_card(gid, card, held, True)
+                        if getattr(res, "success", False):
+                            with self._state_lock:
+                                card.last_text = held
+                    except Exception:
+                        logger.debug("held summary edit failed", exc_info=True)
             return
         text = _fit_to_limit(self.tracker.render(gid), self._message_limit())
         if not text:
@@ -501,7 +516,12 @@ class DelegationActivityPublisher:
                 self._adapter.send(self._chat_id, text, metadata=self._metadata)
             )
         except Exception as exc:
-            self._record_failure(card, None, f"{type(exc).__name__}: {exc}")
+            # Ambiguous (e.g. timeout after the platform accepted it):
+            # retrying could post the summary twice. The parent still gets
+            # the full result through the delegation completion message.
+            logger.debug("delegation summary send raised; not retrying: %s", exc)
+            with self._state_lock:
+                card.summary_posted = True
             return
         if not getattr(result, "success", False):
             self._record_failure(card, result, getattr(result, "error", "send failed"))
