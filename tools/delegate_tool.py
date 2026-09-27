@@ -1268,7 +1268,12 @@ def _build_child_system_prompt(
         "Keep your final summary tight: lead with outcomes, prefer bullet "
         "points over paragraphs, and don't replay your whole process. Your "
         "response is returned to the parent agent as a summary, and overlong "
-        "summaries crowd out the parent's context window."
+        "summaries crowd out the parent's context window.\n\n"
+        "End your answer with a line starting 'Plain summary:' followed by 2-3 "
+        "short sentences for a non-technical reader, in Simplified Technical "
+        "English: one idea per sentence, active voice, common words, no file "
+        "paths, line numbers, code or jargon. Say what you found or did and "
+        "what happens next. This paragraph is shown to the user in chat."
     )
     if role == "orchestrator":
         child_note = (

@@ -651,7 +651,7 @@ class DelegationActivityTracker:
         summary_raw = kw.get("summary") or preview or ""
         if state == "completed":
             child.reason = None
-            child.summary = sanitize_text(summary_raw, _SUMMARY_MAX) or None
+            child.summary = plain_summary(summary_raw) or None
         elif state == "cancelled":
             child.reason = sanitize_text(kw.get("reason") or "", _REASON_MAX) or "stopped before finishing"
         elif status == "timeout":
@@ -800,8 +800,8 @@ _MODEL_NAMES = (
     ("claude-sonnet-", "Sonnet"),
     ("claude-haiku-", "Haiku"),
 )
-_FINAL_SUMMARY_SINGLE = 420
-_FINAL_SUMMARY_MULTI = 180
+_FINAL_SUMMARY_SINGLE = 320
+_FINAL_SUMMARY_MULTI = 160
 
 
 def pretty_model(model: str) -> str:
@@ -890,18 +890,17 @@ def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
     elapsed = format_duration(now - group.created_at)
     if len(children) == 1:
         child = children[0]
-        lines = [" · ".join(p for p in ("🔀 Subagent", pretty_model(child.model), elapsed) if p),
-                 _truncate_words(child.title, _TITLE_MAX),
-                 _doing(child, now)]
+        head = " · ".join(p for p in ("🔀 Subagent", pretty_model(child.model), elapsed) if p)
+        quoted = [_truncate_words(child.title, _TITLE_MAX), _doing(child, now)]
         if child.note and child.open_tools and child.visibility != "lifecycle":
-            lines.append(f"💬 {child.note}")
-        return "\n".join(lines)
+            quoted.append(f"💬 {child.note}")
+        return "\n".join([head] + _quote(quoted))
     done = sum(1 for c in children if c.state == "completed")
     head = [f"🔀 {len(children)} subagents"]
     if done:
         head.append(f"{done} done")
     head.append(elapsed)
-    lines = [" · ".join(head)]
+    quoted: List[str] = []
     shown = 0
     for child in children:
         if child.state in TERMINAL_STATES:
@@ -909,21 +908,79 @@ def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
                 # Failures/cancellations stay visible; successes are just
                 # counted in the header until the final summary.
                 icon = _ICONS.get(child.state, "•")
-                lines.append(f"{icon} {_who(child)} · {_elapsed(child, now)}")
+                quoted.append(f"{icon} {_who(child)} · {_elapsed(child, now)}")
             continue
         if shown >= _MAX_ACTIVE_LINES:
             continue
         shown += 1
-        lines.append(f"▸ {_who(child)} — {_doing(child, now)}")
+        quoted.append(f"▸ {_who(child)} — {_doing(child, now)}")
     hidden = len(active) - shown
     if hidden > 0:
-        lines.append(f"+{hidden} more running")
-    return "\n".join(lines)
+        quoted.append(f"+{hidden} more running")
+    return "\n".join([" · ".join(head)] + _quote(quoted))
+
+
+_PLAIN_MARKER_RE = re.compile(r"(?im)^\s*[*_#>\s]*plain summary\s*[*_]*\s*:\s*[*_]*\s*")
+_PATH_RE = re.compile(r"(?:[\w.-]+/)+([\w.-]+)")
+_CODE_REF_RE = re.compile(r"(:\d+(?:-\d+)?)\b")
+_MD_NOISE_RE = re.compile(r"\*\*|__|`+|^\s*#+\s*|^\s*[-•*]\s+|^\s*\d+\.\s+", re.MULTILINE)
+_CODE_SPAN_RE = re.compile(r"`[^`]*`\s*")
+_EMPTY_PARENS_RE = re.compile(r"\s*\(\s*[,;:]?\s*\)")
+PLAIN_SUMMARY_MAX = 320
+
+
+def plain_summary(text: Any, limit: int = PLAIN_SUMMARY_MAX) -> str:
+    """A short plain-English paragraph for the chat summary.
+
+    Prefers the worker's own ``Plain summary:`` paragraph (subagents are asked
+    to end with one). Otherwise falls back to the first sentences of the
+    answer with markdown, paths and line refs stripped. Always redacted.
+    """
+    raw = _redact(str(text or ""))
+    marker = None
+    for marker in _PLAIN_MARKER_RE.finditer(raw):
+        pass
+    if marker is not None:
+        raw = raw[marker.end():]
+    else:
+        # Drop headings and bullets; keep the prose.
+        raw = "\n".join(
+            ln for ln in raw.splitlines()
+            if ln.strip() and not ln.lstrip().startswith(("#", "|", "```"))
+        )
+    if marker is None:
+        # Fallback prose: code spans are identifiers, not plain English.
+        raw = _CODE_SPAN_RE.sub("", raw)
+    text = _MD_NOISE_RE.sub("", raw)
+    text = _PATH_RE.sub(lambda m: m.group(1), text)
+    text = _CODE_REF_RE.sub("", text)
+    text = _EMPTY_PARENS_RE.sub("", text)
+    text = " ".join(text.split()).replace("`", "'")
+    if marker is None:
+        # Removing code spans can leave broken sentences ("X clears , so");
+        # keep only sentences that still read as prose.
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+        clean = [s for s in sentences if not re.search(r"\s[,;:.]|^[a-z,;:]", s)]
+        text = " ".join(clean or sentences[:1])
+    if len(text) <= limit:
+        return text
+    # Cut on a sentence boundary when one is close enough.
+    cut = text[:limit]
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    if end >= limit // 2:
+        return cut[: end + 1]
+    return _truncate_words(text, limit)
+
+
+def _quote(lines: List[str]) -> List[str]:
+    """Blockquote: renders as a side-barred block on Telegram/Discord/Slack,
+    setting subagent output apart from the main chat."""
+    return [f"> {ln}" for ln in lines if ln]
 
 
 def _final_body(child: ChildActivity, limit: int) -> str:
     if child.state == "completed":
-        return sanitize_text(child.summary or "", limit)
+        return _truncate_words(child.summary or "", limit)
     if child.state == "cancelled":
         return f"stopped: {child.reason}" if child.reason else "stopped before finishing"
     return f"failed: {child.reason}" if child.reason else "failed"
@@ -939,26 +996,27 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
             p for p in (f"{icon} Subagent {verb}", pretty_model(child.model),
                         _elapsed(child, now), _tool_count(child)) if p
         )
-        lines = [head, _truncate_words(child.title, _TITLE_MAX)]
+        quoted = [_truncate_words(child.title, _TITLE_MAX)]
         body = _final_body(child, _FINAL_SUMMARY_SINGLE)
         if body:
-            lines.append(body)
+            quoted.append(body)
         if child.files_written:
-            lines.append("📄 " + ", ".join(child.files_written[:4])
-                         + (f" +{len(child.files_written) - 4}" if len(child.files_written) > 4 else ""))
-        return "\n".join(lines)
+            quoted.append("📄 " + ", ".join(child.files_written[:4])
+                          + (f" +{len(child.files_written) - 4}" if len(child.files_written) > 4 else ""))
+        return "\n".join([head] + _quote(quoted))
     end = max((c.ended_at or now) for c in children)
     counts = _state_counts(children)
     lines = [" · ".join(p for p in (f"🔀 {len(children)} subagents finished", counts,
                                      format_duration(end - group.created_at)) if p)]
+    quoted: List[str] = []
     for child in children:
         icon = _ICONS.get(child.state, "•")
         meta = " · ".join(p for p in (_who(child), _elapsed(child, now), _tool_count(child)) if p)
-        lines.append(f"{icon} {meta}")
+        quoted.append(f"{icon} {meta}")
         body = _final_body(child, _FINAL_SUMMARY_MULTI)
         if body:
-            lines.append(f"   ↳ {body}")
-    return "\n".join(lines)
+            quoted.append(f"↳ {body}")
+    return "\n".join(lines + _quote(quoted))
 
 
 def _state_counts(children: List[ChildActivity]) -> str:
