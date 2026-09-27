@@ -757,6 +757,31 @@ def _missing_api_key_toolsets_for_summary(unavailable: list[dict]) -> list[dict]
     ]
 
 
+# The same repair `clover update` performs for the venv (`uv pip install
+# -e .[all]`, or the pip fallback). Shared by the core-runtime-dependency
+# import probe and the version-consistency repair below so both point users
+# (and --fix) at one exact, correct command.
+_DEPENDENCY_SYNC_HINT = (
+    "Run 'clover update' to resync Python dependencies "
+    "(same dependency install the updater uses)"
+)
+
+# Load-bearing packages the agent core imports before it can do anything
+# useful (secret scope / credential handling, retry logic, process
+# introspection, TLS trust) but that the "Required Packages" check above
+# never covered. A missing one here means the *editable install's declared
+# dependencies* have drifted from what's actually on disk — the fix is a
+# dependency resync, not a one-off `pip install <pkg>` (which would fetch an
+# unpinned version instead of the combination pyproject.toml pins).
+_CORE_RUNTIME_MODULES = [
+    ("pydantic", "Pydantic"),
+    ("cryptography", "cryptography"),
+    ("tenacity", "Tenacity"),
+    ("psutil", "psutil"),
+    ("certifi", "certifi"),
+]
+
+
 def _read_pyproject_version() -> str | None:
     """Read the ``version = "..."`` from ``pyproject.toml`` at the project root.
 
@@ -1539,6 +1564,14 @@ def run_doctor(args):
             check_ok(name, "(optional)")
         except ImportError:
             check_warn(name, "(optional, not installed)")
+
+    _section("Core Runtime Dependencies")
+    for module, name in _CORE_RUNTIME_MODULES:
+        try:
+            __import__(module)
+            check_ok(name)
+        except ImportError:
+            _fail_and_issue(name, "(missing)", _DEPENDENCY_SYNC_HINT, issues)
     
     _section("Configuration Files")
     # Managed scope (administrator-pinned config/env), when present.
