@@ -359,6 +359,41 @@ class FinalizingCleanupAdapter(CleanupCaptureAdapter):
         return await super().edit_message(chat_id, message_id, content)
 
 
+@pytest.mark.asyncio
+async def test_slack_cleanup_progress_on_by_default_without_config(monkeypatch, tmp_path):
+    """Slack's Bolt adapter really implements both edit_message
+    (chat.update) and delete_message (chat.delete), so cleanup_progress is
+    on by default there too — no explicit config.yaml override needed."""
+    adapter = FinalizingCleanupAdapter(platform=Platform.SLACK)
+    runner = _make_runner(adapter)
+    gateway_run = _install_fakes(monkeypatch, ProgressAgent, cleanup_on=False)
+    monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
+
+    source = SessionSource(platform=Platform.SLACK, chat_id="C1")
+    session_key = "agent:main:slack:channel:C1"
+
+    result = await runner._run_agent(
+        message="hello",
+        context_prompt="",
+        history=[],
+        source=source,
+        session_id="sess-slack-default-cleanup",
+        session_key=session_key,
+    )
+    assert result["final_response"] == "done"
+    cb = adapter.pop_post_delivery_callback(session_key)
+    assert callable(cb)
+    await _fire_post_delivery_cb(cb)
+    for _ in range(20):
+        await asyncio.sleep(0.01)
+        if any("tool call" in e["content"] for e in adapter.edits):
+            break
+
+    assert any("tool call" in e["content"] for e in adapter.edits), (
+        "Slack's progress bubbles must collapse into a summary card by default"
+    )
+
+
 class QueuesFollowUpAgent(ProgressAgent):
     """First run emits tool progress, then a follow-up lands in the queue
     (the shape of an async delegation result arriving mid-turn). The
