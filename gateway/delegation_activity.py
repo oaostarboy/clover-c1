@@ -51,6 +51,23 @@ DEFAULT_MAX_FINAL_DEFER = 1800.0
 # Combined turn card: a result finished during the turn waits for the turn's
 # card to absorb it; this caps the wait if the turn never produces a card.
 COMBINED_MAX_FINAL_DEFER = 120.0
+# A background worker that finishes AFTER its turn ended waits this long in
+# the chat's inbox for the next turn (usually the completion wake-up) to fold
+# it into that turn's card. Unclaimed, it posts on its own.
+INBOX_GRACE_SECONDS = 90.0
+
+# (adapter id, chat id) -> finished groups waiting for the next turn's card.
+_INBOX: Dict[Tuple[int, str], List[Tuple["DelegationActivityPublisher", str]]] = {}
+_INBOX_LOCK = threading.Lock()
+
+
+def _inbox_key(adapter: Any, chat_id: Any) -> Tuple[int, str]:
+    return (id(adapter), str(chat_id))
+
+
+def inbox_pending(adapter: Any, chat_id: Any) -> int:
+    with _INBOX_LOCK:
+        return len(_INBOX.get(_inbox_key(adapter, chat_id), ()))
 _SUMMARY_POLL_SECONDS = 2.0
 _MAX_ALERTS_PER_GROUP = 12
 # Stop heartbeat refreshes for a group that has produced no event for this
@@ -103,6 +120,9 @@ class _CardState:
     summary_released: bool = False
     summary_waiting: bool = False
     summary_deadline: float = float("inf")
+    # Combined mode: finished after its turn; parked for the next turn card.
+    in_inbox: bool = False
+    inbox_expired: bool = False
 
 
 class DelegationActivityPublisher:
@@ -151,6 +171,9 @@ class DelegationActivityPublisher:
         # held (shown in place on the live card).
         self._combined = bool(combined)
         self._turn_over = False
+        # Results from EARLIER turns in this chat, claimed at this turn's
+        # start so they fold into this turn's card.
+        self._adopted: List[Tuple["DelegationActivityPublisher", str]] = []
         if self._combined:
             is_parent_busy = lambda: not self._turn_over  # noqa: E731
             max_final_defer = min(max_final_defer, COMBINED_MAX_FINAL_DEFER)
@@ -368,11 +391,22 @@ class DelegationActivityPublisher:
         summarised so no separate summary message is ever posted for them;
         the caller deletes the returned live cards.
         """
+        adopted_children: List[Any] = []
+        ids: List[str] = []
+        adopted, self._adopted = self._adopted, []
+        for pub, agid in adopted:
+            kids, kid_ids = pub._absorb_groups([agid])
+            adopted_children.extend(kids)
+            ids.extend(kid_ids)
+        own, own_ids = self._absorb_groups(None)
+        return adopted_children + own, ids + own_ids
+
+    def _absorb_groups(self, only: Optional[List[str]]) -> Tuple[List[Any], List[str]]:
         gids: List[str] = []
         ids: List[str] = []
         status_ids = getattr(self._adapter, "_status_message_ids", None)
         with self._state_lock:
-            for gid in self.tracker.group_ids():
+            for gid in (only if only is not None else self.tracker.group_ids()):
                 if not self.tracker.group_finished(gid):
                     continue
                 card = self._cards.setdefault(gid, _CardState())
@@ -389,14 +423,71 @@ class DelegationActivityPublisher:
                     ids.append(str(mid))
         return self.tracker.children_for(gids), ids
 
+    def _park_in_inbox(self, gid: str, card: _CardState) -> None:
+        """Finished after this turn ended: wait for the next turn's card."""
+        with self._state_lock:
+            card.in_inbox = True
+        with _INBOX_LOCK:
+            _INBOX.setdefault(_inbox_key(self._adapter, self._chat_id), []).append((self, gid))
+        try:
+            self._loop.call_later(INBOX_GRACE_SECONDS, self._expire_inbox, gid)
+        except RuntimeError:
+            self._expire_inbox(gid)
+
+    def _expire_inbox(self, gid: str) -> None:
+        """Nobody claimed it in time (or the claiming turn failed): post it
+        on its own, as before."""
+        key = _inbox_key(self._adapter, self._chat_id)
+        with _INBOX_LOCK:
+            entries = _INBOX.get(key, [])
+            if (self, gid) in entries:
+                entries.remove((self, gid))
+                if not entries:
+                    _INBOX.pop(key, None)
+        with self._state_lock:
+            card = self._cards.get(gid)
+            if card is None or card.summary_posted:
+                return
+            card.inbox_expired = True
+            card.dirty = True
+        self._schedule()
+
+    def adopt_inbox(self) -> int:
+        """At turn start: claim results that finished after earlier turns in
+        this chat, so this turn's card shows them. Returns how many groups."""
+        if not self._combined:
+            return 0
+        with _INBOX_LOCK:
+            claimed = _INBOX.pop(_inbox_key(self._adapter, self._chat_id), [])
+        self._adopted.extend(claimed)
+        return len(claimed)
+
+    def adopted_preview(self) -> Tuple[int, List[str]]:
+        """``(worker count, rows)`` of adopted results, for the carrier card."""
+        from agent.delegation_activity import turn_card_body
+
+        children: List[Any] = []
+        for pub, gid in self._adopted:
+            children.extend(pub.tracker.children_for([gid]))
+        return len(children), turn_card_body(children, self._clock())
+
     def end_turn(self) -> None:
         """The parent turn is over: anything still held posts on its own."""
         if self._turn_over:
             return
         self._turn_over = True
+        # Adopted results this turn never showed (failed turn, no card):
+        # post them on their own now rather than lose them.
+        leftovers, self._adopted = self._adopted, []
+        for pub, gid in leftovers:
+            pub._expire_inbox(gid)
         with self._state_lock:
             waiting = [g for g, c in self._cards.items()
                        if c.summary_waiting and not c.summary_posted]
+            for g in waiting:
+                # Finished DURING this turn but no card took it (a turn with
+                # no progress bubbles): post now, don't wait for a next turn.
+                self._cards[g].inbox_expired = True
         for gid in waiting:
             self._release_summary(gid)
 
@@ -575,6 +666,10 @@ class DelegationActivityPublisher:
                                 card.last_text = held
                     except Exception:
                         logger.debug("held summary edit failed", exc_info=True)
+            return
+        if self._combined and self._turn_over and not card.inbox_expired:
+            if not card.in_inbox:
+                self._park_in_inbox(gid, card)
             return
         text = self._render(gid)
         if not text:

@@ -1564,7 +1564,11 @@ async def test_combined_mode_holds_results_for_the_turn_card(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_combined_mode_posts_late_results_on_their_own(monkeypatch):
-    """A worker that finishes after the turn ended still gets its card."""
+    """A worker that finishes after the turn ended still gets its card
+    (after the inbox grace, when no later turn claims it)."""
+    import gateway.delegation_activity as da
+
+    monkeypatch.setattr(da, "INBOX_GRACE_SECONDS", 0.01)
     pub, adapter = _combined_pub(monkeypatch)
     runner = _turn_runner(pub)
     a = _child_cb(runner)
@@ -1573,6 +1577,8 @@ async def test_combined_mode_posts_late_results_on_their_own(monkeypatch):
     pub.absorb_finished()  # turn card built while the worker still runs
     pub.end_turn()
     a("subagent.complete", status="completed", summary="Plain summary: Late.", duration_seconds=2)
+    await pub.drain()
+    await asyncio.sleep(0.05)
     await pub.drain()
     assert len(adapter.sends) == 1 and "Late." in adapter.summary()
     await pub.aclose()
@@ -1602,3 +1608,87 @@ def test_ran_out_of_steps_is_hourglass_not_red_x():
     head = card.splitlines()[0]
     assert head.startswith("⏳ 2 subagents · 1 done · 1 unfinished"), head
     assert "❌" not in card and "ran out of steps" in card
+
+
+
+@pytest.mark.asyncio
+async def test_background_result_folds_into_the_next_turns_card(monkeypatch):
+    """A worker launched in turn 1 finishes after turn 1 ended. Its result
+    waits in the chat inbox; turn 2 (the completion wake-up) claims it, so
+    it shows inside turn 2's card instead of as a second, separate card."""
+    import gateway.delegation_activity as da
+
+    pub1, adapter = _combined_pub(monkeypatch)
+    a = _child_cb(_turn_runner(pub1))
+    a("subagent.start", preview="g")
+    await pub1.drain()
+    pub1.absorb_finished()
+    pub1.end_turn()  # turn 1 over, worker still running
+    a("subagent.complete", status="completed", summary="Plain summary: Late result.", duration_seconds=5)
+    await pub1.drain()
+    assert adapter.sends == [], "parked for the next turn, not posted"
+    assert da.inbox_pending(adapter, "chat-A") == 1
+
+    pub2 = da.DelegationActivityPublisher(
+        adapter=adapter, chat_id="chat-A", loop=asyncio.get_running_loop(),
+        expandable=True, combined=True,
+    )
+    assert pub2.adopt_inbox() == 1
+    count, rows = pub2.adopted_preview()
+    assert count == 1 and any("Late result." in r for r in rows)
+    workers, ids = pub2.absorb_finished()
+    assert [w.summary for w in workers] == ["Late result."]
+    assert ids, "turn 1's live card is removed by turn 2's card"
+    pub2.end_turn()
+    await pub1.drain()
+    await pub2.drain()
+    assert adapter.sends == [], "shown once, inside turn 2's card"
+    await pub1.aclose()
+    await pub2.aclose()
+
+
+@pytest.mark.asyncio
+async def test_unclaimed_background_result_still_posts(monkeypatch):
+    """No next turn claims it: after the grace period it posts on its own."""
+    import gateway.delegation_activity as da
+
+    monkeypatch.setattr(da, "INBOX_GRACE_SECONDS", 0.01)
+    pub, adapter = _combined_pub(monkeypatch)
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    pub.absorb_finished()
+    pub.end_turn()
+    a("subagent.complete", status="completed", summary="Plain summary: Nobody came.", duration_seconds=5)
+    await pub.drain()
+    await asyncio.sleep(0.05)
+    await pub.drain()
+    assert len(adapter.sends) == 1 and "Nobody came." in adapter.summary()
+    assert da.inbox_pending(adapter, "chat-A") == 0
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_claiming_turn_without_a_card_hands_results_back(monkeypatch):
+    """The claiming turn ends without building a card (failed/plain turn):
+    the adopted result posts on its own instead of vanishing."""
+    import gateway.delegation_activity as da
+
+    pub1, adapter = _combined_pub(monkeypatch)
+    a = _child_cb(_turn_runner(pub1))
+    a("subagent.start", preview="g")
+    await pub1.drain()
+    pub1.absorb_finished()
+    pub1.end_turn()
+    a("subagent.complete", status="completed", summary="Plain summary: Keep me.", duration_seconds=5)
+    await pub1.drain()
+    pub2 = da.DelegationActivityPublisher(
+        adapter=adapter, chat_id="chat-A", loop=asyncio.get_running_loop(),
+        expandable=True, combined=True,
+    )
+    pub2.adopt_inbox()
+    pub2.end_turn()  # no absorb_finished: no card this turn
+    await pub1.drain()
+    assert len(adapter.sends) == 1 and "Keep me." in adapter.summary()
+    await pub1.aclose()
+    await pub2.aclose()
