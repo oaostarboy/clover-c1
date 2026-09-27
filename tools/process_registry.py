@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shlex
 import signal
 import subprocess
@@ -63,6 +64,11 @@ MAX_OUTPUT_CHARS = 200_000      # 200KB rolling output buffer
 FINISHED_TTL_SECONDS = 1800     # Keep finished processes for 30 minutes
 MAX_PROCESSES = 64              # Max concurrent tracked processes (LRU pruning)
 MAX_ACTIVE_PROCESS_AGE = 86400  # 24h default — see session_reset.bg_process_max_age_hours (#29177)
+
+# Trailing sentinel emitted by the env-poller probe script: `<log size>_<alive 0|1>`.
+# Anchored at the end of the probe output so we can split real log bytes from
+# the status payload in a single round trip (see _env_poller_loop).
+_ENV_POLL_MARKER_RE = re.compile(r"__CLOVER_POLL_(\d+)_([01])__\s*\Z")
 
 # Watch pattern rate limiting — PER SESSION.
 # Hard rule: at most ONE watch-match notification every WATCH_MIN_INTERVAL_SECONDS.
@@ -1524,50 +1530,97 @@ class ProcessRegistry:
     def _env_poller_loop(
         self, session: ProcessSession, env: Any, log_path: str, pid_path: str, exit_path: str
     ):
-        """Background thread: poll a sandbox log file for non-local backends."""
+        """Background thread: poll a sandbox log file for non-local backends.
+
+        Normally issues ONE env.execute() per tick: a small POSIX probe that
+        reports the log's current byte size, tails only the bytes appended
+        since the last tick, and reports liveness -- all in one round trip
+        (see _ENV_POLL_MARKER_RE). Falls back to the old whole-log read +
+        separate `kill -0` call for backends whose `tail` doesn't support
+        `-c +N` (e.g. minimal BusyBox images), detected when the probe's
+        trailing marker doesn't come back.
+        """
         quoted_log_path = shlex.quote(log_path)
         quoted_pid_path = shlex.quote(pid_path)
         quoted_exit_path = shlex.quote(exit_path)
-        prev_output_len = 0  # track delta for watch pattern scanning
+        probe_script = (
+            'SZ=$(wc -c <"$1" 2>/dev/null||echo 0); '
+            '[ "$SZ" -gt "$2" ] && tail -c +"$(($2+1))" "$1" 2>/dev/null; '
+            'printf "\\n__CLOVER_POLL_%s_%s__" "$SZ" '
+            '"$(kill -0 "$(cat "$3" 2>/dev/null)" 2>/dev/null && echo 1||echo 0)"'
+        )
+        quoted_probe_script = shlex.quote(probe_script)
+        offset = 0  # bytes of the log already consumed
+        use_full_read_fallback = False
+
+        def _mark_exited():
+            exit_result = env.execute(f"cat {quoted_exit_path} 2>/dev/null", timeout=5)
+            exit_str = exit_result.get("output", "").strip()
+            try:
+                session.exit_code = int(exit_str.splitlines()[-1].strip())
+            except (ValueError, IndexError):
+                session.exit_code = -1
+            session.exited = True
+            if session.completion_reason != "killed":
+                session.completion_reason = "exited"
+            self._move_to_finished(session)
+
+        def _emit_delta(delta: str):
+            if not delta:
+                return
+            with session._lock:
+                session.output_buffer += delta
+                if len(session.output_buffer) > session.max_output_chars:
+                    session.output_buffer = session.output_buffer[-session.max_output_chars:]
+            self._check_watch_patterns(session, delta)
+            self._emit_output(session, delta)
+
         while not session.exited:
             time.sleep(2)  # Poll every 2 seconds
             try:
-                # Read new output from the log file
-                result = env.execute(f"cat {quoted_log_path} 2>/dev/null", timeout=10)
-                new_output = result.get("output", "")
-                if new_output:
-                    # Compute delta for watch pattern scanning
-                    delta = new_output[prev_output_len:] if len(new_output) > prev_output_len else ""
-                    prev_output_len = len(new_output)
-                    with session._lock:
-                        session.output_buffer = new_output
-                        if len(session.output_buffer) > session.max_output_chars:
-                            session.output_buffer = session.output_buffer[-session.max_output_chars:]
-                    if delta:
-                        self._check_watch_patterns(session, delta)
-                        self._emit_output(session, delta)
+                if use_full_read_fallback:
+                    result = env.execute(f"cat {quoted_log_path} 2>/dev/null", timeout=10)
+                    full_output = result.get("output", "")
+                    delta = full_output[offset:] if len(full_output) > offset else ""
+                    offset = len(full_output)
+                    _emit_delta(delta)
 
-                # Check if process is still running
-                check = env.execute(
-                    f"kill -0 \"$(cat {quoted_pid_path} 2>/dev/null)\" 2>/dev/null; echo $?",
-                    timeout=5,
-                )
-                check_output = check.get("output", "").strip()
-                if check_output and check_output.splitlines()[-1].strip() != "0":
-                    # Process has exited -- get exit code captured by the wrapper shell.
-                    exit_result = env.execute(
-                        f"cat {quoted_exit_path} 2>/dev/null",
+                    check = env.execute(
+                        f"kill -0 \"$(cat {quoted_pid_path} 2>/dev/null)\" 2>/dev/null; echo $?",
                         timeout=5,
                     )
-                    exit_str = exit_result.get("output", "").strip()
-                    try:
-                        session.exit_code = int(exit_str.splitlines()[-1].strip())
-                    except (ValueError, IndexError):
-                        session.exit_code = -1
-                    session.exited = True
-                    if session.completion_reason != "killed":
-                        session.completion_reason = "exited"
-                    self._move_to_finished(session)
+                    check_output = check.get("output", "").strip()
+                    if check_output and check_output.splitlines()[-1].strip() != "0":
+                        _mark_exited()
+                        return
+                    continue
+
+                probe_command = "sh -c {} _ {} {} {}".format(
+                    quoted_probe_script, quoted_log_path, offset, quoted_pid_path
+                )
+                result = env.execute(probe_command, timeout=10)
+                raw = result.get("output", "")
+                match = _ENV_POLL_MARKER_RE.search(raw)
+                if not match:
+                    # Backend can't run the combined probe (e.g. BusyBox
+                    # `tail` without `-c +N`). Fall back for the rest of
+                    # this job's polling.
+                    use_full_read_fallback = True
+                    continue
+
+                new_size = int(match.group(1))
+                alive = match.group(2) == "1"
+                chunk = raw[: match.start()]
+                if chunk.endswith("\n"):
+                    # Drop the separator newline the probe always emits
+                    # before the marker -- not part of the log's own bytes.
+                    chunk = chunk[:-1]
+
+                offset = new_size if new_size >= offset else 0
+                _emit_delta(chunk)
+
+                if not alive:
+                    _mark_exited()
                     return
 
             except Exception:
