@@ -6267,6 +6267,19 @@ def _guard_official_docker_root_gateway() -> None:
     sys.exit(1)
 
 
+def _import_start_gateway():
+    """Import ``gateway.run.start_gateway``, isolated for testability.
+
+    Split out so ``run_gateway`` can wrap just this import in a narrow
+    try/except: ``gateway.run`` pulls in the full model_tools/plugin
+    discovery chain, and a missing dependency anywhere in that chain
+    surfaces here as ImportError/ModuleNotFoundError.
+    """
+    from gateway.run import start_gateway
+
+    return start_gateway
+
+
 def run_gateway(verbose: int = 0, quiet: bool = False, replace: bool = False, force: bool = False):
     """Run the gateway in foreground.
 
@@ -6345,7 +6358,13 @@ def run_gateway(verbose: int = 0, quiet: bool = False, replace: bool = False, fo
         except Exception:
             pass  # best-effort; don't block gateway startup
 
-    from gateway.run import start_gateway
+    try:
+        start_gateway = _import_start_gateway()
+    except (ImportError, ModuleNotFoundError) as exc:
+        missing = getattr(exc, "name", None) or str(exc)
+        print_error(f"Gateway failed to start: missing dependency '{missing}'.")
+        print("  Fix with: clover update  (or re-run the installer: scripts/install.sh / scripts/install.ps1)")
+        sys.exit(1)
 
     print("┌─────────────────────────────────────────────────────────┐")
     print("│           ☘ Clover Gateway Starting...                 │")
