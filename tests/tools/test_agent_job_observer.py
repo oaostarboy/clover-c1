@@ -159,7 +159,7 @@ async def test_two_concurrent_external_workers_attributed_and_redacted(hermetic_
     assert len(adapter.sends) == 1
     final = adapter.summary()
     assert "Found the lock race" in final and "Fixed DST catchup" in final
-    assert "finished" in final
+    assert final.startswith("✅ 2 subagents ·") and "🛠 3 tool calls (1 failed)" in final
     # One live card for the job group, removed once the summary lands.
     assert {c["key"] for c in adapter.status_calls} == {f"delegation:{group_id}"}
     assert adapter.deleted

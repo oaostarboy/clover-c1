@@ -884,22 +884,39 @@ def _tool_count(child: ChildActivity) -> str:
     return text
 
 
+def _calls(child: ChildActivity, *, live: bool) -> int:
+    return child.tools_ok + child.tools_failed + (len(child.open_tools) if live else 0)
+
+
+def _stats_head(icon: str, label: str, calls: int, elapsed: str, failed: int = 0) -> str:
+    """Header in the same shape as the main agent's turn card:
+    ``🔀 Opus 5.5 · 🛠 2 tool calls · ⏱ 22s``."""
+    parts = [f"{icon} {label}".strip()]
+    if calls:
+        tools = f"🛠 {calls} tool call{'s' if calls != 1 else ''}"
+        if failed:
+            tools += f" ({failed} failed)"
+        parts.append(tools)
+    if elapsed:
+        parts.append(f"⏱ {elapsed}")
+    return " · ".join(parts)
+
+
 def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
     children = group.ordered()
     active = [c for c in children if c.state in _ACTIVE_STATES or c.state == "queued"]
     elapsed = format_duration(now - group.created_at)
     if len(children) == 1:
         child = children[0]
-        head = " · ".join(p for p in ("🔀 Subagent", pretty_model(child.model), elapsed) if p)
+        head = _stats_head("🔀", pretty_model(child.model) or "Subagent",
+                           _calls(child, live=True), elapsed)
         quoted = [_truncate_words(child.title, _TITLE_MAX), _doing(child, now)]
         if child.note and child.open_tools and child.visibility != "lifecycle":
             quoted.append(f"💬 {child.note}")
         return "\n".join([head] + _quote(quoted))
     done = sum(1 for c in children if c.state == "completed")
-    head = [f"🔀 {len(children)} subagents"]
-    if done:
-        head.append(f"{done} done")
-    head.append(elapsed)
+    label = f"{len(children)} subagents" + (f" · {done} done" if done else "")
+    head = _stats_head("🔀", label, sum(_calls(c, live=True) for c in children), elapsed)
     quoted: List[str] = []
     shown = 0
     for child in children:
@@ -917,12 +934,19 @@ def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
     hidden = len(active) - shown
     if hidden > 0:
         quoted.append(f"+{hidden} more running")
-    return "\n".join([" · ".join(head)] + _quote(quoted))
+    return "\n".join([head] + _quote(quoted))
 
 
-_PLAIN_MARKER_RE = re.compile(r"(?im)^\s*[*_#>\s]*plain summary\s*[*_]*\s*:\s*[*_]*\s*")
-_PATH_RE = re.compile(r"(?:[\w.-]+/)+([\w.-]+)")
-_CODE_REF_RE = re.compile(r"(:\d+(?:-\d+)?)\b")
+_PLAIN_MARKER_RE = re.compile(r"(?im)^\s*[*_#\s]*plain summary\s*[*_]*\s*:\s*[*_]*\s*")
+# Real path shapes only: a segment with a dot/underscore or a leading ~ . /,
+# never URLs, dates (2026/09/27), ratios (24/7) or words (and/or).
+_URL_RE = re.compile(r"\bhttps?://\S+")
+_PATH_RE = re.compile(
+    r"(?<![\w/:])(?:~|\.{1,2})?/?(?:[\w.-]+/)+([\w-]+\.[A-Za-z0-9]{1,8})\b"
+)
+# ":123" / ":12-40" only right after a filename.
+_CODE_REF_RE = re.compile(r"(\.[A-Za-z][A-Za-z0-9]{0,7}):\d+(?:-\d+)?\b")
+_FENCE_RE = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
 _MD_NOISE_RE = re.compile(r"\*\*|__|`+|^\s*#+\s*|^\s*[-•*]\s+|^\s*\d+\.\s+", re.MULTILINE)
 _CODE_SPAN_RE = re.compile(r"`[^`]*`\s*")
 _EMPTY_PARENS_RE = re.compile(r"\s*\(\s*[,;:]?\s*\)")
@@ -937,30 +961,55 @@ def plain_summary(text: Any, limit: int = PLAIN_SUMMARY_MAX) -> str:
     answer with markdown, paths and line refs stripped. Always redacted.
     """
     raw = _redact(str(text or ""))
+    # Code blocks are never prose, and a "Plain summary:" quoted inside one
+    # (tool output, a file being reviewed) is not the worker's own.
+    raw = _FENCE_RE.sub("\n", raw)
     marker = None
-    for marker in _PLAIN_MARKER_RE.finditer(raw):
-        pass
+    for candidate in _PLAIN_MARKER_RE.finditer(raw):
+        line_start = raw.rfind("\n", 0, candidate.start()) + 1
+        if raw[line_start:candidate.start()].lstrip().startswith(">"):
+            continue  # quoted, not the worker's own
+        marker = candidate
     if marker is not None:
-        raw = raw[marker.end():]
-    else:
-        # Drop headings and bullets; keep the prose.
-        raw = "\n".join(
-            ln for ln in raw.splitlines()
-            if ln.strip() and not ln.lstrip().startswith(("#", "|", "```"))
-        )
+        # Just that paragraph: stop at the first blank line.
+        para = re.split(r"\n\s*\n", raw[marker.end():].strip(), maxsplit=1)[0]
+        if para.strip():
+            raw = para
+        else:
+            marker = None
+    if marker is None:
+        # Keep prose; a bullet item becomes its own sentence.
+        kept = []
+        for ln in raw.splitlines():
+            s = ln.strip()
+            if not s or s.startswith(("#", "|", ">")):
+                continue
+            if re.match(r"^([-•*]|\d+\.)\s+", s) and not re.search(r"[.!?:]$", s):
+                s += "."
+            kept.append(s)
+        raw = "\n".join(kept)
     if marker is None:
         # Fallback prose: code spans are identifiers, not plain English.
         raw = _CODE_SPAN_RE.sub("", raw)
-    text = _MD_NOISE_RE.sub("", raw)
+    urls: List[str] = []
+
+    def _keep_url(m: "re.Match[str]") -> str:
+        urls.append(m.group(0))
+        return f"\x00{len(urls) - 1}\x00"
+
+    text = _URL_RE.sub(_keep_url, raw)
+    text = _MD_NOISE_RE.sub("", text)
     text = _PATH_RE.sub(lambda m: m.group(1), text)
-    text = _CODE_REF_RE.sub("", text)
+    text = _CODE_REF_RE.sub(r"\1", text)
+    text = re.sub(r"\x00(\d+)\x00", lambda m: urls[int(m.group(1))], text)
     text = _EMPTY_PARENS_RE.sub("", text)
     text = " ".join(text.split()).replace("`", "'")
     if marker is None:
         # Removing code spans can leave broken sentences ("X clears , so");
         # keep only sentences that still read as prose.
         sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-        clean = [s for s in sentences if not re.search(r"\s[,;:.]|^[a-z,;:]", s)]
+        # Only leftover punctuation marks a sentence broken by stripping.
+        clean = [s for s in sentences if not re.search(r"\s[,;:.]|^[,;:.]", s)]
         text = " ".join(clean or sentences[:1])
     if len(text) <= limit:
         return text
@@ -991,11 +1040,9 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
     if len(children) == 1:
         child = children[0]
         icon = _ICONS.get(child.state, "•")
-        verb = {"completed": "done", "cancelled": "stopped"}.get(child.state, "failed")
-        head = " · ".join(
-            p for p in (f"{icon} Subagent {verb}", pretty_model(child.model),
-                        _elapsed(child, now), _tool_count(child)) if p
-        )
+        head = _stats_head(icon, pretty_model(child.model) or "Subagent",
+                           _calls(child, live=False), _elapsed(child, now),
+                           child.tools_failed)
         quoted = [_truncate_words(child.title, _TITLE_MAX)]
         body = _final_body(child, _FINAL_SUMMARY_SINGLE)
         if body:
@@ -1006,12 +1053,16 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
         return "\n".join([head] + _quote(quoted))
     end = max((c.ended_at or now) for c in children)
     counts = _state_counts(children)
-    lines = [" · ".join(p for p in (f"🔀 {len(children)} subagents finished", counts,
-                                     format_duration(end - group.created_at)) if p)]
+    all_ok = all(c.state == "completed" for c in children)
+    label = f"{len(children)} subagents" + (f" · {counts}" if counts else "")
+    lines = [_stats_head("✅" if all_ok else "🔀", label,
+                         sum(_calls(c, live=False) for c in children),
+                         format_duration(end - group.created_at),
+                         sum(c.tools_failed for c in children))]
     quoted: List[str] = []
     for child in children:
         icon = _ICONS.get(child.state, "•")
-        meta = " · ".join(p for p in (_who(child), _elapsed(child, now), _tool_count(child)) if p)
+        meta = " · ".join(p for p in (_who(child), _elapsed(child, now)) if p)
         quoted.append(f"{icon} {meta}")
         body = _final_body(child, _FINAL_SUMMARY_MULTI)
         if body:
