@@ -176,6 +176,36 @@ class TestPlatformDefaults:
         assert resolve_display_setting({}, "slack", "busy_ack_detail") is False
 
 
+class TestShowReasoningDefault:
+    """Owner decision: live thoughts default ON for every user, on every
+    platform tier — not just platforms with no tier entry at all. A tier
+    dict's own ``show_reasoning`` key always wins over ``_GLOBAL_DEFAULTS``
+    in ``resolve_display_setting``, so each tier must set it explicitly."""
+
+    def test_default_true_across_every_tier(self):
+        from gateway.display_config import resolve_display_setting
+
+        for plat in (
+            "telegram", "discord",              # tier high
+            "slack", "mattermost", "matrix", "feishu",  # tier medium
+            "signal", "whatsapp", "bluebubbles", "weixin",  # tier low
+            "email", "sms", "webhook", "homeassistant",  # tier minimal
+        ):
+            assert resolve_display_setting({}, plat, "show_reasoning") is True, plat
+
+    def test_explicit_platform_false_still_wins(self):
+        from gateway.display_config import resolve_display_setting
+
+        config = {"display": {"platforms": {"discord": {"show_reasoning": False}}}}
+        assert resolve_display_setting(config, "discord", "show_reasoning") is False
+
+    def test_explicit_global_false_still_wins(self):
+        from gateway.display_config import resolve_display_setting
+
+        config = {"display": {"show_reasoning": False}}
+        assert resolve_display_setting(config, "telegram", "show_reasoning") is False
+
+
 # ---------------------------------------------------------------------------
 # Config migration: tool_progress_overrides → display.platforms
 # ---------------------------------------------------------------------------
