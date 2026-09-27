@@ -29871,6 +29871,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
             except Exception:
                 logger.debug("delegation activity publisher setup failed", exc_info=True)
+        # Combined turn card: results from background workers that finished
+        # after an EARLIER turn (e.g. the completion that woke this turn) are
+        # claimed now and fold into this turn's card. A small carrier bubble
+        # is posted first so the card lands ABOVE this turn's reply.
+        _adopted_carrier_id = None
+        if _delegation_activity is not None and getattr(_delegation_activity, "combined", False):
+            try:
+                if _delegation_activity.adopt_inbox() and _cleanup_progress and _cleanup_adapter is not None:
+                    _n_adopted, _ = _delegation_activity.adopted_preview()
+                    _carrier = await _cleanup_adapter.send(
+                        source.chat_id,
+                        f"🍀 {_n_adopted} finished",
+                        metadata=self._thread_metadata_for_source(source),
+                    )
+                    if getattr(_carrier, "success", False) and getattr(_carrier, "message_id", None):
+                        _adopted_carrier_id = str(_carrier.message_id)
+                        _cleanup_msg_ids.append(_adopted_carrier_id)
+            except Exception:
+                logger.debug("combined turn card: inbox adoption failed", exc_info=True)
 
         turn_ctx = TurnContext(
             source=source,
