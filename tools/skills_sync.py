@@ -726,6 +726,28 @@ def _recover_renamed_skill(
     return None
 
 
+def bundled_skills_dir_is_unseeded() -> bool:
+    """True when the active profile's skills dir has no bundled skill yet.
+
+    A fresh install (or a user deleting the whole ``skills/`` dir) leaves a
+    gap that only self-heals on the next CLI launch (``clover chat`` runs
+    this same check via ``_skills_dir_is_unseeded`` before syncing). A
+    gateway-only install — ``clover gateway run`` without ever running the
+    interactive CLI — never hit that check, so bundled skills silently
+    never landed (or stayed gone after a deletion). Callers should follow a
+    ``True`` result with :func:`sync_skills`, which already no-ops safely
+    when the ``--no-skills`` opt-out marker is present, so a false positive
+    here costs nothing beyond a wasted no-op scan.
+    """
+    try:
+        skills_dir = _skills_dir()
+        if not skills_dir.is_dir():
+            return True
+        return next(skills_dir.rglob("SKILL.md"), None) is None
+    except Exception:
+        return False
+
+
 def sync_skills(quiet: bool = False) -> dict:
     """
     Sync bundled skills into ~/.clover/skills/ using the manifest.

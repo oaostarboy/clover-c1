@@ -13039,6 +13039,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             self._start_loop_liveness_guards(self._gateway_loop)
         logger.info("Session storage: %s", self.config.sessions_dir)
 
+        # Reseed bundled skills if the skills/ dir is missing or empty.
+        # `clover chat` runs this same check on every CLI launch (main.py's
+        # ``_skills_dir_is_unseeded`` + ``_sync_bundled_skills_for_startup``),
+        # but a gateway-only install (``clover gateway run`` with no prior
+        # CLI launch, or a skills/ dir deleted after install) never ran it —
+        # bundled skills silently never landed. Best-effort, never raises.
+        try:
+            from tools.skills_sync import bundled_skills_dir_is_unseeded, sync_skills
+            if bundled_skills_dir_is_unseeded():
+                sync_skills(quiet=True)
+        except Exception:
+            logger.debug("Gateway bundled-skills reseed check failed", exc_info=True)
+
         # Sanity-check that systemd's TimeoutStopSec covers our drain
         # window.  When the user upgraded clover-c1 without re-running
         # ``clover setup``, their unit file may still encode the old
