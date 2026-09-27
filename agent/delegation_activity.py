@@ -357,6 +357,13 @@ class ChildActivity:
         }
 
 
+def _close_open_tools(child: "ChildActivity") -> None:
+    """A tool still running when its worker ends never finished: count it
+    as failed so the done header never shows fewer calls than the live one."""
+    child.tools_failed += len(child.open_tools)
+    child.open_tools.clear()
+
+
 def _short_model(model: str) -> str:
     text = (model or "").strip()
     if "/" in text:
@@ -643,7 +650,7 @@ class DelegationActivityTracker:
         state = _COMPLETE_STATUS.get(status, "failed")
         child.state = state
         child.ended_at = now
-        child.open_tools.clear()
+        _close_open_tools(child)
         dur = _as_float(kw.get("duration_seconds"))
         child.duration_s = dur
         if child.started_at is None:
@@ -724,7 +731,7 @@ class DelegationActivityTracker:
             child.state = "failed"
             child.reason = "worker ended without a completion report"
             child.ended_at = now
-            child.open_tools.clear()
+            _close_open_tools(child)
             self._alert(child, "failed", alerts)
             return True
         activity_age = _as_float((info or {}).get("seconds_since_activity"))
@@ -812,8 +819,8 @@ def pretty_model(model: str) -> str:
     low = text.lower()
     for prefix, family in _MODEL_NAMES:
         if low.startswith(prefix):
-            version = low[len(prefix):].split("-")
-            nums = [v for v in version if v.isdigit()]
+            parts = re.split(r"[-.]", low[len(prefix):])
+            nums = [v for v in parts if v.isdigit() and len(v) < 8]
             return f"{family} {'.'.join(nums)}" if nums else family
     if low.startswith("gpt-"):
         parts = text.split("-")
@@ -1053,9 +1060,14 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
         return "\n".join([head] + _quote(quoted))
     end = max((c.ended_at or now) for c in children)
     counts = _state_counts(children)
-    all_ok = all(c.state == "completed" for c in children)
+    if any(c.state == "failed" for c in children):
+        final_icon = "❌"
+    elif any(c.state == "cancelled" for c in children):
+        final_icon = "⏹"
+    else:
+        final_icon = "✅"
     label = f"{len(children)} subagents" + (f" · {counts}" if counts else "")
-    lines = [_stats_head("✅" if all_ok else "🔀", label,
+    lines = [_stats_head(final_icon, label,
                          sum(_calls(c, live=False) for c in children),
                          format_duration(end - group.created_at),
                          sum(c.tools_failed for c in children))]
