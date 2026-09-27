@@ -3237,6 +3237,30 @@ def run_doctor(args):
     except Exception as e:
         check_warn("Could not check tool availability", f"({e})")
     
+    _section("Bundled Skills")
+    try:
+        from tools.skills_sync import bundled_skills_dir_is_unseeded, sync_skills
+
+        if bundled_skills_dir_is_unseeded():
+            _fail_and_issue(
+                "Bundled skills directory is empty or missing",
+                f"({_DHH}/skills)",
+                "Run 'clover skills sync' to reseed bundled skills "
+                "(gateway-only installs don't do this automatically on every launch)",
+                issues,
+            )
+            if should_fix:
+                sync_skills(quiet=True)
+                if not bundled_skills_dir_is_unseeded():
+                    check_ok("Reseeded bundled skills")
+                    fixed_count += 1
+                else:
+                    check_warn("Reseed attempt did not populate any bundled skill")
+        else:
+            check_ok("Bundled skills directory populated")
+    except Exception as e:
+        check_warn("Could not check bundled skills directory", f"({e})")
+
     _section("Skills Hub")
     hub_dir = CLOVER_HOME / "skills" / ".hub"
     if hub_dir.exists():
