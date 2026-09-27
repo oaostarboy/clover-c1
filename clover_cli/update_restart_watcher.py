@@ -122,7 +122,7 @@ def _pid_alive(pid: int) -> bool:
         except Exception:
             return True  # unknown means "assume alive": never restart on a guess
     try:
-        os.kill(pid, 0)
+        os.kill(pid, 0)  # windows-footgun: ok (POSIX only; nt returns above)
     except ProcessLookupError:
         return False
     except PermissionError:
