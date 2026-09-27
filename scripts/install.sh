@@ -1921,6 +1921,10 @@ setup_path() {
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
+if [ ! -x "$CLOVER_BIN" ]; then
+    echo "clover: Python interpreter missing or broken ($CLOVER_BIN) — repair with: bash \"$INSTALL_DIR/scripts/install.sh\"" >&2
+    exit 1
+fi
 exec "$CLOVER_BIN" "$CLOVER_ENTRYPOINT" "\$@"
 EOF
     else
@@ -1944,6 +1948,10 @@ EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
+if [ ! -x "$CLOVER_BIN" ]; then
+    echo "clover-c1: Python interpreter missing or broken ($CLOVER_BIN) — repair with: bash \"$INSTALL_DIR/scripts/install.sh\"" >&2
+    exit 1
+fi
 exec "$CLOVER_BIN" "$INSTALL_DIR/run_agent.py" "\$@"
 EOF
     else
