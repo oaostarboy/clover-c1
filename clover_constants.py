@@ -327,11 +327,36 @@ def assert_named_profile_home_live(path: str | Path) -> None:
         )
 
 
+def _secure_runtime_dir(path: Path) -> None:
+    """Restrict *path* to owner-only access (0700). No-op on Windows.
+
+    Runtime-created ``CLOVER_HOME`` subdirectories (sessions, memories,
+    pairing, logs, ...) hold sensitive data — conversation history,
+    credentials, pairing tokens. A permissive process umask (e.g. 022) must
+    not leave them group/world readable. Mirrors the install-time hardening
+    in ``scripts/install.sh``'s ``copy_config_templates()`` and the
+    ``_secure_dir`` helper in ``clover_cli/config.py`` — duplicated locally
+    rather than imported because this module is documented import-safe and
+    must not depend on ``clover_cli``.
+    """
+    if sys.platform == "win32":
+        return
+    try:
+        os.chmod(path, 0o700)
+    except OSError:
+        pass
+
+
 def mkdir_under_clover_home(path: str | Path) -> Path:
-    """Create *path*, but never materialize a deleted/missing named profile."""
+    """Create *path* as an owner-only (0700) directory on POSIX.
+
+    Never materializes a deleted/missing named profile. No-op permission
+    change on Windows.
+    """
     target = Path(path)
     assert_named_profile_home_live(target)
     target.mkdir(parents=True, exist_ok=True)
+    _secure_runtime_dir(target)
     return target
 
 

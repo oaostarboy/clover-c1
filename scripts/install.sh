@@ -2107,8 +2107,42 @@ EOF
 copy_config_templates() {
     log_info "Setting up configuration files..."
 
+    # Snapshot which sensitive subdirs already exist *before* mkdir -p below,
+    # and whether they're already group/world accessible, so the chmod pass
+    # further down can log a clear "we just tightened this" message instead
+    # of silently rewriting permissions a user set on a pre-existing install.
+    local _sensitive_dirs="sessions memories pairing"
+    local _pre_existing_lax=""
+    local _d _path _mode _mode_num
+    for _d in $_sensitive_dirs; do
+        _path="$CLOVER_HOME/$_d"
+        if [ -d "$_path" ]; then
+            _mode=$(stat -c '%a' "$_path" 2>/dev/null || stat -f '%OLp' "$_path" 2>/dev/null || echo "700")
+            _mode_num=$((8#$_mode))
+            if [ $((_mode_num & 8#077)) -ne 0 ]; then
+                _pre_existing_lax="$_pre_existing_lax $_d"
+            fi
+        fi
+    done
+
     # Create ~/.clover directory structure (config at top level, code in subdir)
     mkdir -p "$CLOVER_HOME"/{cron,sessions,logs,pairing,hooks,image_cache,audio_cache,memories,skills}
+
+    # $CLOVER_HOME and everything under it can hold sensitive data
+    # (conversation history in sessions/, agent memories, pairing tokens) —
+    # a permissive process umask (e.g. 022) would otherwise leave freshly
+    # created dirs group/world readable. Tighten CLOVER_HOME and its
+    # subdirs to owner-only (0700); log when a pre-existing
+    # sessions/memories/pairing dir had to be tightened, so upgraders can
+    # see what changed instead of it happening silently.
+    chmod 700 "$CLOVER_HOME" \
+        "$CLOVER_HOME/cron" "$CLOVER_HOME/sessions" "$CLOVER_HOME/logs" \
+        "$CLOVER_HOME/pairing" "$CLOVER_HOME/hooks" "$CLOVER_HOME/image_cache" \
+        "$CLOVER_HOME/audio_cache" "$CLOVER_HOME/memories" "$CLOVER_HOME/skills" \
+        2>/dev/null || true
+    for _d in $_pre_existing_lax; do
+        log_warn "Tightened $CLOVER_HOME/$_d permissions to owner-only (0700) — it was group/world accessible"
+    done
 
     # Create .env at ~/.clover/.env (top level, easy to find)
     if [ ! -f "$CLOVER_HOME/.env" ]; then
