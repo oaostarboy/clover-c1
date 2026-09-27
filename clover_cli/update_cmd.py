@@ -1029,6 +1029,67 @@ def _print_curator_recent_run_notice() -> None:
     except Exception:
         pass
 
+
+def _run_post_update_safe_repairs() -> None:
+    """Best-effort SAFE ``clover doctor --fix`` repairs after a successful update.
+
+    A successful ``clover update`` is the moment abandoned git locks, an
+    unseeded ``skills/`` dir, or a drifted venv are most likely to have been
+    left behind by the update itself — but a user only ever sees them if they
+    later run ``clover doctor``. Run the same SAFE-tier checks here so the
+    common cases self-heal immediately, matching what doctor would otherwise
+    report on the very next run.
+
+    Each repair is independent and reports its own one-line result; none of
+    them may raise or otherwise fail/block the update — this function never
+    propagates an exception.
+    """
+    try:
+        from clover_cli.gitlock import clear_stale_git_locks, clear_stale_tmp_packs
+
+        cleared = clear_stale_git_locks(_m().PROJECT_ROOT)
+        swept = clear_stale_tmp_packs(_m().PROJECT_ROOT)
+        if cleared or swept:
+            print(
+                f"✓ Cleared {len(cleared)} stale git lock(s) and "
+                f"{len(swept)} aborted-fetch pack temp file(s)"
+            )
+    except Exception as e:
+        logger.debug("Post-update git lock repair failed: %s", e)
+        print(f"⚠ Post-update git lock repair failed: {e}")
+
+    try:
+        from tools.skills_sync import bundled_skills_dir_is_unseeded, sync_skills
+
+        if bundled_skills_dir_is_unseeded():
+            sync_skills(quiet=True)
+            if bundled_skills_dir_is_unseeded():
+                print("⚠ Bundled skills directory is still empty after reseed attempt")
+            else:
+                print("✓ Reseeded bundled skills")
+    except Exception as e:
+        logger.debug("Post-update skills reseed failed: %s", e)
+        print(f"⚠ Post-update skills reseed failed: {e}")
+
+    try:
+        from clover_cli.doctor import _CORE_RUNTIME_MODULES
+
+        missing = []
+        for module, name in _CORE_RUNTIME_MODULES:
+            try:
+                __import__(module)
+            except ImportError:
+                missing.append(name)
+        if missing:
+            print(
+                "⚠ Core runtime dependencies missing after update: "
+                + ", ".join(missing)
+            )
+    except Exception as e:
+        logger.debug("Post-update core runtime import probe failed: %s", e)
+        print(f"⚠ Post-update core runtime import probe failed: {e}")
+
+
 def _format_time_ago(iso_ts: str) -> str:
     """Render an ISO timestamp as `Xh ago` / `Xd ago` / `Xm ago`. Best effort."""
     try:
@@ -2238,6 +2299,10 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
         _print_curator_recent_run_notice()
     except Exception as e:
         logger.debug("Curator recent-run notice failed: %s", e)
+    try:
+        _run_post_update_safe_repairs()
+    except Exception as e:
+        logger.debug("Post-update safe repairs failed: %s", e)
     # Don't stop a working dashboard when the Node refresh failed — see the
     # git-update path for rationale (#30271).
     _finish_dashboard_update_cleanup(node_failures)
@@ -8963,6 +9028,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _print_curator_recent_run_notice()
         except Exception as e:
             logger.debug("Curator recent-run notice failed: %s", e)
+
+        # SAFE doctor repairs (stale git locks, unseeded skills dir, missing
+        # core runtime deps) — self-heal what `clover doctor --fix` would
+        # otherwise report on the next run.
+        try:
+            _run_post_update_safe_repairs()
+        except Exception as e:
+            logger.debug("Post-update safe repairs failed: %s", e)
 
         # Repair RHEL-family root installs where /usr/local/bin isn't on PATH
         # for non-login interactive shells.  No-op on every other platform.
