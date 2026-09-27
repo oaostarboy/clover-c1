@@ -1481,6 +1481,33 @@ def run_doctor(args):
     # to older binaries stay stale (toggle shows ON while macOS re-prompts).
     check_macos_tcc_grants()
 
+    _section("Git Repository")
+    git_dir = PROJECT_ROOT / ".git"
+    if git_dir.is_dir():
+        if should_fix:
+            try:
+                from clover_cli.gitlock import clear_stale_git_locks, clear_stale_tmp_packs
+
+                # Same safety contract update_cmd uses before fetching: only
+                # locks/pack debris older than 10 minutes, and never while a
+                # git process is running (see clover_cli/gitlock.py).
+                cleared = clear_stale_git_locks(PROJECT_ROOT)
+                for lock_path in cleared:
+                    check_ok(f"Removed stale git lock: {lock_path}")
+                    fixed_count += 1
+                swept = clear_stale_tmp_packs(PROJECT_ROOT)
+                if swept:
+                    check_ok(f"Removed {len(swept)} aborted-fetch pack temp file(s)")
+                    fixed_count += 1
+                if not cleared and not swept:
+                    check_ok("No stale git locks or pack debris")
+            except Exception as e:
+                check_warn("Could not check git lock/pack debris", f"({e})")
+        else:
+            check_info("Stale git lock / pack-debris cleanup runs with `clover doctor --fix`")
+    else:
+        check_info("Not a git checkout (installed wheel) — skipping git checks")
+
     _section("SSL / CA Certificates")
     check_certificates(should_fix=should_fix, issues=manual_issues)
 
