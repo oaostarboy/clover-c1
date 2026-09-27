@@ -48,6 +48,9 @@ DEFAULT_MIN_INTERVAL = 4.0
 # Hard cap on how long a finished summary waits for a busy parent (the live
 # card already shows the result in place while it waits).
 DEFAULT_MAX_FINAL_DEFER = 1800.0
+# Combined turn card: a result finished during the turn waits for the turn's
+# card to absorb it; this caps the wait if the turn never produces a card.
+COMBINED_MAX_FINAL_DEFER = 120.0
 _SUMMARY_POLL_SECONDS = 2.0
 _MAX_ALERTS_PER_GROUP = 12
 # Stop heartbeat refreshes for a group that has produced no event for this
@@ -123,6 +126,7 @@ class DelegationActivityPublisher:
         defer_final: Optional[Callable[[Callable[[], None]], bool]] = None,
         max_final_defer: float = DEFAULT_MAX_FINAL_DEFER,
         expandable: bool = False,
+        combined: bool = False,
     ) -> None:
         self._adapter = adapter
         self._chat_id = str(chat_id)
@@ -141,6 +145,15 @@ class DelegationActivityPublisher:
         # its reply (so tool bubbles, the reply and the summary never
         # interleave). ``defer_final(release)`` registers ``release`` to run
         # after the parent's reply is delivered; returns False if it cannot.
+        # Combined mode (display.turn_card: combined): results that finish
+        # while the turn runs are folded into the turn's own summary card,
+        # so a turn is one card + one reply. Until the turn ends they are
+        # held (shown in place on the live card).
+        self._combined = bool(combined)
+        self._turn_over = False
+        if self._combined:
+            is_parent_busy = lambda: not self._turn_over  # noqa: E731
+            max_final_defer = min(max_final_defer, COMBINED_MAX_FINAL_DEFER)
         self._is_parent_busy = is_parent_busy or (lambda: False)
         self._defer_final = defer_final
         self._max_final_defer = max(0.0, float(max_final_defer))
@@ -250,12 +263,20 @@ class DelegationActivityPublisher:
             except asyncio.TimeoutError:
                 pass
 
+    def _gate(self, gid: str, card: _CardState) -> float:
+        """Earliest time this card may be sent. A finished group skips the
+        edit-rate gate (it is sent once) so its result lands before the
+        parent reacts to the same completion; server backoff still holds."""
+        if self.tracker.group_finished(gid):
+            return card.backoff_until
+        return max(card.last_attempt + self._min_interval, card.backoff_until)
+
     def _next_gate_delay(self) -> Optional[float]:
         now = self._clock()
         with self._state_lock:
             gates = [
-                max(c.last_attempt + self._min_interval, c.backoff_until) - now
-                for c in self._cards.values()
+                self._gate(gid, c) - now
+                for gid, c in self._cards.items()
                 if c.dirty and not c.suppressed
             ]
         return max(0.0, min(gates)) if gates else None
@@ -302,7 +323,7 @@ class DelegationActivityPublisher:
                     for gid, card in self._cards.items()
                     if card.dirty
                     and not card.suppressed
-                    and now >= max(card.last_attempt + self._min_interval, card.backoff_until)
+                    and now >= self._gate(gid, card)
                 ]
             for gid in due:
                 try:
@@ -333,6 +354,51 @@ class DelegationActivityPublisher:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+
+    # -- combined turn card ------------------------------------------------
+
+    @property
+    def combined(self) -> bool:
+        return self._combined
+
+    def absorb_finished(self) -> Tuple[List[Any], List[str]]:
+        """Hand every finished, not-yet-summarised group to the turn card.
+
+        Returns ``(workers, live_card_message_ids)``. The groups are marked
+        summarised so no separate summary message is ever posted for them;
+        the caller deletes the returned live cards.
+        """
+        gids: List[str] = []
+        ids: List[str] = []
+        status_ids = getattr(self._adapter, "_status_message_ids", None)
+        with self._state_lock:
+            for gid in self.tracker.group_ids():
+                if not self.tracker.group_finished(gid):
+                    continue
+                card = self._cards.setdefault(gid, _CardState())
+                if card.summary_posted:
+                    continue
+                card.summary_posted = True
+                card.dirty = False
+                gids.append(gid)
+                mid = card.message_id
+                if isinstance(status_ids, dict):
+                    key_id = status_ids.pop((self._chat_id, f"delegation:{gid}"), None)
+                    mid = mid or (str(key_id) if key_id else None)
+                if mid:
+                    ids.append(str(mid))
+        return self.tracker.children_for(gids), ids
+
+    def end_turn(self) -> None:
+        """The parent turn is over: anything still held posts on its own."""
+        if self._turn_over:
+            return
+        self._turn_over = True
+        with self._state_lock:
+            waiting = [g for g, c in self._cards.items()
+                       if c.summary_waiting and not c.summary_posted]
+        for gid in waiting:
+            self._release_summary(gid)
 
     # -- delivery ----------------------------------------------------------
 
@@ -692,6 +758,14 @@ def build_turn_publisher(
     except Exception:
         metadata = None
     probe = _combined_liveness_probe
+    is_telegram = getattr(getattr(source, "platform", None), "value", None) == "telegram"
+    cfg = user_config if isinstance(user_config, dict) else {}
+    try:
+        from gateway.display_config import resolve_display_setting
+
+        turn_card = str(resolve_display_setting(cfg, platform_key, "turn_card", "combined")).lower()
+    except Exception:
+        turn_card = "combined"
     return DelegationActivityPublisher(
         adapter=adapter,
         chat_id=source.chat_id,
@@ -702,5 +776,8 @@ def build_turn_publisher(
         liveness_probe=probe,
         # Posted as soon as the subagent finishes, so its summary sits ABOVE
         # the parent's next reply (which then needn't repeat it).
-        expandable=getattr(getattr(source, "platform", None), "value", None) == "telegram",
+        expandable=is_telegram,
+        # display.turn_card: "combined" (default) folds results into the
+        # turn's own card; "separate" restores standalone summary cards.
+        combined=is_telegram and turn_card != "separate",
     )

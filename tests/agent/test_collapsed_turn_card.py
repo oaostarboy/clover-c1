@@ -26,7 +26,8 @@ class TestCardContent:
         """The shape seen in chat: thoughts · tool calls · elapsed."""
         card = format_collapsed_turn_card(23, 35, 2033.0)
 
-        assert card == "**> 🧠 23 thoughts · 🛠 35 tool calls · ⏱ 33m53s||"
+        # Past 10 minutes the seconds are dropped so the header stays one line.
+        assert card == "**> 🧠 23 thoughts · 🛠 35 tool calls · ⏱ 33m||"
 
     def test_singular_wording(self):
         card = format_collapsed_turn_card(1, 1, 5.0)
@@ -91,8 +92,10 @@ class TestTelegramMarkupRules:
         )
         lines = card.split("\n")
 
-        assert lines[1] == "> line one still line one||"
-        assert len(lines) == 2, "blank detail lines must be dropped"
+        # Header, italic tap hint, blank fold line, then the details.
+        assert lines[1] == "> *tap to read 🍀*"
+        assert lines[3] == "> line one still line one||"
+        assert len(lines) == 4, "blank detail lines must be dropped"
 
 
 class TestTelegramRendersItRatherThanEscapingIt:
@@ -119,3 +122,20 @@ class TestTelegramRendersItRatherThanEscapingIt:
 
         assert rendered == card
         assert "\\*" not in rendered and "\\|" not in rendered
+
+
+class TestCombinedTurnCard:
+    """display.turn_card: combined -- the turn's subagents live in its card."""
+
+    def test_header_counts_workers_and_stays_one_line(self):
+        card = format_collapsed_turn_card(
+            3, 12, 125.0, detail_lines=["🍀 **Audit**", "*Sonnet 5 · 🛠 4 tool calls · ⏱ 40s*"],
+            workers=2,
+        )
+        head = card.split("\n")[0]
+        assert head == "**> 🧠 3 thoughts · 🛠 12 tool calls · 🍀 2 · ⏱ 2m05s"
+        assert "🍀 **Audit**" in card and card.endswith("||")
+
+    def test_worker_text_cannot_close_the_quote_early(self):
+        card = format_collapsed_turn_card(1, 1, 5.0, detail_lines=["a || b"], workers=1)
+        assert card.count("||") == 1

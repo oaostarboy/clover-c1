@@ -226,6 +226,7 @@ def format_collapsed_turn_card(
     tools: int,
     elapsed_seconds: float,
     detail_lines: list | None = None,
+    workers: int = 0,
 ) -> str:
     """Render the collapsed per-turn summary card.
 
@@ -241,22 +242,32 @@ def format_collapsed_turn_card(
         segments.append(f"🧠 {thoughts} thought{'s' if thoughts != 1 else ''}")
     if tools > 0:
         segments.append(f"🛠 {tools} tool call{'s' if tools != 1 else ''}")
+    if workers > 0:
+        # Combined card: this turn's subagents live inside the same card.
+        segments.append(f"🍀 {workers}")
     if not segments:
         return ""
     if elapsed_seconds >= 0:
         if elapsed_seconds < 60:
             elapsed = f"{elapsed_seconds:.0f}s"
-        else:
+        elif elapsed_seconds < 600:
             _m, _s = divmod(int(round(elapsed_seconds)), 60)
             elapsed = f"{_m}m{_s:02d}s"
+        else:
+            elapsed = f"{int(elapsed_seconds) // 60}m"
         segments.append(f"⏱ {elapsed}")
 
-    head = " · ".join(segments)
+    head = " · ".join(segments).replace("*", "")
     lines = [f"**> {head}"]
-    for _dl in (detail_lines or []):
-        _clean = str(_dl).replace("\n", " ").strip()
-        if _clean:
-            lines.append(f"> {_clean}")
+    details = [
+        str(_dl).replace("\n", " ").replace("||", "¦¦").strip()
+        for _dl in (detail_lines or [])
+    ]
+    details = [d for d in details if d]
+    if details:
+        # Same fold as the subagent cards: header, a small italic hint and a
+        # blank line fill the collapsed quote, so the cut lands on space.
+        lines += ["> *tap to read 🍀*", "> \u2800"] + [f"> {d}" for d in details]
     # The || terminator must land on the LAST line of the block.
     return "\n".join(lines) + "||"
 

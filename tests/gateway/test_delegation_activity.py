@@ -1241,7 +1241,8 @@ async def test_gateway_posts_summary_as_soon_as_the_subagent_finishes(monkeypatc
         def _thread_metadata_for_source(self, source):
             return None
 
-    pub = da.build_turn_publisher(_Runner(), _source(), {}, "telegram", lambda: True)
+    cfg = {"display": {"turn_card": "separate"}}
+    pub = da.build_turn_publisher(_Runner(), _source(), cfg, "telegram", lambda: True)
     pub._min_interval = 0.0
     runner = _turn_runner(pub)
     a = _child_cb(runner)
@@ -1386,7 +1387,7 @@ async def test_done_header_counts_tools_still_running_at_the_end():
     assert "🛠 2 tool calls" in adapter.card()
     a("subagent.complete", status="interrupted", duration_seconds=5)
     await pub.drain()
-    assert "🛠 2 tool calls (1 failed)" in adapter.summary().splitlines()[0]
+    assert "🛠 2 tool calls ·" in adapter.summary().splitlines()[0]  # one line: no "(1 failed)"
     await pub.aclose()
 
 
@@ -1515,3 +1516,89 @@ def test_collapsed_card_shows_a_subtle_tap_hint():
     card = _to_expandable("✅ 2 subagents · ⏱ 9s\n> 🍀 **A**\n> Did A.", TAP_HINT_DONE)
     lines = card.splitlines()
     assert lines[1] == "> *tap to read 🍀*" and lines[2] == "> \u2800"
+
+
+
+# -- combined turn card + unfinished workers ---------------------------------
+
+
+def _combined_pub(monkeypatch, cfg=None):
+    import gateway.delegation_activity as da
+
+    monkeypatch.setattr(da, "resolve_delegation_activity", lambda c, k: (True, 60))
+    adapter = FakeTelegramAdapter()
+
+    class _Runner:
+        def _adapter_for_source(self, source):
+            return adapter
+
+        def _thread_metadata_for_source(self, source):
+            return None
+
+    pub = da.build_turn_publisher(_Runner(), _source(), cfg or {}, "telegram", lambda: True)
+    pub._min_interval = 0.0
+    return pub, adapter
+
+
+@pytest.mark.asyncio
+async def test_combined_mode_holds_results_for_the_turn_card(monkeypatch):
+    """Default on Telegram: a worker that finishes mid-turn never posts its
+    own summary; the turn card absorbs it and its live card is removed."""
+    pub, adapter = _combined_pub(monkeypatch)
+    assert pub.combined
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    a("subagent.complete", status="completed", summary="Plain summary: All good.", duration_seconds=2)
+    await pub.drain()
+    assert adapter.sends == [], "no standalone summary while the turn runs"
+    workers, ids = pub.absorb_finished()
+    assert len(workers) == 1 and workers[0].summary == "All good."
+    assert ids, "the live card is handed over for deletion"
+    pub.end_turn()
+    await pub.drain()
+    assert adapter.sends == [], "absorbed results never post again"
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_combined_mode_posts_late_results_on_their_own(monkeypatch):
+    """A worker that finishes after the turn ended still gets its card."""
+    pub, adapter = _combined_pub(monkeypatch)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    pub.absorb_finished()  # turn card built while the worker still runs
+    pub.end_turn()
+    a("subagent.complete", status="completed", summary="Plain summary: Late.", duration_seconds=2)
+    await pub.drain()
+    assert len(adapter.sends) == 1 and "Late." in adapter.summary()
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_separate_mode_restores_standalone_cards(monkeypatch):
+    """One-line rollback: display.turn_card: separate."""
+    pub, _ = _combined_pub(monkeypatch, {"display": {"turn_card": "separate"}})
+    assert not pub.combined
+    await pub.aclose()
+
+
+def test_ran_out_of_steps_is_hourglass_not_red_x():
+    from agent.delegation_activity import DelegationActivityTracker
+
+    t = DelegationActivityTracker()
+    for i, (status, extra) in enumerate([
+        ("completed", {}),
+        ("error", {"exit_reason": "max_iterations"}),
+    ]):
+        t.observe("subagent.start", None, "g", None, delegation_id="d", subagent_id=f"s{i}",
+                  task_index=i, task_count=2, goal=f"Task {i}", model="claude-sonnet-5")
+        t.observe("subagent.complete", None, "x", None, delegation_id="d", subagent_id=f"s{i}",
+                  task_index=i, task_count=2, status=status, summary="x", duration_seconds=1, **extra)
+    card = t.render("d")
+    head = card.splitlines()[0]
+    assert head.startswith("⏳ 2 subagents · 1 done · 1 unfinished"), head
+    assert "❌" not in card and "ran out of steps" in card

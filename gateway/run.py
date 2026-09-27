@@ -30489,6 +30489,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if _cleanup_registered:
                 return
             _cleanup_registered = True
+            _pub_end = getattr(turn_ctx, "delegation_activity", None)
+            if _pub_end is not None and hasattr(_pub_end, "end_turn"):
+                # Runs after this function registers the card below, so
+                # absorbed results are claimed first; anything else that
+                # finished (or finishes later) posts on its own.
+                try:
+                    asyncio.get_running_loop().call_soon(_pub_end.end_turn)
+                except Exception:
+                    pass
             # Schedule deletion of tracked temporary progress bubbles after the
             # final response lands. Failed runs skip this so bubbles remain as
             # breadcrumbs for the user to see what work happened. Only fires on
@@ -30511,17 +30520,37 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # FIRST one into a single expandable summary card and delete the
                 # rest. Falls back to plain deletion when the card is empty (a
                 # turn that did no real work) or the adapter cannot edit.
+                # Combined turn card (display.turn_card: combined): subagents
+                # that finished during this turn fold into this card instead
+                # of posting their own summary, so a turn reads as one card
+                # plus one reply. Their live cards are deleted below.
+                _worker_rows: list = []
+                _worker_count = 0
+                _absorbed_ids: list = []
+                _pub = getattr(turn_ctx, "delegation_activity", None)
+                _card_edit = getattr(type(_adapter_snapshot), "edit_message", None)
+                if _pub is not None and getattr(_pub, "combined", False) and _card_edit is not None:
+                    try:
+                        from agent.delegation_activity import turn_card_body
+                        _workers, _absorbed_ids = _pub.absorb_finished()
+                        _worker_count = len(_workers)
+                        _worker_rows = turn_card_body(_workers, time.monotonic())
+                    except Exception:
+                        logger.debug("combined turn card: absorb failed", exc_info=True)
+                        _worker_rows, _worker_count, _absorbed_ids = [], 0, []
                 try:
                     from agent.turn_summary import format_collapsed_turn_card
                     _card_text = format_collapsed_turn_card(
                         turn_ctx._summary_thoughts,
                         turn_ctx._summary_tools,
                         time.monotonic() - turn_ctx._summary_t0,
+                        detail_lines=_worker_rows,
+                        workers=_worker_count,
                     )
                 except Exception:
                     _card_text = ""
-                _card_edit = getattr(type(_adapter_snapshot), "edit_message", None)
                 _can_card = bool(_card_text) and _card_edit is not None
+                _ids_snapshot = _ids_snapshot + [i for i in _absorbed_ids if i not in _ids_snapshot]
 
                 def _cleanup_temp_bubbles() -> None:
                     async def _delete_all() -> None:

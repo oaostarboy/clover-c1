@@ -45,10 +45,11 @@ STATES = (
     "waiting",
     "blocked",
     "completed",
+    "incomplete",
     "failed",
     "cancelled",
 )
-TERMINAL_STATES = frozenset({"completed", "failed", "cancelled"})
+TERMINAL_STATES = frozenset({"completed", "incomplete", "failed", "cancelled"})
 _ACTIVE_STATES = frozenset({"starting", "running", "tool-running", "waiting", "blocked"})
 
 _ICONS = {
@@ -59,6 +60,8 @@ _ICONS = {
     "waiting": "⌛",
     "blocked": "⚠️",
     "completed": "✅",
+    # Ran out of steps (turn/iteration cap): not a crash, so never a red X.
+    "incomplete": "⏳",
     "failed": "❌",
     "cancelled": "⏹",
 }
@@ -74,6 +77,9 @@ _COMPLETE_STATUS = {
     "failed": "failed",
     "error": "failed",
     "timeout": "failed",
+    "incomplete": "incomplete",
+    "max_turns": "incomplete",
+    "max_iterations": "incomplete",
 }
 
 _TITLE_MAX = 60
@@ -648,6 +654,8 @@ class DelegationActivityTracker:
     ) -> None:
         status = str(kw.get("status") or "completed").strip().lower()
         state = _COMPLETE_STATUS.get(status, "failed")
+        if str(kw.get("exit_reason") or "").lower() in {"max_iterations", "max_turns"}:
+            state = "incomplete"
         child.state = state
         child.ended_at = now
         _close_open_tools(child)
@@ -661,6 +669,8 @@ class DelegationActivityTracker:
             child.summary = plain_summary(summary_raw) or None
         elif state == "cancelled":
             child.reason = sanitize_text(kw.get("reason") or "", _REASON_MAX) or "stopped before finishing"
+        elif state == "incomplete":
+            child.reason = "ran out of steps"
         elif status == "timeout":
             child.reason = f"timed out after {format_duration(dur)}"
         else:
@@ -786,6 +796,16 @@ class DelegationActivityTracker:
 
     # -- rendering -------------------------------------------------------
 
+    def children_for(self, group_ids: List[str]) -> List[ChildActivity]:
+        """Every worker across ``group_ids``, in start order (combined card)."""
+        with self._lock:
+            out: List[ChildActivity] = []
+            for gid in group_ids:
+                group = self._groups.get(gid)
+                if group is not None:
+                    out.extend(group.ordered())
+            return out
+
     def render(self, group_id: str) -> str:
         now = self._clock()
         with self._lock:
@@ -898,12 +918,11 @@ def _calls(child: ChildActivity, *, live: bool) -> int:
 def _stats_head(icon: str, label: str, calls: int, elapsed: str, failed: int = 0) -> str:
     """Header in the same shape as the main agent's turn card:
     ``🔀 Opus 5.5 · 🛠 2 tool calls · ⏱ 22s``."""
+    # One line on a phone: failed tool calls are not called out here (a
+    # retried call is normal); failed workers show on their own row.
     parts = [f"{icon} {label}".strip()]
     if calls:
-        tools = f"🛠 {calls} tool call{'s' if calls != 1 else ''}"
-        if failed:
-            tools += f" ({failed} failed)"
-        parts.append(tools)
+        parts.append(f"🛠 {calls} tool call{'s' if calls != 1 else ''}")
     if elapsed:
         parts.append(f"⏱ {elapsed}")
     return " · ".join(parts)
@@ -1081,6 +1100,8 @@ def _quote(lines: List[str]) -> List[str]:
 def _final_body(child: ChildActivity, limit: int) -> str:
     if child.state == "completed":
         return _truncate_words(child.summary or "", limit)
+    if child.state == "incomplete":
+        return "ran out of steps before finishing"
     if child.state == "cancelled":
         return f"stopped: {child.reason}" if child.reason else "stopped before finishing"
     return f"failed: {child.reason}" if child.reason else "failed"
@@ -1104,17 +1125,11 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
         return "\n".join([head] + _quote(quoted))
     end = max((c.ended_at or now) for c in children)
     counts = _state_counts(children)
-    if any(c.state == "failed" for c in children):
-        final_icon = "❌"
-    elif any(c.state == "cancelled" for c in children):
-        final_icon = "⏹"
-    else:
-        final_icon = "✅"
+    final_icon = group_icon(children)
     label = f"{len(children)} subagents" + (f" · {counts}" if counts else "")
     lines = [_stats_head(final_icon, label,
                          sum(_calls(c, live=False) for c in children),
-                         format_duration(end - group.created_at),
-                         sum(c.tools_failed for c in children))]
+                         short_duration(end - group.created_at))]
     quoted: List[str] = []
     for i, child in enumerate(children):
         if i:
@@ -1130,11 +1145,53 @@ def _state_counts(children: List[ChildActivity]) -> str:
     done = sum(1 for c in children if c.state == "completed")
     failed = sum(1 for c in children if c.state == "failed")
     cancelled = sum(1 for c in children if c.state == "cancelled")
-    if failed == 0 and cancelled == 0:
+    incomplete = sum(1 for c in children if c.state == "incomplete")
+    if failed == 0 and cancelled == 0 and incomplete == 0:
         return ""
     parts = [f"{done} done"] if done else []
+    if incomplete:
+        parts.append(f"{incomplete} unfinished")
     if failed:
         parts.append(f"{failed} failed")
     if cancelled:
         parts.append(f"{cancelled} stopped")
     return " · ".join(parts)
+
+
+def group_icon(children: List[ChildActivity]) -> str:
+    """❌ only for a real failure; running out of steps is ⏳, not red."""
+    states = {c.state for c in children}
+    if "failed" in states:
+        return "❌"
+    if "incomplete" in states:
+        return "⏳"
+    if "cancelled" in states:
+        return "⏹"
+    return "✅"
+
+
+def short_duration(seconds: Optional[float]) -> str:
+    """Header time: ``9s``, ``2m05s``, ``22m``, ``1h05m`` (drops seconds past 10m)."""
+    try:
+        total = max(0, int(seconds or 0))
+    except (TypeError, ValueError):
+        total = 0
+    if 600 <= total < 3600:
+        return f"{total // 60}m"
+    return format_duration(total)
+
+
+def turn_card_body(children: List[ChildActivity], now: float) -> List[str]:
+    """Worker rows for the combined per-turn card: two fixed rows per worker
+    (``🍀 **Title**`` + italic stats) and, once done, its plain summary."""
+    rows: List[str] = []
+    for i, child in enumerate(children):
+        if i:
+            rows.append(SPACER)
+        live = child.state not in TERMINAL_STATES
+        rows += [r for r in _worker_rows(child, now, live=live) if r]
+        if not live:
+            body = _final_body(child, _FINAL_SUMMARY_MULTI)
+            if body:
+                rows.append(body)
+    return rows
