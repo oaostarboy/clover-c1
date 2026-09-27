@@ -808,32 +808,52 @@ def _read_pyproject_version() -> str | None:
     return None
 
 
-def _check_version_consistency(issues: list[str]) -> None:
-    """Verify pyproject.toml version matches clover_cli.__version__.
-
-    A git conflict resolution (reset/merge) can revert one file without the
-    other, leaving ``clover --version`` reporting a stale version while
-    ``pyproject.toml`` is current. Detect that drift so users can re-sync.
-    Silent no-op for installed wheels where pyproject.toml isn't present.
-    """
+def _check_version_consistency(issues: list[str], should_fix: bool = False) -> None:
+    """Verify and, for git source installs, repair package version drift."""
     try:
         from clover_cli import __version__ as init_version
     except Exception:
         return
     pyproject_version = _read_pyproject_version()
     if pyproject_version is None:
-        # Installed wheel or unreadable pyproject — nothing to cross-check.
         return
     if pyproject_version == init_version:
         check_ok("Version files consistent", f"({init_version})")
-    else:
-        _fail_and_issue(
-            "Version mismatch between source files",
-            f"(pyproject.toml {pyproject_version} != clover_cli/__init__.py {init_version})",
-            "Re-sync version files (e.g. run 'clover update', or set "
-            "clover_cli/__init__.py __version__ to match pyproject.toml)",
-            issues,
-        )
+        return
+
+    init_path = PROJECT_ROOT / "clover_cli" / "__init__.py"
+    git_dir = PROJECT_ROOT / ".git"
+    if should_fix and (git_dir.exists() or git_dir.is_file()):
+        try:
+            text = init_path.read_text(encoding="utf-8")
+            lines = text.splitlines(keepends=True)
+            matches = [i for i, line in enumerate(lines) if line.lstrip().startswith("__version__") and "=" in line]
+            if len(matches) != 1:
+                raise ValueError("expected exactly one __version__ assignment")
+            i = matches[0]
+            ending = "\r\n" if lines[i].endswith("\r\n") else "\n" if lines[i].endswith("\n") else ""
+            indent = lines[i][:len(lines[i]) - len(lines[i].lstrip())]
+            lines[i] = f'{indent}__version__ = "{pyproject_version}"{ending}'
+            tmp = init_path.with_name(init_path.name + f".tmp.{os.getpid()}")
+            try:
+                tmp.write_text("".join(lines), encoding="utf-8", newline="")
+                os.replace(tmp, init_path)
+            finally:
+                try:
+                    tmp.unlink()
+                except FileNotFoundError:
+                    pass
+            check_ok("Version drift repaired", f"({pyproject_version})")
+            return
+        except Exception as exc:
+            check_warn("Version drift repair failed", str(exc))
+    _fail_and_issue(
+        "Version mismatch between source files",
+        f"(pyproject.toml {pyproject_version} != clover_cli/__init__.py {init_version})",
+        "Re-sync version files (e.g. run 'clover update', or set "
+        "clover_cli/__init__.py __version__ to match pyproject.toml)",
+        issues,
+    )
 
 
 def _check_s6_supervision(issues: list[str]) -> None:
@@ -1498,7 +1518,7 @@ def run_doctor(args):
 
     # Detect drift between pyproject.toml and clover_cli/__init__.py versions
     # (a git conflict resolution can silently revert one but not the other).
-    _check_version_consistency(issues)
+    _check_version_consistency(issues, should_fix=should_fix)
 
     # macOS TCC grant persistence (issue #86385): a locally-built desktop
     # bundle whose DR is cdhash-pinned loses every permission grant on each
