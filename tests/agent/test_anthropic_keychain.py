@@ -1,22 +1,39 @@
 """Tests for Bug #12905 fixes in agent/anthropic_adapter.py — macOS Keychain support."""
 
 import json
+import subprocess
 import threading
 import time
 from unittest.mock import patch, MagicMock
 
 import pytest
 
+from agent import anthropic_credentials
 from agent.anthropic_adapter import (
     _read_claude_code_credentials_from_keychain,
     read_claude_code_credentials,
     _refresh_oauth_token,
+)
+from agent.anthropic_credentials import (
+    _keychain_marked_unavailable,
+    _mark_keychain_unavailable,
+    _read_keychain_generic_password,
 )
 
 
 # This module exercises the reader itself with explicit platform and subprocess
 # mocks, so it opts out of the suite-wide guard without touching a real Keychain.
 pytestmark = pytest.mark.allow_macos_keychain
+
+
+@pytest.fixture(autouse=True)
+def _reset_keychain_unavailable_cache():
+    """Every test starts with a clean cache, and a failure-marking test
+    (e.g. a mocked timeout) must not poison the cache for the next test in
+    this file/process."""
+    anthropic_credentials._keychain_unavailable_until = 0.0
+    yield
+    anthropic_credentials._keychain_unavailable_until = 0.0
 
 
 @pytest.mark.macos_only
@@ -44,6 +61,73 @@ class TestReadClaudeCodeCredentialsFromKeychain:
         with patch("agent.anthropic_adapter.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
             assert _read_claude_code_credentials_from_keychain() is None
+
+
+class TestKeychainUnavailableCache:
+    """The cache primitives take ``now`` as data (see ``hidden_windows_child_options``
+    convention in tests/conftest.py), so they are host-independent — no
+    ``macos_only`` marker, no faking ``platform.system()``.
+    """
+
+    def test_not_marked_before_any_failure(self):
+        assert _keychain_marked_unavailable(now=1_000.0) is False
+
+    def test_marked_unavailable_immediately_after_a_failure(self):
+        _mark_keychain_unavailable(now=1_000.0)
+        assert _keychain_marked_unavailable(now=1_000.0) is True
+
+    def test_still_marked_a_minute_later(self):
+        _mark_keychain_unavailable(now=1_000.0)
+        assert _keychain_marked_unavailable(now=1_060.0) is True
+
+    def test_cache_expires_after_the_window(self):
+        _mark_keychain_unavailable(now=1_000.0)
+        assert _keychain_marked_unavailable(now=1_000.0 + 301.0) is False
+
+
+class TestReadKeychainGenericPasswordCaching:
+    """``_read_keychain_generic_password`` makes no platform check itself
+    (the Darwin gate lives one layer up in
+    ``_read_claude_code_credentials_from_keychain``), so its subprocess/cache
+    behavior is directly testable without needing real or faked macOS.
+    """
+
+    def test_repeated_timeout_only_calls_subprocess_once_within_the_cache_window(self):
+        """A headless launchd gateway must not re-pay the 5s timeout on every
+        refresh — only once per cache window."""
+        with patch(
+            "agent.anthropic_credentials.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="security", timeout=5),
+        ) as mock_run:
+            first = _read_keychain_generic_password()
+            second = _read_keychain_generic_password()
+
+        assert first is None
+        assert second is None
+        mock_run.assert_called_once()
+
+    def test_retries_once_the_cache_window_expires(self):
+        with patch(
+            "agent.anthropic_credentials.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="security", timeout=5),
+        ) as mock_run:
+            _read_keychain_generic_password()
+
+        # Simulate the cache window having elapsed.
+        anthropic_credentials._keychain_unavailable_until = 0.0
+
+        with patch("agent.anthropic_credentials.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
+            assert _read_keychain_generic_password() is None
+            mock_run.assert_called_once()
+
+    def test_a_successful_lookup_does_not_mark_the_cache(self):
+        with patch("agent.anthropic_credentials.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
+            _read_keychain_generic_password()
+            _read_keychain_generic_password()
+
+        assert mock_run.call_count == 2
 
 
 
