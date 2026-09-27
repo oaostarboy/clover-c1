@@ -2034,7 +2034,7 @@ def _raw_config_has_explicit_version() -> bool:
     if not config_path.exists():
         return False
     try:
-        with open(config_path, encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8-sig") as f:
             raw = fast_safe_load(f) or {}
     except Exception:
         return False
@@ -2059,7 +2059,7 @@ def check_config_version() -> Tuple[int, int]:
         return latest, latest
 
     try:
-        with open(config_path, encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8-sig") as f:
             config = fast_safe_load(f) or {}
     except Exception as e:
         # Invalid YAML needs a parse warning, not an automatic schema rewrite
@@ -3360,7 +3360,7 @@ def read_raw_config() -> Dict[str, Any]:
             return copy.deepcopy(cached[2])
 
         try:
-            with open(config_path, encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8-sig") as f:
                 data = fast_safe_load(f) or {}
         except Exception as e:
             _warn_config_parse_failure(config_path, e)
@@ -3414,7 +3414,7 @@ def read_user_config_raw(config_path: Optional[Path] = None) -> Dict[str, Any]:
     if config_path is None:
         config_path = get_config_path()
     try:
-        with open(config_path, encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8-sig") as f:
             data = fast_safe_load(f) or {}
     except FileNotFoundError:
         return {}
@@ -3450,7 +3450,7 @@ def read_raw_config_readonly() -> Dict[str, Any]:
             return cached[2]
 
         try:
-            with open(config_path, encoding="utf-8") as f:
+            with open(config_path, encoding="utf-8-sig") as f:
                 data = fast_safe_load(f) or {}
         except Exception as e:
             _warn_config_parse_failure(config_path, e)
@@ -3522,7 +3522,7 @@ def _load_user_config_for_mutation(config_path: Path) -> Dict[str, Any]:
     if not config_path.exists():
         return {}
     try:
-        with open(config_path, encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8-sig") as f:
             loaded = fast_safe_load(f)
     except OSError as exc:
         raise RuntimeError(
@@ -3844,7 +3844,7 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
 
         if user_sig is not None:
             try:
-                with open(config_path, encoding="utf-8") as f:
+                with open(config_path, encoding="utf-8-sig") as f:
                     user_config = fast_safe_load(f) or {}
 
                 if "max_turns" in user_config:
