@@ -98,6 +98,7 @@ class AgentJobObserver:
         self._tool_names: Dict[str, str] = {}
         self._result_text: Optional[str] = None
         self._result_is_error: Optional[bool] = None
+        self._result_subtype: str = ""
         self._finished = False
         self.started_at = clock()
         self.last_output_at = self.started_at
@@ -231,6 +232,7 @@ class AgentJobObserver:
             with self._lock:
                 self._result_text = result if isinstance(result, str) else None
                 self._result_is_error = bool(obj.get("is_error"))
+                self._result_subtype = str(obj.get("subtype") or "")
 
     def _parse_clover(self, obj: Dict[str, Any]) -> None:
         if obj.get("clover_activity") != CLOVER_ACTIVITY_VERSION:
@@ -277,6 +279,7 @@ class AgentJobObserver:
             self._finished = True
             result_text = self._result_text
             result_error = self._result_is_error
+            ran_out = self._result_subtype == "error_max_turns"
         duration = max(0.0, self._clock() - self.started_at)
         if completion_reason == "killed":
             self._emit("subagent.complete", status="interrupted", duration_seconds=duration,
@@ -285,6 +288,11 @@ class AgentJobObserver:
         if completion_reason in {"lost", "failed_start"}:
             self._emit("subagent.complete", status="failed", duration_seconds=duration,
                        summary=f"process {completion_reason.replace('_', ' ')}")
+            return
+        if ran_out:
+            # Hit its turn cap: unfinished, not crashed (never a red X).
+            self._emit("subagent.complete", status="incomplete", duration_seconds=duration,
+                       summary=result_text or "")
             return
         if exit_code == 0 and not result_error:
             self._emit("subagent.complete", status="completed", duration_seconds=duration,

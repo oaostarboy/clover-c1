@@ -159,7 +159,7 @@ async def test_two_concurrent_external_workers_attributed_and_redacted(hermetic_
     assert len(adapter.sends) == 1
     final = adapter.summary()
     assert "Found the lock race" in final and "Fixed DST catchup" in final
-    assert final.startswith("✅ 2 subagents ·") and "🛠 3 tool calls (1 failed)" in final
+    assert final.startswith("✅ 2 subagents ·") and "🛠 3 tool calls ·" in final
     # One live card for the job group, removed once the summary lands.
     assert {c["key"] for c in adapter.status_calls} == {f"delegation:{group_id}"}
     assert adapter.deleted
@@ -393,3 +393,25 @@ def test_activity_events_flag_is_parsed():
     parsed = parser.parse_args(["-z", "do it", "--activity-events"])
     assert parsed.activity_events is True
     assert parser.parse_args(["-z", "do it"]).activity_events is False
+
+
+
+def test_turn_cap_is_unfinished_not_failed():
+    """claude -p hitting --max-turns exits 1 with subtype error_max_turns:
+    the card shows it as unfinished (⏳), never as a crash."""
+    import json
+    from tools.agent_job_observer import AgentJobObserver
+
+    seen = []
+
+    class Sink:
+        def observe(self, event_type, *a, **kw):
+            seen.append((event_type, kw))
+
+    obs = AgentJobObserver(session_id="proc_x", sink=Sink(), group_id="jobs_x", index=0,
+                           title="Big task", model="claude-sonnet-5", parser="claude-stream-json")
+    obs.feed(json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True,
+                         "result": ""}) + "\n")
+    obs.finish(1)
+    done = [kw for ev, kw in seen if ev == "subagent.complete"]
+    assert done and done[-1]["status"] == "incomplete"

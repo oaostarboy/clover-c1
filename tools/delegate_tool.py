@@ -3367,6 +3367,7 @@ def _run_single_child(
         complete_kwargs: Dict[str, Any] = {
             "preview": summary[:160] if summary else entry.get("error", ""),
             "status": status,
+            "exit_reason": entry.get("exit_reason", ""),
             "duration_seconds": duration,
             "summary": summary[:500] if summary else entry.get("error", ""),
             "input_tokens": (
