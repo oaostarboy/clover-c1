@@ -571,7 +571,10 @@ class DelegationActivityPublisher:
     def _render(self, gid: str) -> str:
         limit = self._message_limit()
         text = _fit_to_limit(self.tracker.render(gid), limit - (8 if self._expandable else 0))
-        return _to_expandable(text) if self._expandable and text else text
+        if not (self._expandable and text):
+            return text
+        hint = TAP_HINT_DONE if self.tracker.group_finished(gid) else TAP_HINT_LIVE
+        return _to_expandable(text, hint)
 
     def _message_limit(self) -> int:
         adapter = self._adapter
@@ -612,7 +615,11 @@ _GONE_MARKERS = (
 )
 
 
-def _to_expandable(text: str) -> str:
+TAP_HINT_LIVE = "tap to watch 🍀"
+TAP_HINT_DONE = "tap to read 🍀"
+
+
+def _to_expandable(text: str, hint: str = "") -> str:
     """Header + "> " detail lines -> one Telegram expandable blockquote:
     ``**> header`` / ``> detail`` / ... with ``||`` closing the last line."""
     # "||" would be read as a spoiler / early quote terminator, and "*" in
@@ -620,13 +627,15 @@ def _to_expandable(text: str) -> str:
     lines = text.replace("||", "¦¦").split("\n")
     header = lines[0].replace("*", "")
     body = [ln[2:] if ln.startswith("> ") else ln for ln in lines[1:]]
-    # Telegram shows the first ~3 lines of a collapsed quote; two blank
-    # lines keep the details hidden until tapped, like the turn card.
+    # A collapsed Telegram quote shows about three lines and then cuts off.
+    # Header, a small italic "tap" hint, and a blank line fill those three,
+    # so the cut lands on empty space, never on half a detail.
     details = [ln for ln in body if ln.strip()]
     spacer = "\u2800"
     out = [f"**> {header}"]
     if details:
-        out += [f"> {spacer}", f"> {spacer}"] + [f"> {ln}" for ln in details]
+        tip = f"*{hint}*" if hint else spacer
+        out += [f"> {tip}", f"> {spacer}"] + [f"> {ln}" for ln in details]
     return "\n".join(out) + "||"
 
 

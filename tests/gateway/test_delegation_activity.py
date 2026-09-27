@@ -134,6 +134,12 @@ def _turn_runner(publisher, source=None):
     return TurnRunner(_StubGatewayRunner(), ctx)
 
 
+def _worker_block(lines, title):
+    """A worker's two rows (title row + italic stats row), joined."""
+    i = next(i for i, l in enumerate(lines) if f"**{title}" in l)
+    return lines[i] + "\n" + lines[i + 1]
+
+
 def _child_cb(runner, *, index=0, count=1, subagent_id="sa-1", goal="Audit the gateway auth mixin",
               title="Audit gateway auth", model="claude-opus-5-5", provider="anthropic",
               delegation_id="deleg_aaaa0001"):
@@ -259,8 +265,8 @@ async def test_progress_note_is_attributed_to_child_and_reasoning_is_never_shown
     # The note line sits under child A's title, not child B's.
     # The note is an activity line attributed to child A (title + model) —
     # never to child B.
-    note_line = next(l for l in card.splitlines() if "Checking token scoping" in l)
-    assert "Audit gateway auth" in note_line and "Opus 5.5" in note_line
+    note_line = _worker_block(card.splitlines(), "Audit gateway auth")
+    assert "Checking token scoping" in note_line and "Opus 5.5" in note_line
     assert "Draft changelog" not in note_line
     await pub.aclose()
 
@@ -769,9 +775,9 @@ async def test_rendered_frames_finished_workers_leave_the_active_feed():
     await pub.drain()
     frame1 = _card_lines(adapter)
     assert frame1[0].startswith("🔀 3 subagents")
-    line_a = next(l for l in frame1 if "Audit auth scoping" in l)
+    line_a = _worker_block(frame1, "Audit auth scoping")
     assert "Opus 5.5" in line_a and "Scoping check looks wrong" in line_a
-    line_b = next(l for l in frame1 if "Port cron tests" in l)
+    line_b = _worker_block(frame1, "Port cron tests")
     assert "GPT-5.5" in line_b and "terminal pytest tests/cron -q" in line_b
     assert "openrouter" not in line_b
     # Finished tool calls don't pile up as a scrolling log.
@@ -795,7 +801,7 @@ async def test_rendered_frames_finished_workers_leave_the_active_feed():
     clock.advance(70)
     await pub.heartbeat_tick()
     frame3 = _card_lines(adapter)
-    line_a = next(l for l in frame3 if "Audit auth scoping" in l)
+    line_a = _worker_block(frame3, "Audit auth scoping")
     assert "waiting for model response" in line_a
     assert adapter.sends == []
 
@@ -831,8 +837,9 @@ async def test_active_card_stays_compact_with_many_workers():
     await pub.drain()
     lines = _card_lines(adapter)
     # header + <=6 worker lines + overflow
-    assert len(lines) <= 1 + 6 + 1
-    assert not any(f"Worker {i} " in l or l.endswith(f"Worker {i}") for i in range(6) for l in lines[1:])
+    # header + <=6 workers x (2 rows + spacer) + overflow
+    assert len(lines) <= 1 + 6 * 3 + 1
+    assert not any(f"**Worker {i}**" in l for i in range(6) for l in lines[1:])
     await pub.aclose()
 
 
@@ -1459,7 +1466,7 @@ def test_collapsed_card_shows_only_the_header():
     card = _to_expandable("✅ 2 subagents · ⏱ 9s\n> A · Opus 5.5 · 4s\n> Did A.\n> ⠀\n> B · Opus 5.5 · 5s\n> Did B.")
     lines = card.splitlines()
     assert lines[0] == "**> ✅ 2 subagents · ⏱ 9s"
-    assert lines[1] == lines[2] == "> \u2800"
+    assert lines[2] == "> \u2800"
     assert "Did A." not in "\n".join(lines[:3])
 
 
@@ -1474,7 +1481,36 @@ def test_group_summary_is_spaced_and_only_flags_problems():
         tr.observe("subagent.complete", status=status, summary="Plain summary: ok.",
                    duration_seconds=3, **kw)
     lines = tr.render("d").splitlines()
-    assert "> 🍀 **One** · Opus 5.5 · ⏱ 3s" in lines  # 🍀 per worker, bold title
-    assert "> ❌ **Two** · Opus 5.5 · ⏱ 3s" in lines
+    assert lines[lines.index("> 🍀 **One**") + 1] == "> *Opus 5.5 · ⏱ 3s*"
+    assert lines[lines.index("> ❌ **Two**") + 1] == "> *Opus 5.5 · ⏱ 3s*"
     assert "> failed: ok." in lines  # reason uses the plain paragraph
     assert f"> {SPACER}" in lines and not any("↳" in l for l in lines)
+
+
+
+def test_every_worker_takes_the_same_two_rows():
+    """Title row + italic stats row for each worker, regardless of title
+    length, so the list lines up and nothing wraps unevenly."""
+    from agent.delegation_activity import DelegationActivityTracker
+
+    tr = DelegationActivityTracker(clock=lambda: 1000.0)
+    titles = ["Short", "A much longer title that would otherwise wrap onto a second row"]
+    for i, title in enumerate(titles):
+        kw = dict(delegation_id="d", subagent_id=f"s{i}", task_index=i, task_count=2,
+                  title=title, model="claude-opus-5-5")
+        tr.observe("subagent.start", **kw)
+        tr.observe("subagent.complete", status="completed", summary="Plain summary: ok.",
+                   duration_seconds=3, **kw)
+    lines = tr.render("d").splitlines()
+    rows = [l for l in lines if l.startswith("> 🍀")]
+    assert len(rows) == 2 and all(len(r) <= 44 for r in rows)
+    for r in rows:
+        assert lines[lines.index(r) + 1].startswith("> *Opus 5.5 · ")
+
+
+def test_collapsed_card_shows_a_subtle_tap_hint():
+    from gateway.delegation_activity import _to_expandable, TAP_HINT_DONE
+
+    card = _to_expandable("✅ 2 subagents · ⏱ 9s\n> 🍀 **A**\n> Did A.", TAP_HINT_DONE)
+    lines = card.splitlines()
+    assert lines[1] == "> *tap to read 🍀*" and lines[2] == "> \u2800"

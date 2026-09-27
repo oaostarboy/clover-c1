@@ -912,18 +912,38 @@ def _stats_head(icon: str, label: str, calls: int, elapsed: str, failed: int = 0
 WORKER_ICON = "🍀"
 
 
-def _bold_title(child: ChildActivity) -> str:
-    title = _truncate_words(child.title, _TITLE_MAX).replace("*", "")
+# Fits one line inside a quote on a phone (~36 chars), so rows never wrap.
+_ROW_TITLE_MAX = 32
+
+
+def _bold_title(child: ChildActivity, limit: int = _TITLE_MAX) -> str:
+    title = _truncate_words(child.title, limit).replace("*", "")
     return f"**{title}**"
 
 
-def _worker_line(child: ChildActivity, now: float) -> str:
-    """One finished worker, same stats shape as the header:
-    ``🍀 **Title** · Opus 5.5 · 🛠 2 tool calls · ⏱ 10s`` (❌/⏹ on problems)."""
-    icon = WORKER_ICON if child.state == "completed" else _ICONS.get(child.state, "•")
-    label = " · ".join(p for p in (_bold_title(child), pretty_model(child.model)) if p)
-    return _stats_head(icon, label, _calls(child, live=False), _elapsed(child, now),
-                       child.tools_failed)
+def _italic(text: str) -> str:
+    text = (text or "").replace("*", "").strip()
+    return f"*{text}*" if text else ""
+
+
+def _worker_rows(child: ChildActivity, now: float, *, live: bool) -> List[str]:
+    """Two fixed rows per worker, so every worker lines up the same way:
+    ``🍀 **Title**`` then an italic ``Opus 5.5 · 🛠 2 tool calls · ⏱ 9s``.
+    Live cards show what it's doing instead of the time."""
+    if live:
+        icon = WORKER_ICON
+    else:
+        icon = WORKER_ICON if child.state == "completed" else _ICONS.get(child.state, "•")
+    title = f"{icon} {_bold_title(child, _ROW_TITLE_MAX)}"
+    calls = _calls(child, live=live)
+    bits = [pretty_model(child.model)]
+    if calls:
+        bits.append(f"🛠 {calls} tool call{'s' if calls != 1 else ''}")
+    if live:
+        bits.append(_doing(child, now).replace("🔧 ", ""))
+    else:
+        bits.append(f"⏱ {_elapsed(child, now)}")
+    return [title, _italic(" · ".join(b for b in bits if b))]
 
 
 def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
@@ -948,14 +968,16 @@ def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
             if child.state != "completed":
                 # Failures/cancellations stay visible; successes are just
                 # counted in the header until the final summary.
-                icon = _ICONS.get(child.state, "•")
-                quoted.append(f"{icon} {_who(child)} · {_elapsed(child, now)}")
+                if quoted:
+                    quoted.append(SPACER)
+                quoted += _worker_rows(child, now, live=False)
             continue
         if shown >= _MAX_ACTIVE_LINES:
             continue
         shown += 1
-        who = " · ".join(p for p in (_bold_title(child), pretty_model(child.model)) if p)
-        quoted.append(f"{WORKER_ICON} {who} — {_doing(child, now)}")
+        if quoted:
+            quoted.append(SPACER)
+        quoted += _worker_rows(child, now, live=True)
     hidden = len(active) - shown
     if hidden > 0:
         quoted.append(f"+{hidden} more running")
@@ -1097,7 +1119,7 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
     for i, child in enumerate(children):
         if i:
             quoted.append(SPACER)  # breathing room between workers
-        quoted.append(_worker_line(child, now))
+        quoted += _worker_rows(child, now, live=False)
         body = _final_body(child, _FINAL_SUMMARY_MULTI)
         if body:
             quoted.append(body)
