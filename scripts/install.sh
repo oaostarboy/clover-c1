@@ -400,6 +400,23 @@ is_termux() {
     [ -n "${TERMUX_VERSION:-}" ] || [[ "${PREFIX:-}" == *"com.termux/files/usr"* ]]
 }
 
+# musl libc (Alpine and a handful of other minimal distros) matters because
+# uv's managed Python downloads (python-build-standalone) are built against
+# glibc and do not run on musl systems — they fail deep inside `uv python
+# install` with an opaque exec error, not a clear "unsupported" message.
+# Two independent signals, since not every musl system ships
+# /etc/alpine-release: the file (fast path, no subprocess) and `ldd
+# --version`, whose banner names the libc implementation on both glibc
+# (GNU libc) and musl. musl's ldd prints its banner to stderr and exits
+# non-zero, so stderr must be captured too.
+is_musl() {
+    # _ALPINE_RELEASE_FILE is a test-only override (default: the real path);
+    # production code always sees /etc/alpine-release.
+    [ -f "${_ALPINE_RELEASE_FILE:-/etc/alpine-release}" ] && return 0
+    command -v ldd >/dev/null 2>&1 || return 1
+    ldd --version 2>&1 | grep -qi musl
+}
+
 # Decide where the repo checkout + venv live, and where the `clover` command
 # symlink goes.  Called after detect_os so $OS/$DISTRO are known.
 #
@@ -529,6 +546,16 @@ detect_os() {
                     DISTRO="unknown"
                     DISTRO_VERSION=""
                 fi
+                if is_musl; then
+                    IS_MUSL=true
+                    log_warn "musl libc detected (Alpine or similar minimal distro)."
+                    log_warn "uv's managed Python downloads are built for glibc and"
+                    log_warn "will not run on musl — automatic Python provisioning"
+                    log_warn "below may fail. See the message at that step for how"
+                    log_warn "to provide your own Python 3.11+ instead."
+                else
+                    IS_MUSL=false
+                fi
             fi
             ;;
         Darwin*)
@@ -649,6 +676,21 @@ check_python() {
         return 0
     fi
 
+    # uv's managed Python downloads (python-build-standalone) are built for
+    # glibc and do not run on musl — `uv python install` would fail deep
+    # inside with an opaque exec error. Fail fast with clear manual steps
+    # instead, since there is no automated way to make this work.
+    if [ "${IS_MUSL:-false}" = true ]; then
+        log_error "No suitable Python $PYTHON_VERSION+ found, and uv cannot download one on musl (Alpine) systems."
+        log_info "Install Python yourself, then re-run this installer — it will detect it on PATH:"
+        if [ "$DISTRO" = "alpine" ]; then
+            log_info "  apk add --no-cache python3 py3-pip"
+        else
+            log_info "  Install python3 (3.11+) via your distro's package manager"
+        fi
+        exit 1
+    fi
+
     # Python not found — use uv to install it (no sudo needed!)
     log_info "Python $PYTHON_VERSION not found, installing via uv..."
     if "$UV_CMD" python install "$PYTHON_VERSION"; then
@@ -718,6 +760,10 @@ attempt_install_git() {
                     log_info "Installing Git via pacman..."
                     $sudo_cmd pacman -S --noconfirm git >/dev/null 2>&1 || true
                     ;;
+                alpine)
+                    log_info "Installing Git via apk..."
+                    $sudo_cmd apk add --no-cache git >/dev/null 2>&1 || true
+                    ;;
                 *)
                     return 1
                     ;;
@@ -772,6 +818,9 @@ check_git() {
                     ;;
                 arch)
                     log_info "  sudo pacman -S git"
+                    ;;
+                alpine)
+                    log_info "  apk add git"
                     ;;
                 *)
                     log_info "  Use your package manager to install git"
@@ -855,6 +904,10 @@ check_cxx_compiler() {
                     log_info "Installing base-devel via pacman..."
                     $sudo_cmd pacman -S --noconfirm base-devel >/dev/null 2>&1 || true
                     ;;
+                alpine)
+                    log_info "Installing build-base via apk..."
+                    $sudo_cmd apk add --no-cache build-base >/dev/null 2>&1 || true
+                    ;;
             esac
             if command -v g++ &> /dev/null || command -v clang++ &> /dev/null; then
                 log_success "C++ compiler installed"
@@ -873,6 +926,7 @@ check_cxx_compiler() {
                 ubuntu|debian) log_info "  sudo apt install build-essential" ;;
                 fedora)        log_info "  sudo dnf install gcc-c++" ;;
                 arch)          log_info "  sudo pacman -S base-devel" ;;
+                alpine)        log_info "  apk add build-base" ;;
                 *)             log_info "  Install a C++ compiler (g++/gcc-c++) via your package manager" ;;
             esac
             ;;
