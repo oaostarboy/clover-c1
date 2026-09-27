@@ -773,7 +773,10 @@ class TestSpawnEnvSanitization:
         # A failed launch must not be exposed as a running/tracked session.
         assert session.id not in registry._running
 
-    def test_env_poller_quotes_temp_paths_with_spaces(self, registry):
+    def test_env_poller_reads_only_new_bytes_via_single_call(self, registry):
+        """Each poll tick issues exactly one env.execute() call that reads
+        only the bytes appended since the last tick (byte-offset tracking),
+        instead of re-reading the whole log plus a separate kill -0 call."""
         session = _make_session(sid="proc_space")
         session.exited = False
 
@@ -781,8 +784,11 @@ class TestSpawnEnvSanitization:
             def __init__(self):
                 self.commands = []
                 self._responses = iter([
-                    {"output": "hello\n"},
-                    {"output": "1\n"},
+                    # tick 1: 6 new bytes, process still alive
+                    {"output": "hello\n\n__CLOVER_POLL_6_1__"},
+                    # tick 2: no new bytes, process has exited
+                    {"output": "\n__CLOVER_POLL_6_0__"},
+                    # exit code read (only fires once the poll marks exited)
                     {"output": "0\n"},
                 ])
 
@@ -802,9 +808,88 @@ class TestSpawnEnvSanitization:
                 "/path with spaces/clover_bg.exit",
             )
 
-        assert env.commands[0][0] == "cat '/path with spaces/clover_bg.log' 2>/dev/null"
-        assert env.commands[1][0] == "kill -0 \"$(cat '/path with spaces/clover_bg.pid' 2>/dev/null)\" 2>/dev/null; echo $?"
+        # Exactly one call per poll tick, plus one exit-code read at the end.
+        assert len(env.commands) == 3
+        assert "/path with spaces/clover_bg.log" in env.commands[0][0]
+        assert "/path with spaces/clover_bg.pid" in env.commands[0][0]
         assert env.commands[2][0] == "cat '/path with spaces/clover_bg.exit' 2>/dev/null"
+
+        # Only the new bytes landed in the buffer -- no duplication, no
+        # re-reading of bytes already seen.
+        assert session.output_buffer == "hello\n"
+        assert session.exit_code == 0
+        assert session.exited is True
+
+    def test_env_poller_resets_offset_on_truncation(self, registry):
+        """If the log shrinks (rotated/truncated), the offset resets to 0
+        so the next tick re-reads the regrown file from the start instead
+        of computing a bogus negative/garbage delta."""
+        session = _make_session(sid="proc_trunc")
+        session.exited = False
+
+        class FakeEnv:
+            def __init__(self):
+                self.commands = []
+                self._responses = iter([
+                    {"output": "abcdef\n__CLOVER_POLL_6_1__"},  # offset -> 6
+                    {"output": "\n__CLOVER_POLL_3_1__"},        # truncated to 3 < 6
+                    {"output": "xyz123\n__CLOVER_POLL_6_0__"},  # re-read from 0
+                    {"output": "5\n"},                          # exit code
+                ])
+
+            def execute(self, command, **kwargs):
+                self.commands.append((command, kwargs))
+                return next(self._responses)
+
+        env = FakeEnv()
+
+        with patch("tools.process_registry.time.sleep", return_value=None), \
+            patch.object(registry, "_move_to_finished"):
+            registry._env_poller_loop(session, env, "/tmp/t.log", "/tmp/t.pid", "/tmp/t.exit")
+
+        # The third poll must have been issued with offset 0, not 6.
+        third_command = env.commands[2][0]
+        assert " 0 " in third_command
+        assert session.output_buffer == "abcdefxyz123"
+        assert session.exit_code == 5
+
+    def test_env_poller_falls_back_to_full_read_when_marker_missing(self, registry):
+        """A minimal/BusyBox image whose `tail` lacks -c +N support won't
+        produce the trailing marker; the poller must detect that and fall
+        back to the old whole-log-read behavior for the rest of the job."""
+        session = _make_session(sid="proc_fallback")
+        session.exited = False
+
+        class FakeEnv:
+            def __init__(self):
+                self.commands = []
+                self._responses = iter([
+                    # tick 1: combined probe fails, no marker present
+                    {"output": "tail: unrecognized option '-c'\n"},
+                    # tick 2 (fallback): full cat, then alive check
+                    {"output": "hello world\n"},
+                    {"output": "0\n"},
+                    # tick 3 (fallback): full cat again (unchanged), then exited
+                    {"output": "hello world\n"},
+                    {"output": "1\n"},
+                    {"output": "2\n"},  # exit code
+                ])
+
+            def execute(self, command, **kwargs):
+                self.commands.append((command, kwargs))
+                return next(self._responses)
+
+        env = FakeEnv()
+
+        with patch("tools.process_registry.time.sleep", return_value=None), \
+            patch.object(registry, "_move_to_finished"):
+            registry._env_poller_loop(session, env, "/tmp/f.log", "/tmp/f.pid", "/tmp/f.exit")
+
+        assert session.output_buffer == "hello world\n"
+        assert session.exit_code == 2
+        assert session.exited is True
+        # tick 1 (1 call) + tick 2 (2 calls) + tick 3 (2 calls) + exit read (1 call)
+        assert len(env.commands) == 6
 
 
 # =========================================================================
