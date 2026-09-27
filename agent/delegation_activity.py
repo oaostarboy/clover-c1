@@ -80,7 +80,7 @@ _TITLE_MAX = 60
 _NOTE_MAX = 110
 _TOOL_MAX = 72
 _REASON_MAX = 120
-_SUMMARY_MAX = 160
+_SUMMARY_MAX = 600
 _CARD_MAX_CHARS = 3500
 
 _REASONING_TAGS = r"(?:think|thinking|reasoning|reflection|REASONING_SCRATCHPAD)"
@@ -766,36 +766,16 @@ class DelegationActivityTracker:
     # -- alerts / findings -------------------------------------------------
 
     def _alert(self, child: ChildActivity, kind: str, alerts: List[str]) -> None:
+        """Out-of-band pings. Only a stall is worth interrupting the chat for:
+        completion, failure and cancellation are reported once, in the final
+        summary message, so a result never shows up twice."""
         if kind in child.alerted:
             return
         child.alerted.add(kind)
-        label = f"#{child.index + 1} “{child.title}”" + (
-            f" ({_short_model(child.model)})" if child.model else ""
-        )
-        elapsed = format_duration(
-            child.duration_s
-            if child.duration_s is not None
-            else (child.ended_at or self._clock()) - (child.started_at or child.first_seen)
-        )
-        if kind == "completed":
-            finding = f": {child.summary}" if child.summary else "."
-            files = ""
-            if child.files_written:
-                shown = ", ".join(child.files_written[:3])
-                more = len(child.files_written) - 3
-                files = f" 📄 {shown}" + (f" +{more}" if more > 0 else "")
-            alerts.append(
-                f"✅ Subagent {label} reported done in {elapsed}{finding}{files}"
-                " — awaiting parent review."
-            )
-        elif kind == "cancelled":
-            alerts.append(f"⏹ Subagent {label} was cancelled after {elapsed}: {child.reason}.")
-        elif kind == "blocked":
-            alerts.append(
-                f"⚠️ Subagent {label} looks stalled: {child.reason}. It is still running; nothing was stopped."
-            )
-        else:
-            alerts.append(f"❌ Subagent {label} failed after {elapsed}: {child.reason}")
+        if kind != "blocked":
+            return
+        who = _who(child)
+        alerts.append(f"⚠️ Subagent {who} looks stuck: {child.reason}. Still running; nothing was stopped.")
 
     # -- rendering -------------------------------------------------------
 
@@ -814,141 +794,182 @@ class DelegationActivityTracker:
             return _render_active(group, now, stamp)
 
 
-def _state_counts(children: List[ChildActivity]) -> str:
-    active = sum(1 for c in children if c.state in _ACTIVE_STATES)
-    queued = sum(1 for c in children if c.state == "queued")
-    done = sum(1 for c in children if c.state == "completed")
-    failed = sum(1 for c in children if c.state == "failed")
-    cancelled = sum(1 for c in children if c.state == "cancelled")
-    parts = []
-    if active:
-        parts.append(f"{active} active")
-    if queued:
-        parts.append(f"{queued} queued")
-    if done:
-        parts.append(f"{done} done")
-    if failed:
-        parts.append(f"{failed} failed")
-    if cancelled:
-        parts.append(f"{cancelled} cancelled")
-    return " · ".join(parts)
+_MODEL_NAMES = (
+    # (prefix, family label) — "claude-opus-5-5" -> "Opus 5.5"
+    ("claude-opus-", "Opus"),
+    ("claude-sonnet-", "Sonnet"),
+    ("claude-haiku-", "Haiku"),
+)
+_FINAL_SUMMARY_SINGLE = 420
+_FINAL_SUMMARY_MULTI = 180
 
 
-def _footer(stamp: str) -> str:
-    # The timestamp makes a card frozen by a gateway restart visibly stale.
-    footer = "subagent activity · not the main agent"
-    return f"{footer} · updated {stamp}" if stamp else footer
+def pretty_model(model: str) -> str:
+    """Human model label: ``claude-opus-5-5`` -> ``Opus 5.5``, ``gpt-6-sol`` -> ``GPT-6 Sol``."""
+    text = _short_model(model)
+    if not text:
+        return ""
+    low = text.lower()
+    for prefix, family in _MODEL_NAMES:
+        if low.startswith(prefix):
+            version = low[len(prefix):].split("-")
+            nums = [v for v in version if v.isdigit()]
+            return f"{family} {'.'.join(nums)}" if nums else family
+    if low.startswith("gpt-"):
+        parts = text.split("-")
+        head = f"GPT-{parts[1]}" if len(parts) > 1 else "GPT"
+        rest = " ".join(p.capitalize() for p in parts[2:])
+        return f"{head} {rest}".strip()
+    return text
 
 
-def _now_line(child: ChildActivity, now: float) -> str:
-    """What one active worker is doing right now (one line)."""
+def _short_tool_arg(summary: str) -> str:
+    """File paths show as their basename; everything else stays as is."""
+    text = (summary or "").strip()
+    if not text:
+        return ""
+    if " " not in text and ("/" in text or "\\" in text):
+        base = text.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+        return base or text
+    return text
+
+
+def _tool_phrase(name: str, summary: str) -> str:
+    arg = _short_tool_arg(summary)
+    return f"{name} {arg}" if arg else name
+
+
+def _who(child: ChildActivity, *, with_title: bool = True) -> str:
+    bits = []
+    if with_title:
+        bits.append(_truncate_words(child.title, _FEED_TITLE_MAX))
+    model = pretty_model(child.model)
+    if model:
+        bits.append(model)
+    return " · ".join(bits)
+
+
+def _elapsed(child: ChildActivity, now: float) -> str:
+    started = child.started_at if child.started_at is not None else child.first_seen
+    if child.duration_s is not None:
+        return format_duration(child.duration_s)
+    return format_duration((child.ended_at or now) - started)
+
+
+def _doing(child: ChildActivity, now: float) -> str:
+    """One short phrase: what this worker is doing right now."""
     latest = child._latest_open()
     if latest is not None:
+        phrase = f"🔧 {_tool_phrase(latest.name, latest.summary)}"
         extra = len(child.open_tools) - 1
-        bit = f"🔧 {latest.name}"
-        if latest.summary:
-            bit += f" `{latest.summary}`"
-        bit += f" {format_duration(now - latest.started_at)}"
-        if extra > 0:
-            bit += f" (+{extra} more)"
-    elif child.state in {"waiting", "blocked"} and child.reason:
-        bit = f"{_ICONS[child.state]} {child.reason}"
-    elif child.state == "starting":
-        bit = "🚀 starting"
-    else:
-        bit = "▶️ working"
-        if child.reason:
-            bit += f" · {child.reason}"
+        return phrase + (f" (+{extra})" if extra > 0 else "")
+    if child.state in {"waiting", "blocked"} and child.reason:
+        return f"{_ICONS[child.state]} {child.reason}"
+    if child.state == "queued":
+        return "queued"
     if child.visibility == "lifecycle":
-        bit += " · lifecycle only (no tool visibility)"
-    started = child.started_at if child.started_at is not None else child.first_seen
-    label = child.label + (f" ({child.provider})" if child.provider else "")
-    return f"▸ {label} [{format_duration(now - started)}] — {bit}"
+        return "running · no tool detail"
+    if child.note:
+        return f"💬 {child.note}"
+    return "starting…" if child.state == "starting" else "thinking…"
 
 
-def _feed_line(entry: FeedEntry, child: ChildActivity) -> str:
-    if entry.kind == "note":
-        body = f"📝 {entry.text}"
-    else:
-        body = f"🔧 {entry.tool}"
-        if entry.count > 1:
-            body += f" ×{entry.count}"
-        if entry.summary:
-            body += f" `{entry.summary}`"
-        if entry.ok is True:
-            body += " ✓"
-        elif entry.ok is False:
-            body += " ✗ failed"
-        if entry.duration is not None and entry.count == 1:
-            body += f" {format_duration(entry.duration)}"
-    return f"· {child.label} — {body}"
+def _tool_count(child: ChildActivity) -> str:
+    tools = child.tools_ok + child.tools_failed
+    if not tools:
+        return ""
+    text = f"{tools} tool{'s' if tools != 1 else ''}"
+    if child.tools_failed:
+        text += f" ({child.tools_failed} failed)"
+    return text
 
 
 def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
     children = group.ordered()
-    active = [c for c in children if c.state in _ACTIVE_STATES]
-    lines = [
-        " · ".join(
-            p for p in ("🔀 Subagents", _state_counts(children),
-                        format_duration(now - group.created_at)) if p
-        )
-    ]
-    for child in active[:_MAX_ACTIVE_LINES]:
-        lines.append(_now_line(child, now))
-    if len(active) > _MAX_ACTIVE_LINES:
-        lines.append(f"+{len(active) - _MAX_ACTIVE_LINES} more active")
-    active_keys = {c.key for c in active}
-    recent = [e for e in group.feed if e.child_key in active_keys][-_FEED_SHOWN:]
-    if recent:
-        lines.append("Recent:")
-        for entry in recent:
-            lines.append(_feed_line(entry, group.children[entry.child_key]))
-    lines.append(_footer(stamp))
-    text = "\n".join(lines)
-    if len(text) > _CARD_MAX_CHARS:
-        text = text[: _CARD_MAX_CHARS - 1].rsplit("\n", 1)[0] + "\n…"
-    return text
+    active = [c for c in children if c.state in _ACTIVE_STATES or c.state == "queued"]
+    elapsed = format_duration(now - group.created_at)
+    if len(children) == 1:
+        child = children[0]
+        lines = [" · ".join(p for p in ("🔀 Subagent", pretty_model(child.model), elapsed) if p),
+                 _truncate_words(child.title, _TITLE_MAX),
+                 _doing(child, now)]
+        if child.note and child.open_tools and child.visibility != "lifecycle":
+            lines.append(f"💬 {child.note}")
+        return "\n".join(lines)
+    done = sum(1 for c in children if c.state == "completed")
+    head = [f"🔀 {len(children)} subagents"]
+    if done:
+        head.append(f"{done} done")
+    head.append(elapsed)
+    lines = [" · ".join(head)]
+    shown = 0
+    for child in children:
+        if child.state in TERMINAL_STATES:
+            if child.state != "completed":
+                # Failures/cancellations stay visible; successes are just
+                # counted in the header until the final summary.
+                icon = _ICONS.get(child.state, "•")
+                lines.append(f"{icon} {_who(child)} · {_elapsed(child, now)}")
+            continue
+        if shown >= _MAX_ACTIVE_LINES:
+            continue
+        shown += 1
+        lines.append(f"▸ {_who(child)} — {_doing(child, now)}")
+    hidden = len(active) - shown
+    if hidden > 0:
+        lines.append(f"+{hidden} more running")
+    return "\n".join(lines)
+
+
+def _final_body(child: ChildActivity, limit: int) -> str:
+    if child.state == "completed":
+        return sanitize_text(child.summary or "", limit)
+    if child.state == "cancelled":
+        return f"stopped: {child.reason}" if child.reason else "stopped before finishing"
+    return f"failed: {child.reason}" if child.reason else "failed"
 
 
 def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
     children = group.ordered()
-    end = max((c.ended_at or now) for c in children)
-    lines = [
-        " · ".join(
-            p for p in ("🔀 Subagents finished", _state_counts(children),
-                        format_duration(end - group.created_at)) if p
-        )
-    ]
-    for child in children:
-        started = child.started_at if child.started_at is not None else child.first_seen
-        dur = format_duration(
-            child.duration_s if child.duration_s is not None else (child.ended_at or now) - started
-        )
-        tools = child.tools_ok + child.tools_failed
-        tool_bit = f" · {tools} tool{'s' if tools != 1 else ''}" if tools else ""
-        if child.tools_failed:
-            tool_bit += f" ({child.tools_failed} failed)"
+    if len(children) == 1:
+        child = children[0]
         icon = _ICONS.get(child.state, "•")
-        if child.state == "completed":
-            lines.append(f"{icon} {child.label} — done in {dur}{tool_bit}")
-            if child.summary:
-                lines.append(f"   ↳ {child.summary}")
-            if child.files_written:
-                shown = ", ".join(child.files_written[:3])
-                more = len(child.files_written) - 3
-                lines.append(f"   📄 {shown}" + (f" +{more}" if more > 0 else ""))
-        elif child.state == "cancelled":
-            lines.append(f"{icon} {child.label} — cancelled after {dur}{tool_bit}")
-            if child.reason:
-                lines.append(f"   ↳ {child.reason}")
-        else:
-            lines.append(f"{icon} {child.label} — failed after {dur}{tool_bit}")
-            if child.reason:
-                lines.append(f"   ↳ {child.reason}")
-    if any(c.state == "completed" for c in children):
-        lines.append("Reported results are awaiting parent review.")
-    lines.append(_footer(stamp))
-    text = "\n".join(lines)
-    if len(text) > _CARD_MAX_CHARS:
-        text = text[: _CARD_MAX_CHARS - 1].rsplit("\n", 1)[0] + "\n…"
-    return text
+        verb = {"completed": "done", "cancelled": "stopped"}.get(child.state, "failed")
+        head = " · ".join(
+            p for p in (f"{icon} Subagent {verb}", pretty_model(child.model),
+                        _elapsed(child, now), _tool_count(child)) if p
+        )
+        lines = [head, _truncate_words(child.title, _TITLE_MAX)]
+        body = _final_body(child, _FINAL_SUMMARY_SINGLE)
+        if body:
+            lines.append(body)
+        if child.files_written:
+            lines.append("📄 " + ", ".join(child.files_written[:4])
+                         + (f" +{len(child.files_written) - 4}" if len(child.files_written) > 4 else ""))
+        return "\n".join(lines)
+    end = max((c.ended_at or now) for c in children)
+    counts = _state_counts(children)
+    lines = [" · ".join(p for p in (f"🔀 {len(children)} subagents finished", counts,
+                                     format_duration(end - group.created_at)) if p)]
+    for child in children:
+        icon = _ICONS.get(child.state, "•")
+        meta = " · ".join(p for p in (_who(child), _elapsed(child, now), _tool_count(child)) if p)
+        lines.append(f"{icon} {meta}")
+        body = _final_body(child, _FINAL_SUMMARY_MULTI)
+        if body:
+            lines.append(f"   ↳ {body}")
+    return "\n".join(lines)
+
+
+def _state_counts(children: List[ChildActivity]) -> str:
+    done = sum(1 for c in children if c.state == "completed")
+    failed = sum(1 for c in children if c.state == "failed")
+    cancelled = sum(1 for c in children if c.state == "cancelled")
+    if failed == 0 and cancelled == 0:
+        return ""
+    parts = [f"{done} done"] if done else []
+    if failed:
+        parts.append(f"{failed} failed")
+    if cancelled:
+        parts.append(f"{cancelled} stopped")
+    return " · ".join(parts)

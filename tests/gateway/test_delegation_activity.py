@@ -47,6 +47,9 @@ class FakeTelegramAdapter:
         self.status_calls: List[Dict[str, Any]] = []
         self.sends: List[Dict[str, Any]] = []
         self.cards: Dict[str, str] = {}
+        self.deleted: List[str] = []
+        self._status_message_ids: Dict[Any, str] = {}
+        self._mid_key: Dict[str, Any] = {}
         self._fail = fail
         self._retry_after = retry_after
         self._raise = raise_exc
@@ -62,8 +65,21 @@ class FakeTelegramAdapter:
         if self._fail > 0:
             self._fail -= 1
             return SendResult(success=False, error="flood", retry_after=self._retry_after)
-        self.cards[(chat_id, status_key)] = content
-        return SendResult(success=True, message_id="m1")
+        key = (chat_id, status_key)
+        self.cards[key] = content
+        mid = self._status_message_ids.get(key) or f"m{len(self._status_message_ids) + 1}"
+        self._status_message_ids[key] = mid
+        self._mid_key[mid] = key
+        return SendResult(success=True, message_id=mid)
+
+    async def delete_message(self, chat_id, message_id):
+        self.deleted.append(str(message_id))
+        self.cards.pop(self._mid_key.pop(str(message_id), None), None)
+        return True
+
+    def summary(self) -> str:
+        assert self.sends, "expected a final summary message"
+        return self.sends[-1]["content"]
 
     async def send(self, chat_id, content, reply_to=None, metadata=None):
         from gateway.platforms.base import SendResult
@@ -161,12 +177,14 @@ async def test_two_concurrent_titled_children_share_one_card():
     assert adapter.sends == []
     card = adapter.card()
     assert "Audit gateway auth" in card and "Summarize release notes" in card
-    assert "claude-opus-5-5" in card and "gpt-5.5" in card and "openrouter" in card
-    assert "read_file" in card and "web_search" in card
+    assert "Opus 5.5" in card and "GPT-5.5" in card
+    assert "openrouter" not in card  # provider plumbing stays out of the card
+    assert "read_file authz_mixin.py" in card and "web_search" in card
+    assert "gateway/authz_mixin.py" not in card  # basenames, not full paths
     # Clearly labelled as child activity, not the parent's own thoughts/tools.
     assert "subagent" in card.lower()
-    # Stable per-child identity shown consistently.
-    assert "#1" in card and "#2" in card
+    # One line per worker.
+    assert len([l for l in card.splitlines() if l.startswith("▸")]) == 2
     # No fake percentages.
     assert "%" not in card
     await pub.aclose()
@@ -242,7 +260,7 @@ async def test_progress_note_is_attributed_to_child_and_reasoning_is_never_shown
     # The note is an activity line attributed to child A (title + model) —
     # never to child B.
     note_line = next(l for l in card.splitlines() if "Checking token scoping" in l)
-    assert "#1 Audit gateway auth" in note_line and "claude-opus-5-5" in note_line
+    assert "Audit gateway auth" in note_line and "Opus 5.5" in note_line
     assert "Draft changelog" not in note_line
     await pub.aclose()
 
@@ -287,7 +305,6 @@ async def test_tool_start_is_sanitized_and_result_shows_outcome_not_output():
     assert snap["state"] == "running"
     assert snap["tools_failed"] == 1 and snap["tools_ok"] == 0
     assert "RAW-OUTPUT-BODY" not in card and SECRET not in card
-    assert "failed" in card.lower()
     await pub.aclose()
 
 
@@ -421,24 +438,17 @@ async def test_completion_error_and_cancellation_final_states():
     assert snap["sa-1"]["state"] == "completed"
     assert snap["sa-2"]["state"] == "failed"
     assert snap["sa-3"]["state"] == "cancelled"
-    card = adapter.card()
-    assert SECRET not in card
-    assert "Fixed the scope leak" in card
-    assert "authz_mixin.py" in card
-    # A child reporting done is NOT parent approval.
-    assert "parent review" in card.lower()
-    assert "approved" not in card.lower()
-    # Follow-up contract (activity-first): finished workers leave the live
-    # card, so each result is delivered ONCE as it happens — a finding for
-    # success (still "awaiting parent review"), an alert for failure/cancel.
-    alerts = [s["content"] for s in adapter.sends]
-    assert len(alerts) == 3
-    assert any("Fix auth" in m and "Fixed the scope leak" in m and "parent review" in m
-               for m in alerts)
-    assert any("Port tests" in m and "failed" in m.lower() for m in alerts)
-    assert any("Update docs" in m and "cancel" in m.lower() for m in alerts)
-    assert SECRET not in "\n".join(alerts)
     assert pub.tracker.group_finished("deleg_aaaa0001")
+    # Every result is reported ONCE, in one summary message at the bottom:
+    # no per-worker ✅/❌/⏹ pings.
+    assert len(adapter.sends) == 1
+    final = adapter.summary()
+    assert SECRET not in final
+    assert final.startswith("🔀 3 subagents finished")
+    assert "Fixed the scope leak" in final
+    assert "Port tests" in final and "failed" in final.lower()
+    assert "Update docs" in final and "stopped" in final.lower()
+    assert "approved" not in final.lower()
     await pub.aclose()
 
 
@@ -535,7 +545,7 @@ async def test_transport_failure_never_reaches_the_child_and_recovers():
     await pub.drain()
     snap = pub.tracker.snapshot("deleg_aaaa0001")[0]
     assert snap["state"] == "completed"
-    assert "completed" in adapter.card() or "done" in adapter.card().lower()
+    assert "done" in adapter.summary().lower()
     await pub.aclose()
 
 
@@ -577,8 +587,8 @@ async def test_stale_and_replayed_events_cannot_regress_final_state():
     assert snap["state"] == "completed"
     # Exactly one finding for the real completion; the replayed "failed"
     # completion produced no second message.
-    assert len(adapter.sends) == 1 and "all good" in adapter.sends[0]["content"]
-    assert "rm -rf build" not in adapter.card()
+    assert len(adapter.sends) == 1 and "all good" in adapter.summary()
+    assert "rm -rf build" not in adapter.summary()
     await pub.aclose()
 
 
@@ -603,7 +613,8 @@ async def test_stale_run_does_not_open_new_card_but_finalizes_existing():
     a("subagent.complete", status="interrupted", summary="", duration_seconds=2)
     await pub.drain()
     assert pub.tracker.snapshot("deleg_live")[0]["state"] == "cancelled"
-    assert "cancel" in adapter.card(key="delegation:deleg_live").lower()
+    assert "stopped" in adapter.summary().lower()
+    assert adapter.deleted, "the live card is removed once the summary lands"
     await pub.aclose()
 
 
@@ -748,7 +759,7 @@ async def test_rendered_frames_finished_workers_leave_the_active_feed():
     a("subagent.start", preview="g")
     b("subagent.start", preview="g")
 
-    # Frame 1: rapid identical tools coalesce into ONE attributed line.
+    # Frame 1: one line per worker, showing what it is doing right now.
     for path in ("a.py", "b.py", "c.py", "d.py"):
         a("tool.started", "read_file", path, {"path": path})
         clock.advance(1)
@@ -757,21 +768,20 @@ async def test_rendered_frames_finished_workers_leave_the_active_feed():
     b("tool.started", "terminal", "pytest", {"command": "pytest tests/cron -q"})
     await pub.drain()
     frame1 = _card_lines(adapter)
-    assert frame1[0].startswith("🔀 Subagents") and "2 active" in frame1[0] and "1 queued" in frame1[0]
-    # Queued workers are a count, not a listed row.
-    assert not any("Draft release notes" in l for l in frame1)
-    read_lines = [l for l in frame1 if "read_file" in l]
-    assert len(read_lines) == 1 and "×4" in read_lines[0] and "d.py" in read_lines[0]
-    assert "#1 Audit auth scoping · claude-opus-5-5" in read_lines[0]
-    # b's in-flight tool is on its "now" line, attributed with model/provider.
-    now_b = next(l for l in frame1 if l.startswith("▸ #2 Port cron tests"))
-    assert "gpt-5.5" in now_b and "openrouter" in now_b and "terminal" in now_b
+    assert frame1[0].startswith("🔀 3 subagents")
+    line_a = next(l for l in frame1 if "Audit auth scoping" in l)
+    assert "Opus 5.5" in line_a and "Scoping check looks wrong" in line_a
+    line_b = next(l for l in frame1 if "Port cron tests" in l)
+    assert "GPT-5.5" in line_b and "terminal pytest tests/cron -q" in line_b
+    assert "openrouter" not in line_b
+    # Finished tool calls don't pile up as a scrolling log.
+    assert not any("read_file" in l for l in frame1)
+    assert "Recent:" not in frame1
 
-    # Frame 2: b finishes -> gone from the live card entirely; its finding is
-    # delivered once as its own message.
+    # Frame 2: b finishes -> leaves the live card, counted in the header;
+    # no separate per-worker message.
     clock.advance(3)
     b("tool.completed", "terminal", None, None, duration=3.0, is_error=False)
-    b("_thinking", "All cron tests pass on the fixed branch")
     b("subagent.complete", status="completed", duration_seconds=10,
       summary="Ported 14 cron tests; all pass.")
     c("subagent.start", preview="g")
@@ -779,30 +789,29 @@ async def test_rendered_frames_finished_workers_leave_the_active_feed():
     frame2 = _card_lines(adapter)
     assert not any("Port cron tests" in l for l in frame2)
     assert "1 done" in frame2[0]
-    assert len(adapter.sends) == 1 and "Ported 14 cron tests" in adapter.sends[0]["content"]
-    recent = frame2[frame2.index("Recent:") + 1: -1]
-    assert 1 <= len(recent) <= 5
-    assert all(("Audit auth scoping" in l) or ("Draft release notes" in l) for l in recent)
+    assert adapter.sends == []
 
-    # Frame 3 (heartbeat): says what is pending instead of re-listing.
+    # Frame 3 (heartbeat): says what is pending; never posts.
     clock.advance(70)
     await pub.heartbeat_tick()
     frame3 = _card_lines(adapter)
-    now_a = next(l for l in frame3 if l.startswith("▸ #1 Audit auth scoping"))
-    assert "waiting for model response" in now_a
-    assert not any("Port cron tests" in l for l in frame3)
-    assert len(frame3) <= len(frame2)
-    assert len(adapter.sends) == 1  # heartbeats never post messages
+    line_a = next(l for l in frame3 if "Audit auth scoping" in l)
+    assert "waiting for model response" in line_a
+    assert adapter.sends == []
 
-    # Final frame: the detailed per-worker record lives in ONE final summary.
+    # Final: ONE summary message posted at the bottom; live card removed.
     a("subagent.complete", status="completed", duration_seconds=80, summary="Found the leak.")
     c("subagent.complete", status="failed", duration_seconds=70, summary="network error")
     await pub.drain()
-    final = adapter.card()
-    assert final.startswith("🔀 Subagents finished")
+    assert len(adapter.sends) == 1
+    final = adapter.summary()
+    assert final.startswith("🔀 3 subagents finished")
     for title in ("Audit auth scoping", "Port cron tests", "Draft release notes"):
         assert title in final
-    assert "Recent:" not in final and "▸" not in final
+    assert "Found the leak." in final and "Ported 14 cron tests" in final
+    assert "network error" in final
+    assert "▸" not in final
+    assert adapter.deleted and not adapter.cards
     await pub.aclose()
 
 
@@ -821,8 +830,8 @@ async def test_active_card_stays_compact_with_many_workers():
         cb("subagent.complete", status="completed", duration_seconds=5, summary="ok")
     await pub.drain()
     lines = _card_lines(adapter)
-    # header + <=6 now lines + overflow + "Recent:" + <=5 + footer
-    assert len(lines) <= 1 + 6 + 1 + 1 + 5 + 1
+    # header + <=6 worker lines + overflow
+    assert len(lines) <= 1 + 6 + 1
     assert not any(f"Worker {i} " in l or l.endswith(f"Worker {i}") for i in range(6) for l in lines[1:])
     await pub.aclose()
 
@@ -894,9 +903,11 @@ async def test_edit_only_transient_failure_backs_off_then_keeps_editing_same_car
     assert "b.py" in adapter.messages["s1"], "card must not freeze after one failed edit"
     a("subagent.complete", status="completed", summary="done", duration_seconds=3)
     await pub.drain()
-    cards = [s for s in adapter.sends if s["content"].startswith("🔀")]
-    assert len(cards) == 1, "final state must edit the card, not post a duplicate card"
-    assert adapter.messages["s1"].startswith("🔀 Subagents finished")
+    # Final summary is a NEW message at the bottom; the old live card is
+    # retired (edit-only adapters can't delete, so it points below).
+    assert len(adapter.sends) == 2
+    assert adapter.sends[-1]["content"].startswith("✅ Subagent done")
+    assert "summary below" in adapter.messages["s1"]
     await pub.aclose()
 
 
@@ -972,3 +983,200 @@ async def test_groups_without_delegation_id_get_a_per_publisher_key():
     assert len(keys) == 2, f"two turns must not share one status card: {keys}"
     await pub1.aclose()
     await pub2.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Parent and subagent finishing at the same time
+# ---------------------------------------------------------------------------
+
+
+def _busy_publisher(adapter, *, clock=None, defer=True, max_final_defer=90.0):
+    from gateway.delegation_activity import DelegationActivityPublisher
+
+    state = {"busy": True, "released": []}
+
+    def defer_final(release):
+        if not defer:
+            return False
+        state["released"].append(release)
+        return True
+
+    pub = DelegationActivityPublisher(
+        adapter=adapter,
+        chat_id="chat-A",
+        loop=asyncio.get_running_loop(),
+        min_interval=0.0,
+        clock=clock or FakeClock(),
+        auto_heartbeat=False,
+        is_parent_busy=lambda: state["busy"],
+        defer_final=defer_final,
+        max_final_defer=max_final_defer,
+    )
+    return pub, state
+
+
+@pytest.mark.asyncio
+async def test_summary_waits_for_the_parent_reply_then_posts_below_it():
+    """While the parent turn is still working, a finished subagent's summary
+    is held (the live card stays), so it never lands between the parent's
+    tool bubbles and its answer. After the parent's reply is delivered, the
+    summary is posted as the newest message and the live card is removed."""
+    adapter = FakeTelegramAdapter()
+    pub, state = _busy_publisher(adapter)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    a("tool.started", "read_file", "x.py", {"path": "x.py"})
+    await pub.drain()
+    a("subagent.complete", status="completed", summary="Root cause found.", duration_seconds=9)
+    await pub.drain()
+    assert adapter.sends == [], "summary must wait while the parent is still working"
+    assert len(state["released"]) == 1, "summary registered to fire after the parent's reply"
+    assert adapter.cards, "live card stays up while waiting"
+
+    # Parent's reply is delivered -> post-delivery callback fires.
+    await adapter.send("chat-A", "PARENT REPLY")
+    state["busy"] = False
+    state["released"][0]()
+    await pub.drain()
+    contents = [s["content"] for s in adapter.sends]
+    assert contents[0] == "PARENT REPLY"
+    assert contents[-1].startswith("✅ Subagent done") and "Root cause found." in contents[-1]
+    assert len(contents) == 2, "exactly one summary, after the parent's reply"
+    assert adapter.deleted and not adapter.cards, "live card removed"
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_summary_posts_immediately_when_parent_is_idle():
+    adapter = FakeTelegramAdapter()
+    pub, state = _busy_publisher(adapter)
+    state["busy"] = False
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    a("subagent.complete", status="completed", summary="Done.", duration_seconds=3)
+    await pub.drain()
+    assert len(adapter.sends) == 1 and "Done." in adapter.summary()
+    assert state["released"] == []
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_summary_falls_back_if_the_parent_reply_never_releases_it():
+    """A parent that crashes or never delivers must not strand the summary."""
+    adapter = FakeTelegramAdapter()
+    pub, state = _busy_publisher(adapter, max_final_defer=0.05)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    a("subagent.complete", status="completed", summary="Still delivered.", duration_seconds=3)
+    await pub.drain()
+    assert adapter.sends == []
+    await asyncio.sleep(0.15)  # bounded fallback fires; parent still "busy"
+    await pub.drain()
+    assert len(adapter.sends) == 1 and "Still delivered." in adapter.summary()
+    # A late release after the fallback does not post twice.
+    state["released"][0]()
+    await pub.drain()
+    assert len(adapter.sends) == 1
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_single_subagent_card_is_compact_and_readable():
+    clock = FakeClock()
+    adapter = FakeTelegramAdapter()
+    pub = _make_publisher(adapter, clock=clock)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner, title="Find why the summary card is skipped")
+    a("subagent.start", preview="g")
+    a("_thinking", "Two injection sites, checking run.py")
+    a("tool.started", "Read", "/home/x/repo/gateway/platforms/base.py",
+      {"path": "/home/x/repo/gateway/platforms/base.py"})
+    clock.advance(72)
+    await pub.drain()
+    lines = _card_lines(adapter)
+    assert lines == [
+        "🔀 Subagent · Opus 5.5 · 1m12s",
+        "Find why the summary card is skipped",
+        "🔧 Read base.py",
+        "💬 Two injection sites, checking run.py",
+    ]
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_without_a_delivery_hook_summary_polls_until_parent_is_idle(monkeypatch):
+    adapter = FakeTelegramAdapter()
+    pub, state = _busy_publisher(adapter, defer=False)
+    import gateway.delegation_activity as da
+
+    delays = []
+    real_call_later = pub._loop.call_later
+
+    def fast_call_later(delay, cb, *args):
+        delays.append(delay)
+        return real_call_later(0.01, cb, *args)
+
+    monkeypatch.setattr(pub._loop, "call_later", fast_call_later)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    a("subagent.complete", status="completed", summary="Polled.", duration_seconds=3)
+    await pub.drain()
+    await asyncio.sleep(0.05)
+    await pub.drain()
+    assert adapter.sends == [], "still busy: keep holding"
+    state["busy"] = False
+    await asyncio.sleep(0.05)
+    await pub.drain()
+    assert len(adapter.sends) == 1 and "Polled." in adapter.summary()
+    assert da  # module imported for monkeypatch scope
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_defer_final_only_registers_with_the_run_generation(monkeypatch):
+    """Registering the summary release without the run generation would
+    overwrite the turn's generation-tagged slot and drop its summary card."""
+    import gateway.delegation_activity as da
+
+    monkeypatch.setattr(da, "resolve_delegation_activity", lambda cfg, key: (True, 60))
+    registered = []
+
+    class _Adapter(FakeTelegramAdapter):
+        def __init__(self):
+            super().__init__()
+            self._active_sessions = {}
+
+        def register_post_delivery_callback(self, key, cb, *, generation=None):
+            registered.append((key, generation))
+
+    adapter = _Adapter()
+
+    class _Runner:
+        def _adapter_for_source(self, source):
+            return adapter
+
+        def _thread_metadata_for_source(self, source):
+            return None
+
+        def _session_key_for_source(self, source):
+            return "sk"
+
+    pub = da.build_turn_publisher(_Runner(), _source(), {}, "telegram", lambda: True)
+    event = asyncio.Event()
+    adapter._active_sessions["sk"] = event
+    assert pub._parent_busy() is True
+    assert pub._defer_final(lambda: None) is False, "no generation bound: must not register"
+    assert registered == []
+    event._clover_run_generation = 7
+    assert pub._defer_final(lambda: None) is True
+    assert registered == [("sk", 7)]
+    del adapter._active_sessions["sk"]
+    assert pub._parent_busy() is False
+    await pub.aclose()

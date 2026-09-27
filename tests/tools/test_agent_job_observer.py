@@ -140,7 +140,7 @@ async def test_two_concurrent_external_workers_attributed_and_redacted(hermetic_
     )
     # Tool calls are visible and attributed by title + model.
     assert "Bash" in everything and "Read" in everything and "terminal" in everything
-    assert any("#1 Audit cron locking · claude-opus-5-5" in c["content"] and "Bash" in c["content"]
+    assert any("Audit cron locking · Opus 5.5" in c["content"] and "Bash" in c["content"]
                for c in adapter.status_calls)
     assert any("Fix DST catchup · luna-large" in c["content"] for c in adapter.status_calls)
     # Public notes surface; private thinking, tool output, stray stdout never do.
@@ -155,13 +155,14 @@ async def test_two_concurrent_external_workers_attributed_and_redacted(hermetic_
     assert snap["Audit cron locking"]["tools_failed"] == 1
     assert snap["Fix DST catchup"]["model"] == "luna-large"
     assert all(s["state"] == "completed" for s in snap.values())
-    findings = [s["content"] for s in adapter.sends]
-    assert len(findings) == 2
-    assert any("Found the lock race" in f for f in findings)
-    assert any("Fixed DST catchup" in f for f in findings)
-    # One card for the job group, and it ends as a final summary.
+    # Both results arrive once, together, in one summary at the bottom.
+    assert len(adapter.sends) == 1
+    final = adapter.summary()
+    assert "Found the lock race" in final and "Fixed DST catchup" in final
+    assert "finished" in final
+    # One live card for the job group, removed once the summary lands.
     assert {c["key"] for c in adapter.status_calls} == {f"delegation:{group_id}"}
-    assert "finished" in adapter.card()
+    assert adapter.deleted
     await pub.aclose()
 
 
@@ -181,7 +182,7 @@ async def test_cancelled_and_failing_external_workers(hermetic_terminal):
     await pub.drain()
     live = adapter.card()
     assert "Long Codex job" in live
-    assert "lifecycle only (no tool visibility)" in live
+    assert "no tool detail" in live
     assert "booting" not in live  # raw output is never shown
 
     process_registry.kill_process(r1["session_id"])
@@ -191,7 +192,7 @@ async def test_cancelled_and_failing_external_workers(hermetic_terminal):
     assert snap["Broken worker"]["state"] == "failed"
     assert "exited with code 3" in snap["Broken worker"]["reason"]
     alerts = "\n".join(s["content"] for s in adapter.sends)
-    assert "Long Codex job" in alerts and "cancelled" in alerts
+    assert "Long Codex job" in alerts and "stopped" in alerts
     assert "Broken worker" in alerts and "failed" in alerts
     assert "oops" not in alerts
     await pub.aclose()
