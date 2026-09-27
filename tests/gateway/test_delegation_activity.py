@@ -184,7 +184,7 @@ async def test_two_concurrent_titled_children_share_one_card():
     # Clearly labelled as child activity, not the parent's own thoughts/tools.
     assert "subagent" in card.lower()
     # One line per worker.
-    assert len([l for l in card.splitlines() if l.startswith("▸")]) == 2
+    assert len([l for l in card.splitlines() if l.startswith("> ▸")]) == 2
     # No fake percentages.
     assert "%" not in card
     await pub.aclose()
@@ -1177,9 +1177,9 @@ async def test_single_subagent_card_is_compact_and_readable():
     lines = _card_lines(adapter)
     assert lines == [
         "🔀 Subagent · Opus 5.5 · 1m12s",
-        "Find why the summary card is skipped",
-        "🔧 Read base.py",
-        "💬 Two injection sites, checking run.py",
+        "> Find why the summary card is skipped",
+        "> 🔧 Read base.py",
+        "> 💬 Two injection sites, checking run.py",
     ]
     await pub.aclose()
 
@@ -1256,3 +1256,64 @@ async def test_defer_final_only_registers_with_the_run_generation(monkeypatch):
     del adapter._active_sessions["sk"]
     assert pub._parent_busy() is False
     await pub.aclose()
+
+
+def test_plain_summary_prefers_the_workers_plain_paragraph():
+    from agent.delegation_activity import plain_summary
+
+    answer = (
+        "## Findings\n1. **Polling never fires** (`gateway/x.py:474-477`).\n\n"
+        "Plain summary: I found three problems. Each one has a small fix."
+    )
+    assert plain_summary(answer) == "I found three problems. Each one has a small fix."
+
+
+def test_plain_summary_fallback_strips_code_paths_and_broken_sentences():
+    from agent.delegation_activity import plain_summary
+
+    answer = (
+        "Found three issues.\n\n1. **The polling fallback never fires** "
+        "(`gateway/delegation_activity.py:474-477`). `_recheck_summary` (:454) "
+        "clears `summary_waiting`, so the deadline resets."
+    )
+    out = plain_summary(answer)
+    assert out == "Found three issues. The polling fallback never fires."
+    for bad in ("`", "**", "gateway/", ":474", "clears ,"):
+        assert bad not in out
+
+
+def test_plain_summary_is_redacted_and_bounded():
+    from agent.delegation_activity import plain_summary
+
+    out = plain_summary("Plain summary: " + ("Done. " * 200) + SECRET)
+    assert SECRET not in out and len(out) <= 320
+
+
+@pytest.mark.asyncio
+async def test_subagent_output_is_quoted_apart_from_the_main_chat():
+    """Everything a subagent produced sits in a blockquote under a one-line
+    header, so it reads as separate from the main agent's own messages."""
+    adapter = FakeTelegramAdapter()
+    pub = _make_publisher(adapter)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    a("tool.started", "read_file", "x.py", {"path": "x.py"})
+    await pub.drain()
+    live = adapter.card().splitlines()
+    assert live[0].startswith("🔀 Subagent") and all(l.startswith("> ") for l in live[1:])
+    a("subagent.complete", status="completed", duration_seconds=3,
+      summary="**Done** (`a/b.py:3`).\n\nPlain summary: I checked the file. It is fine.")
+    await pub.drain()
+    final = adapter.summary().splitlines()
+    assert final[0].startswith("✅ Subagent done")
+    assert all(l.startswith("> ") for l in final[1:])
+    assert final[-1] == "> I checked the file. It is fine."
+    await pub.aclose()
+
+
+def test_child_prompt_asks_for_a_plain_summary():
+    from tools.delegate_tool import _build_child_system_prompt
+
+    prompt = _build_child_system_prompt("do x")
+    assert "Plain summary:" in prompt and "Simplified Technical English" in prompt
