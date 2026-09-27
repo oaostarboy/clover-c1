@@ -18,6 +18,22 @@ from clover_cli.doctor import _has_provider_env_config
 
 
 class TestDoctorPlatformHints:
+    def test_version_drift_fix_rewrites_only_version_line_in_git_checkout(self, monkeypatch, tmp_path):
+        (tmp_path / ".git").mkdir()
+        (tmp_path / "clover_cli").mkdir()
+        project = tmp_path / "pyproject.toml"
+        init = tmp_path / "clover_cli" / "__init__.py"
+        project.write_text('[project]\nversion = "9.8.7"\n', encoding="utf-8")
+        original = '# header\n__version__ = "0.0.1"\n__release_date__ = "today"\n'
+        init.write_text(original, encoding="utf-8")
+        monkeypatch.setattr(doctor, "PROJECT_ROOT", tmp_path)
+        issues = []
+
+        doctor._check_version_consistency(issues, should_fix=True)
+
+        assert init.read_text(encoding="utf-8") == original.replace('"0.0.1"', '"9.8.7"')
+
+
     def test_termux_package_hint(self, monkeypatch):
         monkeypatch.setenv("TERMUX_VERSION", "0.118.3")
         monkeypatch.setenv("PREFIX", "/data/data/com.termux/files/usr")
