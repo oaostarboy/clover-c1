@@ -620,7 +620,13 @@ def _to_expandable(text: str) -> str:
     lines = text.replace("||", "¦¦").split("\n")
     header = lines[0].replace("*", "")
     body = [ln[2:] if ln.startswith("> ") else ln for ln in lines[1:]]
-    out = [f"**> {header}"] + [f"> {ln}" for ln in body if ln.strip()]
+    # Telegram shows the first ~3 lines of a collapsed quote; two blank
+    # lines keep the details hidden until tapped, like the turn card.
+    details = [ln for ln in body if ln.strip()]
+    spacer = "\u2800"
+    out = [f"**> {header}"]
+    if details:
+        out += [f"> {spacer}", f"> {spacer}"] + [f"> {ln}" for ln in details]
     return "\n".join(out) + "||"
 
 

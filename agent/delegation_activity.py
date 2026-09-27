@@ -1028,6 +1028,10 @@ def plain_summary(text: Any, limit: int = PLAIN_SUMMARY_MAX) -> str:
     return _truncate_words(text, limit)
 
 
+# Visually blank line that chat platforms don't collapse away (U+2800).
+SPACER = "\u2800"
+
+
 def _quote(lines: List[str]) -> List[str]:
     """Blockquote: renders as a side-barred block on Telegram/Discord/Slack,
     setting subagent output apart from the main chat."""
@@ -1072,13 +1076,16 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
                          format_duration(end - group.created_at),
                          sum(c.tools_failed for c in children))]
     quoted: List[str] = []
-    for child in children:
-        icon = _ICONS.get(child.state, "•")
+    for i, child in enumerate(children):
+        if i:
+            quoted.append(SPACER)  # breathing room between workers
+        # Only problems get an icon; the header already says how it went.
+        icon = "" if child.state == "completed" else _ICONS.get(child.state, "•") + " "
         meta = " · ".join(p for p in (_who(child), _elapsed(child, now)) if p)
-        quoted.append(f"{icon} {meta}")
+        quoted.append(f"{icon}{meta}")
         body = _final_body(child, _FINAL_SUMMARY_MULTI)
         if body:
-            quoted.append(f"↳ {body}")
+            quoted.append(body)
     return "\n".join(lines + _quote(quoted))
 
 

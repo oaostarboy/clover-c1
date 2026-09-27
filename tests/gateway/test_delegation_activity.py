@@ -1449,3 +1449,31 @@ def test_expandable_quote_survives_bars_and_stars_in_card_text():
     assert card.count("||") == 1
     fmt = TelegramAdapter.format_message(object.__new__(TelegramAdapter), card)
     assert fmt.startswith("**>") and fmt.endswith("||") and fmt.count("||") == 1
+
+
+def test_collapsed_card_shows_only_the_header():
+    """Telegram shows ~3 lines of a collapsed quote: two blank lines after
+    the header keep every detail hidden until the card is tapped."""
+    from gateway.delegation_activity import _to_expandable
+
+    card = _to_expandable("✅ 2 subagents · ⏱ 9s\n> A · Opus 5.5 · 4s\n> Did A.\n> ⠀\n> B · Opus 5.5 · 5s\n> Did B.")
+    lines = card.splitlines()
+    assert lines[0] == "**> ✅ 2 subagents · ⏱ 9s"
+    assert lines[1] == lines[2] == "> \u2800"
+    assert "Did A." not in "\n".join(lines[:3])
+
+
+def test_group_summary_is_spaced_and_only_flags_problems():
+    from agent.delegation_activity import DelegationActivityTracker, SPACER
+
+    tr = DelegationActivityTracker(clock=lambda: 1000.0)
+    for i, (title, status) in enumerate([("One", "completed"), ("Two", "failed")]):
+        kw = dict(delegation_id="d", subagent_id=f"s{i}", task_index=i, task_count=2,
+                  title=title, model="claude-opus-5-5")
+        tr.observe("subagent.start", **kw)
+        tr.observe("subagent.complete", status=status, summary="Plain summary: ok.",
+                   duration_seconds=3, **kw)
+    lines = tr.render("d").splitlines()
+    assert "> One · Opus 5.5 · 3s" in lines  # success: no ✅ per worker
+    assert any(l.startswith("> ❌ Two") for l in lines)
+    assert f"> {SPACER}" in lines and not any("↳" in l for l in lines)
