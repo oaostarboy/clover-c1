@@ -473,11 +473,30 @@ def _legacy_kill_process_tree(proc: "subprocess.Popen") -> None:
             pass
 
 
+def probe_output_encoding() -> str:
+    """Codec for decoding native tool output (``wmic``, PowerShell, ``ps``).
+
+    Windows console tools emit text in the OEM/ANSI code page, not UTF-8, so a
+    non-English locale or a non-ASCII username came through mangled and
+    command-line matching (e.g. ``CLOVER_HOME=`` in gateway detection) failed.
+    Same approach as ``gateway_windows._schtasks_encoding``. POSIX: UTF-8.
+    """
+    if not IS_WINDOWS:
+        return "utf-8"
+    try:
+        import locale
+
+        return locale.getpreferredencoding(False) or "utf-8"
+    except Exception:
+        return "utf-8"
+
+
 def bounded_probe_run(
     argv: Sequence[str],
     *,
     timeout: float,
     errors: str = "replace",
+    encoding: "str | None" = None,
 ) -> "subprocess.CompletedProcess[str] | None":
     """Deadlock-safe ``subprocess.run(argv, capture_output=True, timeout=...)``
     for fail-open probe call sites. Returns a ``CompletedProcess`` when the
@@ -513,7 +532,7 @@ def bounded_probe_run(
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             text=True,
-            encoding="utf-8",
+            encoding=encoding or probe_output_encoding(),
             errors=errors,
             **_popen_kwargs,
         )
