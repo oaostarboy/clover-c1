@@ -166,14 +166,17 @@ _PLATFORM_DEFAULTS: dict[str, dict[str, Any]] = {
     "discord":     {**_TIER_HIGH, "reasoning_style": "subtext"},
 
     # Tier 2 — edit support, often customer/workspace channels
-    # Slack's Bolt adapter really implements chat.update (edit_message), so
-    # it keeps the medium tier's "new" tool_progress (one line per NEW tool
-    # call, edited in place — not the permanent-line spam clover-c1#14663
-    # worried about, since edits don't post new lines). This also means
-    # subagent delegation cards ("auto") show here, since they follow
+    # Slack's Bolt adapter really implements chat.update (edit_message) AND
+    # chat.delete (delete_message), so it keeps the medium tier's "new"
+    # tool_progress (one line per NEW tool call, edited in place — not the
+    # permanent-line spam clover-c1#14663 worried about, since edits don't
+    # post new lines) and opts into cleanup_progress: completed tool
+    # bubbles collapse into one summary card, same as Telegram. Subagent
+    # delegation cards ("auto") also show here, since they follow
     # tool_progress.
     "slack":           {
         **_TIER_MEDIUM,
+        "cleanup_progress": True,
         "long_running_notifications": False,
         "busy_ack_detail": False,
     },

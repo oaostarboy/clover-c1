@@ -305,15 +305,28 @@ class TestCleanupProgress:
     """``cleanup_progress`` is off by default and resolvable per-platform."""
 
     def test_default_off_for_all_platforms(self):
-        """No config set → cleanup_progress is off except where a platform
-        opts in (Telegram collapses its bubbles into a summary card)."""
+        """No config set → cleanup_progress is off except where a platform's
+        adapter really implements BOTH edit_message and delete_message
+        (Telegram, Slack collapse their bubbles into a summary card).
+        Discord/Mattermost/Matrix implement edit_message but not
+        delete_message, so they cannot safely collect progress-message ids
+        for cleanup and stay off."""
         from gateway.display_config import resolve_display_setting
 
-        for plat in ("discord", "slack", "email"):
-            assert resolve_display_setting({}, plat, "cleanup_progress") is False
-        # Telegram opts in: progress bubbles are replaced by one collapsed
-        # per-turn card, so a finished turn leaves a single artifact.
+        for plat in ("discord", "mattermost", "matrix", "email"):
+            assert resolve_display_setting({}, plat, "cleanup_progress") is False, plat
+        # Telegram and Slack opt in: progress bubbles are replaced by one
+        # collapsed per-turn card, so a finished turn leaves a single
+        # artifact instead of scrollback.
         assert resolve_display_setting({}, "telegram", "cleanup_progress") is True
+        assert resolve_display_setting({}, "slack", "cleanup_progress") is True
+
+    def test_slack_cleanup_progress_still_overridable_off(self):
+        """Users can still disable the collapsed-card cleanup explicitly."""
+        from gateway.display_config import resolve_display_setting
+
+        config = {"display": {"platforms": {"slack": {"cleanup_progress": False}}}}
+        assert resolve_display_setting(config, "slack", "cleanup_progress") is False
 
 
     def test_yaml_true_string_normalises_to_true(self):
