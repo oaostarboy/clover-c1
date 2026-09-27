@@ -825,3 +825,150 @@ async def test_active_card_stays_compact_with_many_workers():
     assert len(lines) <= 1 + 6 + 1 + 1 + 5 + 1
     assert not any(f"Worker {i} " in l or l.endswith(f"Worker {i}") for i in range(6) for l in lines[1:])
     await pub.aclose()
+
+
+# ---------------------------------------------------------------------------
+# Edit-only adapters (Discord, Matrix, Mattermost, ...): no send_or_update_status
+# ---------------------------------------------------------------------------
+
+
+class FakeEditOnlyAdapter:
+    """Discord-shaped transport: send() + edit_message(), no status keying."""
+
+    MAX_MESSAGE_LENGTH = 2000
+
+    def __init__(self, *, edit_failures=None) -> None:
+        # Each queued entry is consumed by one edit_message call:
+        # a float retry_after, "gone" (message deleted), or "error".
+        self.edit_failures = list(edit_failures or [])
+        self.sends: List[Dict[str, Any]] = []
+        self.edits: List[Dict[str, Any]] = []
+        self.messages: Dict[str, str] = {}
+
+    async def send(self, chat_id, content, reply_to=None, metadata=None):
+        from gateway.platforms.base import SendResult
+
+        if len(content) > self.MAX_MESSAGE_LENGTH:
+            return SendResult(success=False, error="message too long")
+        mid = f"s{len(self.sends) + 1}"
+        self.sends.append({"chat_id": chat_id, "content": content})
+        self.messages[mid] = content
+        return SendResult(success=True, message_id=mid)
+
+    async def edit_message(self, chat_id, message_id, content, *, finalize=False, metadata=None):
+        from gateway.platforms.base import SendResult
+
+        self.edits.append({"message_id": message_id, "content": content})
+        if len(content) > self.MAX_MESSAGE_LENGTH:
+            return SendResult(success=False, error="message too long")
+        if self.edit_failures:
+            kind = self.edit_failures.pop(0)
+            if kind == "gone":
+                return SendResult(success=False, error="Unknown Message (404)")
+            if kind == "error":
+                return SendResult(success=False, error="connection reset")
+            return SendResult(success=False, error="rate limited", retry_after=float(kind))
+        self.messages[message_id] = content
+        return SendResult(success=True, message_id=message_id)
+
+
+@pytest.mark.asyncio
+async def test_edit_only_transient_failure_backs_off_then_keeps_editing_same_card():
+    clock = FakeClock()
+    adapter = FakeEditOnlyAdapter(edit_failures=[5.0])
+    pub = _make_publisher(adapter, clock=clock)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    assert len(adapter.sends) == 1
+    a("tool.started", "read_file", "a.py", {"path": "a.py"})
+    await pub.flush()  # edit rejected with retry_after=5
+    assert len(adapter.edits) == 1
+    a("tool.started", "read_file", "b.py", {"path": "b.py"})
+    await pub.flush()
+    assert len(adapter.edits) == 1, "retry_after must be honoured on edit-only adapters"
+    clock.advance(6)
+    await pub.flush()
+    assert len(adapter.edits) == 2
+    assert "b.py" in adapter.messages["s1"], "card must not freeze after one failed edit"
+    a("subagent.complete", status="completed", summary="done", duration_seconds=3)
+    await pub.drain()
+    cards = [s for s in adapter.sends if s["content"].startswith("🔀")]
+    assert len(cards) == 1, "final state must edit the card, not post a duplicate card"
+    assert adapter.messages["s1"].startswith("🔀 Subagents finished")
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_edit_only_plain_error_is_retried_not_marked_delivered():
+    clock = FakeClock()
+    adapter = FakeEditOnlyAdapter(edit_failures=["error"])
+    pub = _make_publisher(adapter, clock=clock)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    a("tool.started", "read_file", "a.py", {"path": "a.py"})
+    await pub.flush()
+    assert "a.py" not in adapter.messages["s1"]
+    clock.advance(5)
+    await pub.flush()
+    assert "a.py" in adapter.messages["s1"]
+    assert len(adapter.sends) == 1
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_edit_only_deleted_card_is_reposted_once():
+    clock = FakeClock()
+    adapter = FakeEditOnlyAdapter(edit_failures=["gone"])
+    pub = _make_publisher(adapter, clock=clock)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    await pub.drain()
+    a("tool.started", "read_file", "a.py", {"path": "a.py"})
+    await pub.drain()
+    clock.advance(5)
+    await pub.flush()
+    assert len(adapter.sends) == 2, "a deleted card is replaced by one new card"
+    assert "a.py" in adapter.messages["s2"]
+    a("tool.started", "read_file", "b.py", {"path": "b.py"})
+    await pub.drain()
+    assert "b.py" in adapter.messages["s2"] and len(adapter.sends) == 2
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_card_fits_the_adapter_message_limit():
+    adapter = FakeEditOnlyAdapter()
+    pub = _make_publisher(adapter)
+    runner = _turn_runner(pub)
+    cbs = [_child_cb(runner, index=i, count=12, subagent_id=f"sa-{i}",
+                     title=f"Worker {i} " + "long title " * 8) for i in range(12)]
+    for i, cb in enumerate(cbs):
+        cb("subagent.start", preview="g")
+        cb("tool.started", "terminal", "x" * 300, {"command": "echo " + "x" * 300})
+    for cb in cbs:
+        cb("subagent.complete", status="completed", duration_seconds=5, summary="ok " * 80)
+    await pub.drain()
+    assert adapter.sends, "card must be delivered"
+    assert all(len(m) <= adapter.MAX_MESSAGE_LENGTH for m in adapter.messages.values())
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_groups_without_delegation_id_get_a_per_publisher_key():
+    adapter = FakeTelegramAdapter()
+    pub1 = _make_publisher(adapter)
+    pub2 = _make_publisher(adapter)
+    for pub in (pub1, pub2):
+        runner = _turn_runner(pub)
+        a = _child_cb(runner, delegation_id=None)
+        a("subagent.start", preview="g")
+        await pub.drain()
+    keys = {k for (_c, k) in adapter.cards}
+    assert len(keys) == 2, f"two turns must not share one status card: {keys}"
+    await pub1.aclose()
+    await pub2.aclose()

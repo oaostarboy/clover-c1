@@ -89,7 +89,6 @@ class _CardState:
     flood_backoff: bool = False
     failures: int = 0
     message_id: Optional[str] = None
-    edit_broken: bool = False
     alerts_sent: int = 0
 
 
@@ -136,6 +135,10 @@ class DelegationActivityPublisher:
         self._closed = False
         self._jobs_group: Optional[str] = None
         self._jobs_count = 0
+        # Fallback group for relays that carry no delegation_id (e.g. live
+        # transcript creation failed). Per publisher, so two turns in one chat
+        # never share a status key like "delegation:delegation".
+        self._fallback_group = f"deleg_{uuid.uuid4().hex[:8]}"
 
     def external_job_identity(self) -> Tuple[str, int]:
         """Group id + index for an external agent job registered this turn.
@@ -163,6 +166,8 @@ class DelegationActivityPublisher:
         """Fold one relayed child event. Never raises, never blocks on I/O."""
         if self._closed:
             return
+        if not kwargs.get("delegation_id"):
+            kwargs["delegation_id"] = self._fallback_group
         try:
             group_id, alerts = self.tracker.observe(
                 event_type, tool_name, preview, args, **kwargs
@@ -315,7 +320,7 @@ class DelegationActivityPublisher:
 
     async def _deliver_card(self, gid: str) -> None:
         card = self._cards[gid]
-        text = self.tracker.render(gid)
+        text = _fit_to_limit(self.tracker.render(gid), self._message_limit())
         with self._state_lock:
             if not text or text == card.last_text:
                 card.dirty = False
@@ -372,14 +377,21 @@ class DelegationActivityPublisher:
                 updater(self._chat_id, f"delegation:{gid}", text, metadata=self._metadata)
             )
         editor = getattr(adapter, "edit_message", None)
-        if card.message_id and callable(editor) and not card.edit_broken:
+        if card.message_id and callable(editor):
             result = await _maybe_await(
                 editor(self._chat_id, card.message_id, text, finalize=True, metadata=self._metadata)
             )
             if getattr(result, "success", False):
                 return result
-            card.edit_broken = True
-        if card.message_id and not final:
+            if not _message_gone(result):
+                # Transient (rate limit, network, server): report the failure
+                # so _record_failure backs off and honours retry_after, and the
+                # latest state is retried as an edit of the same card.
+                return result
+            # The card was deleted or can no longer be edited: post a
+            # replacement once and keep editing that one.
+            card.message_id = None
+        elif card.message_id and not final:
             # No working edit path: don't turn every update into a new
             # message. Only the final state gets one more post.
             from gateway.platforms.base import SendResult
@@ -389,6 +401,16 @@ class DelegationActivityPublisher:
         if getattr(result, "success", False) and getattr(result, "message_id", None):
             card.message_id = str(result.message_id)
         return result
+
+    def _message_limit(self) -> int:
+        adapter = self._adapter
+        try:
+            fn = getattr(adapter, "max_message_length_for_chat", None)
+            if callable(fn):
+                return int(fn(self._chat_id) or 0) or 4096
+            return int(getattr(adapter, "MAX_MESSAGE_LENGTH", 0) or 0) or 4096
+        except Exception:
+            return 4096
 
     async def _deliver_alerts(self) -> None:
         with self._state_lock:
@@ -406,6 +428,34 @@ class DelegationActivityPublisher:
                 )
             except Exception:
                 logger.debug("delegation alert delivery failed", exc_info=True)
+
+
+_GONE_MARKERS = (
+    "not found",
+    "unknown message",
+    "message to edit not found",
+    "message can't be edited",
+    "message_id_invalid",
+    "deleted",
+    "404",
+)
+
+
+def _message_gone(result: Any) -> bool:
+    """True only for a confirmed "that message no longer exists / is not editable"."""
+    if result is None:
+        return False
+    error = str(getattr(result, "error", "") or "").lower()
+    return any(marker in error for marker in _GONE_MARKERS)
+
+
+def _fit_to_limit(text: str, limit: int) -> str:
+    """Trim a card to the adapter's message limit on a line boundary."""
+    if not text or len(text) <= limit:
+        return text
+    budget = max(16, limit - 2)
+    cut = text[:budget].rsplit("\n", 1)[0]
+    return (cut or text[:budget]) + "\n…"
 
 
 async def _maybe_await(value: Any) -> Any:
