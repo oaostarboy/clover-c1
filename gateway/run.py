@@ -30456,6 +30456,101 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         return False
             return False
 
+        _cleanup_registered = False
+
+        def _register_turn_card_cleanup(response: Any) -> None:
+            """Collapse this turn's progress bubbles into the summary card.
+
+            Registered as a post-delivery callback. Called from the normal
+            completed-turn exit AND from the queued follow-up branch, which
+            returns early (and pops the callback slot) before reaching the
+            normal exit — without this, a turn followed by a queued message
+            (e.g. an async delegation result) never got its card.
+            """
+            nonlocal _cleanup_registered
+            if _cleanup_registered:
+                return
+            _cleanup_registered = True
+            # Schedule deletion of tracked temporary progress bubbles after the
+            # final response lands. Failed runs skip this so bubbles remain as
+            # breadcrumbs for the user to see what work happened. Only fires on
+            # adapters that support ``delete_message`` (see init above); failures
+            # are swallowed — deletion is best-effort.
+            if (
+                _cleanup_progress
+                and _cleanup_adapter is not None
+                and _cleanup_msg_ids
+                and session_key
+                and isinstance(response, dict)
+                and not response.get("failed")
+                and hasattr(_cleanup_adapter, "register_post_delivery_callback")
+            ):
+                _ids_snapshot = list(_cleanup_msg_ids)
+                _chat_id_snapshot = source.chat_id
+                _adapter_snapshot = _cleanup_adapter
+                _loop_snapshot = asyncio.get_running_loop()
+                # Collapsed-card mode: instead of deleting every bubble, edit the
+                # FIRST one into a single expandable summary card and delete the
+                # rest. Falls back to plain deletion when the card is empty (a
+                # turn that did no real work) or the adapter cannot edit.
+                try:
+                    from agent.turn_summary import format_collapsed_turn_card
+                    _card_text = format_collapsed_turn_card(
+                        turn_ctx._summary_thoughts,
+                        turn_ctx._summary_tools,
+                        time.monotonic() - turn_ctx._summary_t0,
+                    )
+                except Exception:
+                    _card_text = ""
+                _card_edit = getattr(type(_adapter_snapshot), "edit_message", None)
+                _can_card = bool(_card_text) and _card_edit is not None
+
+                def _cleanup_temp_bubbles() -> None:
+                    async def _delete_all() -> None:
+                        _ids = list(_ids_snapshot)
+                        _keep = None
+                        if _can_card and _ids:
+                            _keep = _ids[0]
+                            try:
+                                # finalize=True is REQUIRED: without it the adapter
+                                # takes the streaming branch and pushes the text
+                                # through with NO parse_mode, so the card arrives
+                                # as literal "**> ... ||" markup in the chat.
+                                await _adapter_snapshot.edit_message(
+                                    _chat_id_snapshot, _keep, _card_text,
+                                    finalize=True,
+                                )
+                            except Exception:
+                                # Edit failed — fall back to deleting it too, so a
+                                # stale progress bubble is never left behind.
+                                _keep = None
+                        for _mid in _ids:
+                            if _keep is not None and _mid == _keep:
+                                continue
+                            try:
+                                await _adapter_snapshot.delete_message(
+                                    _chat_id_snapshot, _mid
+                                )
+                            except Exception:
+                                pass
+                    try:
+                        safe_schedule_threadsafe(
+                            _delete_all(), _loop_snapshot,
+                            logger=logger,
+                            log_message="Temp bubble cleanup scheduling error",
+                        )
+                    except Exception:
+                        pass
+
+                try:
+                    _cleanup_adapter.register_post_delivery_callback(
+                        session_key,
+                        _cleanup_temp_bubbles,
+                        generation=run_generation,
+                    )
+                except Exception as _rpe:
+                    logger.debug("Post-delivery cleanup registration failed: %s", _rpe)
+
         try:
             # Run in thread pool to not block.  Use an *inactivity*-based
             # timeout instead of a wall-clock limit: the agent can run for
@@ -31005,6 +31100,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             )
                         except Exception as e:
                             logger.warning("Failed to send first response before queued message: %s", e)
+                    # Stop this turn's progress sender and register its summary
+                    # card BEFORE the pop below, so the pop fires it. The
+                    # recursive run for the follow-up owns its own bubbles.
+                    if progress_task:
+                        progress_task.cancel()
+                    _register_turn_card_cleanup(_delivery_result)
                     # Release deferred bg-review notifications now that the
                     # first response has been delivered.  Pop from the
                     # adapter's callback dict (prevents double-fire in
@@ -31378,85 +31479,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     len(_final),
                 )
 
-        # Schedule deletion of tracked temporary progress bubbles after the
-        # final response lands. Failed runs skip this so bubbles remain as
-        # breadcrumbs for the user to see what work happened. Only fires on
-        # adapters that support ``delete_message`` (see init above); failures
-        # are swallowed — deletion is best-effort.
-        if (
-            _cleanup_progress
-            and _cleanup_adapter is not None
-            and _cleanup_msg_ids
-            and session_key
-            and isinstance(response, dict)
-            and not response.get("failed")
-            and hasattr(_cleanup_adapter, "register_post_delivery_callback")
-        ):
-            _ids_snapshot = list(_cleanup_msg_ids)
-            _chat_id_snapshot = source.chat_id
-            _adapter_snapshot = _cleanup_adapter
-            _loop_snapshot = asyncio.get_running_loop()
-            # Collapsed-card mode: instead of deleting every bubble, edit the
-            # FIRST one into a single expandable summary card and delete the
-            # rest. Falls back to plain deletion when the card is empty (a
-            # turn that did no real work) or the adapter cannot edit.
-            try:
-                from agent.turn_summary import format_collapsed_turn_card
-                _card_text = format_collapsed_turn_card(
-                    turn_ctx._summary_thoughts,
-                    turn_ctx._summary_tools,
-                    time.monotonic() - turn_ctx._summary_t0,
-                )
-            except Exception:
-                _card_text = ""
-            _card_edit = getattr(type(_adapter_snapshot), "edit_message", None)
-            _can_card = bool(_card_text) and _card_edit is not None
-
-            def _cleanup_temp_bubbles() -> None:
-                async def _delete_all() -> None:
-                    _ids = list(_ids_snapshot)
-                    _keep = None
-                    if _can_card and _ids:
-                        _keep = _ids[0]
-                        try:
-                            # finalize=True is REQUIRED: without it the adapter
-                            # takes the streaming branch and pushes the text
-                            # through with NO parse_mode, so the card arrives
-                            # as literal "**> ... ||" markup in the chat.
-                            await _adapter_snapshot.edit_message(
-                                _chat_id_snapshot, _keep, _card_text,
-                                finalize=True,
-                            )
-                        except Exception:
-                            # Edit failed — fall back to deleting it too, so a
-                            # stale progress bubble is never left behind.
-                            _keep = None
-                    for _mid in _ids:
-                        if _keep is not None and _mid == _keep:
-                            continue
-                        try:
-                            await _adapter_snapshot.delete_message(
-                                _chat_id_snapshot, _mid
-                            )
-                        except Exception:
-                            pass
-                try:
-                    safe_schedule_threadsafe(
-                        _delete_all(), _loop_snapshot,
-                        logger=logger,
-                        log_message="Temp bubble cleanup scheduling error",
-                    )
-                except Exception:
-                    pass
-
-            try:
-                _cleanup_adapter.register_post_delivery_callback(
-                    session_key,
-                    _cleanup_temp_bubbles,
-                    generation=run_generation,
-                )
-            except Exception as _rpe:
-                logger.debug("Post-delivery cleanup registration failed: %s", _rpe)
+        _register_turn_card_cleanup(response)
 
         return response
 
