@@ -3835,6 +3835,33 @@ class DiscordAdapter(BasePlatformAdapter):
             logger.error("[%s] Failed to edit Discord message %s: %s", self.name, message_id, e, exc_info=True)
             return SendResult(success=False, error=str(e))
 
+    async def delete_message(self, chat_id: str, message_id: str) -> bool:
+        """Delete a previously sent Discord message.
+
+        Used by the stream consumer's fresh-final cleanup path to remove
+        long-lived progress/preview bubbles once the final response has
+        landed. Resolves the channel the same way ``edit_message`` does
+        (cache lookup, then ``fetch_channel`` fallback) and deletes via
+        ``get_partial_message`` — no fetch of the message itself needed.
+        Failures (already deleted, missing permission, unknown channel)
+        are non-fatal — the caller leaves the message in place and this
+        logs at debug level.
+        """
+        if not self._client:
+            return False
+        try:
+            channel = self._client.get_channel(int(chat_id))
+            if not channel:
+                channel = await self._client.fetch_channel(int(chat_id))
+            await channel.get_partial_message(int(message_id)).delete()
+            return True
+        except Exception as e:
+            logger.debug(
+                "[%s] Failed to delete Discord message %s: %s",
+                self.name, message_id, e,
+            )
+            return False
+
     @staticmethod
     def _is_length_overflow_error(err: Exception) -> bool:
         """True when a Discord edit/send failed because text exceeded 2,000.

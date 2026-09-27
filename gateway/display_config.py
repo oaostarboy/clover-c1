@@ -162,8 +162,11 @@ _PLATFORM_DEFAULTS: dict[str, dict[str, Any]] = {
     },
     # Discord has a native "subtext" primitive (-# small grey text) that reads
     # as metadata rather than content, so reasoning summaries default to it
-    # here instead of the fenced code block used elsewhere.
-    "discord":     {**_TIER_HIGH, "reasoning_style": "subtext"},
+    # here instead of the fenced code block used elsewhere. The adapter
+    # implements both edit_message and delete_message, so it opts into
+    # cleanup_progress like Telegram/Slack: completed tool bubbles collapse
+    # into one summary card instead of permanent scrollback.
+    "discord":     {**_TIER_HIGH, "reasoning_style": "subtext", "cleanup_progress": True},
 
     # Tier 2 — edit support, often customer/workspace channels
     # Slack's Bolt adapter really implements chat.update (edit_message) AND
