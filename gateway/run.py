@@ -29733,12 +29733,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         from gateway.config import Platform
         tool_progress_enabled = progress_mode not in {"off", "log"} and source.platform != Platform.WEBHOOK
         # Live working-state status for text-rendering typing indicators
-        # (Slack's assistant status line). Independent of tool_progress —
-        # Slack defaults tool_progress off (permanent lines spam channels)
-        # but the status line is ephemeral, so live status stays useful
-        # there. Rendering rides the existing _keep_typing refresh: the
-        # callback only stores a phrase on the adapter, costing zero extra
-        # platform API calls.
+        # (Slack's assistant status line). Independent of tool_progress:
+        # the status line is ephemeral and useful even where a user or
+        # platform default keeps tool_progress quiet. Rendering rides the
+        # existing _keep_typing refresh: the callback only stores a phrase
+        # on the adapter, costing zero extra platform API calls.
         _live_status_mode = resolve_display_setting(
             user_config, platform_key, "live_status", "full"
         )
@@ -29775,9 +29774,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _thinking_enabled = _thinking_mode != "off"
         # Slack-native task cards (#29483): when the Slack adapter's opt-in
         # is set, tool progress renders as native plan/task cards via
-        # chat.startStream — the progress queue is needed even though Slack
-        # keeps ordinary text tool_progress off by default (requiring both
-        # flags would silently leave the native feature inactive).
+        # chat.startStream — the progress queue is needed even for a user
+        # who explicitly overrides ordinary text tool_progress to off while
+        # keeping native task cards on (requiring both flags would silently
+        # leave the native feature inactive).
         _progress_adapter_for_native = self._adapter_for_source(source)
         _native_slack_task_cards = False
         if (
