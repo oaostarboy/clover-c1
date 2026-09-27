@@ -184,7 +184,7 @@ async def test_two_concurrent_titled_children_share_one_card():
     # Clearly labelled as child activity, not the parent's own thoughts/tools.
     assert "subagent" in card.lower()
     # One line per worker.
-    assert len([l for l in card.splitlines() if l.startswith("> ▸")]) == 2
+    assert len([l for l in card.splitlines() if l.startswith("> 🍀 **")]) == 2
     # No fake percentages.
     assert "%" not in card
     await pub.aclose()
@@ -1177,7 +1177,7 @@ async def test_single_subagent_card_is_compact_and_readable():
     lines = _card_lines(adapter)
     assert lines == [
         "🔀 Opus 5.5 · 🛠 1 tool call · ⏱ 1m12s",
-        "> Find why the summary card is skipped",
+        "> **Find why the summary card is skipped**",
         "> 🔧 Read base.py",
         "> 💬 Two injection sites, checking run.py",
     ]
@@ -1474,6 +1474,7 @@ def test_group_summary_is_spaced_and_only_flags_problems():
         tr.observe("subagent.complete", status=status, summary="Plain summary: ok.",
                    duration_seconds=3, **kw)
     lines = tr.render("d").splitlines()
-    assert "> One · Opus 5.5 · 3s" in lines  # success: no ✅ per worker
-    assert any(l.startswith("> ❌ Two") for l in lines)
+    assert "> 🍀 **One** · Opus 5.5 · ⏱ 3s" in lines  # 🍀 per worker, bold title
+    assert "> ❌ **Two** · Opus 5.5 · ⏱ 3s" in lines
+    assert "> failed: ok." in lines  # reason uses the plain paragraph
     assert f"> {SPACER}" in lines and not any("↳" in l for l in lines)

@@ -664,7 +664,7 @@ class DelegationActivityTracker:
         elif status == "timeout":
             child.reason = f"timed out after {format_duration(dur)}"
         else:
-            child.reason = sanitize_text(summary_raw, _REASON_MAX) or "failed"
+            child.reason = sanitize_text(plain_summary(summary_raw) or summary_raw, _REASON_MAX) or "failed"
         files = kw.get("files_written") or []
         if isinstance(files, (list, tuple)):
             child.files_written = [
@@ -909,6 +909,23 @@ def _stats_head(icon: str, label: str, calls: int, elapsed: str, failed: int = 0
     return " · ".join(parts)
 
 
+WORKER_ICON = "🍀"
+
+
+def _bold_title(child: ChildActivity) -> str:
+    title = _truncate_words(child.title, _TITLE_MAX).replace("*", "")
+    return f"**{title}**"
+
+
+def _worker_line(child: ChildActivity, now: float) -> str:
+    """One finished worker, same stats shape as the header:
+    ``🍀 **Title** · Opus 5.5 · 🛠 2 tool calls · ⏱ 10s`` (❌/⏹ on problems)."""
+    icon = WORKER_ICON if child.state == "completed" else _ICONS.get(child.state, "•")
+    label = " · ".join(p for p in (_bold_title(child), pretty_model(child.model)) if p)
+    return _stats_head(icon, label, _calls(child, live=False), _elapsed(child, now),
+                       child.tools_failed)
+
+
 def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
     children = group.ordered()
     active = [c for c in children if c.state in _ACTIVE_STATES or c.state == "queued"]
@@ -917,7 +934,7 @@ def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
         child = children[0]
         head = _stats_head("🔀", pretty_model(child.model) or "Subagent",
                            _calls(child, live=True), elapsed)
-        quoted = [_truncate_words(child.title, _TITLE_MAX), _doing(child, now)]
+        quoted = [_bold_title(child), _doing(child, now)]
         if child.note and child.open_tools and child.visibility != "lifecycle":
             quoted.append(f"💬 {child.note}")
         return "\n".join([head] + _quote(quoted))
@@ -937,7 +954,8 @@ def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
         if shown >= _MAX_ACTIVE_LINES:
             continue
         shown += 1
-        quoted.append(f"▸ {_who(child)} — {_doing(child, now)}")
+        who = " · ".join(p for p in (_bold_title(child), pretty_model(child.model)) if p)
+        quoted.append(f"{WORKER_ICON} {who} — {_doing(child, now)}")
     hidden = len(active) - shown
     if hidden > 0:
         quoted.append(f"+{hidden} more running")
@@ -1054,7 +1072,7 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
         head = _stats_head(icon, pretty_model(child.model) or "Subagent",
                            _calls(child, live=False), _elapsed(child, now),
                            child.tools_failed)
-        quoted = [_truncate_words(child.title, _TITLE_MAX)]
+        quoted = [_bold_title(child)]
         body = _final_body(child, _FINAL_SUMMARY_SINGLE)
         if body:
             quoted.append(body)
@@ -1079,10 +1097,7 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
     for i, child in enumerate(children):
         if i:
             quoted.append(SPACER)  # breathing room between workers
-        # Only problems get an icon; the header already says how it went.
-        icon = "" if child.state == "completed" else _ICONS.get(child.state, "•") + " "
-        meta = " · ".join(p for p in (_who(child), _elapsed(child, now)) if p)
-        quoted.append(f"{icon}{meta}")
+        quoted.append(_worker_line(child, now))
         body = _final_body(child, _FINAL_SUMMARY_MULTI)
         if body:
             quoted.append(body)
