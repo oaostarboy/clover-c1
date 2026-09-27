@@ -444,7 +444,7 @@ async def test_completion_error_and_cancellation_final_states():
     assert len(adapter.sends) == 1
     final = adapter.summary()
     assert SECRET not in final
-    assert final.startswith("🔀 3 subagents ·") and "⏱" in final.splitlines()[0]
+    assert final.startswith("❌ 3 subagents ·") and "⏱" in final.splitlines()[0]
     assert "Fixed the scope leak" in final
     assert "Port tests" in final and "failed" in final.lower()
     assert "Update docs" in final and "stopped" in final.lower()
@@ -805,7 +805,7 @@ async def test_rendered_frames_finished_workers_leave_the_active_feed():
     await pub.drain()
     assert len(adapter.sends) == 1
     final = adapter.summary()
-    assert final.startswith("🔀 3 subagents ·") and "⏱" in final.splitlines()[0]
+    assert final.startswith("❌ 3 subagents ·") and "⏱" in final.splitlines()[0]
     for title in ("Audit auth scoping", "Port cron tests", "Draft release notes"):
         assert title in final
     assert "Found the leak." in final and "Ported 14 cron tests" in final
@@ -1360,4 +1360,51 @@ async def test_header_matches_the_main_agent_turn_card():
     a("subagent.complete", status="completed", summary="Plain summary: Done.", duration_seconds=25)
     await pub.drain()
     assert adapter.summary().splitlines()[0] == "✅ Opus 5.5 · 🛠 2 tool calls · ⏱ 25s"
+    await pub.aclose()
+
+
+@pytest.mark.parametrize("model, expected", [
+    ("claude-opus-5-5", "Opus 5.5"),
+    ("claude-sonnet-4-5-20250929", "Sonnet 4.5"),
+    ("anthropic/claude-opus-4.5", "Opus 4.5"),
+    ("gpt-6-sol", "GPT-6 Sol"),
+    ("", ""),
+])
+def test_pretty_model_names(model, expected):
+    from agent.delegation_activity import pretty_model
+
+    assert pretty_model(model) == expected
+
+
+@pytest.mark.asyncio
+async def test_done_header_counts_tools_still_running_at_the_end():
+    adapter = FakeTelegramAdapter()
+    pub = _make_publisher(adapter)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner)
+    a("subagent.start", preview="g")
+    a("tool.started", "read_file", "a.py", {"path": "a.py"})
+    a("tool.completed", "read_file", None, None, duration=0.1, is_error=False)
+    a("tool.started", "terminal", "sleep", {"command": "sleep 99"})
+    await pub.drain()
+    assert "🛠 2 tool calls" in adapter.card()
+    a("subagent.complete", status="interrupted", duration_seconds=5)
+    await pub.drain()
+    assert "🛠 2 tool calls (1 failed)" in adapter.summary().splitlines()[0]
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_group_header_shows_failure_not_running_icon():
+    adapter = FakeTelegramAdapter()
+    pub = _make_publisher(adapter)
+    runner = _turn_runner(pub)
+    a = _child_cb(runner, index=0, count=2, subagent_id="s1", title="One")
+    b = _child_cb(runner, index=1, count=2, subagent_id="s2", title="Two")
+    a("subagent.start", preview="g")
+    b("subagent.start", preview="g")
+    a("subagent.complete", status="completed", summary="ok", duration_seconds=1)
+    b("subagent.complete", status="failed", summary="boom", duration_seconds=1)
+    await pub.drain()
+    assert adapter.summary().startswith("❌ 2 subagents")
     await pub.aclose()
