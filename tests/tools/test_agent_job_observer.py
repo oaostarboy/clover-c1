@@ -62,7 +62,7 @@ def hermetic_terminal(monkeypatch, tmp_path):
 CLAUDE_WORKER = textwrap.dedent(f"""
     import json, sys, time
     def emit(o):
-        print(json.dumps(o), flush=True); time.sleep(0.05)
+        print(json.dumps(o), flush=True); time.sleep(0.3)
     emit({{"type": "system", "subtype": "init", "model": "claude-opus-5-5"}})
     emit({{"type": "assistant", "message": {{"content": [
         {{"type": "thinking", "thinking": "PRIVATE-THOUGHT about secrets"}},
@@ -84,7 +84,7 @@ CLOVER_WORKER = textwrap.dedent("""
     import json, sys, time
     def ev(**k):
         k["clover_activity"] = 1
-        sys.stderr.write(json.dumps(k) + "\\n"); sys.stderr.flush(); time.sleep(0.05)
+        sys.stderr.write(json.dumps(k) + "\\n"); sys.stderr.flush(); time.sleep(0.3)
     ev(event="start", model="luna-large")
     ev(event="tool.started", tool="terminal", summary="pytest tests/cron -q")
     ev(event="tool.completed", tool="terminal", duration=1.5, is_error=False)
