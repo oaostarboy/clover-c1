@@ -615,9 +615,12 @@ _GONE_MARKERS = (
 def _to_expandable(text: str) -> str:
     """Header + "> " detail lines -> one Telegram expandable blockquote:
     ``**> header`` / ``> detail`` / ... with ``||`` closing the last line."""
-    lines = text.split("\n")
+    # "||" would be read as a spoiler / early quote terminator, and "*" in
+    # the header can eat the "**>" opener (Opus review).
+    lines = text.replace("||", "¦¦").split("\n")
+    header = lines[0].replace("*", "")
     body = [ln[2:] if ln.startswith("> ") else ln for ln in lines[1:]]
-    out = [f"**> {lines[0]}"] + [f"> {ln}" for ln in body if ln.strip()]
+    out = [f"**> {header}"] + [f"> {ln}" for ln in body if ln.strip()]
     return "\n".join(out) + "||"
 
 

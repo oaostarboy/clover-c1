@@ -1437,3 +1437,15 @@ def test_telegram_formats_multiline_expandable_quote():
     # A plain quote ending in || (not expandable) is still escaped.
     plain = TelegramAdapter.format_message(object.__new__(TelegramAdapter), "> odd||")
     assert plain.endswith("\\|\\|")
+
+
+
+def test_expandable_quote_survives_bars_and_stars_in_card_text():
+    from gateway.delegation_activity import _to_expandable
+    from plugins.platforms.telegram.adapter import TelegramAdapter
+
+    card = _to_expandable("🔀 fix **auth** bug\n> ran a || b\n> done||")
+    assert card.startswith("**> 🔀 fix auth bug") and card.endswith("done¦¦||")
+    assert card.count("||") == 1
+    fmt = TelegramAdapter.format_message(object.__new__(TelegramAdapter), card)
+    assert fmt.startswith("**>") and fmt.endswith("||") and fmt.count("||") == 1
