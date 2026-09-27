@@ -11,6 +11,7 @@ in one must never raise out of the function or block the update.
 
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -97,7 +98,7 @@ def test_skills_reseed_failure_is_caught_and_reported(monkeypatch, tmp_path, cap
 
 def test_missing_core_runtime_module_is_reported(monkeypatch, tmp_path, capsys):
     _patch_m(monkeypatch, tmp_path)
-    from clover_cli import doctor
+    doctor = importlib.import_module("clover_cli.doctor")  # the module update_cmd imports from
 
     monkeypatch.setattr(
         doctor, "_CORE_RUNTIME_MODULES", [("definitely_not_a_real_module_xyz", "Fakepkg")]
@@ -112,7 +113,7 @@ def test_missing_core_runtime_module_is_reported(monkeypatch, tmp_path, capsys):
 
 def test_healthy_core_runtime_modules_print_nothing(monkeypatch, tmp_path, capsys):
     _patch_m(monkeypatch, tmp_path)
-    from clover_cli import doctor
+    doctor = importlib.import_module("clover_cli.doctor")  # the module update_cmd imports from
 
     monkeypatch.setattr(doctor, "_CORE_RUNTIME_MODULES", [("os", "os")])
     with patch("clover_cli.gitlock.clear_stale_git_locks", return_value=[]), \
@@ -124,7 +125,7 @@ def test_healthy_core_runtime_modules_print_nothing(monkeypatch, tmp_path, capsy
 
 def test_core_runtime_probe_failure_is_caught_and_reported(monkeypatch, tmp_path, capsys):
     _patch_m(monkeypatch, tmp_path)
-    from clover_cli import doctor
+    doctor = importlib.import_module("clover_cli.doctor")  # the module update_cmd imports from
 
     # A malformed entry (not a 2-tuple) makes the unpacking loop itself raise
     # — exercising the except path around the probe, not just ImportError.
@@ -140,7 +141,7 @@ def test_core_runtime_probe_failure_is_caught_and_reported(monkeypatch, tmp_path
 def test_all_three_repairs_run_independently(monkeypatch, tmp_path, capsys):
     """One repair failing must not prevent the other two from running."""
     _patch_m(monkeypatch, tmp_path)
-    from clover_cli import doctor
+    doctor = importlib.import_module("clover_cli.doctor")  # the module update_cmd imports from
 
     monkeypatch.setattr(doctor, "_CORE_RUNTIME_MODULES", [("os", "os")])
     with patch(
