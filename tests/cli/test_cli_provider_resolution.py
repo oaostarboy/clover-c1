@@ -339,10 +339,6 @@ def test_model_flow_clover_does_not_restore_stale_custom_api_key(tmp_path, monke
         "clover_cli.auth._prompt_model_selection",
         lambda *args, **kwargs: selected_model,
     )
-    monkeypatch.setattr(
-        "clover_cli.clover_subscription.prompt_enable_tool_gateway",
-        lambda config: None,
-    )
 
     clover_main._model_flow_clover(stale_config, current_model="glm-5.2")
 
