@@ -33,7 +33,7 @@ test('canonicalGitHubRemote normalizes SSH and HTTPS forms to the same value', (
   assert.equal(canonicalGitHubRemote('ssh://git@github.com/oaostarboy/clover-c1.git'), OFFICIAL_REPO_CANONICAL)
   assert.equal(canonicalGitHubRemote('https://github.com/oaostarboy/clover-c1.git'), OFFICIAL_REPO_CANONICAL)
   // Case-insensitive: an uppercased owner still canonicalizes to the same repo.
-  assert.equal(canonicalGitHubRemote('git@github.com:CloverC1/Clover-C1.git'), OFFICIAL_REPO_CANONICAL)
+  assert.equal(canonicalGitHubRemote('git@github.com:OaoStarboy/Clover-C1.git'), OFFICIAL_REPO_CANONICAL)
   // Trailing slashes are stripped.
   assert.equal(canonicalGitHubRemote('https://github.com/oaostarboy/clover-c1/'), OFFICIAL_REPO_CANONICAL)
 })
