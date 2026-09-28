@@ -50,3 +50,13 @@ def test_dead_updater_uses_watcher_rollback(monkeypatch, tmp_path):
 def test_rollback_message_never_leaks_traceback():
     assert "Traceback" not in watcher.ROLLBACK_MESSAGE
     assert "version you had before" in watcher.ROLLBACK_MESSAGE
+
+
+def test_windows_service_rollback_uses_existing_restore_path(monkeypatch, tmp_path):
+    calls = []
+    from types import SimpleNamespace
+    monkeypatch.setattr(watcher, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(watcher.subprocess, "run", lambda args, **kw: calls.append(args))
+    watcher._restart_from_beacon({"repo": str(tmp_path), "windows_services": ["clover-gateway"]})
+    assert "_restore_windows_gateway_service" in calls[0][2]
+    assert calls[0][-1] == "clover-gateway"
