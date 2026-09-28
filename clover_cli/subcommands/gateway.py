@@ -258,11 +258,12 @@ def build_gateway_parser(
         help="Enroll this gateway with a relay connector (writes relay auth creds to .env)",
         description=(
             "Redeem a single-use enrollment token with a relay connector. "
-            "Authenticates as your Clover Portal account (the connector derives the "
-            "authoritative tenant from it), mints this gateway's per-gateway secret "
+            "Authenticates with your configured identity provider "
+            "(gateway.idp.token_url; the connector derives the authoritative tenant "
+            "from it), mints this gateway's per-gateway secret "
             "and per-tenant delivery key, and writes GATEWAY_RELAY_ID / "
             "GATEWAY_RELAY_SECRET / GATEWAY_RELAY_DELIVERY_KEY into ~/.clover/.env. "
-            "Requires being logged in (clover setup). Not available in managed installs."
+            "Not available in managed installs."
         ),
     )
     gateway_enroll.add_argument(

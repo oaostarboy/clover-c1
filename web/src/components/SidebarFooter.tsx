@@ -20,18 +20,9 @@ export function SidebarFooter({ status }: SidebarFooterProps) {
         {status?.version != null ? `v${status.version}` : "—"}
       </Typography>
 
-      <a
-        href=""
-        target="_blank"
-        rel="noopener noreferrer"
-        className={cn(
-          "font-sans text-display text-xs tracking-[0.12em] text-midground",
-          "transition-opacity hover:opacity-90",
-          "focus-visible:rounded-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground/40",
-        )}
-      >
+      <span className="font-sans text-display text-xs tracking-[0.12em] text-midground">
         {t.app.footer.org}
-      </a>
+      </span>
     </div>
   );
 }
