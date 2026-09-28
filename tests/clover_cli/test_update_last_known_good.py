@@ -103,3 +103,14 @@ def test_rollback_keeps_local_checkout_edits(tmp_path):
     watcher._rollback_checkout({"repo": str(tmp_path), "pre_pull_sha": old_sha}, tmp_path / "beacon")
     assert git("rev-parse", "HEAD") == old_sha
     assert source.read_text(encoding="utf-8") == "my edit" or "stash@" in git("stash", "list")
+
+
+def test_probe_rejects_old_gateway_identity_even_if_process_is_up(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "gateway_state.json").write_text(json.dumps({"code_sha": "old"}), encoding="utf-8")
+    monkeypatch.setattr(watcher, "_gateway_running", lambda: True)
+    monkeypatch.setattr(watcher, "_core_imports_healthy", lambda root: True)
+    monkeypatch.setattr(watcher, "_gateway_identity", lambda: (123, 1.0))
+    monkeypatch.setattr(watcher, "_current_head", lambda root: "new")
+    assert not watcher.probe_gateway(tmp_path, home=home, timeout=0.03, stable_seconds=0, poll=0)
