@@ -22,7 +22,7 @@ class TestCloverAgentHelpGuidance:
     def test_no_skills_variant_has_no_skill_view_reference(self):
         from agent.prompt_builder import CLOVER_AGENT_HELP_GUIDANCE_NO_SKILLS
         assert "skill_view" not in CLOVER_AGENT_HELP_GUIDANCE_NO_SKILLS
-        assert "clover-c1./docs" in CLOVER_AGENT_HELP_GUIDANCE_NO_SKILLS
+        assert "the documentation at docs/" in CLOVER_AGENT_HELP_GUIDANCE_NO_SKILLS
 
 
 class TestExecutionGuidanceText:
