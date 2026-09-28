@@ -2128,6 +2128,7 @@ def test_auto_saved_catalog_round_trips_without_pinning(tmp_path, monkeypatch):
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(
+        f"_config_version: {config_mod.DEFAULT_CONFIG['_config_version']}\n"
         "custom_providers:\n"
         f"  - name: Local MLX\n    base_url: {_LOCAL_ENDPOINT}\n"
         "    model: omlx-model-1\n"
@@ -2212,7 +2213,10 @@ def test_legacy_sentinel_catalog_still_resolves_and_migrates(tmp_path, monkeypat
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
     cfg_path = tmp_path / "config.yaml"
     cfg_path.write_text(
-        yaml.safe_dump({"custom_providers": [legacy_entry]})
+        yaml.safe_dump({
+            "_config_version": config_mod.DEFAULT_CONFIG["_config_version"],
+            "custom_providers": [legacy_entry],
+        })
     )
     monkeypatch.setattr(config_mod, "CONFIG_PATH", str(cfg_path), raising=False)
 
