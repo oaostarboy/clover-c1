@@ -25,7 +25,15 @@ import pytest
 import yaml
 
 
+from clover_cli.config import DEFAULT_CONFIG
+
 CONFIG = {
+    # Pin the current schema version: without it, merely loading this config
+    # (e.g. via build_aux_picker_rows()) runs the startup auto-migration,
+    # which converts the legacy custom_providers: entry below into the
+    # modern providers: dict shape before this test can exercise the legacy
+    # slug convention it's specifically pinning.
+    "_config_version": DEFAULT_CONFIG["_config_version"],
     "model": {"provider": "openrouter", "default": "anthropic/claude-opus-4.6"},
     "model_catalog": {"excluded_providers": ["copilot"]},
     "providers": {
