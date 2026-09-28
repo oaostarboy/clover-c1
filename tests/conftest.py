@@ -1787,3 +1787,25 @@ def _moa_caches_isolated():
     yield
     moa._preset_cache.clear()
     moa._runtime_cache.clear()
+
+
+
+@pytest.fixture(autouse=True)
+def _reset_delegation_card_registries():
+    """Per-chat card registries (live publishers, boards, last outbound id)
+    are module globals keyed by id(adapter); a recycled id from an earlier
+    test's adapter must never leak a board or publisher into the next test."""
+    yield
+    try:
+        import gateway.delegation_activity as _da
+    except Exception:
+        return
+    for _h in list(getattr(_da, "_FOLLOW_TIMERS", {}).values()):
+        try:
+            _h.cancel()
+        except Exception:
+            pass
+    for _name in ("_LIVE", "_BOARDS", "_LAST_OUT", "_FOLLOW_TIMERS", "_INBOX"):
+        _reg = getattr(_da, _name, None)
+        if isinstance(_reg, dict):
+            _reg.clear()

@@ -20,7 +20,7 @@ class _NoDeleteAdapter(FakeTelegramAdapter):
 
 @pytest.fixture(autouse=True)
 def _clean_registry():
-    da._LIVE.clear(); da._LAST_OUT.clear(); da._FOLLOW_TIMERS.clear()
+    da._LIVE.clear(); da._LAST_OUT.clear(); da._FOLLOW_TIMERS.clear(); da._BOARDS.clear()
     yield
     for h in list(da._FOLLOW_TIMERS.values()):
         h.cancel()
@@ -146,6 +146,13 @@ class _SeqAdapter(FakeTelegramAdapter):
         self.status_calls.append({"chat_id": chat_id, "key": status_key, "content": content})
         return SendResult(success=True, message_id=mid)
 
+    async def edit_message(self, chat_id, message_id, content, finalize=False, metadata=None):
+        from gateway.platforms.base import SendResult
+
+        self.edits = getattr(self, "edits", [])
+        self.edits.append((str(message_id), content))
+        return SendResult(success=True, message_id=str(message_id))
+
     async def send(self, chat_id, content, reply_to=None, metadata=None):
         from gateway.platforms.base import SendResult
 
@@ -266,3 +273,71 @@ async def test_two_turn_cards_both_follow(monkeypatch):
     reply2 = next(int(x["id"]) for x in ad.sends if x["content"] == "reply 2")
     assert all(int(i) > reply2 for i in ids)
     await p1.aclose(); await p2.aclose()
+
+
+# ── one live board per chat ──────────────────────────────────────────────
+
+
+async def _board_pub(adapter, monkeypatch):
+    from tests.gateway.test_delegation_activity import _make_publisher
+
+    pub = _make_publisher(adapter)
+    pub._combined = True
+    pub._board_mode = True
+    return pub
+
+
+@pytest.mark.asyncio
+async def test_two_turns_share_one_board(monkeypatch):
+    monkeypatch.setattr(da, "BOARD_MIN_EDIT_SECONDS", 0.0)
+    ad = _SeqAdapter()
+    p1 = await _board_pub(ad, monkeypatch)
+    p2 = await _board_pub(ad, monkeypatch)
+    _child_cb(_turn_runner(p1), delegation_id="deleg_1", title="Billing")("subagent.start", preview="a")
+    await p1.drain()
+    _child_cb(_turn_runner(p2), delegation_id="deleg_2", subagent_id="sa-2", title="Subscription")("subagent.start", preview="b")
+    await p2.drain()
+    assert len(ad.sends) == 1, "one board message, not one card per turn"
+    assert ad.status_calls == [], "no per-group live cards in board mode"
+    board = da._BOARDS[da._inbox_key(ad, "chat-A")]
+    assert "Billing" in board.last_text and "Subscription" in board.last_text
+    await p1.aclose(); await p2.aclose()
+
+
+@pytest.mark.asyncio
+async def test_board_follows_latest_message(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(da, "FOLLOW_DEBOUNCE_SECONDS", 0.05)
+    ad = _SeqAdapter()
+    pub = await _board_pub(ad, monkeypatch)
+    _child_cb(_turn_runner(pub))("subagent.start", preview="g")
+    await pub.drain()
+    board = da._BOARDS[da._inbox_key(ad, "chat-A")]
+    first = board.message_id
+    await ad.send("chat-A", "reply")
+    await asyncio.sleep(0.2)
+    assert first in ad.deleted
+    assert int(board.message_id) > int(ad.sends[-2]["id"])  # below "reply"
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_board_drops_absorbed_worker_and_vanishes_when_empty(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(da, "BOARD_MIN_EDIT_SECONDS", 0.0)
+    ad = _SeqAdapter()
+    pub = await _board_pub(ad, monkeypatch)
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    board_id = da._BOARDS[da._inbox_key(ad, "chat-A")].message_id
+    a("subagent.complete", status="completed", summary="Plain summary: ok.", duration_seconds=1)
+    await pub.drain()
+    pub.absorb_finished()  # the turn card takes the result
+    await asyncio.sleep(0.05)
+    await pub.drain()
+    assert board_id in ad.deleted
+    assert da._inbox_key(ad, "chat-A") not in da._BOARDS
+    await pub.aclose()

@@ -161,6 +161,12 @@ async def follow_latest_message(adapter: Any, chat_id: Any) -> int:
         else:
             _LIVE.pop(key, None)
     moved = 0
+    board = _BOARDS.get(key)
+    if board is not None:
+        try:
+            moved += int(await board.refresh(move=True))
+        except Exception:
+            logger.debug("delegation board follow failed", exc_info=True)
     for pub in pubs:
         try:
             moved += await pub.repost_live_cards()
@@ -229,6 +235,181 @@ class _CardState:
     inbox_expired: bool = False
 
 
+# ── One live board per chat ───────────────────────────────────────────────
+# Combined mode (Telegram default): instead of one live card per delegation
+# group (two turns that each launched workers = two cards at two scroll
+# positions), every running worker in the chat shows on ONE board message.
+# The board follows the latest message; a finished worker leaves the board
+# once its result is shown (turn card / summary), and the board is deleted
+# when nothing is left on it.
+_BOARDS: Dict[Tuple[int, str], "_ChatBoard"] = {}
+BOARD_MIN_EDIT_SECONDS = 3.0
+
+
+class _BoardGroup:
+    """Duck-typed stand-in for DelegationGroup so _render_active can draw
+    workers from several groups/turns as one card."""
+
+    def __init__(self, children: List[Any], created_at: float) -> None:
+        self._children = children
+        self.created_at = created_at
+        self.children = {str(i): c for i, c in enumerate(children)}
+
+    def ordered(self) -> List[Any]:
+        return list(self._children)
+
+
+class _ChatBoard:
+    def __init__(self, adapter: Any, chat_id: str, metadata: Any, loop: Any,
+                 expandable: bool, clock: Callable[[], float]) -> None:
+        self.adapter = adapter
+        self.chat_id = chat_id
+        self.metadata = metadata
+        self.loop = loop
+        self.expandable = expandable
+        self.clock = clock
+        self.message_id: Optional[str] = None
+        self.last_text = ""
+        self.last_edit = float("-inf")
+        self._lock: Optional[asyncio.Lock] = None
+        self._timer: Any = None
+
+    @property
+    def key(self) -> Tuple[int, str]:
+        return _inbox_key(self.adapter, self.chat_id)
+
+    def _publishers(self) -> List["DelegationActivityPublisher"]:
+        with _LIVE_LOCK:
+            return [p for p in _LIVE.get(self.key, []) if not p._closed and p._combined]
+
+    def children(self) -> Tuple[List[Any], float]:
+        """Every worker still owned by the board, oldest turn first."""
+        kids: List[Any] = []
+        t0 = float("inf")
+        for pub in self._publishers():
+            with pub._state_lock:
+                gids = [
+                    gid for gid in pub.tracker.group_ids()
+                    if not pub._cards.get(gid, _CardState()).summary_posted
+                    and not pub._cards.get(gid, _CardState()).suppressed
+                    and pub._cards.get(gid, _CardState()).posted
+                ]
+            if not gids:
+                continue
+            with pub.tracker._lock:
+                for gid in gids:
+                    grp = pub.tracker._groups.get(gid)
+                    if grp is None:
+                        continue
+                    t0 = min(t0, grp.created_at)
+                    kids.extend(grp.ordered())
+        return kids, (t0 if t0 != float("inf") else self.clock())
+
+    def render(self) -> str:
+        kids, t0 = self.children()
+        if not kids:
+            return ""
+        from agent.delegation_activity import _render_active
+
+        try:
+            stamp = time.strftime("%H:%M %Z", time.localtime()).strip()
+        except Exception:
+            stamp = ""
+        text = _render_active(_BoardGroup(kids, t0), self.clock(), stamp)
+        limit = 4096
+        try:
+            limit = int(getattr(self.adapter, "MAX_MESSAGE_LENGTH", 4096) or 4096)
+        except Exception:
+            pass
+        text = _fit_to_limit(text, limit - (8 if self.expandable else 0))
+        if self.expandable and text:
+            text = _to_expandable(text, TAP_HINT_LIVE)
+        return text
+
+    def schedule(self, delay: float = 0.0) -> None:
+        def _go() -> None:
+            self._timer = None
+            self.loop.create_task(self.refresh())
+        try:
+            if self._timer is not None:
+                return
+            self._timer = self.loop.call_later(max(0.0, delay), _go)
+        except RuntimeError:
+            pass
+
+    async def refresh(self, *, move: bool = False) -> bool:
+        """Post, edit, move or delete the board. Returns True if it moved."""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        token = _CARD_SEND.set(True)
+        try:
+            async with self._lock:
+                text = self.render()
+                if not text:
+                    await self._delete()
+                    _BOARDS.pop(self.key, None)
+                    return False
+                last_out = _LAST_OUT.get(self.key)
+                behind = bool(self.message_id and last_out and _is_newer(last_out, self.message_id))
+                if self.message_id is None or (move and behind):
+                    old = self.message_id
+                    res = await _maybe_await(self.adapter.send(self.chat_id, text, metadata=self.metadata))
+                    if getattr(res, "success", False) and getattr(res, "message_id", None):
+                        self.message_id = str(res.message_id)
+                        self.last_text = text
+                        self.last_edit = self.clock()
+                        if old and old != self.message_id:
+                            await self._delete(old)
+                        return bool(old)
+                    return False
+                if text == self.last_text:
+                    return False
+                wait = self.last_edit + BOARD_MIN_EDIT_SECONDS - self.clock()
+                if wait > 0:
+                    self.schedule(wait)
+                    return False
+                editor = getattr(self.adapter, "edit_message", None)
+                if callable(editor):
+                    res = await _maybe_await(editor(
+                        self.chat_id, self.message_id, text, finalize=True, metadata=self.metadata,
+                    ))
+                    if getattr(res, "success", False):
+                        self.last_text = text
+                        self.last_edit = self.clock()
+                    elif _message_gone(res):
+                        self.message_id = None
+                        self.schedule(0.0)
+                return False
+        except Exception:
+            logger.debug("delegation board refresh failed", exc_info=True)
+            return False
+        finally:
+            _CARD_SEND.reset(token)
+
+    async def _delete(self, message_id: Optional[str] = None) -> None:
+        mid = message_id or self.message_id
+        if not mid:
+            return
+        if message_id is None:
+            self.message_id = None
+            self.last_text = ""
+        try:
+            if _adapter_can_delete(self.adapter):
+                await _maybe_await(self.adapter.delete_message(self.chat_id, mid))
+        except Exception:
+            logger.debug("delegation board delete failed", exc_info=True)
+
+
+def _board_for(pub: "DelegationActivityPublisher") -> "_ChatBoard":
+    key = _inbox_key(pub._adapter, pub._chat_id)
+    board = _BOARDS.get(key)
+    if board is None:
+        board = _ChatBoard(pub._adapter, pub._chat_id, pub._metadata, pub._loop,
+                           pub._expandable, pub._clock)
+        _BOARDS[key] = board
+    return board
+
+
 class DelegationActivityPublisher:
     """Per-turn publisher of delegation roster cards to one chat/thread."""
 
@@ -274,6 +455,9 @@ class DelegationActivityPublisher:
         # so a turn is one card + one reply. Until the turn ends they are
         # held (shown in place on the live card).
         self._combined = bool(combined)
+        # One board per chat instead of one card per group (needs delete so
+        # the board can move and vanish cleanly).
+        self._board_mode = self._combined and _adapter_can_delete(adapter)
         self._turn_over = False
         # Results from EARLIER turns in this chat, claimed at this turn's
         # start so they fold into this turn's card.
@@ -525,7 +709,7 @@ class DelegationActivityPublisher:
         """Delete each posted, still-running card and post it again at the
         bottom of the chat. Finished cards are left alone (their summary
         path already posts at the bottom)."""
-        if self._closed:
+        if self._closed or self._board_mode:
             return 0
         if self._flush_lock is None:
             self._flush_lock = asyncio.Lock()
@@ -606,6 +790,11 @@ class DelegationActivityPublisher:
             adopted_children.extend(kids)
             ids.extend(kid_ids)
         own, own_ids = self._absorb_groups(None)
+        if self._board_mode:
+            try:
+                self._loop.call_soon_threadsafe(lambda: _board_for(self).schedule(0.0))
+            except RuntimeError:
+                pass
         return adopted_children + own, ids + own_ids
 
     def _absorb_groups(self, only: Optional[List[str]]) -> Tuple[List[Any], List[str]]:
@@ -726,6 +915,13 @@ class DelegationActivityPublisher:
             card.dirty = False
             card.last_attempt = self._clock()
         final = self.tracker.group_finished(gid)
+        if self._board_mode:
+            with self._state_lock:
+                card.posted = True
+                card.last_text = text
+                card.last_publish = self._clock()
+            await _board_for(self).refresh()
+            return
         try:
             result = await self._send_card(gid, card, text, final)
         except Exception as exc:
@@ -864,6 +1060,9 @@ class DelegationActivityPublisher:
                     pass
                 # Meanwhile show the result in place on the live card, so a
                 # long parent turn doesn't hide it.
+                if self._board_mode:
+                    _board_for(self).schedule(0.0)
+                    return
                 held = self._render(gid)
                 if held and held != card.last_text and card.posted:
                     try:
@@ -907,6 +1106,8 @@ class DelegationActivityPublisher:
             old_id = card.message_id
             card.message_id = str(getattr(result, "message_id", "") or "") or None
         await self._remove_live_card(gid, old_id)
+        if self._board_mode:
+            _board_for(self).schedule(0.0)
 
     async def _remove_live_card(self, gid: str, message_id: Optional[str]) -> None:
         adapter = self._adapter
