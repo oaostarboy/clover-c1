@@ -95,7 +95,7 @@ describe('createGatewayEventHandler', () => {
     expect(getTurnState().todos).toEqual([])
   })
 
-  it('opens a billing confirm dialog routing Clover to /topup', () => {
+  it('opens a billing confirm dialog offering to switch providers when there is no billing URL', () => {
     const appended: Msg[] = []
     const ctx = buildCtx(appended)
     const onEvent = createGatewayEventHandler(ctx)
@@ -104,11 +104,11 @@ describe('createGatewayEventHandler', () => {
       payload: {
         billing: {
           billing_url: null,
-          is_clover: true,
+          is_clover: false,
           message: 'out of credits',
           model: 'm',
-          provider: 'clover',
-          provider_label: 'Clover Portal'
+          provider: 'custom',
+          provider_label: 'Custom Provider'
         },
         text: 'Billing or credits exhausted: ...'
       },
@@ -116,11 +116,11 @@ describe('createGatewayEventHandler', () => {
     } as any)
 
     const { confirm } = getOverlayState()
-    expect(confirm?.title).toContain('Clover')
-    expect(confirm?.confirmLabel).toBe('Top up')
+    expect(confirm?.title).toContain('Custom Provider')
+    expect(confirm?.confirmLabel).toBe('Switch provider')
 
     confirm!.onConfirm()
-    expect(ctx.submission.submitRef.current).toHaveBeenCalledWith('/topup')
+    expect(ctx.submission.submitRef.current).toHaveBeenCalledWith('/model')
   })
 
   it('deep-links a third-party provider billing page from the confirm dialog', () => {

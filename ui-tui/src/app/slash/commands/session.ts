@@ -20,7 +20,7 @@ import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
 import type { SlashCommand } from '../types.js'
 
-const USAGE_CTA = 'Run /subscription to change plan · /topup to add to your balance'
+const USAGE_CTA = 'Manage your plan and balance with your provider'
 
 const TUI_SESSION_MODEL_RE = new RegExp(`(?:^|\\s)${TUI_SESSION_MODEL_FLAG}(?:\\s|$)`)
 const REASONING_SESSION_FLAGS = new Set(['--session'])
@@ -679,10 +679,10 @@ export const sessionCommands: SlashCommand[] = [
           })
         }
 
-        // Clover balance block is agent-independent (a portal fetch), so it shows
-        // even with zero API calls or on a resumed session. Prefer the shared
-        // dollar usage model (two-bar view, dollars-only); fall back to the
-        // legacy text lines only when the model is unavailable.
+        // The balance block is agent-independent, so it shows even with zero API
+        // calls or on a resumed session. Prefer the shared dollar usage model
+        // (two-bar view, dollars-only); fall back to the legacy text lines only
+        // when the model is unavailable.
         const usageModel = r?.usage
         const barLines = usageBarsText(usageModel)
         let showedBalance = false
@@ -702,10 +702,10 @@ export const sessionCommands: SlashCommand[] = [
           }
 
           if (usageModel.status === 'free') {
-            sections.push({ text: '> Free · free models only. Run /subscription to reach paid models.' })
+            sections.push({ text: '> Free · free models only. Manage your plan with your provider.' })
           } else if (usageModel.status === 'low') {
             sections.push({
-              text: `! Low balance · ${usageModel.total_spendable_display ?? 'under $5'} left. Run /topup or /subscription.`
+              text: `! Low balance · ${usageModel.total_spendable_display ?? 'under $5'} left. Manage your plan with your provider.`
             })
           }
 

@@ -5,7 +5,7 @@ import type { SessionUsageResponse } from '../gatewayTypes.js'
 
 const usageCommand = sessionCommands.find(cmd => cmd.name === 'usage')!
 
-const USAGE_CTA = 'Run /subscription to change plan · /topup to add to your balance'
+const USAGE_CTA = 'Manage your plan and balance with your provider'
 
 const guarded =
   <T>(fn: (r: T) => void) =>
@@ -119,6 +119,6 @@ describe('/usage slash command', () => {
 
     const body = balancePanel(panel)
     expect(body).toContain('free models only')
-    expect(body).toContain('/subscription')
+    expect(body).toContain('Manage your plan with your provider')
   })
 })
