@@ -3,7 +3,6 @@
 from types import SimpleNamespace
 
 from clover_cli.clover_account import CloverPaidServiceAccessInfo, CloverPortalAccountInfo
-from clover_cli.clover_subscription import CloverFeatureState, CloverSubscriptionFeatures
 
 
 def _patch_common_status_deps(monkeypatch, status_mod, tmp_path, *, openai_base_url=""):
