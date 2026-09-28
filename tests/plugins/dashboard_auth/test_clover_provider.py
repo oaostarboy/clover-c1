@@ -310,13 +310,13 @@ class TestStartLogin:
 
     def test_returns_login_start(self, provider):
         result = provider.start_login(
-            redirect_uri=""
+            redirect_uri="https://portal.example.com/auth/callback"
         )
         assert isinstance(result, LoginStart)
 
     def test_redirect_url_targets_portal_authorize(self, provider):
         result = provider.start_login(
-            redirect_uri=""
+            redirect_uri="https://portal.example.com/auth/callback"
         )
         assert result.redirect_url.startswith(
             "https://portal.example.com/oauth/authorize?"
@@ -324,13 +324,13 @@ class TestStartLogin:
 
     def test_authorize_url_has_required_params(self, provider):
         result = provider.start_login(
-            redirect_uri=""
+            redirect_uri="https://portal.example.com/auth/callback"
         )
         parsed = urllib.parse.urlparse(result.redirect_url)
         params = dict(urllib.parse.parse_qsl(parsed.query))
         assert params["response_type"] == "code"
         assert params["client_id"] == "agent:inst1"
-        assert params["redirect_uri"] == ""
+        assert params["redirect_uri"] == "https://portal.example.com/auth/callback"
         assert params["scope"] == "agent_dashboard:access"
         assert params["code_challenge_method"] == "S256"
         assert "state" in params
@@ -338,7 +338,7 @@ class TestStartLogin:
 
     def test_code_verifier_in_cookie_payload_43_to_128_chars(self, provider):
         result = provider.start_login(
-            redirect_uri=""
+            redirect_uri="https://portal.example.com/auth/callback"
         )
         assert "clover_session_pkce" in result.cookie_payload
         pkce = result.cookie_payload["clover_session_pkce"]
@@ -351,7 +351,7 @@ class TestStartLogin:
 
     def test_state_in_cookie_payload_matches_url_param(self, provider):
         result = provider.start_login(
-            redirect_uri=""
+            redirect_uri="https://portal.example.com/auth/callback"
         )
         parsed = urllib.parse.urlparse(result.redirect_url)
         params = dict(urllib.parse.parse_qsl(parsed.query))
@@ -362,10 +362,10 @@ class TestStartLogin:
 
     def test_two_calls_produce_different_state_and_verifier(self, provider):
         a = provider.start_login(
-            redirect_uri=""
+            redirect_uri="https://portal.example.com/auth/callback"
         )
         b = provider.start_login(
-            redirect_uri=""
+            redirect_uri="https://portal.example.com/auth/callback"
         )
         assert a.cookie_payload["clover_session_pkce"] != b.cookie_payload[
             "clover_session_pkce"
