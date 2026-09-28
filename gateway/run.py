@@ -9095,7 +9095,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
           The api_server is a loopback listener force-enabled by the presence
           of API_SERVER_KEY (which the Docker stage2 hook now generates for
           every container, so hosted instances ALWAYS have it enabled) — it
-          holds no outbound socket and Chronos fires through it already reset
+          holds no outbound socket and external cron fires through it already reset
           the idle clock. Counting it made messaging_is_relay_only_or_absent
           False on every hosted instance, silently disarming the feature.
           Mirrors the non-messaging exclusion set used for handoff eligibility
@@ -31767,23 +31767,6 @@ def _start_gateway_housekeeping(stop_event: threading.Event, adapters=None, loop
             except Exception as e:
                 logger.debug("Curator tick error: %s", e)
 
-            # Skill Sync — best-effort periodic pull on the same cadence.
-            # Inert unless the access gate is open and a sync base URL is
-            # configured; never raises.
-            try:
-                from tools.skills_sync_client import maybe_pull_skills
-                maybe_pull_skills()
-            except Exception as e:
-                logger.debug("Sync pull tick error: %s", e)
-
-            # Org-shared skills. Gated on real org membership (the token must
-            # carry an org role), so a solo account never reaches the network.
-            try:
-                from tools.skills_sync_client import maybe_pull_org_skills
-                maybe_pull_org_skills()
-            except Exception as e:
-                logger.debug("Org sync pull tick error: %s", e)
-
         # Stale-session auto-archive — a live timer, so gateways that stay up
         # for weeks keep sweeping on schedule (the startup hook fires once).
         # maybe_auto_archive() is gated by sessions.min_interval_hours in
@@ -32623,13 +32606,6 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     except Exception as _lc_exc:
         logger.debug("Lifecycle ledger startup record failed: %s", _lc_exc)
 
-    try:
-        from clover_cli.clover_auth_keepalive import start_clover_auth_keepalive
-
-        start_clover_auth_keepalive()
-    except Exception as exc:
-        logger.debug("Clover auth keepalive did not start: %s", exc)
-
     _ensure_windows_gateway_venv_imports()
 
     # MCP tool discovery — run in an executor so the asyncio event loop
@@ -32700,9 +32676,9 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
 
     # Start the background cron scheduler via the resolved provider so
     # scheduled jobs fire automatically. The built-in provider is the
-    # historical in-process 60s ticker; an external provider (e.g. chronos)
-    # may arm a schedule and return. Pass the event loop so cron delivery can
-    # use live adapters (E2EE support).
+    # historical in-process 60s ticker; an external provider may arm a
+    # schedule and return. Pass the event loop so cron delivery can use live
+    # adapters (E2EE support).
     from cron.scheduler_provider import (
         InProcessCronScheduler,
         resolve_cron_scheduler,
@@ -32758,7 +32734,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     cron_thread.start()
 
     # Preflight tell for the hosted fire path: an external cron provider
-    # (Chronos) delivers scheduled fires over HTTP to THIS process's
+    # delivers scheduled fires over HTTP to THIS process's
     # api_server adapter on loopback. If that adapter never came up (most
     # commonly API_SERVER_KEY missing from this process's environment —
     # e.g. a gateway relaunched outside its supervisor without the profile
@@ -32819,13 +32795,6 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
             await _control_server.stop()
         except Exception:
             logger.debug("Control socket stop failed (non-fatal)", exc_info=True)
-
-    try:
-        from clover_cli.clover_auth_keepalive import stop_clover_auth_keepalive
-
-        stop_clover_auth_keepalive()
-    except Exception:
-        pass
 
     if runner.should_exit_with_failure:
         if runner.exit_reason:
