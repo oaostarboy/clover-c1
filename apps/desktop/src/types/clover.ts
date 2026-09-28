@@ -1523,10 +1523,6 @@ export interface DebugShareResponse {
 export interface ModelAssignmentResponse {
   /** Persisted endpoint URL for custom/local providers (echoed back). */
   base_url?: string
-  /** Toolset keys auto-routed through the Clover Tool Gateway as a result of
-   *  switching the main provider to Clover. Empty unless provider === 'clover'
-   *  and the user is a paid subscriber with unconfigured tools. */
-  gateway_tools?: string[]
   /** Additive profile-local cron impact returned after a persisted main assignment. */
   cron_model_impact?: CronModelImpact
   confirm_message?: string

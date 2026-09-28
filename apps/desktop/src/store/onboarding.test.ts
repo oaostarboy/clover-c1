@@ -342,7 +342,7 @@ describe('OAuth onboarding', () => {
       }
 
       if (path === '/api/model/set') {
-        return { ok: true, provider: 'clover', model, gateway_tools: [] }
+        return { ok: true, provider: 'clover', model }
       }
 
       throw new Error(`unexpected api path: ${path}`)
