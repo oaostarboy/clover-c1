@@ -2853,10 +2853,30 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         # a fallback-recovery notice after an actual provider fallback.
         agent._provider_fallback_active = True
         agent._provider_fallback_route = (str(fb_model), str(fb_provider))
-        logger.info(
-            "Fallback activated: %s → %s (%s)",
-            old_model, fb_model, fb_provider,
+        # WARNING (not INFO): a model/provider switch is a durable, billable
+        # state change — it must show up in agent.log's default level, not
+        # only when verbose logging is enabled. See #93412.
+        logger.warning(
+            "Model fallback activated: %s (%s) → %s (%s); reason=%s",
+            old_model, old_provider, fb_model, fb_provider,
+            _fallback_reason_text(reason),
         )
+        # Structured event for external observers (clover -z --activity-events,
+        # the subagent/job card). Separate from the human-readable notice
+        # above — this is the machine-readable wire format consumers like
+        # ActivityEventWriter.model_fallback / AgentJobObserver key off of.
+        _fallback_cb = getattr(agent, "model_fallback_callback", None)
+        if _fallback_cb is not None:
+            try:
+                _fallback_cb(
+                    from_model=old_model,
+                    from_provider=old_provider,
+                    to_model=fb_model,
+                    to_provider=fb_provider,
+                    reason=(reason.value if reason is not None else None),
+                )
+            except Exception:
+                logger.debug("model_fallback_callback failed", exc_info=True)
         # Reset the stale-call circuit breaker (#58962): the streak measured
         # the OLD provider's unresponsiveness.  Carrying it over would
         # short-circuit the freshly activated fallback before it gets a
