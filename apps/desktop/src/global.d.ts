@@ -712,7 +712,7 @@ export interface CloverConnection {
   authMode?: 'oauth' | 'token'
   remoteHost?: string
   remoteIdentity?: string
-  remoteKind?: 'cloud' | 'ssh' | 'url'
+  remoteKind?: 'ssh' | 'url'
   remoteCloverVersion?: string
   nativeOverlayWidth: number
   source?: 'env' | 'local' | 'settings'
@@ -838,7 +838,7 @@ export interface DesktopConnectionTestResult {
 
 // ── v2 multi-connection registry (named agent sources) ─────────────────────
 
-export type DesktopConnectionKind = 'cloud' | 'local' | 'remote' | 'ssh'
+export type DesktopConnectionKind = 'local' | 'remote' | 'ssh'
 
 // A registered agent source as the renderer sees it: token bytes never cross
 // the IPC boundary (preview + set flag instead, like DesktopConnectionConfig).
