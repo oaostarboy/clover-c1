@@ -1216,6 +1216,17 @@ platform_toolsets:
 #     cooldown_seconds: 600  # how long a tripped conversation stays dropped
 
 # =============================================================================
+# Cron
+# =============================================================================
+# cron:
+#   # A fire that never reached the model at all (transient DNS/connect
+#   # failure, zero API calls — e.g. right after the machine wakes behind a
+#   # VPN) re-arms at +5/15/30 minutes instead of waiting a full period, then
+#   # falls back to the normal schedule. Never re-runs if any API call was
+#   # made. On by default; set false to disable.
+#   retry_unreachable: true
+
+# =============================================================================
 # Gateway Platform Settings
 # =============================================================================
 # Optional per-platform messaging settings.
