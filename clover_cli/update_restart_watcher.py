@@ -228,7 +228,8 @@ def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
     if not python.is_file():
         venv_dir = python.parent.parent
         venv_arg = "venv" if venv_dir == root / "venv" else str(venv_dir)
-        uv = shutil.which("uv")
+        managed_uv = home / "bin" / ("uv.exe" if os.name == "nt" else "uv")
+        uv = str(managed_uv) if managed_uv.is_file() else shutil.which("uv")
         if uv:
             create = [uv, "venv", venv_arg]
         else:

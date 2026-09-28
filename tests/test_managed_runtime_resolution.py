@@ -80,6 +80,12 @@ _ALLOWED: dict[tuple[str, str], str] = {
         "uv on PATH is a legitimate last rung before giving up with install "
         "guidance."
     ),
+    ("clover_cli/update_restart_watcher.py", "uv"): (
+        "The watcher runs as a standalone COPY outside the install (its own "
+        "docstring: 'depends on nothing that an interrupted update could have "
+        "broken'), so it cannot import managed_uv. It checks beacon.parent / "
+        "'bin' / 'uv' (the managed path) first and only falls back to PATH."
+    ),
     ("clover_cli/gateway.py", "node"): (
         "Fallback rung of _append_node_dir_for_service(), after the managed "
         "dirs from iter_clover_node_dirs() are already appended."
