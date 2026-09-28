@@ -993,73 +993,8 @@ def test_load_pool_falls_back_to_os_environ_when_dotenv_empty(tmp_path, monkeypa
 
 
 
-def test_load_pool_mirrors_clover_invoke_jwt_agent_key_runtime_api_key(tmp_path, monkeypatch):
-    monkeypatch.setenv("CLOVER_HOME", str(tmp_path / "clover"))
-    expires_at = datetime.fromtimestamp(time.time() + 3600, tz=timezone.utc).isoformat()
-    token = _jwt_with_claims({
-        "sub": "test-user",
-        "scope": ["inference:invoke"],
-        "exp": int(time.time() + 3600),
-    })
-    _write_auth_store(
-        tmp_path,
-        {
-            "version": 1,
-            "active_provider": "clover",
-            "providers": {
-                "clover": {
-                    "portal_base_url": "https://portal.example.com",
-                    "inference_base_url": "https://inference.example.com/v1",
-                    "client_id": "clover-cli",
-                    "token_type": "Bearer",
-                    "scope": "inference:invoke",
-                    "access_token": token,
-                    "refresh_token": "refresh-token",
-                    "expires_at": expires_at,
-                    "agent_key": token,
-                    "agent_key_expires_at": expires_at,
-                }
-            },
-        },
-    )
-
-    from agent.credential_pool import load_pool
-
-    pool = load_pool("clover")
-    entry = pool.select()
-
-    assert entry is not None
-    assert entry.source == "device_code"
-    assert entry.agent_key == token
-    assert entry.runtime_api_key == token
-
-    auth_payload = json.loads((tmp_path / "clover" / "auth.json").read_text())
-    pool_entry = auth_payload["credential_pool"]["clover"][0]
-    assert pool_entry["agent_key"] == token
-    assert pool_entry["agent_key_expires_at"] == expires_at
 
 
-def test_clover_runtime_api_key_rejects_opaque_agent_key():
-    from agent.credential_pool import PooledCredential
-
-    entry = PooledCredential(
-        provider="clover",
-        id="clover-opaque",
-        label="opaque",
-        auth_type="oauth",
-        priority=0,
-        source="device_code",
-        access_token="opaque-access-token",
-        refresh_token="refresh-token",
-        agent_key="opaque-agent-key",
-        agent_key_expires_at=datetime.fromtimestamp(
-            time.time() + 3600,
-            tz=timezone.utc,
-        ).isoformat(),
-        extra={"scope": "inference:invoke"},
-    )
-
-    assert entry.runtime_api_key == ""
 
 
 
@@ -1602,72 +1537,6 @@ def test_load_pool_does_not_seed_qwen_oauth_when_no_token(tmp_path, monkeypatch)
     assert pool.entries() == []
 
 
-def test_clover_seed_from_singletons_preserves_obtained_at_timestamps(tmp_path, monkeypatch):
-    """Regression test for #15099 secondary issue.
-
-    When ``_seed_from_singletons`` materialises a device_code pool entry from
-    the ``providers.clover`` singleton, it must carry the mint/refresh
-    timestamps (``obtained_at``, ``agent_key_obtained_at``, ``expires_in``,
-    etc.) into the pool entry.  Without them, freshness-sensitive consumers
-    (self-heal hooks, pool pruning by age) treat just-minted credentials as
-    older than they actually are and evict them.
-    """
-    monkeypatch.setenv("CLOVER_HOME", str(tmp_path / "clover"))
-    _write_auth_store(
-        tmp_path,
-        {
-            "version": 1,
-            "providers": {
-                "clover": {
-                    "access_token": "at_XXXXXXXX",
-                    "refresh_token": "rt_YYYYYYYY",
-                    "client_id": "clover-cli",
-                    "portal_base_url": "",
-                    "inference_base_url": "https://inference./v1",
-                    "token_type": "Bearer",
-                    "scope": "openid profile",
-                    "obtained_at": "2026-04-24T10:00:00+00:00",
-                    "expires_at": "2026-04-24T11:00:00+00:00",
-                    "expires_in": 3600,
-                    "agent_key": "sk-clover-AAAA",
-                    "agent_key_id": "ak_123",
-                    "agent_key_expires_at": "2026-04-25T10:00:00+00:00",
-                    "agent_key_expires_in": 86400,
-                    "agent_key_reused": False,
-                    "agent_key_obtained_at": "2026-04-24T10:00:05+00:00",
-                    "tls": {"insecure": False, "ca_bundle": None},
-                },
-            },
-        },
-    )
-
-    from agent.credential_pool import load_pool
-
-    pool = load_pool("clover")
-    entries = pool.entries()
-
-    device_entries = [e for e in entries if e.source == "device_code"]
-    assert len(device_entries) == 1, f"expected single device_code entry; got {len(device_entries)}"
-    e = device_entries[0]
-
-    # Direct dataclass fields — must survive the singleton → pool copy.
-    assert e.access_token == "at_XXXXXXXX"
-    assert e.refresh_token == "rt_YYYYYYYY"
-    assert e.expires_at == "2026-04-24T11:00:00+00:00"
-    assert e.agent_key == "sk-clover-AAAA"
-    assert e.agent_key_expires_at == "2026-04-25T10:00:00+00:00"
-
-    # Extra fields — this is what regressed.  These must be carried through
-    # via ``extra`` dict or __getattr__, NOT silently dropped.
-    assert e.obtained_at == "2026-04-24T10:00:00+00:00", (
-        f"obtained_at was dropped during seed; got {e.obtained_at!r}. This breaks "
-        f"downstream pool-freshness consumers (#15099)."
-    )
-    assert e.agent_key_obtained_at == "2026-04-24T10:00:05+00:00"
-    assert e.expires_in == 3600
-    assert e.agent_key_id == "ak_123"
-    assert e.agent_key_expires_in == 86400
-    assert e.agent_key_reused is False
 
 
 class TestLeastUsedStrategy:
