@@ -17,6 +17,11 @@ from pathlib import Path
 
 import pytest
 
+# Each test imports gateway.run in a throwaway subprocess against a temp
+# CLOVER_HOME to read the env bridge. No gateway is started, but the
+# conftest live-system guard matches the "gateway" + "run" substrings.
+pytestmark = pytest.mark.live_system_guard_bypass
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
