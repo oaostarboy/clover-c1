@@ -18,7 +18,6 @@
     "paths": {
       "@/*": ["./src/*"],
       "@clover/plugin-sdk": ["./src/sdk/index.ts"],
-      "@clover/shared/billing": ["../shared/src/billing-types.ts"],
       "@clover/shared/translucency": ["../shared/src/translucency.ts"],
       "@clover/shared": ["../shared/src/index.ts"]
     }

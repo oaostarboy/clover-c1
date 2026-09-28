@@ -188,7 +188,6 @@ export default defineConfig(({ command }) => ({
       '@/debug/dev-only': debugEntry(command, process.env as Record<string, string>),
       '@': path.resolve(__dirname, './src'),
       '@clover/plugin-sdk': path.resolve(__dirname, './src/sdk/index.ts'),
-      '@clover/shared/billing': path.resolve(__dirname, '../shared/src/billing-types.ts'),
       '@clover/shared': path.resolve(__dirname, '../shared/src'),
       // The tour tool's preview surface injects driver.js's prebuilt IIFE into
       // the pane's guest page as raw source; the package's exports map doesn't
