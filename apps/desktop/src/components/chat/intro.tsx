@@ -169,6 +169,13 @@ export function Intro({ personality, seed }: IntroProps) {
       <div className="w-full min-w-0">
         <Wordmark className="mb-1" text={WORDMARK} />
 
+        <p
+          className="mx-auto mb-3 inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-medium tracking-wide text-amber-400 uppercase"
+          data-slot="aui_intro_under_construction"
+        >
+          🚧 Under construction
+        </p>
+
         <p className="m-0 text-center leading-normal tracking-tight">{copy.body}</p>
       </div>
     </div>
