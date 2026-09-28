@@ -544,6 +544,7 @@ def init_agent(
     command: str = None,
     args: list[str] | None = None,
     model: str = "",
+    model_pinned: bool = False,
     max_iterations: int = sys.maxsize,  # Default: unlimited tool-calling iterations (shared with subagents)
     enabled_toolsets: List[str] = None,
     disabled_toolsets: List[str] = None,
@@ -667,6 +668,13 @@ def init_agent(
     _install_safe_stdio()
 
     agent.model = model
+    # Set only when the caller explicitly chose this model (clover -z -m,
+    # clover chat -m, delegate_task per-task/delegation.model override) —
+    # never for a value that only came from config/env defaults. Gates the
+    # no-silent-fallback guard in conversation_loop.py: a pinned model that
+    # gets a model_not_found error must abort instead of silently running
+    # the turn on a different model. See #93412.
+    agent.model_pinned = bool(model_pinned)
     agent.max_iterations = max_iterations
     # Shared iteration budget — parent creates, children inherit.
     # Consumed by every LLM turn across parent + all subagents.

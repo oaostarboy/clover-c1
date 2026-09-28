@@ -453,6 +453,7 @@ class AIAgent:
         command: str = None,
         args: list[str] | None = None,
         model: str = "",
+        model_pinned: bool = False,
         max_iterations: int = sys.maxsize,  # Default: unlimited tool-calling iterations (shared with subagents)
         tool_delay: float = None,  # Deprecated: accepted for compatibility, ignored
         enabled_toolsets: List[str] = None,
@@ -547,6 +548,7 @@ class AIAgent:
             command=command,
             args=args,
             model=model,
+            model_pinned=model_pinned,
             max_iterations=max_iterations,
             enabled_toolsets=enabled_toolsets,
             disabled_toolsets=disabled_toolsets,

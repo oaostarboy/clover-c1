@@ -6027,6 +6027,40 @@ def run_conversation(
                             )
                             retry_count = 0
                             continue
+                    # An explicitly pinned model (clover -z -m, clover chat
+                    # -m, a delegate_task per-task/delegation.model override)
+                    # must never silently run on a different model. Before
+                    # this guard, a typo'd/unavailable model name walked the
+                    # configured fallback_providers chain and completed the
+                    # whole job on a different provider/model with no
+                    # visible warning — see #93412. Abort the turn instead;
+                    # other failure reasons (rate limit, overload, auth,
+                    # timeouts) are still allowed to fall back.
+                    if (
+                        classified.reason == FailoverReason.model_not_found
+                        and getattr(agent, "model_pinned", False)
+                    ):
+                        _pinned_summary = agent._summarize_api_error(api_error)
+                        _pinned_msg = (
+                            f"Model '{_model}' isn't available on provider "
+                            f"'{_provider}'. Nothing was run on another model."
+                        )
+                        agent._flush_status_buffer()
+                        agent._emit_status(f"❌ {_pinned_msg}")
+                        logger.error(
+                            "%s%s (%s)", agent.log_prefix, _pinned_msg, _pinned_summary,
+                        )
+                        agent._persist_session(messages, conversation_history)
+                        return {
+                            "final_response": _pinned_msg,
+                            "messages": messages,
+                            "api_calls": api_call_count,
+                            "completed": False,
+                            "failed": True,
+                            "error": _pinned_msg,
+                            "pinned_model_unavailable": True,
+                        }
+
                     # Try fallback before aborting — a different provider may
                     # not have the same issue (rate limit, auth, etc.). Only
                     # announce the attempt when a fallback chain actually

@@ -486,8 +486,18 @@ class CLIAgentSetupMixin:
                 "credential_pool": getattr(self, "_credential_pool", None),
             }
             effective_model = model_override or self.model
+            # Pinned when the effective model came from an explicit choice
+            # (the -m/--model CLI flag, or a runtime override such as
+            # `/model <name>`) rather than a config/env default. Gates the
+            # no-silent-fallback guard: a pinned model that gets a
+            # model_not_found error aborts instead of walking the fallback
+            # chain unannounced. See #93412.
+            effective_model_pinned = bool(model_override) or bool(
+                getattr(self, "_explicit_model_override", False)
+            )
             self.agent = AIAgent(
                 model=effective_model,
+                model_pinned=effective_model_pinned,
                 api_key=runtime.get("api_key"),
                 base_url=runtime.get("base_url"),
                 provider=runtime.get("provider"),
