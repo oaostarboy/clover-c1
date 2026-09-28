@@ -67,8 +67,8 @@ ROLLBACK_MESSAGE = ("The update didn't start correctly, so I went back to the ve
                     "you had before. Nothing was lost. You can try again later.")
 
 
-def _core_imports_healthy(root: Path) -> bool:
-    python = root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+def _core_imports_healthy(root: Path, python: Path | None = None) -> bool:
+    python = python or root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     if not python.is_file():
         return False
     try:
@@ -104,7 +104,8 @@ def _current_head(root: Path) -> str | None:
 
 
 def probe_gateway(root: Path, *, timeout: float = 90, stable_seconds: float = 20,
-                  poll: float = POLL_SECONDS, home: Path | None = None) -> bool:
+                  poll: float = POLL_SECONDS, home: Path | None = None,
+                  python: Path | None = None) -> bool:
     """One bounded startup probe: imports and continuously live gateway."""
     deadline = time.monotonic() + timeout
     stable_since = None
@@ -119,7 +120,9 @@ def probe_gateway(root: Path, *, timeout: float = 90, stable_seconds: float = 20
                     alive = False
             except (OSError, ValueError):
                 pass  # Legacy gateways have no stamped status file.
-        if alive and _core_imports_healthy(root):
+        imports_ok = (_core_imports_healthy(root, python=python) if python is not None
+                      else _core_imports_healthy(root)) if alive else False
+        if alive and imports_ok:
             identity = _gateway_identity()
             if stable_since is None or (identity is not None and stable_identity != identity):
                 stable_since = time.monotonic()
@@ -138,7 +141,8 @@ def _restart_from_beacon(data: dict[str, Any]) -> None:
     supervisor = data.get("supervisor")
     if supervisor in {"systemd", "launchd"}:
         root = Path(data["repo"])
-        python = root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        python = Path(data.get("venv_python") or
+                      root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
         if supervisor == "systemd":
             code = ("from clover_cli.update_cmd import _restart_systemd_gateway_units_best_effort as restart; "
                     "failed=[]; restart(failed); "
@@ -153,7 +157,7 @@ def _restart_from_beacon(data: dict[str, Any]) -> None:
     services = data.get("windows_services") or []
     if services and os.name == "nt":
         root = Path(data["repo"])
-        python = root / "venv" / "Scripts" / "python.exe"
+        python = Path(data.get("venv_python") or root / "venv" / "Scripts" / "python.exe")
         for name in services:
             subprocess.run(
                 [str(python), "-c",
@@ -181,6 +185,19 @@ def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
     sha = data["pre_pull_sha"]
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("Invalid saved pre-pull commit")
+    if os.name == "nt":
+        for service in data.get("windows_services") or []:
+            subprocess.run(["sc", "stop", str(service)], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=10)
+            deadline = time.monotonic() + 60
+            while True:
+                state = subprocess.run(["sc", "query", str(service)], capture_output=True,
+                                       text=True, encoding="utf-8", errors="replace", timeout=10)
+                if state.returncode == 0 and "STOPPED" in state.stdout:
+                    break
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"Windows gateway service did not stop: {service}")
+                time.sleep(0.25)
     dirty = subprocess.run(["git", "status", "--porcelain"], cwd=root, check=True,
                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     parked = bool(dirty.stdout.strip())
@@ -198,18 +215,27 @@ def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
             subprocess.run(["git", "stash", "drop", "stash@{0}"], cwd=root, check=True,
                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         # Conflicts stay in the stash; never discard the user's edits.
-    python = root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    snapshot_id = data.get("pre_update_snapshot_id")
+    home = beacon.parent
+    if snapshot_id and Path(snapshot_id).name == snapshot_id:
+        config = home / "state-snapshots" / snapshot_id / "config.yaml"
+        if config.is_file():
+            shutil.copy2(config, home / "config.yaml")
+    python = Path(data.get("venv_python") or
+                  root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
     if not python.is_file():
+        venv_dir = python.parent.parent
+        venv_arg = "venv" if venv_dir == root / "venv" else str(venv_dir)
         uv = shutil.which("uv")
         if uv:
-            create = [uv, "venv", "venv"]
+            create = [uv, "venv", venv_arg]
         else:
             bootstrap = next((exe for exe in (shutil.which("python3"), shutil.which("python"),
                                                str(sys.executable) if Path(sys.executable).is_file() else None)
                               if exe), None)
             if not bootstrap:
                 raise RuntimeError("No Python interpreter available to recreate the managed venv")
-            create = [bootstrap, "-m", "venv", "venv"]
+            create = [bootstrap, "-m", "venv", venv_arg]
         subprocess.run(create, cwd=root, check=True, capture_output=True,
                        text=True, encoding="utf-8", errors="replace", timeout=120)
     if not python.is_file():
@@ -220,12 +246,6 @@ def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
               "import sys; install([sys.executable, '-m', 'pip'], group='all')")
     subprocess.run([str(python), "-c", repair], cwd=root, check=True,
                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
-    snapshot_id = data.get("pre_update_snapshot_id")
-    home = beacon.parent
-    if snapshot_id and Path(snapshot_id).name == snapshot_id:
-        config = home / "state-snapshots" / snapshot_id / "config.yaml"
-        if config.is_file():
-            shutil.copy2(config, home / "config.yaml")
 
 
 def publish_gateway_verdict(beacon: Path, outcome: str) -> None:
@@ -245,15 +265,27 @@ def publish_gateway_verdict(beacon: Path, outcome: str) -> None:
 def verify_or_rollback(data: dict[str, Any], beacon: Path, *, timeout: float = 90,
                        stable_seconds: float = 20) -> str:
     root = Path(data["repo"])
-    if probe_gateway(root, timeout=timeout, stable_seconds=stable_seconds, home=beacon.parent):
+    python = Path(data["venv_python"]) if data.get("venv_python") else None
+    if probe_gateway(root, timeout=timeout, stable_seconds=stable_seconds,
+                     home=beacon.parent, python=python):
         return "healthy"
     log_dir = beacon.parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log = log_dir / "update-rollback.log"
     try:
-        _rollback_checkout(data, beacon)
+        try:
+            _rollback_checkout(data, beacon)
+        except Exception:
+            # The checkout may already be back at the saved commit even if
+            # dependency repair failed. Try its gateway once; the second
+            # health probe decides whether recovery actually succeeded.
+            if _current_head(root) != data["pre_pull_sha"]:
+                raise
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(traceback.format_exc())
         _restart_from_beacon(data)
-        restored = probe_gateway(root, timeout=timeout, stable_seconds=stable_seconds, home=beacon.parent)
+        restored = probe_gateway(root, timeout=timeout, stable_seconds=stable_seconds,
+                                 home=beacon.parent, python=python)
         outcome = "rolled-back" if restored else "rollback-unhealthy"
     except Exception as exc:
         logging.basicConfig(filename=str(log), level=logging.ERROR)
@@ -298,7 +330,8 @@ def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None,
                  pre_pull_sha: str | None = None, repo: str | None = None,
                  pre_update_snapshot_id: str | None = None,
                  windows_services: list[str] | None = None,
-                 supervisor: str | None = None) -> Path:
+                 supervisor: str | None = None,
+                 venv_python: str | None = None) -> Path:
     """Record how to restart the gateway, and that the updater is alive.
 
     ``argv`` is the command line of the gateway being stopped, captured before
@@ -316,6 +349,8 @@ def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None,
         "pre_update_snapshot_id": pre_update_snapshot_id,
         "windows_services": list(windows_services or []),
         "supervisor": supervisor,
+        "venv_python": venv_python or (str(Path(sys.executable).absolute())
+                                       if sys.prefix != sys.base_prefix else None),
     }
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
