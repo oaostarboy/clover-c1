@@ -13,7 +13,7 @@ This is a near-verbatim clone of ``plugins/memory/__init__.py`` — the same
 discovery/loader machinery, retargeted at ``CronScheduler``. The built-in
 ``InProcessCronScheduler`` is NOT discovered here: it is core (lives in
 ``cron/scheduler_provider.py``) so the fallback can never be accidentally
-removed. Only NON-default providers (e.g. "chronos") live under this directory.
+removed. Only NON-default providers live under this directory.
 
 Only ONE provider can be active at a time, selected via ``cron.provider`` in
 config.yaml (empty = built-in). See ``cron.scheduler_provider.resolve_cron_scheduler``.
@@ -22,7 +22,7 @@ Usage:
     from plugins.cron_providers import discover_cron_schedulers, load_cron_scheduler
 
     available = discover_cron_schedulers()   # [(name, desc, available), ...]
-    provider = load_cron_scheduler("chronos")  # CronScheduler instance
+    provider = load_cron_scheduler("<name>")  # CronScheduler instance
 """
 
 from __future__ import annotations
@@ -273,7 +273,7 @@ def _load_provider_from_dir(provider_dir: Path) -> Optional["CronScheduler"]:  #
         loaded_submodules = []
 
         # Register submodules so relative imports work
-        # e.g., "from ._nas_client import NasCronClient" in the chronos plugin
+        # e.g., "from ._client import Client" inside a provider plugin
         for sub_file in provider_dir.glob("*.py"):
             if sub_file.name == "__init__.py":
                 continue
