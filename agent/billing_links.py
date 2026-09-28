@@ -20,10 +20,9 @@ from utils import base_url_host_matches
 class BillingBlock:
     """Structured billing-wall descriptor shared across every surface.
 
-    ``is_clover`` is the routing bit: Clover has a first-class in-app billing surface
-    (desktop Settings → Billing, TUI/CLI ``/topup``), so surfaces prefer that over
-    ``billing_url``; third-party providers have no in-app flow, so ``billing_url``
-    is the deep link the user actually needs.
+    ``is_clover`` is kept for wire-shape stability with existing TS consumers
+    but is always ``False`` now — Clover C1 has no hosted billing surface, so
+    every provider resolves through ``billing_url``.
     """
 
     provider: str
@@ -70,33 +69,6 @@ _PROVIDERS: tuple[_Provider, ...] = (
 _BY_SLUG: dict[str, _Provider] = {slug: p for p in _PROVIDERS for slug in p.slugs}
 
 
-def is_clover_inference_route(provider: str, base_url: str) -> bool:
-    """True when the failing route is the Clover-managed inference gateway.
-
-    An unset provider AND an unset base_url means no third-party override
-    was ever configured — the only route that can reach here with nothing
-    set is Clover's own hosted inference, since every other provider always
-    carries an explicit base_url.
-    """
-    slug = (provider or "").strip().lower()
-    base = str(base_url or "").strip()
-    if slug == "clover":
-        return True
-    if not slug and not base:
-        return True
-    return base_url_host_matches(base, "inference-api.")
-
-
-def _clover_billing_url() -> Optional[str]:
-    """Best-effort Clover portal billing URL (text-surface fallback; Clover prefers the in-app flow)."""
-    try:
-        from clover_cli.clover_account import clover_portal_billing_url
-
-        return clover_portal_billing_url(None)
-    except Exception:
-        return ""
-
-
 def _resolve_provider_link(slug: str, base_url: str) -> tuple[str, Optional[str]]:
     """Resolve ``(label, url)``: exact slug → base_url host → readable-label fallback."""
     hit = _BY_SLUG.get(slug)
@@ -126,9 +98,6 @@ def build_billing_block(
     """
     slug = (provider or "").strip().lower()
     model = (model or "").strip()
-
-    if is_clover_inference_route(slug, base_url):
-        return BillingBlock(slug or "clover", "Clover Portal", model, _clover_billing_url(), True, message or "")
 
     label, url = _resolve_provider_link(slug, base_url)
     return BillingBlock(slug, label, model, url, False, message or "")
