@@ -30,7 +30,7 @@ class TestGatewayLifecyclePattern:
         "clover gateway stop",
         "clover gateway uninstall",
         "clover  gateway  restart",         # double spaces
-        "Hermez Gateway Restart".lower().replace("z", "s"),  # case handled
+        "Clover Gateway Restart".lower(),   # case handled
         "CLOVER GATEWAY RESTART",           # uppercase
     ])
     def test_clover_gateway_commands(self, text):
