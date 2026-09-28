@@ -261,9 +261,12 @@ class AgentJobObserver:
                 self._emit("subagent.thinking", preview=text, note_kind="note")
         elif event == "result":
             text = obj.get("text")
+            status = obj.get("status")
             with self._lock:
                 self._result_text = text if isinstance(text, str) else None
-                self._result_is_error = obj.get("status") not in (None, "completed")
+                self._result_is_error = status not in (None, "completed", "incomplete")
+                if status == "incomplete":
+                    self._result_subtype = "error_max_turns"  # unfinished, not crashed
 
     # -- exit ---------------------------------------------------------------
 

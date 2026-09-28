@@ -310,7 +310,15 @@ def run_oneshot(
 
     if activity_writer is not None:
         _ok = failure is None and bool((response or "").strip()) and not result.get("failed")
-        activity_writer.result(response if _ok else "", "completed" if _ok else "failed")
+        _status = "completed" if _ok else "failed"
+        if _ok:
+            # Still stopped early after every allowed resume: say so, so the
+            # parent's card shows "unfinished" instead of a false "done".
+            from agent.step_continuation import needs_continuation
+
+            if needs_continuation(result) is not None:
+                _status = "incomplete"
+        activity_writer.result(response if _ok else "", _status)
 
     if failure is not None:
         # Re-raise control-flow exceptions so the parent handles them as usual
@@ -527,6 +535,29 @@ def _run_agent(
             activity_writer.start(effective_model)
 
         result = agent.run_conversation(prompt)
+        # Keep a worker going when it stops early: out of steps, or quit
+        # with steps left while admitting the job isn't done
+        # (delegation.auto_continue, default 2).
+        try:
+            from agent.step_continuation import (
+                auto_continue_limit,
+                continue_until_done,
+                needs_continuation,
+            )
+
+            _limit = auto_continue_limit((cfg.get("delegation") or {}) if isinstance(cfg, dict) else {})
+            if _limit and needs_continuation(result, agent):
+                def _leg(message, history):
+                    return agent.run_conversation(message, conversation_history=history)
+
+                def _note(kind, n, lim):
+                    if activity_writer is not None:
+                        label = "out of steps" if kind == "budget" else "not finished"
+                        activity_writer.interim_callback(f"{label}, continuing ({n}/{lim})")
+
+                result = continue_until_done(agent, result, limit=_limit, run=_leg, on_continue=_note)
+        except Exception:
+            logging.debug("oneshot auto-continue failed", exc_info=True)
         return (result.get("final_response") or "", result)
     finally:
         # Ordering deliberately mirrors gateway/run.py:_cleanup_agent_resources,
