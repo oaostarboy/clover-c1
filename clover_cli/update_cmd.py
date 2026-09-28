@@ -8367,11 +8367,13 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 _rollback_argv = _m()._gateway_restart_argv_for_running_gateway()
                 if not _rollback_argv and _windows_gateway_resume:
                     _rollback_argv = _m()._gateway_restart_argv_for_resume(_windows_gateway_resume)
-                if _rollback_argv:
+                _rollback_services = list((_windows_gateway_resume or {}).get("services") or [])
+                if _rollback_argv or _rollback_services:
                     _beacon = _urw.write_beacon(
                         _rollback_argv, pre_pull_sha=pre_pull_sha,
                         repo=str(_m().PROJECT_ROOT),
                         pre_update_snapshot_id=pre_update_snapshot_id,
+                        windows_services=_rollback_services,
                     )
                     if not _pre_armed_watcher:
                         # Freeze the watcher outside the checkout: the pulled

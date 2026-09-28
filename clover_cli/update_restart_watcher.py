@@ -99,6 +99,19 @@ def probe_gateway(root: Path, *, timeout: float = 90, stable_seconds: float = 20
 
 
 def _restart_from_beacon(data: dict[str, Any]) -> None:
+    services = data.get("windows_services") or []
+    if services and os.name == "nt":
+        root = Path(data["repo"])
+        python = root / "venv" / "Scripts" / "python.exe"
+        for name in services:
+            subprocess.run(
+                [str(python), "-c",
+                 "import sys; from clover_cli.update_cmd import _restore_windows_gateway_service; "
+                 "_restore_windows_gateway_service(sys.argv[1])", str(name)],
+                cwd=root, check=True, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", timeout=70,
+            )
+        return
     argv = data.get("gateway_argv") or []
     if not argv:
         raise RuntimeError("No saved gateway restart command")
@@ -148,9 +161,12 @@ def verify_or_rollback(data: dict[str, Any], beacon: Path, *, timeout: float = 9
         _restart_from_beacon(data)
         restored = probe_gateway(root, timeout=timeout, stable_seconds=stable_seconds)
         outcome = "rolled-back" if restored else "rollback-unhealthy"
-    except Exception:
+    except Exception as exc:
         logging.basicConfig(filename=str(log), level=logging.ERROR)
         logging.exception("Update rollback failed")
+        with log.open("a", encoding="utf-8") as handle:
+            handle.write(str(getattr(exc, "stdout", "") or "") + "\n")
+            handle.write(str(getattr(exc, "stderr", "") or "") + "\n")
         outcome = "rollback-failed"
     receipt = log_dir / "update_receipts" / "latest.json"
     try:
@@ -176,7 +192,8 @@ def beacon_path(clover_home: Optional[Path] = None) -> Path:
 
 def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None,
                  pre_pull_sha: str | None = None, repo: str | None = None,
-                 pre_update_snapshot_id: str | None = None) -> Path:
+                 pre_update_snapshot_id: str | None = None,
+                 windows_services: list[str] | None = None) -> Path:
     """Record how to restart the gateway, and that the updater is alive.
 
     ``argv`` is the command line of the gateway being stopped, captured before
@@ -192,6 +209,7 @@ def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None,
         "pre_pull_sha": pre_pull_sha,
         "repo": repo,
         "pre_update_snapshot_id": pre_update_snapshot_id,
+        "windows_services": list(windows_services or []),
     }
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
@@ -327,7 +345,7 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
                     )
                     if head.returncode == 0 and head.stdout.strip() == data["pre_pull_sha"]:
-                        if not _gateway_running() and data.get("gateway_argv"):
+                        if not _gateway_running() and (data.get("gateway_argv") or data.get("windows_services")):
                             _restart_from_beacon(data)
                         beacon.unlink(missing_ok=True)
                         return "update-finished"
