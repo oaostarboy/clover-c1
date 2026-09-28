@@ -65,7 +65,7 @@ def test_artifact_build_rejects_nix_development_shell_environment(kind, tmp_path
 
 @pytest.mark.parametrize(
     ("kind", "artifact_glob"),
-    [("sdist", "clover-c1-*.tar.gz"), ("wheel", "clover-c1-*.whl")],
+    [("sdist", "clover_c1-*.tar.gz"), ("wheel", "clover_c1-*.whl")],
 )
 def test_artifact_build_allows_explicit_nix_package_build_marker(kind, artifact_glob, tmp_path):
     result = _build_artifact(kind, tmp_path, nix_build=True)

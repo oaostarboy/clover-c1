@@ -7,7 +7,7 @@ cron job store.
 """
 
 import importlib
-import json
+
 from pathlib import Path
 from unittest.mock import patch
 
@@ -184,21 +184,4 @@ class TestCommandHandler:
         assert jobs[0].get("deliver") == "telegram"
 
 
-class TestDocsGenerator:
-    def test_generator_emits_valid_index(self, tmp_path):
-        # The generator imports the catalog and writes a flat JSON array.
-        import importlib.util
 
-        script = (
-            Path(__file__).resolve().parents[2]
-            / "website" / "scripts" / "extract-automation-blueprints.py"
-        )
-        spec = importlib.util.spec_from_file_location("extract_cron_blueprints", script)
-        assert spec is not None and spec.loader is not None
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        index = mod.build_index()
-        assert isinstance(index, list) and len(index) == len(CATALOG)
-        # Each entry must round-trip through json and carry the surfaces.
-        json.dumps(index)
-        assert all("command" in e and "appUrl" in e for e in index)

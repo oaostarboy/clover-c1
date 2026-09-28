@@ -46,7 +46,7 @@ def build_login_parser(subparsers, *, cmd_login: Callable) -> None:
         help="(deprecated) Provider name; ignored — see `clover model`",
     )
     login_parser.add_argument(
-        "--portal-url", help="Portal base URL (default: production portal)"
+        "--portal-url", help="Portal base URL"
     )
     login_parser.add_argument(
         "--inference-url",

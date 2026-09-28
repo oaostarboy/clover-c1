@@ -9,16 +9,8 @@ Currently supports:
                           ``~/.clover/logs/*.log`` are not leaked into
                           the public paste service. Pass ``--no-redact``
                           to disable.
-                          Pass ``--clover`` to upload instead to Clover-internal
-                          storage (AWS S3) via a signed URL minted by the
-                          Clover account service: the bundle is private
-                          (viewable only by Clover staff / allowlisted mods via
-                          a Google-login-gated viewer) and auto-deletes after
-                          14 days, rather than going to a public paste.
 """
 
-import datetime
-import gzip
 import io
 import json
 import logging
@@ -634,12 +626,8 @@ def collect_debug_report(
 
 
 # ---------------------------------------------------------------------------
-# Shared bundle collection (used by both the paste.rs and Clover-S3 paths)
+# Shared bundle collection
 # ---------------------------------------------------------------------------
-
-# Bundle format identifier embedded in the Clover-S3 JSON envelope. The
-# discord-support viewer keys off this string to parse the bundle.
-_CLOVER_BUNDLE_FORMAT = "clover-debug-share/1"
 
 
 def collect_share_bundle(
@@ -709,26 +697,6 @@ def collect_share_bundle(
     if desktop_log:
         bundle["desktop.log"] = desktop_log
     return bundle
-
-
-def build_clover_bundle(bundle: dict[str, str], redact: bool = True) -> bytes:
-    """Gzip-compress a :func:`collect_share_bundle` mapping into the Clover envelope.
-
-    The JSON shape is what the discord-support viewer (Repo 3) parses::
-
-        {"format": "clover-debug-share/1",
-         "redacted": <bool>,
-         "created": <iso8601>,
-         "files": {"report": ..., "agent.log": ..., ...}}
-    """
-    created = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    envelope = {
-        "format": _CLOVER_BUNDLE_FORMAT,
-        "redacted": bool(redact),
-        "created": created,
-        "files": bundle,
-    }
-    return gzip.compress(json.dumps(envelope).encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
@@ -848,7 +816,6 @@ def run_debug_share(args):
     log_lines = getattr(args, "lines", 200)
     expiry = getattr(args, "expire", 7)
     local_only = getattr(args, "local", False)
-    clover = getattr(args, "clover", False)
     redact = not getattr(args, "no_redact", False)
 
     if local_only:
@@ -871,10 +838,6 @@ def run_debug_share(args):
                 print(title)
                 print(f"{'=' * 60}\n")
                 print(body)
-        return
-
-    if clover:
-        _run_debug_share_clover(args, log_lines=log_lines, redact=redact)
         return
 
     print(_PRIVACY_NOTICE)
@@ -910,88 +873,6 @@ def run_debug_share(args):
     print("To delete now:  clover debug delete <url>")
 
     print("\nShare these links with the Clover team for support.")
-
-
-_CLOVER_PRIVACY_NOTICE = """\
-⚠️  --clover: This uploads your debug bundle to Clover-INTERNAL storage (AWS S3),
-    NOT a public paste service. The following is included:
-  • System info (OS, Python/Clover version, provider, which API keys are
-    configured — NOT the actual keys)
-  • Full agent.log, gateway.log, and desktop.log (up to 512 KB each — likely
-    contains conversation content, tool outputs, and file paths)
-
-  • The bundle is viewable only by Clover staff (and allowlisted Discord mods)
-    via a Google-login-gated viewer.
-  • It is NOT a public paste — there is no public URL to the contents.
-  • It auto-deletes after 14 days.
-"""
-
-
-def _run_debug_share_clover(args, *, log_lines: int, redact: bool) -> None:
-    """Handle ``clover debug share --clover``: upload the bundle to Clover-S3.
-
-    Collects the same force-redacted bundle as the paste path, gzips it into
-    the Clover envelope, requests a signed URL from NAS, uploads, and prints the
-    private viewer link. On any failure falls back to a clear error that
-    suggests ``--local``.
-    """
-    from clover_cli.diagnostics_upload import share_to_clover
-
-    print(_CLOVER_PRIVACY_NOTICE)
-    if not _confirm_upload(args):
-        return
-    if not redact:
-        print(
-            "⚠️  --no-redact is set: secrets in your logs will NOT be redacted "
-            "before upload.\n"
-        )
-    print("Collecting debug report...")
-    _best_effort_sweep_expired_pastes()
-
-    bundle = collect_share_bundle(log_lines=log_lines, redact=redact)
-    if redact:
-        logger.info(
-            "clover debug share --clover: applied force-mode redaction before upload"
-        )
-    blob = build_clover_bundle(bundle, redact=redact)
-
-    print("Uploading to Clover diagnostics storage...")
-    try:
-        res = share_to_clover(blob)
-    except Exception as exc:
-        print(
-            f"\nNous upload failed: {exc}\n"
-            "\nThe Clover diagnostics service may be unavailable or not yet "
-            "provisioned.\n"
-            "Run `clover debug share --local` to print the report instead, "
-            "or `clover debug share` to upload to a public paste service.\n",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    view_url = res.get("viewUrl") or res.get("view_url")
-    print("\nDebug bundle uploaded to Clover (private):")
-    if view_url:
-        print(f"  View URL  {view_url}")
-    else:
-        print(f"  (no view URL returned; upload id: {res.get('id', '?')})")
-
-    expires_at = res.get("expiresAt") or res.get("expires_at")
-    if expires_at:
-        print(f"\n⏱  Auto-deletes at {expires_at} (14-day retention).")
-    else:
-        print("\n⏱  Auto-deletes after 14 days.")
-
-    print(
-        "\nShare this private link with the Clover team — only Clover staff "
-        "(via Google login) can open it."
-    )
-    print(
-        "\nPick up the discussion in:\n"
-        "  GitHub Issues        "
-        "  Clover Portal Support  "
-        "  Discord              "
-    )
 
 
 def run_debug_delete(args):

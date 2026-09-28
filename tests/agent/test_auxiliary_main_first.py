@@ -1,9 +1,8 @@
 """Regression tests for the ``auto`` → main-model-first policy.
 
-Prior to this change, aggregator users (OpenRouter / Clover Portal) had aux
-tasks routed through a cheap provider-side default (Gemini Flash) while
-non-aggregator users got their main model.  This made behavior inconsistent
-and surprising — users picked Claude but got Gemini Flash summaries.
+Previously, aggregator users (such as OpenRouter) had aux tasks routed
+through a cheap provider-side default (Gemini Flash) while other users
+got their main model. This made behavior inconsistent and surprising.
 
 The current policy: ``auto`` means "use my main chat model" for every user,
 regardless of provider type.  Explicit per-task overrides in ``config.yaml``
@@ -279,128 +278,10 @@ class TestResolveVisionMainFirst:
 
 
 
-    @staticmethod
-    def _stub_clover_portal(seen: dict):
-        """Stub the Clover network boundary, keeping the resolution chain real.
 
-        Returns a ``_try_clover`` replacement that answers with the Portal's
-        tier-aware slots: a vision model for ``vision=True``, the text chat
-        default otherwise.
-        """
-        clover_client = MagicMock()
-        clover_client.api_key = "jwt-test"
-        clover_client.base_url = ""
 
-        def fake_try_clover(vision=False):
-            seen["vision"] = vision
-            return clover_client, (
-                "stepfun/step-3.7-flash:free" if vision else "tencent/hy3:free"
-            )
 
-        return clover_client, fake_try_clover
 
-    def test_clover_main_vision_uses_portal_pick_not_text_chat_model(self):
-        """Clover main → vision runs the Portal's vision slot, not the chat model.
-
-        A Clover chat default is routinely text-only (e.g. a ``:free`` chat SKU).
-        Letting it reach the vision lane means the image goes to a model that
-        cannot accept one and the Portal 404s. Only the Clover network boundary
-        is stubbed — the strict vision backend, the provider router, and its
-        missing-model pre-fill all run for real, because that pre-fill is where
-        the chat model used to clobber the Portal's pick.
-        """
-        seen: dict = {}
-        clover_client, fake_try_clover = self._stub_clover_portal(seen)
-
-        with patch(
-            "agent.auxiliary_client._read_main_provider", return_value="clover",
-        ), patch(
-            "agent.auxiliary_client._read_main_model", return_value="tencent/hy3:free",
-        ), patch(
-            "agent.auxiliary_client._resolve_task_provider_model",
-            return_value=("auto", None, None, None, None),
-        ), patch(
-            "agent.auxiliary_client._try_clover", side_effect=fake_try_clover,
-        ):
-            from agent.auxiliary_client import resolve_vision_provider_client
-
-            provider, client, model = resolve_vision_provider_client()
-
-        assert provider == "clover"
-        assert client is clover_client
-        assert seen["vision"] is True
-        assert model == "stepfun/step-3.7-flash:free"
-
-    def test_clover_main_vision_honours_explicit_vision_model(self):
-        """An explicit auxiliary.vision.model still overrides the Portal pick."""
-        seen: dict = {}
-        _clover_client, fake_try_clover = self._stub_clover_portal(seen)
-
-        with patch(
-            "agent.auxiliary_client._read_main_provider", return_value="clover",
-        ), patch(
-            "agent.auxiliary_client._read_main_model", return_value="tencent/hy3:free",
-        ), patch(
-            "agent.auxiliary_client._resolve_task_provider_model",
-            return_value=("auto", "qwen/qwen3-vl-8b-instruct", None, None, None),
-        ), patch(
-            "agent.auxiliary_client._try_clover", side_effect=fake_try_clover,
-        ):
-            from agent.auxiliary_client import resolve_vision_provider_client
-
-            provider, _client, model = resolve_vision_provider_client()
-
-        assert provider == "clover"
-        assert model == "qwen/qwen3-vl-8b-instruct"
-
-    def test_clover_explicit_vision_provider_also_skips_chat_model(self):
-        """``auxiliary.vision.provider: clover`` takes the same Portal pick.
-
-        The explicit-provider branch reaches the strict vision backend with no
-        model too, so it has to resolve the same way the auto branch does.
-        """
-        seen: dict = {}
-        clover_client, fake_try_clover = self._stub_clover_portal(seen)
-
-        with patch(
-            "agent.auxiliary_client._read_main_provider", return_value="clover",
-        ), patch(
-            "agent.auxiliary_client._read_main_model", return_value="tencent/hy3:free",
-        ), patch(
-            "agent.auxiliary_client._resolve_task_provider_model",
-            return_value=("clover", None, None, None, None),
-        ), patch(
-            "agent.auxiliary_client._try_clover", side_effect=fake_try_clover,
-        ):
-            from agent.auxiliary_client import resolve_vision_provider_client
-
-            provider, client, model = resolve_vision_provider_client()
-
-        assert provider == "clover"
-        assert client is clover_client
-        assert model == "stepfun/step-3.7-flash:free"
-
-    def test_clover_text_aux_still_uses_main_chat_model(self):
-        """The vision carve-out must not leak into text aux resolution.
-
-        Text auxiliary work on a Clover main deliberately keeps the user's chat
-        model rather than dropping to the Portal's cheap default.
-        """
-        seen: dict = {}
-        _clover_client, fake_try_clover = self._stub_clover_portal(seen)
-
-        with patch(
-            "agent.auxiliary_client._read_main_provider", return_value="clover",
-        ), patch(
-            "agent.auxiliary_client._read_main_model", return_value="tencent/hy3:free",
-        ), patch(
-            "agent.auxiliary_client._try_clover", side_effect=fake_try_clover,
-        ):
-            from agent.auxiliary_client import resolve_provider_client
-
-            _client, model = resolve_provider_client("clover")
-
-        assert model == "tencent/hy3:free"
 
     def test_copilot_vision_sets_vision_header(self, monkeypatch):
         """Copilot vision requests include the header required for vision routing."""
@@ -508,6 +389,8 @@ class TestResolveVisionCustomProvider:
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_BASE_URL", "https://my.endpoint.example/v1")
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_API_KEY", "sk-runtime-key")
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_API_MODE", "anthropic_messages")
+        monkeypatch.setattr(aux, "_RUNTIME_MAIN_PROVIDER", "custom")
+        monkeypatch.setattr(aux, "_RUNTIME_MAIN_MODEL", "claude-opus-4-8")
 
         with patch(
             "agent.auxiliary_client._read_main_provider", return_value="custom",
@@ -543,6 +426,8 @@ class TestResolveVisionCustomProvider:
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_BASE_URL", "https://named.example/v1")
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_API_KEY", "sk-named")
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_API_MODE", "")
+        monkeypatch.setattr(aux, "_RUNTIME_MAIN_PROVIDER", "custom:copilot-gateway")
+        monkeypatch.setattr(aux, "_RUNTIME_MAIN_MODEL", "claude-opus-4-8")
 
         with patch(
             "agent.auxiliary_client._read_main_provider",

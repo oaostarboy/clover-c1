@@ -207,15 +207,6 @@ contextBridge.exposeInMainWorld('cloverDesktop', {
   probeConnectionConfig: remoteUrl => ipcRenderer.invoke('clover:connection-config:probe', remoteUrl),
   oauthLoginConnectionConfig: remoteUrl => ipcRenderer.invoke('clover:connection-config:oauth-login', remoteUrl),
   oauthLogoutConnectionConfig: remoteUrl => ipcRenderer.invoke('clover:connection-config:oauth-logout', remoteUrl),
-  // Clover Cloud: one portal login powers discovery + silent per-agent sign-in
-  // (cloud-auto-discovery Phase 3).
-  cloud: {
-    status: () => ipcRenderer.invoke('clover:cloud:status'),
-    login: () => ipcRenderer.invoke('clover:cloud:login'),
-    logout: () => ipcRenderer.invoke('clover:cloud:logout'),
-    discover: org => ipcRenderer.invoke('clover:cloud:discover', org),
-    agentSignIn: dashboardUrl => ipcRenderer.invoke('clover:cloud:agent-sign-in', dashboardUrl)
-  },
   profile: {
     get: () => ipcRenderer.invoke('clover:profile:get'),
     remember: name => ipcRenderer.invoke('clover:profile:remember', name),

@@ -1475,11 +1475,6 @@ DEFAULT_CONFIG = {
         # class of over-claim that otherwise forces users to run
         # `git status` to verify edits landed.  Set false to suppress.
         "file_mutation_verifier": True,
-        # Clover credits status-bar notices (usage bands, grant-spent, depleted /
-        # restored).  When false, no credits notices are emitted — balance data
-        # is still captured and /usage keeps working.  Off switch for sub +
-        # top-up users who find the gauge noisy.
-        "credits_notices": True,
         # Turn-completion explainer.  When true (default), the agent appends a
         # one-line explanation to its final response whenever a turn ends
         # abnormally with no usable reply — empty content after retries, a
@@ -1717,23 +1712,9 @@ DEFAULT_CONFIG = {
         # (telegram, discord, ...) are never touched; live in-memory
         # sessions are excluded; swept sessions stay resumable.
         "startup_orphan_sweep": True,
-        # OAuth gate configuration (engaged when ``--host`` is set and
-        # ``--insecure`` is not). The bundled Clover Portal plugin reads
-        # both keys at startup; they are the canonical surface for these
-        # settings. Each can be overridden by an environment variable —
-        # ``CLOVER_DASHBOARD_OAUTH_CLIENT_ID`` and
-        # ``CLOVER_DASHBOARD_PORTAL_URL`` respectively — and the env var
-        # wins when set to a non-empty value. The override path is what
-        # Fly.io's platform-secret injection uses to push the per-deploy
-        # client_id at provisioning time without operators needing to
-        # touch config.yaml. Local dev / non-Fly deploys can set either
-        # surface; missing values fall through to the plugin's defaults
-        # (no provider registered when ``client_id`` is empty;
-        # ``portal_url`` defaults to ).
-        "oauth": {
-            "client_id": "",  # agent:{instance_id} — Portal provisions this
-            "portal_url": "",  # blank → use plugin default (production Portal)
-        },
+        # OAuth gate configuration. The bundled self-hosted OIDC provider
+        # reads its settings from ``dashboard.oauth.self_hosted``.
+        "oauth": {},
         # Username/password gate configuration — read by the bundled
         # ``dashboard_auth/basic`` plugin (a self-hosted "just put a
         # password on my dashboard" provider that needs no OAuth IDP).
@@ -2084,6 +2065,20 @@ DEFAULT_CONFIG = {
     "delegation": {
         "model": "",       # e.g. "google/gemini-3-flash-preview" (empty = inherit parent model)
         "provider": "",    # e.g. "openrouter" (empty = inherit parent provider + credentials)
+        # Value-routed model tiers: task.tier -> ordered "provider/model"
+        # candidates, first one the user has credentials for wins. Lets the
+        # parent pick a tier per subagent (code/read/check/fast/deep) instead
+        # of pinning every child to one model. A tier name here REPLACES the
+        # built-in list of the same name (lists don't merge); add new tier
+        # names freely. Set to {} to disable tiering entirely and fall back
+        # to delegation.provider/model (or parent inheritance) for every task.
+        "tiers": {
+            "deep": ["anthropic/claude-opus-5-5", "openai-codex/gpt-6-sol"],
+            "code": ["anthropic/claude-sonnet-5", "openai-codex/gpt-6-luna"],
+            "read": ["gemini/gemini-3.8-pro", "anthropic/claude-sonnet-5"],
+            "check": ["xai/grok-4.7", "xai-oauth/grok-4.7", "gemini/gemini-3.8-pro"],
+            "fast": ["gemini/gemini-3.8-flash-high", "openai-codex/gpt-6-luna"],
+        },
         "base_url": "",    # direct OpenAI-compatible endpoint for subagents
         "api_key": "",     # API key for delegation.base_url (falls back to OPENAI_API_KEY)
         "api_mode": "",    # wire protocol for delegation.base_url: "chat_completions",
@@ -2107,6 +2102,11 @@ DEFAULT_CONFIG = {
         "inherit_mcp_toolsets": True,
         "max_iterations": 250,  # per-subagent iteration cap (each subagent gets its own budget,
                                # independent of the parent's max_iterations)
+        # When a subagent runs out of steps mid-task, refresh its budget and
+        # let it resume from its own transcript instead of returning a partial
+        # summary. Up to this many times per child; each resume must make
+        # progress (call a tool). 0 disables.
+        "auto_continue": 2,
         # Subagent summaries return to the parent's context verbatim. A batch
         # fan-out (N children) returns N summaries at once, which can exceed
         # the parent's context window and trigger a compression/429 death
@@ -2733,30 +2733,9 @@ DEFAULT_CONFIG = {
         # Active cron SCHEDULER provider (Axis B — the trigger that decides
         # WHEN a due job fires). Empty string = the built-in in-process 60s
         # ticker (default). Name an installed provider (plugins/cron_providers/<name>/ or
-        # $CLOVER_HOME/plugins/<name>/) to relocate the trigger — e.g. "chronos",
-        # the NAS-mediated managed-cron provider for scale-to-zero deployments.
-        # An unknown or unavailable provider falls back to the built-in, so cron
+        # $CLOVER_HOME/plugins/<name>/) to relocate the trigger. An unknown or unavailable provider falls back to the built-in, so cron
         # never loses its trigger.
         "provider": "",
-        # Chronos (NAS-mediated managed cron) settings. Only consulted when
-        # provider == "chronos". All non-secret (URLs + the JWT audience): the
-        # agent holds NO external-scheduler credentials. For hosted agents, NAS
-        # sets these at provision time. The outbound provision call reuses the
-        # agent's existing Clover Portal token — there is no token key here.
-        "chronos": {
-            # NAS / portal base URL the agent calls to arm/cancel one-shots
-            # and that mints the inbound fire JWT (used as the expected issuer).
-            "portal_url": "",
-            # The agent's OWN publicly-reachable base URL for NAS→agent fires
-            # (NAS POSTs {callback_url}/api/cron/fire). Empty → Chronos is
-            # unavailable and the resolver falls back to the built-in ticker.
-            "callback_url": "",
-            # This agent's expected JWT audience (e.g. "agent:{instance_id}").
-            "expected_audience": "",
-            # NAS JWKS URL for verifying the inbound fire JWT's signature.
-            # Empty → the fire endpoint refuses all tokens (no unsigned decode).
-            "nas_jwks_url": "",
-        },
         # Wrap delivered cron responses with a header (task name) and footer
         # ("The agent cannot see this message").  Set to false for clean output.
         "wrap_response": True,
@@ -3037,8 +3016,8 @@ DEFAULT_CONFIG = {
     },
 
     # Remotely-hosted model catalog manifest.  When enabled, the CLI fetches
-    # curated model lists for OpenRouter and Clover Portal from this URL,
-    # falling back to the in-repo snapshot on network failure.  Lets us
+    # curated model lists for OpenRouter from this URL, falling back to the
+    # in-repo snapshot on network failure.  Lets us
     # update model picker lists without shipping a clover-c1 release.
     # The default URL is served by the docs site GitHub Pages deploy.
     "model_catalog": {
@@ -3949,15 +3928,15 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 39,
+    "_config_version": 40,
 }
 
 # Optional environment variables that enhance functionality
 OPTIONAL_ENV_VARS = {
     # ── Provider (handled in provider selection, not shown in checklists) ──
     "CLOVER_BASE_URL": {
-        "description": "Clover Portal base URL override",
-        "prompt": "Clover Portal base URL (leave empty for default)",
+        "description": "Base URL override for the active inference provider",
+        "prompt": "Provider base URL override (leave empty for default)",
         "url": None,
         "password": False,
         "category": "provider",
@@ -4415,38 +4394,6 @@ OPTIONAL_ENV_VARS = {
         "prompt": "Firecrawl API URL (leave empty for cloud)",
         "url": None,
         "password": False,
-        "category": "tool",
-        "advanced": True,
-    },
-    "FIRECRAWL_GATEWAY_URL": {
-        "description": "Exact Firecrawl tool-gateway origin override for Clover Subscribers only (optional)",
-        "prompt": "Firecrawl gateway URL (leave empty to derive from domain)",
-        "url": None,
-        "password": False,
-        "category": "tool",
-        "advanced": True,
-    },
-    "TOOL_GATEWAY_DOMAIN": {
-        "description": "Shared tool-gateway domain suffix for Clover Subscribers only, used to derive vendor hosts, e.g.  -> firecrawl-gateway.",
-        "prompt": "Tool-gateway domain suffix",
-        "url": None,
-        "password": False,
-        "category": "tool",
-        "advanced": True,
-    },
-    "TOOL_GATEWAY_SCHEME": {
-        "description": "Shared tool-gateway URL scheme for Clover Subscribers only, used to derive vendor hosts (`https` by default, set `http` for local gateway testing)",
-        "prompt": "Tool-gateway URL scheme",
-        "url": None,
-        "password": False,
-        "category": "tool",
-        "advanced": True,
-    },
-    "TOOL_GATEWAY_USER_TOKEN": {
-        "description": "Explicit Clover Subscriber access token for tool-gateway requests (optional; otherwise read from the Clover auth store)",
-        "prompt": "Tool-gateway user token",
-        "url": None,
-        "password": True,
         "category": "tool",
         "advanced": True,
     },

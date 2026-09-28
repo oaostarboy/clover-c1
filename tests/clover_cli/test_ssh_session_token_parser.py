@@ -14,7 +14,6 @@ def dashboard_parser():
     build_dashboard_parser(
         subparsers,
         cmd_dashboard=lambda _args: None,
-        cmd_dashboard_register=lambda _args: None,
     )
     return parser
 

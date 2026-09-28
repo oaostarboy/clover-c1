@@ -1540,6 +1540,15 @@ def _combined_pub(monkeypatch, cfg=None):
     return pub, adapter
 
 
+def _summaries(adapter):
+    """Sent messages minus the live board (which also posts via send)."""
+    import gateway.delegation_activity as da
+
+    board_ids = {b.message_id for b in da._BOARDS.values()} | set(adapter.deleted)
+    return [s for i, s in enumerate(adapter.sends, 1)
+            if f"s{i}" not in board_ids and da.TAP_HINT_LIVE not in s["content"]]
+
+
 @pytest.mark.asyncio
 async def test_combined_mode_holds_results_for_the_turn_card(monkeypatch):
     """Default on Telegram: a worker that finishes mid-turn never posts its
@@ -1552,13 +1561,15 @@ async def test_combined_mode_holds_results_for_the_turn_card(monkeypatch):
     await pub.drain()
     a("subagent.complete", status="completed", summary="Plain summary: All good.", duration_seconds=2)
     await pub.drain()
-    assert adapter.sends == [], "no standalone summary while the turn runs"
+    assert _summaries(adapter) == [], "no standalone summary while the turn runs"
     workers, ids = pub.absorb_finished()
     assert len(workers) == 1 and workers[0].summary == "All good."
-    assert ids, "the live card is handed over for deletion"
+    # Board mode (adapter can delete): the chat board drops the worker
+    # itself; otherwise the live card id is handed over for deletion.
+    assert ids or pub._board_mode, "the live card is handed over for deletion"
     pub.end_turn()
     await pub.drain()
-    assert adapter.sends == [], "absorbed results never post again"
+    assert _summaries(adapter) == [], "absorbed results never post again"
     await pub.aclose()
 
 
@@ -1580,7 +1591,7 @@ async def test_combined_mode_posts_late_results_on_their_own(monkeypatch):
     await pub.drain()
     await asyncio.sleep(0.05)
     await pub.drain()
-    assert len(adapter.sends) == 1 and "Late." in adapter.summary()
+    assert len(_summaries(adapter)) == 1 and "Late." in adapter.summary()
     await pub.aclose()
 
 
@@ -1626,7 +1637,7 @@ async def test_background_result_folds_into_the_next_turns_card(monkeypatch):
     pub1.end_turn()  # turn 1 over, worker still running
     a("subagent.complete", status="completed", summary="Plain summary: Late result.", duration_seconds=5)
     await pub1.drain()
-    assert adapter.sends == [], "parked for the next turn, not posted"
+    assert _summaries(adapter) == [], "parked for the next turn, not posted"
     assert da.inbox_pending(adapter, "chat-A") == 1
 
     pub2 = da.DelegationActivityPublisher(
@@ -1638,11 +1649,11 @@ async def test_background_result_folds_into_the_next_turns_card(monkeypatch):
     assert count == 1 and any("Late result." in r for r in rows)
     workers, ids = pub2.absorb_finished()
     assert [w.summary for w in workers] == ["Late result."]
-    assert ids, "turn 1's live card is removed by turn 2's card"
+    assert ids or pub1._board_mode, "turn 1's live card is removed by turn 2's card"
     pub2.end_turn()
     await pub1.drain()
     await pub2.drain()
-    assert adapter.sends == [], "shown once, inside turn 2's card"
+    assert _summaries(adapter) == [], "shown once, inside turn 2's card"
     await pub1.aclose()
     await pub2.aclose()
 
@@ -1663,7 +1674,7 @@ async def test_unclaimed_background_result_still_posts(monkeypatch):
     await pub.drain()
     await asyncio.sleep(0.05)
     await pub.drain()
-    assert len(adapter.sends) == 1 and "Nobody came." in adapter.summary()
+    assert len(_summaries(adapter)) == 1 and "Nobody came." in adapter.summary()
     assert da.inbox_pending(adapter, "chat-A") == 0
     await pub.aclose()
 
@@ -1689,6 +1700,6 @@ async def test_claiming_turn_without_a_card_hands_results_back(monkeypatch):
     pub2.adopt_inbox()
     pub2.end_turn()  # no absorb_finished: no card this turn
     await pub1.drain()
-    assert len(adapter.sends) == 1 and "Keep me." in adapter.summary()
+    assert len(_summaries(adapter)) == 1 and "Keep me." in adapter.summary()
     await pub1.aclose()
     await pub2.aclose()

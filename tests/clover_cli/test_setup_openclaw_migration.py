@@ -157,8 +157,8 @@ class TestSetupWizardOpenclawIntegration:
             patch("clover_cli.auth.get_active_provider", return_value=None),
             # User presses Enter to start
             patch("builtins.input", return_value=""),
-            # Select "Full setup" (index 1) so we exercise the full path
-            patch.object(setup_mod, "prompt_choice", return_value=1),
+            # Select "Full setup" (index 0) so we exercise the full path
+            patch.object(setup_mod, "prompt_choice", return_value=0),
             # Mock the migration offer
             patch.object(
                 setup_mod, "_offer_openclaw_migration", return_value=False
@@ -193,7 +193,8 @@ class TestSetupWizardOpenclawIntegration:
             patch.object(setup_mod, "is_interactive_stdin", return_value=True),
             patch("clover_cli.auth.get_active_provider", return_value=None),
             patch("builtins.input", return_value=""),
-            patch.object(setup_mod, "prompt_choice", return_value=1),
+            # Select "Full setup" (index 0) so we exercise the full path.
+            patch.object(setup_mod, "prompt_choice", return_value=0),
             patch.object(setup_mod, "_offer_openclaw_migration", return_value=True),
             patch.object(setup_mod, "setup_model_provider"),
             patch.object(setup_mod, "setup_terminal_backend"),
@@ -310,7 +311,11 @@ class TestSetupWizardSkipsConfiguredSections:
             patch.object(setup_mod, "is_interactive_stdin", return_value=True),
             patch("clover_cli.auth.get_active_provider", return_value=None),
             patch("builtins.input", return_value=""),
-            patch.object(setup_mod, "prompt_choice", return_value=1),
+            # Select "Full setup" (index 0) from the "How would you like to
+            # set up Clover?" menu — this test exercises full-setup's
+            # per-section skip logic (prompt_yes_no, mocked below), not the
+            # separate Blank Slate path index 1 would select here.
+            patch.object(setup_mod, "prompt_choice", return_value=0),
             # Migration succeeds and flips the env_side flag
             patch.object(
                 setup_mod, "_offer_openclaw_migration",

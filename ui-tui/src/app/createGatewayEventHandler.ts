@@ -13,7 +13,6 @@ import type {
   GatewaySkin,
   SessionMostRecentResponse
 } from '../gatewayTypes.js'
-import { billingDialogCopy } from '../lib/billingDialog.js'
 import { relativeLuminance } from '../lib/color.js'
 import { isTodoDone } from '../lib/liveProgress.js'
 import { openExternalUrl } from '../lib/openExternalUrl.js'
@@ -1455,26 +1454,21 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         // notice. The transcript already carries the full provider guidance;
         // this is the actionable layer. Set AFTER recordMessageComplete() so the
         // turn-idle resetFlowOverlays() (which clears `confirm`) can't wipe it;
-        // the top-of-loop guard already scopes this to the active session.
+        // the top-of-loop guard already scopes this to the active session. The
+        // only recovery action left is the provider's own billing page — offer
+        // switching models when the provider gave us no URL to deep-link.
         if (ev.payload?.billing) {
           const block = ev.payload.billing
-          const copy = billingDialogCopy(block)
+          const label = block.provider_label || 'your provider'
+          const url = block.billing_url
 
           patchOverlayState({
             confirm: {
-              cancelLabel: copy.cancelLabel,
-              confirmLabel: copy.confirmLabel,
-              detail: copy.detail,
-              onConfirm: () => {
-                if (block.is_clover) {
-                  submitRef.current('/topup')
-                } else if (block.billing_url) {
-                  openExternalUrl(block.billing_url)
-                } else {
-                  submitRef.current('/model')
-                }
-              },
-              title: copy.title
+              cancelLabel: 'Dismiss',
+              confirmLabel: url ? 'Open billing page' : 'Switch provider',
+              detail: `${label} reports your credits or billing are exhausted.`,
+              onConfirm: () => (url ? openExternalUrl(url) : submitRef.current('/model')),
+              title: `Out of credits · ${label}`
             }
           })
         }

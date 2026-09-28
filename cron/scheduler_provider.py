@@ -1,7 +1,7 @@
 """CronScheduler provider interface (Axis B — the trigger).
 
 ⚠️ EXPERIMENTAL — this interface is validated by exactly ONE consumer (the
-built-in) until an external provider (Chronos, Phase 4) shakes it out. Until
+built-in) until an external provider shakes it out. Until
 then the module path, method signatures, and start() kwargs MAY change without
 a deprecation cycle. Once a second provider validates the shape it becomes
 stable. Any growth MUST be additive (new optional method with a default), never
@@ -13,8 +13,8 @@ shared by all providers. Providers must never reimplement agent construction or
 delivery.
 
 The built-in InProcessCronScheduler runs the historical 60s daemon-thread
-ticker. Alternative providers (e.g. Chronos, a NAS-mediated managed-cron
-provider for scale-to-zero deployments) live under plugins/cron_providers/<name>/ and are
+ticker. Alternative providers (e.g. an external managed-cron provider for
+scale-to-zero deployments) live under plugins/cron_providers/<name>/ and are
 selected via the `cron.provider` config key (empty = built-in).
 """
 from __future__ import annotations
@@ -103,7 +103,7 @@ class CronScheduler(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Short identifier, e.g. 'builtin', 'chronos'."""
+        """Short identifier, e.g. 'builtin'."""
 
     def is_available(self) -> bool:
         """Whether this provider can run in the current environment.

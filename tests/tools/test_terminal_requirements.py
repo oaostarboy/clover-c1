@@ -34,11 +34,6 @@ def _clear_terminal_env(monkeypatch):
     ]
     for key in keys:
         monkeypatch.delenv(key, raising=False)
-    # Default: no Clover subscription — patch both the terminal_tool local
-    # binding and tool_backend_helpers (used by resolve_modal_backend_state).
-    monkeypatch.setattr(terminal_tool_module, "managed_clover_tools_enabled", lambda: False)
-    import tools.tool_backend_helpers as _tbh
-    monkeypatch.setattr(_tbh, "managed_clover_tools_enabled", lambda: False)
 
 
 def test_local_terminal_requirements(monkeypatch, caplog):
@@ -67,20 +62,18 @@ def test_unknown_terminal_env_logs_error_and_returns_false(monkeypatch, caplog):
     )
 
 
-def test_modal_backend_managed_mode_without_feature_flag_logs_clear_error(monkeypatch, caplog, tmp_path):
+def test_modal_backend_without_direct_credentials_logs_clear_error(monkeypatch, caplog, tmp_path):
     _clear_terminal_env(monkeypatch)
     monkeypatch.setenv("TERMINAL_ENV", "modal")
-    monkeypatch.setenv("TERMINAL_MODAL_MODE", "managed")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
-    monkeypatch.setattr(terminal_tool_module, "is_managed_tool_gateway_ready", lambda _vendor: False)
 
     with caplog.at_level(logging.ERROR):
         ok = terminal_tool_module.check_terminal_requirements()
 
     assert ok is False
     assert any(
-        "Clover Tool Gateway access is not currently available" in record.getMessage()
+        "no direct Modal credentials/config was found" in record.getMessage()
         for record in caplog.records
     )
 

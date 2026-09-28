@@ -27,6 +27,51 @@ PROJECT_ROOT = get_project_root()
 CLOVER_HOME = get_clover_home()
 _DHH = display_clover_home()  # user-facing display path (e.g. ~/.clover or ~/.clover/profiles/coder)
 
+
+def _migrate_sibling_profiles_for_doctor():
+    """Use the same profile-scoped migration sweep as clover update."""
+    from clover_cli.update_cmd import _migrate_sibling_profile_configs
+    return _migrate_sibling_profile_configs()
+
+
+def _dashboard_auth_warning(config):
+    """Explain why a public dashboard will refuse startup, without opening it."""
+    from urllib.parse import urlparse
+    dashboard = config.get("dashboard", {})
+    if not isinstance(dashboard, dict):
+        return None
+    host = str(dashboard.get("host") or "127.0.0.1").strip().lower()
+    public_host = urlparse(str(dashboard.get("public_url") or "")).hostname
+    loopback = {"127.0.0.1", "localhost", "::1"}
+    if host in loopback and (not public_host or public_host.lower() in loopback):
+        return None
+    oauth = dashboard.get("oauth") or {}
+    if not isinstance(oauth, dict):
+        oauth = {}
+    from clover_cli.config_migrations import _V40_REMOVED_PROVIDERS
+    configured_provider = str(oauth.get("provider") or "").strip().lower()
+    env_oidc = bool(os.environ.get("CLOVER_DASHBOARD_OIDC_ISSUER") and os.environ.get("CLOVER_DASHBOARD_OIDC_CLIENT_ID"))
+    env_basic = bool(os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_USERNAME") and (
+        os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
+        or os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_PASSWORD")
+    ))
+    basic = dashboard.get("basic_auth") or {}
+    basic_ready = isinstance(basic, dict) and bool(
+        (basic.get("username") or os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_USERNAME"))
+        and (basic.get("password_hash") or basic.get("password")
+             or os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
+             or os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_PASSWORD"))
+    )
+    oidc = oauth.get("self_hosted") or dashboard.get("self_hosted") or {}
+    oidc_ready = isinstance(oidc, dict) and bool(
+        (oidc.get("issuer") or os.environ.get("CLOVER_DASHBOARD_OIDC_ISSUER"))
+        and (oidc.get("client_id") or os.environ.get("CLOVER_DASHBOARD_OIDC_CLIENT_ID"))
+    )
+    if basic_ready or oidc_ready or env_oidc or env_basic or (configured_provider and configured_provider not in _V40_REMOVED_PROVIDERS):
+        return None
+    return ("Non-loopback dashboard has no auth provider; it will not bind. "
+            "Configure basic_auth or self_hosted OIDC, or bind to loopback.")
+
 # Load environment variables from ~/.clover/.env so API key checks work
 _env_path = get_env_path()
 load_clover_dotenv(clover_home=_env_path.parent, project_env=PROJECT_ROOT / ".env")
@@ -951,6 +996,7 @@ def check_certificates(should_fix: bool = False, issues: "list | None" = None) -
             [sys.executable, "-m", "pip", "install", "--force-reinstall", "certifi"],
             capture_output=True,
             text=True,
+            encoding="utf-8", errors="replace",
             timeout=300,
         )
     except Exception as exc:
@@ -1875,6 +1921,8 @@ def run_doctor(args):
                 if should_fix:
                     try:
                         migrate_config(interactive=False, quiet=False)
+                        for name, before, after in _migrate_sibling_profiles_for_doctor():
+                            check_ok(f"Profile {name} config migrated (v{before} → v{after})")
                         check_ok("Config migrated to latest version")
                         fixed_count += 1
                     except Exception as mig_err:
@@ -1884,6 +1932,9 @@ def run_doctor(args):
                     issues.append("Run 'clover doctor --fix' or 'clover setup' to migrate config")
             else:
                 check_ok(f"Config version up to date (v{current_ver})")
+                if should_fix:
+                    for name, before, after in _migrate_sibling_profiles_for_doctor():
+                        check_ok(f"Profile {name} config migrated (v{before} → v{after})")
         except Exception:
             pass
 
@@ -1892,6 +1943,10 @@ def run_doctor(args):
             # Raw-file diagnostic: stale-key detection must see the raw file.
             from clover_cli.config import read_user_config_raw
             raw_config = read_user_config_raw(config_path)
+            dashboard_warning = _dashboard_auth_warning(raw_config)
+            if dashboard_warning:
+                check_warn(dashboard_warning)
+                issues.append(dashboard_warning)
             stale_root_keys = [k for k in ("provider", "base_url") if k in raw_config and isinstance(raw_config[k], str)]
             if stale_root_keys:
                 check_warn(
@@ -2060,18 +2115,9 @@ def run_doctor(args):
 
     try:
         from clover_cli.auth import (
-            get_clover_auth_status_local,
             get_codex_auth_status,
             get_minimax_oauth_auth_status,
         )
-
-        # Read-only display: refresh-free snapshot — doctor must never
-        # trigger an OAuth refresh as a side effect of a health check.
-        clover_status = get_clover_auth_status_local()
-        if clover_status.get("logged_in"):
-            check_ok("Clover Portal auth", "(logged in)")
-        else:
-            check_warn("Clover Portal auth", "(not logged in)")
 
         codex_status = get_codex_auth_status()
         if codex_status.get("logged_in"):
@@ -2605,7 +2651,7 @@ def run_doctor(args):
 
     # Plugin-registered terminal backends (if one is the active backend)
     if terminal_env not in {
-        "local", "docker", "singularity", "modal", "managed_modal",
+        "local", "docker", "singularity", "modal",
         "daytona", "vercel_sandbox", "ssh",
     }:
         try:

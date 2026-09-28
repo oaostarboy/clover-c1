@@ -21,7 +21,7 @@ import type { GatewayEventContext } from './types'
  *  error — the status-and-notice tail of the dispatcher. */
 export function handleStatusEvent(ctx: GatewayEventContext): boolean {
   const { deps, event, payload, sessionId, isActiveEvent, occurredAt } = ctx
-  const { compactedTurnRef, failAssistantMessage, flushQueuedDeltas, queryClient, updateSessionState } = deps
+  const { compactedTurnRef, failAssistantMessage, flushQueuedDeltas, updateSessionState } = deps
 
   if (event.type === 'status.update') {
     if (sessionId && payload?.kind === 'compacting') {
@@ -96,13 +96,6 @@ export function handleStatusEvent(ctx: GatewayEventContext): boolean {
 
     if (native) {
       dispatchNativeNotification(native)
-    }
-
-    // A credits crossing moves the account balance. Settings → Billing polls
-    // `billing.state` every 30s; nudge it so the page reflects the crossing
-    // immediately instead of up to 30s late.
-    if (notice?.key?.startsWith('credits.')) {
-      void queryClient.invalidateQueries({ queryKey: ['billing', 'state'] })
     }
 
     return true

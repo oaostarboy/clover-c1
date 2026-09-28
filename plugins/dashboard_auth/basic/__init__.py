@@ -50,7 +50,7 @@ comparison and always performs a hash even for an unknown username, so
 the endpoint is not a username-enumeration timing oracle.
 
 Skip reasons:
-  Like the Clover provider, this exposes a module-level ``LAST_SKIP_REASON``
+  This exposes a module-level ``LAST_SKIP_REASON``
   the gate's fail-closed branch can surface when the plugin loads but
   declines to register (no username/password configured).
 """

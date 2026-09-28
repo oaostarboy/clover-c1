@@ -722,6 +722,21 @@ def finalize_turn(
         "model": agent.model,
         "provider": agent.provider,
         "base_url": agent.base_url,
+        # requested_model/actual_model contract (#93412 follow-up): when a
+        # pinned model that doesn't exist got silently substituted for a
+        # real one, callers like `clover -z --usage-file` need both names,
+        # not just the one that ended up running.
+        "model_substituted": getattr(agent, "_model_substitution", None) is not None,
+        "requested_model": (
+            (getattr(agent, "_model_substitution", None) or {}).get("requested_model")
+            or getattr(agent, "_requested_model", None)
+            or agent.model
+        ),
+        "requested_provider": (
+            (getattr(agent, "_model_substitution", None) or {}).get("requested_provider")
+            or agent.provider
+        ),
+        "actual_model": agent.model,
         "input_tokens": agent.session_input_tokens,
         "output_tokens": agent.session_output_tokens,
         "cache_read_tokens": agent.session_cache_read_tokens,

@@ -118,7 +118,6 @@ Multiple credentials per provider form a pool that rotates automatically and ski
 clover desktop / gui        Native desktop app
 clover dashboard            Web admin panel + embedded chat (--stop / --status)
 clover proxy                OpenAI-compatible local proxy backed by an OAuth provider
-clover portal               Quick setup / sign in via Clover Portal
 clover kanban <verb>        Multi-agent work-queue board
 clover project              Named multi-folder workspaces
 clover skin list|use|set    Switch/tweak skins (see references/themes.md)

@@ -112,7 +112,7 @@ describe('ConnectionsRegistrySection', () => {
 
     const localKind = screen.getByRole('button', { name: 'Local' }) as HTMLButtonElement
     expect(localKind.disabled).toBe(true)
-    expect(screen.getByRole('button', { name: 'Clover Cloud' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Clover Cloud' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Remote gateway' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'SSH' })).toBeTruthy()
   })
@@ -327,7 +327,7 @@ describe('dedupe helpers', () => {
   it('keys remote/cloud dupes on the normalized URL across both kinds', () => {
     expect(
       findDuplicateConnection(
-        { host: '', id: null, kind: 'cloud', remoteProfile: '', url: 'http://HOMELAB.lan:9119/' },
+        { host: '', id: null, kind: 'remote', remoteProfile: '', url: 'http://HOMELAB.lan:9119/' },
         registry.connections
       )
     ).toMatchObject({ id: 'homelab' })

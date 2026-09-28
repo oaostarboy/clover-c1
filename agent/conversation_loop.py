@@ -648,30 +648,8 @@ def _ra():
     return run_agent
 
 
-def _clover_entitlement_message(capability: str) -> str:
-    try:
-        from clover_cli.clover_account import (
-            format_clover_portal_entitlement_message,
-            get_clover_portal_account_info,
-        )
-
-        account_info = get_clover_portal_account_info(force_fresh=True)
-        message = format_clover_portal_entitlement_message(
-            account_info,
-            capability=capability,
-        )
-        return message or ""
-    except Exception:
-        return ""
 
 
-def _print_clover_entitlement_guidance(agent, capability: str) -> bool:
-    message = _clover_entitlement_message(capability)
-    if not message:
-        return False
-    for line in message.splitlines():
-        agent._vprint(f"{agent.log_prefix}   💡 {line}", force=True)
-    return True
 
 
 def _system_prompt_for_hooks(api_kwargs: Any, request_messages: Any) -> Any:
@@ -692,14 +670,6 @@ def _system_prompt_for_hooks(api_kwargs: Any, request_messages: Any) -> Any:
     return system_prompt
 
 
-def _is_clover_inference_route(provider: str, base_url: str) -> bool:
-    provider = (provider or "").strip().lower()
-    if provider == "clover":
-        return True
-    base = str(base_url or "")
-    return (
-        base_url_host_matches(base, "inference-api.")
-    )
 
 
 def _billing_or_entitlement_message(
@@ -710,9 +680,6 @@ def _billing_or_entitlement_message(
     model: str,
     unverified: bool = False,
 ) -> str:
-    if _is_clover_inference_route(provider, base_url):
-        return _clover_entitlement_message(capability)
-
     provider_label = (provider or "").strip() or "the selected provider"
     model_label = (model or "").strip() or "the selected model"
 
@@ -897,19 +864,6 @@ def _print_billing_or_entitlement_guidance(
     return True
 
 
-def _try_refresh_clover_paid_entitlement_credentials(agent) -> bool:
-    """Refresh Clover runtime credentials after a fresh paid-entitlement check."""
-    try:
-        from clover_cli.clover_account import get_clover_portal_account_info
-
-        account_info = get_clover_portal_account_info(force_fresh=True)
-        if account_info.paid_service_access is not True:
-            return False
-        return agent._try_refresh_clover_client_credentials(
-            force=True,
-        )
-    except Exception:
-        return False
 
 
 def _restore_or_build_system_prompt(agent, system_message, conversation_history):
@@ -1104,19 +1058,6 @@ def _restore_or_build_system_prompt(agent, system_message, conversation_history)
         )
     except Exception as exc:
         logger.warning("on_session_start hook failed: %s", exc)
-
-    # Cold-start credits seed (L3) — fallback for the first-turn path. The TUI/
-    # desktop build seeds at session OPEN (see seed_credits_at_session_start in
-    # tui_gateway), so this call is usually a no-op there (idempotent: skips when
-    # _credits_state already exists). For the plain CLI / any path that didn't seed
-    # at build, it primes credits state from /api/oauth/account (or a fixture) on the
-    # first turn so depletion / usage-band warnings fire. Fail-open inside the helper.
-    try:
-        from agent.credits_tracker import seed_credits_at_session_start
-
-        seed_credits_at_session_start(agent)
-    except Exception:
-        logger.debug("cold-start credits seed failed (fail-open)", exc_info=True)
 
     # Persist the system prompt snapshot in SQLite.  Failure here used
     # to log at DEBUG, which silently broke prefix-cache reuse on the
@@ -2970,56 +2911,6 @@ def run_conversation(
         agent._current_api_request_id = api_request_id
 
         while retry_count < max_retries:
-            # ── Clover Portal rate limit guard ──────────────────────
-            # If another session already recorded that Clover is rate-
-            # limited, skip the API call entirely.  Each attempt
-            # (including SDK-level retries) counts against RPH and
-            # deepens the rate limit hole.
-            if agent.provider == "clover":
-                try:
-                    from agent.clover_rate_guard import (
-                        clover_rate_limit_remaining,
-                        format_remaining as _fmt_clover_remaining,
-                    )
-                    _clover_remaining = clover_rate_limit_remaining()
-                    if _clover_remaining is not None and _clover_remaining > 0:
-                        _clover_msg = (
-                            f"Clover Portal rate limit active — "
-                            f"resets in {_fmt_clover_remaining(_clover_remaining)}."
-                        )
-                        agent._buffer_vprint(
-                            f"⏳ {_clover_msg} Trying fallback..."
-                        )
-                        agent._buffer_status(f"⏳ {_clover_msg}")
-                        if agent._try_activate_fallback():
-                            active_system_prompt = _sync_failover_system_message(
-                                agent, api_messages, active_system_prompt)
-                            retry_count = 0
-                            compression_attempts = 0
-                            _retry.primary_recovery_attempted = False
-                            _retry.restart_with_rebuilt_messages = True
-                            break
-                        # No fallback available — surface buffered context
-                        # so user sees the rate-limit message that led here.
-                        agent._flush_status_buffer()
-                        agent._persist_session(messages, conversation_history)
-                        return {
-                            "final_response": (
-                                f"⏳ {_clover_msg}\n\n"
-                                "No fallback provider available. "
-                                "Try again after the reset, or add a "
-                                "fallback provider in config.yaml."
-                            ),
-                            "messages": messages,
-                            "api_calls": api_call_count,
-                            "completed": False,
-                            "failed": True,
-                            "error": _clover_msg,
-                        }
-                except ImportError:
-                    pass
-                except Exception:
-                    pass  # Never let rate guard break the agent loop
 
             try:
                 agent._reset_stream_delivery_tracking()
@@ -4506,15 +4397,6 @@ def run_conversation(
                 # usable content. Empty responses still loop through the
                 # empty-retry path below; the buffer is cleared when
                 # genuinely successful content is detected later (~L4127).
-                # Clear Clover rate limit state on successful request —
-                # proves the limit has reset and other sessions can
-                # resume hitting Clover.
-                if agent.provider == "clover":
-                    try:
-                        from agent.clover_rate_guard import clear_clover_rate_limit
-                        clear_clover_rate_limit()
-                    except Exception:
-                        pass
                 from agent import relay_llm
 
                 relay_llm.complete_logical_call(
@@ -4870,22 +4752,6 @@ def run_conversation(
                     reason=classified.reason.value,
                 )
 
-                if (
-                    classified.reason == FailoverReason.billing
-                    and _is_clover_inference_route(
-                        getattr(agent, "provider", "") or "",
-                        getattr(agent, "base_url", "") or "",
-                    )
-                    and not _retry.clover_paid_entitlement_refresh_attempted
-                ):
-                    _retry.clover_paid_entitlement_refresh_attempted = True
-                    if _try_refresh_clover_paid_entitlement_credentials(agent):
-                        agent._vprint(
-                            f"{agent.log_prefix}🔐 Clover paid access verified — "
-                            "refreshed runtime credentials and retrying request...",
-                            force=True,
-                        )
-                        continue
 
                 recovered_with_pool, _retry.has_retried_429 = agent._recover_with_credential_pool(
                     status_code=status_code,
@@ -5031,38 +4897,6 @@ def run_conversation(
                     if agent._try_refresh_vertex_client_credentials():
                         agent._buffer_vprint("🔐 Vertex AI token refreshed after 401. Retrying request...")
                         continue
-                if (
-                    agent.api_mode in ("chat_completions", "anthropic_messages")
-                    and agent.provider == "clover"
-                    and status_code == 401
-                    and not _retry.clover_auth_retry_attempted
-                ):
-                    _retry.clover_auth_retry_attempted = True
-                    if agent._try_refresh_clover_client_credentials(force=True):
-                        print(f"{agent.log_prefix}🔐 Clover agent key refreshed after 401. Retrying request...")
-                        continue
-                    # Credential refresh didn't help — show diagnostic info.
-                    # Most common causes: Portal OAuth expired/revoked,
-                    # account out of credits, or agent key blocked.
-                    from clover_constants import display_clover_home as _dhh_fn
-                    _dhh = _dhh_fn()
-                    _body_text = ""
-                    try:
-                        _body = getattr(api_error, "body", None) or getattr(api_error, "response", None)
-                        if _body is not None:
-                            _body_text = str(_body)[:200]
-                    except Exception:
-                        pass
-                    print(f"{agent.log_prefix}🔐 Clover 401 — Portal authentication failed.")
-                    if _body_text:
-                        print(f"{agent.log_prefix}   Response: {_body_text}")
-                    if not _print_clover_entitlement_guidance(agent, "Clover model access"):
-                        print(f"{agent.log_prefix}   Most likely: Portal OAuth expired, account out of credits, or agent key revoked.")
-                    print(f"{agent.log_prefix}   Troubleshooting:")
-                    print(f"{agent.log_prefix}     • Re-authenticate: clover auth add clover")
-                    print(f"{agent.log_prefix}     • Check credits / billing: ")
-                    print(f"{agent.log_prefix}     • Verify stored credentials: {_dhh}/auth.json")
-                    print(f"{agent.log_prefix}     • Switch providers temporarily: /model <model> --provider openrouter")
                 if (
                     _is_copilot_provider(agent)
                     and status_code == 401
@@ -5642,70 +5476,6 @@ def run_conversation(
                         _retry.restart_with_rebuilt_messages = True
                         break
 
-                # ── Clover Portal: record rate limit & skip retries ─────
-                # When Clover returns a 429 that is a genuine account-
-                # level rate limit, record the reset time to a shared
-                # file so ALL sessions (cron, gateway, auxiliary) know
-                # not to pile on, then skip further retries -- each
-                # one burns another RPH request and deepens the hole.
-                # The retry loop's top-of-iteration guard will catch
-                # this on the next pass and try fallback or bail.
-                #
-                # IMPORTANT: Clover Portal multiplexes multiple upstream
-                # providers (DeepSeek, Kimi, MiMo, Clover).  A 429 can
-                # also mean an UPSTREAM provider is out of capacity
-                # for one specific model -- transient, clears in
-                # seconds, nothing to do with the caller's quota.
-                # Tripping the cross-session breaker on that would
-                # block every Clover model for minutes.  We use
-                # ``is_genuine_clover_rate_limit`` to tell the two
-                # apart via the 429's own x-ratelimit-* headers and
-                # the last-known-good state captured on the previous
-                # successful response.
-                if (
-                    is_rate_limited
-                    and agent.provider == "clover"
-                    and classified.reason == FailoverReason.rate_limit
-                    and not recovered_with_pool
-                ):
-                    _genuine_clover_rate_limit = False
-                    try:
-                        from agent.clover_rate_guard import (
-                            is_genuine_clover_rate_limit,
-                            record_clover_rate_limit,
-                        )
-                        _err_resp = getattr(api_error, "response", None)
-                        _err_hdrs = (
-                            getattr(_err_resp, "headers", None)
-                            if _err_resp else None
-                        )
-                        _genuine_clover_rate_limit = is_genuine_clover_rate_limit(
-                            headers=_err_hdrs,
-                            last_known_state=agent._rate_limit_state,
-                        )
-                        if _genuine_clover_rate_limit:
-                            record_clover_rate_limit(
-                                headers=_err_hdrs,
-                                error_context=error_context,
-                            )
-                        else:
-                            logger.info(
-                                "Clover 429 looks like upstream capacity "
-                                "(no exhausted bucket in headers or "
-                                "last-known state) -- not tripping "
-                                "cross-session breaker."
-                            )
-                    except Exception:
-                        pass
-                    if _genuine_clover_rate_limit:
-                        # Re-enter the loop exactly once so the
-                        # top-of-loop Clover guard handles fallback or
-                        # bails cleanly. (Setting retry_count to
-                        # max_retries would make the while condition
-                        # false immediately and the guard would never
-                        # run -- no fallback, generic exhaustion error.)
-                        retry_count = max(0, max_retries - 1)
-                        continue
                     # Upstream capacity 429: fall through to normal
                     # retry logic.  A different model (or the same
                     # model a moment later) will typically succeed.
@@ -6257,6 +6027,72 @@ def run_conversation(
                             )
                             retry_count = 0
                             continue
+                    # An explicitly pinned model (clover -z -m, clover chat
+                    # -m, a delegate_task per-task/delegation.model override)
+                    # must never silently run on a different model. Before
+                    # this guard, a typo'd/unavailable model name walked the
+                    # configured fallback_providers chain and completed the
+                    # whole job on a different provider/model with no
+                    # visible warning — see #93412. Abort the turn instead;
+                    # other failure reasons (rate limit, overload, auth,
+                    # timeouts) are still allowed to fall back.
+                    if (
+                        classified.reason == FailoverReason.model_not_found
+                        and getattr(agent, "model_pinned", False)
+                    ):
+                        # Before aborting, try a substitute -- closest real
+                        # model on the SAME provider, then the user's own
+                        # configured default -- instead of leaving a pinned
+                        # typo dead in the water. Deliberately NOT the
+                        # configured fallback_providers chain (that's for
+                        # outages); guarded so a substitute that itself
+                        # 404s doesn't loop back through here forever.
+                        # See #93412 follow-up.
+                        _substitute = None
+                        if getattr(agent, "_model_substitution", None) is None:
+                            from agent.model_substitute import substitute_unknown_models_enabled
+                            from clover_cli.config import load_config
+
+                            if substitute_unknown_models_enabled(load_config()):
+                                _substitute = agent._try_substitute_unknown_model(
+                                    requested_model=_model, provider=_provider,
+                                )
+                        if _substitute is not None:
+                            _substitute_notice = (
+                                f"⚠ '{_model}' doesn't exist on {_provider}, "
+                                f"so I used {_substitute.model} instead."
+                            )
+                            agent._flush_status_buffer()
+                            agent._emit_status(_substitute_notice)
+                            active_system_prompt = _sync_failover_system_message(
+                                agent, api_messages, active_system_prompt)
+                            retry_count = 0
+                            compression_attempts = 0
+                            _retry.primary_recovery_attempted = False
+                            _retry.restart_with_rebuilt_messages = True
+                            break
+
+                        _pinned_summary = agent._summarize_api_error(api_error)
+                        _pinned_msg = (
+                            f"Model '{_model}' isn't available on provider "
+                            f"'{_provider}'. Nothing was run on another model."
+                        )
+                        agent._flush_status_buffer()
+                        agent._emit_status(f"❌ {_pinned_msg}")
+                        logger.error(
+                            "%s%s (%s)", agent.log_prefix, _pinned_msg, _pinned_summary,
+                        )
+                        agent._persist_session(messages, conversation_history)
+                        return {
+                            "final_response": _pinned_msg,
+                            "messages": messages,
+                            "api_calls": api_call_count,
+                            "completed": False,
+                            "failed": True,
+                            "error": _pinned_msg,
+                            "pinned_model_unavailable": True,
+                        }
+
                     # Try fallback before aborting — a different provider may
                     # not have the same issue (rate limit, auth, etc.). Only
                     # announce the attempt when a fallback chain actually
@@ -6321,31 +6157,15 @@ def run_conversation(
                             unverified=classified.billing_unverified,
                         ):
                             pass
-                        elif _provider == "clover" and _print_clover_entitlement_guidance(
-                            agent,
-                            "Clover model access",
-                        ):
-                            pass
-                        elif _provider in {"openai-codex", "xai-oauth", "clover"} and status_code == 401:
+                        elif _provider in {"openai-codex", "xai-oauth"} and status_code == 401:
                             if _provider == "openai-codex":
                                 agent._vprint(f"{agent.log_prefix}   💡 Codex OAuth token was rejected (HTTP 401). Your token may have been", force=True)
                                 agent._vprint(f"{agent.log_prefix}      refreshed by another client (Codex CLI, VS Code). To fix:", force=True)
                                 agent._vprint(f"{agent.log_prefix}      1. Run `codex` in your terminal to generate fresh tokens.", force=True)
                                 agent._vprint(f"{agent.log_prefix}      2. Then run `clover auth` to re-authenticate.", force=True)
-                            elif _provider == "xai-oauth":
+                            else:
                                 agent._vprint(f"{agent.log_prefix}   💡 xAI OAuth token was rejected (HTTP 401). To fix:", force=True)
                                 agent._vprint(f"{agent.log_prefix}      re-authenticate with xAI Grok OAuth (SuperGrok / Premium+) from `clover model`.", force=True)
-                            else:  # clover
-                                agent._vprint(f"{agent.log_prefix}   💡 Clover Portal OAuth token was rejected (HTTP 401). Your token may be", force=True)
-                                agent._vprint(f"{agent.log_prefix}      expired, revoked, or your account may be out of credits. To fix:", force=True)
-                                agent._vprint(f"{agent.log_prefix}      1. Re-authenticate: clover portal", force=True)
-                                agent._vprint(f"{agent.log_prefix}      2. Check your portal account: ", force=True)
-                                # ``:free`` is OpenRouter slug syntax; Clover Portal will reject
-                                # the model name even after a successful re-auth.
-                                if isinstance(_model, str) and _model.endswith(":free"):
-                                    agent._vprint(f"{agent.log_prefix}      ⚠️  Note: `{_model}` looks like an OpenRouter slug (`:free` suffix).", force=True)
-                                    agent._vprint(f"{agent.log_prefix}         Clover Portal won't recognize that model name. Either switch to a", force=True)
-                                    agent._vprint(f"{agent.log_prefix}         Clover catalog model, or run `/model openrouter:{_model}` to use OpenRouter.", force=True)
                         else:
                             agent._vprint(f"{agent.log_prefix}   💡 Your API key was rejected by the provider. Check:", force=True)
                             agent._vprint(f"{agent.log_prefix}      • Is the key valid? Run: clover setup", force=True)
@@ -6685,7 +6505,7 @@ def run_conversation(
                         # body (#82154) — may be a content-filter rejection.
                         "billing_unverified": _billing_unverified,
                         # Present only for billing walls: structured recovery
-                        # descriptor (provider, billing_url, is_clover, message).
+                        # descriptor (provider, billing_url, message).
                         "billing_block": _billing_block,
                     }
 

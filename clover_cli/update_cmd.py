@@ -6994,6 +6994,10 @@ def _arm_restart_watcher_before_pause() -> bool:
             return False
 
         beacon = _urw.write_beacon(argv)
+        import shutil as _shutil
+        _watch_script = beacon.parent / "logs" / "update_restart_watcher.py"
+        _watch_script.parent.mkdir(parents=True, exist_ok=True)
+        _shutil.copy2(_urw.__file__, _watch_script)
 
         watcher_kwargs: dict = {"close_fds": True}
         if _m()._is_windows():
@@ -7005,8 +7009,7 @@ def _arm_restart_watcher_before_pause() -> bool:
             watcher_kwargs["start_new_session"] = True
 
         subprocess.Popen(
-            [sys.executable, "-m",
-             "clover_cli.update_restart_watcher", str(beacon)],
+            [sys.executable, str(_watch_script), str(beacon)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             **watcher_kwargs,
@@ -8351,6 +8354,52 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # every user who ran ``clover update`` for the 7 minutes between
         # the bad commit and the fix landing).
         pre_pull_sha = _capture_head_sha(git_cmd, _m().PROJECT_ROOT)
+        if pre_pull_sha:
+            try:
+                from clover_cli import update_receipt as _receipt
+                from clover_cli import update_restart_watcher as _urw
+
+                _receipt.save_pending_receipt(pre_pull_sha, pre_update_snapshot_id)
+                # Windows already has a pre-pause watcher. Update its beacon
+                # without spawning a second process. Other platforms arm here.
+                _rollback_argv = _m()._gateway_restart_argv_for_running_gateway()
+                if not _rollback_argv and _windows_gateway_resume:
+                    _rollback_argv = _m()._gateway_restart_argv_for_resume(_windows_gateway_resume)
+                _rollback_services = list((_windows_gateway_resume or {}).get("services") or [])
+                _supervisors = {
+                    r.supervisor for r in ((_pre_update_plan.runtimes if _pre_update_plan else []) or [])
+                    if r.kind == "gateway"
+                }
+                _rollback_supervisor = next((s for s in ("systemd", "launchd") if s in _supervisors), None)
+                if _rollback_argv or _rollback_services or _rollback_supervisor:
+                    _beacon = _urw.write_beacon(
+                        _rollback_argv, pre_pull_sha=pre_pull_sha,
+                        repo=str(_m().PROJECT_ROOT),
+                        pre_update_snapshot_id=pre_update_snapshot_id,
+                        windows_services=_rollback_services,
+                        supervisor=_rollback_supervisor,
+                    )
+                    if not _pre_armed_watcher:
+                        # Freeze the watcher outside the checkout: the pulled
+                        # module may not even parse, but this copy still runs.
+                        import shutil as _shutil
+                        _watch_script = _beacon.parent / "logs" / "update_restart_watcher.py"
+                        _watch_script.parent.mkdir(parents=True, exist_ok=True)
+                        _shutil.copy2(_urw.__file__, _watch_script)
+                        _watch_kwargs: dict = {"close_fds": True}
+                        if _m()._is_windows():
+                            _watch_kwargs["creationflags"] = (
+                                getattr(subprocess, "DETACHED_PROCESS", 0)
+                                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                            )
+                        else:
+                            _watch_kwargs["start_new_session"] = True
+                        subprocess.Popen(
+                            [sys.executable, str(_watch_script), str(_beacon)],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **_watch_kwargs,
+                        )
+            except Exception:
+                logger.exception("Could not arm post-restart rollback watcher")
         try:
             # Merge the ref we already fetched above (→ Fetching updates...)
             # instead of `git pull`, which performs a SECOND network fetch of

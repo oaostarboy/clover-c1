@@ -366,15 +366,21 @@ function remoteRequestMatchesBaseUrl(requestUrl, baseUrl) {
   }
 }
 
-// True for connection modes that resolve to a REMOTE backend. 'cloud' is a
-// Clover Cloud connection (cloud-auto-discovery Q3/Q6): it carries a
-// remote-shaped block and reuses the entire remote connect/probe/reconnect
-// path, so every resolution site treats it exactly like 'remote'. The only
-// places that distinguish cloud from remote are the settings UI (which card to
-// show) and config persistence (remembering the provenance). Centralized here
-// so no resolution site forgets the third arm.
+// True for connection modes that resolve to a REMOTE backend. A legacy saved
+// 'cloud' connection (portal-based agent discovery, removed) is coerced to
+// 'local' at the point the saved config is read from disk
+// (readDesktopConnectionConfig), so this only ever sees 'remote'/'local'/'ssh'.
 function modeIsRemoteLike(mode) {
-  return mode === 'remote' || mode === 'cloud'
+  return mode === 'remote'
+}
+
+// A saved 'cloud' connection (portal-based agent discovery, removed) is
+// dropped entirely, never coerced into a generic remote gateway: the URL it
+// carried was a portal-discovered agent, not a gateway the user configured
+// themselves, so it must not be dialed, registered, or made primary. `mode`
+// is unrelated for every other value.
+function coerceSavedConnectionMode(mode, _remoteUrl) {
+  return mode === 'cloud' ? 'local' : mode
 }
 
 function normalizeSshConfig(entry) {
@@ -968,48 +974,15 @@ function cookiesHaveLiveSession(cookies) {
   return cookies.some(c => c && c.value && (AT_COOKIE_VARIANTS.includes(c.name) || RT_COOKIE_VARIANTS.includes(c.name)))
 }
 
-/**
- * True if the cookie jar holds a live Clover PORTAL (Privy) session — a non-empty
- * `privy-token` (access-token) cookie, or a variant. This is the portal
- * analogue of `cookiesHaveLiveSession`: the portal authenticates via Privy, not
- * the Clover gateway session cookies, so cloud sign-in / discovery liveness
- * must check THIS, not the gateway helpers. (NAS `auth()` and the `/api/agents`
- * cookie path both key off `privy-token`.)
- */
-function cookiesHavePrivySession(cookies) {
-  if (!Array.isArray(cookies)) {
-    return false
-  }
-
-  return cookies.some(c => c && c.value && PRIVY_SESSION_COOKIE_VARIANTS.includes(c.name))
-}
-
-/**
- * True only when the short-lived Privy ACCESS token (`privy-token`) is present
- * — the exact cookie `/api/agents` validates. A jar can satisfy
- * `cookiesHavePrivySession` (renewable session: `privy-session` /
- * `privy-refresh-token`) while failing this check; that gap is the cold-start
- * "Signed in" + "No agents found" contradiction, and the signal that a silent
- * renewal (not an interactive re-login) is the right recovery (#73495).
- */
-function cookiesHavePrivyAccessToken(cookies) {
-  if (!Array.isArray(cookies)) {
-    return false
-  }
-
-  return cookies.some(c => c && c.value && PRIVY_ACCESS_COOKIE_VARIANTS.includes(c.name))
-}
-
 export {
   apiRequestRegistryConnectionId,
   AT_COOKIE_VARIANTS,
   authModeFromStatus,
   buildGatewayWsUrl,
   buildGatewayWsUrlWithTicket,
+  coerceSavedConnectionMode,
   connectionScopeKey,
   cookiesHaveLiveSession,
-  cookiesHavePrivyAccessToken,
-  cookiesHavePrivySession,
   cookiesHaveSession,
   gatewayTicketFailure,
   gatewayWsUrlIpcResult,

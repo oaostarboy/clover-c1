@@ -195,7 +195,10 @@ class TestCustomProviderModelSwitch:
 
         config = yaml.safe_load(config_path.read_text()) or {}
         assert config["model"]["api_key"] == "${EXAMPLE_PROVIDER_API_KEY}"
-        assert config["custom_providers"][0]["key_env"] == "EXAMPLE_PROVIDER_API_KEY"
+        # The legacy custom_providers mirror normalizes every credential
+        # reference (key_env or a literal ${VAR} template) to the same
+        # templated api_key form the modern model/providers entries use.
+        assert config["custom_providers"][0]["api_key"] == "${EXAMPLE_PROVIDER_API_KEY}"
         assert "sk-live-example-provider" not in config_path.read_text()
 
     def test_env_ref_base_url_preserves_api_key_ref_through_picker(
@@ -203,7 +206,8 @@ class TestCustomProviderModelSwitch:
     ):
         """Integration regression: when BOTH ``base_url`` and ``api_key`` use
         ``${VAR}`` templates (the Discord-reported NeuralWatt case), the picker
-        must still preserve the env reference in ``model.api_key``.
+        must still preserve the env reference — a named custom provider like
+        this one persists it under ``providers.<name>.api_key``.
 
         The earlier lookup went through ``get_compatible_custom_providers``
         which dropped entries whose ``base_url`` was an env-ref template
@@ -259,8 +263,7 @@ class TestCustomProviderModelSwitch:
         # But config.yaml must keep the env reference, not the plaintext secret.
         saved = config_path.read_text()
         config = yaml.safe_load(saved) or {}
-        assert config["model"]["api_key"] == "${NEURALWATT_API_KEY}"
-        assert config["custom_providers"][0]["api_key"] == "${NEURALWATT_API_KEY}"
+        assert config["providers"]["neuralwatt"]["api_key"] == "${NEURALWATT_API_KEY}"
         assert "sk-live-neuralwatt-secret" not in saved
 
 

@@ -14,17 +14,15 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { makeNousCloudBackendDownError } from './backend-health'
 import {
   apiRequestRegistryConnectionId,
   AT_COOKIE_VARIANTS,
   authModeFromStatus,
   buildGatewayWsUrl,
   buildGatewayWsUrlWithTicket,
+  coerceSavedConnectionMode,
   connectionScopeKey,
   cookiesHaveLiveSession,
-  cookiesHavePrivyAccessToken,
-  cookiesHavePrivySession,
   cookiesHaveSession,
   gatewayTicketFailure,
   gatewayWsUrlIpcResult,
@@ -121,11 +119,23 @@ test('remoteRequestMatchesBaseUrl treats HTTPS and WSS as the same gateway origi
 
 // --- modeIsRemoteLike ---
 
-test('modeIsRemoteLike is true for remote and cloud, false otherwise', () => {
-  // cloud resolves to a remote backend under the hood (Q6), so every resolution
-  // site treats it like remote.
+test('coerceSavedConnectionMode always drops a legacy cloud config to local, URL or not', () => {
+  // A saved cloud connection was a portal-discovered agent, never the user's
+  // own gateway — it must never resurrect as 'remote', with or without a URL.
+  assert.equal(coerceSavedConnectionMode('cloud', 'https://gateway.example'), 'local')
+  assert.equal(coerceSavedConnectionMode('cloud', '  https://gateway.example  '), 'local')
+  assert.equal(coerceSavedConnectionMode('cloud', ''), 'local')
+  assert.equal(coerceSavedConnectionMode('cloud', undefined), 'local')
+})
+
+test('coerceSavedConnectionMode leaves non-cloud modes untouched', () => {
+  assert.equal(coerceSavedConnectionMode('remote', 'https://gateway.example'), 'remote')
+  assert.equal(coerceSavedConnectionMode('local', ''), 'local')
+  assert.equal(coerceSavedConnectionMode('ssh', ''), 'ssh')
+})
+
+test('modeIsRemoteLike is true only for remote', () => {
   assert.equal(modeIsRemoteLike('remote'), true)
-  assert.equal(modeIsRemoteLike('cloud'), true)
   assert.equal(modeIsRemoteLike('local'), false)
   assert.equal(modeIsRemoteLike(undefined), false)
   assert.equal(modeIsRemoteLike(null), false)
@@ -192,22 +202,6 @@ test('profileRemoteOverride preserves normalized remote headers', () => {
     headers: {
       'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'encrypted-id' }
     }
-  })
-})
-
-test('profileRemoteOverride treats a cloud entry as a remote override', () => {
-  // A 'cloud' per-profile entry resolves to the same remote backend a 'remote'
-  // entry would (Q6) — the override must be returned, not dropped.
-  const config = {
-    profiles: {
-      coder: { mode: 'cloud', url: 'https://agent-1.agents.', authMode: 'oauth' }
-    }
-  }
-
-  assert.deepEqual(profileRemoteOverride(config, 'coder'), {
-    url: 'https://agent-1.agents.',
-    authMode: 'oauth',
-    token: undefined
   })
 })
 
@@ -302,14 +296,14 @@ test('normalizeSshConfig strips a pasted "ssh " command prefix', () => {
   })
 })
 
-test('localProfileEntry preserves inactive SSH drafts but drops Cloud state', () => {
+test('localProfileEntry preserves inactive SSH drafts but drops remote state', () => {
   const ssh = { mode: 'ssh', host: 'box', user: 'alice', remoteCloverPath: '/clover' }
   assert.deepEqual(localProfileEntry(ssh), { mode: 'local', savedSsh: ssh })
   assert.deepEqual(localProfileEntry({ mode: 'local', savedSsh: ssh }), {
     mode: 'local',
     savedSsh: ssh
   })
-  assert.equal(localProfileEntry({ mode: 'cloud', url: 'https://agent' }), null)
+  assert.equal(localProfileEntry({ mode: 'remote', url: 'https://agent' }), null)
 })
 
 test('saved SSH drafts are inactive and explicit overrides take precedence', () => {
@@ -1022,71 +1016,6 @@ test('cookiesHaveLiveSession is false for unrelated cookies and non-arrays', () 
   assert.equal(cookiesHaveLiveSession([]), false)
 })
 
-// --- cookiesHavePrivySession (Clover portal / Privy auth, NOT gateway cookies) ---
-
-test('cookiesHavePrivySession detects the privy-token access cookie', () => {
-  assert.equal(cookiesHavePrivySession([{ name: 'privy-token', value: 'jwt' }]), true)
-})
-
-test('cookiesHavePrivySession detects __Host-/__Secure- prefixes and the legacy privy-session name', () => {
-  assert.equal(cookiesHavePrivySession([{ name: '__Host-privy-token', value: 'x' }]), true)
-  assert.equal(cookiesHavePrivySession([{ name: '__Secure-privy-token', value: 'x' }]), true)
-  assert.equal(cookiesHavePrivySession([{ name: 'privy-session', value: 'x' }]), true)
-})
-
-test('cookiesHavePrivySession is false for an empty value', () => {
-  assert.equal(cookiesHavePrivySession([{ name: 'privy-token', value: '' }]), false)
-})
-
-test('cookiesHavePrivySession does NOT treat clover gateway cookies as a portal session', () => {
-  // The whole point of Q7: a gateway session cookie is NOT a portal sign-in.
-  assert.equal(cookiesHavePrivySession([{ name: 'clover_session_at', value: 'x' }]), false)
-  assert.equal(cookiesHavePrivySession([{ name: '__Host-clover_session_rt', value: 'x' }]), false)
-})
-
-test('cookiesHavePrivySession is false for unrelated cookies and non-arrays', () => {
-  assert.equal(cookiesHavePrivySession([{ name: 'other', value: 'x' }]), false)
-  assert.equal(cookiesHavePrivySession(null), false)
-  assert.equal(cookiesHavePrivySession(undefined), false)
-  assert.equal(cookiesHavePrivySession([]), false)
-})
-
-test('cookiesHavePrivySession treats refresh-token material as a (renewable) session', () => {
-  // #73495: after a restart the ~1h `privy-token` is often gone while the
-  // 30-day renewal cookies survive. That jar is still SIGNED IN (renewable),
-  // so the session check must accept it — the access check below is what
-  // distinguishes "can discovery succeed right now".
-  assert.equal(cookiesHavePrivySession([{ name: 'privy-refresh-token', value: 'x' }]), true)
-})
-
-// --- cookiesHavePrivyAccessToken (short-lived access state for /api/agents) ---
-
-test('cookiesHavePrivyAccessToken detects privy-token and its secured prefixes', () => {
-  assert.equal(cookiesHavePrivyAccessToken([{ name: 'privy-token', value: 'jwt' }]), true)
-  assert.equal(cookiesHavePrivyAccessToken([{ name: '__Host-privy-token', value: 'x' }]), true)
-  assert.equal(cookiesHavePrivyAccessToken([{ name: '__Secure-privy-token', value: 'x' }]), true)
-})
-
-test('cookiesHavePrivyAccessToken rejects renewal-only jars (the #73495 cold-start state)', () => {
-  // Session/refresh material present, access token absent: signed in but
-  // discovery would 401 → the silent-renewal path must trigger, not re-login.
-  const renewalOnly = [
-    { name: 'privy-session', value: 'x' },
-    { name: 'privy-refresh-token', value: 'x' }
-  ]
-
-  assert.equal(cookiesHavePrivySession(renewalOnly), true)
-  assert.equal(cookiesHavePrivyAccessToken(renewalOnly), false)
-})
-
-test('cookiesHavePrivyAccessToken is false for empty values, gateway cookies, and non-arrays', () => {
-  assert.equal(cookiesHavePrivyAccessToken([{ name: 'privy-token', value: '' }]), false)
-  assert.equal(cookiesHavePrivyAccessToken([{ name: 'clover_session_at', value: 'x' }]), false)
-  assert.equal(cookiesHavePrivyAccessToken(null), false)
-  assert.equal(cookiesHavePrivyAccessToken(undefined), false)
-  assert.equal(cookiesHavePrivyAccessToken([]), false)
-})
-
 // --- tokenPreview ---
 
 test('tokenPreview returns null for empty', () => {
@@ -1290,55 +1219,12 @@ test('gatewayTicketFailure keeps 401 and 403 as reauth with needsOauthLogin', ()
 })
 
 test('gatewayTicketFailure only copies an integer statusCode, not a message prefix', () => {
-  // A legacy "503: ..." message carries no structured statusCode; the Cloud
-  // classifier (makeNousCloudBackendDownError) handles the prefix at the mint
-  // boundary. The wrapper must not invent an integer from the message.
+  // A legacy "503: ..." message carries no structured statusCode; the wrapper
+  // must not invent an integer from the message.
   const source = new Error('503: Service Unavailable') as any
 
   const wrapped = gatewayTicketFailure(source, 'auth message', 'transport message')
 
   assert.equal((wrapped as any).statusCode, undefined)
   assert.equal((wrapped as any).needsOauthLogin, undefined)
-})
-
-// OAuth integration regression (#85373): the WS-ticket mint boundary runs
-// BEFORE waitForCloverReady. This mirrors main.ts buildRemoteConnection's
-// catch — classify a Clover Cloud server fault via the shared factory, else
-// fall through to gatewayTicketFailure. Proves the production composition:
-//   1. Cloud + OAuth ticket mint + 503  -> actionable Cloud-down error
-//   2. Cloud + OAuth ticket mint + 401  -> reauth (never Cloud-down)
-test('OAuth ticket-mint 503 surfaces the Cloud-down error (startup boundary)', () => {
-  const baseUrl = 'https://ares-3009.agents.'
-  const ticketErr = new Error('upstream unavailable') as any
-  ticketErr.statusCode = 503
-
-  // The exact production sequence from main.ts.
-  const cloudError = makeNousCloudBackendDownError(baseUrl, ticketErr)
-
-  if (cloudError !== null) {
-    assert.equal((cloudError as any).isCloudBackendDown, true)
-    assert.equal((cloudError as any).statusCode, 503)
-    assert.ok(cloudError.message.includes('Clover Cloud agent ares-3009.agents. is down'))
-
-    return
-  }
-
-  const wrapped = gatewayTicketFailure(ticketErr, 'auth', 'transport')
-
-  assert.fail(`expected Cloud-down classification, got wrapper: ${wrapped.message}`)
-})
-
-test('OAuth ticket-mint 401 stays on the reauth path (never Cloud-down)', () => {
-  const baseUrl = 'https://ares-3009.agents.'
-  const ticketErr = new Error('Unauthorized') as any
-  ticketErr.statusCode = 401
-
-  const cloudError = makeNousCloudBackendDownError(baseUrl, ticketErr)
-  assert.equal(cloudError, null, 'a 401 must not become a Cloud-down error')
-
-  const wrapped = gatewayTicketFailure(ticketErr, 'auth message', 'transport message')
-
-  assert.equal(wrapped.message, 'auth message')
-  assert.equal((wrapped as any).needsOauthLogin, true)
-  assert.equal((wrapped as any).statusCode, 401)
 })

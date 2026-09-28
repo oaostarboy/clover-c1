@@ -118,8 +118,7 @@ class TestProviderRegistry:
 
     def test_oauth_providers_unchanged(self):
         """Ensure we didn't break the existing OAuth providers."""
-        assert "clover" in PROVIDER_REGISTRY
-        assert PROVIDER_REGISTRY["clover"].auth_type == "oauth_device_code"
+        assert "clover" not in PROVIDER_REGISTRY
         assert "openai-codex" in PROVIDER_REGISTRY
         assert PROVIDER_REGISTRY["openai-codex"].auth_type == "oauth_external"
 

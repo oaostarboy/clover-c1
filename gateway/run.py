@@ -9095,7 +9095,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
           The api_server is a loopback listener force-enabled by the presence
           of API_SERVER_KEY (which the Docker stage2 hook now generates for
           every container, so hosted instances ALWAYS have it enabled) — it
-          holds no outbound socket and Chronos fires through it already reset
+          holds no outbound socket and external cron fires through it already reset
           the idle clock. Counting it made messaging_is_relay_only_or_absent
           False on every hosted instance, silently disarming the feature.
           Mirrors the non-messaging exclusion set used for handoff eligibility
@@ -17318,6 +17318,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "commands": self._handle_commands_command,
             "profile": self._handle_profile_command,
             "update": self._handle_update_command,
+            "repair": self._handle_repair_command,
             "version": self._handle_version_command,
         }
 
@@ -18686,8 +18687,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "usage":
             return await self._handle_usage_command(event)
 
-        if canonical == "topup":
-            return await self._handle_topup_command(event)
 
         if canonical == "insights":
             return await self._handle_insights_command(event)
@@ -25065,6 +25064,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
 
 
+    def _restart_after_repair(self) -> None:
+        """Detach gateway restart after a repaired venv's result was delivered."""
+        try:
+            import subprocess
+            from clover_cli._subprocess_compat import windows_detach_popen_kwargs
+            restart_cmd = _resolve_clover_bin()
+            if not restart_cmd:
+                logger.warning("Could not resolve Clover executable for repaired gateway restart")
+                return
+            if sys.platform == "win32":
+                subprocess.Popen([*restart_cmd, "gateway", "restart"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 **windows_detach_popen_kwargs())
+            else:
+                subprocess.Popen([*restart_cmd, "gateway", "restart"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+        except Exception:
+            logger.exception("Could not restart gateway after dependency repair")
+
     def _schedule_update_notification_watch(self) -> None:
         """Ensure a background task is watching for update completion."""
         existing_task = getattr(self, "_update_notification_task", None)
@@ -25149,10 +25168,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         chat_id = None
         session_key = None
         metadata = None
+        platform = None
+        update_action = "update"
         for path in (claimed_path, pending_path):
             if path.exists():
                 try:
                     pending = json.loads(path.read_text(encoding="utf-8"))
+                    update_action = pending.get("action", "update")
                     platform_str = pending.get("platform")
                     chat_id = pending.get("chat_id")
                     chat_type = pending.get("chat_type")
@@ -25223,10 +25245,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         bytes_sent = 0
         last_stream_time = loop.time()
         buffer = ""
+        repair_reinstalled_packages = False
 
         async def _flush_buffer() -> None:
             """Send buffered output to the user."""
-            nonlocal buffer, last_stream_time
+            nonlocal buffer, last_stream_time, repair_reinstalled_packages
             if not buffer.strip():
                 buffer = ""
                 return
@@ -25235,6 +25258,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             buffer = ""
             last_stream_time = loop.time()
             if not clean:
+                return
+            if update_action == "repair":
+                repair_reinstalled_packages |= "reinstalled missing packages" in clean
+                # Repair has one user-facing summary, never a raw traceback.
+                if "Traceback" in clean:
+                    logger.error("Detached repair failed: %s", clean)
+                    clean = "Repair could not finish. Run clover doctor."
+                try:
+                    await adapter.send(chat_id, clean, metadata=_non_conversational_metadata(metadata, platform=platform))
+                except Exception:
+                    logger.exception("Repair result delivery failed")
                 return
             # Split into chunks if too long
             max_chunk = 3500
@@ -25252,6 +25286,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         while loop.time() < deadline:
             # Check for completion
             if exit_code_path.exists():
+                from clover_cli.update_restart_watcher import verification_pending
+                if verification_pending(_clover_home):
+                    await asyncio.sleep(poll_interval)
+                    continue
                 # Read any remaining output
                 if output_path.exists():
                     try:
@@ -25263,10 +25301,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 await _flush_buffer()
 
                 # Send final status
+                exit_code = 1
                 try:
                     exit_code_raw = exit_code_path.read_text(encoding="utf-8").strip() or "1"
                     exit_code = int(exit_code_raw)
-                    if exit_code == 0:
+                    if update_action == "repair" and exit_code == 0:
+                        pass  # run_repair already sent the plain-language result
+                    elif update_action == "repair":
+                        await adapter.send(chat_id, "Repair failed. Run clover doctor.", metadata=_non_conversational_metadata(metadata, platform=platform))
+                    elif exit_code == 0:
                         await adapter.send(
                             chat_id,
                             "✅ Clover update finished.",
@@ -25290,6 +25333,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _up_done = self._peek_session_state(session_key)
                 if _up_done is not None:
                     _up_done.persistent.update_prompt_pending = False
+                if update_action == "repair" and repair_reinstalled_packages and exit_code == 0:
+                    from clover_constants import venv_python_path
+                    project_venv = venv_python_path(Path(__file__).resolve().parent.parent / "venv",
+                                                    windows=sys.platform == "win32")
+                    gateway_uses_repaired_venv = Path(sys.executable).resolve() == project_venv.resolve()
+                    if gateway_uses_repaired_venv:
+                        self._restart_after_repair()
                 return
 
             # Check for new output
@@ -25302,7 +25352,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     pass
 
             # Flush buffer periodically
-            if buffer.strip() and (loop.time() - last_stream_time) >= stream_interval:
+            if update_action != "repair" and buffer.strip() and (loop.time() - last_stream_time) >= stream_interval:
                 await _flush_buffer()
 
             # Check for prompts — only forward if we haven't already sent
@@ -25436,6 +25486,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         ``outcome`` is success — or one that recorded a post-update sha — is
         proof the tree was updated even though the messenger never heard back.
         """
+        # The out-of-process rollback watcher may still be inside its bounded
+        # startup probe or dependency repair. A provisional "success" receipt
+        # is not the verdict until that watcher finishes; wait for its beacon
+        # to clear rather than messaging success just before rollback.
+        _rollback_beacon = _clover_home / ".clover-update-heartbeat.json"
+        _rollback_deadline = asyncio.get_running_loop().time() + 600
+        while _rollback_beacon.exists() and asyncio.get_running_loop().time() < _rollback_deadline:
+            try:
+                _pending = json.loads(_rollback_beacon.read_text(encoding="utf-8"))
+                if not _pending.get("pre_pull_sha"):
+                    break
+            except (OSError, ValueError):
+                break
+            await asyncio.sleep(2)
         verdict = "unknown"
         detail = ""
         try:
@@ -25464,7 +25528,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if recent:
                 outcome = str(receipt.get("outcome") or "")
                 post = receipt.get("post_update") or {}
-                if outcome == "success" or post.get("sha"):
+                if outcome == "rolled-back":
+                    verdict = "rolled-back"
+                elif outcome == "success" or post.get("sha"):
                     verdict = "success"
                     detail = str(
                         post.get("short_sha") or post.get("sha") or ""
@@ -25475,7 +25541,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         except (OSError, ValueError, json.JSONDecodeError):
             pass
 
-        if verdict == "success":
+        if verdict == "rolled-back":
+            text = "The update didn't start correctly, so I went back to the version you had before. Nothing was lost. You can try again later."
+        elif verdict == "success":
             text = (
                 "✅ Clover update finished. (The updater exited during its "
                 "gateway-restart step — this notice comes from the restarted "
@@ -25556,6 +25624,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             chat_type = pending.get("chat_type")
             thread_id = pending.get("thread_id")
             message_id = pending.get("message_id")
+
+            from clover_cli.update_restart_watcher import verification_pending
+            if verification_pending(_clover_home):
+                logger.info("Update notification deferred: restart health probe pending")
+                cleanup = False
+                active_pending_path = pending_path
+                claimed_path.replace(pending_path)
+                return False
 
             if not exit_code_path.exists():
                 logger.info("Update notification deferred: update still running")
@@ -31767,23 +31843,6 @@ def _start_gateway_housekeeping(stop_event: threading.Event, adapters=None, loop
             except Exception as e:
                 logger.debug("Curator tick error: %s", e)
 
-            # Skill Sync — best-effort periodic pull on the same cadence.
-            # Inert unless the access gate is open and a sync base URL is
-            # configured; never raises.
-            try:
-                from tools.skills_sync_client import maybe_pull_skills
-                maybe_pull_skills()
-            except Exception as e:
-                logger.debug("Sync pull tick error: %s", e)
-
-            # Org-shared skills. Gated on real org membership (the token must
-            # carry an org role), so a solo account never reaches the network.
-            try:
-                from tools.skills_sync_client import maybe_pull_org_skills
-                maybe_pull_org_skills()
-            except Exception as e:
-                logger.debug("Org sync pull tick error: %s", e)
-
         # Stale-session auto-archive — a live timer, so gateways that stay up
         # for weeks keep sweeping on schedule (the startup hook fires once).
         # maybe_auto_archive() is gated by sessions.min_interval_hours in
@@ -32623,13 +32682,6 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     except Exception as _lc_exc:
         logger.debug("Lifecycle ledger startup record failed: %s", _lc_exc)
 
-    try:
-        from clover_cli.clover_auth_keepalive import start_clover_auth_keepalive
-
-        start_clover_auth_keepalive()
-    except Exception as exc:
-        logger.debug("Clover auth keepalive did not start: %s", exc)
-
     _ensure_windows_gateway_venv_imports()
 
     # MCP tool discovery — run in an executor so the asyncio event loop
@@ -32700,9 +32752,9 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
 
     # Start the background cron scheduler via the resolved provider so
     # scheduled jobs fire automatically. The built-in provider is the
-    # historical in-process 60s ticker; an external provider (e.g. chronos)
-    # may arm a schedule and return. Pass the event loop so cron delivery can
-    # use live adapters (E2EE support).
+    # historical in-process 60s ticker; an external provider may arm a
+    # schedule and return. Pass the event loop so cron delivery can use live
+    # adapters (E2EE support).
     from cron.scheduler_provider import (
         InProcessCronScheduler,
         resolve_cron_scheduler,
@@ -32758,7 +32810,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     cron_thread.start()
 
     # Preflight tell for the hosted fire path: an external cron provider
-    # (Chronos) delivers scheduled fires over HTTP to THIS process's
+    # delivers scheduled fires over HTTP to THIS process's
     # api_server adapter on loopback. If that adapter never came up (most
     # commonly API_SERVER_KEY missing from this process's environment —
     # e.g. a gateway relaunched outside its supervisor without the profile
@@ -32819,13 +32871,6 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
             await _control_server.stop()
         except Exception:
             logger.debug("Control socket stop failed (non-fatal)", exc_info=True)
-
-    try:
-        from clover_cli.clover_auth_keepalive import stop_clover_auth_keepalive
-
-        stop_clover_auth_keepalive()
-    except Exception:
-        pass
 
     if runner.should_exit_with_failure:
         if runner.exit_reason:

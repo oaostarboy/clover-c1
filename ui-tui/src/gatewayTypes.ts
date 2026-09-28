@@ -1,4 +1,4 @@
-import type { BillingBlock, UsageModelData } from '@clover/shared/billing'
+import type { BillingBlock } from '@clover/shared/billing'
 import type { CloverSkin } from '@clover/shared/skin'
 
 import type { SessionInfo, SlashCategory, SubagentStatus, Usage } from './types.js'
@@ -49,23 +49,7 @@ export interface SlashExecResponse {
 // ── Remote Spending (Phase 2b) ───────────────────────────────────────
 
 // Wire shapes now live in @clover/shared for reuse by TypeScript clients.
-export type {
-  BillingAutoReload,
-  BillingBlock,
-  BillingCardInfo,
-  BillingChargeResponse,
-  BillingChargeStatusResponse,
-  BillingErrorPayload,
-  BillingMonthlyCap,
-  BillingMutationResponse,
-  BillingStateResponse,
-  SubscriptionPreviewResponse,
-  SubscriptionStateResponse,
-  SubscriptionTierOption,
-  SubscriptionUpgradeResponse,
-  UsageBarData,
-  UsageModelData
-} from '@clover/shared/billing'
+export type { BillingBlock } from '@clover/shared/billing'
 
 export type CommandDispatchResponse =
   | { output?: string; type: 'exec' | 'plugin' }
@@ -286,14 +270,10 @@ export interface SessionUsageResponse {
   context_used?: number
   cost_status?: 'estimated' | 'exact'
   cost_usd?: number
-  credits_lines?: string[]
   input?: number
   model?: string
   output?: number
   total?: number
-  // Shared dollar usage model (two-bar view) so /usage renders the same bars
-  // as /subscription. Dollars only — never "credits".
-  usage?: UsageModelData
 }
 
 export interface SessionStatusResponse {

@@ -68,14 +68,13 @@ class TestProviderClass:
         from plugins.image_gen.openrouter import _build_providers
 
         names = {p.name for p in _build_providers()}
-        assert names == {"openrouter", "clover"}
+        assert names == {"openrouter"}
 
     def test_display_names(self):
         from plugins.image_gen.openrouter import _build_providers
 
         by_name = {p.name: p for p in _build_providers()}
         assert by_name["openrouter"].display_name == "OpenRouter"
-        assert by_name["clover"].display_name == "Clover Portal"
 
     def test_capabilities_support_image_input(self):
         caps = _openrouter().capabilities()
@@ -112,14 +111,6 @@ class TestProviderClass:
         assert _openrouter()._resolve_model() == "black-forest-labs/flux.2-pro"
         assert _openrouter()._resolve_model_chain() == ["black-forest-labs/flux.2-pro"]
 
-
-    def test_clover_honors_top_level_model(self):
-        from plugins.image_gen.openrouter import _build_providers
-
-        cfg = {"model": "openai/gpt-image-2"}
-        clover = {p.name: p for p in _build_providers()}["clover"]
-        with patch("plugins.image_gen.openrouter._load_image_gen_config", return_value=cfg):
-            assert clover._resolve_model_chain() == ["openai/gpt-image-2"]
 
     def test_explicit_model_kwarg_wins_over_config(self):
         cfg = {"model": "openai/gpt-image-2"}
@@ -238,19 +229,6 @@ class TestLiveCatalog:
         assert "bytedance-seed/seedream-4.5" in ids        # Image-API-only model present
         assert "google/gemini-3-pro-image" in ids          # chat-catalog model present
         assert len(ids) == len(set(ids))                   # deduped
-
-    def test_clover_portal_picker_excludes_image_api_catalog(self):
-        """Clover Portal has no /images route; its picker must not offer
-        Image-API-only models it cannot serve."""
-        from plugins.image_gen.openrouter import _build_providers
-
-        clover = {p.name: p for p in _build_providers()}["clover"]
-        with patch(_RUNTIME, side_effect=RuntimeError("no creds")):
-            ids = [m["id"] for m in clover.list_models()]
-        from plugins.image_gen.openrouter import DEFAULT_MODEL, _FALLBACK_MODEL
-
-        assert ids == [DEFAULT_MODEL, _FALLBACK_MODEL]
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -379,24 +357,6 @@ class TestGenerate:
         assert result["success"] is True
         assert result["model"] == "openai/gpt-image-2"
         assert mock_post.call_args.kwargs["json"]["model"] == "openai/gpt-image-2"
-
-    def test_posts_to_resolved_base_url(self):
-        """Clover routes to its own base URL — proves the same code serves both."""
-        clover_runtime = _runtime_ok(
-            provider="clover", base_url="https://inference./v1", api_key="clover-tok"
-        )
-        with patch(_RUNTIME, return_value=clover_runtime), \
-             patch("requests.post", return_value=_mock_chat_response([_PNG_DATA_URI])) as mock_post, \
-             patch("plugins.image_gen.openrouter.save_b64_image", return_value=Path("/tmp/x.png")):
-            from plugins.image_gen.openrouter import _build_providers
-
-            clover = {p.name: p for p in _build_providers()}["clover"]
-            result = clover.generate(prompt="a pet")
-
-        assert result["success"] is True
-        assert result["provider"] == "clover"
-        url = mock_post.call_args[0][0]
-        assert url == "https://inference./v1/chat/completions"
 
     def test_api_error(self):
         import requests as req_lib
@@ -571,22 +531,6 @@ class TestImageApiSurface:
         assert result["success"] is True
         assert mock_post.call_args[0][0].endswith("/chat/completions")
 
-    def test_clover_never_uses_the_image_api(self):
-        """Clover Portal proxies chat-completions and has no /images route."""
-        from plugins.image_gen.openrouter import _build_providers
-
-        clover_runtime = _runtime_ok(
-            provider="clover", base_url="https://inference./v1", api_key="clover-tok"
-        )
-        with patch(_RUNTIME, return_value=clover_runtime), \
-             patch("requests.post", return_value=_mock_chat_response([_PNG_DATA_URI])) as mock_post, \
-             patch("plugins.image_gen.openrouter.save_b64_image", return_value=Path("/tmp/x.png")):
-            clover = {p.name: p for p in _build_providers()}["clover"]
-            result = clover.generate(prompt="a pet", model="openai/gpt-image-2")
-
-        assert result["success"] is True
-        assert mock_post.call_args[0][0] == "https://inference./v1/chat/completions"
-
     # -- per-model parameter filtering ------------------------------------
 
     def test_aspect_ratio_is_mapped_per_model(self):
@@ -760,10 +704,8 @@ class TestImageApiSurface:
 
         by_name = {p.name: p for p in _build_providers()}
         openrouter_ids = {m["id"] for m in by_name["openrouter"].list_models()}
-        clover_ids = {m["id"] for m in by_name["clover"].list_models()}
         assert "openai/gpt-image-2" in openrouter_ids
         assert set(_IMAGE_API_MODELS) <= openrouter_ids
-        assert not (set(_IMAGE_API_MODELS) & clover_ids)
 
     def test_default_model_is_unchanged_by_the_new_surface(self):
         from plugins.image_gen.openrouter import DEFAULT_MODEL
@@ -778,10 +720,10 @@ class TestRegistration:
         ctx = MagicMock()
         register(ctx)
         registered = [c.args[0].name for c in ctx.register_image_gen_provider.call_args_list]
-        assert set(registered) == {"openrouter", "clover"}
+        assert set(registered) == {"openrouter"}
 
     def test_both_are_reference_capable_for_pets(self):
         from agent.pet.generate.imagegen import _REF_CAPABLE
 
         assert "openrouter" in _REF_CAPABLE
-        assert "clover" in _REF_CAPABLE
+        assert "clover" not in _REF_CAPABLE

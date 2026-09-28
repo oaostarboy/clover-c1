@@ -154,7 +154,7 @@ clover-c1/
 │   ├── main.py                   # Punto de entrada, análisis de argumentos, despacho de comandos
 │   ├── config.py                 # Gestión de configuración, migración, definiciones de variables de entorno
 │   ├── setup.py                  # Asistente de configuración interactivo
-│   ├── auth.py                   # Resolución de proveedor, OAuth, Clover Portal
+│   ├── auth.py                   # Resolución de proveedor, OAuth (Anthropic, OpenAI Codex, Qwen, ...), claves API, OpenRouter
 │   ├── models.py                 # Listas de selección de modelos de OpenRouter
 │   ├── banner.py                 # Banner de bienvenida, arte ASCII
 │   ├── commands.py               # Registro central de comandos de barra (CommandDef), autocompletado, ayudantes del gateway
@@ -206,7 +206,7 @@ clover-c1/
 |------|-----------|
 | `~/.clover/config.yaml` | Configuración (modelo, terminal, toolsets, compresión, etc.) |
 | `~/.clover/.env` | Claves API y secretos |
-| `~/.clover/auth.json` | Credenciales OAuth (Clover Portal) |
+| `~/.clover/auth.json` | Credenciales OAuth (Anthropic, OpenAI Codex, Qwen, ...) |
 | `~/.clover/skills/` | Todas las habilidades activas (incluidas + instaladas desde hub + creadas por el agente) |
 | `~/.clover/memories/` | Memoria persistente (MEMORY.md, USER.md) |
 | `~/.clover/state.db` | Base de datos de sesiones SQLite |

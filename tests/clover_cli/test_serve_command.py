@@ -20,16 +20,11 @@ def _dash(args):  # sentinel handler — identity-compared, never invoked
     return args
 
 
-def _register(args):
-    return args
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     build_dashboard_parser(
         parser.add_subparsers(dest="command"),
         cmd_dashboard=_dash,
-        cmd_dashboard_register=_register,
     )
     return parser
 

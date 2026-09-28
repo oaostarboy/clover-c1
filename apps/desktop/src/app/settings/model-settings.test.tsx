@@ -73,7 +73,7 @@ beforeEach(() => {
     tasks: [{ task: 'vision', provider: 'auto', model: '', base_url: '' }]
   })
   getMoaModels.mockResolvedValue(null)
-  setModelAssignment.mockResolvedValue({ ok: true, provider: 'clover', model: 'clover-4', gateway_tools: [] })
+  setModelAssignment.mockResolvedValue({ ok: true, provider: 'clover', model: 'clover-4' })
   getRecommendedDefaultModel.mockResolvedValue({ provider: 'clover', model: 'clover-4', free_tier: null })
   setEnvVar.mockResolvedValue({ ok: true })
   getCloverConfigRecord.mockResolvedValue({ agent: { reasoning_effort: 'medium', service_tier: 'normal' } })
@@ -261,7 +261,6 @@ describe('ModelSettings', () => {
       ok: true,
       provider: 'local-ollama',
       model: 'qwen3:latest',
-      gateway_tools: []
     })
 
     await renderModelSettings()
@@ -383,7 +382,6 @@ describe('ModelSettings', () => {
       ok: true,
       provider: 'openrouter',
       model: 'anthropic/claude-opus-4.7',
-      gateway_tools: [],
       stale_aux: [{ task: 'compression', provider: 'clover', model: 'clover-4' }]
     })
 

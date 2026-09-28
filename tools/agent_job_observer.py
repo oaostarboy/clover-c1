@@ -88,6 +88,12 @@ class AgentJobObserver:
         self.index = index
         self.title = title
         self.model = model
+        # Raw (un-labeled) model last observed from the child's own output —
+        # separate from self.model, which may carry the "Y (fallback from X)"
+        # display label. Lets _apply_model_update() detect a genuine change
+        # instead of re-labeling on every repeated observation of the same
+        # model. See #93412.
+        self._current_model_raw = model
         self.parser = parser if parser in SUPPORTED_PARSERS else "none"
         self.visibility = "lifecycle" if self.parser == "none" else "tools"
         self._sink = sink
@@ -126,6 +132,28 @@ class AgentJobObserver:
 
     def start(self) -> None:
         self._emit("subagent.start", preview=self.title)
+
+    def _apply_model_update(self, raw_model: Any) -> None:
+        """Update the card's model label from a truthfully observed model.
+
+        First observation just records it. A later observation that names a
+        DIFFERENT model — either the ``clover-activity`` worker's explicit
+        ``model.fallback`` event, or a ``claude-stream-json`` worker's own
+        ``system/init`` message reporting a model that drifted from the
+        label passed at launch — relabels the card "Y (fallback from X)" so
+        the card always shows the model actually in use, not just what was
+        requested at spawn time. See #93412.
+        """
+        if not isinstance(raw_model, str) or not raw_model:
+            return
+        raw_model = raw_model[:80]
+        with self._lock:
+            previous = self._current_model_raw
+            if previous == raw_model:
+                return
+            self._current_model_raw = raw_model
+            self.model = f"{raw_model} (fallback from {previous})" if previous else raw_model
+        self._emit("subagent.progress")  # identity refresh, no state
 
     # -- output -----------------------------------------------------------
 
@@ -185,10 +213,7 @@ class AgentJobObserver:
     def _parse_claude(self, obj: Dict[str, Any]) -> None:
         kind = obj.get("type")
         if kind == "system" and obj.get("subtype") == "init":
-            model = obj.get("model")
-            if isinstance(model, str) and model and not self.model:
-                self.model = model[:80]
-                self._emit("subagent.progress")  # identity refresh, no state
+            self._apply_model_update(obj.get("model"))
             return
         if kind == "assistant":
             message = obj.get("message") or {}
@@ -239,10 +264,9 @@ class AgentJobObserver:
             return
         event = obj.get("event")
         if event == "start":
-            model = obj.get("model")
-            if isinstance(model, str) and model and not self.model:
-                self.model = model[:80]
-                self._emit("subagent.progress")
+            self._apply_model_update(obj.get("model"))
+        elif event == "model.fallback":
+            self._apply_model_update(obj.get("to"))
         elif event == "tool.started":
             self._emit(
                 "subagent.tool", obj.get("tool") or "tool", obj.get("summary"), None,
@@ -261,9 +285,12 @@ class AgentJobObserver:
                 self._emit("subagent.thinking", preview=text, note_kind="note")
         elif event == "result":
             text = obj.get("text")
+            status = obj.get("status")
             with self._lock:
                 self._result_text = text if isinstance(text, str) else None
-                self._result_is_error = obj.get("status") not in (None, "completed")
+                self._result_is_error = status not in (None, "completed", "incomplete")
+                if status == "incomplete":
+                    self._result_subtype = "error_max_turns"  # unfinished, not crashed
 
     # -- exit ---------------------------------------------------------------
 

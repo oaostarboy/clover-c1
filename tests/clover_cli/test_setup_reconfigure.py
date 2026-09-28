@@ -170,35 +170,17 @@ class TestFreshInstall:
     """On a fresh install (no active provider), flags are no-ops."""
 
 
-    def test_reconfigure_on_fresh_install_falls_through(self, fresh_install):
-        args = _make_setup_args(reconfigure=True)
-
-        with ExitStack() as stack:
-            m = _enter_fresh_install_patches(
-                stack,
-                prompt=("clover_cli.setup.prompt_choice", {"return_value": 0}),
-                first="clover_cli.setup._run_first_time_quick_setup",
-            )
-            from clover_cli.setup import run_setup_wizard
-            from clover_cli import setup as setup_mod
-
-            section_indexes = []
-            m["first"].side_effect = lambda *_args: section_indexes.append(
-                setup_mod._SETUP_NAVIGATION.get().section_index
-            )
-            run_setup_wizard(args)
-
-        m["prompt"].assert_called_once()
-        m["first"].assert_called_once()
-        assert section_indexes == [0]
-
     def test_blank_slate_runs_inside_navigation_step(self, fresh_install):
         args = _make_setup_args()
 
         with ExitStack() as stack:
             m = _enter_fresh_install_patches(
                 stack,
-                prompt=("clover_cli.setup.prompt_choice", {"return_value": 2}),
+                # index 1 of the 2-item "How would you like to set up
+                # Clover?" menu (0=Full setup, 1=Blank Slate) — the removed
+                # Portal-only third choice used to push Blank Slate to
+                # index 2.
+                prompt=("clover_cli.setup.prompt_choice", {"return_value": 1}),
                 blank="clover_cli.setup._run_blank_slate_setup",
             )
             from clover_cli import setup as setup_mod

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { getElevenLabsVoices, getCloverConfigSchema, saveCloverConfig } from '@/clover'
+import { getCloverConfigSchema, getElevenLabsVoices, saveCloverConfig } from '@/clover'
 import { useI18n } from '@/i18n'
 import { notifyError } from '@/store/notifications'
 import type { CloverConfigRecord } from '@/types/clover'

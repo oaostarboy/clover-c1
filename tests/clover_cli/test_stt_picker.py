@@ -8,7 +8,7 @@ and the faster_whisper post-setup readiness hook.
 import sys
 import types
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -42,23 +42,11 @@ class TestSttCategory:
         assert len(cat["providers"]) >= 5
 
 
-
-
-    def test_managed_row_shares_tts_coverage_category(self):
-        from clover_cli.clover_subscription import MANAGED_FEATURE_COVERAGE_CATEGORY
-
-        managed = [p for p in _stt_cat()["providers"] if p.get("managed_clover_feature")]
-        assert managed, "expected a Clover Subscription row"
-        for p in managed:
-            assert p["managed_clover_feature"] == "stt"
-        assert MANAGED_FEATURE_COVERAGE_CATEGORY["stt"] == "openai-audio"
-
-
 class TestConfigWrites:
     def test_write_provider_config_sets_stt_provider(self):
         config = {"stt": {"use_gateway": True}}
         prov = _stt_provider_named("Groq")
-        _write_provider_config(prov, config, managed_feature=None)
+        _write_provider_config(prov, config)
         assert config["stt"]["provider"] == "groq"
         # Legacy key is popped so the read-time shim can't override the pick.
         assert "use_gateway" not in config["stt"]
@@ -66,13 +54,7 @@ class TestConfigWrites:
 
     def test_apply_provider_selection_stt(self):
         config = {}
-        with patch(
-            "clover_cli.tools_config.get_clover_subscription_features"
-        ) as feats:
-            feats.return_value = MagicMock(
-                clover_auth_present=False, account_info=None
-            )
-            apply_provider_selection("stt", "OpenAI", config)
+        apply_provider_selection("stt", "OpenAI", config)
         assert config["stt"]["provider"] == "openai"
 
 

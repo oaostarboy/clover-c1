@@ -1,8 +1,8 @@
 import { type ConnectionState, type GatewayEvent, registryBackendScopeKey, resolveGatewayWsUrl } from '@clover/shared'
 import { atom } from 'nanostores'
 
-import type { CloverConnection } from '@/global'
 import { CloverGateway, setApiRequestConnection } from '@/clover'
+import type { CloverConnection } from '@/global'
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import { RECONNECT_ATTEMPT_TIMEOUT_MS, withTimeout } from '@/lib/with-timeout'
 import { markNativeNotifyBaseline } from '@/store/notify-baseline'

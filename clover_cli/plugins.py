@@ -636,10 +636,13 @@ def _get_disabled_plugins() -> set:
     Kept for backward compat and explicit deny-list semantics. A plugin
     name in this set will never load, even if it appears in
     ``plugins.enabled``.
+
+    Reads the RAW on-disk config (``read_raw_config()``) — see
+    ``_get_enabled_plugins()`` for why this must not be ``load_config()``.
     """
     try:
-        from clover_cli.config import load_config
-        config = load_config()
+        from clover_cli.config import read_raw_config
+        config = read_raw_config()
         disabled = cfg_get(config, "plugins", "disabled", default=[])
         return set(disabled) if isinstance(disabled, list) else set()
     except Exception:
@@ -659,10 +662,21 @@ def _get_enabled_plugins() -> Optional[set]:
       break on upgrade.
     * ``set()`` — an empty list was explicitly set; nothing loads.
     * ``set(...)`` — the concrete allow-list.
+
+    Reads the RAW on-disk config (``read_raw_config()``), not the merged
+    ``load_config()`` result: this runs from provider/plugin discovery,
+    which can fire as an incidental side effect of merely importing
+    ``clover_cli.config`` (its module-level env-var injectors enumerate
+    providers). ``load_config()`` deep-merges ``DEFAULT_CONFIG`` — which
+    would make ``enabled`` always "present" via the default — and, since
+    config migration now runs on first ``load_config()`` (to land before
+    provider/cron startup), would also trigger that migration this early,
+    before a caller like the Docker boot script gets a chance to back up
+    the file first.
     """
     try:
-        from clover_cli.config import load_config
-        config = load_config()
+        from clover_cli.config import read_raw_config
+        config = read_raw_config()
         plugins_cfg = config.get("plugins")
         if not isinstance(plugins_cfg, dict):
             return None

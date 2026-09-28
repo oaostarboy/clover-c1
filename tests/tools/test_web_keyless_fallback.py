@@ -27,7 +27,7 @@ def _no_web_env(monkeypatch):
     for var in (
         "EXA_API_KEY", "PARALLEL_API_KEY", "TAVILY_API_KEY",
         "FIRECRAWL_API_KEY", "FIRECRAWL_API_URL", "BRAVE_SEARCH_API_KEY",
-        "SEARXNG_URL", "TOOL_GATEWAY_USER_TOKEN",
+        "SEARXNG_URL",
     ):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(
@@ -35,7 +35,6 @@ def _no_web_env(monkeypatch):
     )
     monkeypatch.setattr(web_tools, "_env_value", lambda name: "", raising=True)
     monkeypatch.setattr(web_tools, "_load_web_config", dict, raising=True)
-    monkeypatch.setattr(web_tools, "_is_tool_gateway_ready", lambda: False, raising=True)
     monkeypatch.setattr(web_tools, "_ddgs_package_importable", lambda: False, raising=True)
     yield
 
@@ -398,13 +397,12 @@ class TestPickerTierRows:
         _write_provider_config(
             {"web_backend": "exa", "web_tier": "free", "env_vars": []},
             config,
-            managed_feature=None,
         )
         assert config["web"]["backend"] == "exa"
         assert config["web"]["provider_tier"]["exa"] == "free"
         # Re-selecting a tier-agnostic row clears the stale tier.
         _write_provider_config(
-            {"web_backend": "exa", "env_vars": []}, config, managed_feature=None
+            {"web_backend": "exa", "env_vars": []}, config
         )
         assert "exa" not in config["web"]["provider_tier"]
 

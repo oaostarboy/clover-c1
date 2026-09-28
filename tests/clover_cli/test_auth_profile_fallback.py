@@ -139,13 +139,10 @@ def test_provider_auth_state_returns_none_when_neither_has_it(profile_env):
 # ---------------------------------------------------------------------------
 # _load_provider_state — internal global fallback (issue #18594 follow-up)
 #
-# Several runtime helpers (notably ``resolve_clover_runtime_credentials`` and
-# ``resolve_clover_access_token``) call ``_load_provider_state`` directly with
-# a profile-loaded auth store rather than going through
-# ``get_provider_auth_state``. Without the fallback wired into
-# ``_load_provider_state`` itself, those helpers raise ``"Clover is not
-# logged into Clover Portal"`` even though the user has a valid global Clover
-# login. These tests pin the per-provider shadowing into the helper.
+# Runtime helpers call ``_load_provider_state`` directly with a
+# profile-loaded auth store rather than going through
+# ``get_provider_auth_state``. These tests pin the per-provider global
+# fallback shadowing into the helper.
 # ---------------------------------------------------------------------------
 
 

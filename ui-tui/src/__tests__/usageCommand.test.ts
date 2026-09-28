@@ -5,8 +5,6 @@ import type { SessionUsageResponse } from '../gatewayTypes.js'
 
 const usageCommand = sessionCommands.find(cmd => cmd.name === 'usage')!
 
-const USAGE_CTA = 'Run /subscription to change plan · /topup to add to your balance'
-
 const guarded =
   <T>(fn: (r: T) => void) =>
   (r: null | T) => {
@@ -46,79 +44,51 @@ const baseUsage = (overrides: Partial<SessionUsageResponse> = {}): SessionUsageR
 
 const printed = (sys: ReturnType<typeof vi.fn>) => sys.mock.calls.map(c => c[0]).join('\n')
 
-const balancePanel = (panel: ReturnType<typeof vi.fn>) => {
-  const sections = panel.mock.calls.find(c => c[0] === 'Balance')?.[1] as { text?: string }[] | undefined
-
-  return (sections ?? []).map(s => s.text ?? '').join('\n')
-}
+const usagePanel = (panel: ReturnType<typeof vi.fn>) => panel.mock.calls.find(c => c[0] === 'Usage')?.[1]
 
 describe('/usage slash command', () => {
   beforeEach(() => {
     vi.clearAllMocks()
   })
 
-  it('always shows the CTA; "no API calls yet" only when there is no balance', async () => {
-    const empty = buildCtx({ 'session.usage': baseUsage({ calls: 0, credits_lines: [] }) })
-    await empty.run('')
-    expect(printed(empty.sys)).toContain('no API calls yet')
-    expect(printed(empty.sys)).toContain(USAGE_CTA)
-
-    const withBalance = buildCtx({ 'session.usage': baseUsage({ calls: 0, credits_lines: ['$50.00 remaining'] }) })
-    await withBalance.run('')
-    expect(printed(withBalance.sys)).not.toContain('no API calls yet')
-    expect(printed(withBalance.sys)).toContain(USAGE_CTA)
+  it('help text advertises session token usage only', () => {
+    expect(usageCommand.help).toBe('session token usage')
   })
 
-  it('renders the dollar two-bar model (no "credits" wording) when available', async () => {
+  it('prints "no API calls yet" and no panel when there are no calls', async () => {
+    const { panel, run, sys } = buildCtx({ 'session.usage': baseUsage({ calls: 0 }) })
+    await run('')
+
+    expect(printed(sys)).toContain('no API calls yet')
+    expect(panel).not.toHaveBeenCalled()
+  })
+
+  it('renders a token-only Usage panel when there are calls', async () => {
     const { panel, run } = buildCtx({
       'session.usage': baseUsage({
-        usage: {
-          available: true,
-          status: 'healthy',
-          plan_name: 'Plus',
-          renews_display: 'Jul 1, 2026',
-          total_spendable_display: '$26.00',
-          has_topup: true,
-          plan_bar: {
-            kind: 'plan',
-            remaining_display: '$14.00',
-            total_display: '$20.00',
-            spent_display: '$6.00',
-            pct_used: 30,
-            fill_fraction: 0.7
-          },
-          topup_bar: {
-            kind: 'topup',
-            remaining_display: '$12.00',
-            total_display: '$12.00',
-            spent_display: '$0.00',
-            pct_used: null,
-            fill_fraction: 1
-          }
-        }
+        calls: 3,
+        compressions: 1,
+        context_max: 200000,
+        context_percent: 12,
+        context_used: 24000,
+        input: 100,
+        model: 'anthropic/claude-opus-4.6',
+        output: 50,
+        total: 150
       })
     })
 
     await run('')
 
-    const body = balancePanel(panel)
-    expect(body).toContain('Plus')
-    expect(body).toContain('$14.00 left of $20.00')
-    expect(body).toContain('30% used')
-    expect(body).toContain('top-up')
-    expect(body).toContain('$12.00')
-    expect(body.toLowerCase()).not.toContain('credits')
-  })
+    const sections = usagePanel(panel)
+    expect(sections).toBeDefined()
+    const rows = sections![0].rows as [string, string][]
+    expect(rows).toContainEqual(['Model', 'anthropic/claude-opus-4.6'])
+    expect(rows).toContainEqual(['Total tokens', '150'])
+    expect(rows).toContainEqual(['API calls', '3'])
 
-  it('shows the free-models upsell for a free account', async () => {
-    const { panel, run } = buildCtx({
-      'session.usage': baseUsage({ usage: { available: true, status: 'free', plan_name: null } })
-    })
-
-    await run('')
-
-    const body = balancePanel(panel)
-    expect(body).toContain('free models only')
-    expect(body).toContain('/subscription')
+    const text = sections!.map(s => s.text ?? '').join('\n')
+    expect(text).toContain('Context: 24,000 / 200,000 (12%)')
+    expect(text).toContain('Compressions: 1')
   })
 })

@@ -258,11 +258,12 @@ def build_gateway_parser(
         help="Enroll this gateway with a relay connector (writes relay auth creds to .env)",
         description=(
             "Redeem a single-use enrollment token with a relay connector. "
-            "Authenticates as your Clover Portal account (the connector derives the "
-            "authoritative tenant from it), mints this gateway's per-gateway secret "
+            "Authenticates with your configured identity provider "
+            "(gateway.idp.token_url; the connector derives the authoritative tenant "
+            "from it), mints this gateway's per-gateway secret "
             "and per-tenant delivery key, and writes GATEWAY_RELAY_ID / "
             "GATEWAY_RELAY_SECRET / GATEWAY_RELAY_DELIVERY_KEY into ~/.clover/.env. "
-            "Requires being logged in (clover setup). Not available in managed installs."
+            "Not available in managed installs."
         ),
     )
     gateway_enroll.add_argument(
@@ -318,7 +319,7 @@ def build_gateway_parser(
         help="Local OpenAI-compatible proxy to OAuth providers",
         description=(
             "Run a local HTTP server that forwards OpenAI-compatible requests "
-            "to an OAuth-authenticated provider (e.g. Clover Portal). External "
+            "to an OAuth-authenticated provider (e.g. xAI Grok). External "
             "apps can point at the proxy with any bearer token; the proxy "
             "attaches your real credentials."
         ),
@@ -330,8 +331,8 @@ def build_gateway_parser(
     )
     proxy_start.add_argument(
         "--provider",
-        default="clover",
-        help="Upstream provider: clover or xai (default: clover). See `clover proxy providers`.",
+        default="xai",
+        help="Upstream provider: xai (default: xai). See `clover proxy providers`.",
     )
     proxy_start.add_argument(
         "--host",

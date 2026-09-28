@@ -52,9 +52,7 @@ SKILL_SUPPORT_DIRS = frozenset(("references", "templates", "assets", "scripts"))
 
 # ── Org-shared skills (sync contract) ───────────────────────────
 # Org mirrors live under ~/.clover/skills/_org/<org_id>/. Resolution is
-# TOKEN-GATED via a marker file the sync client writes after verifying the
-# token (skills_sync_client.pull_org_skills): only the marked org's mirror is
-# scanned. No marker ⇒ no org skills load. The marker is plain data (org_id
+# gated via a marker file: only the marked org's mirror is scanned. No marker ⇒ no org skills load. The marker is plain data (org_id
 # string) so this module stays import-light; the VERIFICATION lives in the
 # sync client, which is the only writer. Offline grace: the marker persists,
 # so already-pulled org skills keep working without connectivity; a VERIFIED

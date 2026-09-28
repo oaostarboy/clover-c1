@@ -1139,16 +1139,23 @@ def test_managed_config_cannot_override_shared_metrics_consent(
     managed = tmp_path / "managed"
     profile.mkdir()
     managed.mkdir()
-    profile_config = "{}\n"
+    # Stamp the current schema version on both files: merely reading a
+    # version-less config now runs the startup auto-migration, and its
+    # persist step goes through save_config()'s managed-key stripping —
+    # deleting this profile's own shared_metrics.enabled from disk as an
+    # incidental side effect of loading, unrelated to what this test pins.
+    version_line = f"_config_version: {config.DEFAULT_CONFIG['_config_version']}\n"
+    profile_config = version_line
     if profile_enabled is not None:
-        profile_config = (
+        profile_config += (
             "telemetry:\n"
             "  shared_metrics:\n"
             f"    enabled: {str(profile_enabled).lower()}\n"
         )
     (profile / "config.yaml").write_text(profile_config, encoding="utf-8")
     (managed / "config.yaml").write_text(
-        "telemetry:\n"
+        version_line
+        + "telemetry:\n"
         "  shared_metrics:\n"
         f"    enabled: {str(managed_enabled).lower()}\n",
         encoding="utf-8",

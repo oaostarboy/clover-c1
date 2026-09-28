@@ -5,8 +5,8 @@ import {
   NO_PROJECT_ID,
   type SidebarProjectTree
 } from '@/app/chat/sidebar/projects/workspace-groups'
+import { cloverApi, type CloverGateway, getCloverConfig } from '@/clover'
 import type { CloverGitBaseBranch, CloverGitBranch } from '@/global'
-import { getCloverConfig, cloverApi, type CloverGateway } from '@/clover'
 import { translateNow } from '@/i18n'
 import { desktopDefaultCwd, isDesktopFsRemoteMode, selectDesktopPaths, writeDesktopFileText } from '@/lib/desktop-fs'
 import { desktopGit } from '@/lib/desktop-git'

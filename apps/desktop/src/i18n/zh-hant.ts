@@ -102,12 +102,6 @@ export const zhHant = defineLocale({
         `先登出已儲存的遠端瀏覽器工作階段，然後開啟${signInLabel}。使用本機閘道可切換至內建後端。`,
       signOutAndSignIn: '登出並重新登入',
       remoteFailureHint: '在「閘道設定」中檢查閘道 URL 與登入，或切換至本機閘道。',
-      cloudDownTitle: 'Clover Cloud 代理已停機',
-      cloudDownDescription:
-        '此閘道連線的 Clover 託管雲端代理正在回傳伺服器錯誤。無法在此處重新啟動——請檢查其狀態、切換至本機閘道，或取得支援。',
-      cloudDownHint: '使用下方按鈕開啟 Clover Portal（檢視執行個體狀態與操作）或加入 Discord 取得支援。',
-      cloudDownCheckPortal: '查看 Portal 狀態',
-      cloudDownDiscord: '在 Discord 取得協助',
       hideRecentLogs: '隱藏最近記錄',
       showRecentLogs: '顯示最近記錄',
       signedInTitle: '已登入',
@@ -198,10 +192,8 @@ export const zhHant = defineLocale({
   },
 
   billingBlock: {
-    titleNous: 'Clover 額度已用盡',
     titleProvider: provider => `額度已用盡 — ${provider}`,
     fallbackMessage: '您的帳戶額度已用盡。請儲值以繼續使用。',
-    openBilling: '開啟帳單',
     addCredits: '新增額度',
     dismiss: '忽略'
   },
@@ -224,7 +216,6 @@ export const zhHant = defineLocale({
     handoffLead: '在以下位置繼續討論:',
     links: {
       github: 'GitHub Issues',
-      portal: 'Clover Portal 支援',
       discord: 'Discord'
     }
   },
@@ -276,7 +267,6 @@ export const zhHant = defineLocale({
       mcp: 'MCP',
       archivedChats: '已封存聊天',
       about: '關於',
-      billing: '帳單',
       notifications: '通知'
     },
     notifications: {
@@ -1057,13 +1047,6 @@ export const zhHant = defineLocale({
       activeBackend: '目前後端',
       activeBackendHint: '這是你目前使用的後端',
       useBackend: '使用此後端',
-      cloverIncluded: '包含在 Clover 訂閱中；登入 Clover Portal 即可啟用。',
-      cloverAuthNeededTitle: '登入 Clover Portal',
-      cloverAuthNeededMessage: provider => `已儲存 ${provider}，但在登入 Clover Portal 之前不會啟用。`,
-      cloverAuthSignIn: '登入',
-      cloverAuthDoneTitle: '已連接 Clover Portal',
-      cloverAuthDoneMessage: '訂閱後端現已啟用。',
-      cloverAuthFailed: 'Clover Portal 登入未完成',
       noApiKeyRequired: '不需要 API 金鑰。',
       postSetupHint: step => `此後端需要一次性安裝 (${step})。將在此機器上執行，可能需要幾分鐘。`,
       postSetupInstalledHint: '已安裝。僅在出現問題時才需要重新執行安裝。',
@@ -2448,7 +2431,6 @@ export const zhHant = defineLocale({
       connectionSsh: host => `SSH: ${host}`,
       connectionRemote: host => `遠端: ${host}`,
       connectionCloud: host => `雲端: ${host}`,
-      connectionCloudTooltip: host => `Clover Cloud · ${host}`,
       connectionSshTooltip: host => `SSH · ${host}`,
       connectionRemoteTooltip: host => `Remote · ${host}`,
       backendLabel: version => `後端 v${version}`,
@@ -2751,7 +2733,6 @@ export const zhHant = defineLocale({
       errorOpenLogsFailed: '無法開啟日誌資料夾',
       errorOpenDesktopLogs: '開啟桌面端日誌',
       errorCopyDiagnostics: '複製錯誤詳細資訊',
-      errorSendDiagnostics: '傳送診斷資訊',
       filesChanged: count => `${count} 個檔案已變更`,
       reviewChanges: '檢視',
       readAloudFailed: '朗讀失敗',

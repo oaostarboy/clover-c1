@@ -105,13 +105,6 @@ export const ja = defineLocale({
       signOutAndSignIn: 'サインアウトして再サインイン',
       remoteFailureHint:
         '「ゲートウェイ設定」でゲートウェイの URL とサインインを確認するか、ローカルゲートウェイに切り替えてください。',
-      cloudDownTitle: 'Clover Cloud エージェントが停止しています',
-      cloudDownDescription:
-        'このゲートウェイが接続している Clover 管理のクラウドエージェントがサーバーエラーを返しています。ここから再起動することはできません。ステータスを確認するか、ローカルゲートウェイに切り替えるか、サポートに連絡してください。',
-      cloudDownHint:
-        '下のボタンから Clover Portal（インスタンスの状態と操作）を開くか、Discord でサポートを受けられます。',
-      cloudDownCheckPortal: 'Portal のステータスを確認',
-      cloudDownDiscord: 'Discord でサポートを受ける',
       hideRecentLogs: '最近のログを非表示',
       showRecentLogs: '最近のログを表示',
       signedInTitle: 'サインインしました',
@@ -205,10 +198,8 @@ export const ja = defineLocale({
   },
 
   billingBlock: {
-    titleNous: 'Clover クレジットが不足しています',
     titleProvider: provider => `クレジット不足 — ${provider}`,
     fallbackMessage: 'アカウントのクレジットが不足しています。続行するにはクレジットを追加してください。',
-    openBilling: '請求を開く',
     addCredits: 'クレジットを追加',
     dismiss: '閉じる'
   },
@@ -232,7 +223,6 @@ export const ja = defineLocale({
     handoffLead: '続きは次の場所で:',
     links: {
       github: 'GitHub Issues',
-      portal: 'Clover Portal サポート',
       discord: 'Discord'
     }
   },
@@ -284,7 +274,6 @@ export const ja = defineLocale({
       mcp: 'MCP',
       archivedChats: 'アーカイブ済みチャット',
       about: '情報',
-      billing: '請求',
       notifications: '通知'
     },
     notifications: {
@@ -1096,14 +1085,6 @@ export const ja = defineLocale({
       activeBackend: '使用中',
       activeBackendHint: 'これが現在アクティブなバックエンドです',
       useBackend: 'このバックエンドを使う',
-      cloverIncluded: 'Clover サブスクリプションに含まれています。有効にするには Clover Portal にサインインしてください。',
-      cloverAuthNeededTitle: 'Clover Portal にサインイン',
-      cloverAuthNeededMessage: provider =>
-        `${provider} は保存されましたが、Clover Portal にサインインするまで有効になりません。`,
-      cloverAuthSignIn: 'サインイン',
-      cloverAuthDoneTitle: 'Clover Portal に接続しました',
-      cloverAuthDoneMessage: 'サブスクリプションのバックエンドが有効になりました。',
-      cloverAuthFailed: 'Clover Portal のサインインが完了しませんでした',
       noApiKeyRequired: 'API キーは不要です。',
       postSetupHint: step =>
         `このバックエンドは一度だけインストールが必要です (${step})。このマシン上で実行され、数分かかる場合があります。`,
@@ -2538,7 +2519,6 @@ export const ja = defineLocale({
       connectionSsh: host => `SSH: ${host}`,
       connectionRemote: host => `リモート: ${host}`,
       connectionCloud: host => `クラウド: ${host}`,
-      connectionCloudTooltip: host => `Clover Cloud · ${host}`,
       connectionSshTooltip: host => `SSH · ${host}`,
       connectionRemoteTooltip: host => `Remote · ${host}`,
       backendLabel: version => `バックエンド v${version}`,
@@ -2847,7 +2827,6 @@ export const ja = defineLocale({
       errorOpenLogsFailed: 'ログフォルダを開けませんでした',
       errorOpenDesktopLogs: 'デスクトップのログを開く',
       errorCopyDiagnostics: 'エラー詳細をコピー',
-      errorSendDiagnostics: '診断情報を送信',
       filesChanged: count => `${count} 件のファイルを変更`,
       reviewChanges: 'レビュー',
       readAloudFailed: '読み上げに失敗しました',

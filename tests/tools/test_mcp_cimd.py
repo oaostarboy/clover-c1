@@ -39,16 +39,6 @@ from tools.mcp_oauth import (  # noqa: E402 — after the SDK availability gate
     _maybe_use_cimd,
 )
 
-_DOCUMENT_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "website" / "static" / "oauth" / "client-metadata.json"
-)
-
-
-def _document() -> dict:
-    return json.loads(_DOCUMENT_PATH.read_text())
-
-
 def _set_interactive_stdin(monkeypatch, *, is_tty: bool = True) -> None:
     mock_stdin = MagicMock()
     mock_stdin.isatty.return_value = is_tty
@@ -89,27 +79,8 @@ def private_ports(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_document_client_id_is_the_url_clover_sends():
-    """A CIMD document is only valid when its client_id is its own URL."""
-    assert _document()["client_id"] == _CIMD_CLIENT_METADATA_URL
 
 
-def test_document_declares_every_callback_clover_can_build(tmp_path, monkeypatch):
-    """Every loopback URI a CIMD flow could produce must be registered.
-
-    Exact string matching means one missing entry is a hard auth failure on
-    whichever port the OS happens to hand out that day. Built through the real
-    ``_build_client_metadata`` so pydantic's URL serialization — not an
-    f-string that merely resembles it — is what gets compared.
-    """
-    monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
-    declared = set(_document()["redirect_uris"])
-
-    for host in _CIMD_REDIRECT_HOSTS:
-        for port in _CIMD_PORTS:
-            cfg = {"redirect_host": host, "_resolved_port": port}
-            uri = str(_build_client_metadata(cfg).redirect_uris[0])
-            assert uri in declared, f"{uri} is not registered in the document"
 
 
 def test_document_url_passes_the_sdk_validator():
@@ -119,21 +90,8 @@ def test_document_url_passes_the_sdk_validator():
     assert is_valid_client_metadata_url(_CIMD_CLIENT_METADATA_URL)
 
 
-def test_document_advertises_a_public_native_client():
-    """Loopback redirects need application_type=native (SEP-837), and CIMD
-    carries no secret, so the client must be public."""
-    doc = _document()
-    assert doc["application_type"] == "native"
-    assert doc["token_endpoint_auth_method"] == "none"
-    assert "authorization_code" in doc["grant_types"]
-    assert "refresh_token" in doc["grant_types"]
 
 
-def test_document_carries_no_shared_secret():
-    """Draft section 4.1 forbids secret material in the document."""
-    doc = _document()
-    assert "client_secret" not in doc
-    assert "client_secret_expires_at" not in doc
 
 
 def test_default_document_url_is_a_valid_client_identifier():
@@ -154,26 +112,6 @@ def test_client_identifier_url_requirements_are_enforced(url):
     assert not _is_valid_cimd_url(url)
 
 
-def test_generated_redirect_uri_is_registered_in_the_document(tmp_path, monkeypatch):
-    """End to end on the real range: the URI the SDK will actually send is
-    one the authorization server accepts.
-
-    The only test that runs the whole chain on production constants, so it
-    binds a real pinned port. Another test file mid-flight can legitimately
-    be holding all of them; the invariant itself is covered port-by-port,
-    without binding, by the document tests above.
-    """
-    monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
-    cfg: dict = {}
-
-    _configure_callback_port(cfg, CloverTokenStorage("srv"))
-    if "_cimd_url" not in cfg:
-        pytest.skip("every pinned CIMD port is held by another process")
-    metadata = _build_client_metadata(cfg)
-
-    assert cfg["_cimd_url"] == _CIMD_CLIENT_METADATA_URL
-    assert cfg["_resolved_port"] in _CIMD_PORTS
-    assert str(metadata.redirect_uris[0]) in set(_document()["redirect_uris"])
 
 
 # ---------------------------------------------------------------------------

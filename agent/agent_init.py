@@ -544,6 +544,7 @@ def init_agent(
     command: str = None,
     args: list[str] | None = None,
     model: str = "",
+    model_pinned: bool = False,
     max_iterations: int = sys.maxsize,  # Default: unlimited tool-calling iterations (shared with subagents)
     enabled_toolsets: List[str] = None,
     disabled_toolsets: List[str] = None,
@@ -667,6 +668,18 @@ def init_agent(
     _install_safe_stdio()
 
     agent.model = model
+    # Snapshot of what was actually requested at construction time -- read
+    # back by finalize_turn() for the requested_model/actual_model result
+    # contract (#93412 follow-up: a model substitute changes agent.model,
+    # this stays the original so the result/usage file can report both).
+    agent._requested_model = model
+    # Set only when the caller explicitly chose this model (clover -z -m,
+    # clover chat -m, delegate_task per-task/delegation.model override) —
+    # never for a value that only came from config/env defaults. Gates the
+    # no-silent-fallback guard in conversation_loop.py: a pinned model that
+    # gets a model_not_found error must abort instead of silently running
+    # the turn on a different model. See #93412.
+    agent.model_pinned = bool(model_pinned)
     agent.max_iterations = max_iterations
     # Shared iteration budget — parent creates, children inherit.
     # Consumed by every LLM turn across parent + all subagents.
@@ -750,13 +763,6 @@ def init_agent(
         # AWS Bedrock — auto-detect from provider name or base URL
         # (bedrock-runtime.<region>.amazonaws.com).
         agent.api_mode = "bedrock_converse"
-    elif agent.provider in {"clover", "clover-portal", "cloverc1"}:
-        # Portal is dual-wire: anthropic/* → Messages, everything else →
-        # chat_completions. Callers that already pass api_mode win above;
-        # this covers direct AIAgent construction without a resolved runtime.
-        from clover_cli.providers import clover_api_mode
-
-        agent.api_mode = clover_api_mode(agent.model)
     else:
         # Host-mandated wire check — LAST, so the elif chain's provider-slug
         # rewrites (e.g. api.anthropic.com → provider="anthropic", #63425)
@@ -1057,17 +1063,6 @@ def init_agent(
     # Rate limit tracking — updated from x-ratelimit-* response headers
     # after each API call.  Accessed by /usage slash command.
     agent._rate_limit_state: Optional["RateLimitState"] = None
-
-    # Credits tracking (dev-only, L0 usage-aware-credits) — updated from
-    # x-clover-credits-* response headers after each API call.  Session-start
-    # remaining is latched the first time a header is ever seen so we can
-    # report cumulative micros spent.  Surfaced behind CLOVER_DEV_CREDITS.
-    agent._credits_state = None
-    agent._credits_session_start_micros = None
-    # Threshold-notice latch (L4): active sticky-notice keys + the crossing gates.
-    from agent.credits_tracker import new_credits_latch
-
-    agent._credits_latch = new_credits_latch()
 
     # OpenRouter response cache hit counter — incremented when
     # X-OpenRouter-Cache-Status: HIT is seen in streaming response headers.

@@ -86,7 +86,7 @@ export function ProfileRemoteOverrideDialog({ profileNames }: { profileNames: st
           return
         }
 
-        const hasOverride = (config.mode === 'remote' || config.mode === 'cloud') && Boolean(config.remoteUrl)
+        const hasOverride = config.mode === 'remote' && Boolean(config.remoteUrl)
         setLoaded({
           authMode: config.remoteAuthMode === 'oauth' ? 'oauth' : 'token',
           hasOverride,

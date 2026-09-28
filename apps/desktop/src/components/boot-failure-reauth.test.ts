@@ -24,7 +24,7 @@ function config(overrides: Partial<DesktopConnectionConfig> = {}): DesktopConnec
     secureTokenStorage: true,
     remoteTokenPlainText: false,
     remoteUrl: 'https://box:9119',
-    cloudOrg: '',
+
     sshHost: '',
     sshUser: '',
     sshPort: null,
@@ -36,9 +36,9 @@ function config(overrides: Partial<DesktopConnectionConfig> = {}): DesktopConnec
 }
 
 describe('isRemoteConfig', () => {
-  it('true for remote/cloud with a URL, regardless of auth mode or connection', () => {
+  it('true for remote with a URL, regardless of auth mode or connection', () => {
     expect(isRemoteConfig(config({ remoteAuthMode: 'token', remoteOauthConnected: false }))).toBe(true)
-    expect(isRemoteConfig(config({ mode: 'cloud', remoteOauthConnected: true }))).toBe(true)
+
   })
 
   it('recognizes SSH as remote recovery without treating it as OAuth reauth', () => {
@@ -79,15 +79,6 @@ describe('isRemoteReauthFailure', () => {
     expect(isRemoteReauthFailure(config({ mode: 'local' }))).toBe(false)
   })
 
-  it('true for a cloud connection with a lapsed session (cloud resolves to remote oauth)', () => {
-    // A 'cloud' connection is a remote oauth backend under the hood (Q6), so a
-    // lapsed cloud session is the same reauth failure as a lapsed remote one.
-    expect(isRemoteReauthFailure(config({ mode: 'cloud' }))).toBe(true)
-  })
-
-  it('false for a connected cloud session', () => {
-    expect(isRemoteReauthFailure(config({ mode: 'cloud', remoteOauthConnected: true }))).toBe(false)
-  })
 
   it('false for a token (non-gated) remote gateway', () => {
     expect(isRemoteReauthFailure(config({ remoteAuthMode: 'token' }))).toBe(false)

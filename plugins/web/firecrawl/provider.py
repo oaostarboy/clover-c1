@@ -7,14 +7,13 @@ firecrawl implementation that previously lived in tools/web_tools.py:
   - :data:`Firecrawl` lazy proxy that defers the ~200ms SDK import to
     first use (re-exported by tools.web_tools for backward compat with
     existing tests that mock that name).
-  - :func:`_get_firecrawl_client` with direct + managed-gateway dual
-    mode, controlled by ``web.use_gateway`` config when both are
-    configured.
+  - :func:`_get_firecrawl_client` for direct (keyed, self-hosted, or
+    explicit keyless) Firecrawl configuration.
   - :func:`check_firecrawl_api_key` re-exported (tests + tools_config
     setup hint depend on this name living in tools.web_tools).
   - :func:`_extract_web_search_results` / :func:`_extract_scrape_payload`
-    response-shape normalizers that handle SDK / direct API / gateway
-    response variants.
+    response-shape normalizers that handle SDK / direct API response
+    variants.
   - Per-URL extract loop with 60s timeout, redirect-aware SSRF re-check,
     website-policy gating, and format-aware content selection.
 
@@ -30,17 +29,11 @@ Config keys this provider responds to::
       search_backend: "firecrawl"     # explicit per-capability
       extract_backend: "firecrawl"    # explicit per-capability
       backend: "firecrawl"            # shared fallback (default)
-      use_gateway: false              # prefer managed gateway when both
-                                      # direct + gateway credentials exist
 
 Env vars::
 
     FIRECRAWL_API_KEY=...            # direct cloud auth
     FIRECRAWL_API_URL=...            # self-hosted Firecrawl
-    FIRECRAWL_GATEWAY_URL=...        # Clover tool-gateway (subscribers)
-    TOOL_GATEWAY_DOMAIN=...          # alternate gateway env
-    TOOL_GATEWAY_SCHEME=...
-    TOOL_GATEWAY_USER_TOKEN=...
 """
 
 from __future__ import annotations
@@ -115,7 +108,7 @@ Firecrawl = _FirecrawlProxy()
 
 
 # ---------------------------------------------------------------------------
-# Client construction (direct vs managed-gateway)
+# Client construction (direct Firecrawl)
 # ---------------------------------------------------------------------------
 #
 # The canonical cache slots live on :mod:`tools.web_tools` so tests that do
@@ -170,10 +163,9 @@ def _is_explicit_firecrawl_selection() -> bool:
 def _use_keyless_ring() -> bool:
     """True when Firecrawl calls should route via the keyless ring.
 
-    Ring dispatch applies when there are no direct credentials, the
-    managed Clover gateway isn't the selected path, and the keyless tier
-    isn't disabled or pinned paid. Keyed/self-hosted/gateway setups never
-    reach the ring.
+    Ring dispatch applies when there are no direct credentials and the
+    keyless tier isn't disabled or pinned paid. Keyed/self-hosted setups
+    never reach the ring.
     """
     from clover_cli.config import get_env_value
 
@@ -181,19 +173,6 @@ def _use_keyless_ring() -> bool:
         return False
     if (get_env_value("FIRECRAWL_API_URL") or "").strip():
         return False
-    import tools.web_tools as _wt
-    from tools.tool_backend_helpers import CLOVER_MANAGED_PROVIDER, read_selection
-
-    try:
-        if read_selection("web") == CLOVER_MANAGED_PROVIDER:
-            return False
-    except Exception:  # noqa: BLE001 — selection helpers optional
-        pass
-    try:
-        if _wt._is_tool_gateway_ready() and not _is_explicit_firecrawl_selection():
-            return False
-    except Exception:  # noqa: BLE001 — probe optional
-        pass
     from plugins.web.keyless_mcp import use_keyless
 
     return use_keyless("firecrawl", "")
@@ -227,182 +206,70 @@ class _KeylessFirecrawlClient:
         return self._post("/v2/scrape", {"url": url, "formats": formats})
 
 
-def _get_firecrawl_gateway_url() -> str:
-    """Return the configured Firecrawl gateway URL."""
-    import tools.web_tools as _wt
-
-    return _wt.build_vendor_gateway_url("firecrawl")
-
-
-def _is_tool_gateway_ready() -> bool:
-    """Return True when gateway URL + Clover Subscriber token are available.
-
-    Reads ``peek_clover_access_token`` and ``resolve_managed_tool_gateway``
-    via :mod:`tools.web_tools` rather than direct imports, so unit tests
-    that ``patch("tools.web_tools._peek_clover_access_token", ...)`` see
-    their patches honored. The names are re-exported on
-    :mod:`tools.web_tools` for exactly this reason.
-    """
-    import tools.web_tools as _wt
-
-    return _wt.resolve_managed_tool_gateway(
-        "firecrawl", token_reader=_wt._peek_clover_access_token
-    ) is not None
-
-
 def _has_direct_firecrawl_config() -> bool:
     """Return True when direct Firecrawl config is explicitly configured."""
     return _get_direct_firecrawl_config() is not None
 
 
 def check_firecrawl_api_key() -> bool:
-    """Return True when the Firecrawl backend selected via `clover tools`
-    (or, on a never-configured install, either route) is usable.
+    """Return True when direct Firecrawl config is usable.
 
     Re-exported by :mod:`tools.web_tools` for backward compatibility with
     existing tests and the ``clover tools`` setup flow.
     """
-    from tools.tool_backend_helpers import (
-        CLOVER_MANAGED_PROVIDER,
-        read_selection,
-    )
-
-    selected = read_selection("web")
-    if selected == CLOVER_MANAGED_PROVIDER:
-        return _is_tool_gateway_ready()
-    if selected is not None:
-        return _has_direct_firecrawl_config()
-    return _has_direct_firecrawl_config() or _is_tool_gateway_ready()
-
-
-def _firecrawl_backend_help_suffix() -> str:
-    """Return optional managed-gateway guidance for Firecrawl help text."""
-    import tools.web_tools as _wt
-
-    if not _wt.managed_clover_tools_enabled():
-        return ""
-    return (
-        ", or use the Clover Tool Gateway via your subscription "
-        "(FIRECRAWL_GATEWAY_URL or TOOL_GATEWAY_DOMAIN)"
-    )
+    return _has_direct_firecrawl_config()
 
 
 def _raise_web_backend_configuration_error() -> "NoReturn":
     """Raise a clear error for unsupported web backend configuration."""
-    import tools.web_tools as _wt
-
-    message = (
+    raise ValueError(
         "Web tools are not configured. "
         "Set FIRECRAWL_API_KEY for cloud Firecrawl or set FIRECRAWL_API_URL "
         "for a self-hosted Firecrawl instance."
     )
-    if _wt.managed_clover_tools_enabled():
-        message += (
-            " With your Clover subscription you can also use the Tool Gateway. "
-            "run `clover tools` and select Clover Subscription as the web provider."
-        )
-    else:
-        message += " " + _wt.clover_tool_gateway_unavailable_message(
-            "managed Firecrawl web tools",
-        )
-    raise ValueError(message)
 
 
 def _get_firecrawl_client() -> Any:
     """Get or create the cached Firecrawl client.
 
-    Strict selection semantics (switch on the stored ``web`` selection):
-    - ``"clover"`` (or legacy ``use_gateway: true``) → managed Tool Gateway
-      ONLY; unavailable is a selection-naming error (a present
-      FIRECRAWL_API_KEY does not reroute).
-    - any other stored web backend → direct Firecrawl ONLY; missing config
-      is a selection-naming error — never a silent managed fallback billed
-      to Clover.
-    - never-configured web section → legacy behavior: direct config when
-      present, else the managed gateway.
+    Direct Firecrawl only (keyed, self-hosted, or explicit keyless). A
+    stored ``web`` selection that isn't backed by direct config (including
+    a stale legacy ``"clover"`` selection) is a selection-naming error;
+    a never-configured web section falls back to the generic
+    configuration error.
 
     Raises ValueError when the resolved path is unusable.
 
     The cached client is stored on :mod:`tools.web_tools` (as
     ``_firecrawl_client`` and ``_firecrawl_client_config``) rather than on
     this plugin module so that unit tests that reset the cache via
-    ``tools.web_tools._firecrawl_client = None`` keep working. Helper
-    functions (``resolve_managed_tool_gateway``, ``_read_clover_access_token``,
-    ``Firecrawl``) are also looked up via :mod:`tools.web_tools` for the same
-    reason — see :func:`_is_tool_gateway_ready`.
+    ``tools.web_tools._firecrawl_client = None`` keep working. The
+    ``Firecrawl`` proxy is also looked up via :mod:`tools.web_tools` for
+    the same reason.
     """
     import tools.web_tools as _wt
-    from tools.tool_backend_helpers import (
-        CLOVER_MANAGED_PROVIDER,
-        read_selection,
-        selection_error,
-        selection_exists,
-    )
+    from tools.tool_backend_helpers import read_selection, selection_error
 
     selected = read_selection("web")
-
     direct_config = _get_direct_firecrawl_config()
 
-    def _managed_kwargs():
-        managed_gateway = _wt.resolve_managed_tool_gateway(
-            "firecrawl", token_reader=_wt._read_clover_access_token
-        )
-        if managed_gateway is None:
-            return None
-        kwargs = {
-            "api_key": managed_gateway.clover_user_token,
-            "api_url": managed_gateway.gateway_origin,
-        }
-        return kwargs, (
-            "tool-gateway",
-            kwargs["api_url"],
-            managed_gateway.clover_user_token,
-        )
-
-    if selected == CLOVER_MANAGED_PROVIDER:
-        managed = _managed_kwargs()
-        if managed is None:
-            logger.error(
-                "Firecrawl client initialization failed: the Clover "
-                "Subscription web selection is stored but the tool gateway "
-                "is unavailable."
-            )
-            raise ValueError(selection_error(
-                "web",
-                CLOVER_MANAGED_PROVIDER,
-                "the Clover Tool Gateway is not available (not entitled or "
-                "unreachable)",
-            ))
-        kwargs, client_config = managed
-        client_mode = "sdk"
-    elif selected is not None or selection_exists("web"):
-        # Stored vendor selection (or per-capability web keys routing to
-        # firecrawl): direct Firecrawl only. With no credentials, the
-        # explicit selection unlocks keyless cloud mode instead of erroring.
-        if direct_config is None:
+    if direct_config is None:
+        if selected is not None:
             logger.error(
                 "Firecrawl client initialization failed: direct Firecrawl "
                 "selected but FIRECRAWL_API_KEY/FIRECRAWL_API_URL is not set."
             )
             raise ValueError(selection_error(
                 "web",
-                selected or "firecrawl",
+                selected,
                 "neither FIRECRAWL_API_KEY nor FIRECRAWL_API_URL is set",
             ))
-        client_mode, kwargs, client_config = direct_config
-    elif direct_config is not None:
-        client_mode, kwargs, client_config = direct_config
-    else:
-        # Never-configured web section: legacy managed fallback.
-        managed = _managed_kwargs()
-        if managed is None:
-            logger.error(
-                "Firecrawl client initialization failed: "
-                "missing direct config and tool-gateway auth."
-            )
-            _raise_web_backend_configuration_error()
-        kwargs, client_config = managed
-        client_mode = "sdk"
+        logger.error(
+            "Firecrawl client initialization failed: missing direct config."
+        )
+        _raise_web_backend_configuration_error()
+
+    client_mode, kwargs, client_config = direct_config
 
     cached = getattr(_wt, "_firecrawl_client", None)
     cached_config = getattr(_wt, "_firecrawl_client_config", None)
@@ -533,7 +400,7 @@ class FirecrawlWebSearchProvider(WebSearchProvider):
         return "Firecrawl"
 
     def is_available(self) -> bool:
-        """Return True when direct Firecrawl OR managed-gateway path is configured."""
+        """Return True when direct Firecrawl config is available."""
         return check_firecrawl_api_key()
 
     def is_keyless_available(self) -> bool:
@@ -573,7 +440,7 @@ class FirecrawlWebSearchProvider(WebSearchProvider):
             return {"success": False, "error": "Interrupted"}
 
         if _use_keyless_ring():
-            # No credentials and no managed gateway: ring dispatch with
+            # No credentials: ring dispatch with
             # next-in-line failover on rate limits (default-on free tier).
             from plugins.web.keyless_mcp import search_with_failover
 
@@ -616,7 +483,7 @@ class FirecrawlWebSearchProvider(WebSearchProvider):
             return [{"url": u, "error": "Interrupted", "title": ""} for u in urls]
 
         if _use_keyless_ring():
-            # No credentials and no managed gateway: ring dispatch with
+            # No credentials: ring dispatch with
             # next-in-line failover on rate limits (default-on free tier).
             import asyncio as _asyncio
 
@@ -789,10 +656,9 @@ class FirecrawlWebSearchProvider(WebSearchProvider):
     def get_setup_schema(self) -> Dict[str, Any]:
         return {
             "name": "Firecrawl",
-            "badge": "keyless/paid · optional gateway",
+            "badge": "keyless/paid",
             "tag": (
-                "Full search + extract; supports keyless cloud, direct API, "
-                "and Clover tool-gateway routing."
+                "Full search + extract; supports keyless cloud and direct API."
             ),
             "env_vars": [
                 {

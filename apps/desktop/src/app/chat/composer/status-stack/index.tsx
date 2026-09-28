@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router'
 
 import { blurComposerInput } from '@/app/chat/composer/focus'
 import { AGENTS_ROUTE } from '@/app/routes'
-import { BillingBanner } from '@/components/billing-banner'
 import { composerDockCard } from '@/components/chat/composer-dock'
 import { StatusSection } from '@/components/chat/status-section'
 import { Button } from '@/components/ui/button'
@@ -14,7 +13,6 @@ import { Tip, TipKeybindLabel } from '@/components/ui/tooltip'
 import { type Translations, useI18n } from '@/i18n'
 import { useSessionSlice } from '@/lib/use-session-slice'
 import { cn } from '@/lib/utils'
-import { $billingBlock } from '@/store/billing-block'
 import {
   $statusItemsBySession,
   type ComposerStatusItem,
@@ -98,7 +96,6 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
   const items = useSessionSlice($statusItemsBySession, sessionId)
   const previews = useSessionSlice($previewStatusBySession, sessionId)
   const scrolledUp = useStore($threadScrolledUp)
-  const billing = useStore($billingBlock)
 
   const groups = useMemo(() => groupStatusItems(items), [items])
 
@@ -151,13 +148,6 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
   const previewBlock = <div className="px-1 py-0.5">{previewRows}</div>
 
   const sections: { key: string; node: ReactNode }[] = []
-
-  // Billing wall sits at the very top of the stack — it's the most important
-  // thing above the composer when the account is out of credits. Rendered here
-  // (not as a composer-disable) so slash commands stay usable.
-  if (billing && sessionId && billing.sessionId === sessionId) {
-    sections.push({ key: 'billing', node: <BillingBanner sessionId={sessionId} /> })
-  }
 
   for (const group of groups) {
     sections.push({
@@ -226,9 +216,9 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
   }
 
   // Micro actions are the TOP-MOST thing in the whole overlay lane — above the
-  // status card, above the billing wall, above everything. They're the only
-  // rows up here you press instead of read, so nothing may ever stack on top
-  // of them. Rendered outside the card (below) so the pills float.
+  // status card, above everything. They're the only rows up here you press
+  // instead of read, so nothing may ever stack on top of them. Rendered
+  // outside the card (below) so the pills float.
   const visible = sections.length > 0
 
   // No height to publish: the stack is an in-flow child of the composer dock,

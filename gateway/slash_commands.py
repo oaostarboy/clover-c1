@@ -5595,40 +5595,6 @@ class GatewaySlashCommandsMixin:
         key = "gateway.branch.branched_one" if msg_count == 1 else "gateway.branch.branched_many"
         return t(key, title=branch_title, count=msg_count, parent=parent_session_id, new=new_session_id)
 
-    async def _handle_topup_command(self, event: MessageEvent) -> str:
-        """Handle /topup -- show the Clover balance and hand off to the portal.
-
-        Renders the balance block + identity line + a tappable portal URL that
-        opens the billing page. Remote spending is managed on the portal: this
-        messaging command does NOT charge, confirm, or track payment here —
-        everything happens in the browser and the next /topup shows the new balance. The
-        tappable URL is the affordance and works on every platform (button-capable
-        or plain text like SMS/email). Fetched off the event loop; fail-open.
-        """
-        from agent.account_usage import build_credits_view
-
-        try:
-            view = await asyncio.to_thread(build_credits_view, markdown=True)
-        except Exception:
-            view = None
-
-        if view is None or not view.logged_in:
-            return t("gateway.credits.not_logged_in")
-
-        lines: list[str] = ["💳 **Clover balance**"]
-        for line in view.balance_lines:
-            if line.lstrip().startswith("📈"):
-                continue  # drop the helper's header; we print our own
-            lines.append(line)
-        if view.identity_line:
-            lines.append("")
-            lines.append(view.identity_line)
-        if view.topup_url:
-            lines.append("")
-            lines.append(f"Manage billing on the portal: {view.topup_url}")
-            lines.append("Top up and manage billing in the browser — your balance updates here after.")
-        return "\n".join(lines)
-
     def _context_breakdown_block(self, agent, source, expanded: bool) -> list[str]:
         """Render the /context per-category block (plain text, no grid).
 
@@ -5781,7 +5747,6 @@ class GatewaySlashCommandsMixin:
         # Fetch account usage off the event loop so slow provider APIs don't
         # block the gateway. Failures are non-fatal -- account_lines stays [].
         account_lines: list[str] = []
-        credits_lines: list[str] = []
         if provider:
             try:
                 account_snapshot = await asyncio.to_thread(
@@ -5794,21 +5759,6 @@ class GatewaySlashCommandsMixin:
                 account_snapshot = None
             if account_snapshot:
                 account_lines = render_account_usage_lines(account_snapshot, markdown=True)
-
-        # ── Clover credits magnitudes + monthly-grant % gauge ─────────────
-        # Shared with the CLI / TUI /usage block via clover_credits_lines(): a single
-        # auth-gate + portal-fetch + render path (which also honors the dev fixture).
-        # Run off the event loop. The helper gates on "a Clover account is logged in"
-        # — NOT the inference provider and NOT nested under `if provider:` — so a
-        # Clover-credentialled user running inference elsewhere (or with none resident)
-        # still sees their balance. NO recovery trigger: messaging binds no notice
-        # consumer, so /usage only displays. Fail-open: never break /usage.
-        try:
-            from agent.account_usage import clover_credits_lines
-
-            credits_lines = await asyncio.to_thread(clover_credits_lines, markdown=True)
-        except Exception:
-            credits_lines = []  # fail-open: never break /usage
 
         if agent and hasattr(agent, "session_total_tokens") and agent.session_api_calls > 0:
             lines = []
@@ -5854,9 +5804,6 @@ class GatewaySlashCommandsMixin:
             if account_lines:
                 lines.append("")
                 lines.extend(account_lines)
-            if credits_lines:
-                lines.append("")
-                lines.extend(credits_lines)
 
             return "\n".join(lines)
 
@@ -5876,18 +5823,9 @@ class GatewaySlashCommandsMixin:
             if account_lines:
                 lines.append("")
                 lines.extend(account_lines)
-            if credits_lines:
-                lines.append("")
-                lines.extend(credits_lines)
             return "\n".join(lines)
-        if account_lines or credits_lines:
-            # account-only, credits-only, or both — joined with a blank divider.
-            parts = list(account_lines)
-            if credits_lines:
-                if parts:
-                    parts.append("")
-                parts.extend(credits_lines)
-            return "\n".join(parts)
+        if account_lines:
+            return "\n".join(account_lines)
         return t("gateway.usage.no_data")
 
     async def _handle_insights_command(self, event: MessageEvent) -> str:
@@ -6361,7 +6299,14 @@ class GatewaySlashCommandsMixin:
 
         return await loop.run_in_executor(None, _collect_and_upload)
 
-    async def _handle_update_command(self, event: MessageEvent) -> str:
+    async def _handle_repair_command(self, event: MessageEvent) -> str:
+        """Use the update IPC/watch path, with identical platform and admin access."""
+        denied = self._check_slash_access(event.source, "repair")
+        if denied:
+            return denied
+        return await self._handle_update_command(event, action="repair")
+
+    async def _handle_update_command(self, event: MessageEvent, *, action: str = "update") -> str:
         """Handle /update command — update Clover Cognition to the latest version.
 
         Spawns ``clover update`` in a detached session (via ``setsid``) so it
@@ -6389,13 +6334,13 @@ class GatewaySlashCommandsMixin:
             except Exception:
                 return t("gateway.update.platform_not_messaging")
 
-        if is_managed():
+        if action == "update" and is_managed():
             return f"✗ {format_managed_message('update Clover Cognition')}"
 
         project_root = Path(__file__).parent.parent.resolve()
         git_dir = project_root / '.git'
 
-        if not git_dir.exists():
+        if action == "update" and not git_dir.exists():
             return t("gateway.update.not_git_repo")
 
         clover_cmd = _resolve_clover_bin()
@@ -6407,6 +6352,7 @@ class GatewaySlashCommandsMixin:
         exit_code_path = _clover_home / ".update_exit_code"
         session_key = self._session_key_for_source(event.source)
         pending = {
+            "action": action,
             "platform": event.source.platform.value,
             "chat_id": event.source.chat_id,
             "chat_type": event.source.chat_type,
@@ -6477,7 +6423,7 @@ class GatewaySlashCommandsMixin:
                         sys.executable, "-c", helper,
                         str(output_path), str(exit_code_path),
                         sys.executable, "-m", "clover_cli.main",
-                        "update", "--gateway",
+                        action, *( ["--gateway"] if action == "update" else [] ),
                     ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -6486,8 +6432,9 @@ class GatewaySlashCommandsMixin:
             else:
                 clover_cmd_str = " ".join(shlex.quote(part) for part in clover_cmd)
                 update_cmd = (
-                    f"PYTHONUNBUFFERED=1 {clover_cmd_str} update --gateway"
-                    f" > {shlex.quote(str(output_path))} 2>&1; "
+                    f"PYTHONUNBUFFERED=1 {clover_cmd_str} {action}"
+                    + (" --gateway" if action == "update" else "")
+                    + f" > {shlex.quote(str(output_path))} 2>&1; "
                     # Avoid `status=$?`: `status` is a read-only special parameter
                     # in zsh, and this command string is copied/reused in macOS/zsh
                     # operator wrappers. Keep the template zsh-safe even though this
@@ -6517,4 +6464,4 @@ class GatewaySlashCommandsMixin:
             return t("gateway.update.start_failed", error=e)
 
         self._schedule_update_notification_watch()
-        return t("gateway.update.starting")
+        return "Checking and safely repairing Clover; I'll report back here." if action == "repair" else t("gateway.update.starting")

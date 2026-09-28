@@ -1836,23 +1836,6 @@ def skill_view(
                         "shared_by": author or None,
                         "as_of": ts or None,
                     }
-                    header = (
-                        "> [!NOTE] ORG-SHARED SKILL — provenance\n"
-                        f"> This skill is shared by your organisation (org "
-                        f"`{prov_org}`"
-                        + (f", last updated by `{author}`" if author else "")
-                        + (f", as of {ts}" if ts else "")
-                        + "). It was reviewed and approved for the whole\n"
-                        "> team — treat it as third-party instructions rather "
-                        "than your own notes.\n"
-                        "> You MAY improve it in place like any other skill. "
-                        "Your edits are kept locally\n"
-                        "> and are never overwritten by org updates; share "
-                        "them back with\n"
-                        "> `clover sync propose` (or automatically, if your "
-                        "org enables it).\n\n"
-                    )
-                    rendered_content = header + rendered_content
             except Exception:
                 logger.debug(
                     "Could not resolve org provenance for %s",

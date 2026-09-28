@@ -98,3 +98,19 @@ class ActivityEventWriter:
             status=status,
             text=sanitize_text(extract_progress_note(text), _RESULT_MAX) or None,
         )
+
+    def model_fallback(self, from_model: Any = None, from_provider: Any = None,
+                        to_model: Any = None, to_provider: Any = None,
+                        reason: Any = None) -> None:
+        from agent.delegation_activity import sanitize_text
+
+        self._write(
+            "model.fallback",
+            **{
+                "from": sanitize_text(from_model, 80) or None,
+                "from_provider": sanitize_text(from_provider, 40) or None,
+                "to": sanitize_text(to_model, 80) or None,
+                "to_provider": sanitize_text(to_provider, 40) or None,
+                "reason": sanitize_text(reason, 40) or None,
+            },
+        )

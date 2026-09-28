@@ -13,7 +13,7 @@ Pipeline
    - Fetches the master URL if disk cache is stale or missing.
    - On any fetch failure, keeps using the stale cache (or empty dict).
 
-2. ``get_curated_openrouter_models()`` / ``get_curated_clover_models()`` —
+2. ``get_curated_openrouter_models()`` —
    thin accessors returning the shapes existing callers expect. Each
    falls back to the in-repo hardcoded list on any lookup failure.
 
@@ -64,15 +64,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CATALOG_URL = (
     "docs/api/model-catalog.json"
-)
-# Fallback fetch chain. The Docusaurus site is served through Vercel, which
-# occasionally returns HTTP 403 + x-vercel-mitigated: challenge for non-
-# browser clients (urllib, curl). When that happens the disk cache goes
-# stale and new model releases never reach the picker. The raw GitHub URL
-# is the same manifest published from the same repo and is not bot-gated,
-# so we fall through to it whenever the primary URL fails.
-DEFAULT_CATALOG_FALLBACK_URLS: tuple[str, ...] = (
-    "",
 )
 DEFAULT_TTL_HOURS = 1
 DEFAULT_FETCH_TIMEOUT = 8.0
@@ -152,26 +143,17 @@ def _fetch_manifest(url: str, timeout: float) -> dict[str, Any] | None:
 def _fetch_manifest_with_fallback(
     primary_url: str,
     timeout: float,
-    fallback_urls: tuple[str, ...] = DEFAULT_CATALOG_FALLBACK_URLS,
 ) -> dict[str, Any] | None:
-    """Try ``primary_url`` first, then walk ``fallback_urls``.
+    """Fetch ``primary_url``, or None when it fails or fails validation.
 
-    Returns the first manifest that fetches and validates, or None when
-    every URL fails. Skips fallback URLs identical to the primary so an
-    operator who configured the catalog URL to point at the raw GitHub
-    copy doesn't double-fetch.
+    Historically this also walked a fallback chain (a raw-GitHub mirror of
+    the manifest, used when the primary docs-site fetch was bot-gated).
+    That mirror lived under the docs site's own repo tree, which is no
+    longer shipped, so there is no working fallback URL to walk — every
+    failure now falls through to ``get_catalog()``'s own stale-disk-cache
+    handling instead.
     """
-    data = _fetch_manifest(primary_url, timeout)
-    if data is not None:
-        return data
-    for url in fallback_urls:
-        if not url or url == primary_url:
-            continue
-        data = _fetch_manifest(url, timeout)
-        if data is not None:
-            logger.info("model catalog primary URL failed; using fallback %s", url)
-            return data
-    return None
+    return _fetch_manifest(primary_url, timeout)
 
 
 def _validate_manifest(data: Any) -> bool:
@@ -301,7 +283,7 @@ def get_catalog(*, force_refresh: bool = False) -> dict[str, Any]:
 
     # Stale-while-revalidate: an expired disk copy is served immediately and
     # refreshed off-thread, so interactive surfaces (the /model picker calls
-    # this via get_curated_clover_model_ids on every open) never block on the
+    # this on every open) never block on the
     # manifest fetch. Only a cold cache (no disk copy at all) still blocks.
     if not force_refresh and disk_data is not None:
         _catalog_cache = disk_data
@@ -378,22 +360,6 @@ def get_curated_openrouter_models() -> list[tuple[str, str]] | None:
             continue
         desc = str(m.get("description") or "")
         out.append((mid, desc))
-    return out or None
-
-
-def get_curated_clover_models() -> list[str] | None:
-    """Return Clover Portal's curated list of model ids from the manifest.
-
-    Returns ``None`` when the manifest is unavailable.
-    """
-    block = _get_provider_block("clover")
-    if not block:
-        return None
-    out: list[str] = []
-    for m in block.get("models", []):
-        mid = str(m.get("id") or "").strip()
-        if mid:
-            out.append(mid)
     return out or None
 
 

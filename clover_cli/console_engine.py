@@ -932,10 +932,6 @@ class CloverConsoleEngine:
             confirmation="Send this message?",
         )
 
-        # portal family removed 2026-08-30: the hosted service it fronts is not
-        # run by this fork, and its address is empty, so every path through it
-        # dead-ended with a protocol error. See clover_cli/main.py.
-
         _register_command_family(
             self,
             root="project",
@@ -1205,8 +1201,6 @@ class CloverConsoleEngine:
             ("profile", "alias"): "`profile alias` creates shell wrappers and is not available in Clover Console.",
             ("skills", "config"): "`skills config` is interactive and is not available in Clover Console.",
             ("skills", "publish"): "`skills publish` is not available in Clover Console.",
-            ("portal", "login"): "`portal login` is interactive and is not available in Clover Console.",
-            ("portal", "open"): "`portal open` opens a browser and is not available in Clover Console.",
             ("kanban", "tail"): "`kanban tail` streams output and is not available in Clover Console.",
             ("kanban", "watch"): "`kanban watch` streams output and is not available in Clover Console.",
             ("kanban", "daemon"): "`kanban daemon` starts a service and is not available in Clover Console.",

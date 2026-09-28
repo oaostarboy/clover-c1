@@ -40,7 +40,8 @@ class TestShowConfigCredentialSource:
             _make_stand_in(cli_key="sk-proj-WRONGVENDORKEY1234", agent_key="clover-REALKEY-abcdef9876"),
             capsys,
         )
-        assert "clover-REA" in out
+        # show_config masks to key[:8] + "..." + key[-4:].
+        assert "clover-R...9876" in out
         assert "sk-proj-" not in out
 
     def test_falls_back_to_cli_key_without_agent(self, capsys):

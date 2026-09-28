@@ -174,19 +174,9 @@ class TestTavilyAvailability:
             os.environ.pop("TAVILY_API_KEY", None)
             assert _is_backend_available("tavily") is True
 
-    def test_keyless_does_not_preempt_managed_firecrawl(self):
-        """No TAVILY_API_KEY + Clover gateway ready → firecrawl, not keyless tavily."""
-        from tools.web_tools import _get_backend
-        with patch("tools.web_tools._load_web_config", return_value={}), \
-             patch("tools.web_tools._is_tool_gateway_ready", return_value=True), \
-             patch("tools.web_tools._ddgs_package_importable", return_value=False):
-            os.environ.pop("TAVILY_API_KEY", None)
-            assert _get_backend() == "firecrawl"
-
     def test_keyless_does_not_preempt_ddgs(self):
         from tools.web_tools import _get_backend
         with patch("tools.web_tools._load_web_config", return_value={}), \
-             patch("tools.web_tools._is_tool_gateway_ready", return_value=False), \
              patch("tools.web_tools._ddgs_package_importable", return_value=True):
             os.environ.pop("TAVILY_API_KEY", None)
             assert _get_backend() == "ddgs"
@@ -198,7 +188,6 @@ class TestTavilyAvailability:
         """
         from tools.web_tools import _get_backend
         with patch("tools.web_tools._load_web_config", return_value={}), \
-             patch("tools.web_tools._is_tool_gateway_ready", return_value=False), \
              patch("tools.web_tools._ddgs_package_importable", return_value=False), \
              patch("tools.web_tools._list_registered_web_providers", return_value=[]), \
              patch("agent.web_search_registry._keyless_tier_enabled", return_value=False):
@@ -209,15 +198,13 @@ class TestTavilyAvailability:
         """web.search_backend=tavily sticks even with no TAVILY_API_KEY."""
         from tools.web_tools import _get_search_backend
         with patch("tools.web_tools._load_web_config",
-                   return_value={"backend": "firecrawl", "search_backend": "tavily"}), \
-             patch("tools.web_tools._is_tool_gateway_ready", return_value=True):
+                   return_value={"backend": "firecrawl", "search_backend": "tavily"}):
             os.environ.pop("TAVILY_API_KEY", None)
             assert _get_search_backend() == "tavily"
 
     def test_check_web_api_key_when_tavily_configured_without_key(self):
         from tools.web_tools import check_web_api_key
         with patch("tools.web_tools._load_web_config", return_value={"backend": "tavily"}), \
-             patch("tools.web_tools._is_tool_gateway_ready", return_value=False), \
              patch("tools.web_tools.check_firecrawl_api_key", return_value=False), \
              patch("tools.web_tools._ddgs_package_importable", return_value=False), \
              patch("agent.web_search_registry.get_active_search_provider", return_value=None), \

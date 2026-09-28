@@ -478,85 +478,9 @@ class TestPollRetryPolicy:
         assert mock_get.call_count == 1
 
 
-# ---------------------------------------------------------------------------
-# Managed Clover gateway path
-# ---------------------------------------------------------------------------
-
-
-def _managed_cfg(
-    origin: str = "https://krea-gateway.example.com",
-    token: str = "clover-tok-abc",
-):
-    from types import SimpleNamespace
-
-    return SimpleNamespace(
-        vendor="krea",
-        gateway_origin=origin,
-        clover_user_token=token,
-        managed_mode=True,
-    )
-
-
-class TestManagedGateway:
-    def test_managed_submit_uses_gateway_origin_and_clover_token(self, monkeypatch):
-        """Managed mode submits to the gateway origin with the Clover token."""
-        import plugins.image_gen.krea as krea_mod
-        from plugins.image_gen.krea import KreaImageGenProvider
-
-        # Even with a direct key present, an active managed gateway wins.
-        monkeypatch.setattr(krea_mod, "_resolve_managed_krea_gateway", lambda: _managed_cfg())
-
-        submit = _submit_response()
-        poll = _poll_response(_completed_job())
-        with patch("plugins.image_gen.krea.requests.post", return_value=submit) as mock_post, \
-             patch("plugins.image_gen.krea.requests.get", return_value=poll) as mock_get, \
-             patch(
-                 "plugins.image_gen.krea.save_url_image",
-                 return_value=Path("/tmp/x.png"),
-             ), \
-             patch("plugins.image_gen.krea.time.sleep"):
-            result = KreaImageGenProvider().generate(prompt="A managed lamp", upscale=False)
-
-        assert result["success"] is True
-        post_url = mock_post.call_args[0][0]
-        assert post_url == (
-            "https://krea-gateway.example.com/generate/image/krea/krea-2/medium"
-        )
-        headers = mock_post.call_args.kwargs["headers"]
-        assert headers["Authorization"] == "Bearer clover-tok-abc"
-        # Idempotency key drives the gateway's per-generation billing boundary.
-        assert headers["x-idempotency-key"]
-        # Poll is bound to the same gateway + Clover token.
-        poll_url = mock_get.call_args[0][0]
-        assert poll_url.startswith("https://krea-gateway.example.com/jobs/")
-        poll_headers = mock_get.call_args.kwargs["headers"]
-        assert poll_headers["Authorization"] == "Bearer clover-tok-abc"
-
-
-    def test_managed_429_concurrency_hint(self, monkeypatch):
-        import requests as req_lib
-        import plugins.image_gen.krea as krea_mod
-        from plugins.image_gen.krea import KreaImageGenProvider
-
-        monkeypatch.setattr(krea_mod, "_resolve_managed_krea_gateway", lambda: _managed_cfg())
-
-        resp = req_lib.Response()
-        resp.status_code = 429
-        resp._content = b'{"error": {"message": "maximum number of concurrent jobs"}}'
-        resp.headers["Content-Type"] = "application/json"
-        resp.raise_for_status = MagicMock(side_effect=req_lib.HTTPError(response=resp))
-
-        with patch("plugins.image_gen.krea.requests.post", return_value=resp):
-            result = KreaImageGenProvider().generate(prompt="test")
-
-        assert result["success"] is False
-        assert "429" in result["error"]
-        assert "concurrency" in result["error"].lower()
-
-
 class TestExplicitModelOverride:
     def test_model_kwarg_overrides_config(self, monkeypatch):
-        """An explicit ``model`` kwarg (managed routing) wins over config/default."""
+        """An explicit ``model`` kwarg wins over config/default."""
         from plugins.image_gen.krea import _resolve_model
 
         model_id, meta = _resolve_model("krea-2-large")

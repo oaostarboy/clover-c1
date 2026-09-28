@@ -1,15 +1,15 @@
 """Tests for clover_cli.tools_config platform tool persistence."""
 
 import logging
+import shutil
 import subprocess
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from tools.browser_tool import AGENT_BROWSER_NPX_SPEC
-from clover_cli.clover_account import CloverPortalAccountInfo, CloverToolAccessInfo
-from clover_cli.clover_subscription import CloverSubscriptionFeatures
 from clover_cli.tools_config import (
     _DEFAULT_OFF_TOOLSETS,
     _RECENTLY_SHIPPED_TOOLSETS,
@@ -202,64 +202,6 @@ def test_save_platform_tools_preserves_mcp_server_names():
 
 
 
-
-def test_first_install_clover_auto_configures_video_gen(monkeypatch):
-    """When a Clover subscriber checks video_gen in the toolset checklist,
-    apply_clover_managed_defaults must write video_gen.provider and
-    video_gen.use_gateway so the FAL plugin can route through the gateway
-    at runtime.  Regression test for the bug where video_gen was marked as
-    auto-configured but no config was actually written."""
-    monkeypatch.setattr("clover_cli.clover_subscription.managed_clover_tools_enabled", lambda: True)
-    config = {
-        "model": {"provider": "clover"},
-        "platform_toolsets": {"cli": []},
-    }
-    for env_var in (
-        "VOICE_TOOLS_OPENAI_KEY",
-        "OPENAI_API_KEY",
-        "ELEVENLABS_API_KEY",
-        "FIRECRAWL_API_KEY",
-        "FIRECRAWL_API_URL",
-        "TAVILY_API_KEY",
-        "PARALLEL_API_KEY",
-        "BROWSERBASE_API_KEY",
-        "BROWSERBASE_PROJECT_ID",
-        "BROWSER_USE_API_KEY",
-        "FAL_KEY",
-    ):
-        monkeypatch.delenv(env_var, raising=False)
-
-    monkeypatch.setattr(
-        "clover_cli.tools_config._prompt_toolset_checklist",
-        lambda *args, **kwargs: {"video_gen"},
-    )
-    monkeypatch.setattr("clover_cli.tools_config.save_config", lambda config: None)
-    monkeypatch.setattr(
-        "clover_cli.tools_config._get_enabled_platforms",
-        lambda: ["cli"],
-    )
-    monkeypatch.setattr(
-        "clover_cli.clover_subscription.get_clover_portal_account_info",
-        lambda *args, **kwargs: CloverPortalAccountInfo(
-            logged_in=True,
-            source="jwt",
-            fresh=False,
-            paid_service_access=True,
-        ),
-    )
-
-    configured = []
-    monkeypatch.setattr(
-        "clover_cli.tools_config._configure_toolset",
-        lambda ts_key, config: configured.append(ts_key),
-    )
-
-    tools_command(first_install=True, config=config)
-
-    assert config["video_gen"]["provider"] == "clover"
-    assert "use_gateway" not in config["video_gen"]
-    # video_gen should NOT appear in the manual configure list — it's auto-configured
-    assert "video_gen" not in configured
 
 # ── Platform / toolset consistency ────────────────────────────────────────────
 
@@ -696,15 +638,13 @@ class TestImagegenBackendRegistry:
         assert "fal-ai/flux-2/klein/9b" in catalog
         assert "fal-ai/flux-2-pro" in catalog
 
-    def test_image_gen_providers_tagged_with_fal_backend(self):
-        """Both Clover Subscription and FAL.ai providers must carry the
-        imagegen_backend tag so _configure_provider fires the picker."""
+    def test_image_gen_providers_are_all_plugin_injected(self):
+        """image_gen has no hardcoded provider rows — FAL.ai (and any other
+        image_gen plugin) is injected at runtime by _visible_providers via
+        _plugin_image_gen_providers(), tagged with imagegen_backend/
+        image_gen_plugin_name so _configure_provider fires the picker."""
         from clover_cli.tools_config import TOOL_CATEGORIES
-        providers = TOOL_CATEGORIES["image_gen"]["providers"]
-        for p in providers:
-            assert p.get("imagegen_backend") == "fal", (
-                f"{p['name']} missing imagegen_backend tag"
-            )
+        assert TOOL_CATEGORIES["image_gen"]["providers"] == []
 
 
 class TestImagegenModelPicker:
@@ -879,94 +819,6 @@ def test_vision_picker_custom_endpoint(tmp_path, monkeypatch):
     save_env.assert_called_once_with("OPENAI_API_KEY", "sk-secret")
 
 
-
-
-# ─── provider_readiness_status ────────────────────────────────────────────────
-#
-# Server-side truth for the GUI "Ready" pill (issue: Capabilities tab showed
-# Ready for every zero-env-var provider row, including logged-out Clover
-# Subscription rows and never-installed KittenTTS/Piper).
-
-
-def _fake_features(*, logged_in: bool, paid: bool = True):
-    account = (
-        CloverPortalAccountInfo(
-            logged_in=True, source="jwt", fresh=False, paid_service_access=paid
-        )
-        if logged_in
-        else CloverPortalAccountInfo(
-            logged_in=False, source="none", fresh=False, paid_service_access=None
-        )
-    )
-    return SimpleNamespace(clover_auth_present=logged_in, account_info=account)
-
-
-def test_visible_providers_reuses_logged_out_feature_snapshot(monkeypatch):
-    import clover_cli.tools_config as tools_config
-
-    account = CloverPortalAccountInfo(
-        logged_in=False,
-        source="none",
-        fresh=False,
-        paid_service_access=None,
-    )
-    features = CloverSubscriptionFeatures(
-        subscribed=False,
-        clover_auth_present=False,
-        provider_is_clover=False,
-        features={},
-        account_info=account,
-    )
-    monkeypatch.setattr(
-        tools_config,
-        "get_clover_subscription_features",
-        lambda *args, **kwargs: pytest.fail("feature snapshot was resolved again"),
-    )
-
-    providers = _visible_providers(
-        TOOL_CATEGORIES["image_gen"], {}, features=features
-    )
-
-    assert any(
-        provider.get("managed_clover_feature") == "image_gen"
-        for provider in providers
-    )
-
-
-def test_visible_providers_reuses_pool_video_feature_snapshot(monkeypatch):
-    import clover_cli.tools_config as tools_config
-
-    account = CloverPortalAccountInfo(
-        logged_in=True,
-        source="jwt",
-        fresh=False,
-        paid_service_access=False,
-        tool_access=CloverToolAccessInfo(
-            enabled=True,
-            coverage={"fal-video": False},
-        ),
-    )
-    features = CloverSubscriptionFeatures(
-        subscribed=True,
-        clover_auth_present=True,
-        provider_is_clover=False,
-        features={},
-        account_info=account,
-    )
-    monkeypatch.setattr(
-        tools_config,
-        "get_clover_subscription_features",
-        lambda *args, **kwargs: pytest.fail("feature snapshot was resolved again"),
-    )
-
-    providers = _visible_providers(
-        TOOL_CATEGORIES["video_gen"], {}, features=features
-    )
-
-    assert not any(
-        provider.get("managed_clover_feature") == "video_gen"
-        for provider in providers
-    )
 
 
 
@@ -1219,3 +1071,159 @@ def test_explicit_plugin_toolset_admitted_against_real_a2a_plugin(monkeypatch):
         f"plugin-provided 'a2a' toolset dropped by _get_platform_tools "
         f"(Layer 2 of #81163); enabled={sorted(enabled)}"
     )
+
+
+# ── _has_agent_browser / _local_browser_runnable ──────────────────────────────
+
+
+def _block_legacy_agent_browser_checks(monkeypatch):
+    """Make the legacy checks (PATH lookup + local node_modules/.bin) find nothing."""
+    real_which = shutil.which
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda cmd, *args, **kwargs: (
+            None if cmd == "agent-browser" else real_which(cmd, *args, **kwargs)
+        ),
+    )
+    monkeypatch.setattr("clover_constants.agent_browser_runnable", lambda path: False)
+
+
+def test_has_agent_browser_true_for_npx_only_resolution(monkeypatch):
+    """No PATH binary and no runnable node_modules copy, but the browser_tool
+    cascade resolves the npx fallback: browser capability is available."""
+    _block_legacy_agent_browser_checks(monkeypatch)
+    import clover_cli.tools_config as tools_config
+    import tools.browser_tool as browser_tool
+
+    calls = []
+
+    def fake_find_agent_browser(*, validate=True):
+        calls.append({"validate": validate})
+        return "npx agent-browser"
+
+    monkeypatch.setattr(browser_tool, "_find_agent_browser", fake_find_agent_browser)
+    monkeypatch.setattr(
+        browser_tool, "_requires_real_termux_browser_install", lambda cmd: False
+    )
+
+    assert tools_config._has_agent_browser() is True
+    # A readiness probe must resolve without spawning the daemon.
+    assert calls and all(call["validate"] is False for call in calls)
+
+
+def test_has_agent_browser_false_for_termux_local_bare_npx(monkeypatch):
+    """On Termux in local mode the bare npx fallback is not a usable install."""
+    _block_legacy_agent_browser_checks(monkeypatch)
+    import clover_cli.tools_config as tools_config
+    import tools.browser_tool as browser_tool
+
+    monkeypatch.setattr(
+        browser_tool,
+        "_find_agent_browser",
+        lambda *, validate=True: "npx agent-browser",
+    )
+    monkeypatch.setattr(
+        browser_tool,
+        "_requires_real_termux_browser_install",
+        lambda cmd: cmd.strip() == "npx agent-browser",
+    )
+
+    assert tools_config._has_agent_browser() is False
+
+
+def test_has_agent_browser_false_when_nothing_resolvable(monkeypatch):
+    _block_legacy_agent_browser_checks(monkeypatch)
+    import clover_cli.tools_config as tools_config
+    import tools.browser_tool as browser_tool
+
+    def raise_not_found(*, validate=True):
+        raise FileNotFoundError("agent-browser CLI not found")
+
+    monkeypatch.setattr(browser_tool, "_find_agent_browser", raise_not_found)
+
+    assert tools_config._has_agent_browser() is False
+
+
+def test_has_agent_browser_import_failure_falls_back_to_path_check(monkeypatch):
+    """If tools.browser_tool cannot be imported, the old PATH + node_modules
+    check must still answer (prior behaviour), not crash."""
+    import clover_cli.tools_config as tools_config
+
+    monkeypatch.setitem(sys.modules, "tools.browser_tool", None)
+    real_which = shutil.which
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda cmd, *args, **kwargs: (
+            "/fake/bin/agent-browser"
+            if cmd == "agent-browser"
+            else real_which(cmd, *args, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(
+        "clover_constants.agent_browser_runnable",
+        lambda path: path == "/fake/bin/agent-browser",
+    )
+
+    assert tools_config._has_agent_browser() is True
+
+
+def test_has_agent_browser_import_failure_falls_back_to_clover_managed_node_path(
+    monkeypatch, tmp_path
+):
+    """If tools.browser_tool cannot be imported, the managed-Node rung must
+    still find a runnable agent-browser under the Clover Node dir even when
+    it's absent from the probe process's PATH — the Windows installer shape
+    where install succeeded but the GUI still said needs setup."""
+    import clover_cli.tools_config as tools_config
+
+    monkeypatch.setitem(sys.modules, "tools.browser_tool", None)
+    managed_dir = tmp_path / "node"
+    managed_dir.mkdir()
+    managed_bin = managed_dir / "agent-browser"
+    managed_bin.write_text("#!/bin/sh\nexit 0\n")
+    managed_bin.chmod(0o755)
+
+    real_which = shutil.which
+    monkeypatch.setattr(
+        shutil,
+        "which",
+        lambda cmd, *args, **kwargs: (
+            None
+            if cmd == "agent-browser" and not kwargs.get("path")
+            else real_which(cmd, *args, **kwargs)
+        ),
+    )
+    monkeypatch.setattr(
+        "clover_constants.with_clover_node_path", lambda: {"PATH": str(managed_dir)}
+    )
+    monkeypatch.setattr(
+        "clover_constants.agent_browser_runnable",
+        lambda p: bool(p) and str(p) == str(managed_bin),
+    )
+
+    assert tools_config._has_agent_browser() is True
+
+
+def test_has_agent_browser_import_failure_and_no_binary_is_false(monkeypatch):
+    import clover_cli.tools_config as tools_config
+
+    monkeypatch.setitem(sys.modules, "tools.browser_tool", None)
+    _block_legacy_agent_browser_checks(monkeypatch)
+
+    assert tools_config._has_agent_browser() is False
+
+
+def test_local_browser_runnable_false_without_chromium(monkeypatch):
+    """agent-browser present but Chromium absent must NOT advertise local
+    browser readiness — the runtime (check_browser_requirements) refuses
+    local mode without a Chromium build, so the setup/status surface must
+    report unavailable too, otherwise the first real call hangs/fails."""
+    import clover_cli.tools_config as tools_config
+
+    monkeypatch.setattr(tools_config, "_has_agent_browser", lambda: True)
+    monkeypatch.setattr("tools.browser_tool._chromium_installed", lambda: False)
+    monkeypatch.setattr("tools.browser_tool._using_lightpanda_engine", lambda: False)
+
+    assert tools_config._local_browser_runnable() is False

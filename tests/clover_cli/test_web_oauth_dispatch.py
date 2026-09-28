@@ -44,19 +44,6 @@ def _make_profile_home(tmp_path, monkeypatch, profile="coder"):
     return profile_home
 
 
-def _fake_clover_device_data():
-    return {
-        "device_code": "device-code",
-        "user_code": "CLOVER-1234",
-        "verification_uri": "",
-        "verification_uri_complete": (
-            ""
-        ),
-        "expires_in": 600,
-        "interval": 5,
-    }
-
-
 def _invoke_scope_refusal():
     request = httpx.Request("POST", "")
     response = httpx.Response(
@@ -477,58 +464,6 @@ def test_cancel_oauth_session_marks_dict_cancelled_before_popping(tmp_path, monk
     assert resp.json() == {"ok": True, "session_id": session_id}
     assert session_id not in ws._oauth_sessions
     assert worker_ref["cancelled"] is True
-
-
-def test_clover_dashboard_poller_preserves_effective_scope_when_token_omits_scope(monkeypatch):
-    from clover_cli import auth as auth_mod
-    from clover_cli import web_server as ws
-
-    session_id = "clover-effective-scope-test"
-    ws._oauth_sessions[session_id] = {
-        "session_id": session_id,
-        "provider": "clover",
-        "flow": "device_code",
-        "created_at": time.time(),
-        "status": "pending",
-        "error_message": None,
-        "portal_base_url": "",
-        "client_id": "clover-cli",
-        "device_code": "device-code",
-        "interval": 5,
-        "expires_at": time.time() + 600,
-        "scope": auth_mod.DEFAULT_CLOVER_SCOPE,
-    }
-    captured_state = {}
-
-    def fake_refresh_clover_oauth_from_state(state, **kwargs):
-        captured_state.update(state)
-        return {**state, "agent_key": "jwt-agent-key"}
-
-    monkeypatch.setattr(
-        auth_mod,
-        "_poll_for_token",
-        lambda **kwargs: {
-            "access_token": "access-token",
-            "refresh_token": "refresh-token",
-            "expires_in": 3600,
-            "token_type": "Bearer",
-        },
-    )
-    monkeypatch.setattr(
-        auth_mod,
-        "refresh_clover_oauth_from_state",
-        fake_refresh_clover_oauth_from_state,
-    )
-    monkeypatch.setattr(auth_mod, "persist_clover_credentials", lambda state: None)
-
-    try:
-        ws._clover_poller(session_id)
-        assert captured_state["scope"] == auth_mod.DEFAULT_CLOVER_SCOPE
-        assert ws._oauth_sessions[session_id]["status"] == "approved"
-    finally:
-        ws._oauth_sessions.pop(session_id, None)
-
-
 
 
 def test_xai_oauth_listed_as_device_code_flow():

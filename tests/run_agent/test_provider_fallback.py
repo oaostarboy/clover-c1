@@ -215,75 +215,16 @@ class TestFallbackChainAdvancement:
             assert mock_rpc.call_args.kwargs["explicit_api_key"] == "env-secret"
 
 
-    def test_clover_anthropic_fallback_uses_the_messages_wire(self):
-        """Portal Claude fallbacks must not stay on chat_completions.
-
-        ``resolve_provider_client`` still returns an OpenAI client for Clover;
-        activation has to re-derive api_mode from the model and rebuild the
-        Anthropic client — otherwise the turn POSTs /chat/completions.
-        """
-        portal = ""
-        fbs = [
-            {
-                "provider": "clover",
-                "model": "anthropic/claude-opus-4.8",
-            }
-        ]
-        agent = _make_agent(fallback_model=fbs)
-        rebuilt = {"count": 0}
-
-        def _fake_build(api_key, base_url, timeout=None, **kwargs):
-            rebuilt["count"] += 1
-            rebuilt["api_key"] = api_key
-            rebuilt["base_url"] = base_url
-            return MagicMock(name="anthropic-client")
-
-        with (
-            patch(
-                "agent.chat_completion_helpers._fallback_entry_unavailable_without_network",
-                return_value=None,
-            ),
-            patch(
-                "agent.auxiliary_client.resolve_provider_client",
-                return_value=(
-                    _mock_client(base_url=portal, api_key="portal-jwt"),
-                    "anthropic/claude-opus-4.8",
-                ),
-            ),
-            patch(
-                "clover_cli.model_normalize.normalize_model_for_provider",
-                side_effect=lambda m, p: m,
-            ),
-            patch(
-                "agent.anthropic_adapter.build_anthropic_client",
-                side_effect=_fake_build,
-            ),
-        ):
-            assert agent._try_activate_fallback() is True
-
-        assert agent.api_mode == "anthropic_messages"
-        assert agent.provider == "clover"
-        assert agent.model == "anthropic/claude-opus-4.8"
-        assert agent.client is None
-        assert rebuilt["count"] == 1
-        assert rebuilt["api_key"] == "portal-jwt"
-        assert rebuilt["base_url"] == portal
-        assert agent._anthropic_client is not None
-
-    def test_clover_non_anthropic_fallback_stays_on_chat_completions(self):
-        portal = ""
-        fbs = [{"provider": "clover", "model": "clover-4-405b"}]
+    def test_non_anthropic_fallback_stays_on_chat_completions(self):
+        base_url = "https://openrouter.ai/api/v1"
+        fbs = [{"provider": "openrouter", "model": "anthropic/claude-sonnet-4.6"}]
         agent = _make_agent(fallback_model=fbs)
         with (
             patch(
-                "agent.chat_completion_helpers._fallback_entry_unavailable_without_network",
-                return_value=None,
-            ),
-            patch(
                 "agent.auxiliary_client.resolve_provider_client",
                 return_value=(
-                    _mock_client(base_url=portal, api_key="portal-jwt"),
-                    "clover-4-405b",
+                    _mock_client(base_url=base_url, api_key="or-key"),
+                    "anthropic/claude-sonnet-4.6",
                 ),
             ),
             patch(

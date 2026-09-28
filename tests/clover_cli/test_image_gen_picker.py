@@ -6,8 +6,6 @@ Covers `_plugin_image_gen_providers`, `_visible_providers`, and
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from agent import image_gen_registry
@@ -144,29 +142,4 @@ class TestConfigWriting:
 
         assert config["image_gen"]["provider"] == "noenv"
         assert config["image_gen"]["model"] == "noenv-model-v1"
-
-
-    def test_plugin_provider_active_overrides_managed_clover_active_label(self, monkeypatch):
-        from clover_cli import tools_config
-
-        monkeypatch.setattr(
-            tools_config,
-            "get_clover_subscription_features",
-            lambda config, **kwargs: SimpleNamespace(
-                features={"image_gen": SimpleNamespace(managed_by_clover=True)}
-            ),
-        )
-
-        config = {"image_gen": {"provider": "openai", "use_gateway": False}}
-        clover_row = {
-            "name": "Clover Subscription",
-            "managed_clover_feature": "image_gen",
-        }
-        openai_row = {
-            "name": "OpenAI",
-            "image_gen_plugin_name": "openai",
-        }
-
-        assert tools_config._is_provider_active(openai_row, config) is True
-        assert tools_config._is_provider_active(clover_row, config) is False
 

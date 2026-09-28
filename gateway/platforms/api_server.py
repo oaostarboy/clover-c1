@@ -2271,10 +2271,6 @@ class APIServerAdapter(BasePlatformAdapter):
             ("POST", "/v1/runs/{run_id}/steer", self._handle_steer_run),
             ("POST", "/v1/runs/{run_id}/stop", self._handle_stop_run),
         ]
-        if _CRON_AVAILABLE:
-            # Chronos managed-cron fire webhook (NAS → agent). Authenticated
-            # by a NAS-minted JWT (NOT API_SERVER_KEY).
-            routes.append(("POST", "/api/cron/fire", self._handle_cron_fire))
         return routes
 
     # ------------------------------------------------------------------
@@ -4108,7 +4104,6 @@ class APIServerAdapter(BasePlatformAdapter):
                 _get_effective_configurable_toolsets,
                 _get_platform_tools,
                 _toolset_has_keys,
-                get_clover_subscription_features,
             )
             from toolsets import resolve_toolset
 
@@ -4118,7 +4113,6 @@ class APIServerAdapter(BasePlatformAdapter):
                 "api_server",
                 include_default_mcp_servers=False,
             )
-            features = get_clover_subscription_features(config)
             data: List[Dict[str, Any]] = []
             for name, label, desc in _get_effective_configurable_toolsets():
                 try:
@@ -4131,7 +4125,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     "label": label,
                     "description": desc,
                     "enabled": is_enabled,
-                    "configured": _toolset_has_keys(name, config, features=features),
+                    "configured": _toolset_has_keys(name, config),
                     "tools": tools,
                 })
         except Exception:
@@ -6819,153 +6813,6 @@ class APIServerAdapter(BasePlatformAdapter):
         except Exception as e:
             return web.json_response({"error": _redact_api_error_text(e)}, status=500)
 
-    async def _handle_cron_fire(self, request: "web.Request") -> "web.Response":
-        """POST /api/cron/fire — Chronos managed-cron fire webhook (NAS → agent).
-
-        Authenticated by a NAS-minted JWT (verified via the pluggable
-        fire-verifier), NOT API_SERVER_KEY — NAS holds no API server key, and
-        this is the only inbound that can trigger remote job execution, so it
-        gets its own purpose-scoped token check.
-
-        Returns 202 + runs the job in the background so a long agent turn never
-        trips NAS's HTTP timeout. The store CAS claim inside fire_due guards
-        against double-fire on a NAS/scheduler retry.
-        """
-        from clover_cli.config import cfg_get, load_config
-        from plugins.cron_providers.chronos.verify import get_fire_verifier
-
-        auth = request.headers.get("Authorization", "")
-        token = auth[7:].strip() if auth.startswith("Bearer ") else ""
-
-        cfg = load_config()
-        verifier = get_fire_verifier()
-        verify_kwargs = dict(
-            token=token,
-            expected_audience=cfg_get(cfg, "cron", "chronos", "expected_audience", default=""),
-            jwks_or_key=cfg_get(cfg, "cron", "chronos", "nas_jwks_url", default="") or None,
-            issuer=cfg_get(cfg, "cron", "chronos", "portal_url", default="") or None,
-        )
-        try:
-            if asyncio.iscoroutinefunction(verifier):
-                claims = await verifier(**verify_kwargs)
-            else:
-                # The verifier resolves the NAS signing key from a JWKS URL,
-                # which is a synchronous HTTP GET on a cache miss (cold client
-                # or a rotated kid) — keep that blocking I/O off the event loop
-                # so a slow or rate-limited portal can't stall every other
-                # adapter sharing this loop. Same hardening the platform HTTP
-                # event verifier already got.
-                claims = await asyncio.to_thread(verifier, **verify_kwargs)
-        except Exception:
-            # Fail closed: a crashing verifier must never admit a fire — this
-            # is the only inbound that can trigger remote job execution.
-            logger.exception("cron fire: verifier crashed; rejecting token")
-            claims = None
-        if claims is None:
-            logger.warning(
-                "cron fire: rejected invalid token: %s",
-                self._request_audit_log_suffix(request),
-            )
-            return web.json_response({"error": "invalid fire token"}, status=401)
-        draining = self._draining_response()
-        if draining is not None:
-            return draining
-
-        with _reserve_pending_api_work(self) as reservation:
-            try:
-                body = await request.json()
-            except Exception:
-                body = {}
-            job_id = (body or {}).get("job_id")
-            if not job_id:
-                return web.json_response({"error": "missing job_id"}, status=400)
-
-            from cron.scheduler_provider import (
-                provider_supports_split_fire,
-                resolve_cron_scheduler,
-            )
-            provider = resolve_cron_scheduler()
-
-            loop = asyncio.get_running_loop()
-            # Live adapters for delivery parity with the built-in ticker
-            # (gateway/run.py passes runner.adapters to the in-process
-            # scheduler). Without them, _deliver_result cannot resolve a live
-            # transport, so E2EE platforms and relay-fronted logical platforms
-            # (whose only send path IS the live relay adapter — no native
-            # credential exists) fail with "platform 'X' not
-            # configured/enabled" on every external-provider fire even though
-            # the same job delivers fine under the built-in ticker.
-            runner = self.gateway_runner or request.app.get("gateway_runner")
-            if runner is None:
-                try:
-                    from gateway.run import _gateway_runner_ref
-
-                    runner = _gateway_runner_ref()
-                except Exception:
-                    runner = None
-            adapters = getattr(runner, "adapters", None) or None
-
-            if not provider_supports_split_fire(provider):
-                # Legacy single-phase provider: it overrides the documented
-                # ``fire_due`` hook (custom claim/re-arm/telemetry) but
-                # inherits the base ``claim_fire`` — driving it through the
-                # split claim path would silently bypass that override.
-                task = asyncio.create_task(
-                    asyncio.to_thread(
-                        provider.fire_due,
-                        job_id,
-                        adapters=adapters,
-                        loop=loop,
-                    )
-                )
-                reservation["detached"] = True
-                task.add_done_callback(
-                    lambda _task: _release_pending_api_work(self, reservation)
-                )
-                try:
-                    self._background_tasks.add(task)
-                    task.add_done_callback(self._background_tasks.discard)
-                except (TypeError, AttributeError):
-                    pass
-                return web.json_response(
-                    {"status": "accepted", "job_id": job_id}, status=202
-                )
-
-            # Persist the attempt and exact store owner before acknowledging NAS.
-            # A failure here is retryable and the reservation remains attached.
-            try:
-                claimed_job = await asyncio.to_thread(provider.claim_fire, job_id)
-            except Exception as exc:
-                logger.error("cron fire admission failed for %s: %s", job_id, exc)
-                return web.json_response(
-                    {"error": "cron fire admission failed", "job_id": job_id},
-                    status=503,
-                )
-            if claimed_job is None:
-                return web.json_response(
-                    {"status": "duplicate", "job_id": job_id},
-                    status=200,
-                )
-
-            task = asyncio.create_task(
-                asyncio.to_thread(
-                    provider.fire_claimed,
-                    claimed_job,
-                    adapters=adapters,
-                    loop=loop,
-                )
-            )
-            reservation["detached"] = True
-            task.add_done_callback(
-                lambda _task: _release_pending_api_work(self, reservation)
-            )
-            try:
-                self._background_tasks.add(task)
-                task.add_done_callback(self._background_tasks.discard)
-            except (TypeError, AttributeError):
-                pass
-
-            return web.json_response({"status": "accepted", "job_id": job_id}, status=202)
 
 
     # ------------------------------------------------------------------

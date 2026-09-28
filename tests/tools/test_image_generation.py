@@ -4,7 +4,7 @@ Covers the pure logic of the new wrapper: catalog integrity, the three size
 families (image_size_preset / aspect_ratio / gpt_literal), the supports
 whitelist, default merging, GPT quality override, and model resolution
 fallback. Does NOT exercise fal_client submission — that's covered by
-tests/tools/test_managed_media_gateways.py.
+tests/tools/test_image_generation_image_to_image.py.
 """
 
 from __future__ import annotations
@@ -365,91 +365,8 @@ class TestRegistryIntegration:
         assert set(enum) == {"landscape", "square", "portrait"}
 
 
-# ---------------------------------------------------------------------------
-# Managed gateway 4xx translation
-# ---------------------------------------------------------------------------
-
-class _MockResponse:
-    def __init__(self, status_code: int):
-        self.status_code = status_code
-
-
-class _MockHttpxError(Exception):
-    """Simulates httpx.HTTPStatusError which exposes .response.status_code."""
-    def __init__(self, status_code: int, message: str = "Bad Request"):
-        super().__init__(message)
-        self.response = _MockResponse(status_code)
-
-
-class TestExtractHttpStatus:
-    """Status-code extraction should work across exception shapes."""
-
-    def test_extracts_from_response_attr(self, image_tool):
-        exc = _MockHttpxError(403)
-        assert image_tool._extract_http_status(exc) == 403
-
-
-    def test_response_attr_without_status_code_returns_none(self, image_tool):
-        class OddResponse:
-            pass
-        exc = Exception("weird")
-        exc.response = OddResponse()  # type: ignore[attr-defined]
-        assert image_tool._extract_http_status(exc) is None
-
-
-class TestManagedGatewayErrorTranslation:
-    """4xx from the Clover managed gateway should be translated to a user-actionable message."""
-
-    def test_4xx_translates_to_value_error_with_remediation(self, image_tool, monkeypatch):
-        """403 from managed gateway → ValueError mentioning FAL_KEY + clover tools."""
-        from unittest.mock import MagicMock
-
-        # Simulate: managed mode active, managed submit raises 4xx.
-        managed_gateway = MagicMock()
-        managed_gateway.gateway_origin = "https://fal-queue-gateway.example.com"
-        managed_gateway.clover_user_token = "test-token"
-        monkeypatch.setattr(image_tool, "_resolve_managed_fal_gateway",
-                            lambda: managed_gateway)
-
-        bad_request = _MockHttpxError(403, "Forbidden")
-        mock_managed_client = MagicMock()
-        mock_managed_client.submit.side_effect = bad_request
-        monkeypatch.setattr(image_tool, "_get_managed_fal_client",
-                            lambda gw: mock_managed_client)
-
-        with pytest.raises(ValueError) as exc_info:
-            image_tool._submit_fal_request("fal-ai/nano-banana-pro", {"prompt": "x"})
-
-        msg = str(exc_info.value)
-        assert "fal-ai/nano-banana-pro" in msg
-        assert "403" in msg
-        assert "FAL_KEY" in msg
-        assert "clover tools" in msg
-        # Original exception chained for debugging
-        assert exc_info.value.__cause__ is bad_request
-
-
-    def test_non_http_exception_from_managed_bubbles_up(self, image_tool, monkeypatch):
-        """Connection errors, timeouts, etc. from managed mode aren't 4xx —
-        they should bubble up unchanged so callers can retry or diagnose."""
-        from unittest.mock import MagicMock
-
-        managed_gateway = MagicMock()
-        monkeypatch.setattr(image_tool, "_resolve_managed_fal_gateway",
-                            lambda: managed_gateway)
-
-        conn_error = ConnectionError("network down")
-        mock_managed_client = MagicMock()
-        mock_managed_client.submit.side_effect = conn_error
-        monkeypatch.setattr(image_tool, "_get_managed_fal_client",
-                            lambda gw: mock_managed_client)
-
-        with pytest.raises(ConnectionError):
-            image_tool._submit_fal_request("fal-ai/flux-2-pro", {"prompt": "x"})
-
-
 class TestKreaModelNormalization:
-    """Native ``krea-2-*`` detection for managed Krea routing."""
+    """Native ``krea-2-*`` model id detection."""
 
     def test_native_models_detected(self, image_tool):
         for mid in ("krea-2-medium", "krea-2-large", "krea-2-medium-turbo"):
@@ -461,61 +378,6 @@ class TestKreaModelNormalization:
         for mid in ("fal-ai/flux-2/klein/9b", "fal-ai/nano-banana-pro", None, "", 123):
             assert image_tool.is_krea_model(mid) is False
             assert image_tool._normalize_krea_model(mid) is None
-
-
-class TestManagedKreaRouting:
-    """`_maybe_route_managed_krea` only fires for Krea models in managed mode."""
-
-    def test_no_route_when_model_not_krea(self, image_tool, monkeypatch):
-        monkeypatch.setattr(image_tool, "_read_configured_image_provider", lambda: None)
-        monkeypatch.setattr(
-            image_tool, "_read_configured_image_model", lambda: "fal-ai/flux-2/klein/9b"
-        )
-        assert image_tool._maybe_route_managed_krea("p", "square") is None
-
-
-    def test_routes_native_krea_model_to_krea_plugin_in_managed_mode(
-        self, image_tool, monkeypatch
-    ):
-        from types import SimpleNamespace
-        from unittest.mock import MagicMock
-        import json as _json
-
-        monkeypatch.setattr(image_tool, "_read_configured_image_provider", lambda: None)
-        monkeypatch.setattr(
-            image_tool,
-            "_read_configured_image_model",
-            lambda: "krea-2-large",
-        )
-        import plugins.image_gen.krea as krea_mod
-
-        monkeypatch.setattr(
-            krea_mod,
-            "_resolve_managed_krea_gateway",
-            lambda: SimpleNamespace(
-                vendor="krea",
-                gateway_origin="https://krea-gateway.example.com",
-                clover_user_token="tok",
-                managed_mode=True,
-            ),
-        )
-
-        fake_provider = MagicMock()
-        fake_provider.generate.return_value = {"success": True, "image": "/tmp/x.png"}
-        monkeypatch.setattr(
-            "agent.image_gen_registry.get_provider", lambda name: fake_provider
-        )
-        monkeypatch.setattr(
-            "clover_cli.plugins._ensure_plugins_discovered", lambda *a, **k: None
-        )
-
-        out = image_tool._maybe_route_managed_krea("a cat", "portrait")
-        assert out is not None
-        assert _json.loads(out)["success"] is True
-        kwargs = fake_provider.generate.call_args.kwargs
-        assert kwargs["model"] == "krea-2-large"
-        assert kwargs["prompt"] == "a cat"
-        assert kwargs["aspect_ratio"] == "portrait"
 
 
 class TestFalKreaCatalog:
@@ -544,7 +406,6 @@ class TestUpscaleOptIn:
     def _run(self, image_tool, monkeypatch, *, model, upscale, upscaler_called):
         monkeypatch.setenv("FAL_IMAGE_MODEL", model)
         monkeypatch.setattr(image_tool, "fal_key_is_configured", lambda: True)
-        monkeypatch.setattr(image_tool, "_resolve_managed_fal_gateway", lambda: None)
         monkeypatch.setattr(
             image_tool, "_submit_fal_request",
             lambda endpoint, arguments=None: _FakeHandle(
@@ -595,7 +456,6 @@ class TestUpscaleOptIn:
     def test_upscale_failure_falls_back_to_native(self, image_tool, monkeypatch):
         monkeypatch.setenv("FAL_IMAGE_MODEL", "fal-ai/flux-2/klein/9b")
         monkeypatch.setattr(image_tool, "fal_key_is_configured", lambda: True)
-        monkeypatch.setattr(image_tool, "_resolve_managed_fal_gateway", lambda: None)
         monkeypatch.setattr(
             image_tool, "_submit_fal_request",
             lambda endpoint, arguments=None: _FakeHandle(

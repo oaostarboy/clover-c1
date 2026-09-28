@@ -130,18 +130,15 @@ class TestFetchFailure:
 
 
 class TestFallbackChain:
-    """``_fetch_manifest_with_fallback`` walks ``DEFAULT_CATALOG_FALLBACK_URLS``
-    when the primary URL fails. Regression: the Docusaurus site behind Vercel
-    occasionally returns HTTP 403 + x-vercel-mitigated: challenge for urllib;
-    without a fallback URL the user's disk cache freezes and new model
-    releases (opus 4.8, etc.) never reach the picker.
+    """``_fetch_manifest_with_fallback`` fetches the primary URL only.
+
+    It used to also walk a raw-GitHub mirror of the manifest for when the
+    docs-site fetch was bot-gated by Vercel, but that mirror lived under
+    the docs site's own repo tree, which is no longer shipped — there is
+    no working second URL to fall through to anymore.
     """
 
     PRIMARY = "docs/api/model-catalog.json"
-    FALLBACK = (
-        ""
-        "/main/website/static/api/model-catalog.json"
-    )
 
     def test_uses_primary_when_it_succeeds(self, isolated_home):
         from clover_cli import model_catalog
@@ -155,43 +152,15 @@ class TestFallbackChain:
             result = model_catalog._fetch_manifest_with_fallback(self.PRIMARY, 5.0)
 
         assert result is not None
-        assert calls == [self.PRIMARY], "fallback URLs must not be touched on primary success"
+        assert calls == [self.PRIMARY]
 
-    def test_falls_through_to_raw_github_on_primary_failure(self, isolated_home):
+    def test_primary_failure_returns_none(self, isolated_home):
         from clover_cli import model_catalog
-        calls: list[str] = []
 
-        def fake_fetch(url, timeout):
-            calls.append(url)
-            if url == self.PRIMARY:
-                return None  # simulate Vercel 403
-            return _valid_manifest()
-
-        with patch.object(model_catalog, "_fetch_manifest", side_effect=fake_fetch):
+        with patch.object(model_catalog, "_fetch_manifest", return_value=None):
             result = model_catalog._fetch_manifest_with_fallback(self.PRIMARY, 5.0)
 
-        assert result is not None
-        assert calls == [self.PRIMARY, self.FALLBACK]
-
-
-    def test_get_catalog_uses_fallback_chain(self, isolated_home):
-        """End-to-end: ``get_catalog`` routes through the fallback helper so
-        a primary URL failure transparently produces a working catalog."""
-        from clover_cli import model_catalog
-        manifest = _valid_manifest()
-        calls: list[str] = []
-
-        def fake_fetch(url, timeout):
-            calls.append(url)
-            if url == self.PRIMARY:
-                return None
-            return manifest
-
-        with patch.object(model_catalog, "_fetch_manifest", side_effect=fake_fetch):
-            result = model_catalog.get_catalog(force_refresh=True)
-
-        assert result == manifest
-        assert self.FALLBACK in calls
+        assert result is None
 
 
 class TestCuratedAccessors:
@@ -206,12 +175,6 @@ class TestCuratedAccessors:
             ("openai/gpt-5.4", ""),
             ("openrouter/elephant-alpha", "free"),
         ]
-
-
-    def test_clover_returns_none_when_catalog_empty(self, isolated_home):
-        from clover_cli import model_catalog
-        with patch.object(model_catalog, "_fetch_manifest", return_value=None):
-            assert model_catalog.get_curated_clover_models() is None
 
 
 class TestDefaultModelFromCache:
@@ -250,25 +213,6 @@ class TestDefaultModelFromCache:
         with patch.object(model_catalog, "_fetch_manifest") as fetch:
             assert model_catalog.get_default_model_from_cache("openrouter") is None
             fetch.assert_not_called()
-
-
-    def test_shipped_manifest_labels_glm52_default(self, isolated_home):
-        """Contract with the in-repo manifest: both provider blocks label the
-        same default entry the code constant points at."""
-        import clover_cli.model_catalog as model_catalog
-        from clover_cli.models import PREFERRED_SILENT_DEFAULT_MODEL
-
-        repo_root = Path(model_catalog.__file__).resolve().parent.parent
-        manifest = json.loads(
-            (repo_root / "website" / "static" / "api" / "model-catalog.json").read_text()
-        )
-        for provider in ("openrouter", "clover"):
-            block = manifest["providers"][provider]
-            labeled = [m["id"] for m in block["models"] if m.get("default")]
-            assert labeled == [PREFERRED_SILENT_DEFAULT_MODEL], (
-                f"{provider}: exactly one entry must be labeled default and it "
-                f"must match PREFERRED_SILENT_DEFAULT_MODEL"
-            )
 
 
 class TestProviderOverride:
@@ -312,125 +256,24 @@ class TestIntegrationWithModelsModule:
 
 
 
-    def test_picker_clover_row_uses_curated_list(self, tmp_path, monkeypatch):
-        """The /model picker surfaces the curated ``_PROVIDER_MODELS["clover"]``
-        list in curated order — matching the ``clover model`` CLI — not the live
-        ``/v1/models`` catalog or the manifest. Portal free/paid recommendations
-        are unioned in when reachable; offline (as here, with the Portal calls
-        stubbed out) it's exactly the curated list.
-        """
-        # We deliberately do NOT use the ``isolated_home`` fixture here:
-        # that fixture monkeypatches ``Path.home`` to ``tmp_path``, which
-        # trips the auth-store seat-belt in ``_auth_file_path()`` because
-        # ``CLOVER_HOME / auth.json`` then resolves to the same path the
-        # seat-belt thinks is the "real" user store. Use the autouse
-        # ``_hermetic_environment`` CLOVER_HOME directly instead.
-        import importlib
-        from clover_cli import model_catalog
-        from clover_cli.models import get_curated_clover_model_ids
-        importlib.reload(model_catalog)
-        try:
-            from clover_cli.model_switch import list_picker_providers
 
-            active_home = Path(os.environ["CLOVER_HOME"])
-            (active_home / "auth.json").write_text(
-                json.dumps(
-                    {
-                        "providers": {"clover": {"access_token": "fake"}},
-                        "credential_pool": {},
-                    }
-                )
-            )
+    def test_picker_max_models_cap_semantics(self, monkeypatch):
+        """None is unlimited, zero hides models, one returns one model."""
+        from clover_cli.model_switch import list_authenticated_providers, list_picker_providers
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+        models = ["deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"]
+        with patch("clover_cli.models.cached_provider_model_ids", side_effect=lambda slug: models if slug == "deepseek" else []), patch("agent.models_dev.fetch_models_dev", return_value={}):
+            full = list_picker_providers(current_provider="deepseek", max_models=None)
+            one = list_picker_providers(current_provider="deepseek", max_models=1)
+            zero = list_authenticated_providers(current_provider="deepseek", max_models=0)
 
-            # Stub the Portal recommendation union so the row is deterministic
-            # (the curated list alone) and never touches the network. ``expected``
-            # is computed from the same source the picker uses internally
-            # (``curated["clover"] = get_curated_clover_model_ids()``), so the test
-            # stays an invariant — it can't rot as the curated/manifest list grows.
-            with patch.object(
-                model_catalog, "_fetch_manifest", return_value=_valid_manifest()
-            ), patch("clover_cli.models.check_clover_free_tier", return_value=False), patch(
-                "clover_cli.models.union_with_portal_free_recommendations",
-                side_effect=lambda ids, *a, **k: (ids, {}),
-            ), patch(
-                "clover_cli.models.union_with_portal_paid_recommendations",
-                side_effect=lambda ids, *a, **k: (ids, {}),
-            ):
-                expected = get_curated_clover_model_ids()
-                picker = list_picker_providers(
-                    current_provider="clover", max_models=99
-                )
-        finally:
-            model_catalog.reset_cache()
+        def row(rows):
+            return next((r for r in rows if r["slug"] == "deepseek"), None)
 
-        clover_row = next((r for r in picker if r["slug"] == "clover"), None)
-        assert clover_row is not None, "clover row must appear when authed"
-        assert clover_row["models"] == expected
-
-    def test_picker_max_models_cap_semantics(self, tmp_path, monkeypatch):
-        """The cap argument has three distinct meanings on the real slicing
-        path: ``None`` = unlimited (the cap-removal fix, #48297), ``0`` = no
-        models (preserved for slug-only callers), an int N = first N. Guards
-        the ``is not None`` distinction the cap-removal follow-up introduced —
-        a ``if max_models`` (falsy) check would conflate ``0`` with unlimited.
-        """
-        import importlib
-        from clover_cli import model_catalog
-        from clover_cli.models import get_curated_clover_model_ids
-        importlib.reload(model_catalog)
-        try:
-            from clover_cli.model_switch import (
-                list_authenticated_providers,
-                list_picker_providers,
-            )
-
-            active_home = Path(os.environ["CLOVER_HOME"])
-            (active_home / "auth.json").write_text(
-                json.dumps(
-                    {
-                        "providers": {"clover": {"access_token": "fake"}},
-                        "credential_pool": {},
-                    }
-                )
-            )
-            with patch.object(
-                model_catalog, "_fetch_manifest", return_value=_valid_manifest()
-            ), patch("clover_cli.models.check_clover_free_tier", return_value=False), patch(
-                "clover_cli.models.union_with_portal_free_recommendations",
-                side_effect=lambda ids, *a, **k: (ids, {}),
-            ), patch(
-                "clover_cli.models.union_with_portal_paid_recommendations",
-                side_effect=lambda ids, *a, **k: (ids, {}),
-            ):
-                expected = get_curated_clover_model_ids()
-                full = list_picker_providers(current_provider="clover", max_models=None)
-                one = list_picker_providers(current_provider="clover", max_models=1)
-                # 0 is exercised on list_authenticated_providers (the slug-only
-                # path); the picker variant drops empty-model rows entirely, so
-                # the empty-list contract lives on the auth-providers call.
-                zero = list_authenticated_providers(
-                    current_provider="clover", max_models=0
-                )
-        finally:
-            model_catalog.reset_cache()
-
-        def _clover(rows):
-            return next((r for r in rows if r["slug"] == "clover"), None)
-
-        # Only meaningful when the curated list actually exceeds 1 entry.
-        assert len(expected) > 1, "test needs a multi-model curated clover list"
-
-        full_row = _clover(full)
-        assert full_row is not None and full_row["models"] == expected
-
-        one_row = _clover(one)
-        assert one_row is not None and one_row["models"] == expected[:1]
-
-        zero_row = _clover(zero)
-        # 0 means an empty model list — NOT unlimited. total_models still real.
-        assert zero_row is not None
-        assert zero_row["models"] == []
-        assert zero_row["total_models"] == len(expected)
+        assert row(full) is not None and row(full)["models"] == models
+        assert row(one) is not None and row(one)["models"] == models[:1]
+        assert row(zero) is not None and row(zero)["models"] == []
+        assert row(zero)["total_models"] == len(models)
 
 
 # -----------------------------------------------------------------------------

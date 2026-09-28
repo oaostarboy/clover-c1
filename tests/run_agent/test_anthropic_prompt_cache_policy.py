@@ -81,7 +81,6 @@ class TestNativeAnthropic:
         ) is False
 
 
-
 class TestOpenRouter:
     def test_claude_on_openrouter_caches_with_envelope_layout(self):
         agent = _make_agent(
@@ -115,7 +114,6 @@ class TestKimiMoonshotOnOpenRouter:
             model="moonshotai/kimi-k2.6",
         )
         assert agent._anthropic_prompt_cache_policy() == (True, False)
-
 
 
     def test_kimi_bare_release_slug_on_openrouter_caches(self):
@@ -649,35 +647,6 @@ class TestQwenAlibabaFamily:
         assert agent._anthropic_prompt_cache_policy() == (True, False)
 
 
-
-
-
-    def test_qwen_on_clover_portal_caches_with_envelope_layout(self):
-        # Clover Portal Qwen takes the same envelope-layout cache_control
-        # path as Portal Claude. Without this, Portal-routed qwen3.6-plus
-        # falls through to the alibaba-family check (which only matches
-        # provider=opencode/alibaba) and serves 0% cache hits.
-        agent = _make_agent(
-            provider="clover",
-            base_url="",
-            api_mode="chat_completions",
-            model="qwen3.6-plus",
-        )
-        assert agent._anthropic_prompt_cache_policy() == (True, False)
-
-
-    def test_non_qwen_non_claude_on_clover_portal_does_not_cache(self):
-        # Portal scope is narrow: Claude OR Qwen only. Other models
-        # routed through Portal keep their existing fall-through behavior.
-        agent = _make_agent(
-            provider="clover",
-            base_url="",
-            api_mode="chat_completions",
-            model="openai/gpt-5.4",
-        )
-        assert agent._anthropic_prompt_cache_policy() == (False, False)
-
-
 class TestDeepSeekOpenCode:
     """DeepSeek on OpenCode does NOT use cache markers (#77217).
 
@@ -992,28 +961,6 @@ class TestLiteLLMOpenAIWire:
             if isinstance(part, dict) and "cache_control" in part
         ]
         assert inner, "the OpenAI-wire grant must still place real breakpoints"
-
-
-class TestNousPortalAnthropicWire:
-    def test_portal_claude_on_the_messages_wire_uses_the_native_layout(self):
-        agent = _make_agent(
-            provider="clover",
-            base_url="",
-            api_mode="anthropic_messages",
-            model="anthropic/claude-opus-4.8",
-        )
-        assert agent._anthropic_prompt_cache_policy() == (True, True)
-
-    def test_portal_claude_on_chat_completions_keeps_the_envelope_layout(self):
-        """The wire, not the provider, picks the layout — Portal models still on
-        /chat/completions must not be flipped to inner-block markers."""
-        agent = _make_agent(
-            provider="clover",
-            base_url="",
-            api_mode="chat_completions",
-            model="anthropic/claude-opus-4.8",
-        )
-        assert agent._anthropic_prompt_cache_policy() == (True, False)
 
 
 class TestExplicitOverrides:

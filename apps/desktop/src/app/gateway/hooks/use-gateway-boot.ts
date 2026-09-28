@@ -1,9 +1,9 @@
 import { isGatewayReauthRequired, JsonRpcGatewayError, resolveGatewayWsUrl } from '@clover/shared'
 import { useEffect, useRef } from 'react'
 
+import { CloverGateway } from '@/clover'
 import { shouldApplyPostBootProgressError } from '@/components/boot-failure-reauth'
 import type { CloverConnection } from '@/global'
-import { CloverGateway } from '@/clover'
 import { translateNow } from '@/i18n'
 import { desktopDefaultCwd } from '@/lib/desktop-fs'
 import { decideLivenessForceClose, LIVENESS_REPROBE_DELAY_MS } from '@/lib/gateway-liveness-policy'

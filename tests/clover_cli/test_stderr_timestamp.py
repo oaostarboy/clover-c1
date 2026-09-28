@@ -3,6 +3,8 @@
 import re
 import sys
 
+import pytest
+
 from gateway.restart import EXTERNAL_GATEWAY_SUPERVISOR_ENV
 from clover_cli import stderr_timestamp
 
@@ -80,8 +82,17 @@ def test_prepare_skips_interactive_xpc_zero_even_for_gateway_argv():
     )
 
 
+@pytest.mark.live_system_guard_bypass
 def test_main_injects_flag_into_stale_gateway_child(tmp_path, monkeypatch):
-    """Stale plist inner argv must grow --external-supervisor in the grandchild."""
+    """Stale plist inner argv must grow --external-supervisor in the grandchild.
+
+    The spawned child runs ``-c <code>`` — it only writes its trailing argv
+    to a file and never actually starts a gateway — but the trailing argv
+    deliberately contains "gateway run" (the stale-plist argv under test),
+    so the conftest live-system guard's substring match flags it. No real
+    gateway is spawned; see test_config_env_bridge_authority.py for the
+    same documented false-positive pattern.
+    """
     monkeypatch.setenv("XPC_SERVICE_NAME", "ai.clover.gateway-butler")
     monkeypatch.delenv(EXTERNAL_GATEWAY_SUPERVISOR_ENV, raising=False)
     log_path = tmp_path / "gateway.error.log"

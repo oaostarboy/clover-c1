@@ -59,17 +59,8 @@ def _load_fal_client() -> Any:
 
 
 from tools.debug_helpers import DebugSession
-from tools.fal_common import (
-    _ManagedFalSyncClient,
-    _extract_http_status,
-    _normalize_fal_queue_url_format,  # noqa: F401 — re-exported for tests
-)
-from tools.managed_tool_gateway import resolve_managed_tool_gateway
 from tools.tool_backend_helpers import (
-    CLOVER_MANAGED_PROVIDER,
     fal_key_is_configured,
-    managed_clover_tools_enabled,
-    clover_tool_gateway_unavailable_message,
     read_selection,
     selection_error,
 )
@@ -207,7 +198,6 @@ FAL_MODELS: Dict[str, Dict[str, Any]] = {
             "output_format": "png",
             "safety_tolerance": "5",
             # "1K" is the cheapest tier; 4K doubles the per-image cost.
-            # Users on Clover Subscription should stay at 1K for predictable billing.
             "resolution": "1K",
         },
         "supports": {
@@ -272,8 +262,8 @@ FAL_MODELS: Dict[str, Dict[str, Any]] = {
             "portrait": "1024x1536",
         },
         "defaults": {
-            # Quality is pinned to medium to keep portal billing predictable
-            # across all users (low is too rough, high is 4-6x more expensive).
+            # Quality is pinned to medium: low is too rough, high is
+            # 4-6x more expensive.
             "quality": "medium",
             "num_images": 1,
             "output_format": "png",
@@ -308,9 +298,9 @@ FAL_MODELS: Dict[str, Dict[str, Any]] = {
             "portrait": "portrait_4_3",       # 768x1024
         },
         "defaults": {
-            # Same quality pinning as gpt-image-1.5: medium keeps Clover
-            # Portal billing predictable. "high" is 3-4x the per-image
-            # cost at the same size; "low" is too rough for production use.
+            # Same quality pinning as gpt-image-1.5: "high" is 3-4x the
+            # per-image cost at the same size; "low" is too rough for
+            # production use.
             "quality": "medium",
             "num_images": 1,
             "output_format": "png",
@@ -725,78 +715,6 @@ UPSCALER_NUM_INFERENCE_STEPS = 18
 
 
 _debug = DebugSession("image_tools", env_var="IMAGE_TOOLS_DEBUG")
-_managed_fal_client = None
-_managed_fal_client_config = None
-_managed_fal_client_lock = threading.Lock()
-
-
-# ---------------------------------------------------------------------------
-# Managed FAL gateway (Clover Subscription)
-# ---------------------------------------------------------------------------
-def _resolve_managed_fal_gateway():
-    """Resolve the FAL route from the stored `clover tools` selection.
-
-    Dispatch is a plain switch on the stored ``image_gen`` provider string:
-    - ``"clover"`` (or legacy ``use_gateway: true``) → managed fal-queue
-      gateway ONLY; unentitled/unreachable is a selection-naming error
-      (never a silent fall back to FAL_KEY).
-    - any other stored provider (``"fal"``, ...) → direct FAL ONLY; a
-      missing FAL_KEY is an error naming FAL_KEY and the selection (never a
-      silent managed reroute).
-    - no selection ever written → legacy credential autodetect: direct when
-      FAL_KEY is set, else the managed gateway when resolvable, else None.
-
-    Returns the managed gateway config, or ``None`` for the direct route.
-    Raises ``ValueError`` with the honest error contract when the stored
-    selection cannot run.
-    """
-    selected = read_selection("image_gen")
-    if selected == CLOVER_MANAGED_PROVIDER:
-        gateway = resolve_managed_tool_gateway("fal-queue")
-        if gateway is None:
-            raise ValueError(selection_error(
-                "image_gen",
-                CLOVER_MANAGED_PROVIDER,
-                "the Clover Tool Gateway is not available (not entitled or "
-                "unreachable)",
-            ))
-        return gateway
-    if selected is not None:
-        if not fal_key_is_configured():
-            raise ValueError(selection_error(
-                "image_gen",
-                selected,
-                "FAL_KEY is not set",
-            ))
-        return None
-    # Never-configured category: legacy credential autodetect (do NOT persist).
-    if fal_key_is_configured():
-        return None
-    return resolve_managed_tool_gateway("fal-queue")
-
-
-def _get_managed_fal_client(managed_gateway):
-    """Reuse the managed FAL client so its internal httpx.Client is not leaked per call."""
-    global _managed_fal_client, _managed_fal_client_config
-
-    client_config = (
-        managed_gateway.gateway_origin.rstrip("/"),
-        managed_gateway.clover_user_token,
-    )
-    with _managed_fal_client_lock:
-        if _managed_fal_client is not None and _managed_fal_client_config == client_config:
-            return _managed_fal_client
-
-        # Resolve fal_client on the legacy module — preserves the test
-        # pattern of monkey-patching ``image_generation_tool.fal_client``.
-        _load_fal_client()
-        _managed_fal_client = _ManagedFalSyncClient(
-            fal_client,
-            key=managed_gateway.clover_user_token,
-            queue_run_origin=managed_gateway.gateway_origin,
-        )
-        _managed_fal_client_config = client_config
-        return _managed_fal_client
 
 
 class ImageGenerationInterrupted(Exception):
@@ -840,46 +758,18 @@ def _wait_fal_result(handler, *, poll_seconds: float = 0.5):
 
 
 def _submit_fal_request(model: str, arguments: Dict[str, Any]):
-    """Submit a FAL request using direct credentials or the managed queue gateway."""
+    """Submit a FAL request using direct credentials."""
     # Trigger the lazy import on first call. Idempotent.
     _load_fal_client()
     request_headers = {"x-idempotency-key": str(uuid.uuid4())}
-    managed_gateway = _resolve_managed_fal_gateway()
-    if managed_gateway is None:
-        return fal_client.submit(model, arguments=arguments, headers=request_headers)
-
-    managed_client = _get_managed_fal_client(managed_gateway)
-    try:
-        return managed_client.submit(
-            model,
-            arguments=arguments,
-            headers=request_headers,
-        )
-    except Exception as exc:
-        # 4xx from the managed gateway typically means the portal doesn't
-        # currently proxy this model (allowlist miss, billing gate, etc.)
-        # — surface a clearer message with actionable remediation instead
-        # of a raw HTTP error from httpx.
-        status = _extract_http_status(exc)
-        if status is not None and 400 <= status < 500:
-            gateway_message = ""
-            if status in {401, 402, 403}:
-                gateway_message = (
-                    "\n\n"
-                    + clover_tool_gateway_unavailable_message(
-                        "managed FAL image generation",
-                        force_fresh=True,
-                    )
-                )
-            raise ValueError(
-                f"Clover Subscription gateway rejected model '{model}' "
-                f"(HTTP {status}). This model may not yet be enabled on "
-                f"the Clover Portal's FAL proxy. Either:\n"
-                f"  • Set FAL_KEY in your environment to use FAL.ai directly, or\n"
-                f"  • Pick a different model via `clover tools` → Image Generation."
-                f"{gateway_message}"
-            ) from exc
-        raise
+    selected = read_selection("image_gen")
+    if selected is not None and not fal_key_is_configured():
+        raise ValueError(selection_error(
+            "image_gen",
+            selected,
+            "FAL_KEY is not set",
+        ))
+    return fal_client.submit(model, arguments=arguments, headers=request_headers)
 
 
 # ---------------------------------------------------------------------------
@@ -1265,9 +1155,16 @@ def image_generate_tool(
             raise ValueError("Prompt is required and must be a non-empty string")
 
         # Strict selection check: a stored-but-broken selection raises the
-        # honest selection-naming error from _resolve_managed_fal_gateway();
-        # only the never-configured path can report "no backend at all".
-        if not (fal_key_is_configured() or _resolve_managed_fal_gateway()):
+        # honest selection-naming error; only the never-configured path
+        # reports "no backend at all" here.
+        if not fal_key_is_configured():
+            selected = read_selection("image_gen")
+            if selected is not None:
+                raise ValueError(selection_error(
+                    "image_gen",
+                    selected,
+                    "FAL_KEY is not set",
+                ))
             raise ValueError(_build_no_backend_setup_message())
 
         # If the caller supplied source images but the active model has no
@@ -1411,19 +1308,13 @@ def image_generate_tool(
 
 
 def check_fal_api_key() -> bool:
-    """True if the FAL backend selected via `clover tools` (or, on a
-    never-configured install, any FAL backend) is available.
+    """True if FAL_KEY is configured.
 
     A stored-but-broken selection reports False here (registry gating);
     the honest selection-naming error surfaces at call time from
-    ``_resolve_managed_fal_gateway``.
+    ``_submit_fal_request``.
     """
-    selected = read_selection("image_gen")
-    if selected == CLOVER_MANAGED_PROVIDER:
-        return bool(resolve_managed_tool_gateway("fal-queue"))
-    if selected is not None:
-        return fal_key_is_configured()
-    return bool(fal_key_is_configured() or resolve_managed_tool_gateway("fal-queue"))
+    return fal_key_is_configured()
 
 
 def _build_no_backend_setup_message() -> str:
@@ -1431,36 +1322,20 @@ def _build_no_backend_setup_message() -> str:
 
     Used by the in-tree FAL path. Mentions:
       - FAL_KEY signup link
-      - managed-gateway status (if Clover tools are enabled)
       - plugin alternative pointer (so users on a stale ``image_gen.provider``
         know the registry exists and how to inspect it)
     """
     lines = ["Image generation is unavailable in this environment.", ""]
     lines.append("Missing requirements:")
-    if managed_clover_tools_enabled():
-        lines.append(
-            "  - FAL_KEY is not set and the managed FAL gateway is unreachable"
-        )
-    else:
-        lines.append("  - FAL_KEY environment variable is not set")
-        gateway_message = clover_tool_gateway_unavailable_message(
-            "managed FAL image generation",
-        )
-        if gateway_message:
-            lines.append(f"  - {gateway_message}")
+    lines.append("  - FAL_KEY environment variable is not set")
     lines.append("")
     lines.append("To enable image generation, do one of:")
     lines.append(
         "  1. Get a free API key at https://fal.ai and set "
         "FAL_KEY=<your-key> (then restart the session)"
     )
-    if managed_clover_tools_enabled():
-        lines.append(
-            "  2. Sign in to a Clover account that has the managed FAL "
-            "gateway enabled (`clover setup`)"
-        )
     lines.append(
-        "  3. Configure a different image_gen provider via `clover tools` "
+        "  2. Configure a different image_gen provider via `clover tools` "
         "→ Image Generation (run `clover plugins list` to see installed "
         "backends)"
     )
@@ -1481,7 +1356,7 @@ def check_image_generation_requirements() -> bool:
         pass
 
     configured = _read_configured_image_provider()
-    if not configured or configured in ("fal", CLOVER_MANAGED_PROVIDER):
+    if not configured or configured == "fal":
         return False
 
     # Probe only the explicitly selected plugin. Merely possessing a cloud
@@ -1640,10 +1515,8 @@ def _dispatch_to_plugin_provider(
     ignore it via their ``**kwargs`` (the ABC contract).
     """
     configured = _read_configured_image_provider()
-    if not configured or configured in ("fal", CLOVER_MANAGED_PROVIDER):
-        # Unset/explicit FAL keeps the legacy FAL path; "clover" (managed
-        # Clover Subscription selection) also runs the legacy pipeline, which
-        # routes through the managed fal-queue gateway.
+    if not configured or configured == "fal":
+        # Unset/explicit FAL keeps the legacy FAL path.
         return None
 
     # Also read configured model so we can pass it to the plugin
@@ -1754,13 +1627,12 @@ def _dispatch_to_plugin_provider(
 
 
 # ---------------------------------------------------------------------------
-# Managed-mode Krea routing
+# Krea model id helpers
 # ---------------------------------------------------------------------------
 #
-# Native ``krea-2-*`` plugin model ids are served by the dedicated Krea managed
-# gateway. ``fal-ai/krea/v2/*`` FAL catalog ids stay on the FAL path (BYO key
-# or FAL managed gateway). Routing only fires in managed mode; direct/BYO users
-# keep their unchanged pipeline.
+# Native ``krea-2-*`` plugin model ids are served by the Krea plugin
+# (``image_gen.provider: krea``). ``fal-ai/krea/v2/*`` FAL catalog ids stay
+# on the FAL path.
 
 _KREA_NATIVE_MODELS = {"krea-2-medium", "krea-2-large", "krea-2-medium-turbo"}
 
@@ -1778,96 +1650,6 @@ def _normalize_krea_model(model_id: Optional[str]) -> Optional[str]:
 def is_krea_model(model_id: Optional[str]) -> bool:
     """True when ``model_id`` is a native Krea plugin id (``krea-2-*``)."""
     return _normalize_krea_model(model_id) is not None
-
-
-def _maybe_route_managed_krea(
-    prompt: str,
-    aspect_ratio: str,
-    image_url: Optional[str] = None,
-    reference_image_urls: Optional[list] = None,
-    upscale: Optional[bool] = None,
-) -> Optional[str]:
-    """Route a native ``krea-2-*`` model to the managed Krea gateway, in managed mode.
-
-    Returns a JSON result string when handled by the Krea managed gateway, or
-    ``None`` to fall through to the normal plugin/FAL pipeline. Fires only when
-    all hold:
-      - the configured image model is a native ``krea-2-*`` id, AND
-      - the user isn't already routed to the Krea plugin via
-        ``image_gen.provider`` (that path dispatches normally), AND
-      - the managed Krea gateway is resolvable (portal/managed mode).
-
-    Direct/BYO users (no managed gateway) fall through untouched.
-    """
-    # Strict selection rule: an explicitly stored ``image_gen.provider``
-    # (other than the managed "clover" selection, which IS a managed-mode
-    # opt-in) disables the model-driven managed interception — the user's
-    # picker choice dispatches normally. Interception is permitted only on
-    # never-configured installs or under the managed selection.
-    configured_provider = _read_configured_image_provider()
-    if configured_provider is not None and configured_provider != CLOVER_MANAGED_PROVIDER:
-        return None
-
-    normalized = _normalize_krea_model(_read_configured_image_model())
-    if normalized is None:
-        return None
-
-    # Only intercept on the managed path; BYO/direct users keep their pipeline.
-    try:
-        from plugins.image_gen.krea import _resolve_managed_krea_gateway
-
-        if _resolve_managed_krea_gateway() is None:
-            return None
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Managed Krea routing probe failed: %s", exc)
-        return None
-
-    try:
-        from agent.image_gen_registry import get_provider
-        from clover_cli.plugins import _ensure_plugins_discovered
-
-        _ensure_plugins_discovered()
-        provider = get_provider("krea")
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Managed Krea routing: provider unavailable: %s", exc)
-        return None
-    if provider is None:
-        return None
-
-    kwargs: Dict[str, Any] = {
-        "prompt": prompt,
-        "aspect_ratio": aspect_ratio,
-        "model": normalized,
-    }
-    try:
-        if isinstance(image_url, str) and image_url.strip():
-            kwargs["image_url"] = image_url.strip()
-        norm_refs = None
-        if reference_image_urls is not None:
-            from agent.image_gen_provider import normalize_reference_images
-
-            norm_refs = normalize_reference_images(reference_image_urls)
-        if norm_refs:
-            kwargs["reference_image_urls"] = norm_refs
-        if upscale is not None:
-            kwargs["upscale"] = bool(upscale)
-        result = provider.generate(**kwargs)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Managed Krea routing failed: %s", exc)
-        return json.dumps({
-            "success": False,
-            "image": None,
-            "error": f"Managed Krea generation error: {exc}",
-            "error_type": "provider_exception",
-        })
-    if not isinstance(result, dict):
-        return json.dumps({
-            "success": False,
-            "image": None,
-            "error": "Krea provider returned a non-dict result",
-            "error_type": "provider_contract",
-        })
-    return json.dumps(result)
 
 
 def _confine_source_images(
@@ -1926,16 +1708,15 @@ def _handle_image_generate(args, **kw):
 
     # Terminal-backend confinement chokepoint: convert path-like sources to
     # data: URLs via the shared resolver BEFORE any provider dispatch, so
-    # every backend (plugin, managed Krea, in-tree FAL) gets the same
-    # sandbox-confined bytes.
+    # every backend (plugin or in-tree FAL) gets the same sandbox-confined
+    # bytes.
     image_url, reference_image_urls, confine_error = _confine_source_images(
         image_url, reference_image_urls, task_id)
     if confine_error is not None:
         return confine_error
 
     # Route to a plugin-registered provider if one is active (and it's
-    # not the in-tree FAL path). When ``image_gen.provider == "krea"`` this
-    # already reaches the Krea plugin's managed gateway path.
+    # not the in-tree FAL path).
     dispatched = _dispatch_to_plugin_provider(
         prompt, aspect_ratio,
         image_url=image_url,
@@ -1944,20 +1725,6 @@ def _handle_image_generate(args, **kw):
     )
     if dispatched is not None:
         return _postprocess_image_generate_result(dispatched, task_id=task_id)
-
-    # Managed-mode Krea routing: when no explicit plugin provider is configured
-    # but the selected model is a native ``krea-2-*`` id, a portal user routes to
-    # the dedicated Krea managed gateway. ``fal-ai/krea/v2/*`` models stay on the
-    # FAL path below. Runs after plugin dispatch (which returns None when no
-    # provider is set) so the BYO/direct FAL path stays untouched.
-    krea_routed = _maybe_route_managed_krea(
-        prompt, aspect_ratio,
-        image_url=image_url,
-        reference_image_urls=reference_image_urls,
-        upscale=upscale,
-    )
-    if krea_routed is not None:
-        return _postprocess_image_generate_result(krea_routed, task_id=task_id)
 
     raw = image_generate_tool(
         prompt=prompt,

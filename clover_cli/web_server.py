@@ -644,7 +644,7 @@ app.add_middleware(
 # OAuth gate middleware can honour the same allowlist — keeping the two
 # gates in lockstep avoids drift like the wildcard-subdomain regression
 # where ``/api/status`` was public under the legacy gate but 401'd under
-# the OAuth gate (breaking the portal's liveness probe).
+# the OAuth gate (breaking external liveness probes).
 #
 # Keep the upstream list minimal — only truly non-sensitive, read-only
 # endpoints belong there.
@@ -1698,8 +1698,6 @@ from clover_cli.web_models import (  # noqa: F401
     MemoryProviderSetupRequest,
     CustomEndpointUpdate,
     MessagingPlatformUpdate,
-    TelegramOnboardingStart,
-    TelegramOnboardingApply,
     WhatsAppOnboardingStart,
     WhatsAppOnboardingApply,
     AudioTranscriptionRequest,
@@ -3961,21 +3959,6 @@ async def get_status(profile: Optional[str] = None):
             # Module not importable yet (early startup) — leave as [].
             pass
 
-        # Clover bootstrap-session validity for the NAS health sweep. A hosted
-        # agent whose Clover auth dies terminally (invalid_grant / quarantine)
-        # looks HEALTHY to every liveness/connectivity probe — the machine,
-        # relay, and this dashboard all stay up — yet every inference turn
-        # fails. This is the ONLY signal that surfaces that condition, and it
-        # is determinable with no working token (local auth-store state). NAS
-        # re-mints the bootstrap session when it reads "terminal". Best-effort:
-        # never let auth classification break the public liveness probe.
-        clover_session_valid = "unknown"
-        try:
-            from clover_cli.auth import get_clover_session_validity
-            clover_session_valid = get_clover_session_validity()
-        except Exception:
-            clover_session_valid = "unknown"
-
         # Always-public liveness + auth-gate shape. Safe for external uptime
         # probes (NAS's wildcard-subdomain liveness probe), the SPA's pre-login
         # bootstrap, and anyone who can curl the host — i.e. exactly the audience
@@ -3999,7 +3982,6 @@ async def get_status(profile: Optional[str] = None):
             "auth_required": auth_required,
             "auth_providers": auth_providers,
             "auth_flows": auth_flows,
-            "clover_session_valid": clover_session_valid,
         }
 
         # Stable per-install identity (see get_install_id above). First call
@@ -4113,9 +4095,9 @@ async def get_status(profile: Optional[str] = None):
         # process table, so keep it off the event loop.
         #
         # Split by sensitivity: profile NAMES (``profiles``) and the gateway
-        # ``gateway_mode`` are low-sensitivity PRODUCT surface — Clover Cloud
-        # renders the profile list in the Portal, which reads this endpoint over
-        # the network (a gated bind), so they must survive the auth gate. The
+        # ``gateway_mode`` are low-sensitivity PRODUCT surface — remote
+        # clients render the profile list by reading this endpoint over the
+        # network (a gated bind), so they must survive the auth gate. The
         # per-gateway ``gateways[]`` detail carries host ports (deployment
         # recon), so it stays gated with the host paths / PID below.
         # (``topology`` was already fetched above, before the platform rollup,
@@ -4396,63 +4378,6 @@ def _safe_call(mod, fn_name: str, default):
         return fn() if callable(fn) else default
     except Exception:
         return default
-
-
-# ---------------------------------------------------------------------------
-# Portal endpoint — Clover Portal auth + Tool Gateway routing status (read-only).
-# ---------------------------------------------------------------------------
-
-
-@app.get("/api/portal")
-async def get_portal_status():
-    # load_config() + auth/subscription snapshots are disk reads — this is a
-    # polled endpoint, so keep them off the event loop.
-    def _run():
-        return _get_portal_status_sync()
-
-    return await asyncio.to_thread(_run)
-
-
-def _get_portal_status_sync():
-    cfg = load_config() or {}
-    auth: Dict[str, Any] = {}
-    try:
-        from clover_cli.auth import get_clover_auth_status_local
-
-        # Read-only dashboard endpoint: refresh-free snapshot so polling
-        # never performs an OAuth refresh or burns a refresh token.
-        auth = get_clover_auth_status_local() or {}
-    except Exception:
-        auth = {}
-
-    features = []
-    try:
-        from clover_cli.clover_subscription import get_clover_subscription_features
-
-        feats = get_clover_subscription_features(cfg)
-        if feats is not None:
-            for feat in feats.items():
-                if getattr(feat, "managed_by_clover", False):
-                    state = "via Clover Portal"
-                elif getattr(feat, "active", False) and getattr(feat, "current_provider", None):
-                    state = feat.current_provider
-                elif getattr(feat, "active", False):
-                    state = "active"
-                else:
-                    state = "not configured"
-                features.append({"label": getattr(feat, "label", ""), "state": state})
-    except Exception:
-        _log.exception("portal features failed")
-
-    model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
-    return {
-        "logged_in": bool(auth.get("logged_in")),
-        "portal_url": auth.get("portal_base_url"),
-        "inference_url": auth.get("inference_base_url"),
-        "provider": str((model_cfg or {}).get("provider") or ""),
-        "subscription_url": "",
-        "features": features,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -7475,60 +7400,14 @@ def get_recommended_default_model(provider: str = ""):
     """Return the recommended default model for a freshly-authenticated provider.
 
     Mirrors the model-curation `clover model` does so GUI onboarding lands on a
-    sensible default instead of blindly taking the first curated entry. For
-    Clover this honors the user's free/paid tier: free users get a free model,
-    paid users get the full curated default. For any other provider it falls
-    back to the first curated model (same as before).
+    sensible default instead of blindly taking the first curated entry.
 
-    Response: {"provider": str, "model": str, "free_tier": bool | None}
-    where free_tier is True/False for Clover and None otherwise. `model` may be
-    empty if nothing could be resolved (caller degrades gracefully).
+    Response: {"provider": str, "model": str, "free_tier": None}. `model` may
+    be empty if nothing could be resolved (caller degrades gracefully).
     """
     slug = (provider or "").strip().lower()
 
-    if slug == "clover":
-        try:
-            from clover_cli.models import (
-                get_curated_clover_model_ids,
-                get_pricing_for_provider,
-                check_clover_free_tier,
-                partition_clover_models_by_tier,
-                pick_silent_default_model,
-                union_with_portal_free_recommendations,
-                union_with_portal_paid_recommendations,
-            )
-            from clover_cli.auth import get_provider_auth_state
-
-            model_ids = get_curated_clover_model_ids()
-            pricing = get_pricing_for_provider("clover") or {}
-            free_tier = check_clover_free_tier(force_fresh=True)
-
-            portal_url = ""
-            try:
-                state = get_provider_auth_state("clover") or {}
-                portal_url = state.get("portal_base_url", "") or ""
-            except Exception:
-                portal_url = ""
-
-            if free_tier:
-                model_ids, pricing = union_with_portal_free_recommendations(
-                    model_ids, pricing, portal_url
-                )
-                model_ids, _unavailable = partition_clover_models_by_tier(
-                    model_ids, pricing, free_tier=True
-                )
-            else:
-                model_ids, pricing = union_with_portal_paid_recommendations(
-                    model_ids, pricing, portal_url
-                )
-
-            model = pick_silent_default_model(model_ids, provider="clover")
-            return {"provider": "clover", "model": model, "free_tier": bool(free_tier)}
-        except Exception:
-            _log.exception("GET /api/model/recommended-default (clover) failed")
-            return {"provider": "clover", "model": "", "free_tier": None}
-
-    # Non-Clover: preferred silent default when the provider's curated list
+    # Preferred silent default when the provider's curated list
     # carries it, else the first curated model. Aggregator lists lead with the
     # priciest Anthropic flagship (claude-fable-5), which must never be the
     # model a user lands on without explicitly picking it.
@@ -7775,35 +7654,6 @@ def _apply_model_assignment_sync(
             model_cfg["api_key"] = provider_entry["api_key"]
         cfg["model"] = model_cfg
 
-        # When switching the main provider to Clover, mirror the CLI's
-        # post-model-selection behaviour (clover_cli/main.py
-        # prompt_enable_tool_gateway / tools_config apply_clover_managed_defaults):
-        # auto-route any *unconfigured* tools through the Clover Tool Gateway.
-        # This is purely additive — apply_clover_managed_defaults skips every
-        # tool where the user already has a direct key (FIRECRAWL_API_KEY,
-        # FAL_KEY, etc.) or an explicit backend/provider in config, so it
-        # never overwrites a user's own setup. GUI users thus land on the
-        # gateway the same way CLI users do, without a separate prompt.
-        gateway_tools: list[str] = []
-        if provider.strip().lower() == "clover":
-            try:
-                from clover_cli.clover_subscription import apply_clover_managed_defaults
-                from clover_cli.tools_config import _get_platform_tools
-
-                enabled = _get_platform_tools(
-                    cfg, "cli", include_default_mcp_servers=False
-                )
-                changed = apply_clover_managed_defaults(
-                    cfg,
-                    enabled_toolsets=enabled,
-                    force_fresh=True,
-                )
-                gateway_tools = sorted(changed)
-            except Exception:
-                # Portal lookup hiccups / non-subscriber / non-clover gating
-                # must never block saving the model assignment.
-                _log.debug("apply_clover_managed_defaults skipped", exc_info=True)
-
         save_config(cfg)
 
         # Register a named ``custom_providers`` entry for a custom/local
@@ -7876,7 +7726,6 @@ def _apply_model_assignment_sync(
             "provider": provider,
             "model": model,
             "base_url": model_cfg.get("base_url", ""),
-            "gateway_tools": gateway_tools,
             "stale_aux": stale_aux,
             "cron_model_impact": cron_model_impact,
         }
@@ -10182,376 +10031,6 @@ async def cancel_whatsapp_onboarding(pairing_id: str):
     return {"ok": True}
 
 
-_TELEGRAM_ONBOARDING_DEFAULT_URL = "https://setup.clover-c1."
-_TELEGRAM_ONBOARDING_USER_AGENT = f"CloverDashboard/{__version__}"
-@dataclass
-class _TelegramOnboardingPairing:
-    poll_token: str
-    expires_at: str
-    expires_at_ts: float
-    bot_token: str | None = None
-    bot_username: str | None = None
-    owner_user_id: str | None = None
-
-
-_telegram_onboarding_pairings: dict[str, _TelegramOnboardingPairing] = {}
-_telegram_onboarding_lock = threading.RLock()
-
-
-def _telegram_onboarding_base_url() -> str:
-    return (
-        os.getenv("TELEGRAM_ONBOARDING_URL", _TELEGRAM_ONBOARDING_DEFAULT_URL)
-        .strip()
-        .rstrip("/")
-    )
-
-
-def _parse_expiry_ts(value: str) -> float:
-    try:
-        normalized = value.replace("Z", "+00:00")
-        parsed = datetime.fromisoformat(normalized)
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
-        return parsed.timestamp()
-    except Exception:
-        return time.time() + 600
-
-
-def _prune_telegram_onboarding_pairings() -> None:
-    now = time.time()
-    expired = [
-        pairing_id
-        for pairing_id, record in _telegram_onboarding_pairings.items()
-        if record.expires_at_ts <= now
-    ]
-    for pairing_id in expired:
-        _telegram_onboarding_pairings.pop(pairing_id, None)
-
-
-def _normalize_telegram_user_id(value: Any) -> str | None:
-    normalized = str(value or "").strip()
-    if _TELEGRAM_USER_ID_RE.fullmatch(normalized):
-        return normalized
-    return None
-
-
-def _telegram_onboarding_error_message(error: str, fallback: str) -> str:
-    return {
-        "not_found": "Telegram pairing was not found. Start a new setup.",
-        "expired": "Telegram setup expired. Start a new setup.",
-        "claimed": "Telegram setup was already claimed. Start a new setup.",
-        "unauthorized": "Telegram setup service rejected this request.",
-        "telegram_manager_bot_token_not_configured": "Telegram setup service is not configured.",
-        "telegram_token_fetch_failed": "Telegram could not finish bot setup. Try again.",
-    }.get(error, fallback)
-
-
-def _telegram_onboarding_request_sync(
-    method: str,
-    path: str,
-    *,
-    body: dict[str, Any] | None = None,
-    bearer_token: str | None = None,
-) -> dict[str, Any]:
-    import httpx
-
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": _TELEGRAM_ONBOARDING_USER_AGENT,
-    }
-    request_kwargs: dict[str, Any] = {}
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-        request_kwargs["json"] = body
-    if bearer_token:
-        headers["Authorization"] = f"Bearer {bearer_token}"
-
-    url = f"{_telegram_onboarding_base_url()}{path}"
-    try:
-        with httpx.Client(timeout=httpx.Timeout(10.0)) as client:
-            response = client.request(
-                method,
-                url,
-                headers=headers,
-                **request_kwargs,
-            )
-            response.raise_for_status()
-    except httpx.HTTPStatusError as exc:
-        try:
-            parsed = exc.response.json()
-        except Exception:
-            parsed = {}
-        error = str(parsed.get("error") or parsed.get("status") or "")
-        detail = _telegram_onboarding_error_message(
-            error,
-            "Telegram setup service returned an error.",
-        )
-        status_code = 404 if exc.response.status_code == 404 else 502
-        if error in {"expired", "claimed"}:
-            status_code = 410
-        raise HTTPException(status_code=status_code, detail=detail) from exc
-    except httpx.RequestError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Telegram setup service is unavailable. Try again shortly.",
-        ) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Telegram setup service is unavailable. Try again shortly.",
-        ) from exc
-
-    try:
-        parsed = response.json()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="Telegram setup service returned an invalid response.",
-        ) from exc
-    if not isinstance(parsed, dict):
-        raise HTTPException(
-            status_code=502,
-            detail="Telegram setup service returned an invalid response.",
-        )
-    return parsed
-
-
-async def _telegram_onboarding_request(
-    method: str,
-    path: str,
-    *,
-    body: dict[str, Any] | None = None,
-    bearer_token: str | None = None,
-) -> dict[str, Any]:
-    return await asyncio.to_thread(
-        _telegram_onboarding_request_sync,
-        method,
-        path,
-        body=body,
-        bearer_token=bearer_token,
-    )
-
-
-@app.post("/api/messaging/telegram/onboarding/start")
-async def start_telegram_onboarding(body: TelegramOnboardingStart):
-    bot_name = (body.bot_name or "Clover Cognition").strip() or "Clover Cognition"
-    payload = await _telegram_onboarding_request(
-        "POST",
-        "/v1/telegram/pairings",
-        body={"bot_name": bot_name},
-    )
-
-    pairing_id = str(payload.get("pairing_id") or "").strip()
-    poll_token = str(payload.get("poll_token") or "").strip()
-    expires_at = str(payload.get("expires_at") or "").strip()
-    deep_link = str(payload.get("deep_link") or "").strip()
-    qr_payload = str(payload.get("qr_payload") or deep_link).strip()
-    suggested_username = str(payload.get("suggested_username") or "").strip()
-    if not pairing_id or not poll_token or not expires_at or not deep_link:
-        raise HTTPException(
-            status_code=502,
-            detail="Telegram setup service returned an incomplete response.",
-        )
-
-    with _telegram_onboarding_lock:
-        _prune_telegram_onboarding_pairings()
-        _telegram_onboarding_pairings[pairing_id] = _TelegramOnboardingPairing(
-            poll_token=poll_token,
-            expires_at=expires_at,
-            expires_at_ts=_parse_expiry_ts(expires_at),
-        )
-
-    return {
-        "pairing_id": pairing_id,
-        "suggested_username": suggested_username,
-        "deep_link": deep_link,
-        "qr_payload": qr_payload,
-        "expires_at": expires_at,
-    }
-
-
-@app.get("/api/messaging/telegram/onboarding/{pairing_id}")
-async def get_telegram_onboarding_status(pairing_id: str):
-    with _telegram_onboarding_lock:
-        _prune_telegram_onboarding_pairings()
-        record = _telegram_onboarding_pairings.get(pairing_id)
-        if not record:
-            raise HTTPException(
-                status_code=404,
-                detail="Telegram setup session was not found. Start a new setup.",
-            )
-        if record.bot_token:
-            return {
-                "status": "ready",
-                "bot_username": record.bot_username,
-                "owner_user_id": record.owner_user_id,
-                "expires_at": record.expires_at,
-            }
-        poll_token = record.poll_token
-
-    payload = await _telegram_onboarding_request(
-        "GET",
-        f"/v1/telegram/pairings/{urllib.parse.quote(pairing_id, safe='')}",
-        bearer_token=poll_token,
-    )
-    status = str(payload.get("status") or "").strip()
-    if status == "waiting":
-        with _telegram_onboarding_lock:
-            current = _telegram_onboarding_pairings.get(pairing_id)
-            expires_at = current.expires_at if current else ""
-        return {"status": "waiting", "expires_at": expires_at}
-
-    if status == "ready":
-        bot_token = str(payload.get("token") or "").strip()
-        bot_username = str(payload.get("bot_username") or "").strip()
-        if not bot_token:
-            raise HTTPException(
-                status_code=502,
-                detail="Telegram setup service returned an incomplete response.",
-            )
-        owner_user_id = _normalize_telegram_user_id(payload.get("owner_user_id"))
-        with _telegram_onboarding_lock:
-            record = _telegram_onboarding_pairings.get(pairing_id)
-            if not record:
-                raise HTTPException(
-                    status_code=404,
-                    detail="Telegram setup session was not found. Start a new setup.",
-                )
-            record.bot_token = bot_token
-            record.bot_username = bot_username or None
-            record.owner_user_id = owner_user_id
-            return {
-                "status": "ready",
-                "bot_username": record.bot_username,
-                "owner_user_id": record.owner_user_id,
-                "expires_at": record.expires_at,
-            }
-
-    if status in {"expired", "claimed"}:
-        with _telegram_onboarding_lock:
-            _telegram_onboarding_pairings.pop(pairing_id, None)
-        raise HTTPException(
-            status_code=410,
-            detail=_telegram_onboarding_error_message(
-                status,
-                "Telegram setup is no longer available. Start a new setup.",
-            ),
-        )
-
-    raise HTTPException(
-        status_code=502,
-        detail="Telegram setup service returned an unknown status.",
-    )
-
-
-def _restart_gateway_after_telegram_onboarding(profile: Optional[str] = None) -> dict[str, Any]:
-    """Best-effort gateway restart after saving Telegram QR onboarding.
-
-    The QR flow naturally pulls users into Telegram on another device. If the
-    saved token waits on a separate dashboard restart click, Clover appears
-    broken from the chat side. Keep the config save authoritative, but report
-    restart failures so the UI can fall back to the existing manual banner.
-    """
-    try:
-        proc, reused = _spawn_gateway_restart(profile)
-    except Exception as exc:
-        _log.exception("Failed to auto-restart gateway after Telegram onboarding")
-        return {
-            "restart_started": False,
-            "restart_error": str(exc),
-        }
-    if reused:
-        _log.info(
-            "Telegram onboarding: reusing in-flight gateway restart (pid %s)",
-            proc.pid,
-        )
-    return {
-        "restart_started": True,
-        "restart_action": "gateway-restart",
-        "restart_pid": proc.pid,
-    }
-
-
-@app.post("/api/messaging/telegram/onboarding/{pairing_id}/apply")
-async def apply_telegram_onboarding(
-    pairing_id: str, body: TelegramOnboardingApply, profile: Optional[str] = None
-):
-    allowed_user_ids = []
-    seen = set()
-    for raw_id in body.allowed_user_ids:
-        normalized = _normalize_telegram_user_id(raw_id)
-        if not normalized:
-            raise HTTPException(
-                status_code=400,
-                detail="Allowed Telegram user IDs must be numeric.",
-            )
-        if normalized not in seen:
-            seen.add(normalized)
-            allowed_user_ids.append(normalized)
-    if not allowed_user_ids:
-        raise HTTPException(
-            status_code=400,
-            detail="Add at least one allowed Telegram user ID.",
-        )
-
-    with _telegram_onboarding_lock:
-        _prune_telegram_onboarding_pairings()
-        record = _telegram_onboarding_pairings.get(pairing_id)
-        if not record:
-            raise HTTPException(
-                status_code=404,
-                detail="Telegram setup session was not found. Start a new setup.",
-            )
-        bot_token = record.bot_token
-        bot_username = record.bot_username
-        if not bot_token:
-            raise HTTPException(
-                status_code=409,
-                detail="Telegram setup is not ready yet.",
-            )
-
-    effective_profile = body.profile or profile
-
-    def _apply():
-        with _profile_scope(effective_profile):
-            save_env_value("TELEGRAM_BOT_TOKEN", bot_token)
-            save_env_value("TELEGRAM_ALLOWED_USERS", ",".join(allowed_user_ids))
-            _write_platform_enabled("telegram", True)
-
-    try:
-        await asyncio.to_thread(_apply)
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        _log.exception("Telegram onboarding apply failed")
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to save Telegram setup.",
-        ) from exc
-
-    with _telegram_onboarding_lock:
-        _telegram_onboarding_pairings.pop(pairing_id, None)
-
-    restart_result = _restart_gateway_after_telegram_onboarding(effective_profile)
-
-    return {
-        "ok": True,
-        "platform": "telegram",
-        "bot_username": bot_username,
-        "needs_restart": not restart_result["restart_started"],
-        **restart_result,
-    }
-
-
-@app.delete("/api/messaging/telegram/onboarding/{pairing_id}")
-async def cancel_telegram_onboarding(pairing_id: str):
-    with _telegram_onboarding_lock:
-        _telegram_onboarding_pairings.pop(pairing_id, None)
-    return {"ok": True}
-
-
 @app.get("/api/messaging/platforms")
 async def get_messaging_platforms(profile: Optional[str] = None):
     # Profile-scoped so the dashboard's global profile switcher shows the
@@ -10939,14 +10418,6 @@ def _copilot_acp_status() -> Dict[str, Any]:
 # ``external`` = read-only/delegated to a terminal or third-party CLI.
 _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
     {
-        "id": "clover",
-        "name": "Clover Portal",
-        "flow": "device_code",
-        "cli_command": "clover auth add clover",
-        "docs_url": "",
-        "status_fn": None,  # dispatched via auth.get_clover_auth_status
-    },
-    {
         "id": "openai-codex",
         "name": "ChatGPT or Codex Subscription",
         "flow": "device_code",
@@ -11033,18 +10504,6 @@ def _resolve_provider_status(provider_id: str, status_fn) -> Dict[str, Any]:
             return {"logged_in": False, "error": str(e)}
     try:
         from clover_cli import auth as hauth
-        if provider_id == "clover":
-            # Read-only accounts-tab card: refresh-free snapshot so listing
-            # providers never performs an OAuth refresh.
-            raw = hauth.get_clover_auth_status_local()
-            return {
-                "logged_in": bool(raw.get("logged_in")),
-                "source": "clover_portal",
-                "source_label": raw.get("portal_base_url") or "Clover Portal",
-                "token_preview": _truncate_token(raw.get("access_token")),
-                "expires_at": raw.get("access_expires_at"),
-                "has_refresh_token": bool(raw.get("has_refresh_token")),
-            }
         if provider_id == "openai-codex":
             raw = hauth.get_codex_auth_status()
             return {
@@ -11319,10 +10778,8 @@ async def disconnect_oauth_provider(
                 return {"ok": bool(cleared), "provider": provider_id}
 
             try:
-                from clover_cli.auth import clear_provider_auth, invalidate_clover_auth_status_cache
+                from clover_cli.auth import clear_provider_auth
                 cleared = clear_provider_auth(provider_id)
-                if provider_id == "clover":
-                    invalidate_clover_auth_status_cache()
                 _log.info("oauth/disconnect: %s (cleared=%s)", provider_id, cleared)
                 return {"ok": bool(cleared), "provider": provider_id}
             except Exception as e:
@@ -11428,64 +10885,12 @@ async def _start_device_code_flow(
     provider_id: str,
     profile: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Initiate a device-code flow (Clover, OpenAI Codex, MiniMax, or xAI).
+    """Initiate a device-code flow (OpenAI Codex, MiniMax, or xAI).
 
     Calls the provider's device-auth endpoint via the existing CLI helpers,
     then spawns a background poller. Returns the user-facing display fields
     so the UI can render the verification page link + user code.
     """
-    if provider_id == "clover":
-        from clover_cli.auth import (
-            _request_device_code,
-            PROVIDER_REGISTRY,
-        )
-        import httpx
-        pconfig = PROVIDER_REGISTRY["clover"]
-        portal_base_url = (
-            os.getenv("CLOVER_PORTAL_BASE_URL")
-            or os.getenv("CLOVER_PORTAL_BASE_URL")
-            or pconfig.portal_base_url
-        ).rstrip("/")
-        client_id = pconfig.client_id
-        scope = pconfig.scope
-
-        def _do_clover_device_request():
-            with httpx.Client(
-                timeout=httpx.Timeout(15.0),
-                headers={"Accept": "application/json"},
-            ) as client:
-                return (
-                    _request_device_code(
-                        client=client,
-                        portal_base_url=portal_base_url,
-                        client_id=client_id,
-                        scope=scope,
-                    ),
-                    scope,
-                )
-
-        device_data, effective_scope = await asyncio.get_running_loop().run_in_executor(
-            None, _do_clover_device_request
-        )
-        sid, sess = _new_oauth_session("clover", "device_code", profile=profile)
-        sess["device_code"] = str(device_data["device_code"])
-        sess["interval"] = int(device_data["interval"])
-        sess["expires_at"] = time.time() + int(device_data["expires_in"])
-        sess["portal_base_url"] = portal_base_url
-        sess["client_id"] = client_id
-        sess["scope"] = effective_scope
-        threading.Thread(
-            target=_clover_poller, args=(sid,), daemon=True, name=f"oauth-poll-{sid[:6]}"
-        ).start()
-        return {
-            "session_id": sid,
-            "flow": "device_code",
-            "user_code": str(device_data["user_code"]),
-            "verification_url": str(device_data["verification_uri_complete"]),
-            "expires_in": int(device_data["expires_in"]),
-            "poll_interval": int(device_data["interval"]),
-        }
-
     if provider_id == "openai-codex":
         # Codex uses fixed OpenAI device-auth endpoints; reuse the helper.
         sid, _ = _new_oauth_session("openai-codex", "device_code", profile=profile)
@@ -11636,76 +11041,11 @@ async def _start_device_code_flow(
     raise HTTPException(status_code=400, detail=f"Provider {provider_id} does not support device-code flow")
 
 
-def _clover_poller(session_id: str) -> None:
-    """Background poller that drives a Clover device-code flow to completion."""
-    from clover_cli.auth import (
-        _poll_for_token,
-        refresh_clover_oauth_from_state,
-    )
-    from datetime import datetime, timezone
-    import httpx
-    with _oauth_sessions_lock:
-        sess = _oauth_sessions.get(session_id)
-    if not sess:
-        return
-    portal_base_url = sess["portal_base_url"]
-    client_id = sess["client_id"]
-    device_code = sess["device_code"]
-    interval = sess["interval"]
-    scope = sess.get("scope")
-    expires_in = max(60, int(sess["expires_at"] - time.time()))
-    try:
-        with httpx.Client(timeout=httpx.Timeout(15.0), headers={"Accept": "application/json"}) as client:
-            token_data = _poll_for_token(
-                client=client,
-                portal_base_url=portal_base_url,
-                client_id=client_id,
-                device_code=device_code,
-                expires_in=expires_in,
-                poll_interval=interval,
-            )
-        # Same post-processing as _clover_device_code_login (validate/refresh JWT)
-        now = datetime.now(timezone.utc)
-        token_ttl = int(token_data.get("expires_in") or 0)
-        auth_state = {
-            "portal_base_url": portal_base_url,
-            "inference_base_url": token_data.get("inference_base_url"),
-            "client_id": client_id,
-            "scope": token_data.get("scope") or scope,
-            "token_type": token_data.get("token_type", "Bearer"),
-            "access_token": token_data["access_token"],
-            "refresh_token": token_data.get("refresh_token"),
-            "obtained_at": now.isoformat(),
-            "expires_at": (
-                datetime.fromtimestamp(now.timestamp() + token_ttl, tz=timezone.utc).isoformat()
-                if token_ttl else None
-            ),
-            "expires_in": token_ttl,
-        }
-        with _profile_scope(_oauth_session_profile(session_id)):
-            full_state = refresh_clover_oauth_from_state(
-                auth_state,
-                timeout_seconds=15.0,
-                force_refresh=False,
-            )
-            from clover_cli.auth import persist_clover_credentials
-            persist_clover_credentials(full_state)
-        with _oauth_sessions_lock:
-            sess["status"] = "approved"
-        _log.info("oauth/device: clover login completed (session=%s)", session_id)
-    except Exception as e:
-        _log.warning("clover device-code poll failed (session=%s): %s", session_id, e)
-        with _oauth_sessions_lock:
-            sess["status"] = "error"
-            sess["error_message"] = str(e)
-
-
 def _minimax_poller(session_id: str) -> None:
     """Background poller that drives a MiniMax OAuth flow to completion.
 
-    Mirrors `_clover_poller` but calls the MiniMax-specific token endpoint,
-    which uses a PKCE-style ``code_verifier`` + ``user_code`` rather than
-    the ``device_code`` field used by Clover. On success, builds the same
+    Calls the MiniMax-specific token endpoint, which uses a PKCE-style
+    ``code_verifier`` + ``user_code`` rather than a ``device_code`` field. On success, builds the same
     auth_state dict that ``_minimax_oauth_login`` (the CLI flow) builds
     and persists via ``_minimax_save_auth_state`` — so the dashboard
     path leaves the system in the same state as
@@ -13013,7 +12353,6 @@ from clover_cli.web_routers.cron import (  # noqa: E402,F401 — legacy re-expor
     resume_cron_job,
     trigger_cron_job,
     delete_cron_job,
-    cron_fire_webhook,
     list_cron_blueprints,
     instantiate_blueprint,
 )
@@ -13244,13 +12583,12 @@ def _fire_cron_job_for_profile(
     Run ONE due cron job end-to-end for ``profile`` via the resolved
     scheduler provider's ``fire_due`` (store CAS claim + ``run_one_job``).
 
-    Superseded by :func:`_forward_cron_fire_to_gateway`: cron fires must
-    execute in the GATEWAY process (which owns the live platform adapters),
-    not the dashboard. Executing here delivered through the standalone path
-    only, which cannot serve relay-fronted logical platforms (their only
-    sender is the live relay adapter — no native credential exists on the
-    box) or E2EE rooms. Kept temporarily because external callers may still
-    resolve it via the web_deps late-binding seam.
+    Cron fires belong in the GATEWAY process (which owns the live platform
+    adapters), not the dashboard. Executing here only delivers through the
+    standalone path, which cannot serve relay-fronted logical platforms
+    (their only sender is the live relay adapter — no native credential
+    exists on the box) or E2EE rooms. Kept temporarily because external
+    callers may still resolve it via the web_deps late-binding seam.
     """
     _profile_name, home = _cron_profile_home(profile)
     from cron import jobs as cron_jobs
@@ -13282,147 +12620,6 @@ def _fire_cron_job_for_profile(
             return bool(provider.fire_due(job_id, adapters=None, loop=None))
     finally:
         reset_clover_home_override(token)
-
-
-def _profile_env_value(home: Path, key: str) -> str:
-    """Best-effort read of one KEY=VALUE line from a profile's .env file."""
-    try:
-        env_path = home / ".env"
-        if not env_path.is_file():
-            return ""
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            if k.strip() == key:
-                return v.strip().strip('"').strip("'")
-    except Exception:
-        pass
-    return ""
-
-
-def _gateway_fire_endpoint(profile: str, home: Path) -> str:
-    """Resolve the loopback URL of the gateway api_server's cron-fire route.
-
-    Port resolution mirrors gateway/config.py's api_server load order for the
-    TARGET profile: ``platforms.api_server.extra.port`` in the profile's
-    config.yaml, then ``API_SERVER_PORT`` (process env for the active profile,
-    the profile's own .env otherwise), then the adapter default 8642. The bind
-    host is the adapter's loopback default — the dashboard and gateway share a
-    network namespace in every supported deployment (same host process tree,
-    or the same container under s6).
-
-    Multiplex mode (one gateway serving several profiles) exposes per-profile
-    mirrors under ``/p/<profile>/…``, so a non-default profile routes through
-    the default gateway's port with that prefix; per-profile-gateway mode
-    (each profile its own process/port) uses the bare path on the profile's
-    own port.
-    """
-    import os as _os
-
-    port = 0
-    try:
-        # Profile-scoped read through the CANONICAL loader (managed-scope
-        # overlay, ${ENV_VAR} expansion, profile pathing) — never a raw
-        # yaml.safe_load of config.yaml (tests/clover_cli/
-        # test_config_read_guard.py). The CLOVER_HOME override scopes
-        # get_config_path() to the TARGET profile, same pattern the
-        # deprecated _fire_cron_job_for_profile used for its store scope.
-        from clover_constants import (
-            reset_clover_home_override,
-            set_clover_home_override,
-        )
-
-        token = set_clover_home_override(str(home))
-        try:
-            profile_cfg = load_config()
-        finally:
-            reset_clover_home_override(token)
-        raw = cfg_get(
-            profile_cfg, "platforms", "api_server", "extra", "port", default=None
-        )
-        if raw:
-            port = int(raw)
-    except Exception:
-        port = 0
-    if not port:
-        raw = (
-            _os.getenv("API_SERVER_PORT", "")
-            if profile == _cron_default_profile()
-            else _profile_env_value(home, "API_SERVER_PORT")
-        )
-        try:
-            port = int(raw) if raw else 0
-        except ValueError:
-            port = 0
-    if not port:
-        port = 8642
-
-    multiplex = False
-    try:
-        cfg = load_config()
-        multiplex = bool(cfg_get(cfg, "gateway", "multiplex_profiles", default=False))
-        env_flag = _os.getenv("GATEWAY_MULTIPLEX_PROFILES", "").strip().lower()
-        if env_flag in {"1", "true", "yes", "on"}:
-            multiplex = True
-        elif env_flag in {"0", "false", "no", "off"}:
-            multiplex = False
-    except Exception:
-        pass
-
-    if multiplex and profile != "default":
-        return f"http://127.0.0.1:{port}/p/{profile}/api/cron/fire"
-    return f"http://127.0.0.1:{port}/api/cron/fire"
-
-
-async def _forward_cron_fire_to_gateway(
-    profile: str, job_id: str, authorization: str
-) -> Optional[Tuple[int, Dict[str, Any]]]:
-    """Forward a Chronos fire callback to the gateway api_server on loopback.
-
-    The dashboard is the hosted deployment's only public HTTP door (Fly proxy
-    → internal_port 9119), but cron execution belongs to the GATEWAY process:
-    it owns the live platform adapters, so delivery works for relay-fronted
-    logical platforms and E2EE rooms — the standalone path the dashboard used
-    to run cannot serve either. This forwards the fire byte-preserved (same
-    job_id, same NAS bearer — the gateway re-verifies the JWT itself) and
-    passes the gateway's response through.
-
-    Returns ``(status_code, body)`` from the gateway, or ``None`` when the
-    gateway is unreachable (not started yet after a scale-to-zero wake,
-    restarting, or api_server disabled) — the caller maps that to 503 so NAS
-    retries per the Chronos contract (non-2xx = retryable; the store CAS
-    de-dupes the eventual double fire), UNLESS the profile's gateway was
-    deliberately stopped (see :func:`_gateway_intentionally_stopped`), in
-    which case the caller drops the fire with 200 — retrying into an
-    operator-stopped gateway can never succeed and only burns scheduler
-    retries (OOF-266).
-    """
-    _profile_name, home = _cron_profile_home(profile)
-    url = _gateway_fire_endpoint(_profile_name, home)
-    import httpx
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                url,
-                json={"job_id": job_id},
-                headers={"Authorization": authorization},
-            )
-    except Exception as exc:
-        _log.warning(
-            "cron fire forward to %s failed (%s: %s); returning 503 for NAS retry",
-            url, type(exc).__name__, exc,
-        )
-        return None
-    try:
-        body = resp.json()
-    except Exception:
-        body = {"raw": (resp.text or "")[:500]}
-    if not isinstance(body, dict):
-        body = {"raw": body}
-    return resp.status_code, body
 
 
 def _gateway_intentionally_stopped(profile: Optional[str]) -> bool:
@@ -19488,13 +18685,6 @@ def start_server(
 
     import uvicorn
 
-    try:
-        from clover_cli.clover_auth_keepalive import start_clover_auth_keepalive
-
-        start_clover_auth_keepalive()
-    except Exception as exc:
-        _log.debug("Clover auth keepalive did not start: %s", exc)
-
     # A configured browser-facing URL is also the exact Host/Origin trust
     # declaration for reverse-proxy deployments. Resolve it once at startup so
     # request middleware never reloads config. Any non-loopback public hostname
@@ -19528,18 +18718,18 @@ def start_server(
         from clover_cli.dashboard_auth import list_providers
         if not list_providers():
             # Surface the *specific* reason any bundled provider declined
-            # to register (e.g. missing CLOVER_DASHBOARD_OAUTH_CLIENT_ID).
-            # Each provider plugin that ships with Clover Cognition exposes a
-            # module-level ``LAST_SKIP_REASON`` string for this purpose;
-            # without it the operator would only see "no providers" which
-            # is misleading when the provider IS installed but unconfigured.
+            # to register (e.g. a half-configured basic_auth block). The
+            # bundled basic provider exposes a module-level
+            # ``LAST_SKIP_REASON`` string for this purpose; without it the
+            # operator would only see "no providers" which is misleading
+            # when the provider IS installed but unconfigured.
             skip_reasons: list[str] = []
             try:
-                from plugins.dashboard_auth import clover as _clover_plugin
+                from plugins.dashboard_auth import basic as _basic_plugin
 
-                if _clover_plugin.LAST_SKIP_REASON:
+                if _basic_plugin.LAST_SKIP_REASON:
                     skip_reasons.append(
-                        f"  • clover: {_clover_plugin.LAST_SKIP_REASON}"
+                        f"  • basic: {_basic_plugin.LAST_SKIP_REASON}"
                     )
             except Exception:
                 pass
@@ -19585,7 +18775,7 @@ def start_server(
                 "    (hash with: python -c \"from "
                 "plugins.dashboard_auth.basic import hash_password; "
                 "print(hash_password('your-password'))\")\n"
-                "  • OAuth: run `clover dashboard register` (Clover Portal) or "
+                "  • OAuth/SSO: configure the self_hosted OIDC provider or "
                 "install a DashboardAuthProvider plugin.\n"
                 "There is no unauthenticated public-dashboard option. For "
                 "local-only use, bind 127.0.0.1 and leave dashboard.public_url "

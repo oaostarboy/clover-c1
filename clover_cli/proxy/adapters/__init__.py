@@ -8,13 +8,11 @@ token. See :class:`UpstreamAdapter` for the contract.
 from typing import Dict, Type
 
 from clover_cli.proxy.adapters.base import UpstreamAdapter
-from clover_cli.proxy.adapters.clover_portal import CloverPortalAdapter
 from clover_cli.proxy.adapters.xai import XAIGrokAdapter
 
 # Registry of available adapter classes keyed by provider name as used on
 # the ``clover proxy start --provider <name>`` CLI flag.
 ADAPTERS: Dict[str, Type[UpstreamAdapter]] = {
-    "clover": CloverPortalAdapter,
     "xai": XAIGrokAdapter,
 }
 

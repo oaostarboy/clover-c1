@@ -1,0 +1,398 @@
+"""Running subagent cards follow the latest message (re-posted below the reply)."""
+
+from __future__ import annotations
+
+import pytest
+
+from gateway import delegation_activity as da
+from gateway.delegation_activity import follow_latest_message
+from tests.gateway.test_delegation_activity import (
+    FakeTelegramAdapter,
+    _child_cb,
+    _make_publisher,
+    _turn_runner,
+)
+
+
+class _NoDeleteAdapter(FakeTelegramAdapter):
+    delete_message = None
+
+
+@pytest.fixture(autouse=True)
+def _clean_registry():
+    da._LIVE.clear(); da._LAST_OUT.clear(); da._FOLLOW_TIMERS.clear(); da._BOARDS.clear()
+    yield
+    for h in list(da._FOLLOW_TIMERS.values()):
+        h.cancel()
+    da._LIVE.clear(); da._LAST_OUT.clear(); da._FOLLOW_TIMERS.clear()
+
+
+@pytest.mark.asyncio
+async def test_running_card_moves_below_latest_message():
+    ad = FakeTelegramAdapter()
+    pub = _make_publisher(ad)
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="Audit the gateway auth mixin")
+    await pub.drain()
+    key = ("chat-A", "delegation:deleg_aaaa0001")
+    old_id = ad._status_message_ids[key]
+
+    await ad.send("chat-A", "parent reply")  # the parent's reply lands
+    da._LAST_OUT[da._inbox_key(ad, "chat-A")] = "s1"
+    moved = await follow_latest_message(ad, "chat-A")
+
+    assert moved == 1
+    assert old_id in ad.deleted
+    new_id = ad._status_message_ids[key]
+    assert new_id == "s2"  # a NEW message, posted after the reply (s1)
+    assert "Audit gateway auth" in ad.sends[-1]["content"]
+
+    # Later progress edits the moved card instead of posting a third one.
+    a("tool.started", "read_file", "x.py", {"path": "x.py"})
+    await pub.drain()
+    assert ad.status_calls[-1]["key"] == "delegation:deleg_aaaa0001"
+    assert ad._status_message_ids[key] == "s2"
+    assert len(ad.sends) == 2
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_finished_cards_are_not_moved():
+    ad = FakeTelegramAdapter()
+    pub = _make_publisher(ad)
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    a("subagent.complete", status="completed", summary="done", duration_seconds=3)
+    await pub.drain()
+    before = (list(ad.sends), list(ad.deleted))
+    assert await follow_latest_message(ad, "chat-A") == 0
+    assert (ad.sends, ad.deleted) == before
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_no_delete_support_means_no_move():
+    ad = _NoDeleteAdapter()
+    pub = _make_publisher(ad)
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    assert await follow_latest_message(ad, "chat-A") == 0
+    assert ad.sends == []
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_other_chats_untouched():
+    ad = FakeTelegramAdapter()
+    pub = _make_publisher(ad)
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    assert await follow_latest_message(ad, "chat-B") == 0
+    assert ad.deleted == []
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_idle_publisher_drops_out_of_registry():
+    ad = FakeTelegramAdapter()
+    _make_publisher(ad)  # never started anything
+    assert await follow_latest_message(ad, "chat-A") == 0
+    assert da._LIVE == {}
+
+
+@pytest.mark.asyncio
+async def test_closed_publisher_unregisters():
+    ad = FakeTelegramAdapter()
+    pub = _make_publisher(ad)
+    await pub.aclose()
+    assert da._LIVE == {}
+
+
+@pytest.mark.asyncio
+async def test_base_adapter_moves_cards_after_reply_delivery():
+    """The hook lives in the shared message handler, after post-delivery."""
+    import inspect
+
+    from gateway.platforms import base
+
+    src = inspect.getsource(base)
+    hook = src.index("follow_latest_message(self, event.source.chat_id)")
+    post_cb = src.index("_post_cb = self.pop_post_delivery_callback(")
+    assert hook > post_cb
+
+
+class _SeqAdapter(FakeTelegramAdapter):
+    """Numeric, increasing message ids like Telegram."""
+
+    def __init__(self):
+        super().__init__()
+        self._next = 100
+
+    def _id(self):
+        self._next += 1
+        return str(self._next)
+
+    async def send_or_update_status(self, chat_id, status_key, content, *, metadata=None):
+        from gateway.platforms.base import SendResult
+
+        key = (chat_id, status_key)
+        mid = self._status_message_ids.get(key) or self._id()
+        self._status_message_ids[key] = mid
+        self._mid_key[mid] = key
+        self.cards[key] = content
+        self.status_calls.append({"chat_id": chat_id, "key": status_key, "content": content})
+        return SendResult(success=True, message_id=mid)
+
+    async def edit_message(self, chat_id, message_id, content, finalize=False, metadata=None):
+        from gateway.platforms.base import SendResult
+
+        self.edits = getattr(self, "edits", [])
+        self.edits.append((str(message_id), content))
+        return SendResult(success=True, message_id=str(message_id))
+
+    async def send(self, chat_id, content, reply_to=None, metadata=None):
+        from gateway.platforms.base import SendResult
+
+        mid = self._id()
+        self.sends.append({"chat_id": chat_id, "content": content, "id": mid})
+        da.note_outbound(self, chat_id, mid)  # what BasePlatformAdapter.send does
+        return SendResult(success=True, message_id=mid)
+
+
+@pytest.mark.asyncio
+async def test_interim_messages_move_card_once_after_burst(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(da, "FOLLOW_DEBOUNCE_SECONDS", 0.05)
+    ad = _SeqAdapter()
+    pub = _make_publisher(ad)
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    key = ("chat-A", "delegation:deleg_aaaa0001")
+    card_id = ad._status_message_ids[key]
+
+    # A burst of mid-turn messages (interim text, tool bubbles...).
+    for i in range(5):
+        await ad.send("chat-A", f"interim {i}")
+    await asyncio.sleep(0.2)
+
+    moved = [d for d in ad.deleted]
+    assert moved == [card_id]  # exactly one move for the whole burst
+    new_id = ad._status_message_ids[key]
+    assert int(new_id) > int(ad.sends[4]["id"])  # below the last message
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_card_already_newest_is_left_alone(monkeypatch):
+    ad = _SeqAdapter()
+    pub = _make_publisher(ad)
+    await ad.send("chat-A", "earlier message")
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    assert await follow_latest_message(ad, "chat-A") == 0
+    assert ad.deleted == []
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_card_own_edits_do_not_trigger_a_move(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(da, "FOLLOW_DEBOUNCE_SECONDS", 0.05)
+    ad = _SeqAdapter()
+    pub = _make_publisher(ad)
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    for i in range(3):
+        a("tool.started", "read_file", f"f{i}.py", {"path": f"f{i}.py"})
+        await pub.drain()
+    await asyncio.sleep(0.15)
+    assert ad.deleted == []
+    assert da._FOLLOW_TIMERS == {}
+    await pub.aclose()
+
+
+def test_every_adapter_send_reports_outbound():
+    from gateway.platforms.base import BasePlatformAdapter
+
+    class _A(BasePlatformAdapter):
+        async def send(self, chat_id, content, reply_to=None, metadata=None):
+            return None
+
+    assert getattr(_A.send, "_notes_outbound", False) is True
+
+
+@pytest.mark.asyncio
+async def test_card_follows_even_if_publisher_was_idle_at_first_message(monkeypatch):
+    """A message goes out before the turn's first worker starts (the idle
+    publisher drops out of the registry); the worker's card must still follow."""
+    import asyncio
+
+    monkeypatch.setattr(da, "FOLLOW_DEBOUNCE_SECONDS", 0.05)
+    ad = _SeqAdapter()
+    pub = _make_publisher(ad)
+    await ad.send("chat-A", "Plan: starting workers")
+    await follow_latest_message(ad, "chat-A")  # idle → unregistered
+    assert da._LIVE == {}
+
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    card_id = ad._status_message_ids[("chat-A", "delegation:deleg_aaaa0001")]
+    await ad.send("chat-A", "later reply")
+    await asyncio.sleep(0.2)
+    assert card_id in ad.deleted
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_two_turn_cards_both_follow(monkeypatch):
+    """Workers launched in two different turns: both live cards move below."""
+    import asyncio
+
+    monkeypatch.setattr(da, "FOLLOW_DEBOUNCE_SECONDS", 0.05)
+    ad = _SeqAdapter()
+    p1, p2 = _make_publisher(ad), _make_publisher(ad)
+    _child_cb(_turn_runner(p1), delegation_id="deleg_1")("subagent.start", preview="a")
+    await p1.drain()
+    await ad.send("chat-A", "reply 1")
+    await asyncio.sleep(0.2)
+    _child_cb(_turn_runner(p2), delegation_id="deleg_2", subagent_id="sa-2")("subagent.start", preview="b")
+    await p2.drain()
+    await ad.send("chat-A", "reply 2")
+    await asyncio.sleep(0.2)
+    last = int(ad.sends[-1]["id"]) if ad.sends[-1]["content"] == "reply 2" else None
+    ids = [ad._status_message_ids[("chat-A", f"delegation:{g}")] for g in ("deleg_1", "deleg_2")]
+    reply2 = next(int(x["id"]) for x in ad.sends if x["content"] == "reply 2")
+    assert all(int(i) > reply2 for i in ids)
+    await p1.aclose(); await p2.aclose()
+
+
+# ── one live board per chat ──────────────────────────────────────────────
+
+
+async def _board_pub(adapter, monkeypatch):
+    from tests.gateway.test_delegation_activity import _make_publisher
+
+    pub = _make_publisher(adapter)
+    pub._combined = True
+    pub._board_mode = True
+    return pub
+
+
+@pytest.mark.asyncio
+async def test_two_turns_share_one_board(monkeypatch):
+    monkeypatch.setattr(da, "BOARD_MIN_EDIT_SECONDS", 0.0)
+    ad = _SeqAdapter()
+    p1 = await _board_pub(ad, monkeypatch)
+    p2 = await _board_pub(ad, monkeypatch)
+    _child_cb(_turn_runner(p1), delegation_id="deleg_1", title="Billing")("subagent.start", preview="a")
+    await p1.drain()
+    _child_cb(_turn_runner(p2), delegation_id="deleg_2", subagent_id="sa-2", title="Subscription")("subagent.start", preview="b")
+    await p2.drain()
+    assert len(ad.sends) == 1, "one board message, not one card per turn"
+    assert ad.status_calls == [], "no per-group live cards in board mode"
+    board = da._BOARDS[da._inbox_key(ad, "chat-A")]
+    assert "Billing" in board.last_text and "Subscription" in board.last_text
+    await p1.aclose(); await p2.aclose()
+
+
+@pytest.mark.asyncio
+async def test_board_follows_latest_message(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(da, "FOLLOW_DEBOUNCE_SECONDS", 0.05)
+    ad = _SeqAdapter()
+    pub = await _board_pub(ad, monkeypatch)
+    _child_cb(_turn_runner(pub))("subagent.start", preview="g")
+    await pub.drain()
+    board = da._BOARDS[da._inbox_key(ad, "chat-A")]
+    first = board.message_id
+    await ad.send("chat-A", "reply")
+    await asyncio.sleep(0.2)
+    assert first in ad.deleted
+    assert int(board.message_id) > int(ad.sends[-2]["id"])  # below "reply"
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_board_drops_absorbed_worker_and_vanishes_when_empty(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(da, "BOARD_MIN_EDIT_SECONDS", 0.0)
+    ad = _SeqAdapter()
+    pub = await _board_pub(ad, monkeypatch)
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    board_id = da._BOARDS[da._inbox_key(ad, "chat-A")].message_id
+    a("subagent.complete", status="completed", summary="Plain summary: ok.", duration_seconds=1)
+    await pub.drain()
+    pub.absorb_finished()  # the turn card takes the result
+    await asyncio.sleep(0.05)
+    await pub.drain()
+    assert board_id in ad.deleted
+    assert da._inbox_key(ad, "chat-A") not in da._BOARDS
+    await pub.aclose()
+
+
+
+@pytest.mark.asyncio
+async def test_failed_edit_never_leaves_a_second_board(monkeypatch):
+    """Telegram rejects an edit ("message can't be edited"): the board is
+    re-posted, and the old board message must still be deleted."""
+    from gateway.platforms.base import SendResult
+
+    monkeypatch.setattr(da, "BOARD_MIN_EDIT_SECONDS", 0.0)
+    ad = _SeqAdapter()
+
+    async def _bad_edit(chat_id, message_id, content, finalize=False, metadata=None):
+        return SendResult(success=False, error="Bad Request: message can't be edited")
+
+    ad.edit_message = _bad_edit
+    pub = await _board_pub(ad, monkeypatch)
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    first = da._BOARDS[da._inbox_key(ad, "chat-A")].message_id
+    a("tool.started", "read_file", "x.py", {"path": "x.py"})
+    await pub.drain()
+    import asyncio
+    await asyncio.sleep(0.05)
+    await pub.drain()
+    board = da._BOARDS[da._inbox_key(ad, "chat-A")]
+    live = [s["id"] for s in ad.sends if s["id"] not in ad.deleted]
+    assert live == [board.message_id], f"exactly one board left, got {live}"
+    assert first in ad.deleted
+    await pub.aclose()
+
+
+
+@pytest.mark.asyncio
+async def test_board_left_by_previous_gateway_is_swept(monkeypatch, tmp_path):
+    """A gateway restart mid-run forgets its board in memory; the next board
+    in that chat deletes the orphan (ids persisted on disk)."""
+    monkeypatch.setattr(da, "_board_store_path", lambda: tmp_path / "boards.json")
+    ad = _SeqAdapter()
+    pub = await _board_pub(ad, monkeypatch)
+    _child_cb(_turn_runner(pub))("subagent.start", preview="g")
+    await pub.drain()
+    orphan = da._BOARDS[da._inbox_key(ad, "chat-A")].message_id
+    assert orphan in da._board_store_load().get(da._board_store_key(ad, "chat-A"), [])
+
+    # "Restart": all in-memory state gone, same chat, new workers.
+    da._BOARDS.clear(); da._LIVE.clear(); da._LAST_OUT.clear()
+    pub2 = await _board_pub(ad, monkeypatch)
+    _child_cb(_turn_runner(pub2), delegation_id="deleg_new", subagent_id="sa-9")("subagent.start", preview="h")
+    await pub2.drain()
+    assert orphan in ad.deleted
+    new = da._BOARDS[da._inbox_key(ad, "chat-A")].message_id
+    assert da._board_store_load()[da._board_store_key(ad, "chat-A")] == [new]
+    await pub.aclose(); await pub2.aclose()

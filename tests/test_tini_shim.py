@@ -53,6 +53,7 @@ def test_shim_script_is_executable_bit_friendly() -> None:
     assert "CLOVER_TINI_SHIM_TARGET" in text
 
 
+@pytest.mark.live_system_guard_bypass  # argv says "gateway run" but /init is the fake recorder above, not a real launcher
 def test_strips_g_and_double_dash(recorder: tuple[Path, Path]) -> None:
     """Legacy `tini -g -- gateway run` must not forward `-g` to /init."""
     r = _run_shim(recorder, ["-g", "--", "gateway", "run"])
@@ -69,6 +70,7 @@ def test_strips_g_and_double_dash(recorder: tuple[Path, Path]) -> None:
 
 
 
+@pytest.mark.live_system_guard_bypass  # argv says "gateway run" but /init is the fake recorder above, not a real launcher
 def test_does_not_double_wrap_existing_wrapper(
     recorder: tuple[Path, Path],
 ) -> None:

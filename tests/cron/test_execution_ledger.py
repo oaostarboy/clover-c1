@@ -264,10 +264,22 @@ def test_provider_start_recovers_interrupted_records_before_tick(monkeypatch):
 
 
 def test_external_provider_start_recovers_interrupted_records(monkeypatch):
-    from plugins.cron_providers.chronos import ChronosCronScheduler
+    from cron.scheduler_provider import CronScheduler
 
-    provider = ChronosCronScheduler()
-    provider._client = type("Client", (), {"arm": lambda self, **kwargs: None})()
+    class _FakeExternalCronScheduler(CronScheduler):
+        """Minimal external-provider double: start() recovers then reconciles,
+        exactly like a real remote-trigger provider (e.g. one backed by a
+        NAS/webhook scheduler) must on every process (re)start."""
+
+        @property
+        def name(self) -> str:
+            return "fake-external"
+
+        def start(self, stop_event, *, adapters=None, loop=None, interval=60) -> None:
+            self.recover_interrupted()
+            self.reconcile()
+
+    provider = _FakeExternalCronScheduler()
     events = []
     monkeypatch.setattr(
         "cron.executions.recover_interrupted_executions",

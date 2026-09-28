@@ -298,8 +298,8 @@ describe('fromSkin', () => {
     expect(theme.color.accent).toBe('#00D97E')
     expect(theme.color.border).toBe('#2E8B57')
     expect(theme.color.muted).toBe('ansi256(245)')
-    expect(theme.color.text).toBe('ansi256(136)')
-    expect(theme.color.prompt).toBe('ansi256(136)')
+    expect(theme.color.text).toBe('ansi256(35)')
+    expect(theme.color.prompt).toBe('ansi256(35)')
   })
 
   // ── A skin that authors a background OWNS its polarity ──────────────
@@ -358,7 +358,7 @@ describe('fromSkin', () => {
     const { fromSkin } = await importThemeWithEnv({ TERM_PROGRAM: ' Apple_Terminal ' })
     const theme = fromSkin({ banner_text: '#E4FFF1' }, {})
 
-    expect(theme.color.text).toBe('ansi256(136)')
+    expect(theme.color.text).toBe('ansi256(35)')
   })
 
   it('passes banner logo/hero', async () => {
@@ -434,18 +434,18 @@ describe('derived tone ladder', () => {
     const light = await importThemeWithEnv({ CLOVER_TUI_BACKGROUND: '#ffffff' })
 
     const cases: Array<[string, string, string]> = [
-      [dark.DARK_THEME.color.muted, '#CC9B1F', 'dark muted'],
-      [dark.DARK_THEME.color.label, '#3FBF7F', 'dark label'],
+      [dark.DARK_THEME.color.muted, '#18ac6f', 'dark muted'],
+      [dark.DARK_THEME.color.label, '#19b875', 'dark label'],
       [dark.DARK_THEME.color.statusFg, '#C0C0C0', 'dark statusFg'],
       [dark.DARK_THEME.color.completionBg, '#1a1a2e', 'dark surface'],
       [dark.DARK_THEME.color.completionCurrentBg, '#333355', 'dark chip'],
       [dark.DARK_THEME.color.selectionBg, '#3a3a55', 'dark selection'],
       // Light canon = liftForContrast(dark literal, white, 4.5): the exact
       // colors xterm's minimumContrastRatio rendered on light hosts.
-      [light.LIGHT_THEME.color.muted, '#946C08', 'light muted'],
+      [light.LIGHT_THEME.color.muted, '#0f7943', 'light muted'],
       [light.LIGHT_THEME.color.statusFg, '#6F6F6F', 'light statusFg'],
       [light.LIGHT_THEME.color.completionBg, '#F5F5F5', 'light surface'],
-      [light.LIGHT_THEME.color.completionCurrentBg, '#e0d1bf', 'light chip'],
+      [light.LIGHT_THEME.color.completionCurrentBg, '#bbd9ca', 'light chip'],
       [light.LIGHT_THEME.color.selectionBg, '#D4E4F7', 'light selection']
     ]
 
@@ -520,16 +520,16 @@ describe('background-aware adaptation (OSC-11 light terminals)', () => {
 
   it('rescues near-invisible colors with a hue-preserving multiplicative lift', async () => {
     const { contrastRatio, fromSkin } = await importThemeWithEnv({ CLOVER_TUI_BACKGROUND: '#ffffff' })
-    // The default dark cream (#E4FFF1, 1.08:1 on white) is genuinely invisible.
+    // The default dark mint (#E4FFF1, 1.08:1 on white) is genuinely invisible.
     const { color } = fromSkin({ banner_text: '#E4FFF1' }, {})
 
-    expect(color.text.toLowerCase()).not.toBe('#fff8dc')
+    expect(color.text.toLowerCase()).not.toBe('#e4fff1')
     expect(contrastRatio(color.text, '#ffffff')!).toBeGreaterThanOrEqual(1.18)
 
-    // Multiplicative lift preserves channel ordering (warm stays warm).
+    // Multiplicative lift preserves channel ordering (mint stays mint).
     const [r, g, b] = [1, 3, 5].map(i => parseInt(color.text.slice(i, i + 2), 16))
 
-    expect(r).toBeGreaterThanOrEqual(g!)
+    expect(r).toBeLessThanOrEqual(g!)
     expect(g).toBeGreaterThanOrEqual(b!)
   })
 

@@ -5,11 +5,10 @@ customer-managed and internet-exposed). This command is the gateway half of the
 zero-touch enrollment in the connector repo's
 ``docs/connector-gateway-auth-design.md``:
 
-  1. Resolve a fresh Clover Portal access token from the existing login
-     (``~/.clover/auth.json``) — the same path ``clover dashboard register``
-     uses (``resolve_clover_access_token``). This proves *which Clover org (tenant)*
-     the caller owns; the connector derives the authoritative tenant from it via
-     ``GET /api/oauth/account`` (never from anything the gateway asserts).
+  1. Resolve an identity token from the operator's configured IdP
+     (``gateway.idp.token_url``). This proves *which tenant* the caller owns;
+     the connector derives the authoritative tenant from it (never from
+     anything the gateway asserts).
   2. POST ``{enrollmentToken, gatewayId}`` to the connector's ``/relay/enroll``
      with that token in the ``Authorization`` header, over TLS.
   3. The connector verifies the enrollment token (signature + single-use +
@@ -22,7 +21,7 @@ zero-touch enrollment in the connector repo's
 
 Managed/hosted installs do NOT self-enroll: the orchestrator (NAS) mints the
 secret directly and stamps it into the container env, so this command refuses to
-run under ``is_managed()`` (mirrors ``dashboard register``).
+run under ``is_managed()``.
 
 EXPERIMENTAL: the relay auth scheme may change without a deprecation cycle until
 ≥2 Class-1 platforms validate the contract.
@@ -88,12 +87,12 @@ def _resolve_connector_url(override: Optional[str]) -> Optional[str]:
 
 
 def _resolve_identity_token() -> str:
-    """Resolve the caller-identity bearer token (generic-OIDC or Clover Portal).
+    """Resolve the caller-identity bearer token from the configured IdP.
 
     Delegates to the canonical resolver in ``gateway.relay`` so the enroll CLI and
     the runtime self-provision path share ONE implementation (generic OAuth2
     client-credentials when ``gateway.idp.token_url`` is set — the air-gapped /
-    self-hosted-IdP path; otherwise Clover Portal). Raises RuntimeError on failure.
+    self-hosted-IdP path). Raises RuntimeError on failure.
     """
     from gateway.relay import _resolve_relay_identity_token
 
@@ -138,8 +137,8 @@ def _post_enroll(
             pass
         if exc.code == 401:
             raise RuntimeError(
-                "Connector rejected the caller identity (401). Your Clover Portal "
-                "token could not be verified — try `clover auth add clover` and retry."
+                "Connector rejected the caller identity (401). The identity token "
+                "from gateway.idp.token_url could not be verified."
             ) from exc
         if exc.code == 403:
             raise RuntimeError(
@@ -161,7 +160,6 @@ def _post_enroll(
 
 def cmd_gateway_enroll(args) -> None:
     """Enroll this gateway with a relay connector; persist the auth creds to .env."""
-    from clover_cli.auth import AuthError
     from clover_cli.config import is_managed, save_env_value
 
     # Managed installs get GATEWAY_RELAY_* stamped in by the orchestrator (NAS
@@ -195,18 +193,10 @@ def cmd_gateway_enroll(args) -> None:
 
     gateway_id = (getattr(args, "gateway_id", None) or _default_gateway_id()).strip()
 
-    # 1. Resolve the caller-identity token (the tenant-proving identity). Generic
-    #    OIDC client-credentials when an IdP token endpoint is configured (air-
-    #    gapped / self-hosted-IdP, NO Clover Portal); otherwise the Clover Portal token.
+    # 1. Resolve the caller-identity token (the tenant-proving identity) from
+    #    the operator's configured IdP token endpoint.
     try:
         access_token = _resolve_identity_token()
-    except AuthError as exc:
-        if getattr(exc, "relogin_required", False):
-            print("✗ You're not logged into Clover Portal.")
-            print("  Run `clover setup` (or `clover auth add clover`) first, then retry.")
-        else:
-            print(f"✗ Could not resolve a Clover Portal access token: {exc}")
-        sys.exit(1)
     except Exception as exc:
         print(f"✗ Could not resolve a caller-identity token: {exc}")
         sys.exit(1)

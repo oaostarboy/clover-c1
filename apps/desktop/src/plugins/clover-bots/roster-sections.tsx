@@ -205,7 +205,7 @@ export function rosterGatewaySections<TRow extends RosterGatewayRow>(
 /** Roster rows carry the kind as a loose string (it arrives off the wire).
  *  Anything the glyph doesn't recognise is a remote gateway. */
 function connectionKind(kind?: string) {
-  return kind === 'cloud' || kind === 'local' || kind === 'ssh' ? kind : ('remote' as const)
+  return kind === 'local' || kind === 'ssh' ? kind : ('remote' as const)
 }
 
 interface GatewayKindGlyphProps {

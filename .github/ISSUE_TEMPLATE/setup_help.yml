@@ -21,7 +21,7 @@ body:
       label: What's Going Wrong?
       description: Describe what you're trying to do and where it fails.
       placeholder: |
-        I ran `clover setup` and selected Clover Portal, but when I try to
+        I ran `clover setup` and selected a provider, but when I try to
         start the gateway I get...
     validations:
       required: true

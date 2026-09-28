@@ -613,14 +613,14 @@ class TestFollowProfileConfigRuntimeOverrides:
 
         row = {
             "model": "openai/gpt-5.6-luna-pro",
-            "billing_provider": "clover",
+            "billing_provider": "openrouter",
             "model_config": json.dumps(
-                {"model": "openai/gpt-5.6-luna-pro", "provider": "clover"}
+                {"model": "openai/gpt-5.6-luna-pro", "provider": "openrouter"}
             ),
         }
         overrides = _stored_session_runtime_overrides(row)
         assert overrides["model_override"]["model"] == "openai/gpt-5.6-luna-pro"
-        assert overrides["model_override"]["provider"] == "clover"
+        assert overrides["model_override"]["provider"] == "openrouter"
 
     def test_legacy_bot_chat_title_backfills_contract(self):
         """Canonical Bot Chats created BEFORE the marker existed carry no
@@ -793,15 +793,15 @@ class TestRuntimeModelConfigDropsStaleKeys:
         row = {
             "model": "deepseek/deepseek-v4-flash-0731",
             "model_config": json.dumps(config),
-            "billing_provider": "clover",
+            "billing_provider": "openrouter",
         }
         overrides = _stored_session_runtime_overrides(row)
 
         assert overrides["model_override"]["model"] == "deepseek/deepseek-v4-flash-0731"
         # The stale endpoint identity is gone; resume routes through the
         # billing fallback to the profile's real provider.
-        assert overrides["model_override"]["provider"] == "clover"
-        assert overrides["provider_override"] == "clover"
+        assert overrides["model_override"]["provider"] == "openrouter"
+        assert overrides["provider_override"] == "openrouter"
 
     def test_real_db_persist_heals_desynced_row(self, tmp_path, monkeypatch):
         """A row already desynced (fresh model column + stale model_config

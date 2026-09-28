@@ -9,23 +9,13 @@ from __future__ import annotations
 from agent.billing_links import (
     BillingBlock,
     build_billing_block,
-    is_clover_inference_route,
 )
 
 
 
 
-
-
-def test_is_clover_inference_route_helper():
-    assert is_clover_inference_route("clover", "") is True
-    assert is_clover_inference_route("", "") is True
-    assert is_clover_inference_route("openai", "https://api.openai.com/v1") is False
-
-
 def test_known_provider_by_slug_resolves_label_and_url():
     block = build_billing_block(provider="openai", base_url="", model="gpt-5")
-    assert block.is_clover is False
     assert block.provider_label == "OpenAI"
     assert block.billing_url is not None
     assert "openai.com" in block.billing_url
@@ -47,7 +37,6 @@ def test_to_dict_round_trips_all_fields():
         "provider_label",
         "model",
         "billing_url",
-        "is_clover",
         "message",
     }
     assert isinstance(block, BillingBlock)

@@ -321,7 +321,7 @@ describe('OAuth onboarding', () => {
     installApiMock(async ({ body, path }: { body?: unknown; path: string }) => {
       calls.push({ body, path })
 
-      if (path === '/api/providers/oauth/clover/submit') {
+      if (path === '/api/providers/oauth/example/submit') {
         return { ok: true, status: 'approved' }
       }
 
@@ -329,8 +329,8 @@ describe('OAuth onboarding', () => {
         return {
           providers: [
             {
-              name: 'Clover Portal',
-              slug: 'clover',
+              name: 'Example OAuth',
+              slug: 'example',
               models: [model]
             }
           ]
@@ -338,11 +338,11 @@ describe('OAuth onboarding', () => {
       }
 
       if (path.startsWith('/api/model/recommended-default?')) {
-        return { provider: 'clover', model, free_tier: false }
+        return { provider: 'example', model, free_tier: false }
       }
 
       if (path === '/api/model/set') {
-        return { ok: true, provider: 'clover', model, gateway_tools: [] }
+        return { ok: true, provider: 'example', model }
       }
 
       throw new Error(`unexpected api path: ${path}`)
@@ -358,7 +358,7 @@ describe('OAuth onboarding', () => {
       }
 
       if (method === 'setup.runtime_check') {
-        expect(params).toEqual({ provider: 'clover' })
+        expect(params).toEqual({ provider: 'example' })
 
         return { ok: true } as never
       }
@@ -370,17 +370,17 @@ describe('OAuth onboarding', () => {
       baseState({
         flow: {
           status: 'awaiting_user',
-          provider: makeOAuthProvider('clover', 'Clover Portal'),
+          provider: makeOAuthProvider('example', 'Example OAuth'),
           start: {
-            auth_url: 'https://portal.example/auth',
+            auth_url: 'https://oauth.example/auth',
             expires_in: 600,
             flow: 'pkce',
-            session_id: 'portal-session'
+            session_id: 'example-session'
           },
           code: 'fresh-code'
         },
         reason:
-          'No access token found for Clover Portal login. setup.status reports configured credentials, but runtime resolution still failed.',
+          'No access token found for Example OAuth login. setup.status reports configured credentials, but runtime resolution still failed.',
         requested: true
       })
     )
@@ -392,7 +392,7 @@ describe('OAuth onboarding', () => {
     expect(state.flow.status).toBe('confirming_model')
 
     if (state.flow.status === 'confirming_model') {
-      expect(state.flow.label).toBe('Clover Portal')
+      expect(state.flow.label).toBe('Example OAuth')
       expect(state.flow.currentModel).toBe(model)
     }
 
@@ -410,22 +410,22 @@ describe('OAuth onboarding', () => {
   it('does not advance when the default model assignment is not persisted', async () => {
     const model = 'openai/gpt-5.5-pro'
     installApiMock(async ({ path }: { path: string }) => {
-      if (path === '/api/providers/oauth/clover/submit') {
+      if (path === '/api/providers/oauth/example/submit') {
         return { ok: true, status: 'approved' }
       }
 
       if (path.startsWith('/api/model/options')) {
-        return { providers: [{ name: 'Clover Portal', slug: 'clover', models: [model] }] }
+        return { providers: [{ name: 'Example OAuth', slug: 'example', models: [model] }] }
       }
 
       if (path.startsWith('/api/model/recommended-default?')) {
-        return { provider: 'clover', model, free_tier: false }
+        return { provider: 'example', model, free_tier: false }
       }
 
       if (path === '/api/model/set') {
         return {
           ok: false,
-          provider: 'clover',
+          provider: 'example',
           model,
           confirm_required: true,
           confirm_message: 'Confirm this expensive model.'
@@ -448,12 +448,12 @@ describe('OAuth onboarding', () => {
       baseState({
         flow: {
           status: 'awaiting_user',
-          provider: makeOAuthProvider('clover', 'Clover Portal'),
+          provider: makeOAuthProvider('example', 'Example OAuth'),
           start: {
-            auth_url: 'https://portal.example/auth',
+            auth_url: 'https://oauth.example/auth',
             expires_in: 600,
             flow: 'pkce',
-            session_id: 'portal-session'
+            session_id: 'example-session'
           },
           code: 'fresh-code'
         },

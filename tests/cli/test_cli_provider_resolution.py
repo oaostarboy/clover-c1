@@ -285,74 +285,6 @@ def test_cli_turn_routing_uses_primary_when_disabled(monkeypatch):
 
 
 
-def test_model_flow_clover_does_not_restore_stale_custom_api_key(tmp_path, monkeypatch):
-    import yaml
-
-    config_home = tmp_path / "clover"
-    config_home.mkdir()
-    monkeypatch.setenv("CLOVER_HOME", str(config_home))
-
-    config_path = config_home / "config.yaml"
-    config_path.write_text(
-        yaml.safe_dump(
-            {
-                "model": {
-                    "provider": "custom",
-                    "default": "glm-5.2",
-                    "base_url": "https://api.neuralwatt.com/v1",
-                    "api_key": "${NEURALWATT_API_KEY}",
-                    "api_mode": "chat_completions",
-                }
-            },
-            sort_keys=False,
-        )
-    )
-
-    stale_config = yaml.safe_load(config_path.read_text()) or {}
-    selected_model = "deepseek/deepseek-v4-flash"
-
-    monkeypatch.setattr(
-        "clover_cli.auth.get_provider_auth_state",
-        lambda provider: {
-            "access_token": "clover-token",
-            "portal_base_url": "https://portal.example.com",
-        },
-    )
-    monkeypatch.setattr(
-        "clover_cli.auth.resolve_clover_runtime_credentials",
-        lambda *args, **kwargs: {
-            "base_url": "",
-            "api_key": "clover-key",
-        },
-    )
-    monkeypatch.setattr(
-        "clover_cli.models.get_curated_clover_model_ids",
-        lambda: [selected_model],
-    )
-    monkeypatch.setattr("clover_cli.models.get_pricing_for_provider", lambda provider: {})
-    monkeypatch.setattr("clover_cli.models.check_clover_free_tier", lambda **kwargs: False)
-    monkeypatch.setattr(
-        "clover_cli.models.union_with_portal_paid_recommendations",
-        lambda model_ids, pricing, portal_url: (model_ids, pricing),
-    )
-    monkeypatch.setattr(
-        "clover_cli.auth._prompt_model_selection",
-        lambda *args, **kwargs: selected_model,
-    )
-    monkeypatch.setattr(
-        "clover_cli.clover_subscription.prompt_enable_tool_gateway",
-        lambda config: None,
-    )
-
-    clover_main._model_flow_clover(stale_config, current_model="glm-5.2")
-
-    config = yaml.safe_load(config_path.read_text()) or {}
-    model = config.get("model")
-    assert model["provider"] == "clover"
-    assert model["default"] == selected_model
-    assert model["base_url"] == ""
-    assert "api_key" not in model
-    assert "api_mode" not in model
 
 
 def _seed_stale_custom_model(tmp_path, monkeypatch):
@@ -548,56 +480,6 @@ def test_model_flow_custom_persists_selected_api_mode(monkeypatch):
     assert saved_env[key_env] == "test-key"
 
 
-def test_cmd_model_forwards_clover_login_tls_options(monkeypatch):
-    monkeypatch.setattr(clover_main, "_require_tty", lambda *a: None)
-    monkeypatch.setattr(
-        "clover_cli.config.load_config",
-        lambda: {"model": {"default": "gpt-5", "provider": "clover"}},
-    )
-    monkeypatch.setattr("clover_cli.config.save_config", lambda cfg: None)
-    monkeypatch.setattr("clover_cli.config.get_env_value", lambda key: "")
-    monkeypatch.setattr("clover_cli.config.save_env_value", lambda key, value: None)
-    monkeypatch.setattr("clover_cli.auth.resolve_provider", lambda requested, **kwargs: "clover")
-    monkeypatch.setattr("clover_cli.auth.get_provider_auth_state", lambda provider_id: None)
-    monkeypatch.setattr(clover_main, "_prompt_provider_choice", lambda choices, **kwargs: 0)
-
-    captured = {}
-
-    def _fake_login(login_args, provider_config):
-        captured["portal_url"] = login_args.portal_url
-        captured["inference_url"] = login_args.inference_url
-        captured["client_id"] = login_args.client_id
-        captured["scope"] = login_args.scope
-        captured["no_browser"] = login_args.no_browser
-        captured["timeout"] = login_args.timeout
-        captured["ca_bundle"] = login_args.ca_bundle
-        captured["insecure"] = login_args.insecure
-
-    monkeypatch.setattr("clover_cli.auth._login_clover", _fake_login)
-
-    clover_main.cmd_model(
-        SimpleNamespace(
-            portal_url="",
-            inference_url="https://inference./v1",
-            client_id="clover-local",
-            scope="openid profile",
-            no_browser=True,
-            timeout=7.5,
-            ca_bundle="/tmp/local-ca.pem",
-            insecure=True,
-        )
-    )
-
-    assert captured == {
-        "portal_url": "",
-        "inference_url": "https://inference./v1",
-        "client_id": "clover-local",
-        "scope": "openid profile",
-        "no_browser": True,
-        "timeout": 7.5,
-        "ca_bundle": "/tmp/local-ca.pem",
-        "insecure": True,
-    }
 
 
 # ---------------------------------------------------------------------------

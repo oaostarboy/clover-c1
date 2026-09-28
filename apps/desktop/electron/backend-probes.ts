@@ -211,9 +211,9 @@ function verifyCloverCli(cloverCommand: string, opts?: { shell?: boolean }) {
 
 export {
   canImportCloverCli,
+  cloverRuntimeImportProbe,
   DEFAULT_PROBE_TIMEOUT_MS,
   execProbeSync,
-  cloverRuntimeImportProbe,
   PROBE_TIMEOUT_MS,
   resolveProbeTimeoutMs,
   shouldTrustCloverOverride,

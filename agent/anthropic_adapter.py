@@ -45,7 +45,6 @@ from agent.anthropic_endpoints import (  # noqa: F401
     _is_kimi_coding_endpoint,
     _is_kimi_family_endpoint,
     _is_minimax_anthropic_endpoint,
-    _is_clover_portal_endpoint,
     _is_opencode_endpoint,
     _is_third_party_anthropic_endpoint,
     _model_name_is_kimi_family,
@@ -894,12 +893,7 @@ def build_anthropic_kwargs(
     )
     anthropic_tools = convert_tools_to_anthropic(tools) if tools else []
 
-    # Clover Portal routes on its own catalog ids (``anthropic/claude-opus-4.8``);
-    # normalizing to the bare Anthropic slug would make the model unresolvable
-    # there. Skipping the call preserves the prefix AND the dots, so
-    # ``preserve_dots`` stays irrelevant for Portal.
-    if not _is_clover_portal_endpoint(base_url):
-        model = normalize_model_name(model, preserve_dots=preserve_dots)
+    model = normalize_model_name(model, preserve_dots=preserve_dots)
     # effective_max_tokens = output cap for this call (≠ total context window)
     # Use the resolver helper so non-positive values (negative ints,
     # fractional floats, NaN, non-numeric) fail locally with a clear error

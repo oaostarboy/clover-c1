@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 # so concurrent CLI/gateway loads of a broken config.yaml don't spam stderr
 # every time. Cleared automatically when the file changes (different mtime).
 _CONFIG_PARSE_WARNED: set = set()
+_STARTUP_MIGRATION_CHECKED: dict[str, tuple[int, int]] = {}
+_STARTUP_MIGRATION_GUARD = threading.local()
 
 
 def _backup_corrupt_config(config_path: Path) -> Optional[Path]:
@@ -1027,7 +1029,7 @@ ENV_VARS_BY_VERSION: Dict[int, List[str]] = {
 
 # Required environment variables with metadata for migration prompts.
 # LLM provider is required but handled in the setup wizard's provider
-# selection step (Clover Portal / OpenRouter / Custom endpoint), so this
+# selection step (OpenRouter / Custom endpoint / ...), so this
 # dict is intentionally empty — no single env var is universally required.
 REQUIRED_ENV_VARS = {}
 
@@ -1225,8 +1227,7 @@ def _is_env_config_key(key: str) -> bool:
     api_keys = [
         'OPENROUTER_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'VOICE_TOOLS_OPENAI_KEY',
         'EXA_API_KEY', 'PARALLEL_API_KEY', 'FIRECRAWL_API_KEY', 'FIRECRAWL_API_URL',
-        'FIRECRAWL_GATEWAY_URL', 'TOOL_GATEWAY_DOMAIN', 'TOOL_GATEWAY_SCHEME',
-        'TOOL_GATEWAY_USER_TOKEN', 'TAVILY_API_KEY',
+        'TAVILY_API_KEY',
         'BROWSERBASE_API_KEY', 'BROWSERBASE_PROJECT_ID', 'BROWSER_USE_API_KEY',
         'FAL_KEY', 'TELEGRAM_BOT_TOKEN', 'DISCORD_BOT_TOKEN',
         'TERMINAL_SSH_HOST', 'TERMINAL_SSH_USER', 'TERMINAL_SSH_KEY',
@@ -1259,9 +1260,14 @@ def get_missing_config_fields() -> List[Dict[str, Any]]:
     Check which config fields are missing or outdated (recursive).
     
     Walks the DEFAULT_CONFIG tree at arbitrary depth and reports any keys
-    present in defaults but absent from the user's loaded config.
+    present in defaults but absent from the user's loaded config. Read-only
+    (never mutates ``config``), so uses ``load_config_readonly()`` — this
+    runs from ``migrate_config()``, which the startup-migration probe inside
+    ``_load_config_impl()`` can call reentrantly, and a deepcopying
+    ``load_config()`` here would defeat that probe's whole point of using
+    the cheap readonly path.
     """
-    config = load_config()
+    config = load_config_readonly()
     missing = []
 
     def _check(defaults: dict, current: dict, prefix: str = ""):
@@ -1308,7 +1314,7 @@ def get_missing_skill_config_vars() -> List[Dict[str, Any]]:
     if not all_vars:
         return []
 
-    config = load_config()
+    config = load_config_readonly()
     missing: List[Dict[str, Any]] = []
     for var in all_vars:
         # Skill config is stored under skills.config.<logical_key>
@@ -2041,7 +2047,7 @@ def _raw_config_has_explicit_version() -> bool:
     return isinstance(raw, dict) and "_config_version" in raw
 
 
-def check_config_version() -> Tuple[int, int]:
+def check_config_version(*, _warn_on_parse_failure: bool = True) -> Tuple[int, int]:
     """
     Check the raw on-disk config schema version.
 
@@ -2050,6 +2056,13 @@ def check_config_version() -> Tuple[int, int]:
     whether the user's persisted schema has been migrated. A config file with no
     raw ``_config_version`` must remain visible as legacy instead of inheriting
     the latest default version in memory.
+
+    ``_warn_on_parse_failure`` is internal — ``_load_config_impl``'s startup
+    migration probe passes ``False`` so a broken config.yaml doesn't consume
+    the (path, mtime, size) parse-warning dedup slot with this function's
+    context-free "falling back to defaults" message before the real load a
+    few lines later gets a chance to emit its more informative
+    last-known-good warning.
 
     Returns (current_version, latest_version).
     """
@@ -2064,7 +2077,8 @@ def check_config_version() -> Tuple[int, int]:
     except Exception as e:
         # Invalid YAML needs a parse warning, not an automatic schema rewrite
         # that could replace the user's broken file with defaults.
-        _warn_config_parse_failure(config_path, e)
+        if _warn_on_parse_failure:
+            _warn_config_parse_failure(config_path, e)
         return latest, latest
 
     if not isinstance(config, dict):
@@ -2095,7 +2109,6 @@ _EXTRA_KNOWN_ROOT_KEYS = {
     "platform_toolsets",     # written by the setup wizard (clover_cli/setup.py)
     "known_plugin_toolsets", # written/read by clover_cli/tools_config.py toolset-save flow
     "known_builtin_toolsets",  # ditto — which builtin toolsets a platform's checklist has offered
-    "tool_gateway_declined_tools",  # per-tool Tool Gateway offer declines (clover_cli/clover_subscription.py, #92647)
     "session_reset",         # top-level form read by gateway/config.py + setup
     "group_sessions_per_user",   # top-level form bridged by gateway/config.py
     "thread_sessions_per_user",  # top-level form bridged by gateway/config.py
@@ -3791,6 +3804,27 @@ def apply_terminal_config_to_env(
 
 
 def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
+    # One cheap stat per load; rerun the ladder only when this profile's file
+    # changes. The guard prevents migrations that themselves read config from
+    # recursing into the startup check.
+    path = get_config_path()
+    try:
+        st = path.stat()
+        signature = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        signature = None
+    if signature is not None and not getattr(_STARTUP_MIGRATION_GUARD, "active", False):
+        key = str(path)
+        if _STARTUP_MIGRATION_CHECKED.get(key) != signature:
+            _STARTUP_MIGRATION_GUARD.active = True
+            try:
+                current, latest = check_config_version(_warn_on_parse_failure=False)
+                if current < latest:
+                    migrate_config(interactive=False, quiet=True)
+                st = path.stat()
+                _STARTUP_MIGRATION_CHECKED[key] = (st.st_mtime_ns, st.st_size)
+            finally:
+                _STARTUP_MIGRATION_GUARD.active = False
     with _CONFIG_LOCK:
         ensure_clover_home()
         config_path = get_config_path()
@@ -3975,7 +4009,6 @@ _FALLBACK_COMMENT = """
 # Supported providers:
 #   openrouter   (OPENROUTER_API_KEY)  — routes to any model
 #   openai-codex (OAuth — clover auth) — OpenAI Codex
-#   clover         (OAuth — clover auth) — Clover Portal
 #   zai          (ZAI_API_KEY)         — Z.AI / GLM
 #   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
 #   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)
@@ -4007,7 +4040,6 @@ _COMMENTED_SECTIONS = """
 # Supported providers:
 #   openrouter   (OPENROUTER_API_KEY)  — routes to any model
 #   openai-codex (OAuth — clover auth) — OpenAI Codex
-#   clover         (OAuth — clover auth) — Clover Portal
 #   zai          (ZAI_API_KEY)         — Z.AI / GLM
 #   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
 #   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)

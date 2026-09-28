@@ -499,10 +499,20 @@ class TestImport:
 class TestRoundTrip:
     def test_backup_then_import(self, tmp_path, monkeypatch):
         """Full round-trip: backup -> import to a new location -> verify."""
+        from clover_cli.config import DEFAULT_CONFIG
+
         # Source
         src_home = tmp_path / "source" / ".clover"
         src_home.mkdir(parents=True)
         _make_clover_tree(src_home)
+        # Stamp the current schema version so restoring doesn't incidentally
+        # run the (unrelated, correct) startup config migration — this test
+        # is about file-tree preservation, not migration behavior.
+        expected_config = (
+            f"model:\n  provider: openrouter\n"
+            f"_config_version: {DEFAULT_CONFIG['_config_version']}\n"
+        )
+        (src_home / "config.yaml").write_text(expected_config)
 
         monkeypatch.setenv("CLOVER_HOME", str(src_home))
         monkeypatch.setattr(Path, "home", lambda: tmp_path / "source")
@@ -523,7 +533,7 @@ class TestRoundTrip:
         run_import(Namespace(zipfile=str(out_zip), force=True))
 
         # Verify key files
-        assert (dst_home / "config.yaml").read_text() == "model:\n  provider: openrouter\n"
+        assert (dst_home / "config.yaml").read_text() == expected_config
         assert (dst_home / ".env").read_text() == "OPENROUTER_API_KEY=sk-test-123\n"
         assert (dst_home / "skills" / "my-skill" / "SKILL.md").exists()
         assert (dst_home / "profiles" / "coder" / "config.yaml").exists()

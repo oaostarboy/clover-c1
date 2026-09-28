@@ -1509,80 +1509,6 @@ class TestWebServerEndpoints:
             Platform._member_map_.pop("PSEUDOFAKE", None)
 
 
-
-
-
-
-
-
-
-
-    def test_telegram_onboarding_apply_reports_restart_failure_after_save(
-        self, monkeypatch
-    ):
-        import clover_cli.web_server as ws
-        from clover_cli.config import load_config, load_env
-
-        with ws._telegram_onboarding_lock:
-            ws._telegram_onboarding_pairings.clear()
-
-        def fake_request(method, path, *, body=None, bearer_token=None):
-            if method == "POST":
-                return {
-                    "pairing_id": "pair-restart-fails",
-                    "poll_token": "poll-secret",
-                    "suggested_username": "clover_pair_restart_fails_bot",
-                    "deep_link": "https://t.me/newbot/CloverSetupBot/clover_pair_restart_fails_bot",
-                    "qr_payload": "https://t.me/newbot/CloverSetupBot/clover_pair_restart_fails_bot",
-                    "expires_at": "2027-05-18T00:00:00.000Z",
-                }
-            assert method == "GET"
-            assert path == "/v1/telegram/pairings/pair-restart-fails"
-            assert bearer_token == "poll-secret"
-            return {
-                "status": "ready",
-                "bot_username": "clover_pair_restart_fails_bot",
-                "owner_user_id": 123456789,
-                "token": "123456:SECRET",
-            }
-
-        monkeypatch.setattr(ws, "_telegram_onboarding_request_sync", fake_request)
-        ws._ACTION_PROCS.pop("gateway-restart", None)
-
-        def fail_spawn_action(subcommand, name):
-            assert subcommand == ["gateway", "restart"]
-            assert name == "gateway-restart"
-            raise RuntimeError("supervisor unavailable")
-
-        monkeypatch.setattr(ws, "_spawn_clover_action", fail_spawn_action)
-
-        start = self.client.post("/api/messaging/telegram/onboarding/start", json={})
-        assert start.status_code == 200
-        ready = self.client.get("/api/messaging/telegram/onboarding/pair-restart-fails")
-        assert ready.status_code == 200
-        assert ready.json()["status"] == "ready"
-
-        applied = self.client.post(
-            "/api/messaging/telegram/onboarding/pair-restart-fails/apply",
-            json={"allowed_user_ids": ["123456789"]},
-        )
-
-        assert applied.status_code == 200
-        applied_data = applied.json()
-        assert applied_data["ok"] is True
-        assert applied_data["needs_restart"] is True
-        assert applied_data["restart_started"] is False
-        assert "supervisor unavailable" in applied_data["restart_error"]
-        assert "token" not in applied_data
-        env = load_env()
-        assert env["TELEGRAM_BOT_TOKEN"] == "123456:SECRET"
-        assert env["TELEGRAM_ALLOWED_USERS"] == "123456789"
-        assert load_config()["platforms"]["telegram"]["enabled"] is True
-
-
-
-
-
     def test_unauthenticated_api_blocked(self):
         """API requests without the session token should be rejected."""
         from starlette.testclient import TestClient
@@ -2704,37 +2630,6 @@ class TestNewEndpoints:
             config["platform_toolsets"]["discord"]
         )
 
-    def test_toolsets_resolve_subscription_features_once(self, monkeypatch):
-        import clover_cli.tools_config as tools_config
-        from clover_cli.clover_subscription import CloverSubscriptionFeatures
-
-        calls = 0
-        features = CloverSubscriptionFeatures(
-            subscribed=False,
-            clover_auth_present=False,
-            provider_is_clover=False,
-            features={},
-            account_info=None,
-        )
-
-        def resolve_features(config, *, force_fresh=False):
-            nonlocal calls
-            calls += 1
-            return features
-
-        monkeypatch.setattr(
-            tools_config,
-            "get_clover_subscription_features",
-            resolve_features,
-        )
-
-        resp = self.client.get("/api/tools/toolsets")
-
-        assert resp.status_code == 200
-        assert resp.json()
-        assert calls == 1
-
-
     def test_get_toolset_config_returns_provider_matrix(self):
         """GET .../config returns provider rows with structured env_vars."""
         resp = self.client.get("/api/tools/toolsets/tts/config")
@@ -2771,20 +2666,11 @@ class TestNewEndpoints:
         """Each provider row carries a server-computed readiness `status`.
 
         Regression: the GUI pilled every zero-env-var row "Ready" — including
-        logged-out Clover Subscription rows, xAI TTS without Grok OAuth, and
-        never-installed KittenTTS/Piper. The endpoint now reports the honest
-        state so keyless ≠ ready.
+        xAI TTS without Grok OAuth and never-installed KittenTTS/Piper. The
+        endpoint now reports the honest state so keyless ≠ ready.
         """
         import clover_cli.tools_config as tools_config
-        from clover_cli.clover_account import CloverPortalAccountInfo
 
-        # Logged out of Clover Portal → managed subscription rows need sign-in.
-        monkeypatch.setattr(
-            "clover_cli.clover_subscription.get_clover_portal_account_info",
-            lambda *a, **k: CloverPortalAccountInfo(
-                logged_in=False, source="none", fresh=False, paid_service_access=None
-            ),
-        )
         # No xAI credentials → the Grok OAuth-backed row needs sign-in.
         monkeypatch.setattr(tools_config, "_xai_credentials_present", lambda: False)
         # Local TTS engines not installed → their rows need setup.
@@ -2801,57 +2687,13 @@ class TestNewEndpoints:
         # Genuinely-free keyless row stays Ready.
         assert by_name["Microsoft Edge TTS"]["status"] == "ready"
         # Keyless ≠ ready for gated rows:
-        assert by_name["Clover Subscription"]["status"] == "needs_auth"
         assert by_name["xAI TTS"]["status"] == "needs_auth"
         assert by_name["KittenTTS"]["status"] == "needs_setup"
         assert by_name["Piper"]["status"] == "needs_setup"
         # Keyed row with the key unset:
         assert by_name["ElevenLabs"]["status"] == "needs_keys"
 
-
-
-
-
-
-    def test_select_managed_clover_provider_reports_needs_clover_auth(self, monkeypatch):
-        """Selecting a managed Clover row while logged out flags needs_clover_auth.
-
-        Regression: the GUI PUT wrote browser.cloud_provider + use_gateway
-        but skipped the Portal entitlement handshake the CLI runs inline
-        (ensure_clover_portal_access) — so the row never activated and nothing
-        told the user to sign in. The endpoint now reports the entitlement
-        gap so the client can drive the existing Clover OAuth flow.
-        """
-        from clover_cli.clover_account import CloverPortalAccountInfo
-
-        monkeypatch.setattr(
-            "clover_cli.clover_subscription.get_clover_portal_account_info",
-            lambda *a, **k: CloverPortalAccountInfo(
-                logged_in=False, source="none", fresh=False, paid_service_access=None
-            ),
-        )
-
-        resp = self.client.put(
-            "/api/tools/toolsets/browser/provider",
-            json={"provider": "Clover Subscription (Browser Use cloud)"},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["ok"] is True
-        assert data["needs_clover_auth"] is True
-        assert data["feature"] == "browser"
-        # The selection is still persisted — activation is what's gated.
-        # Managed rows store the single 'clover' provider string (the runtime
-        # maps it to the Browser Use cloud through the Clover Tool Gateway).
-        from clover_cli.config import load_config
-        cfg = load_config()
-        assert cfg["browser"]["cloud_provider"] == "clover"
-        assert "use_gateway" not in cfg["browser"]
-
-
     # -- Web capability split (search vs extract backends) ------------------
-
-
 
     def test_select_web_search_backend_matches_runtime_resolution(self, monkeypatch):
         """PUT provider with capability=search writes web.search_backend and the

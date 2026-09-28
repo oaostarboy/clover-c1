@@ -1,6 +1,6 @@
 import type { IconComponent } from '@/lib/icons'
 import { normalize } from '@/lib/text'
-import type { ConfigFieldSchema, EnvVarInfo, CloverConfigRecord } from '@/types/clover'
+import type { CloverConfigRecord, ConfigFieldSchema, EnvVarInfo } from '@/types/clover'
 
 import { FIELD_LABELS, SECTIONS } from './constants'
 import { credentialRowLabel } from './credential-key-ui'

@@ -25,19 +25,6 @@ def build_model_parser(subparsers, *, cmd_model: Callable) -> None:
         help="Wipe the model picker disk cache and re-fetch every provider's live /v1/models list.",
     )
     model_parser.add_argument(
-        "--portal-url",
-        help="Portal base URL for Clover login (default: production portal)",
-    )
-    model_parser.add_argument(
-        "--inference-url",
-        help="Inference API base URL for Clover login (default: production inference API)",
-    )
-    model_parser.add_argument(
-        "--client-id",
-        default=None,
-        help="OAuth client id to use for Clover login (default: clover-cli)",
-    )
-    model_parser.add_argument(
         "--scope", default=None, help="OAuth scope to request for Clover login"
     )
     model_parser.add_argument(

@@ -12,7 +12,6 @@ import {
 
 function config(overrides: Partial<ProfileRouteConfig> = {}): ProfileRouteConfig {
   return {
-    cloudOrg: '',
     mode: 'local',
     remoteUrl: '',
     sshHost: '',
@@ -183,22 +182,6 @@ describe('buildOpaqueProfileRoutes', () => {
     expect(routes.map(route => route.targetProfile)).toEqual(['remote-primary', 'remote-primary'])
   })
 
-  it('keeps cloud organizations on one service URL in distinct groups', async () => {
-    const routes = await buildOpaqueProfileRoutes({
-      getProfileConfig: profile =>
-        profile === 'org-a' || profile === 'org-b'
-          ? config({ cloudOrg: profile, mode: 'cloud', remoteUrl: 'https://cloud.example' })
-          : config(),
-      globalConfig: config(),
-      installationId: 'install-a-secret',
-      primaryProfile: 'default',
-      profileNames: ['default', 'org-a', 'org-b'],
-      resolveSsh: vi.fn()
-    })
-
-    expect(new Set(routes.map(route => route.connectionId))).toHaveLength(3)
-    expect(JSON.stringify(routes.map(({ connectionId, mode }) => ({ connectionId, mode })))).not.toContain('org-a')
-  })
 })
 
 describe('buildRegistryProfileRoutes', () => {
@@ -299,7 +282,7 @@ describe('undialedSshRouteSeeds', () => {
         [],
         [
           { id: 'homelab', kind: 'ssh', remoteProfile: 'venture' },
-          { id: 'cloud-prod', kind: 'cloud' }
+          { id: 'remote-prod', kind: 'remote' }
         ]
       )
     ).toEqual([{ connectionId: 'homelab', profile: 'default' }])

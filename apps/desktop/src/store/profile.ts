@@ -1,8 +1,8 @@
 import { LOCAL_CONNECTION_ID } from '@clover/shared'
 import { atom, batch, computed } from 'nanostores'
 
+import { cloverApi, getProfiles, setApiRequestProfile, STARTUP_REQUEST_TIMEOUT_MS } from '@/clover'
 import type { CloverConnection } from '@/global'
-import { getProfiles, cloverApi, setApiRequestProfile, STARTUP_REQUEST_TIMEOUT_MS } from '@/clover'
 import { invalidateProfileScopedQueries } from '@/lib/query-client'
 import {
   arraysEqual,

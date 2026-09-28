@@ -1222,6 +1222,12 @@ def _build_child_system_prompt(
     ]
     if context and context.strip():
         parts.append(f"\nCONTEXT:\n{context}")
+        parts.append(
+            "\nThe parent agent has already planned this task. Follow the "
+            "plan in CONTEXT. Do not re-investigate decisions it states as "
+            "settled. If the plan is wrong or impossible, stop and say so "
+            "in your summary instead of improvising a different approach."
+        )
     if workspace_path and str(workspace_path).strip():
         parts.append(
             "\nWORKSPACE PATH:\n"
@@ -1692,6 +1698,26 @@ def _inherit_parent_base_url(parent_agent, fallback_base_url: Optional[str]) -> 
     return fallback_base_url or None
 
 
+def _model_label_for_child(child) -> Optional[str]:
+    """Return the child's current model, annotated with a fallback origin
+    when ``try_activate_fallback`` has switched it mid-run.
+
+    ``child.model`` is mutated in place by fallback activation, so it
+    already reflects the model actually in use — this only adds the
+    "(fallback from X)" suffix so the parent's job card doesn't silently
+    show a different model than what was requested. See #93412.
+    """
+    model = getattr(child, "model", None)
+    if not isinstance(model, str) or not model:
+        return None
+    if getattr(child, "_provider_fallback_active", False):
+        primary = getattr(child, "_primary_runtime", None) or {}
+        original = primary.get("model")
+        if isinstance(original, str) and original and original != model:
+            return f"{model} (fallback from {original})"
+    return model
+
+
 def _build_child_agent(
     task_index: int,
     goal: str,
@@ -1872,6 +1898,12 @@ def _build_child_agent(
 
     # Resolve effective credentials: config override > parent inherit
     effective_model = model or parent_agent.model
+    # Pinned only when THIS child got an explicit model override (a per-task
+    # tier resolution or a delegation.model config pin) — not merely because
+    # it inherited the parent's model. Gates the no-silent-fallback guard so
+    # a pinned subagent model_not_found aborts instead of walking the parent's
+    # fallback chain unannounced. See #93412.
+    model_pinned = bool((model or "").strip())
     effective_provider = override_provider or getattr(parent_agent, "provider", None)
     effective_base_url = override_base_url or parent_agent.base_url
     if not override_base_url:
@@ -1892,20 +1924,9 @@ def _build_child_agent(
     # (e.g. MiniMax uses anthropic_messages, DeepSeek uses chat_completions).
     # Inheriting the parent's mode causes 404 errors when the child routes to the
     # wrong endpoint.  Derive the mode from the target provider when it differs.
-    #
-    # Clover Portal is dual-wire within a single provider: anthropic/* → Messages,
-    # everything else → chat_completions. Same-provider inheritance would pin a
-    # child Clover/Qwen subagent onto the parent's Claude Messages wire (or the
-    # reverse). agent_init honors an explicit api_mode above its clover branch, so
-    # re-derive here before construction.
     _parent_provider = getattr(parent_agent, "provider", None) or ""
-    _effective_provider_norm = (effective_provider or "").strip().lower()
     if override_api_mode is not None:
         effective_api_mode = override_api_mode
-    elif _effective_provider_norm in {"clover", "clover-portal", "cloverc1"}:
-        from clover_cli.providers import clover_api_mode
-
-        effective_api_mode = clover_api_mode(effective_model)
     elif effective_provider != _parent_provider:
         effective_api_mode = None  # force re-derivation from provider's defaults
     else:
@@ -2067,6 +2088,7 @@ def _build_child_agent(
                 base_url=effective_base_url,
                 api_key=effective_api_key,
                 model=effective_model,
+                model_pinned=model_pinned,
                 provider=effective_provider,
                 capabilities=child_capabilities,
                 api_mode=effective_api_mode,
@@ -2566,6 +2588,82 @@ def _apply_summary_budget(results: List[Dict[str, Any]], parent_agent) -> None:
         )
 
 
+
+# Auto-continue (out of steps / quit early) lives in agent.step_continuation,
+# shared with `clover -z` workers. Names kept here for existing imports.
+from agent.step_continuation import (  # noqa: E402
+    AUTO_CONTINUE_MESSAGE,
+    DEFAULT_AUTO_CONTINUE,
+    UNFINISHED_NUDGE_MESSAGE,
+    continue_until_done as _continue_until_done,
+    stopped_on_step_budget as _stopped_on_step_budget,
+    needs_continuation as _needs_continuation,
+)
+
+
+def _auto_continue_limit(cfg: Optional[dict] = None) -> int:
+    from agent.step_continuation import auto_continue_limit
+
+    if cfg is None:
+        try:
+            cfg = _load_config()
+        except Exception:
+            cfg = {}
+    return auto_continue_limit(cfg)
+
+
+def _auto_continue_child(child, result, *, task_index, task_id, stream_callback, limit,
+                         timeout=None):
+    """Resume a child that stopped early. Each leg runs exactly like the
+    first one: on a fresh worker thread with the non-interactive subagent
+    approval callback, inside the delegated-child context, bounded by the
+    child timeout."""
+
+    def _leg(message, history):
+        from agent.delegation_context import delegated_child_context
+
+        with delegated_child_context(str(getattr(child, "session_id", "") or "")):
+            return child.run_conversation(
+                user_message=message,
+                conversation_history=history,
+                task_id=task_id,
+                stream_callback=stream_callback,
+            )
+
+    def _run(message, history):
+        from tools.daemon_pool import DaemonThreadPoolExecutor
+
+        ex = DaemonThreadPoolExecutor(
+            max_workers=1,
+            initializer=_set_subagent_approval_cb,
+            initargs=(_get_subagent_approval_callback(),),
+        )
+        try:
+            fut = ex.submit(contextvars.copy_context().run, _leg, message, history)
+            return fut.result(timeout=timeout)
+        except Exception:
+            try:
+                if hasattr(child, "interrupt"):
+                    child.interrupt()
+            except Exception:
+                pass
+            raise
+        finally:
+            ex.shutdown(wait=False)
+
+    def _note(kind, n, lim):
+        logger.info("Subagent %d stopped early (%s); continuing (%d/%d)", task_index, kind, n, lim)
+        cb = getattr(child, "tool_progress_callback", None)
+        if cb:
+            try:
+                label = "out of steps" if kind == "budget" else "not finished"
+                cb("subagent.status", preview=f"{label}, continuing ({n}/{lim})")
+            except Exception:
+                pass
+
+    return _continue_until_done(child, result, limit=limit, run=_run, on_continue=_note)
+
+
 def _run_single_child(
     task_index: int,
     goal: str,
@@ -2743,11 +2841,7 @@ def _run_single_child(
                 "delegation_id": (
                     _delegation_id if isinstance(_delegation_id, str) else None
                 ),
-                "model": (
-                    getattr(child, "model", None)
-                    if isinstance(getattr(child, "model", None), str)
-                    else None
-                ),
+                "model": _model_label_for_child(child),
                 "started_at": time.time(),
                 "status": "running",
                 "tool_count": 0,
@@ -3071,6 +3165,18 @@ def _run_single_child(
         # stays byte-identical (wire-shape pinning).
         # Pattern from: github/copilot-cli ctx.agent(prompt, {schema}) —
         # PATTERN ONLY, no code copied.
+        _auto_limit = _auto_continue_limit()
+        if _auto_limit and _needs_continuation(result, child):
+            result = _auto_continue_child(
+                child,
+                result,
+                task_index=task_index,
+                task_id=child_task_id,
+                stream_callback=_relay_child_text,
+                limit=_auto_limit,
+                timeout=child_timeout,
+            )
+
         _output_schema = getattr(child, "_delegate_output_schema", None)
         _schema_valid: Optional[bool] = None
         _schema_errors: List[str] = []
@@ -3221,7 +3327,6 @@ def _run_single_child(
         # Extract token counts (safe for mock objects)
         _input_tokens = getattr(child, "session_prompt_tokens", 0)
         _output_tokens = getattr(child, "session_completion_tokens", 0)
-        _model = getattr(child, "model", None)
 
         entry: Dict[str, Any] = {
             "task_index": task_index,
@@ -3229,7 +3334,7 @@ def _run_single_child(
             "summary": summary,
             "api_calls": api_calls,
             "duration_seconds": duration,
-            "model": _model if isinstance(_model, str) else None,
+            "model": _model_label_for_child(child),
             "exit_reason": exit_reason,
             # Explicit, parent-visible truncation flag. A subagent that
             # exhausts its per-child iteration budget still returns a summary,
@@ -3238,6 +3343,9 @@ def _run_single_child(
             # work except by parsing the summary prose. exit_reason is computed
             # authoritatively from the child's `completed` flag.
             "truncated": exit_reason == "max_iterations",
+            # How many times the child was resumed with a fresh step budget
+            # (delegation.auto_continue). 0 when it finished on the first leg.
+            "auto_continuations": int(result.get("auto_continuations", 0) or 0),
             "tokens": {
                 "input": (
                     _input_tokens if isinstance(_input_tokens, (int, float)) else 0
@@ -3276,6 +3384,13 @@ def _run_single_child(
             _cost_status if isinstance(_cost_status, str) and _cost_status
             else "unknown"
         )
+        # Delegation tiers (see _resolve_tier): only set when the task
+        # requested a tier that could not be resolved to an authenticated
+        # candidate, so the parent sees why this child ran on the fallback
+        # model instead of the requested one.
+        _tier_fallback = getattr(child, "_delegate_tier_fallback", None)
+        if isinstance(_tier_fallback, str) and _tier_fallback:
+            entry["tier_fallback"] = _tier_fallback
         if status == "failed":
             entry["error"] = result.get("error", "Subagent did not produce a response.")
 
@@ -3995,6 +4110,35 @@ def delegate_task(
             from tools.delegation_output_schema import append_output_contract
 
             _child_context = append_output_contract(_child_context, _task_schema)
+
+        # Per-task model tier (value routing): resolves to the first
+        # authenticated candidate for t["tier"], shaped like a delegation
+        # credential cfg and fed through the SAME _resolve_delegation_credentials
+        # path a delegation.provider/model pin uses. Precedence: task.tier
+        # (if it resolves) > delegation.provider/model pin > inherit parent.
+        # A tier that doesn't resolve, or whose credential resolution raises,
+        # falls back to the batch-level `creds` (the pin-or-inherit result
+        # already computed above) instead of failing the whole batch.
+        task_creds = creds
+        task_tier_fallback: Optional[str] = None
+        requested_tier = t.get("tier")
+        if isinstance(requested_tier, str) and requested_tier.strip():
+            tier_name = requested_tier.strip()
+            tier_match = _resolve_tier(tier_name, cfg, parent_agent)
+            if tier_match is None:
+                task_tier_fallback = (
+                    f"tier '{tier_name}' has no authenticated candidate; "
+                    "using the default model."
+                )
+            else:
+                try:
+                    task_creds = _resolve_delegation_credentials(tier_match, parent_agent)
+                except ValueError as exc:
+                    task_tier_fallback = (
+                        f"tier '{tier_name}' credential resolution failed "
+                        f"({exc}); using the default model."
+                    )
+
         try:
             child = _build_child_preserving_parent_tools(
                 task_index=i,
@@ -4003,24 +4147,26 @@ def delegate_task(
                 # Subagents always inherit the parent's toolsets; the model
                 # cannot choose or narrow them (no model-facing toolsets arg).
                 toolsets=None,
-                model=creds["model"],
+                model=task_creds["model"],
                 max_iterations=effective_max_iter,
                 task_count=n_tasks,
                 parent_agent=parent_agent,
-                override_provider=creds["provider"],
-                override_base_url=creds["base_url"],
-                override_api_key=creds["api_key"],
-                override_api_mode=creds["api_mode"],
-                override_request_overrides=creds.get("request_overrides"),
-                override_max_tokens=creds.get("max_output_tokens"),
-                override_acp_command=creds.get("command"),
-                override_acp_args=creds.get("args"),
+                override_provider=task_creds["provider"],
+                override_base_url=task_creds["base_url"],
+                override_api_key=task_creds["api_key"],
+                override_api_mode=task_creds["api_mode"],
+                override_request_overrides=task_creds.get("request_overrides"),
+                override_max_tokens=task_creds.get("max_output_tokens"),
+                override_acp_command=task_creds.get("command"),
+                override_acp_args=task_creds.get("args"),
                 role=effective_role,
             )
         except ValueError as exc:
             # Explicit-pin preflight failures (e.g. pinned delegation.command
             # missing from PATH) refuse the spawn loudly (#80450).
             return tool_error(str(exc))
+        if task_tier_fallback:
+            child._delegate_tier_fallback = task_tier_fallback
         # Attach the validated schema for the completion-side validation
         # hook in _run_single_child. Absent (None) on schema-less tasks.
         if _task_schema is not None:
@@ -4849,6 +4995,144 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
     }
 
 
+def _tiers_explicitly_disabled() -> bool:
+    """True when the user's own config.yaml sets ``delegation.tiers: {}`` verbatim.
+
+    ``_deep_merge`` (clover_cli.config) folds a dict override recursively, so
+    an EMPTY dict override merges to a no-op against DEFAULT_CONFIG's tier
+    defaults -- "the user wants zero tiers" would otherwise be indistinguishable
+    from "the user never touched tiers". ``read_raw_config_readonly()`` reads
+    the user's file exactly as written, so we can see the ``{}`` the merge
+    swallowed. Best-effort: any read failure means "not disabled".
+    """
+    try:
+        from clover_cli.config import read_raw_config_readonly
+
+        raw = read_raw_config_readonly()
+    except Exception:
+        return False
+    raw_delegation = raw.get("delegation") if isinstance(raw, dict) else None
+    if not isinstance(raw_delegation, dict):
+        return False
+    return raw_delegation.get("tiers") == {}
+
+
+# Fixed display order for the built-in tiers; user-added tier names sort
+# alphabetically after these so the schema description stays deterministic
+# (and therefore cache-safe) for a given config + credential state.
+_DEFAULT_TIER_ORDER = ("deep", "code", "read", "check", "fast")
+
+# Per-process, short-TTL cache of "does this provider have local credentials"
+# so repeated get_definitions() calls and repeated per-task tier resolutions
+# within one delegate_task call see the same answer, while a fresh sign-in is
+# still picked up within about a minute. Never makes a network call -- reuses
+# agent.credential_pool.load_pool(), the same local probe
+# _resolve_child_credential_pool() already relies on.
+_TIER_AUTH_CACHE_TTL_SECONDS = 60.0
+_tier_auth_cache: Dict[str, tuple] = {}
+_tier_auth_cache_lock = threading.Lock()
+
+
+def _provider_authenticated(provider_id: str) -> bool:
+    """No-network local credential probe for one provider id."""
+    if not provider_id:
+        return False
+    try:
+        from agent.credential_pool import load_pool
+
+        pool = load_pool(provider_id)
+        return bool(pool is not None and pool.has_credentials())
+    except Exception:
+        logger.debug(
+            "delegation tiers: credential probe failed for provider '%s'",
+            provider_id,
+            exc_info=True,
+        )
+        return False
+
+
+def _provider_authenticated_cached(provider_id: str) -> bool:
+    now = time.monotonic()
+    with _tier_auth_cache_lock:
+        cached = _tier_auth_cache.get(provider_id)
+        if cached is not None and now - cached[0] < _TIER_AUTH_CACHE_TTL_SECONDS:
+            return cached[1]
+    result = _provider_authenticated(provider_id)
+    with _tier_auth_cache_lock:
+        _tier_auth_cache[provider_id] = (now, result)
+    return result
+
+
+def _effective_tiers(cfg: dict) -> Dict[str, List[str]]:
+    """The ``delegation.tiers`` mapping to resolve against.
+
+    ``cfg`` is the already-merged ``delegation`` config section (defaults +
+    user overrides). Honors the ``delegation.tiers: {}`` disable escape
+    hatch, which the generic deep-merge can't express on its own (see
+    ``_tiers_explicitly_disabled``).
+    """
+    if _tiers_explicitly_disabled():
+        return {}
+    tiers = cfg.get("tiers")
+    return tiers if isinstance(tiers, dict) else {}
+
+
+def _ordered_tier_names(tiers: Dict[str, Any]) -> List[str]:
+    ordered = [name for name in _DEFAULT_TIER_ORDER if name in tiers]
+    extra = sorted(name for name in tiers if name not in _DEFAULT_TIER_ORDER)
+    return ordered + extra
+
+
+def _resolve_tier(
+    tier: str, cfg: dict, parent_agent=None
+) -> Optional[Dict[str, str]]:
+    """Resolve a delegation tier name to its first authenticated candidate.
+
+    Walks ``cfg["tiers"][tier]`` (a list of ``"provider/model"`` strings) in
+    order and returns the first candidate whose provider has local
+    credentials, shaped like the ``delegation`` credential cfg
+    (``{"provider": ..., "model": ...}``) so it can be fed straight into
+    ``_resolve_delegation_credentials``. Returns ``None`` when the tier is
+    unknown, empty, or every candidate is unauthenticated. Never makes a
+    network call. ``parent_agent`` is accepted for parity with
+    ``_resolve_delegation_credentials`` but unused today (schema-description
+    callers have no agent instance to pass).
+    """
+    candidates = _effective_tiers(cfg).get(tier)
+    if not isinstance(candidates, list) or not candidates:
+        return None
+    for candidate in candidates:
+        if not isinstance(candidate, str) or "/" not in candidate:
+            continue
+        provider_id, _, model_id = candidate.partition("/")
+        provider_id = provider_id.strip()
+        model_id = model_id.strip()
+        if not provider_id or not model_id:
+            continue
+        if _provider_authenticated_cached(provider_id):
+            return {"provider": provider_id, "model": model_id}
+    return None
+
+
+def _resolved_tiers(cfg: dict, parent_agent=None) -> Dict[str, Dict[str, str]]:
+    """Every tier name that currently resolves, in fixed display order."""
+    tiers = _effective_tiers(cfg)
+    resolved: Dict[str, Dict[str, str]] = {}
+    for name in _ordered_tier_names(tiers):
+        match = _resolve_tier(name, cfg, parent_agent)
+        if match:
+            resolved[name] = match
+    return resolved
+
+
+def _build_tier_param_description(resolved: Dict[str, Dict[str, str]]) -> str:
+    parts = ", ".join(f"{name} -> {info['model']}" for name, info in resolved.items())
+    return (
+        f"Model tier for this subagent, picked for value. Available: {parts}. "
+        "Omit to inherit the default."
+    )
+
+
 def _load_config() -> dict:
     """Load delegation config from the active Clover config.
 
@@ -4893,7 +5177,9 @@ def _load_config() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _build_top_level_description() -> str:
+def _build_top_level_description(
+    resolved_tiers: Optional[Dict[str, Dict[str, str]]] = None,
+) -> str:
     """Compose the delegate_task tool description.
 
     Deliberately carries ONLY guidance that exists nowhere else in the
@@ -4908,6 +5194,12 @@ def _build_top_level_description() -> str:
         orchestration_available = _get_max_spawn_depth() >= 2 and _get_orchestrator_enabled()
     except Exception:
         orchestration_available = False
+
+    if resolved_tiers is None:
+        try:
+            resolved_tiers = _resolved_tiers(_load_config())
+        except Exception:
+            resolved_tiers = {}
 
     # The child-restrictions rule renders per config: on nesting-enabled
     # installs the orchestrator clause is load-bearing; on depth-1/disabled
@@ -4932,7 +5224,7 @@ def _build_top_level_description() -> str:
             "cronjob.\n"
         )
 
-    return (
+    base_description = (
         "Spawn subagents in isolated contexts; each gets its own conversation, "
         "terminal session, and toolset, and only its final summary returns to "
         "you. Pass every task in `tasks` — one entry spawns one subagent, "
@@ -4965,6 +5257,24 @@ def _build_top_level_description() -> str:
         "- Children inherit the parent model unless pinned via "
         "delegation.provider / delegation.model in config.yaml."
     )
+
+    # Plan-first delegation guidance applies regardless of tiers; the
+    # value-routing sentence only makes sense when at least one tier
+    # actually resolves for this user (see _resolved_tiers).
+    plan_first = (
+        "\n\nPLAN FIRST, THEN DELEGATE: decide the approach yourself, then "
+        "give each child the concrete plan in `context`: exact files/paths, "
+        "steps, constraints, and how to verify done. Children should "
+        "execute, not re-plan; this saves tokens."
+    )
+    if resolved_tiers:
+        plan_first += (
+            " Pick `tier` per task for value: code for coding, read for "
+            "large reading, check for adversarial review, fast for quick "
+            "chores, deep only for genuinely hard problems."
+        )
+
+    return base_description + plan_first
 
 
 def _build_tasks_param_description() -> str:
@@ -5018,8 +5328,24 @@ def _build_dynamic_schema_overrides() -> dict:
     }
     overrides_params["properties"]["tasks"]["description"] = _build_tasks_param_description()
 
+    cfg = _load_config()
+    resolved_tiers = _resolved_tiers(cfg)
+    if resolved_tiers:
+        # Deep-copy the tasks property (including its nested items.properties)
+        # before mutating -- the shallow dict(v) copy above still shares the
+        # nested "items" dict with the static DELEGATE_TASK_SCHEMA.
+        tasks_prop = dict(overrides_params["properties"]["tasks"])
+        tasks_items = dict(tasks_prop["items"])
+        tasks_items["properties"] = dict(tasks_items["properties"])
+        tasks_items["properties"]["tier"] = {
+            "type": "string",
+            "description": _build_tier_param_description(resolved_tiers),
+        }
+        tasks_prop["items"] = tasks_items
+        overrides_params["properties"]["tasks"] = tasks_prop
+
     return {
-        "description": _build_top_level_description(),
+        "description": _build_top_level_description(resolved_tiers=resolved_tiers),
         "parameters": overrides_params,
     }
 
@@ -5098,6 +5424,11 @@ DELEGATE_TASK_SCHEMA = {
                 # NOTE: the handler also accepts a per-task `role` — legacy,
                 # ignored: delegation capability is depth-derived, not
                 # caller-declared. Unadvertised on purpose; do not re-add.
+                # NOTE: a per-task `tier` property is injected into
+                # items.properties by _build_dynamic_schema_overrides(), only
+                # when >=1 delegation.tiers entry resolves for this user's
+                # credentials. Not declared here statically because its
+                # presence/description depend on runtime auth state.
                 "description": "(rebuilt at get_definitions() time)",
             },
             # NOTE: the handler also accepts `background` (bool) — DEPRECATED,

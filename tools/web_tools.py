@@ -52,10 +52,7 @@ if TYPE_CHECKING:
     from firecrawl import Firecrawl  # noqa: F401 — type hints only
 from plugins.web.firecrawl.provider import (
     Firecrawl,  # noqa: F401  # re-exported for tests that mock.patch("tools.web_tools.Firecrawl")
-    _firecrawl_backend_help_suffix,
     _get_firecrawl_client,  # noqa: F401  # re-exported for tests that `from tools.web_tools import _get_firecrawl_client`
-    _get_firecrawl_gateway_url,
-    _is_tool_gateway_ready,
     check_firecrawl_api_key,
 )
 # Tavily helpers re-exported for backward-compat with existing unit tests
@@ -84,19 +81,6 @@ _async_parallel_client: Optional[Any] = None
 _exa_client: Optional[Any] = None
 
 from tools.debug_helpers import DebugSession
-# Imported solely so unit tests can monkeypatch these names on
-# tools.web_tools (the firecrawl plugin reads them via its own import chain).
-from tools.managed_tool_gateway import (  # noqa: F401 — backward-compat names for tests
-    build_vendor_gateway_url,
-    peek_clover_access_token as _peek_clover_access_token,
-    read_clover_access_token as _read_clover_access_token,
-    resolve_managed_tool_gateway,
-)
-from tools.tool_backend_helpers import (  # noqa: F401
-    managed_clover_tools_enabled,
-    clover_tool_gateway_unavailable_message,
-    prefers_gateway,
-)
 from tools.url_safety import async_is_safe_url, normalize_url_for_request, sensitive_query_param_name
 import sys
 
@@ -232,15 +216,9 @@ def _get_backend() -> str:
     configured = (_load_web_config().get("backend") or "").lower().strip()
     if configured:
         # Strict: the stored selection is final, known name or not — an
-        # unknown/typoed name surfaces as the vendor path's honest error
-        # rather than silently rerouting through the credential ladder.
-        # The managed "Clover Subscription" selection ("clover") is serviced by
-        # the firecrawl provider, whose client resolver routes it through
-        # the managed Tool Gateway.
-        from tools.tool_backend_helpers import CLOVER_MANAGED_PROVIDER
-
-        if configured == CLOVER_MANAGED_PROVIDER:
-            return "firecrawl"
+        # unknown/typoed name (including a legacy "clover" managed
+        # selection) surfaces as the vendor path's honest error rather than
+        # silently rerouting through the credential ladder.
         return configured
 
     from tools.tool_backend_helpers import selection_exists
@@ -252,19 +230,14 @@ def _get_backend() -> str:
         return "firecrawl"
 
     # Never-configured install — pick the highest-priority available
-    # backend. Explicit user credentials (TAVILY_API_KEY etc.)
-    # beat the managed-tool-gateway probe so a deliberate setup is not
-    # pre-empted by a Clover OAuth token whose subscription tier may not
-    # actually grant web-search access (the gateway then fails at runtime
-    # with "no subscription" and the tool returns an error to the agent
-    # without falling back). Free-tier backends trail the paid ones.
+    # backend by explicit user credentials. Free-tier backends trail the
+    # paid ones.
     backend_candidates = (
         ("tavily", _has_env("TAVILY_API_KEY")),
         ("exa", _has_env("EXA_API_KEY")),
         ("parallel", _has_env("PARALLEL_API_KEY")),
         ("keenable", _has_env("KEENABLE_API_KEY")),
         ("firecrawl", _has_env("FIRECRAWL_API_KEY") or _has_env("FIRECRAWL_API_URL")),
-        ("firecrawl", _is_tool_gateway_ready()),
         ("searxng", _has_env("SEARXNG_URL")),
         ("brave-free", _has_env("BRAVE_SEARCH_API_KEY")),
         ("ddgs", _ddgs_package_importable()),
@@ -591,14 +564,9 @@ def _rescue_extract(provider_name: str, urls: list, results: list) -> list:
 def _web_requires_env() -> list[str]:
     """Return tool metadata env vars for the currently enabled web backends.
 
-    The gateway env vars are always reported — they're metadata strings
-    used by the tool registry to light up the tool when the variable is
-    set.  Gating them on ``managed_clover_tools_enabled()`` only saved
-    string noise in the metadata list, but cost a synchronous HTTP
-    refresh against the Clover portal on every CLI startup (invoked at
-    tool-registration time).  The behavioral contract is: if the env var
-    is set, the tool sees it; if not, it doesn't.  Not-logged-in users
-    simply don't have the vars set, so the extra entries are harmless.
+    These are metadata strings used by the tool registry to light up the
+    tool when the variable is set. The behavioral contract is: if the env
+    var is set, the tool sees it; if not, it doesn't.
     """
     return [
         "EXA_API_KEY",
@@ -607,10 +575,6 @@ def _web_requires_env() -> list[str]:
         "KEENABLE_API_KEY",
         "FIRECRAWL_API_KEY",
         "FIRECRAWL_API_URL",
-        "FIRECRAWL_GATEWAY_URL",
-        "TOOL_GATEWAY_DOMAIN",
-        "TOOL_GATEWAY_SCHEME",
-        "TOOL_GATEWAY_USER_TOKEN",
     ]
 
 
@@ -622,9 +586,8 @@ def _web_requires_env() -> list[str]:
 #   - firecrawl: plugins/web/firecrawl/provider.py
 # The names from the firecrawl plugin (Firecrawl proxy, _get_firecrawl_client,
 # _to_plain_object, _normalize_result_list, _extract_web_search_results,
-# _extract_scrape_payload, _is_tool_gateway_ready, etc.) are re-exported at
-# the top of this module for backward-compat with integration tests and
-# unit-test patches.
+# _extract_scrape_payload, etc.) are re-exported at the top of this module
+# for backward-compat with integration tests and unit-test patches.
 
 
 # Default budget (characters) of clean page text sent to the model. Pages at
@@ -1576,7 +1539,6 @@ if __name__ == "__main__":
 
     # Check if API keys are available
     web_available = check_web_api_key()
-    tool_gateway_available = _is_tool_gateway_ready()
     from clover_cli.config import get_env_value as _gev
     firecrawl_key_available = bool((_gev("FIRECRAWL_API_KEY") or "").strip())
     firecrawl_url_available = bool((_gev("FIRECRAWL_API_URL") or "").strip())
@@ -1603,15 +1565,12 @@ if __name__ == "__main__":
             print(f"   Using self-hosted Firecrawl: {(_gev('FIRECRAWL_API_URL') or '').strip().rstrip('/')}")
         elif firecrawl_key_available:
             print("   Using direct Firecrawl cloud API")
-        elif tool_gateway_available:
-            print(f"   Using Firecrawl tool-gateway: {_get_firecrawl_gateway_url()}")
         else:
             print("   Firecrawl backend selected but not configured")
     else:
         print("❌ No web search backend configured")
         print(
             "Set EXA_API_KEY, PARALLEL_API_KEY, TAVILY_API_KEY, FIRECRAWL_API_KEY, FIRECRAWL_API_URL"
-            f"{_firecrawl_backend_help_suffix()}"
         )
 
     if not web_available:

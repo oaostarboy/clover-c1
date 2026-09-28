@@ -38,8 +38,7 @@ const MUTATING_COMMANDS = [
   'tools',
   'undo',
   'verbose',
-  'voice',
-  'yolo'
+  'voice'
 ] as const
 
 const loadCommandRegistryNames = (): CommandRegistryLoad => {
@@ -110,6 +109,9 @@ describe('slash parity matrix', () => {
       expect(routes[name], `missing command in registry: ${name}`).toBeDefined()
       expect(routes[name], `mutating command must not fallback: ${name}`).not.toBe('fallback')
     }
+
+    // /yolo remains a TUI-local command, but is not in Python's slash registry.
+    expect(LOCAL_COMMAND_NAMES.has('yolo'), 'TUI /yolo must remain locally handled').toBe(true)
   })
 
   it('/q alias resolves to queue, not quit (#31983)', () => {

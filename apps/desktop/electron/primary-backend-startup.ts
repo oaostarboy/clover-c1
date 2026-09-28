@@ -18,7 +18,7 @@ interface ResolvedPrimaryRemote {
   connectionId?: string
   remoteCloverVersion?: string
   remoteHost?: string
-  remoteKind?: 'cloud' | 'ssh' | 'url'
+  remoteKind?: 'ssh' | 'url'
   source?: string
   ssh?: {
     effectiveConfigFingerprint?: string

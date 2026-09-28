@@ -2,22 +2,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 
 import { SETTINGS_ROUTE } from '@/app/routes'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import {
   deleteEnvVar,
   getActionStatus,
   getToolsetConfig,
   getToolsetModels,
-  pollOAuthSession,
   type ProfileScope,
   revealEnvVar,
   runToolsetPostSetup,
   selectToolsetModel,
   selectToolsetProvider,
-  setEnvVar,
-  startOAuthLogin
+  setEnvVar
 } from '@/clover'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { useI18n } from '@/i18n'
 import { Check, Loader2, Save, Terminal } from '@/lib/icons'
 import { cn } from '@/lib/utils'
@@ -527,18 +525,6 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
   // Default-provider selection and a user click race just after config arrives:
   // a stale initialization effect must never replace an explicit choice.
   const providerChoiceClaimedRef = useRef(false)
-  // Guard the Clover Portal sign-in poll loop against unmount/state updates.
-  const mountedRef = useRef(true)
-
-  // eslint-disable-next-line no-restricted-syntax -- mount flag guarding an async poll loop, not an atom mirror
-  useEffect(() => {
-    mountedRef.current = true
-
-    return () => {
-      mountedRef.current = false
-    }
-  }, [])
-
   const refresh = useCallback(async () => {
     setLoading(true)
 
@@ -614,83 +600,12 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
           : current
       )
 
-      if (result.needs_clover_auth) {
-        // Managed Clover row selected without Portal entitlement: the config
-        // keys are written but the backend won't activate until the user
-        // signs in (the CLI runs this gate inline; the GUI surfaces it as a
-        // sign-in action). Reuses the existing Clover Portal device-code flow.
-        notify({
-          kind: 'warning',
-          title: copy.cloverAuthNeededTitle,
-          message: copy.cloverAuthNeededMessage(provider.name),
-          action: { label: copy.cloverAuthSignIn, onClick: () => void signInToNousPortal() }
-        })
-
-        return
-      }
-
       notify({ kind: 'success', title: copy.selectedTitle, message: copy.selectedMessage(provider.name) })
       onConfiguredChange?.()
     } catch (err) {
       notifyError(err, copy.failedSelect(provider.name))
     } finally {
       setSelecting(null)
-    }
-  }
-
-  // Drive the existing Clover Portal OAuth device-code flow (the same session
-  // machinery onboarding uses: start → open verification URL → poll), then
-  // refetch the toolset config so is_active / status flip once entitled.
-  async function signInToNousPortal() {
-    try {
-      const start = await startOAuthLogin('clover', profile)
-
-      if (start.flow !== 'device_code') {
-        notifyError(new Error(`unexpected flow: ${start.flow}`), copy.cloverAuthFailed)
-
-        return
-      }
-
-      const url = start.verification_url
-
-      if (window.cloverDesktop?.openExternal) {
-        try {
-          await window.cloverDesktop.openExternal(url)
-        } catch {
-          window.open(url, '_blank', 'noopener,noreferrer')
-        }
-      } else {
-        window.open(url, '_blank', 'noopener,noreferrer')
-      }
-
-      // Poll until the device-code session resolves (~5s cadence, bounded).
-      for (let attempt = 0; attempt < 120 && mountedRef.current; attempt += 1) {
-        await new Promise(resolve => window.setTimeout(resolve, 5000))
-
-        if (!mountedRef.current) {
-          return
-        }
-
-        const polled = await pollOAuthSession('clover', start.session_id, profile)
-
-        if (polled.status === 'approved') {
-          notify({ kind: 'success', title: copy.cloverAuthDoneTitle, message: copy.cloverAuthDoneMessage })
-          await refresh()
-          onConfiguredChange?.()
-
-          return
-        }
-
-        if (polled.status !== 'pending') {
-          notifyError(new Error(polled.error_message || `Sign-in ${polled.status}`), copy.cloverAuthFailed)
-
-          return
-        }
-      }
-    } catch (err) {
-      if (mountedRef.current) {
-        notifyError(err, copy.cloverAuthFailed)
-      }
     }
   }
 
@@ -859,9 +774,6 @@ export function ToolsetConfigPanel({ toolset, onConfiguredChange, profile }: Too
                       </Button>
                     )}
                   </div>
-                )}
-                {provider.requires_clover_auth && (
-                  <p className="text-[0.72rem] text-muted-foreground">{copy.cloverIncluded}</p>
                 )}
                 {provider.env_vars.length === 0 ? (
                   <p className="text-[0.72rem] text-muted-foreground">{copy.noApiKeyRequired}</p>

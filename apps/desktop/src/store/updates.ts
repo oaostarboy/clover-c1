@@ -5,6 +5,7 @@
 
 import { atom } from 'nanostores'
 
+import { checkCloverUpdate, getActionStatus, updateClover } from '@/clover'
 import type {
   DesktopUpdateApplyOptions,
   DesktopUpdateApplyResult,
@@ -14,7 +15,6 @@ import type {
   DesktopUpdateStatus,
   DesktopVersionInfo
 } from '@/global'
-import { checkCloverUpdate, getActionStatus, updateClover } from '@/clover'
 import { translateNow } from '@/i18n'
 import { persistString, storedString } from '@/lib/storage'
 import { $connectionsRegistry, refreshConnectionsRegistry } from '@/store/connections'

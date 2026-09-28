@@ -83,8 +83,6 @@ from tools.environments.singularity import _get_scratch_dir
 from tools.tool_backend_helpers import (
     coerce_modal_mode,
     has_direct_modal_credentials,
-    managed_clover_tools_enabled,
-    clover_tool_gateway_unavailable_message,
     resolve_modal_backend_state,
 )
 
@@ -1124,8 +1122,6 @@ from tools.environments.singularity import SingularityEnvironment as _Singularit
 from tools.environments.ssh import SSHEnvironment as _SSHEnvironment
 from tools.environments.docker import DockerEnvironment as _DockerEnvironment
 from tools.environments.modal import ModalEnvironment as _ModalEnvironment
-from tools.environments.managed_modal import ManagedModalEnvironment as _ManagedModalEnvironment
-from tools.managed_tool_gateway import is_managed_tool_gateway_ready
 import sys
 
 
@@ -1651,7 +1647,7 @@ def _plugin_env_flag(env_type: str, attr: str, default=False):
     backend is unknown, or the provider attribute raises — a misbehaving
     plugin must degrade, never take the terminal tool down.
     """
-    if not env_type or env_type in _CONTAINER_BACKENDS or env_type in {"local", "ssh", "managed_modal"}:
+    if not env_type or env_type in _CONTAINER_BACKENDS or env_type in {"local", "ssh"}:
         return default
     try:
         from agent.terminal_env_registry import provider_flag
@@ -1672,7 +1668,7 @@ def _is_container_backend(env_type: str) -> bool:
 
 def _get_plugin_env_provider(env_type: str):
     """Return the registered plugin provider for *env_type*, or None."""
-    if not env_type or env_type in _CONTAINER_BACKENDS or env_type in {"local", "ssh", "managed_modal"}:
+    if not env_type or env_type in _CONTAINER_BACKENDS or env_type in {"local", "ssh"}:
         return None
     try:
         from agent.terminal_env_registry import get_provider
@@ -1894,11 +1890,10 @@ def _get_env_config() -> Dict[str, Any]:
 
 
 def _get_modal_backend_state(modal_mode: object | None) -> Dict[str, Any]:
-    """Resolve direct vs managed Modal backend selection."""
+    """Resolve direct Modal backend selection."""
     return resolve_modal_backend_state(
         modal_mode,
         has_direct=has_direct_modal_credentials(),
-        managed_ready=is_managed_tool_gateway_ready("modal"),
     )
 
 
@@ -2053,41 +2048,10 @@ def _create_environment(env_type: str, image: str, cwd: str, timeout: int,
 
         modal_state = _get_modal_backend_state(cc.get("modal_mode"))
 
-        if modal_state["selected_backend"] == "managed":
-            return _ManagedModalEnvironment(
-                image=image, cwd=cwd, timeout=timeout,
-                modal_sandbox_kwargs=sandbox_kwargs,
-                persistent_filesystem=persistent, task_id=task_id,
-            )
-
         if modal_state["selected_backend"] != "direct":
-            if modal_state["managed_mode_blocked"]:
-                raise ValueError(
-                    "Modal backend is configured for managed mode, but "
-                    "Clover Tool Gateway access is not currently available and no direct "
-                    "Modal credentials/config were found. "
-                    + clover_tool_gateway_unavailable_message(
-                        "managed Modal execution",
-                    )
-                    + " Choose TERMINAL_MODAL_MODE=direct/auto to use direct Modal credentials."
-                )
-            if modal_state["mode"] == "managed":
-                raise ValueError(
-                    "Modal backend is configured for managed mode, but the managed tool gateway is unavailable. "
-                    + clover_tool_gateway_unavailable_message(
-                        "managed Modal execution",
-                    )
-                )
-            if modal_state["mode"] == "direct":
-                raise ValueError(
-                    "Modal backend is configured for direct mode, but no direct Modal credentials/config were found."
-                )
-            message = "Modal backend selected but no direct Modal credentials/config was found."
-            if managed_clover_tools_enabled():
-                message = (
-                    "Modal backend selected but no direct Modal credentials/config or managed tool gateway was found."
-                )
-            raise ValueError(message)
+            raise ValueError(
+                "Modal backend selected but no direct Modal credentials/config was found."
+            )
 
         return _ModalEnvironment(
             image=image, cwd=cwd, timeout=timeout,
@@ -3979,57 +3943,13 @@ def check_terminal_requirements() -> bool:
 
         elif env_type == "modal":
             modal_state = _get_modal_backend_state(config.get("modal_mode"))
-            if modal_state["selected_backend"] == "managed":
-                return True
 
             if modal_state["selected_backend"] != "direct":
-                if modal_state["managed_mode_blocked"]:
-                    logger.error(
-                        "Modal backend selected with TERMINAL_MODAL_MODE=managed, but "
-                        "Clover Tool Gateway access is not currently available and no direct "
-                        "Modal credentials/config were found. %s Choose "
-                        "TERMINAL_MODAL_MODE=direct/auto to use direct Modal credentials.",
-                        clover_tool_gateway_unavailable_message(
-                            "managed Modal execution",
-                        ),
-                    )
-                    return False
-                if modal_state["mode"] == "managed":
-                    logger.error(
-                        "Modal backend selected with TERMINAL_MODAL_MODE=managed, but the managed "
-                        "tool gateway is unavailable. %s",
-                        clover_tool_gateway_unavailable_message(
-                            "managed Modal execution",
-                        ),
-                    )
-                    return False
-                elif modal_state["mode"] == "direct":
-                    if managed_clover_tools_enabled():
-                        logger.error(
-                            "Modal backend selected with TERMINAL_MODAL_MODE=direct, but no direct "
-                            "Modal credentials/config were found. Configure Modal or choose "
-                            "TERMINAL_MODAL_MODE=managed/auto."
-                        )
-                    else:
-                        logger.error(
-                            "Modal backend selected with TERMINAL_MODAL_MODE=direct, but no direct "
-                            "Modal credentials/config were found. Configure Modal or choose "
-                            "TERMINAL_MODAL_MODE=auto."
-                        )
-                    return False
-                else:
-                    if managed_clover_tools_enabled():
-                        logger.error(
-                            "Modal backend selected but no direct Modal credentials/config or managed "
-                            "tool gateway was found. Configure Modal, set up the managed gateway, "
-                            "or choose a different TERMINAL_ENV."
-                        )
-                    else:
-                        logger.error(
-                            "Modal backend selected but no direct Modal credentials/config was found. "
-                            "Configure Modal or choose a different TERMINAL_ENV."
-                        )
-                    return False
+                logger.error(
+                    "Modal backend selected but no direct Modal credentials/config was found. "
+                    "Configure Modal or choose a different TERMINAL_ENV."
+                )
+                return False
 
             if importlib.util.find_spec("modal") is None:
                 logger.error("modal is required for direct modal terminal backend: pip install modal")

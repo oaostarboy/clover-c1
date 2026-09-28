@@ -20,17 +20,13 @@ from utils import base_url_host_matches
 class BillingBlock:
     """Structured billing-wall descriptor shared across every surface.
 
-    ``is_clover`` is the routing bit: Clover has a first-class in-app billing surface
-    (desktop Settings → Billing, TUI/CLI ``/topup``), so surfaces prefer that over
-    ``billing_url``; third-party providers have no in-app flow, so ``billing_url``
-    is the deep link the user actually needs.
+    Every provider resolves its recovery link through ``billing_url``.
     """
 
     provider: str
     provider_label: str
     model: str
     billing_url: Optional[str]
-    is_clover: bool
     message: str
 
     def to_dict(self) -> dict:
@@ -70,23 +66,6 @@ _PROVIDERS: tuple[_Provider, ...] = (
 _BY_SLUG: dict[str, _Provider] = {slug: p for p in _PROVIDERS for slug in p.slugs}
 
 
-def is_clover_inference_route(provider: str, base_url: str) -> bool:
-    """True when the failing route is the Clover-managed inference gateway."""
-    if (provider or "").strip().lower() == "clover":
-        return True
-    return base_url_host_matches(str(base_url or ""), "inference-api.")
-
-
-def _clover_billing_url() -> Optional[str]:
-    """Best-effort Clover portal billing URL (text-surface fallback; Clover prefers the in-app flow)."""
-    try:
-        from clover_cli.clover_account import clover_portal_billing_url
-
-        return clover_portal_billing_url(None)
-    except Exception:
-        return ""
-
-
 def _resolve_provider_link(slug: str, base_url: str) -> tuple[str, Optional[str]]:
     """Resolve ``(label, url)``: exact slug → base_url host → readable-label fallback."""
     hit = _BY_SLUG.get(slug)
@@ -117,8 +96,5 @@ def build_billing_block(
     slug = (provider or "").strip().lower()
     model = (model or "").strip()
 
-    if is_clover_inference_route(slug, base_url):
-        return BillingBlock(slug or "clover", "Clover Portal", model, _clover_billing_url(), True, message or "")
-
     label, url = _resolve_provider_link(slug, base_url)
-    return BillingBlock(slug, label, model, url, False, message or "")
+    return BillingBlock(slug, label, model, url, message or "")

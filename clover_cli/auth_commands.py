@@ -35,7 +35,7 @@ from clover_cli.secret_prompt import masked_secret_prompt
 
 
 # Providers that support OAuth login in addition to API keys.
-_OAUTH_CAPABLE_PROVIDERS = {"anthropic", "clover", "openai-codex", "xai-oauth", "qwen-oauth", "minimax-oauth"}
+_OAUTH_CAPABLE_PROVIDERS = {"anthropic", "openai-codex", "xai-oauth", "qwen-oauth", "minimax-oauth"}
 
 
 def _get_custom_provider_entries() -> list[dict]:
@@ -340,65 +340,6 @@ def auth_add_command(args) -> None:
         print(f'Added {provider} OAuth credential #{len(pool.entries())}: "{entry.label}"')
         return
 
-    if provider == "clover":
-        # Codex-style auto-import: if a shared Clover credential lives at
-        # <clover-root>/shared/clover_auth.json (written by any previous
-        # successful login), offer to import it instead of running the
-        # full device-code flow. This makes `clover --profile <name>
-        # auth add clover --type oauth` a one-tap operation for users who
-        # run multiple profiles.
-        shared = auth_mod._read_shared_clover_state()
-        if shared:
-            try:
-                path = auth_mod._clover_shared_store_path()
-            except RuntimeError:
-                path = None
-            print()
-            if path:
-                print(f"Found existing Clover OAuth credentials at {path}")
-            else:
-                print("Found existing shared Clover OAuth credentials")
-            try:
-                do_import = input("Import these credentials? [Y/n]: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                do_import = "y"
-            if do_import in {"", "y", "yes"}:
-                print("Rehydrating Clover session from shared credentials...")
-                rehydrated = auth_mod._try_import_shared_clover_state(
-                    timeout_seconds=getattr(args, "timeout", None) or 15.0,
-                )
-                if rehydrated is not None:
-                    custom_label = (getattr(args, "label", None) or "").strip() or None
-                    entry = auth_mod.persist_clover_credentials(rehydrated, label=custom_label)
-                    shown_label = entry.label if entry is not None else label_from_token(
-                        rehydrated.get("access_token", ""), _oauth_default_label(provider, 1),
-                    )
-                    print(f'Imported {provider} OAuth credentials: "{shown_label}"')
-                    return
-                # Rehydrate failed (expired refresh_token, portal down, etc.)
-                # — fall through to device-code flow.
-                print("Could not refresh shared credentials — falling back to device-code login.")
-
-        creds = auth_mod._clover_device_code_login(
-            portal_base_url=getattr(args, "portal_url", None),
-            inference_base_url=getattr(args, "inference_url", None),
-            client_id=getattr(args, "client_id", None),
-            scope=getattr(args, "scope", None),
-            open_browser=not getattr(args, "no_browser", False),
-            timeout_seconds=getattr(args, "timeout", None) or 15.0,
-            insecure=bool(getattr(args, "insecure", False)),
-            ca_bundle=getattr(args, "ca_bundle", None),
-        )
-        # Honor `--label <name>` so clover matches other providers' UX.  The
-        # helper embeds this into providers.clover so that label_from_token
-        # doesn't overwrite it on every subsequent load_pool("clover").
-        custom_label = (getattr(args, "label", None) or "").strip() or None
-        entry = auth_mod.persist_clover_credentials(creds, label=custom_label)
-        shown_label = entry.label if entry is not None else label_from_token(
-            creds.get("access_token", ""), _oauth_default_label(provider, 1),
-        )
-        print(f'Saved {provider} OAuth device-code credentials: "{shown_label}"')
-        return
 
     if provider == "openai-codex":
         creds = auth_mod._codex_device_code_login()
@@ -805,8 +746,7 @@ def _interactive_add() -> None:
 
     auth_add_command(SimpleNamespace(
         provider=provider, auth_type=auth_type, label=label, api_key=None,
-        portal_url=None, inference_url=None, client_id=None, scope=None,
-        no_browser=False, timeout=None, insecure=False, ca_bundle=None,
+        scope=None, no_browser=False, timeout=None, insecure=False, ca_bundle=None,
     ))
 
 

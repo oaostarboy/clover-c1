@@ -41,7 +41,7 @@ class UpstreamAdapter(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Adapter key used on the CLI (e.g. ``"clover"``)."""
+        """Adapter key used on the CLI (e.g. ``"xai"``)."""
 
     @property
     @abstractmethod

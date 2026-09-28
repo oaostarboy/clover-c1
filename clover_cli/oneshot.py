@@ -32,6 +32,11 @@ from gateway.session_context import declare_stateless_channel
 from clover_cli.fallback_config import get_fallback_chain
 
 
+class ModelNotAvailableError(ValueError):
+    """Raised by the -m preflight check: the requested model is not in the
+    resolved provider's known catalog and no fallback was attempted."""
+
+
 def _normalize_toolsets(toolsets: object = None) -> list[str] | None:
     if not toolsets:
         return None
@@ -180,6 +185,13 @@ def _write_usage_file(path: Optional[str], result: dict, failure: Optional[str] 
             "api_calls": result.get("api_calls"),
             "model": result.get("model"),
             "provider": result.get("provider"),
+            # requested_model/actual_model contract (#93412 follow-up): when
+            # a pinned model that doesn't exist got silently substituted for
+            # a real one, pipelines auditing spend need both names, not just
+            # the one that ended up running.
+            "model_substituted": bool(result.get("model_substituted")),
+            "requested_model": result.get("requested_model"),
+            "actual_model": result.get("actual_model"),
             "session_id": result.get("session_id"),
             "completed": result.get("completed"),
             "failed": bool(result.get("failed")) or failure is not None,
@@ -310,7 +322,15 @@ def run_oneshot(
 
     if activity_writer is not None:
         _ok = failure is None and bool((response or "").strip()) and not result.get("failed")
-        activity_writer.result(response if _ok else "", "completed" if _ok else "failed")
+        _status = "completed" if _ok else "failed"
+        if _ok:
+            # Still stopped early after every allowed resume: say so, so the
+            # parent's card shows "unfinished" instead of a false "done".
+            from agent.step_continuation import needs_continuation
+
+            if needs_continuation(result) is not None:
+                _status = "incomplete"
+        activity_writer.result(response if _ok else "", _status)
 
     if failure is not None:
         # Re-raise control-flow exceptions so the parent handles them as usual
@@ -319,9 +339,42 @@ def run_oneshot(
             _write_usage_file(usage_file, result, failure=repr(failure))
             raise failure
         _write_usage_file(usage_file, result, failure=str(failure))
+        if isinstance(failure, ModelNotAvailableError):
+            # The -m preflight check — a plain, direct message with no
+            # "agent failed:" framing (nothing ran; there's no agent failure
+            # to report).
+            real_stderr.write(f"clover -z: {failure}\n")
+            real_stderr.flush()
+            return 2
         real_stderr.write(f"clover -z: agent failed: {failure}\n")
         real_stderr.flush()
         return 1
+
+    # A pinned model (-m) hit model_not_found mid-turn: the conversation loop
+    # aborted instead of silently walking the fallback chain (#93412). Route
+    # the message to stderr with a non-zero exit — same contract as the
+    # --provider-without-model preflight above — instead of printing it to
+    # stdout as if it were a normal (if failed) answer.
+    if result.get("pinned_model_unavailable"):
+        _pinned_msg = (response or result.get("error") or "").strip() or (
+            "Model is pinned and unavailable on this provider; nothing was "
+            "run on another model."
+        )
+        real_stderr.write(f"clover -z: {_pinned_msg}\n")
+        real_stderr.flush()
+        return 2
+
+    if result.get("model_substituted"):
+        # A pinned model that doesn't exist ran on a substitute instead of
+        # stopping (#93412 follow-up). Exit 0 -- the job DID run -- but the
+        # stderr line still names both models so the caller isn't left
+        # thinking their requested model actually answered.
+        real_stderr.write(
+            f"clover -z: ⚠ '{result.get('requested_model')}' doesn't exist "
+            f"on {result.get('requested_provider')}, so I used "
+            f"{result.get('actual_model')} instead.\n"
+        )
+        real_stderr.flush()
 
     _write_usage_file(usage_file, result)
 
@@ -452,6 +505,83 @@ def _run_agent(
         explicit_base_url=explicit_base_url_from_alias,
     )
 
+    # Preflight: -m/--model given without --provider, and detect_provider_for_model
+    # found no confident match (effective_provider is still None), so the run fell
+    # through to the caller's default provider. If that provider's model name is
+    # unknown to a LIVE catalog just fetched from the provider itself, substitute
+    # instead of spending a real API call to discover the failure: the closest
+    # real model on the same provider, then the user's own configured default
+    # (model.substitute_unknown: false keeps the old fail-fast behavior).
+    #
+    # A STATIC catalog is never used for this decision, even when it's all
+    # that's available: it lags real provider releases, and treating "missing
+    # from the static list" as "doesn't exist" silently downgraded a real,
+    # working model the static catalog just hadn't caught up to yet (#93412
+    # follow-up). When only a static list (or nothing) is available, skip
+    # this preflight entirely and let the real API call's own model_not_found
+    # (the conversation_loop pinned-model branch, proof (b)) decide instead —
+    # it substitutes exactly the same way.
+    _model_substitution_info: Optional[dict] = None
+    if (model or "").strip() and not (provider or "").strip() and effective_provider is None:
+        from agent.model_substitute import known_models_for_provider
+
+        _resolved_provider = str(runtime.get("provider") or "").strip().lower()
+        _requested_provider = str(runtime.get("requested_provider") or "").strip().lower()
+        _known_models, _known_models_are_live = known_models_for_provider(
+            _resolved_provider,
+            requested_provider=_requested_provider,
+            base_url=runtime.get("base_url"),
+            api_key=runtime.get("api_key") if isinstance(runtime.get("api_key"), str) else None,
+        )
+        if _known_models_are_live and _known_models and effective_model not in _known_models:
+            from agent.model_substitute import (
+                configured_default_model,
+                resolve_model_substitute,
+                substitute_unknown_models_enabled,
+            )
+
+            _substitute = None
+            if substitute_unknown_models_enabled(cfg):
+                _default_model, _default_provider = configured_default_model(cfg)
+                _substitute = resolve_model_substitute(
+                    effective_model, _resolved_provider,
+                    known_models=_known_models,
+                    default_model=_default_model,
+                    default_provider=_default_provider,
+                )
+            if _substitute is not None:
+                logging.getLogger(__name__).warning(
+                    "Model substitute activated: %s (%s) → %s (%s); "
+                    "reason=model_not_found_substituted",
+                    effective_model, _resolved_provider,
+                    _substitute.model, _substitute.provider,
+                )
+                _model_substitution_info = {
+                    "requested_model": effective_model,
+                    "requested_provider": _resolved_provider,
+                    "actual_model": _substitute.model,
+                    "actual_provider": _substitute.provider,
+                }
+                effective_model = _substitute.model
+                if _substitute.provider != _resolved_provider:
+                    effective_provider = _substitute.provider
+                    runtime = resolve_runtime_provider(
+                        requested=effective_provider,
+                        target_model=effective_model,
+                        explicit_base_url=explicit_base_url_from_alias,
+                    )
+            else:
+                from difflib import get_close_matches
+
+                _suggestions = get_close_matches(effective_model, _known_models, n=5, cutoff=0.4)
+                _msg = (
+                    f"Model '{effective_model}' isn't available on provider "
+                    f"'{_resolved_provider}'. Nothing was run on another model."
+                )
+                if _suggestions:
+                    _msg += " Did you mean: " + ", ".join(_suggestions) + "?"
+                raise ModelNotAvailableError(_msg)
+
     # Pull in explicit toolsets when provided; otherwise use whatever the user
     # has enabled for "cli". sorted() gives stable ordering for config-derived
     # sets; explicit values preserve user order.
@@ -494,6 +624,10 @@ def _run_agent(
             requested_provider=runtime.get("requested_provider"),
             api_mode=runtime.get("api_mode"),
             model=effective_model,
+            # Only "true" when the caller explicitly passed -m/--model — never
+            # for a model that came from CLOVER_INFERENCE_MODEL or config.yaml
+            # (those are "use my defaults", not "pin this exact model").
+            model_pinned=bool((model or "").strip()),
             enabled_toolsets=toolsets_list,
             quiet_mode=True,
             platform="cli",
@@ -520,13 +654,56 @@ def _run_agent(
         agent.suppress_status_output = True
         agent.stream_delta_callback = None
         agent.tool_gen_callback = None
+        if _model_substitution_info is not None:
+            # Durable record for the requested_model/actual_model result
+            # contract, and the same-substitution guard conversation_loop.py's
+            # pinned branch checks before trying a second substitute.
+            agent._model_substitution = _model_substitution_info
         if activity_writer is not None:
             # Structured, redacted worker activity for a parent session.
             agent.tool_progress_callback = activity_writer.tool_progress_callback
             agent.interim_assistant_callback = activity_writer.interim_callback
+            agent.model_fallback_callback = activity_writer.model_fallback
             activity_writer.start(effective_model)
+            if _model_substitution_info is not None:
+                activity_writer.model_fallback(
+                    from_model=_model_substitution_info["requested_model"],
+                    from_provider=_model_substitution_info["requested_provider"],
+                    to_model=_model_substitution_info["actual_model"],
+                    to_provider=_model_substitution_info["actual_provider"],
+                    reason="model_not_found_substituted",
+                )
+        if _model_substitution_info is not None:
+            agent._emit_status(
+                f"⚠ '{_model_substitution_info['requested_model']}' doesn't "
+                f"exist on {_model_substitution_info['requested_provider']}, "
+                f"so I used {_model_substitution_info['actual_model']} instead."
+            )
 
         result = agent.run_conversation(prompt)
+        # Keep a worker going when it stops early: out of steps, or quit
+        # with steps left while admitting the job isn't done
+        # (delegation.auto_continue, default 2).
+        try:
+            from agent.step_continuation import (
+                auto_continue_limit,
+                continue_until_done,
+                needs_continuation,
+            )
+
+            _limit = auto_continue_limit((cfg.get("delegation") or {}) if isinstance(cfg, dict) else {})
+            if _limit and needs_continuation(result, agent):
+                def _leg(message, history):
+                    return agent.run_conversation(message, conversation_history=history)
+
+                def _note(kind, n, lim):
+                    if activity_writer is not None:
+                        label = "out of steps" if kind == "budget" else "not finished"
+                        activity_writer.interim_callback(f"{label}, continuing ({n}/{lim})")
+
+                result = continue_until_done(agent, result, limit=_limit, run=_leg, on_continue=_note)
+        except Exception:
+            logging.debug("oneshot auto-continue failed", exc_info=True)
         return (result.get("final_response") or "", result)
     finally:
         # Ordering deliberately mirrors gateway/run.py:_cleanup_agent_resources,

@@ -25,7 +25,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from agent.anthropic_endpoints import (
     _is_deepseek_anthropic_endpoint,
     _is_kimi_family_endpoint,
-    _is_clover_portal_endpoint,
     _is_third_party_anthropic_endpoint,
 )
 
@@ -894,12 +893,7 @@ def _manage_thinking_signatures(
     Mutates ``result`` in place.
     """
     _THINKING_TYPES = frozenset(("thinking", "redacted_thinking"))
-    # Portal speaks Anthropic's thinking contract end-to-end; do not treat it
-    # as a signature-blind proxy even though the host is not anthropic.com.
-    _is_third_party = (
-        _is_third_party_anthropic_endpoint(base_url)
-        and not _is_clover_portal_endpoint(base_url)
-    )
+    _is_third_party = _is_third_party_anthropic_endpoint(base_url)
 
     last_assistant_idx = None
     for i in range(len(result) - 1, -1, -1):

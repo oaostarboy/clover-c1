@@ -153,33 +153,6 @@ class TestMatrixStartupSecret:
         assert helper("MATRIX_PASSWORD") == "own-env-pass"
 
 
-# ── Cluster C: managed tool gateway token override ─────────────────────────
-
-class TestToolGatewayUserToken:
-    def test_scoped_value_wins(self, monkeypatch):
-        from tools.managed_tool_gateway import _read_user_token_override
-
-        monkeypatch.setenv("TOOL_GATEWAY_USER_TOKEN", "env-tok")
-        ss.set_multiplex_active(True)
-        with _Scope({"TOOL_GATEWAY_USER_TOKEN": "scoped-tok"}):
-            assert _read_user_token_override() == "scoped-tok"
-
-    def test_scoped_miss_no_borrow(self, monkeypatch):
-        from tools.managed_tool_gateway import _read_user_token_override
-
-        monkeypatch.setenv("TOOL_GATEWAY_USER_TOKEN", "other-profile-tok")
-        ss.set_multiplex_active(True)
-        with _Scope({"UNRELATED": "x"}):
-            assert _read_user_token_override() is None
-
-    def test_unscoped_multiplex_falls_back(self, monkeypatch):
-        from tools.managed_tool_gateway import _read_user_token_override
-
-        monkeypatch.setenv("TOOL_GATEWAY_USER_TOKEN", "own-env-tok")
-        ss.set_multiplex_active(True)
-        assert _read_user_token_override() == "own-env-tok"
-
-
 class TestOpenRouterCheckApiKey:
     def test_scoped_value_wins(self, monkeypatch):
         from tools.openrouter_client import check_api_key

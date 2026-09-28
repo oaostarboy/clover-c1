@@ -7,6 +7,7 @@ cloverNpmLib.buildNpmPackage {
     # @clover/shared ships as a file: workspace dep of web, so its source
     # must be in the filtered src tree too.
     "apps/shared"
+    "packages/clover-ui"
   ];
 
   doCheck = false;

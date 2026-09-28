@@ -5,10 +5,10 @@
 // capabilityScoped are shared across api/ but must not reach call sites, or
 // request scoping stops having a single owner.
 export {
-  getApiRequestConnection,
-  getApiRequestProfile,
   cloverApi,
   CloverGateway,
+  getApiRequestConnection,
+  getApiRequestProfile,
   profileScopeKey,
   PROMPT_SUBMIT_REQUEST_TIMEOUT_MS,
   setApiRequestConnection,
@@ -43,6 +43,8 @@ export type {
   AutomationBlueprintField,
   AuxiliaryModelsResponse,
   BackendUpdateCheckResponse,
+  CloverConfig,
+  CloverConfigRecord,
   ComputerUseCheck,
   ComputerUsePermissionSource,
   ComputerUseStatus,
@@ -63,8 +65,6 @@ export type {
   ElevenLabsVoicesResponse,
   EnvVarInfo,
   GatewayReadyPayload,
-  CloverConfig,
-  CloverConfigRecord,
   LogsResponse,
   McpCatalogEntry,
   McpCatalogResponse,

@@ -7,12 +7,13 @@
   "author": "Clover Cognition",
   "repository": {
     "type": "git",
-    "url": "git+"
+    "url": "git+https://github.com/oaostarboy/clover-c1.git",
+    "directory": "apps/desktop"
   },
   "type": "module",
   "main": "dist/electron-main.mjs",
   "engines": {
-    "node": "^22.22.0 || ^24.11.0 || >=26.0.0"
+    "node": "^22.22.0 || ^24.12.0 || >=26.0.0"
   },
   "scripts": {
     "clean": "npm run clean:e2e && npm run clean:renderer && npm run clean:electron",

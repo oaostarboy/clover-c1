@@ -1643,11 +1643,13 @@ function Set-GitBashEnvVar {
     Write-Info "If needed, set CLOVER_GIT_BASH_PATH manually to your bash.exe path."
 }
 
-# The dependency tree supports Node 22.22+, 24.11+, and 26+. nanoid 6 excludes
-# Node 23 and 25 while its >=26 arm accepts later releases, and @babel/* 8.x
-# requires ^22.18.0 || >=24.11.0 -- so accepting 23/25 or an early Node 24
-# only defers the failure to `npm ci` under engine-strict. Keep this in sync
-# with the root package.json.
+# The dependency tree supports Node 22.22+, 24.12+, and 26+. nanoid 6 excludes
+# Node 23 and 25 while its >=26 arm accepts later releases, @babel/* 8.x
+# requires ^22.18.0 || >=24.11.0, and @napi-rs/lzma's optional Linux binding
+# requires ^22.20 || ^24.12 || >=25 -- the 24.x floor tracks the tightest of
+# these (24.12) since accepting 23/25 or an early Node 24 only defers the
+# failure to `npm ci` under engine-strict. Keep this in sync with the root
+# package.json.
 function Test-NodeVersionOk {
     param([string]$Version)
     if ($Version -match '-') { return $false }
@@ -1657,7 +1659,7 @@ function Test-NodeVersionOk {
         return $false
     }
     if ($v.Major -eq 22) { return ($v.Minor -ge 22) }
-    if ($v.Major -eq 24) { return ($v.Minor -ge 11) }
+    if ($v.Major -eq 24) { return ($v.Minor -ge 12) }
     return ($v.Major -ge 26)
 }
 
@@ -1671,7 +1673,7 @@ function Test-SystemNodeReady {
     if (Test-NodeVersionOk $version) {
         Ensure-NodeExeOnPath | Out-Null
     } else {
-        Write-Warn "Node.js $version is unsupported (Clover requires Node 22.22+, 24.11+, or 26+)"
+        Write-Warn "Node.js $version is unsupported (Clover requires Node 22.22+, 24.12+, or 26+)"
         return $false
     }
 

@@ -229,16 +229,15 @@ class CLIAgentSetupMixin:
 
         Called from the interactive startup path when
         ``_runtime_credentials_ready()`` is False and stdin is a TTY. Runs the
-        exact same flow as ``clover model`` (which fronts Quick Setup / Clover Portal OAuth as the first, recommended option) so there is a single
-        source of truth for provider onboarding. Returns True when a provider
-        was configured.
+        exact same flow as ``clover model`` so there is a single source of
+        truth for provider onboarding. Returns True when a provider was
+        configured.
         """
         from cli import _cprint, logger
 
         _cprint("")
         _cprint("☘ No inference provider is configured yet — let's fix that.")
-        _cprint("  You'll pick a provider (Clover Portal OAuth is the fastest; "
-                "no API key needed) and a model.")
+        _cprint("  You'll pick a provider and a model (OAuth or API key).")
         try:
             answer = input("  Set up a provider now? [Y/n]: ").strip().lower()
         except (KeyboardInterrupt, EOFError):
@@ -487,8 +486,18 @@ class CLIAgentSetupMixin:
                 "credential_pool": getattr(self, "_credential_pool", None),
             }
             effective_model = model_override or self.model
+            # Pinned when the effective model came from an explicit choice
+            # (the -m/--model CLI flag, or a runtime override such as
+            # `/model <name>`) rather than a config/env default. Gates the
+            # no-silent-fallback guard: a pinned model that gets a
+            # model_not_found error aborts instead of walking the fallback
+            # chain unannounced. See #93412.
+            effective_model_pinned = bool(model_override) or bool(
+                getattr(self, "_explicit_model_override", False)
+            )
             self.agent = AIAgent(
                 model=effective_model,
+                model_pinned=effective_model_pinned,
                 api_key=runtime.get("api_key"),
                 base_url=runtime.get("base_url"),
                 provider=runtime.get("provider"),
@@ -555,16 +564,6 @@ class CLIAgentSetupMixin:
             # Route agent status output through prompt_toolkit so ANSI escape
             # sequences aren't garbled by patch_stdout's StdoutProxy (#2262).
             self.agent._print_fn = _cprint
-            # Hydrate credits notices at session OPEN (parity with the TUI), so a
-            # depletion / usage-band warning shows before the first message. The
-            # notice_callback is bound above → _on_notice renders the line. Idempotent
-            # + fail-open inside the helper; harmless for non-Clover providers.
-            try:
-                from agent.credits_tracker import seed_credits_at_session_start
-
-                seed_credits_at_session_start(self.agent)
-            except Exception:
-                pass
             self._active_agent_route_signature = (
                 effective_model,
                 runtime.get("provider"),

@@ -52,8 +52,18 @@ def test_preset_resolution_is_cached_across_create_calls(monkeypatch, tmp_path):
     import clover_cli.config as cfg_mod
     # The cache keys on the config FILE's st_mtime_ns — give the test a real
     # stat-able file (no config file -> stamp=None -> caching fails open).
+    # Stamp the current schema version too: create()'s unmocked
+    # resolve_runtime_provider call for the aggregator/reference models
+    # imports tools.approval for the first time in-process, which calls
+    # load_permanent_allowlist() at module import time — an unrelated
+    # load_config_readonly() read that would otherwise run the startup
+    # auto-migration on this unversioned file, rewriting it (and bumping
+    # its mtime) mid-test and defeating the very mtime-keyed cache this
+    # test pins.
     cfg_file = tmp_path / "config.yaml"
-    cfg_file.write_text("moa: {}\n")
+    cfg_file.write_text(
+        f"_config_version: {cfg_mod.DEFAULT_CONFIG['_config_version']}\nmoa: {{}}\n"
+    )
     monkeypatch.setattr(cfg_mod, "get_config_path", lambda: cfg_file)
     monkeypatch.setattr(cfg_mod, "load_config", lambda: _make_preset_config())
     monkeypatch.setattr(moa, "call_llm", lambda **k: _fake_response())

@@ -9,31 +9,13 @@ from unittest.mock import patch
 
 import pytest
 
-from clover_cli.clover_account import CloverPortalAccountInfo
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "tools"
-PLUGINS_DIR = REPO_ROOT / "plugins"
 
 
 def _load_tool_module(module_name: str, filename: str):
     spec = spec_from_file_location(module_name, TOOLS_DIR / filename)
-    assert spec and spec.loader
-    module = module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_plugin_module(module_name: str, relpath: str):
-    """Load a plugin module by file path from ``plugins/``.
-
-    Mirror of :func:`_load_tool_module` for the plugin tree. Used by tests
-    that exercise the per-vendor browser plugins' session-lifecycle
-    behaviour after the PR #25214 migration.
-    """
-    spec = spec_from_file_location(module_name, PLUGINS_DIR / relpath)
     assert spec and spec.loader
     module = module_from_spec(spec)
     sys.modules[module_name] = module
@@ -64,26 +46,6 @@ def _restore_tool_and_agent_modules():
         sys.modules.update(original_modules)
 
 
-@pytest.fixture(autouse=True)
-def _enable_managed_clover_tools(monkeypatch):
-    """Ensure managed_clover_tools_enabled() returns True even after module reloads.
-
-    The _install_fake_tools_package() helper resets and reimports tool modules,
-    so a simple monkeypatch on tool_backend_helpers doesn't survive.  We patch
-    the *source* modules that the reimported modules will import from — both
-    clover_cli.clover_account — so the function body returns True.
-    """
-    monkeypatch.setattr(
-        "clover_cli.clover_account.get_clover_portal_account_info",
-        lambda: CloverPortalAccountInfo(
-            logged_in=True,
-            source="jwt",
-            fresh=False,
-            paid_service_access=True,
-        ),
-    )
-
-
 def _install_fake_tools_package():
     _reset_modules(("tools", "agent"))
 
@@ -104,8 +66,8 @@ def _install_fake_tools_package():
     # The fake `agent` package has an empty __path__, so every real
     # agent.* submodule that production code imports needs an explicit
     # stand-in here. tools.browser_tool imports redact_cdp_url;
-    # clover_cli.auth (imported transitively by clover_account /
-    # tool_backend_helpers) imports sanitize_borrowed_credential_payload.
+    # clover_cli.auth (imported transitively by tool_backend_helpers)
+    # imports sanitize_borrowed_credential_payload.
     sys.modules["agent.redact"] = types.SimpleNamespace(
         redact_cdp_url=lambda value: str(value),
     )
@@ -154,11 +116,6 @@ def _install_fake_tools_package():
         sys.modules[f"plugins.browser.{_name}.provider"] = types.SimpleNamespace(
             **{_classname: _provider_stub_cls},
         )
-
-    sys.modules["tools.managed_tool_gateway"] = _load_tool_module(
-        "tools.managed_tool_gateway",
-        "managed_tool_gateway.py",
-    )
 
     interrupt_event = threading.Event()
     sys.modules["tools.interrupt"] = types.SimpleNamespace(
@@ -210,51 +167,9 @@ def _install_fake_tools_package():
     sys.modules["tools.environments.ssh"] = types.SimpleNamespace(SSHEnvironment=_DummyEnvironment)
     sys.modules["tools.environments.docker"] = types.SimpleNamespace(DockerEnvironment=_DummyEnvironment)
     sys.modules["tools.environments.modal"] = types.SimpleNamespace(ModalEnvironment=_DummyEnvironment)
-    sys.modules["tools.environments.managed_modal"] = types.SimpleNamespace(ManagedModalEnvironment=_DummyEnvironment)
 
 
-def test_browser_use_explicit_local_mode_stays_local_even_when_managed_gateway_is_ready(tmp_path):
-    _install_fake_tools_package()
-    (tmp_path / "config.yaml").write_text("browser:\n  cloud_provider: local\n", encoding="utf-8")
-    env = os.environ.copy()
-    env.pop("BROWSER_USE_API_KEY", None)
-    env.update({
-        "CLOVER_HOME": str(tmp_path),
-        "TOOL_GATEWAY_USER_TOKEN": "clover-token",
-        "BROWSER_USE_GATEWAY_URL": "http://127.0.0.1:3009",
-    })
-
-    with patch.dict(os.environ, env, clear=True):
-        browser_tool = _load_tool_module("tools.browser_tool", "browser_tool.py")
-
-        local_mode = browser_tool._is_local_mode()
-        provider = browser_tool._get_cloud_provider()
-
-    assert local_mode is True
-    assert provider is None
-
-
-def test_browserbase_does_not_use_gateway_only_configuration():
-    _install_fake_tools_package()
-    env = os.environ.copy()
-    env.pop("BROWSERBASE_API_KEY", None)
-    env.pop("BROWSERBASE_PROJECT_ID", None)
-    env.update({
-        "TOOL_GATEWAY_USER_TOKEN": "clover-token",
-        "BROWSERBASE_GATEWAY_URL": "http://127.0.0.1:3009",
-    })
-
-    with patch.dict(os.environ, env, clear=True):
-        browserbase_module = _load_plugin_module(
-            "plugins.browser.browserbase.provider",
-            "browser/browserbase/provider.py",
-        )
-        provider = browserbase_module.BrowserbaseBrowserProvider()
-
-    assert provider.is_available() is False
-
-
-def test_terminal_tool_respects_direct_modal_mode_without_falling_back_to_managed():
+def test_terminal_tool_direct_modal_mode_without_credentials_fails_clearly():
     _install_fake_tools_package()
     env = os.environ.copy()
     env.pop("MODAL_TOKEN_ID", None)
@@ -263,10 +178,7 @@ def test_terminal_tool_respects_direct_modal_mode_without_falling_back_to_manage
     with patch.dict(os.environ, env, clear=True):
         terminal_tool = _load_tool_module("tools.terminal_tool", "terminal_tool.py")
 
-        with (
-            patch.object(terminal_tool, "is_managed_tool_gateway_ready", return_value=True),
-            patch.object(Path, "exists", return_value=False),
-        ):
+        with patch.object(Path, "exists", return_value=False):
             with pytest.raises(ValueError, match="direct Modal credentials"):
                 terminal_tool._create_environment(
                     env_type="modal",

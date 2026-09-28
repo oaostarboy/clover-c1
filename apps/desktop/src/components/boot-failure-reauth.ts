@@ -27,7 +27,7 @@ const DEFAULT_SIGN_IN_COPY: SignInCopy = {
   withProvider: provider => `Sign in with ${provider}`
 }
 
-// True when the app is pointed at a remote/cloud backend (either resolves to a
+// True when the app is pointed at a remote backend (either resolves to a
 // remote URL). Any boot failure in this shape is fixable from Settings →
 // Gateway (edit URL / token / sign in) — the local Retry/Repair buttons target
 // the bundled backend and can't help. Drives the escape-hatch emphasis.
@@ -39,7 +39,7 @@ export function isRemoteConfig(config: DesktopConnectionConfig | null | undefine
   const ssh = config as DesktopConnectionConfig & { sshHost?: string }
 
   return (
-    ((config.mode === 'remote' || config.mode === 'cloud') && Boolean(config.remoteUrl)) ||
+    (config.mode === 'remote' && Boolean(config.remoteUrl)) ||
     ((config.mode as string) === 'ssh' && Boolean(ssh.sshHost))
   )
 }
@@ -75,8 +75,7 @@ export function shouldApplyPostBootProgressError(error: string | null | undefine
 // A remote, gated (oauth-bucket) gateway is a remote-reauth boot failure when the
 // session isn't connected OR the boot error is auth-shaped (connected-but-expired
 // — see isRemoteReauthError). Only re-establishing the remote session fixes it;
-// the local Retry/Repair buttons can't. 'cloud' counts as remote (it resolves to
-// a remote oauth backend), so a lapsed cloud session is the same failure.
+// local Retry/Repair buttons can't.
 export function sshFailureMessage(
   config: DesktopConnectionConfig | null | undefined,
   error: string | null | undefined,
