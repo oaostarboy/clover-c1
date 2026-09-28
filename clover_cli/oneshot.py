@@ -32,6 +32,11 @@ from gateway.session_context import declare_stateless_channel
 from clover_cli.fallback_config import get_fallback_chain
 
 
+class ModelNotAvailableError(ValueError):
+    """Raised by the -m preflight check: the requested model is not in the
+    resolved provider's known catalog and no fallback was attempted."""
+
+
 def _normalize_toolsets(toolsets: object = None) -> list[str] | None:
     if not toolsets:
         return None
@@ -327,9 +332,30 @@ def run_oneshot(
             _write_usage_file(usage_file, result, failure=repr(failure))
             raise failure
         _write_usage_file(usage_file, result, failure=str(failure))
+        if isinstance(failure, ModelNotAvailableError):
+            # The -m preflight check — a plain, direct message with no
+            # "agent failed:" framing (nothing ran; there's no agent failure
+            # to report).
+            real_stderr.write(f"clover -z: {failure}\n")
+            real_stderr.flush()
+            return 2
         real_stderr.write(f"clover -z: agent failed: {failure}\n")
         real_stderr.flush()
         return 1
+
+    # A pinned model (-m) hit model_not_found mid-turn: the conversation loop
+    # aborted instead of silently walking the fallback chain (#93412). Route
+    # the message to stderr with a non-zero exit — same contract as the
+    # --provider-without-model preflight above — instead of printing it to
+    # stdout as if it were a normal (if failed) answer.
+    if result.get("pinned_model_unavailable"):
+        _pinned_msg = (response or result.get("error") or "").strip() or (
+            "Model is pinned and unavailable on this provider; nothing was "
+            "run on another model."
+        )
+        real_stderr.write(f"clover -z: {_pinned_msg}\n")
+        real_stderr.flush()
+        return 2
 
     _write_usage_file(usage_file, result)
 
@@ -460,6 +486,30 @@ def _run_agent(
         explicit_base_url=explicit_base_url_from_alias,
     )
 
+    # Preflight: -m/--model given without --provider, and detect_provider_for_model
+    # found no confident match (effective_provider is still None), so the run fell
+    # through to the caller's default provider. If that provider's model name is
+    # simply unknown to Clover's own static catalog (no network probe — a typo'd
+    # model would otherwise run the whole job on whatever provider the fallback
+    # chain happens to land on with no visible warning, #93412), fail fast instead
+    # of spending a real API call to discover it.
+    if (model or "").strip() and not (provider or "").strip() and effective_provider is None:
+        from clover_cli.models import _PROVIDER_MODELS
+
+        _resolved_provider = str(runtime.get("provider") or "").strip().lower()
+        _known_models = _PROVIDER_MODELS.get(_resolved_provider) or []
+        if _known_models and effective_model not in _known_models:
+            from difflib import get_close_matches
+
+            _suggestions = get_close_matches(effective_model, _known_models, n=5, cutoff=0.4)
+            _msg = (
+                f"Model '{effective_model}' isn't available on provider "
+                f"'{_resolved_provider}'. Nothing was run on another model."
+            )
+            if _suggestions:
+                _msg += " Did you mean: " + ", ".join(_suggestions) + "?"
+            raise ModelNotAvailableError(_msg)
+
     # Pull in explicit toolsets when provided; otherwise use whatever the user
     # has enabled for "cli". sorted() gives stable ordering for config-derived
     # sets; explicit values preserve user order.
@@ -502,6 +552,10 @@ def _run_agent(
             requested_provider=runtime.get("requested_provider"),
             api_mode=runtime.get("api_mode"),
             model=effective_model,
+            # Only "true" when the caller explicitly passed -m/--model — never
+            # for a model that came from CLOVER_INFERENCE_MODEL or config.yaml
+            # (those are "use my defaults", not "pin this exact model").
+            model_pinned=bool((model or "").strip()),
             enabled_toolsets=toolsets_list,
             quiet_mode=True,
             platform="cli",
@@ -532,6 +586,7 @@ def _run_agent(
             # Structured, redacted worker activity for a parent session.
             agent.tool_progress_callback = activity_writer.tool_progress_callback
             agent.interim_assistant_callback = activity_writer.interim_callback
+            agent.model_fallback_callback = activity_writer.model_fallback
             activity_writer.start(effective_model)
 
         result = agent.run_conversation(prompt)
