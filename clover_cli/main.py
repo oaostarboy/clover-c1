@@ -10673,6 +10673,15 @@ def cmd_update(args):
     finally:
         _update_lock.release()
         _finalize_update_output(_update_io_state)
+        # The detached watcher owns post-restart verification. In direct CLI
+        # mode keep this terminal open until it reports its verdict; otherwise
+        # a rollback after the updater exits would only reach a log file.
+        if not gateway_mode and os.environ.get(_UPDATE_REEXEC_ENV) != "1":
+            from clover_cli.update_restart_watcher import wait_for_cli_verdict
+
+            _verified = wait_for_cli_verdict()
+            if not _verified and sys.exc_info()[0] is None:
+                raise SystemExit(1)
         # Windows hand-off child (#93581): the re-exec'd venv child cannot
         # rely on graceful interpreter shutdown — a leftover non-daemon
         # thread from the update tail keeps the console busy long after

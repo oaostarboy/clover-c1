@@ -25250,6 +25250,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         while loop.time() < deadline:
             # Check for completion
             if exit_code_path.exists():
+                from clover_cli.update_restart_watcher import verification_pending
+                if verification_pending(_clover_home):
+                    await asyncio.sleep(poll_interval)
+                    continue
                 # Read any remaining output
                 if output_path.exists():
                     try:
@@ -25572,6 +25576,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             chat_type = pending.get("chat_type")
             thread_id = pending.get("thread_id")
             message_id = pending.get("message_id")
+
+            from clover_cli.update_restart_watcher import verification_pending
+            if verification_pending(_clover_home):
+                logger.info("Update notification deferred: restart health probe pending")
+                cleanup = False
+                active_pending_path = pending_path
+                claimed_path.replace(pending_path)
+                return False
 
             if not exit_code_path.exists():
                 logger.info("Update notification deferred: update still running")

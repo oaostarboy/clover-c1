@@ -46,6 +46,7 @@ import shutil
 import subprocess
 import sys
 import time
+import traceback
 from pathlib import Path
 from typing import Any, Optional
 
@@ -198,19 +199,47 @@ def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
         # Conflicts stay in the stash; never discard the user's edits.
     python = root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    if python.is_file():
-        # Delegate to the same repair helper as `clover update` after the old
-        # checkout is back in place. The watcher itself stays dependency-free.
-        repair = ("from clover_cli.main import _install_python_dependencies_with_optional_fallback as install; "
-                  "import sys; install([sys.executable, '-m', 'pip'], group='all')")
-        subprocess.run([str(python), "-c", repair], cwd=root, check=True,
-                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    if not python.is_file():
+        uv = shutil.which("uv")
+        if uv:
+            create = [uv, "venv", "venv"]
+        else:
+            bootstrap = next((exe for exe in (shutil.which("python3"), shutil.which("python"),
+                                               str(sys.executable) if Path(sys.executable).is_file() else None)
+                              if exe), None)
+            if not bootstrap:
+                raise RuntimeError("No Python interpreter available to recreate the managed venv")
+            create = [bootstrap, "-m", "venv", "venv"]
+        subprocess.run(create, cwd=root, check=True, capture_output=True,
+                       text=True, encoding="utf-8", errors="replace", timeout=120)
+    if not python.is_file():
+        raise RuntimeError("Managed venv interpreter still missing after recreation")
+    # Delegate to the same repair helper as `clover update` after the old
+    # checkout is back in place. The watcher itself stays dependency-free.
+    repair = ("from clover_cli.main import _install_python_dependencies_with_optional_fallback as install; "
+              "import sys; install([sys.executable, '-m', 'pip'], group='all')")
+    subprocess.run([str(python), "-c", repair], cwd=root, check=True,
+                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
     snapshot_id = data.get("pre_update_snapshot_id")
     home = beacon.parent
     if snapshot_id and Path(snapshot_id).name == snapshot_id:
         config = home / "state-snapshots" / snapshot_id / "config.yaml"
         if config.is_file():
             shutil.copy2(config, home / "config.yaml")
+
+
+def publish_gateway_verdict(beacon: Path, outcome: str) -> None:
+    """Use existing /update IPC so even restored OLD gateway code can reply."""
+    home = beacon.parent
+    if outcome == "healthy" or not any(
+        (home / name).exists() for name in (".update_pending.json", ".update_pending.claimed.json")
+    ):
+        return
+    message = (ROLLBACK_MESSAGE if outcome == "rolled-back" else
+               "The update failed and automatic recovery couldn't confirm the gateway is healthy. Check the update log.")
+    (home / ".update_output.txt").write_text(message, encoding="utf-8")
+    # Code LAST: the original gateway treats its presence as completion.
+    (home / ".update_exit_code").write_text("1", encoding="utf-8")
 
 
 def verify_or_rollback(data: dict[str, Any], beacon: Path, *, timeout: float = 90,
@@ -245,6 +274,7 @@ def verify_or_rollback(data: dict[str, Any], beacon: Path, *, timeout: float = 9
         logging.exception("Could not persist rollback result")
     print(ROLLBACK_MESSAGE if outcome == "rolled-back" else
           "The update failed and automatic recovery couldn't confirm the gateway is healthy. Check the update log.")
+    publish_gateway_verdict(beacon, outcome)
     return outcome
 
 
@@ -253,6 +283,15 @@ def beacon_path(clover_home: Optional[Path] = None) -> Path:
         os.environ.get("CLOVER_HOME") or (Path.home() / ".clover")
     )
     return home / BEACON_NAME
+
+
+def verification_pending(clover_home: Path) -> bool:
+    """A finalized update receipt is provisional while restart probe runs."""
+    try:
+        data = json.loads(beacon_path(clover_home).read_text(encoding="utf-8"))
+        return bool(data.get("pre_pull_sha") and data.get("repo"))
+    except (OSError, ValueError):
+        return False
 
 
 def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None,
@@ -295,6 +334,47 @@ def refresh_beacon(*, clover_home: Optional[Path] = None) -> None:
         tmp.replace(path)
     except Exception:
         pass
+
+
+def mark_ready_for_probe(*, clover_home: Optional[Path] = None) -> bool:
+    """CLI update is done; allow the independent watcher to probe before exit."""
+    path = beacon_path(clover_home)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not (data.get("pre_pull_sha") and data.get("repo")):
+            return False
+        data["ready_for_probe"] = True
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(path)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def wait_for_cli_verdict(*, clover_home: Optional[Path] = None,
+                         timeout: float = 600) -> bool:
+    """Print the final rollback result on the same CLI that ran update."""
+    if not mark_ready_for_probe(clover_home=clover_home):
+        return True  # No post-pull watcher was armed on this path.
+    beacon = beacon_path(clover_home)
+    deadline = time.monotonic() + timeout
+    while beacon.exists() and time.monotonic() < deadline:
+        time.sleep(min(0.5, max(0, deadline - time.monotonic())))
+    if beacon.exists():
+        print("The update could not be verified. Check ~/.clover/logs/update-rollback.log.")
+        return False
+    try:
+        receipt = beacon.parent / "logs" / "update_receipts" / "latest.json"
+        record = json.loads(receipt.read_text(encoding="utf-8"))
+        outcome = record.get("outcome")
+        if outcome in {"rolled-back", "rollback-unhealthy", "rollback-failed"}:
+            print(record.get("user_message") or "The update failed; check ~/.clover/logs/.")
+            return False
+    except (OSError, ValueError):
+        print("The update outcome could not be verified. Check ~/.clover/logs/.")
+        return False
+    return True
 
 
 def clear_beacon(*, clover_home: Optional[Path] = None) -> None:
@@ -404,7 +484,7 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
         updater_gone = not _pid_alive(updater_pid)
         beacon_stale = age > BEACON_STALE_SECONDS
 
-        if updater_gone or (beacon_stale and not data.get("pre_pull_sha")):
+        if updater_gone or data.get("ready_for_probe") or (beacon_stale and not data.get("pre_pull_sha")):
             if data.get("pre_pull_sha") and data.get("repo"):
                 try:
                     head = subprocess.run(
@@ -420,6 +500,21 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
                     beacon.unlink(missing_ok=True)
                     return result
                 except Exception:
+                    logs = beacon.parent / "logs"
+                    logs.mkdir(parents=True, exist_ok=True)
+                    with (logs / "update-rollback.log").open("a", encoding="utf-8") as handle:
+                        handle.write(traceback.format_exc())
+                    receipt = logs / "update_receipts" / "latest.json"
+                    receipt.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        record = json.loads(receipt.read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        record = {}
+                    record.update(outcome="rollback-failed", user_message=(
+                        "The update failed and automatic recovery couldn't confirm the gateway is healthy. Check the update log."))
+                    receipt.write_text(json.dumps(record), encoding="utf-8")
+                    publish_gateway_verdict(beacon, "rollback-failed")
+                    beacon.unlink(missing_ok=True)
                     return "rollback-failed"
             # Give the updater's own atexit restart a moment to win the race.
             time.sleep(poll)
