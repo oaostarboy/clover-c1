@@ -980,8 +980,6 @@ def setup_model_provider(config: dict, *, quick: bool = False):
     # on demand via `clover auth add`, `clover setup` vision, and
     # `clover setup tts`. This keeps both quick and full setup thin.
 
-
-    # Tool Gateway prompt is already shown by _model_flow_clover() above.
     save_config(config)
 
 
@@ -1916,35 +1914,6 @@ def _is_valid_telegram_bot_token(token: str) -> bool:
     return bool(_TELEGRAM_BOT_TOKEN_RE.match(token))
 
 
-def _setup_telegram_auto_result():
-    """Attempt automatic Telegram bot creation via managed QR onboarding."""
-    try:
-        from clover_cli.telegram_managed_bot import auto_setup_telegram_bot_result
-    except ImportError:
-        return None
-
-    profile_name: str | None = None
-    try:
-        profile_name = _profile_name_from_clover_home(Path(get_clover_home()))
-    except Exception:
-        pass
-
-    return auto_setup_telegram_bot_result(profile_name=profile_name)
-
-
-def _profile_name_from_clover_home(clover_home) -> str | None:
-    """Return the active profile name when CLOVER_HOME is a profile dir."""
-    if clover_home.parent.name == "profiles":
-        return clover_home.name
-    return None
-
-
-def _setup_telegram_auto() -> str | None:
-    """Attempt automatic Telegram bot creation and return only the token."""
-    result = _setup_telegram_auto_result()
-    return result.token if result else None
-
-
 def _prompt_telegram_bot_token() -> str | None:
     print_info("Create a bot via @BotFather on Telegram")
     while True:
@@ -1978,37 +1947,7 @@ def _setup_telegram():
                         print_success("Telegram allowlist configured")
             return
 
-    print_info("How would you like to create your Telegram bot?")
-    print()
-    print_info("  [1] Automatic (recommended)")
-    print_info("      Scan a QR code → confirm in Telegram → done.")
-    print_info("      No token copy-paste needed.")
-    print()
-    print_info("  [2] Manual")
-    print_info("      Create a bot via @BotFather yourself and paste the token.")
-    print()
-
-    choice = prompt("Choice [1/2]", default="1")
-    token = None
-    setup_result = None
-
-    if choice.strip() == "1":
-        setup_result = _setup_telegram_auto_result()
-        if setup_result:
-            token = setup_result.token
-            if not _is_valid_telegram_bot_token(token):
-                print_error("Automatic setup returned an invalid Telegram bot token.")
-                token = None
-                setup_result = None
-        else:
-            token = None
-        if not token:
-            print()
-            print_info("Falling back to manual setup...")
-            print()
-
-    if not token:
-        token = _prompt_telegram_bot_token()
+    token = _prompt_telegram_bot_token()
     if not token:
         return
 
@@ -2022,25 +1961,9 @@ def _setup_telegram():
     print_info("   2. It will reply with your numeric ID (e.g., 123456789)")
     print()
 
-    detected_user_id = getattr(setup_result, "owner_user_id", None)
-    if detected_user_id:
-        detected_id = str(detected_user_id)
-        print_success(f"Detected your Telegram user ID: {detected_id}")
-        if prompt_yes_no("Allow this Telegram account to use the bot?", True):
-            extra = prompt("Additional allowed user IDs (comma-separated, optional)")
-            ids = [detected_id]
-            for uid in extra.replace(" ", "").split(","):
-                if uid and uid not in ids:
-                    ids.append(uid)
-            allowed_users = ",".join(ids)
-        else:
-            allowed_users = prompt(
-                "Allowed user IDs (comma-separated, leave empty for open access)"
-            )
-    else:
-        allowed_users = prompt(
-            "Allowed user IDs (comma-separated, leave empty for open access)"
-        )
+    allowed_users = prompt(
+        "Allowed user IDs (comma-separated, leave empty for open access)"
+    )
 
     if allowed_users:
         allowed_users = allowed_users.replace(" ", "")
@@ -2802,87 +2725,6 @@ SETUP_SECTIONS = [
 ]
 
 
-def _run_portal_one_shot(config: dict) -> None:
-    """One-shot Clover Portal setup — OAuth + model pick + provider + Tool Gateway.
-
-    Wired into ``clover setup --portal`` and ``clover portal``. This is the
-    Clover-Portal slice of the first-time quick setup, collapsed into a single
-    shareable command so a brand-new user goes from zero to a fully working
-    Clover session — model selected, provider set, and web/image/tts/browser
-    tools routed via their Portal sub — without being told to run
-    ``clover setup`` and hunt for the quick-setup option.
-
-    The login + model selection + provider switch + Tool Gateway opt-in are all
-    delegated to ``_model_flow_clover`` — the exact same flow quick setup uses
-    (``_run_first_time_quick_setup``) and the same one ``clover model`` runs
-    when you pick Clover. Routing through it (instead of hand-rolling the auth +
-    provider write here) means ``clover portal`` always offers a model picker,
-    and there is a single source of truth for the Clover onboarding steps.
-    """
-    from clover_cli.config import load_config
-
-    print()
-    print(
-        color(
-            "┌─────────────────────────────────────────────────────────┐",
-            Colors.MAGENTA,
-        )
-    )
-    print(color("│     ☘ Clover Setup — Clover Portal (one-shot)             │", Colors.MAGENTA))
-    print(
-        color(
-            "└─────────────────────────────────────────────────────────┘",
-            Colors.MAGENTA,
-        )
-    )
-    print()
-    print()
-    print_info("  Sign in to route models and tools through a single account.")
-    print()
-
-    # _model_flow_clover handles BOTH the logged-out path (device-code OAuth,
-    # which selects a model internally) and the already-logged-in path (curated
-    # Clover model picker), then offers the Tool Gateway opt-in and sets
-    # provider=clover via the login/model save. This is the same routine quick
-    # setup calls, so `clover portal` == quick setup's Clover step.
-    try:
-        from clover_cli.main import _model_flow_clover
-
-        _model_flow_clover(config)
-    except (KeyboardInterrupt, EOFError, SystemExit):
-        # _login_clover raises SystemExit(130)/(1) on cancel/failure; the
-        # logged-out path inside _model_flow_clover catches it, but the
-        # expired-session re-login path only catches Exception, so a
-        # SystemExit there would otherwise escape and kill the whole CLI.
-        # Treat all of these as a graceful cancel/abort for the portal flow.
-        print()
-        print_info("  Setup cancelled.")
-        print_info("  Configure a provider with `clover model`.")
-        return
-    except Exception as exc:
-        logger.debug("_model_flow_clover error during `clover portal`: %s", exc)
-        print()
-        print_error(f"  Clover Portal setup encountered an error: {exc}")
-        print_info("  Configure a provider with `clover model`.")
-        return
-
-    # Re-sync the in-memory config from disk — _model_flow_clover (and the
-    # underlying login/model save) write via their own load/save cycle, so any
-    # later save_config(config) by a caller must not clobber those values.
-    try:
-        _refreshed = load_config()
-        if isinstance(_refreshed, dict):
-            config.clear()
-            config.update(_refreshed)
-    except Exception:
-        pass
-
-    print()
-    print_success("Portal setup complete.")
-    print_info("  Run `clover portal info` to inspect routing.")
-    print_info("  Run `clover` to start chatting.")
-
-
 @contextmanager
 def _setup_navigation_scope():
     """Install and reliably restore the setup menu navigation context."""
@@ -3180,10 +3022,7 @@ def _run_setup_wizard_impl(args):
         if migration_ran:
             config = load_config()
 
-        # The Clover Portal option was removed on 2026-08-30: it fronted a
-        # hosted subscription this fork does not run, and it was the
-        # preselected recommendation, so a new user's default path ended in a
-        # login error. Full setup is the working route and is now first.
+        # Full setup is the default route.
         setup_mode = prompt_choice(
             "How would you like to set up Clover?",
             [
@@ -3193,18 +3032,6 @@ def _run_setup_wizard_impl(args):
             0,
         ) + 1
 
-        if setup_mode == 0:
-            _run_setup_steps(
-                [
-                    (
-                        "Quick Setup",
-                        lambda: _run_first_time_quick_setup(
-                            config, clover_home, is_existing
-                        ),
-                    )
-                ]
-            )
-            return
         if setup_mode == 2:
             _run_setup_steps(
                 [
@@ -3289,84 +3116,6 @@ def _run_setup_wizard_impl(args):
         print_info(f"Previous config backed up to: {_backup_path}")
         print_info("If setup changed a value you customized, restore it with:")
         print_info(f"  cp {_backup_path} {config_path}")
-    _print_setup_summary(config, clover_home)
-
-
-def _run_first_time_quick_setup(config: dict, clover_home, is_existing: bool):
-    """Streamlined first-time setup via Clover Portal: OAuth, model, terminal & messaging.
-
-    Routes straight to the Clover Portal provider — runs the device-code OAuth
-    login, picks a Clover model, then configures the terminal backend and (optionally)
-    a messaging platform. Applies sensible defaults for everything else (agent
-    settings, tools); the user can customize later via ``clover setup <section>``
-    or switch providers with ``clover model``.
-    """
-    from clover_cli.config import load_config
-
-    # Step 1: Clover Portal — OAuth login + model selection.
-    # _model_flow_clover() handles both the logged-out path (device-code OAuth,
-    # which selects a model internally) and the already-logged-in path (curated
-    # Clover model picker). Provider is set to "clover" by the login/model save.
-    print()
-    print_header("Clover Portal")
-    print_info("Sign in to route models and tools through a single account.")
-    print()
-    try:
-        from clover_cli.main import _model_flow_clover
-        _model_flow_clover(config)
-    except (KeyboardInterrupt, EOFError):
-        print()
-        print_info("Clover Portal setup cancelled.")
-    except Exception as exc:
-        logger.debug("_model_flow_clover error during quick setup: %s", exc)
-        print_warning(f"Clover Portal setup encountered an error: {exc}")
-        print_info("You can try again later with: clover model")
-
-    # Re-sync the wizard's config dict from disk — _model_flow_clover (and the
-    # underlying login/model save) write via their own load/save cycle, and the
-    # wizard's later save_config(config) must not clobber those values (#4172).
-    _refreshed = load_config()
-    config.clear()
-    config.update(_refreshed)
-
-    # Step 2: Terminal Backend — where commands run is a core decision
-    setup_terminal_backend(config)
-
-    # Step 3: Apply defaults for everything else
-    _apply_default_agent_settings(config)
-
-    save_config(config)
-
-    # Step 4: Offer messaging gateway setup
-    print()
-    gateway_choice = prompt_choice(
-        "Connect a messaging platform? (Telegram, Discord, etc.)",
-        [
-            "Set up messaging now (recommended)",
-            "Skip — set up later with 'clover setup gateway'",
-        ],
-        0,
-    )
-
-    if gateway_choice == 0:
-        setup_gateway(config)
-        save_config(config)
-    else:
-        # Messaging skipped — still install/start the gateway service so cron
-        # jobs run and platforms come alive as soon as tokens are added later
-        # (e.g. via `clover import` from another machine).
-        from clover_cli.gateway import ensure_gateway_service
-        ensure_gateway_service(context="setup")
-
-    print()
-    print_success("Setup complete! You're ready to go.")
-    print()
-    print_info("  Configure all settings:    clover setup")
-    if gateway_choice != 0:
-        print_info("  Connect Telegram/Discord:  clover setup gateway")
-    _print_macos_fda_tip()
-    print()
-
     _print_setup_summary(config, clover_home)
 
 
