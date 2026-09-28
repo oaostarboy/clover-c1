@@ -34,6 +34,17 @@ def loop_env(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setenv("CLOVER_HOME", str(home))
     goals._DB_CACHE.clear()
+    # Pre-warm the SessionDB for this home *synchronously*, before any test
+    # body runs inside the pytest-asyncio event loop. goals._get_session_db()
+    # bootstraps SessionDB off-loop-thread on a cache miss when called with a
+    # running loop (gateway crash-loop guard, see its docstring), waiting up
+    # to _DB_BOOTSTRAP_INIT_WAIT_S for a background thread. Under CI's
+    # parallel load that window can be missed, silently dropping the first
+    # GoalManager(...).set() write in the same test and failing
+    # test_gateway_loop_goal_note_when_goal_active nondeterministically.
+    # Warming it here runs with no event loop, so it builds inline with no
+    # race, and every test using this fixture hits a warm cache.
+    goals._get_session_db()
     yield home
     goals._DB_CACHE.clear()
 
