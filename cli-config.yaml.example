@@ -1201,6 +1201,21 @@ platform_toolsets:
   google_chat: [clover-google_chat]
 
 # =============================================================================
+# Gateway
+# =============================================================================
+# gateway:
+#   # Sliding-window brake on bot-authored inbound messages per conversation.
+#   # {PLATFORM}_ALLOW_BOTS only decides admission, so two fleet bots (or two
+#   # Clover profiles) replying to each other would otherwise ping-pong
+#   # forever. Never affects `clover peer dm` / api_server traffic — only
+#   # platform bot messages count against the budget.
+#   bot_loop_guard:
+#     enabled: true
+#     max_events: 20        # messages allowed inside window_seconds
+#     window_seconds: 300
+#     cooldown_seconds: 600  # how long a tripped conversation stays dropped
+
+# =============================================================================
 # Gateway Platform Settings
 # =============================================================================
 # Optional per-platform messaging settings.

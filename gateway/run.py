@@ -10576,6 +10576,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
             return True  # handled (silently dropped); do not fall through
 
+        # Bot loop guard: count this admitted bot-authored message exactly
+        # once here too — a busy-session steer message takes a different
+        # path than the cold _handle_message admission above.
+        if not self._admit_bot_message(event.source):
+            logger.debug(
+                "Dropping bot-authored busy-session message from %s chat %s: loop guard cooling down",
+                event.source.platform.value if event.source.platform else "unknown",
+                event.source.chat_id,
+            )
+            return True  # handled (silently dropped); do not fall through
+
         effective_mode = self._effective_busy_input_mode(event.source)
 
         # --- Draining case (gateway restarting/stopping) ---
@@ -17809,6 +17820,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         )
                     # Record rate limit so subsequent messages are silently ignored
                     pairing_store._record_rate_limit(platform_name, source.user_id)
+            return None
+
+        # Bot loop guard (#gateway.bot_loop_guard): count this admitted
+        # bot-authored message exactly once, here in the cold inbound path.
+        # `_is_user_authorized` above only PEEKS the guard (it may be called
+        # several times for the same message elsewhere), so the actual
+        # sliding-window count happens once a message is confirmed authorized
+        # and about to be processed — otherwise two ALLOW_BOTS-admitted bots
+        # (or two Clover profiles) replying to each other never stop.
+        if not is_internal and not self._admit_bot_message(source):
+            logger.debug(
+                "Dropping bot-authored message from %s chat %s: loop guard cooling down",
+                source.platform.value if source.platform else "unknown",
+                source.chat_id,
+            )
             return None
 
         # Global emergency stop (`clover pause`): give new turns a brief
