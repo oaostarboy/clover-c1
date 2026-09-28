@@ -1,4 +1,3 @@
-import { usageBarsText } from '../../../components/overlayPrimitives.js'
 import { introMsg, toTranscriptMessages } from '../../../domain/messages.js'
 import { sessionScopedModelArg, TUI_SESSION_MODEL_FLAG } from '../../../domain/slash.js'
 import type {
@@ -19,8 +18,6 @@ import { DEFAULT_INDICATOR_STYLE, INDICATOR_STYLES, type IndicatorStyle } from '
 import { patchOverlayState } from '../../overlayStore.js'
 import { patchUiState } from '../../uiStore.js'
 import type { SlashCommand } from '../types.js'
-
-const USAGE_CTA = 'Manage your plan and balance with your provider'
 
 const TUI_SESSION_MODEL_RE = new RegExp(`(?:^|\\s)${TUI_SESSION_MODEL_FLAG}(?:\\s|$)`)
 const REASONING_SESSION_FLAGS = new Set(['--session'])
@@ -663,7 +660,7 @@ export const sessionCommands: SlashCommand[] = [
   },
 
   {
-    help: 'session usage + Clover credits',
+    help: 'session token usage',
     name: 'usage',
     run: (_arg, ctx) => {
       ctx.gateway.rpc<SessionUsageResponse>('session.usage', { session_id: ctx.sid }).then(r => {
@@ -679,54 +676,8 @@ export const sessionCommands: SlashCommand[] = [
           })
         }
 
-        // The balance block is agent-independent, so it shows even with zero API
-        // calls or on a resumed session. Prefer the shared dollar usage model
-        // (two-bar view, dollars-only); fall back to the legacy text lines only
-        // when the model is unavailable.
-        const usageModel = r?.usage
-        const barLines = usageBarsText(usageModel)
-        let showedBalance = false
-
-        if (usageModel?.available && (barLines.length || usageModel.status === 'free')) {
-          const sections: PanelSection[] = []
-          const plan = usageModel.plan_name ?? (usageModel.status === 'free' ? 'Free' : null)
-
-          if (plan) {
-            sections.push({
-              text: `Plan: ${plan}${usageModel.renews_display ? ` · renews ${usageModel.renews_display}` : ''}`
-            })
-          }
-
-          if (barLines.length) {
-            sections.push({ text: barLines.join('\n') })
-          }
-
-          if (usageModel.status === 'free') {
-            sections.push({ text: '> Free · free models only. Manage your plan with your provider.' })
-          } else if (usageModel.status === 'low') {
-            sections.push({
-              text: `! Low balance · ${usageModel.total_spendable_display ?? 'under $5'} left. Manage your plan with your provider.`
-            })
-          }
-
-          ctx.transcript.panel('Balance', sections)
-          showedBalance = true
-        } else {
-          const creditsLines = r?.credits_lines ?? []
-
-          if (creditsLines.length) {
-            ctx.transcript.panel('Clover balance', [{ text: creditsLines.join('\n') }])
-            showedBalance = true
-          }
-        }
-
         if (!r?.calls) {
-          if (!showedBalance) {
-            sys('no API calls yet')
-          }
-
-          sys(USAGE_CTA)
-
+          sys('no API calls yet')
           return
         }
 
@@ -751,8 +702,6 @@ export const sessionCommands: SlashCommand[] = [
         }
 
         ctx.transcript.panel('Usage', sections)
-
-        sys(USAGE_CTA)
       })
     }
   }
