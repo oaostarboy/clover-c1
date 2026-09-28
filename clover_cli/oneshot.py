@@ -508,25 +508,32 @@ def _run_agent(
     # Preflight: -m/--model given without --provider, and detect_provider_for_model
     # found no confident match (effective_provider is still None), so the run fell
     # through to the caller's default provider. If that provider's model name is
-    # simply unknown to Clover's own static catalog (no network probe — a typo'd
-    # model would otherwise run the whole job on whatever provider the fallback
-    # chain happens to land on with no visible warning, #93412), substitute
+    # unknown to a LIVE catalog just fetched from the provider itself, substitute
     # instead of spending a real API call to discover the failure: the closest
     # real model on the same provider, then the user's own configured default
     # (model.substitute_unknown: false keeps the old fail-fast behavior).
+    #
+    # A STATIC catalog is never used for this decision, even when it's all
+    # that's available: it lags real provider releases, and treating "missing
+    # from the static list" as "doesn't exist" silently downgraded a real,
+    # working model the static catalog just hadn't caught up to yet (#93412
+    # follow-up). When only a static list (or nothing) is available, skip
+    # this preflight entirely and let the real API call's own model_not_found
+    # (the conversation_loop pinned-model branch, proof (b)) decide instead —
+    # it substitutes exactly the same way.
     _model_substitution_info: Optional[dict] = None
     if (model or "").strip() and not (provider or "").strip() and effective_provider is None:
         from agent.model_substitute import known_models_for_provider
 
         _resolved_provider = str(runtime.get("provider") or "").strip().lower()
         _requested_provider = str(runtime.get("requested_provider") or "").strip().lower()
-        _known_models = known_models_for_provider(
+        _known_models, _known_models_are_live = known_models_for_provider(
             _resolved_provider,
             requested_provider=_requested_provider,
             base_url=runtime.get("base_url"),
             api_key=runtime.get("api_key") if isinstance(runtime.get("api_key"), str) else None,
         )
-        if _known_models and effective_model not in _known_models:
+        if _known_models_are_live and _known_models and effective_model not in _known_models:
             from agent.model_substitute import (
                 configured_default_model,
                 resolve_model_substitute,

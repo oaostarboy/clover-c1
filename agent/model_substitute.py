@@ -126,40 +126,129 @@ def _fetch_dynamic_models(base_url: Optional[str], api_key: Optional[str]) -> Li
     return list(models or [])
 
 
+def _fetch_live_models_for_builtin_provider(provider: str) -> Optional[List[str]]:
+    """Live catalog fetch for a BUILT-IN provider that exposes one.
+
+    Returns ``None`` when the provider has no live fetch wired in here, or
+    the fetch didn't unambiguously succeed (no credentials / endpoint
+    unreachable) -- the caller falls back to the static ``_PROVIDER_MODELS``
+    entry in that case. An empty list would be indistinguishable from "the
+    fetch failed", so ``None`` is the only "not live" signal.
+
+    Currently wired: ``openai-codex``, whose own ``/codex/models`` catalog
+    is what actually caught the regression this module exists to prevent --
+    a real, working Codex model (released after Clover's last static-catalog
+    sync) was silently downgraded because it wasn't in ``_PROVIDER_MODELS``
+    yet (#93412 follow-up). Reuses the same live fetch the ``/model`` picker
+    already calls (``clover_cli.models.provider_model_ids``); a static
+    catalog is NEVER proof a model doesn't exist, only a list fetched right
+    now from the provider itself is.
+    """
+    if provider != "openai-codex":
+        return None
+    try:
+        from clover_cli.auth import resolve_codex_runtime_credentials
+        from clover_cli.codex_models import _fetch_models_from_api
+
+        creds = resolve_codex_runtime_credentials(refresh_if_expiring=True)
+        access_token = creds.get("api_key") if isinstance(creds, dict) else None
+    except Exception as exc:
+        logger.debug("Codex credential resolution failed for live model list: %s", exc)
+        return None
+    if not access_token:
+        return None
+    try:
+        models = _fetch_models_from_api(access_token)
+    except Exception as exc:
+        logger.debug("Codex live model list fetch failed: %s", exc)
+        return None
+    if not models:
+        return None
+    return _with_codex_context_variants(models)
+
+
+def _with_codex_context_variants(models: List[str]) -> List[str]:
+    """Add a ``-900k`` sibling for every live-listed Codex base model.
+
+    ``-900k`` is a Clover-side context-window-modifier suffix, stripped
+    before the model id ever reaches the wire (``agent/model_metadata.py``);
+    it is NOT its own catalog entry on the live endpoint (confirmed: the
+    live ``/codex/models`` response never lists a ``<base>-900k`` slug for
+    ANY base, "-900k" or not). The picker's own hardcoded eligibility
+    allowlist (``_CODEX_900K_ELIGIBLE_BASES``) is exactly the kind of
+    static catalog this module exists to stop trusting as proof of absence
+    -- it lags a freshly-released family the same way ``_PROVIDER_MODELS``
+    does (#93412 follow-up: ``gpt-6-astra-900k`` genuinely works, but its
+    base ``gpt-6-astra`` predates that allowlist). Deliberately NOT gated
+    on that allowlist here: a preflight-only, best-effort "is this
+    plausible" widening, never used for the interactive picker or the wire
+    path, and always backstopped by the runtime model_not_found path if a
+    given base turns out not to actually support the variant.
+    """
+    _suffix = "-900k"
+    enriched = list(models)
+    seen = set(enriched)
+    for base in models:
+        if base.endswith(_suffix):
+            continue
+        variant = base + _suffix
+        if variant not in seen:
+            enriched.append(variant)
+            seen.add(variant)
+    return enriched
+
+
 def known_models_for_provider(
     provider: Optional[str],
     *,
     requested_provider: Optional[str] = None,
     base_url: Optional[str] = None,
     api_key: Optional[str] = None,
-) -> List[str]:
-    """Best-known model catalog for a provider.
+) -> tuple:
+    """Best-known model catalog for a provider, plus whether it's LIVE.
 
-    Static ``_PROVIDER_MODELS`` first -- matched by ``provider`` (the
-    resolved runtime/billing class, e.g. ``"custom"``) AND by
-    ``requested_provider`` (the user-facing name, e.g. a named custom
-    provider like ``"gemini-oauth"``), since a custom/user-defined
-    provider's catalog -- if Clover ships one -- is keyed by whichever name
-    happens to be more specific. When neither has a static list, fall back
-    to a live probe of the endpoint's own OpenAI-compatible ``/models``
-    (#93412 follow-up: a custom provider has no ``_PROVIDER_MODELS`` entry
-    at all, which was silently treated as an empty catalog -- skipping the
-    same-provider substitute entirely and jumping straight to a
-    cross-provider default).
+    Returns ``(models, is_live)``. A static catalog is NEVER proof that a
+    model doesn't exist -- it lags real provider releases. Only two things
+    count as proof a pinned model is unknown: (a) a list just fetched from
+    the provider itself (``is_live=True`` here), or (b) the provider's API
+    returning ``model_not_found`` at runtime (the conversation_loop pinned
+    branch, handled entirely outside this function). Callers that gate a
+    substitute-or-fail decision on the catalog (the ``clover -z`` preflight)
+    MUST only act when ``is_live`` is true; a static-only or empty result
+    means "skip the preflight, let the real call decide" (#93412 follow-up).
 
-    Deliberately checks for KEY PRESENCE, not truthiness: a provider that
-    genuinely has a static entry with an empty list (a real, empty-for-now
-    catalog) must NOT trigger a live probe -- only a provider with no entry
+    Live sources, tried in order:
+      1. A built-in provider's own live fetch (currently: ``openai-codex``;
+         see :func:`_fetch_live_models_for_builtin_provider`).
+      2. A live probe of a custom/user-defined provider's own
+         OpenAI-compatible ``/models`` (:func:`_fetch_dynamic_models`) --
+         only reached when NEITHER ``provider`` nor ``requested_provider``
+         has a static entry (a named custom provider like ``"gemini-oauth"``
+         has no ``_PROVIDER_MODELS`` entry at all, by construction).
+
+    Falls back to the static ``_PROVIDER_MODELS`` catalog -- matched by
+    ``provider`` (the resolved runtime/billing class, e.g. ``"custom"``) AND
+    by ``requested_provider`` (the user-facing name, e.g. a named custom
+    provider) -- only when no live source is available. Deliberately checks
+    for KEY PRESENCE, not truthiness: a provider that genuinely has a static
+    entry with an empty list (a real, empty-for-now catalog) must NOT
+    trigger the dynamic ``/models`` probe -- only a provider with no entry
     at all (custom/user-defined providers, by construction) does.
     """
+    provider_norm = (provider or "").strip().lower()
+    live_models = _fetch_live_models_for_builtin_provider(provider_norm)
+    if live_models is not None:
+        return live_models, True
+
     from clover_cli.models import _PROVIDER_MODELS
 
     for key in (provider, requested_provider):
         key_norm = (key or "").strip().lower()
         if key_norm and key_norm in _PROVIDER_MODELS:
-            return list(_PROVIDER_MODELS[key_norm])
+            return list(_PROVIDER_MODELS[key_norm]), False
 
-    return _fetch_dynamic_models(base_url, api_key)
+    dynamic_models = _fetch_dynamic_models(base_url, api_key)
+    return dynamic_models, bool(dynamic_models)
 
 
 def substitute_unknown_models_enabled(config: Optional[dict]) -> bool:

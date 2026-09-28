@@ -228,7 +228,7 @@ class TestSubstituteUnknownModel:
         cfg = {"model": {"default": "gpt-6-astra-900k", "provider": "openai-codex"}}
         new_client = _mock_client(base_url="https://chatgpt.com/backend-api/codex/")
         with (
-            patch("agent.model_substitute.known_models_for_provider", return_value=[]),
+            patch("agent.model_substitute.known_models_for_provider", return_value=([], False)),
             patch("clover_cli.config.load_config", return_value=cfg),
             patch(
                 "agent.auxiliary_client.resolve_provider_client",

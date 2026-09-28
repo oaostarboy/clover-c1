@@ -2959,14 +2959,20 @@ def try_substitute_unknown_model(agent, *, requested_model: str, provider: str):
     cfg = load_config()
     default_model, default_provider = configured_default_model(cfg)
     _agent_api_key = getattr(agent, "api_key", None)
+    # Ignore the live/static provenance here on purpose: this path only runs
+    # after the provider's own API already returned model_not_found for
+    # `requested_model` (proof (b) -- see agent/model_substitute.py's module
+    # docstring). known_models is just a naming HINT for the closest
+    # same-provider substitute; a static-only list is fine for that.
+    _known_models, _ = known_models_for_provider(
+        provider,
+        requested_provider=getattr(agent, "requested_provider", None),
+        base_url=getattr(agent, "base_url", None),
+        api_key=_agent_api_key if isinstance(_agent_api_key, str) else None,
+    )
     substitute = resolve_model_substitute(
         requested_model, provider,
-        known_models=known_models_for_provider(
-            provider,
-            requested_provider=getattr(agent, "requested_provider", None),
-            base_url=getattr(agent, "base_url", None),
-            api_key=_agent_api_key if isinstance(_agent_api_key, str) else None,
-        ),
+        known_models=_known_models,
         default_model=default_model,
         default_provider=default_provider,
     )
