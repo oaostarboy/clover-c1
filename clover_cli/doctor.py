@@ -2060,18 +2060,9 @@ def run_doctor(args):
 
     try:
         from clover_cli.auth import (
-            get_clover_auth_status_local,
             get_codex_auth_status,
             get_minimax_oauth_auth_status,
         )
-
-        # Read-only display: refresh-free snapshot — doctor must never
-        # trigger an OAuth refresh as a side effect of a health check.
-        clover_status = get_clover_auth_status_local()
-        if clover_status.get("logged_in"):
-            check_ok("Clover Portal auth", "(logged in)")
-        else:
-            check_warn("Clover Portal auth", "(not logged in)")
 
         codex_status = get_codex_auth_status()
         if codex_status.get("logged_in"):
