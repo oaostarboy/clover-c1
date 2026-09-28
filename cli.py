@@ -12725,6 +12725,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
         elif canonical == "update":
             if self._handle_update_command():
                 return False
+        elif canonical == "repair":
+            print("  Checking Clover safely; the session will resume after repair.")
+            self._pending_relaunch = ["repair"]
+            return False
         elif canonical == "version":
             from clover_cli.main import _print_version_info
 

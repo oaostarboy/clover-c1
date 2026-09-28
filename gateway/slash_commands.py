@@ -6299,7 +6299,14 @@ class GatewaySlashCommandsMixin:
 
         return await loop.run_in_executor(None, _collect_and_upload)
 
-    async def _handle_update_command(self, event: MessageEvent) -> str:
+    async def _handle_repair_command(self, event: MessageEvent) -> str:
+        """Use the update IPC/watch path, with identical platform and admin access."""
+        denied = self._check_slash_access(event.source, "repair")
+        if denied:
+            return denied
+        return await self._handle_update_command(event, action="repair")
+
+    async def _handle_update_command(self, event: MessageEvent, *, action: str = "update") -> str:
         """Handle /update command — update Clover Cognition to the latest version.
 
         Spawns ``clover update`` in a detached session (via ``setsid``) so it
@@ -6327,13 +6334,13 @@ class GatewaySlashCommandsMixin:
             except Exception:
                 return t("gateway.update.platform_not_messaging")
 
-        if is_managed():
+        if action == "update" and is_managed():
             return f"✗ {format_managed_message('update Clover Cognition')}"
 
         project_root = Path(__file__).parent.parent.resolve()
         git_dir = project_root / '.git'
 
-        if not git_dir.exists():
+        if action == "update" and not git_dir.exists():
             return t("gateway.update.not_git_repo")
 
         clover_cmd = _resolve_clover_bin()
@@ -6415,7 +6422,7 @@ class GatewaySlashCommandsMixin:
                         sys.executable, "-c", helper,
                         str(output_path), str(exit_code_path),
                         sys.executable, "-m", "clover_cli.main",
-                        "update", "--gateway",
+                        action, *( ["--gateway"] if action == "update" else [] ),
                     ],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -6424,8 +6431,9 @@ class GatewaySlashCommandsMixin:
             else:
                 clover_cmd_str = " ".join(shlex.quote(part) for part in clover_cmd)
                 update_cmd = (
-                    f"PYTHONUNBUFFERED=1 {clover_cmd_str} update --gateway"
-                    f" > {shlex.quote(str(output_path))} 2>&1; "
+                    f"PYTHONUNBUFFERED=1 {clover_cmd_str} {action}"
+                    + (" --gateway" if action == "update" else "")
+                    + f" > {shlex.quote(str(output_path))} 2>&1; "
                     # Avoid `status=$?`: `status` is a read-only special parameter
                     # in zsh, and this command string is copied/reused in macOS/zsh
                     # operator wrappers. Keep the template zsh-safe even though this
@@ -6455,4 +6463,4 @@ class GatewaySlashCommandsMixin:
             return t("gateway.update.start_failed", error=e)
 
         self._schedule_update_notification_watch()
-        return t("gateway.update.starting")
+        return "Checking and safely repairing Clover; I'll report back here." if action == "repair" else t("gateway.update.starting")

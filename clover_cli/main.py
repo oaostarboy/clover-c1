@@ -14362,6 +14362,9 @@ def main():
     # update command  (parser built in clover_cli/subcommands/update.py)
     # =========================================================================
     build_update_parser(subparsers, cmd_update=cmd_update)
+    from clover_cli.repair_cmd import cmd_repair
+    repair_parser = subparsers.add_parser("repair", help="Check and fix a broken install (keeps your chats and memories)")
+    repair_parser.set_defaults(func=cmd_repair)
 
     # =========================================================================
     # uninstall command  (parser built in clover_cli/subcommands/uninstall.py)

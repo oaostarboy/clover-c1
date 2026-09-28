@@ -996,6 +996,7 @@ def check_certificates(should_fix: bool = False, issues: "list | None" = None) -
             [sys.executable, "-m", "pip", "install", "--force-reinstall", "certifi"],
             capture_output=True,
             text=True,
+            encoding="utf-8", errors="replace",
             timeout=300,
         )
     except Exception as exc:

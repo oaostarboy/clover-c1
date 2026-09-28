@@ -17318,6 +17318,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "commands": self._handle_commands_command,
             "profile": self._handle_profile_command,
             "update": self._handle_update_command,
+            "repair": self._handle_repair_command,
             "version": self._handle_version_command,
         }
 

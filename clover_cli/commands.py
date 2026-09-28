@@ -406,6 +406,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                cli_only=True, args_hint="<path>", desktop="terminal"),
     CommandDef("update", "Update Clover Cognition to the latest version", "Info",
                busy_policy="dispatch", desktop="terminal"),
+    CommandDef("repair", "Check and fix a broken install (keeps your chats and memories)", "Info",
+               busy_policy="dispatch", desktop="terminal"),
     CommandDef("version", "Show Clover Cognition version", "Info", aliases=("v",),
                busy_policy="dispatch", execute="version"),
     CommandDef("debug", "Upload debug report (system info + logs) and get shareable links", "Info",
