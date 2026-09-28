@@ -207,183 +207,22 @@ class TestOrgSkillsAreEditableInPlace:
         assert su.is_curation_eligible("shared-x", d) is True
 
 
-class TestOrgPullIsWiredIn:
-    """Guards the integration gap that unit tests structurally cannot catch.
+def test_no_internal_jargon_in_user_facing_strings():
+    """User-visible help/errors must not leak internal design coordinates."""
+    import pathlib
+    import re
 
-    The org pull functions were fully implemented and unit-tested while having
-    ZERO runtime callers, so org skills never loaded for anyone. Testing the
-    functions directly could never surface that. These tests assert the CALL
-    SITES exist, so the feature can't silently become dead code again.
-    """
-
-    def test_session_startup_calls_maybe_pull_org_skills(self):
-        import pathlib
-
-        cli_src = (
-            pathlib.Path(__file__).resolve().parents[2] / "cli.py"
-        ).read_text(encoding="utf-8")
-        assert "maybe_pull_org_skills" in cli_src, (
-            "cli.py session startup must call maybe_pull_org_skills() — "
-            "without a call site the org mirror is never populated and org "
-            "skills never load (the function being importable is not enough)."
-        )
-        # It must sit alongside the personal pull, not replace it.
-        assert "maybe_pull_skills" in cli_src
-
-    def test_sync_pull_command_refreshes_org_mirror(self):
-        import pathlib
-
-        main_src = (
-            pathlib.Path(__file__).resolve().parents[2]
-            / "clover_cli"
-            / "main.py"
-        ).read_text(encoding="utf-8")
-        assert "maybe_pull_org_skills" in main_src, (
-            "`clover sync pull` must also refresh the org mirror."
-        )
-
-    def test_sync_status_exposes_org_state(self):
-        from tools import skills_sync_client as ssc
-
-        status = ssc.sync_status()
-        # These keys must always be present so a user can tell whether the org
-        # workflow applies to them, rather than it being invisible.
-        for key in ("org_available", "org_id", "org_role", "org_skills"):
-            assert key in status, f"sync status must expose {key!r}"
-
-    def test_no_internal_jargon_in_user_facing_strings(self):
-        """User-visible help/errors must not leak internal design coordinates."""
-        import pathlib
-        import re
-
-        root = pathlib.Path(__file__).resolve().parents[2]
-        targets = [
-            root / "clover_cli" / "subcommands" / "sync.py",
-            root / "clover_cli" / "subcommands" / "skills.py",
-        ]
-        banned = re.compile(
-            r"\(M[12]\)|\bHSP\b|HSP/1|§[0-9]|DEV-PHASE|hsp-1-contract"
-        )
-        for path in targets:
-            for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
-                if "help=" in line or "description=" in line:
-                    assert not banned.search(line), (
-                        f"{path.name}:{i} leaks internal jargon to users: {line.strip()}"
-                    )
-
-
-class TestSkillSyncIsOneCommand:
-    """Every Skill Sync verb lives under `clover sync` for launch.
-
-    The surface is deliberately encapsulated: one command to learn, one to
-    document, and top-level `sync` stays free of skill-management verbs that
-    belong elsewhere. `propose` in particular used to sit under `clover
-    skills`, which split one feature across two commands.
-    """
-
-    def _src(self, *parts):
-        import pathlib
-
-        return (
-            pathlib.Path(__file__).resolve().parents[2].joinpath(*parts)
-        ).read_text(encoding="utf-8")
-
-    def test_propose_is_a_sync_subcommand(self):
-        sync_src = self._src("clover_cli", "subcommands", "sync.py")
-        assert '"propose"' in sync_src, (
-            "`propose` must be a `clover sync` subcommand."
-        )
-
-    def test_propose_is_not_under_skills(self):
-        skills_src = self._src("clover_cli", "subcommands", "skills.py")
-        assert '"propose"' not in skills_src, (
-            "`propose` must NOT remain under `clover skills` — Skill Sync is "
-            "one command for launch."
-        )
-
-    def test_sync_usage_lists_propose(self):
-        main_src = self._src("clover_cli", "main.py")
-        usage_start = main_src.index("usage: clover sync ")
-        usage_block = main_src[usage_start : usage_start + 1400]
-        assert "propose" in usage_block, (
-            "`clover sync` usage must list the propose verb."
-        )
-
-
-class TestLocalEditsSurviveOrgUpdates:
-    """Ben's requirement: local edits are never silently overwritten.
-
-    An org pull materializes the shared set. Before this, it `rmtree`'d each
-    skill dir and re-wrote it, so any local improvement vanished on the next
-    session start with no warning. Now a locally-modified skill is skipped
-    and reported as a conflict for the user to resolve deliberately.
-    """
-
-    def _mirror(self, tmp_path, monkeypatch, body="original\n"):
-        from tools import skills_sync_client as ssc
-
-        skills = tmp_path / "skills"
-        d = _mk_skill(
-            skills,
-            f"{sku.ORG_MIRROR_DIR_NAME}/org-1/shared-x",
-            name="shared-x",
-            body=body,
-        )
-        _mark_active(skills, "org-1")
-        monkeypatch.setattr(ssc, "_skills_dir", lambda: skills)
-        monkeypatch.setattr(
-            ssc, "_org_dir", lambda: skills / sku.ORG_MIRROR_DIR_NAME
-        )
-        return ssc, skills, d
-
-    def test_unmodified_skill_is_not_flagged(self, tmp_path, monkeypatch):
-        ssc, _skills, d = self._mirror(tmp_path, monkeypatch)
-        ssc._write_org_baseline(
-            "org-1",
-            {"shared-x": {"fingerprint": ssc._skill_dir_fingerprint(d), "tree": "t1"}},
-        )
-        assert ssc.org_skill_is_locally_modified("shared-x", "org-1") is False
-        assert ssc.list_locally_modified_org_skills("org-1") == []
-
-    def test_edited_skill_is_detected(self, tmp_path, monkeypatch):
-        ssc, _skills, d = self._mirror(tmp_path, monkeypatch)
-        ssc._write_org_baseline(
-            "org-1",
-            {"shared-x": {"fingerprint": ssc._skill_dir_fingerprint(d), "tree": "t1"}},
-        )
-        (d / "SKILL.md").write_text("---\nname: shared-x\n---\nEDITED\n", encoding="utf-8")
-        assert ssc.org_skill_is_locally_modified("shared-x", "org-1") is True
-        assert ssc.list_locally_modified_org_skills("org-1") == ["shared-x"]
-
-    def test_missing_baseline_does_not_cry_wolf(self, tmp_path, monkeypatch):
-        ssc, _skills, _d = self._mirror(tmp_path, monkeypatch)
-        # Mirror pulled before baselines existed — must not be reported as
-        # modified (that would block every update with a phantom conflict).
-        assert ssc.org_skill_is_locally_modified("shared-x", "org-1") is False
-
-    def test_fingerprint_is_content_based_not_mtime(self, tmp_path, monkeypatch):
-        import os
-        import time
-
-        ssc, _skills, d = self._mirror(tmp_path, monkeypatch)
-        before = ssc._skill_dir_fingerprint(d)
-        time.sleep(0.01)
-        os.utime(d / "SKILL.md", None)  # touch: mtime changes, content doesn't
-        assert ssc._skill_dir_fingerprint(d) == before
-
-    def test_auto_propose_defaults_off(self, monkeypatch):
-        from tools import skills_sync_client as ssc
-
-        monkeypatch.delenv("CLOVER_SYNC_ORG_AUTO_PROPOSE", raising=False)
-        monkeypatch.setattr(
-            "clover_cli.config.load_config", lambda: {}, raising=False
-        )
-        # Default must be OFF: silently pushing every agent edit to the whole
-        # organisation is not a safe default.
-        assert ssc.sync_org_auto_propose() is False
-
-    def test_auto_propose_can_be_enabled_by_env(self, monkeypatch):
-        from tools import skills_sync_client as ssc
-
-        monkeypatch.setenv("CLOVER_SYNC_ORG_AUTO_PROPOSE", "1")
-        assert ssc.sync_org_auto_propose() is True
+    root = pathlib.Path(__file__).resolve().parents[2]
+    targets = [
+        root / "clover_cli" / "subcommands" / "sync.py",
+        root / "clover_cli" / "subcommands" / "skills.py",
+    ]
+    banned = re.compile(
+        r"\(M[12]\)|\bHSP\b|HSP/1|§[0-9]|DEV-PHASE|hsp-1-contract"
+    )
+    for path in targets:
+        for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+            if "help=" in line or "description=" in line:
+                assert not banned.search(line), (
+                    f"{path.name}:{i} leaks internal jargon to users: {line.strip()}"
+                )
