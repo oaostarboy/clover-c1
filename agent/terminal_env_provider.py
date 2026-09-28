@@ -83,7 +83,7 @@ class TerminalEnvironmentProvider(abc.ABC):
         ``TERMINAL_ENV`` value.
 
         Lowercase, ``[a-z0-9_]``. Must not collide with a built-in backend
-        name (local, docker, singularity, modal, managed_modal, daytona,
+        name (local, docker, singularity, modal, daytona,
         vercel_sandbox, ssh) — the registry rejects such registrations.
         """
 

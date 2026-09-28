@@ -2605,7 +2605,7 @@ def run_doctor(args):
 
     # Plugin-registered terminal backends (if one is the active backend)
     if terminal_env not in {
-        "local", "docker", "singularity", "modal", "managed_modal",
+        "local", "docker", "singularity", "modal",
         "daytona", "vercel_sandbox", "ssh",
     }:
         try:
