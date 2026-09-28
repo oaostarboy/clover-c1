@@ -358,7 +358,7 @@ class TestVerifierEnabled:
         )
         assert agent._file_mutation_verifier_enabled() is False
         # Warm cache: flip the underlying config; the agent still reports the
-        # cached value (same next-session semantics as _credits_notices_enabled).
+        # cached value (next-session semantics).
         monkeypatch.setattr(
             _cfg_mod, "load_config", lambda: {"display": {"file_mutation_verifier": True}}
         )
