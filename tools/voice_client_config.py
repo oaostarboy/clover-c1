@@ -117,9 +117,8 @@ def _resolve_stt_client_config() -> Dict[str, Any]:
         }
 
     if provider == "openai":
-        # Handles the Clover-managed selection too: the resolver returns the
-        # user's own gateway token + managed base URL, which is exactly the
-        # credential the client should use.
+        # The resolver returns the user's own key + base URL, which is exactly
+        # the credential the client should use.
         try:
             api_key, base_url = tt._resolve_openai_audio_client_config()
         except ValueError as exc:
@@ -228,9 +227,9 @@ def _resolve_tts_client_config() -> Dict[str, Any]:
         return _relay("command/plugin provider")
 
     if provider == "openai":
-        # Covers the direct-key, custom-base_url, and Clover-managed selections.
+        # Covers the direct-key and custom-base_url selections.
         try:
-            api_key, base_url, is_managed = tts._resolve_openai_audio_client_config()
+            api_key, base_url = tts._resolve_openai_audio_client_config()
         except ValueError as exc:
             return _relay(f"openai resolution failed: {exc}")
         oai = tts_config.get("openai") if isinstance(tts_config, dict) else None
@@ -239,10 +238,6 @@ def _resolve_tts_client_config() -> Dict[str, Any]:
         config_base = oai.get("base_url")
         if config_base:
             base_url = config_base
-        # The managed gateway only proxies MANAGED_OPENAI_TTS_MODELS — same
-        # coercion text_to_speech applies server-side.
-        if is_managed and not config_base and model not in tts.MANAGED_OPENAI_TTS_MODELS:
-            model = tts.DEFAULT_OPENAI_MODEL
         speed_default = tts_config.get("speed", 1.0) if isinstance(tts_config, dict) else 1.0
         try:
             speed = float(oai.get("speed", speed_default))
