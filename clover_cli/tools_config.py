@@ -3678,7 +3678,6 @@ def provider_readiness_status(
     provider: dict,
     config: dict,
     *,
-    features=None,
     is_active: Optional[bool] = None,
 ) -> str:
     """Compute an honest readiness state for a provider picker row.
