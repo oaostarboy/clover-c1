@@ -71,10 +71,20 @@ _BY_SLUG: dict[str, _Provider] = {slug: p for p in _PROVIDERS for slug in p.slug
 
 
 def is_clover_inference_route(provider: str, base_url: str) -> bool:
-    """True when the failing route is the Clover-managed inference gateway."""
-    if (provider or "").strip().lower() == "clover":
+    """True when the failing route is the Clover-managed inference gateway.
+
+    An unset provider AND an unset base_url means no third-party override
+    was ever configured — the only route that can reach here with nothing
+    set is Clover's own hosted inference, since every other provider always
+    carries an explicit base_url.
+    """
+    slug = (provider or "").strip().lower()
+    base = str(base_url or "").strip()
+    if slug == "clover":
         return True
-    return base_url_host_matches(str(base_url or ""), "inference-api.")
+    if not slug and not base:
+        return True
+    return base_url_host_matches(base, "inference-api.")
 
 
 def _clover_billing_url() -> Optional[str]:
