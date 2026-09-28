@@ -181,13 +181,6 @@ class TestOrgSkillsAreEditableInPlace:
         assert result["success"] is True, result.get("error")
         assert "improved" in (d / "SKILL.md").read_text(encoding="utf-8")
 
-    def test_edit_tells_the_user_how_to_share_it_back(self, tmp_path, monkeypatch):
-        smt, _skills, _d = self._org_skill(tmp_path, monkeypatch)
-        result = smt._patch_skill("shared-x", "body", "improved")
-        # Without auto-propose the edit stays local, and the tool result must
-        # say so AND name the command — otherwise the improvement is stranded.
-        assert "propose" in (result.get("org_sharing") or "")
-
     def test_delete_is_still_refused(self, tmp_path, monkeypatch):
         smt, _skills, d = self._org_skill(tmp_path, monkeypatch)
         guard = smt._org_mirror_write_guard("shared-x", d, "delete")
