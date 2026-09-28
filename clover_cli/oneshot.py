@@ -516,10 +516,16 @@ def _run_agent(
     # (model.substitute_unknown: false keeps the old fail-fast behavior).
     _model_substitution_info: Optional[dict] = None
     if (model or "").strip() and not (provider or "").strip() and effective_provider is None:
-        from clover_cli.models import _PROVIDER_MODELS
+        from agent.model_substitute import known_models_for_provider
 
         _resolved_provider = str(runtime.get("provider") or "").strip().lower()
-        _known_models = _PROVIDER_MODELS.get(_resolved_provider) or []
+        _requested_provider = str(runtime.get("requested_provider") or "").strip().lower()
+        _known_models = known_models_for_provider(
+            _resolved_provider,
+            requested_provider=_requested_provider,
+            base_url=runtime.get("base_url"),
+            api_key=runtime.get("api_key") if isinstance(runtime.get("api_key"), str) else None,
+        )
         if _known_models and effective_model not in _known_models:
             from agent.model_substitute import (
                 configured_default_model,

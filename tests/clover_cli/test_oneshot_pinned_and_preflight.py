@@ -169,6 +169,59 @@ def test_preflight_substitute_unknown_false_keeps_old_fail_fast_behavior():
     assert "Nothing was run on another model" in stderr
 
 
+def test_preflight_uses_dynamic_models_for_custom_provider_without_static_catalog():
+    """A custom/user-defined provider (billing class ``"custom"``) has no
+    ``_PROVIDER_MODELS`` entry -- the preflight must probe the endpoint's
+    own ``/models`` instead of treating the missing static list as "no
+    catalog" and skipping the same-provider substitute check entirely
+    (#93412 follow-up). ``AIAgent`` is mocked, so ``sys.__stderr__`` (which
+    survives oneshot's internal stdout/stderr capture) is used to report
+    what model it was actually constructed with."""
+    program = textwrap.dedent(
+        """
+        import sys
+        from unittest.mock import patch
+        import clover_cli.oneshot as oneshot
+
+        with (
+            patch("clover_cli.models.detect_provider_for_model", return_value=None),
+            patch(
+                "clover_cli.runtime_provider.resolve_runtime_provider",
+                return_value={
+                    "api_key": "k", "base_url": "http://127.0.0.1:8317/v1",
+                    "provider": "custom", "requested_provider": "gemini-oauth",
+                    "api_mode": "chat_completions", "credential_pool": None,
+                },
+            ),
+            patch("clover_cli.models._PROVIDER_MODELS", {}),
+            patch(
+                "providers.base.ProviderProfile.fetch_models",
+                return_value=["gemini-3.8-flash-high", "gemini-3.1-pro-low"],
+            ),
+            patch("run_agent.AIAgent") as MockAgent,
+        ):
+            MockAgent.return_value.run_conversation.return_value = {
+                "final_response": "ok", "failed": False, "completed": True,
+            }
+            code = oneshot.run_oneshot("hello", model="gemini-3.8-pro")
+            print(
+                "ACTUAL_MODEL=" + str(MockAgent.call_args.kwargs.get("model")),
+                file=sys.__stderr__,
+            )
+            raise SystemExit(code)
+        """
+    )
+    result = _run(program)
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    assert result.stdout == b"ok\n"
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    # The dynamically-fetched catalog contains a same-family+version match
+    # ("gemini-3.8-flash-high" shares "gemini-3.8" with the typo'd
+    # "gemini-3.8-pro") -- the preflight must have substituted onto it
+    # instead of skipping straight past an (incorrectly) empty catalog.
+    assert "ACTUAL_MODEL=gemini-3.8-flash-high" in stderr, stderr
+
+
 def test_unknown_model_without_provider_fails_fast_with_suggestions():
     """The -m preflight: detect_provider_for_model finds nothing, the
     resolved (default) provider has a static catalog, and the requested

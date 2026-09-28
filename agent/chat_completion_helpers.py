@@ -2405,6 +2405,122 @@ def _fallback_reason_text(reason: "FailoverReason | None") -> str:
     return str(value or reason or "provider failure").replace("_", " ")
 
 
+def _resolve_cross_provider_backend(
+    agent,
+    *,
+    provider: str,
+    model: str,
+    base_url_hint: Optional[str] = None,
+    api_key_hint: Optional[str] = None,
+    api_mode_hint: Optional[str] = None,
+):
+    """Build the (client, model, base_url, api_mode) an agent needs to run
+    on a DIFFERENT provider than it is currently using.
+
+    Shared by ``try_activate_fallback`` (outage recovery) and
+    ``try_substitute_unknown_model`` (pinned-model-not-found substitute)
+    so both switch the agent onto an identically-resolved transport instead
+    of one of them drifting -- a cross-provider substitute that skipped
+    this api_mode/base_url detection kept the OLD provider's wire shape
+    and 404'd a second time on the new provider (#93412 follow-up).
+
+    Returns ``None`` when the provider has no usable client (unconfigured
+    / auth unavailable); otherwise ``(client, model, base_url, api_mode,
+    is_azure, api_mode_explicit)``.
+    """
+    from agent.auxiliary_client import resolve_provider_client
+
+    provider = (provider or "").strip().lower()
+    # Determine api_mode from the ORIGINAL base_url (before URL transformation).
+    # resolve_provider_client() calls _to_openai_base_url() which can rewrite
+    # a dual-surface /anthropic base to /v1, losing the Anthropic wire signal
+    # from the client's post-rewrite base_url. Pre-compute here so detection
+    # sees the URL the caller actually configured. (#79787)
+    #
+    # An explicit api_mode hint always wins — including an explicit
+    # "chat_completions" — and suppresses all re-detection below.
+    api_mode_explicit = bool((api_mode_hint or "").strip())
+    api_mode = "chat_completions"
+    if api_mode_explicit:
+        api_mode = str(api_mode_hint).strip()
+    elif provider == "anthropic":
+        # Provider-name check must not be gated on base_url_hint: a target
+        # that names provider "anthropic" without an explicit base_url uses
+        # the provider's default endpoint and must still resolve to
+        # anthropic_messages, not chat_completions.
+        api_mode = "anthropic_messages"
+    elif base_url_hint:
+        _orig_url = base_url_hint.rstrip("/").lower()
+        if (
+            _orig_url.endswith("/anthropic")
+            or base_url_hostname(base_url_hint) == "api.anthropic.com"
+        ):
+            api_mode = "anthropic_messages"
+
+    # For Ollama Cloud endpoints, pull OLLAMA_API_KEY from env when no
+    # explicit key was hinted. Host match (not substring) — GHSA-76xc-57q6-vm5m.
+    if base_url_hint and base_url_host_matches(base_url_hint, "ollama.com") and not api_key_hint:
+        from agent.secret_scope import get_secret
+
+        api_key_hint = get_secret("OLLAMA_API_KEY") or None
+
+    client, _resolved_model = resolve_provider_client(
+        provider, model=model, raw_codex=True,
+        explicit_base_url=base_url_hint,
+        explicit_api_key=api_key_hint,
+        api_mode=api_mode)
+    if client is None:
+        return None
+    try:
+        from clover_cli.model_normalize import normalize_model_for_provider
+
+        model = normalize_model_for_provider(model, provider)
+    except Exception as _norm_err:
+        logger.warning(
+            "Could not normalize model %r for provider %r: %s",
+            model, provider, _norm_err,
+        )
+
+    # Re-determine api_mode from provider / resolved base URL / model when
+    # the pre-computed pass above landed on the default and the caller did
+    # not pin api_mode explicitly. An explicit hint (even "chat_completions")
+    # must never be overridden here.
+    base_url = str(client.base_url)
+    is_azure = agent._is_azure_openai_url(base_url)
+
+    if not api_mode_explicit and api_mode == "chat_completions":
+        if provider == "openai-codex":
+            api_mode = "codex_responses"
+        elif (
+            base_url.rstrip("/").lower().endswith("/anthropic")
+            or base_url_hostname(base_url) == "api.anthropic.com"
+        ):
+            # Named custom providers (e.g. cron-anthropic) resolve their
+            # base_url from config rather than the caller's hint, so the
+            # pre-resolve hint check above never sees it. Match the host
+            # the same way determine_api_mode() and _detect_api_mode_for_url()
+            # do on the primary path. (#32243, #49247)
+            api_mode = "anthropic_messages"
+        elif is_azure:
+            # Azure OpenAI serves gpt-5.x on /chat/completions — does NOT
+            # support the Responses API. Stay on chat_completions.
+            api_mode = "chat_completions"
+        elif agent._is_direct_openai_url(base_url):
+            api_mode = "codex_responses"
+        elif agent._provider_model_requires_responses_api(model, provider=provider):
+            # GPT-5.x models usually need Responses API, but keep
+            # provider-specific exceptions like Copilot gpt-5-mini on
+            # chat completions.
+            api_mode = "codex_responses"
+        elif provider == "bedrock" or (
+            base_url_hostname(base_url).startswith("bedrock-runtime.")
+            and base_url_host_matches(base_url, "amazonaws.com")
+        ):
+            api_mode = "bedrock_converse"
+
+    return client, model, base_url, api_mode, is_azure, api_mode_explicit
+
+
 def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool:
     """Switch to the next fallback model/provider in the chain.
 
@@ -2500,7 +2616,6 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
     # raw_codex=True because the main agent needs direct responses.stream()
     # access for Codex providers.
     try:
-        from agent.auxiliary_client import resolve_provider_client
         # Pass base_url and api_key from fallback config so custom
         # endpoints (e.g. Ollama Cloud) resolve correctly instead of
         # falling through to OpenRouter defaults.
@@ -2508,99 +2623,22 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
 
         fb_base_url_hint = (fb.get("base_url") or "").strip() or None
         fb_api_key_hint = resolve_entry_api_key(fb)
-        # Determine api_mode from the ORIGINAL base_url (before URL transformation).
-        # resolve_provider_client() calls _to_openai_base_url() which can rewrite
-        # a dual-surface /anthropic base to /v1, losing the Anthropic wire signal
-        # from the client's post-rewrite base_url. Pre-compute here so detection
-        # sees the URL the user actually configured. (#79787)
-        #
-        # An explicit ``api_mode`` on the fallback entry always wins — including
-        # an explicit "chat_completions" — and suppresses all re-detection below.
-        fb_api_mode_explicit = bool(str(fb.get("api_mode") or "").strip())
-        fb_api_mode = "chat_completions"
-        if fb_api_mode_explicit:
-            fb_api_mode = str(fb.get("api_mode")).strip()
-        elif fb_provider == "anthropic":
-            # Provider-name check must not be gated on fb_base_url_hint:
-            # an entry that names provider: anthropic without an explicit
-            # base_url uses the provider's default endpoint and must still
-            # resolve to anthropic_messages, not chat_completions.
-            fb_api_mode = "anthropic_messages"
-        elif fb_base_url_hint:
-            _orig_url = fb_base_url_hint.rstrip("/").lower()
-            if (
-                _orig_url.endswith("/anthropic")
-                or base_url_hostname(fb_base_url_hint) == "api.anthropic.com"
-            ):
-                fb_api_mode = "anthropic_messages"
-        
-        # For Ollama Cloud endpoints, pull OLLAMA_API_KEY from env
-        # when no explicit key is in the fallback config. Host match
-        # (not substring) — see GHSA-76xc-57q6-vm5m.
-        if fb_base_url_hint and base_url_host_matches(fb_base_url_hint, "ollama.com") and not fb_api_key_hint:
-            from agent.secret_scope import get_secret
 
-            fb_api_key_hint = get_secret("OLLAMA_API_KEY") or None
-        fb_client, _resolved_fb_model = resolve_provider_client(
-            fb_provider, model=fb_model, raw_codex=True,
-            explicit_base_url=fb_base_url_hint,
-            explicit_api_key=fb_api_key_hint,
-            api_mode=fb_api_mode)
-        if fb_client is None:
+        _backend = _resolve_cross_provider_backend(
+            agent,
+            provider=fb_provider,
+            model=fb_model,
+            base_url_hint=fb_base_url_hint,
+            api_key_hint=fb_api_key_hint,
+            api_mode_hint=(str(fb.get("api_mode")).strip() if str(fb.get("api_mode") or "").strip() else None),
+        )
+        if _backend is None:
             logger.warning(
                 "Fallback to %s failed: provider not configured",
                 fb_provider)
             unavailable.add(fb_key)
             return agent._try_activate_fallback(reason)  # try next in chain
-        try:
-            from clover_cli.model_normalize import normalize_model_for_provider
-
-            fb_model = normalize_model_for_provider(fb_model, fb_provider)
-        except Exception as _norm_err:
-            logger.warning(
-                "Could not normalize fallback model %r for provider %r: %s",
-                fb_model, fb_provider, _norm_err,
-            )
-
-        # Re-determine api_mode from provider / resolved base URL / model when
-        # the pre-computed pass above landed on the default and the user did
-        # not pin api_mode explicitly. An explicit fb.api_mode (even
-        # "chat_completions") must never be overridden here.
-        fb_base_url = str(fb_client.base_url)
-        _fb_is_azure = agent._is_azure_openai_url(fb_base_url)
-
-        if not fb_api_mode_explicit and fb_api_mode == "chat_completions":
-            if fb_provider == "openai-codex":
-                fb_api_mode = "codex_responses"
-            elif (
-                fb_base_url.rstrip("/").lower().endswith("/anthropic")
-                or base_url_hostname(fb_base_url) == "api.anthropic.com"
-            ):
-                # Named custom providers (e.g. cron-anthropic) resolve their
-                # base_url from config rather than the fallback entry, so the
-                # pre-resolve hint check above never sees it. Match the host
-                # the same way determine_api_mode() and _detect_api_mode_for_url()
-                # do on the primary path. (#32243, #49247)
-                fb_api_mode = "anthropic_messages"
-            elif _fb_is_azure:
-                # Azure OpenAI serves gpt-5.x on /chat/completions — does NOT
-                # support the Responses API. Stay on chat_completions.
-                fb_api_mode = "chat_completions"
-            elif agent._is_direct_openai_url(fb_base_url):
-                fb_api_mode = "codex_responses"
-            elif agent._provider_model_requires_responses_api(
-                fb_model,
-                provider=fb_provider,
-            ):
-                # GPT-5.x models usually need Responses API, but keep
-                # provider-specific exceptions like Copilot gpt-5-mini on
-                # chat completions.
-                fb_api_mode = "codex_responses"
-            elif fb_provider == "bedrock" or (
-                base_url_hostname(fb_base_url).startswith("bedrock-runtime.")
-                and base_url_host_matches(fb_base_url, "amazonaws.com")
-            ):
-                fb_api_mode = "bedrock_converse"
+        fb_client, fb_model, fb_base_url, fb_api_mode, _fb_is_azure, fb_api_mode_explicit = _backend
 
         old_model = agent.model
         old_provider = agent.provider
@@ -2910,16 +2948,25 @@ def try_substitute_unknown_model(agent, *, requested_model: str, provider: str):
     ``agent/model_substitute.resolve_model_substitute`` found nothing to
     substitute -- the caller keeps the existing stop-with-error behaviour.
     """
-    from agent.model_substitute import configured_default_model, resolve_model_substitute
+    from agent.model_substitute import (
+        configured_default_model,
+        known_models_for_provider,
+        resolve_model_substitute,
+    )
     from clover_cli.config import load_config
-    from clover_cli.models import _PROVIDER_MODELS
 
     provider = (provider or "").strip().lower()
     cfg = load_config()
     default_model, default_provider = configured_default_model(cfg)
+    _agent_api_key = getattr(agent, "api_key", None)
     substitute = resolve_model_substitute(
         requested_model, provider,
-        known_models=_PROVIDER_MODELS.get(provider) or [],
+        known_models=known_models_for_provider(
+            provider,
+            requested_provider=getattr(agent, "requested_provider", None),
+            base_url=getattr(agent, "base_url", None),
+            api_key=_agent_api_key if isinstance(_agent_api_key, str) else None,
+        ),
         default_model=default_model,
         default_provider=default_provider,
     )
@@ -2933,11 +2980,14 @@ def try_substitute_unknown_model(agent, *, requested_model: str, provider: str):
         # same-backend swap.
         agent.model = substitute.model
     else:
-        from agent.auxiliary_client import resolve_provider_client
-
+        # Cross-provider: rebuild the client/base_url/api_mode exactly like
+        # try_activate_fallback does. A substitute must never keep the OLD
+        # provider's client/base_url/api_mode -- that's how a substitute
+        # onto a real provider still 404'd, pointed at the wrong endpoint
+        # shape (#93412 follow-up).
         try:
-            client, resolved_model = resolve_provider_client(
-                substitute.provider, model=substitute.model, raw_codex=True,
+            _backend = _resolve_cross_provider_backend(
+                agent, provider=substitute.provider, model=substitute.model,
             )
         except Exception as exc:
             logger.warning(
@@ -2945,17 +2995,20 @@ def try_substitute_unknown_model(agent, *, requested_model: str, provider: str):
                 substitute.provider, substitute.model, exc,
             )
             return None
-        if client is None:
+        if _backend is None:
             logger.warning(
                 "Model substitute failed: provider %s is not configured",
                 substitute.provider,
             )
             return None
+        client, resolved_model, resolved_base_url, resolved_api_mode, _, _ = _backend
         agent.client = client
+        agent.api_key = client.api_key
         agent.model = resolved_model or substitute.model
         agent.provider = substitute.provider
         agent.requested_provider = substitute.provider
-        agent.base_url = str(client.base_url)
+        agent.base_url = resolved_base_url
+        agent.api_mode = resolved_api_mode
         if hasattr(agent, "_transport_cache"):
             agent._transport_cache.clear()
 

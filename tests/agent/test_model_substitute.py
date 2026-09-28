@@ -14,9 +14,15 @@ project's "no change-detector tests" rule).
 
 from __future__ import annotations
 
+import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from threading import Thread
+from unittest.mock import patch
+
 from agent.model_substitute import (
     ModelSubstitute,
     configured_default_model,
+    known_models_for_provider,
     resolve_model_substitute,
     substitute_unknown_models_enabled,
 )
@@ -48,6 +54,25 @@ class TestSameProviderClosestMatch:
         )
         assert result.source == "same_provider"
         assert result.provider == "openai-codex"
+
+    def test_version_match_wins_over_higher_difflib_ratio_tier_match(self):
+        """A candidate sharing the requested model's family+version
+        ("gemini-3.8") must win even when a DIFFERENT version has a higher
+        raw difflib ratio (e.g. shares the tier token "pro"). Tokens split
+        on '-'; the family+version match is picked first, difflib is only
+        the tiebreak within (or absent) that group."""
+        result = resolve_model_substitute(
+            "gemini-3.8-pro",
+            "gemini-oauth",
+            known_models=[
+                "gemini-3.8-flash-high", "gemini-3.1-pro-low", "gemini-3-flash",
+            ],
+            default_model="",
+            default_provider="",
+        )
+        assert result == ModelSubstitute(
+            model="gemini-3.8-flash-high", provider="gemini-oauth", source="same_provider",
+        )
 
     def test_no_close_enough_match_falls_through(self):
         """Below the 0.6 cutoff, a same-provider guess is not confident
@@ -157,4 +182,97 @@ class TestConfiguredDefaultModel:
 
     def test_unset_returns_empty_strings(self):
         assert configured_default_model({}) == ("", "")
-        assert configured_default_model(None) == ("", "")
+
+
+class _ModelsHandler(BaseHTTPRequestHandler):
+    """Serves /models with a configurable model list; counts requests."""
+
+    models = [{"id": "model-a"}]
+    request_count = 0
+
+    def do_GET(self):
+        type(self).request_count += 1
+        if self.path.rstrip("/") == "/models":
+            body = json.dumps({"data": self.models}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        pass
+
+
+def _start_models_server(models):
+    _ModelsHandler.models = models
+    _ModelsHandler.request_count = 0
+    server = HTTPServer(("127.0.0.1", 0), _ModelsHandler)
+    port = server.server_address[1]
+    Thread(target=server.serve_forever, daemon=True).start()
+    return server, port
+
+
+class TestKnownModelsForProvider:
+    """``known_models_for_provider`` -- the static-catalog lookup a custom
+    provider (billing class "custom") skips, plus the live ``/models``
+    fallback that closes the gap (#93412 follow-up: a custom provider's
+    catalog was silently empty, so the same-provider substitute never ran
+    and a typo'd model jumped straight to a cross-provider default)."""
+
+    def test_static_list_matched_by_provider(self):
+        with patch("clover_cli.models._PROVIDER_MODELS", {"gemini": ["gemini-3.8-flash-high"]}):
+            result = known_models_for_provider("gemini")
+        assert result == ["gemini-3.8-flash-high"]
+
+    def test_static_list_matched_by_requested_provider_when_provider_has_none(self):
+        """A custom endpoint resolves to the billing class ``"custom"`` in
+        ``provider`` -- but a catalog keyed by the user-facing
+        ``requested_provider`` name must still be found."""
+        with patch(
+            "clover_cli.models._PROVIDER_MODELS",
+            {"gemini-oauth": ["gemini-3.8-flash-high"]},
+        ):
+            result = known_models_for_provider("custom", requested_provider="gemini-oauth")
+        assert result == ["gemini-3.8-flash-high"]
+
+    def test_dynamic_fetch_used_when_no_static_list(self):
+        """No static entry for either name -- probe the endpoint's own
+        OpenAI-compatible ``/models`` instead of returning an empty list
+        (which used to skip the same-provider substitute entirely)."""
+        server, port = _start_models_server([{"id": "gemini-3.8-flash-high"}, {"id": "gemini-3.1-pro-low"}])
+        try:
+            with patch("clover_cli.models._PROVIDER_MODELS", {}):
+                result = known_models_for_provider(
+                    "custom",
+                    requested_provider="gemini-oauth",
+                    base_url=f"http://127.0.0.1:{port}",
+                    api_key="test-key",
+                )
+        finally:
+            server.shutdown()
+        assert sorted(result) == ["gemini-3.1-pro-low", "gemini-3.8-flash-high"]
+
+    def test_dynamic_fetch_is_cached_per_base_url_for_the_process(self):
+        """A second lookup for the same base_url must not re-probe the
+        endpoint -- the process-wide cache in agent.model_substitute."""
+        import agent.model_substitute as model_substitute_mod
+
+        server, port = _start_models_server([{"id": "solo-model"}])
+        base_url = f"http://127.0.0.1:{port}"
+        model_substitute_mod._DYNAMIC_MODELS_CACHE.pop(base_url.rstrip("/").lower(), None)
+        try:
+            with patch("clover_cli.models._PROVIDER_MODELS", {}):
+                first = known_models_for_provider("custom", base_url=base_url)
+                second = known_models_for_provider("custom", base_url=base_url)
+        finally:
+            server.shutdown()
+        assert first == ["solo-model"]
+        assert second == ["solo-model"]
+        assert _ModelsHandler.request_count == 1
+
+    def test_no_base_url_returns_empty_list(self):
+        with patch("clover_cli.models._PROVIDER_MODELS", {}):
+            assert known_models_for_provider("custom") == []

@@ -213,6 +213,45 @@ class TestSubstituteUnknownModel:
         assert agent._fallback_activated is False
         assert agent._provider_fallback_active is True
 
+    def test_case_b_cross_provider_rebuild_updates_base_url_and_api_mode(self):
+        """The bug this closes (#93412 follow-up): a cross-provider
+        substitute switched ``agent.model``/``agent.provider`` but kept the
+        OLD provider's client/base_url/api_mode, so the retry 404'd again
+        against the wrong endpoint. The rebuild must mirror
+        ``try_activate_fallback`` and update client, base_url, AND
+        api_mode together."""
+        agent = _make_agent(model_pinned=True, provider="custom")
+        agent.model = "gemini-3.8-pro"
+        agent.provider = "custom"
+        agent.base_url = "http://127.0.0.1:8317/v1"
+        agent.api_mode = "chat_completions"
+        cfg = {"model": {"default": "gpt-6-astra-900k", "provider": "openai-codex"}}
+        new_client = _mock_client(base_url="https://chatgpt.com/backend-api/codex/")
+        with (
+            patch("agent.model_substitute.known_models_for_provider", return_value=[]),
+            patch("clover_cli.config.load_config", return_value=cfg),
+            patch(
+                "agent.auxiliary_client.resolve_provider_client",
+                return_value=(new_client, "gpt-6-astra-900k"),
+            ),
+        ):
+            substitute = agent._try_substitute_unknown_model(
+                requested_model="gemini-3.8-pro", provider="custom",
+            )
+        assert substitute is not None
+        assert substitute.provider == "openai-codex"
+        assert agent.provider == "openai-codex"
+        assert agent.requested_provider == "openai-codex"
+        # The client/base_url must reflect the NEW provider, not the old
+        # custom endpoint the pinned model 404'd against.
+        assert agent.base_url == "https://chatgpt.com/backend-api/codex/"
+        assert agent.base_url != "http://127.0.0.1:8317/v1"
+        assert agent.client is new_client
+        # openai-codex always speaks the Responses API -- api_mode must be
+        # re-derived for the new provider, not left on the old provider's
+        # chat_completions.
+        assert agent.api_mode == "codex_responses"
+
     def test_case_c_nothing_qualifies_returns_none_and_leaves_agent_untouched(self):
         agent = _make_agent(model_pinned=True, provider="gemini")
         agent.model = "gemini-3.8-pro"
