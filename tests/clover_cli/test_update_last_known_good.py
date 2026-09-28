@@ -279,3 +279,50 @@ def test_watcher_reports_unexpected_recovery_error_instead_of_hanging(monkeypatc
                          .read_text(encoding="utf-8"))
     assert receipt["outcome"] == "rollback-failed"
     assert "internal failure" not in receipt["user_message"]
+
+
+def test_probe_uses_updaters_external_venv_interpreter(monkeypatch, tmp_path):
+    python = tmp_path / "external" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("interpreter", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(watcher.subprocess, "run", lambda args, **kw: calls.append(args) or
+                        type("Result", (), {"returncode": 0})())
+    monkeypatch.setattr(watcher, "_gateway_running", lambda: True)
+    assert watcher.probe_gateway(tmp_path / "checkout", python=python,
+                                 timeout=0, stable_seconds=0)
+    assert any(args[0] == str(python) and "import clover_cli.main, gateway.run" in args
+               for args in calls)
+
+
+def test_windows_service_is_stopped_before_repairing_locked_venv(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    monkeypatch.setattr(watcher, "os", SimpleNamespace(name="nt"))
+    python = tmp_path / "venv" / "Scripts" / "python.exe"
+    python.parent.mkdir(parents=True)
+    python.write_text("interpreter", encoding="utf-8")
+    calls = []
+    def service_run(args, **kw):
+        calls.append(args)
+        return type("Result", (), {"returncode": 0,
+                                    "stdout": "STATE : 1 STOPPED" if args[:2] == ["sc", "query"] else ""})()
+    monkeypatch.setattr(watcher.subprocess, "run", service_run)
+    watcher._rollback_checkout({"repo": str(tmp_path), "pre_pull_sha": "a" * 40,
+                                "windows_services": ["clover-gateway"]}, tmp_path / "beacon")
+    assert ["sc", "stop", "clover-gateway"] in calls
+    assert calls.index(["sc", "stop", "clover-gateway"]) < next(
+        i for i, cmd in enumerate(calls) if cmd[:3] == ["git", "reset", "--hard"])
+
+
+def test_repair_failure_still_attempts_one_gateway_recovery(monkeypatch, tmp_path):
+    actions = []
+    monkeypatch.setattr(watcher, "probe_gateway", lambda *a, **kw: actions.append("probe") or
+                        len(actions) >= 3)
+    monkeypatch.setattr(watcher, "_rollback_checkout", lambda *a, **kw: (_ for _ in ()).throw(
+        RuntimeError("dependency repair failed")))
+    monkeypatch.setattr(watcher, "_current_head", lambda root: "a" * 40)
+    monkeypatch.setattr(watcher, "_restart_from_beacon", lambda data: actions.append("restart"))
+    assert watcher.verify_or_rollback({"repo": str(tmp_path), "pre_pull_sha": "a" * 40,
+                                       "gateway_argv": ["clover"]}, tmp_path / "beacon",
+                                      timeout=0, stable_seconds=0) == "rolled-back"
+    assert actions == ["probe", "restart", "probe"]
