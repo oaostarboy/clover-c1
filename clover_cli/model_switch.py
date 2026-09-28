@@ -1212,10 +1212,10 @@ def _resolve_alias_fallback(
 ) -> Optional[tuple[str, str, str]]:
     """Try to resolve an alias on the user's authenticated providers.
 
-    Falls back to ``("openrouter", "clover")`` only when no authenticated
-    providers are supplied (backwards compat for non-interactive callers).
+    Falls back to OpenRouter only when no authenticated providers are supplied
+    (backwards compatibility for non-interactive callers).
     """
-    providers = authenticated_providers or ("openrouter", "clover")
+    providers = authenticated_providers or ("openrouter",)
     for provider in providers:
         # AmbiguousAliasError propagates: the alias exists on this provider,
         # the user just has to choose — trying the next provider instead
@@ -2144,16 +2144,6 @@ def switch_model(
     if target_provider in {"opencode-zen", "opencode-go", "opencode"}:
         api_mode = opencode_model_api_mode(target_provider, new_model)
 
-    # --- Clover Portal dual-wire override ---
-    # Portal serves anthropic/* on /v1/messages and everything else on
-    # /chat/completions. resolve_runtime_provider already sets this when it
-    # succeeds; always re-derive from the *final* (post-normalize) model so
-    # alias clears / empty fallbacks cannot leave Claude on the OpenAI wire.
-    if target_provider in {"clover", "clover-portal", "cloverc1"}:
-        from clover_cli.providers import clover_api_mode
-
-        api_mode = clover_api_mode(new_model)
-
     # --- Determine api_mode if not already set ---
     if not api_mode:
         api_mode = determine_api_mode(
@@ -2665,7 +2655,7 @@ def list_authenticated_providers(
     from clover_cli.models import (
         OPENROUTER_MODELS, _PROVIDER_MODELS,
         _MODELS_DEV_PREFERRED, _merge_with_models_dev, cached_provider_model_ids,
-        clear_provider_models_cache, get_curated_clover_model_ids,
+        clear_provider_models_cache,
     )
 
     # Explicit refresh: drop every provider's cached model-id list so the
@@ -2776,12 +2766,6 @@ def list_authenticated_providers(
     # Build curated model lists keyed by clover provider ID
     curated: dict[str, list[str]] = dict(_PROVIDER_MODELS)
     curated["openrouter"] = [mid for mid, _ in OPENROUTER_MODELS]
-    # "clover" pulls from the remote model-catalog manifest published at
-    # docs/api/model-catalog.json so
-    # newly added Portal models surface in the /model picker without
-    # requiring a Clover release. Falls back to the in-repo
-    # _PROVIDER_MODELS["clover"] snapshot when the manifest is unreachable.
-    curated["clover"] = get_curated_clover_model_ids()
     # Ollama Cloud uses dynamic discovery (no static curated list)
     if "ollama-cloud" not in curated:
         from clover_cli.models import fetch_ollama_cloud_models
@@ -3095,43 +3079,6 @@ def list_authenticated_providers(
                 model_ids = _ids if _ids else (curated.get(clover_slug, []) or curated.get(pid, []))
             except Exception:
                 model_ids = curated.get(clover_slug, []) or curated.get(pid, [])
-        elif clover_slug == "clover":
-            # Clover serves a large live /v1/models catalog (vendor-prefixed
-            # models from many providers, returned alphabetically). The
-            # `clover model` picker deliberately shows ONLY the curated agentic
-            # list — augmented with the Portal's free/paid recommendations so
-            # newly-launched models surface without a CLI release — in curated
-            # order. Mirror that exactly (see _model_flow_clover in main.py) so
-            # the GUI picker matches the CLI. Was: falling through to
-            # cached_provider_model_ids, which dumped the full alphabetical
-            # catalog; then: curated-only, which dropped the 4 Portal
-            # recommendations (e.g. stepfun/step-3.7-flash:free).
-            model_ids = curated.get("clover", [])
-            try:
-                from clover_cli.models import (
-                    get_pricing_for_provider as _clover_pricing,
-                    check_clover_free_tier as _clover_free,
-                    union_with_portal_free_recommendations as _union_free,
-                    union_with_portal_paid_recommendations as _union_paid,
-                )
-                from clover_cli.auth import get_provider_auth_state as _clover_state
-
-                _pricing = _clover_pricing("clover") or {}
-                _portal = ""
-                try:
-                    _st = _clover_state("clover") or {}
-                    _portal = _st.get("portal_base_url", "") or ""
-                except Exception:
-                    _portal = ""
-                if _clover_free(force_fresh=force_fresh_clover_tier):
-                    model_ids, _ = _union_free(model_ids, _pricing, _portal)
-                else:
-                    model_ids, _ = _union_paid(model_ids, _pricing, _portal)
-            except Exception:
-                # Portal recommendation fetch failed — fall back to the
-                # curated list alone (still correct, just may lag newly
-                # launched models, exactly like an offline CLI run).
-                pass
         else:
             # Unified pathway — see Section 1 rationale. Fall back to the
             # curated dict (with models.dev merge for preferred providers)
