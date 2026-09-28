@@ -30,7 +30,6 @@ Examples:
     clover debug share --expire 30  Keep paste for 30 days
     clover debug share --local      Print report locally (no upload)
     clover debug share --no-redact  Disable upload-time secret redaction
-    clover debug share --clover       Upload to Clover-internal storage (private)
     clover debug delete <url>       Delete a previously uploaded paste
 """,
     )
@@ -74,17 +73,6 @@ Examples:
             "are normally run through agent.redact.redact_sensitive_text "
             "with force=True before upload so credentials are not leaked "
             "into the public paste service."
-        ),
-    )
-    share_parser.add_argument(
-        "--clover",
-        action="store_true",
-        help=(
-            "Upload the debug bundle to Clover-internal storage (AWS S3) instead "
-            "of a public paste service. The bundle is private — viewable only "
-            "by Clover staff (and allowlisted Discord mods) via a Google-login-"
-            "gated viewer — and auto-deletes after 14 days. Still force-redacts "
-            "secrets unless --no-redact is also passed."
         ),
     )
     delete_parser = debug_sub.add_parser(

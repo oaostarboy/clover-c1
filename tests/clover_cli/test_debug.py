@@ -375,7 +375,6 @@ class TestRunDebugShare:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.clover = False
 
         with patch("clover_cli.dump.run_dump"), \
              patch("clover_cli.debug._sweep_expired_pastes", return_value=(0, 0)) as mock_sweep, \
@@ -396,7 +395,6 @@ class TestRunDebugShare:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.clover = False
 
         call_count = [0]
         uploaded_content = []
@@ -478,7 +476,6 @@ class TestRunDebugShareRedaction:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.clover = False
         args.no_redact = False
 
         captured: list[str] = []
@@ -509,7 +506,6 @@ class TestRunDebugShareRedaction:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.clover = False
         args.no_redact = False
 
         captured: list[str] = []
@@ -538,7 +534,6 @@ class TestRunDebugShareRedaction:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.clover = False
         args.no_redact = True
 
         captured: list[str] = []
@@ -589,7 +584,6 @@ class TestRunDebug:
         args.lines = 200
         args.expire = 7
         args.local = True
-        args.clover = False
 
         with patch("clover_cli.dump.run_dump"):
             run_debug(args)
@@ -802,7 +796,6 @@ class TestShareIncludesAutoDelete:
         args.lines = 50
         args.expire = 7
         args.local = False
-        args.clover = False
 
         with patch("clover_cli.dump.run_dump"), \
              patch("clover_cli.debug.upload_to_pastebin",
@@ -877,7 +870,7 @@ class TestBuildDebugShare:
 
 
 # ---------------------------------------------------------------------------
-# Shared bundle collection + Clover-S3 path
+# Shared bundle collection
 # ---------------------------------------------------------------------------
 
 class TestCollectShareBundle:
@@ -907,100 +900,8 @@ class TestCollectShareBundle:
         assert secret not in "\n".join(redacted.values())
 
 
-
-
-class TestBuildNousBundle:
-    def test_envelope_shape_and_gzip(self, clover_home):
-        import gzip
-        import json as _json
-
-        from clover_cli.debug import build_clover_bundle
-
-        files = {"report": "hello", "agent.log": "log line"}
-        blob = build_clover_bundle(files, redact=True)
-
-        # It's gzip — magic bytes.
-        assert blob[:2] == b"\x1f\x8b"
-        envelope = _json.loads(gzip.decompress(blob).decode())
-        assert envelope["format"] == "clover-debug-share/1"
-        assert envelope["redacted"] is True
-        assert envelope["files"] == files
-        assert "created" in envelope
-
-    def test_redacted_false_recorded(self):
-        import gzip
-        import json as _json
-
-        from clover_cli.debug import build_clover_bundle
-
-        blob = build_clover_bundle({"report": "x"}, redact=False)
-        envelope = _json.loads(gzip.decompress(blob).decode())
-        assert envelope["redacted"] is False
-
-
-class TestRunDebugShareNous:
-    def _args(self, **over):
-        class _A:
-            lines = 50
-            expire = 7
-            local = False
-            clover = True
-            no_redact = False
-            yes = True
-
-        a = _A()
-        for k, v in over.items():
-            setattr(a, k, v)
-        return a
-
-    def test_clover_success_prints_view_url(self, clover_home, capsys):
-        from clover_cli.debug import run_debug_share
-
-        res = {
-            "id": "id-1",
-            "viewUrl": "https://support.example.com/diagnostics/id-1",
-            "expiresAt": "2026-06-20T00:00:00Z",
-        }
-        with patch("clover_cli.dump.run_dump"), patch(
-            "clover_cli.diagnostics_upload.share_to_clover", return_value=res
-        ) as share:
-            run_debug_share(self._args())
-
-        out = capsys.readouterr().out
-        assert "Clover-INTERNAL" in out
-        assert "https://support.example.com/diagnostics/id-1" in out
-        assert "2026-06-20T00:00:00Z" in out
-        # The blob passed to share_to_clover must be gzip bytes.
-        blob = share.call_args[0][0]
-        assert isinstance(blob, (bytes, bytearray)) and blob[:2] == b"\x1f\x8b"
-
-    def test_clover_failure_suggests_local(self, clover_home, capsys):
-        from clover_cli.debug import run_debug_share
-
-        with patch("clover_cli.dump.run_dump"), patch(
-            "clover_cli.diagnostics_upload.share_to_clover",
-            side_effect=RuntimeError("service down"),
-        ):
-            with pytest.raises(SystemExit) as exc:
-                run_debug_share(self._args())
-        assert exc.value.code == 1
-        err = capsys.readouterr().err
-        assert "Clover upload failed" in err
-        assert "--local" in err
-
-    def test_clover_does_not_touch_pastebin(self, clover_home):
-        from clover_cli.debug import run_debug_share
-
-        res = {"id": "id-1", "viewUrl": "https://v"}
-        with patch("clover_cli.dump.run_dump"), patch(
-            "clover_cli.diagnostics_upload.share_to_clover", return_value=res
-        ), patch("clover_cli.debug.upload_to_pastebin") as paste:
-            run_debug_share(self._args())
-        paste.assert_not_called()
-
-
 class TestDebugSlashCommand:
-    """`/debug [clover|local]` parsing in the CLI/TUI handler.
+    """`/debug [local]` parsing in the CLI/TUI handler.
 
     The classic CLI and the TUI slash worker both dispatch through
     ``CloverCLI.process_command`` → ``_handle_debug_command(cmd_original)``,
@@ -1028,22 +929,17 @@ class TestDebugSlashCommand:
 
     def test_bare_debug_defaults_to_paste(self):
         c = self._captured("/debug")
-        assert c["clover"] is False and c["local"] is False
+        assert c["local"] is False
         assert c["lines"] == 200 and c["expire"] == 7
         # The slash command IS the consent action → skip the [y/N] prompt
         # (input() would hang inside prompt_toolkit's event loop).
         assert c["yes"] is True
 
 
-    def test_word_parsing_is_case_insensitive(self):
-        c = self._captured("/debug CLOVER")
-        assert c["clover"] is True
-
-
     def test_no_arg_default_keyword(self):
         # Calling with no cmd_original (legacy callers) must still work.
         c = self._captured("")
-        assert c["clover"] is False and c["local"] is False
+        assert c["local"] is False
 
 
 class TestShareConsentGate:
@@ -1057,7 +953,7 @@ class TestShareConsentGate:
     def _args(self, **over):
         from types import SimpleNamespace
 
-        base = dict(lines=50, expire=7, local=False, clover=False,
+        base = dict(lines=50, expire=7, local=False,
                     no_redact=False, yes=False)
         base.update(over)
         return SimpleNamespace(**base)

@@ -3979,26 +3979,21 @@ class CLICommandsMixin:
     def _handle_debug_command(self, cmd_original: str = ""):
         """Handle /debug — upload debug report + logs and print share URLs.
 
-        Accepts optional destination words after the command:
+        Accepts an optional destination word after the command:
 
         - ``/debug``        → upload to the public paste service (default)
-        - ``/debug clover``   → upload to Clover-internal storage (private, staff-only)
         - ``/debug local``  → render the report to stdout, no upload
-
-        ``clover`` and ``local`` are mutually exclusive; if both are given,
-        ``local`` wins (it never touches the network).
         """
         from clover_cli.debug import run_debug_share
         from types import SimpleNamespace
 
         words = {w.lower() for w in cmd_original.split()[1:]}
         local = "local" in words
-        clover = "clover" in words and not local
         # Typing the /debug slash command is itself the explicit consent to
         # upload, so we pass yes=True to skip run_debug_share's [y/N] prompt.
         # input() would hang inside prompt_toolkit's event loop anyway.
         args = SimpleNamespace(
-            lines=200, expire=7, local=local, clover=clover, yes=True
+            lines=200, expire=7, local=local, yes=True
         )
         run_debug_share(args)
 

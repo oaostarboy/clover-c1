@@ -32,7 +32,6 @@ import {
 } from '@/components/pane-shell/workspace-scope'
 import { FloatingPet } from '@/components/pet/floating-pet'
 import { RemoteDisplayBanner } from '@/components/remote-display-banner'
-import { SendDiagnosticsHost } from '@/components/send-diagnostics-dialog'
 import { TipHost } from '@/components/tips'
 import { emitGatewayEvent } from '@/contrib/events'
 import { type ChatMessage, chatMessageText, preserveLocalAssistantErrors, toChatMessages } from '@/lib/chat-messages'
@@ -1240,10 +1239,6 @@ export function ContribWiring({ children }: { children: ReactNode }) {
 
       {/* Backs confirm() from @/store/confirm — renders only while one is open. */}
       <ConfirmHost />
-
-      {/* Send Diagnostics consent/upload dialog — driven by $sendDiagnostics
-          (error card action); renders nothing until requested. */}
-      <SendDiagnosticsHost />
 
       {/* Petdex floating mascot — renders nothing unless installed + enabled.
           Never in the HUD: that window is the chat bar and nothing else. */}
