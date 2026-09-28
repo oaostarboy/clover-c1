@@ -2210,10 +2210,7 @@ class _AnthropicCompletionsAdapter:
             reasoning_config=_reasoning_cfg,
             tool_choice=normalized_tool_choice,
             is_oauth=self._is_oauth,
-            # Portal routes on ``anthropic/<slug>`` catalog ids and replays
-            # signed thinking like native Anthropic; both carve-outs key off
-            # base_url. Omitting it normalizes the id to a bare Anthropic
-            # slug and the Portal Messages route cannot resolve it.
+            # Endpoint-specific carve-outs key off base_url.
             base_url=self._base_url,
         )
         # Opus 4.7+ rejects any non-default temperature/top_p/top_k; only set
