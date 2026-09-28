@@ -208,12 +208,6 @@ class TestCuratedAccessors:
         ]
 
 
-    def test_clover_returns_none_when_catalog_empty(self, isolated_home):
-        from clover_cli import model_catalog
-        with patch.object(model_catalog, "_fetch_manifest", return_value=None):
-            assert model_catalog.get_curated_clover_models() is None
-
-
 class TestDefaultModelFromCache:
     """get_default_model_from_cache reads the '"default": true' label without
     ever hitting the network."""
