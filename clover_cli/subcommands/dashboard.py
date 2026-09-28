@@ -85,7 +85,7 @@ def _add_server_runtime_args(parser) -> None:
 
 
 def build_dashboard_parser(
-    subparsers, *, cmd_dashboard: Callable, cmd_dashboard_register: Callable | None = None
+    subparsers, *, cmd_dashboard: Callable
 ) -> None:
     """Attach the ``dashboard`` and ``serve`` subcommands.
 
