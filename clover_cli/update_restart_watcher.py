@@ -79,20 +79,37 @@ def _core_imports_healthy(root: Path) -> bool:
         return False
 
 
+def _gateway_identity() -> tuple[int, float] | None:
+    """Reuse the process-table gateway signature to detect a restart loop."""
+    try:
+        import psutil  # type: ignore
+        for proc in psutil.process_iter(["cmdline", "create_time"]):
+            cmd = " ".join(proc.info.get("cmdline") or [])
+            if "clover_cli.main" in cmd and " gateway" in f" {cmd}":
+                return proc.pid, float(proc.info["create_time"])
+    except Exception:
+        pass
+    return None
+
+
 def probe_gateway(root: Path, *, timeout: float = 90, stable_seconds: float = 20,
                   poll: float = POLL_SECONDS) -> bool:
     """One bounded startup probe: imports and continuously live gateway."""
     deadline = time.monotonic() + timeout
     stable_since = None
+    stable_identity = None
     while True:
         alive = _gateway_running()
         if alive and _core_imports_healthy(root):
-            if stable_since is None:
+            identity = _gateway_identity()
+            if stable_since is None or (identity is not None and stable_identity != identity):
                 stable_since = time.monotonic()
+                stable_identity = identity
             if time.monotonic() - stable_since >= stable_seconds:
                 return True
         else:
             stable_since = None
+            stable_identity = None
         if time.monotonic() >= deadline:
             return False
         time.sleep(min(max(poll, 0.01), max(0, deadline - time.monotonic())))
@@ -130,8 +147,23 @@ def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
     sha = data["pre_pull_sha"]
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("Invalid saved pre-pull commit")
+    dirty = subprocess.run(["git", "status", "--porcelain"], cwd=root, check=True,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+    parked = bool(dirty.stdout.strip())
+    if parked:
+        subprocess.run(["git", "stash", "push", "--include-untracked", "-m", "update-rollback-local-edits"],
+                       cwd=root, check=True, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace", timeout=60)
     subprocess.run(["git", "reset", "--hard", sha], cwd=root, check=True,
                    capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    if parked:
+        reapplied = subprocess.run(["git", "stash", "apply", "stash@{0}"], cwd=root,
+                                   capture_output=True, text=True, encoding="utf-8",
+                                   errors="replace", timeout=60)
+        if reapplied.returncode == 0:
+            subprocess.run(["git", "stash", "drop", "stash@{0}"], cwd=root, check=True,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+        # Conflicts stay in the stash; never discard the user's edits.
     python = root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     if python.is_file():
         # Delegate to the same repair helper as `clover update` after the old

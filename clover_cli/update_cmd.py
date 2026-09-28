@@ -8359,9 +8359,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 from clover_cli import update_receipt as _receipt
                 from clover_cli import update_restart_watcher as _urw
 
-                if _receipt._current is not None:
-                    _receipt._current.data["pre_pull_sha"] = pre_pull_sha
-                    _receipt._current.data["pre_update_snapshot_id"] = pre_update_snapshot_id
+                _receipt.save_pending_receipt(pre_pull_sha, pre_update_snapshot_id)
                 # Windows already has a pre-pause watcher. Update its beacon
                 # without spawning a second process. Other platforms arm here.
                 _rollback_argv = _m()._gateway_restart_argv_for_running_gateway()

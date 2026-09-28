@@ -25434,6 +25434,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         ``outcome`` is success — or one that recorded a post-update sha — is
         proof the tree was updated even though the messenger never heard back.
         """
+        # The out-of-process rollback watcher may still be inside its bounded
+        # startup probe or dependency repair. A provisional "success" receipt
+        # is not the verdict until that watcher finishes; wait for its beacon
+        # to clear rather than messaging success just before rollback.
+        _rollback_beacon = _clover_home / ".clover-update-heartbeat.json"
+        _rollback_deadline = asyncio.get_running_loop().time() + 600
+        while _rollback_beacon.exists() and asyncio.get_running_loop().time() < _rollback_deadline:
+            try:
+                _pending = json.loads(_rollback_beacon.read_text(encoding="utf-8"))
+                if not _pending.get("pre_pull_sha"):
+                    break
+            except (OSError, ValueError):
+                break
+            await asyncio.sleep(2)
         verdict = "unknown"
         detail = ""
         try:

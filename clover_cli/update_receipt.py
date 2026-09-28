@@ -162,6 +162,20 @@ def begin_update_receipt() -> None:
         _current = None
 
 
+def save_pending_receipt(pre_pull_sha: str, pre_update_snapshot_id: str | None) -> None:
+    """Persist the current run before pulling, even if the updater dies later."""
+    if _current is None:
+        return
+    _current.data["pre_pull_sha"] = pre_pull_sha
+    _current.data["pre_update_snapshot_id"] = pre_update_snapshot_id
+    directory = _receipt_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    latest = directory / "latest.json"
+    tmp = directory / f"latest.{os.getpid()}.tmp"
+    tmp.write_text(json.dumps(_current.data, indent=2, default=str), encoding="utf-8")
+    tmp.replace(latest)
+
+
 def record_step(name: str, ok: bool, detail: str = "") -> None:
     """Record one update step outcome. No-op when no receipt is active."""
     try:
