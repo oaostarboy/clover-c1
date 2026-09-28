@@ -2054,7 +2054,6 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         cache_scope_id=_cache_scope_id,
         model_lower=(agent.model or "").lower(),
         is_openrouter=_is_or,
-        is_clover=False,  # Legacy transport parameter; removed provider never routes here.
         is_qwen_portal=_is_qwen,
         is_github_models=_is_gh,
         is_nvidia_nim=_is_nvidia,

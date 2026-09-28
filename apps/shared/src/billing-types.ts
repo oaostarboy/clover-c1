@@ -16,15 +16,14 @@
  *
  * Detection is backend-only (`agent/error_classifier.py` →
  * `FailoverReason.billing`), so every surface renders from this one signal and
- * never re-classifies free-form error text. `is_clover` is reserved for the
- * managed route; every current provider deep-links recovery via `billing_url`.
+ * never re-classifies free-form error text. Every provider deep-links
+ * recovery via `billing_url`.
  */
 export interface BillingBlock {
   provider: string
   provider_label: string
   model: string
   billing_url: string | null
-  is_clover: boolean
   message: string
 }
 

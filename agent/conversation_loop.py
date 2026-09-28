@@ -6439,7 +6439,7 @@ def run_conversation(
                         # body (#82154) — may be a content-filter rejection.
                         "billing_unverified": _billing_unverified,
                         # Present only for billing walls: structured recovery
-                        # descriptor (provider, billing_url, is_clover, message).
+                        # descriptor (provider, billing_url, message).
                         "billing_block": _billing_block,
                     }
 

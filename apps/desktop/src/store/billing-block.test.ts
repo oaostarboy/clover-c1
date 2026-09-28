@@ -10,7 +10,6 @@ import { $billingBlock, billingCtaLabel, clearBillingBlock, runBillingRecovery, 
 function makeBlock(overrides: Partial<BillingBlock> = {}): BillingBlock {
   return {
     billing_url: 'https://platform.openai.com/settings/organization/billing',
-    is_clover: false,
     message: 'You are out of credits.',
     model: 'gpt-5',
     provider: 'openai',

@@ -20,16 +20,13 @@ from utils import base_url_host_matches
 class BillingBlock:
     """Structured billing-wall descriptor shared across every surface.
 
-    ``is_clover`` is kept for wire-shape stability with existing TS consumers
-    but is always ``False`` now — Clover C1 has no hosted billing surface, so
-    every provider resolves through ``billing_url``.
+    Every provider resolves its recovery link through ``billing_url``.
     """
 
     provider: str
     provider_label: str
     model: str
     billing_url: Optional[str]
-    is_clover: bool
     message: str
 
     def to_dict(self) -> dict:
@@ -100,4 +97,4 @@ def build_billing_block(
     model = (model or "").strip()
 
     label, url = _resolve_provider_link(slug, base_url)
-    return BillingBlock(slug, label, model, url, False, message or "")
+    return BillingBlock(slug, label, model, url, message or "")
