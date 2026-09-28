@@ -121,11 +121,19 @@ test('remoteRequestMatchesBaseUrl treats HTTPS and WSS as the same gateway origi
 
 // --- modeIsRemoteLike ---
 
-test('coerceSavedConnectionMode maps legacy cloud configs to remote only when a URL exists', () => {
-  assert.equal(coerceSavedConnectionMode('cloud', 'https://gateway.example'), 'remote')
-  assert.equal(coerceSavedConnectionMode('cloud', '  https://gateway.example  '), 'remote')
+test('coerceSavedConnectionMode always drops a legacy cloud config to local, URL or not', () => {
+  // A saved cloud connection was a portal-discovered agent, never the user's
+  // own gateway — it must never resurrect as 'remote', with or without a URL.
+  assert.equal(coerceSavedConnectionMode('cloud', 'https://gateway.example'), 'local')
+  assert.equal(coerceSavedConnectionMode('cloud', '  https://gateway.example  '), 'local')
   assert.equal(coerceSavedConnectionMode('cloud', ''), 'local')
   assert.equal(coerceSavedConnectionMode('cloud', undefined), 'local')
+})
+
+test('coerceSavedConnectionMode leaves non-cloud modes untouched', () => {
+  assert.equal(coerceSavedConnectionMode('remote', 'https://gateway.example'), 'remote')
+  assert.equal(coerceSavedConnectionMode('local', ''), 'local')
+  assert.equal(coerceSavedConnectionMode('ssh', ''), 'ssh')
 })
 
 test('modeIsRemoteLike is true only for remote', () => {

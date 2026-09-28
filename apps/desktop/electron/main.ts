@@ -8452,10 +8452,21 @@ function readDesktopConnectionConfig() {
       // or 'token' (legacy static session token). Default to 'token' for
       // backward compatibility with configs written before OAuth support.
       remote.authMode = remote.authMode === 'oauth' ? 'oauth' : 'token'
+
+      if (parsed.mode === 'cloud') {
+        // A saved 'cloud' connection (portal-based agent discovery, removed)
+        // is dropped, not coerced into a generic remote — its URL was a
+        // portal-discovered agent, not the user's own gateway, and must never
+        // be dialed or become primary. One-time notice per external edit
+        // (mtime-cache miss), mirroring the quarantine notice below.
+        rememberLog(
+          '[connections] a saved Cloud connection was found and removed (Clover Portal is no longer available); falling back to This device.'
+        )
+      }
+
       config = {
-        // A legacy 'cloud' connection mode (portal-based agent discovery,
-        // removed) always carried a remote-shaped block, so it coerces to
-        // 'remote' here — the one point where saved config is read from disk.
+        // A legacy 'cloud' connection mode is coerced to 'local' here — the
+        // one point where saved config is read from disk — never to 'remote'.
         mode: parsed.mode === 'ssh' ? 'ssh' : coerceSavedConnectionMode(parsed.mode, parsed.remote?.url) === 'remote' ? 'remote' : 'local',
         remote,
         // Per-profile remote overrides: each profile may point at its own

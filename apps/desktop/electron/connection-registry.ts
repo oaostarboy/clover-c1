@@ -1383,7 +1383,12 @@ export function reconcileAppliedGlobalConnection(
   const mode = config?.mode
 
   if (!modeIsRemoteLike(mode)) {
-    if (mode === 'local') {
+    // A saved 'cloud' connection (portal-based agent discovery, removed) is
+    // dropped, never registered or made primary — same outcome as 'local'.
+    // readDesktopConnectionConfig already coerces 'cloud' to 'local' before
+    // config reaches here; this branch is a defense-in-depth backstop for any
+    // other caller that passes a raw v1 shape straight through.
+    if (mode === 'local' || mode === 'cloud') {
       return { ...registry, primary: LOCAL_CONNECTION_ID, lastUsed: LOCAL_CONNECTION_ID }
     }
 
@@ -1457,6 +1462,9 @@ export function reconcileRegistryDrift(
   const config = v1 && typeof v1 === 'object' ? (v1 as Record<string, any>) : {}
   const unchanged = { changed: false, registry }
 
+  // modeIsRemoteLike is false for 'cloud' (and 'local'/'ssh'), so a saved
+  // cloud connection's URL is never drift-healed back into the registry —
+  // it was a portal-discovered agent, not a gateway the user configured.
   if (!modeIsRemoteLike(config.mode)) {
     return unchanged
   }

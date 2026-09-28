@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
+import { coerceSavedConnectionMode } from './connection-config'
 import type { ConnectionRegistry } from './connection-registry'
 import {
   agentHandle,
@@ -1522,6 +1523,71 @@ test('drift heal ignores local, ssh, and unparseable v1 routes', () => {
     assert.equal(drifted.changed, false, `expected no heal for ${JSON.stringify(v1)}`)
     assert.equal(drifted.registry, registry)
   }
+})
+
+test('E2E (review BLOCKER 1): a saved v1 cloud connection + URL never resurrects as remote/primary', () => {
+  // The exact path the review found: a previous release wrote connection.json
+  // with mode 'cloud' + a portal-discovered URL, and connections.json with a
+  // matching kind:'cloud' entry as primary. Reproduce read/coerce (the
+  // main.ts:readDesktopConnectionConfig derivation, mirrored here since that
+  // function is electron-coupled) -> registry load (normalizeRegistry
+  // quarantines the unrecognized kind) -> drift reconcile.
+  const parsedV1FromDisk = {
+    mode: 'cloud',
+    remote: { url: 'https://portal-agent.example.com', authMode: 'oauth' },
+    profiles: {}
+  }
+
+  const coercedV1 = {
+    mode:
+      parsedV1FromDisk.mode === 'ssh'
+        ? 'ssh'
+        : coerceSavedConnectionMode(parsedV1FromDisk.mode, parsedV1FromDisk.remote?.url) === 'remote'
+          ? 'remote'
+          : 'local',
+    remote: parsedV1FromDisk.remote,
+    profiles: parsedV1FromDisk.profiles
+  }
+
+  // The dropped-not-resurrected assertion at the coerce boundary.
+  assert.equal(coercedV1.mode, 'local')
+
+  const registryOnDisk = normalizeRegistry({
+    version: 2,
+    primary: 'clover-cloud',
+    launchMode: 'primary',
+    lastUsed: 'clover-cloud',
+    connections: [
+      { id: 'local', kind: 'local', label: 'This device' },
+      { id: 'clover-cloud', kind: 'cloud', label: 'Clover Cloud', url: 'https://portal-agent.example.com' }
+    ]
+  })
+
+  // normalizeRegistry already quarantines the unrecognized 'cloud' kind and
+  // retargets the dangling primary to local.
+  assert.equal(registryOnDisk.primary, LOCAL_CONNECTION_ID)
+  assert.equal(registryOnDisk.lastUsed, LOCAL_CONNECTION_ID)
+  assert.equal(
+    registryOnDisk.connections.some(c => c.kind === 'remote'),
+    false
+  )
+  assert.equal(registryOnDisk.quarantined?.length, 1)
+
+  const drifted = reconcileRegistryDrift(registryOnDisk, coercedV1)
+
+  // No drift heal fires (coercedV1.mode is 'local', not remote-like), so the
+  // cloud URL is never registered, never made primary.
+  assert.equal(drifted.changed, false)
+  assert.equal(drifted.registry.primary, LOCAL_CONNECTION_ID)
+  assert.equal(drifted.registry.lastUsed, LOCAL_CONNECTION_ID)
+  assert.equal(
+    drifted.registry.connections.some(c => c.kind === 'remote'),
+    false
+  )
+  assert.equal(
+    drifted.registry.connections.some(c => 'url' in c && c.url === 'https://portal-agent.example.com'),
+    false
+  )
 })
 
 test('drift heal adds the missing remote without disturbing other registered sources', () => {

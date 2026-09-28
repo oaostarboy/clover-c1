@@ -368,16 +368,19 @@ function remoteRequestMatchesBaseUrl(requestUrl, baseUrl) {
 
 // True for connection modes that resolve to a REMOTE backend. A legacy saved
 // 'cloud' connection (portal-based agent discovery, removed) is coerced to
-// 'remote' at the point the saved config is read from disk
+// 'local' at the point the saved config is read from disk
 // (readDesktopConnectionConfig), so this only ever sees 'remote'/'local'/'ssh'.
 function modeIsRemoteLike(mode) {
   return mode === 'remote'
 }
 
-// Preserve the meaning of legacy saved cloud-mode configs after removing the
-// Cloud connection type: a usable URL remains a generic remote gateway.
-function coerceSavedConnectionMode(mode, remoteUrl) {
-  return mode === 'cloud' ? (String(remoteUrl || '').trim() ? 'remote' : 'local') : mode
+// A saved 'cloud' connection (portal-based agent discovery, removed) is
+// dropped entirely, never coerced into a generic remote gateway: the URL it
+// carried was a portal-discovered agent, not a gateway the user configured
+// themselves, so it must not be dialed, registered, or made primary. `mode`
+// is unrelated for every other value.
+function coerceSavedConnectionMode(mode, _remoteUrl) {
+  return mode === 'cloud' ? 'local' : mode
 }
 
 function normalizeSshConfig(entry) {
