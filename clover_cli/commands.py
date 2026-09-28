@@ -27,8 +27,8 @@ from clover_constants import INDICATOR_STYLES
 # does a full YAML parse + deep merge of the built-in defaults on every call,
 # and the completer runs on every keystroke of /personality. The personalities
 # list only changes when the config file changes on disk, so keying on
-# path+mtime keeps the memo freshness-correct (same pattern as load_env and
-# _clover_auth_status_cache). Falls back to a fresh load when the file cannot
+# path+mtime keeps the memo freshness-correct (same pattern as load_env).
+# Falls back to a fresh load when the file cannot
 # be stat'ed.
 _personalities_memo: Optional[
     Tuple[Tuple[Optional[str], Optional[int], Optional[int]], Dict[str, Any]]
@@ -2246,7 +2246,7 @@ class SlashCommandCompleter(Completer):
             # merge of the built-in defaults on every call, and this completer
             # runs on every keystroke of /personality. The personalities list
             # only changes when config.yaml changes on disk, so the memo stays
-            # freshness-correct (same pattern as load_env / _clover_auth_status_cache).
+            # freshness-correct (same pattern as load_env).
             personalities = _personalities_from_cli_config()
 
             if "none".startswith(sub_lower) and "none" != sub_lower:
