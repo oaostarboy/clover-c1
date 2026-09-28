@@ -1698,6 +1698,26 @@ def _inherit_parent_base_url(parent_agent, fallback_base_url: Optional[str]) -> 
     return fallback_base_url or None
 
 
+def _model_label_for_child(child) -> Optional[str]:
+    """Return the child's current model, annotated with a fallback origin
+    when ``try_activate_fallback`` has switched it mid-run.
+
+    ``child.model`` is mutated in place by fallback activation, so it
+    already reflects the model actually in use — this only adds the
+    "(fallback from X)" suffix so the parent's job card doesn't silently
+    show a different model than what was requested. See #93412.
+    """
+    model = getattr(child, "model", None)
+    if not isinstance(model, str) or not model:
+        return None
+    if getattr(child, "_provider_fallback_active", False):
+        primary = getattr(child, "_primary_runtime", None) or {}
+        original = primary.get("model")
+        if isinstance(original, str) and original and original != model:
+            return f"{model} (fallback from {original})"
+    return model
+
+
 def _build_child_agent(
     task_index: int,
     goal: str,
@@ -1878,6 +1898,12 @@ def _build_child_agent(
 
     # Resolve effective credentials: config override > parent inherit
     effective_model = model or parent_agent.model
+    # Pinned only when THIS child got an explicit model override (a per-task
+    # tier resolution or a delegation.model config pin) — not merely because
+    # it inherited the parent's model. Gates the no-silent-fallback guard so
+    # a pinned subagent model_not_found aborts instead of walking the parent's
+    # fallback chain unannounced. See #93412.
+    model_pinned = bool((model or "").strip())
     effective_provider = override_provider or getattr(parent_agent, "provider", None)
     effective_base_url = override_base_url or parent_agent.base_url
     if not override_base_url:
@@ -2062,6 +2088,7 @@ def _build_child_agent(
                 base_url=effective_base_url,
                 api_key=effective_api_key,
                 model=effective_model,
+                model_pinned=model_pinned,
                 provider=effective_provider,
                 capabilities=child_capabilities,
                 api_mode=effective_api_mode,
@@ -2814,11 +2841,7 @@ def _run_single_child(
                 "delegation_id": (
                     _delegation_id if isinstance(_delegation_id, str) else None
                 ),
-                "model": (
-                    getattr(child, "model", None)
-                    if isinstance(getattr(child, "model", None), str)
-                    else None
-                ),
+                "model": _model_label_for_child(child),
                 "started_at": time.time(),
                 "status": "running",
                 "tool_count": 0,
@@ -3304,7 +3327,6 @@ def _run_single_child(
         # Extract token counts (safe for mock objects)
         _input_tokens = getattr(child, "session_prompt_tokens", 0)
         _output_tokens = getattr(child, "session_completion_tokens", 0)
-        _model = getattr(child, "model", None)
 
         entry: Dict[str, Any] = {
             "task_index": task_index,
@@ -3312,7 +3334,7 @@ def _run_single_child(
             "summary": summary,
             "api_calls": api_calls,
             "duration_seconds": duration,
-            "model": _model if isinstance(_model, str) else None,
+            "model": _model_label_for_child(child),
             "exit_reason": exit_reason,
             # Explicit, parent-visible truncation flag. A subagent that
             # exhausts its per-child iteration budget still returns a summary,
