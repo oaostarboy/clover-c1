@@ -10510,14 +10510,6 @@ def _copilot_acp_status() -> Dict[str, Any]:
 # ``external`` = read-only/delegated to a terminal or third-party CLI.
 _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
     {
-        "id": "clover",
-        "name": "Clover Portal",
-        "flow": "device_code",
-        "cli_command": "clover auth add clover",
-        "docs_url": "",
-        "status_fn": None,  # dispatched via auth.get_clover_auth_status
-    },
-    {
         "id": "openai-codex",
         "name": "ChatGPT or Codex Subscription",
         "flow": "device_code",
@@ -19013,7 +19005,7 @@ def start_server(
                 "    (hash with: python -c \"from "
                 "plugins.dashboard_auth.basic import hash_password; "
                 "print(hash_password('your-password'))\")\n"
-                "  • OAuth: run `clover dashboard register` (Clover Portal) or "
+                "  • OAuth/SSO: configure the self_hosted OIDC provider or "
                 "install a DashboardAuthProvider plugin.\n"
                 "There is no unauthenticated public-dashboard option. For "
                 "local-only use, bind 127.0.0.1 and leave dashboard.public_url "
