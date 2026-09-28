@@ -176,7 +176,11 @@ class TestFreshInstall:
         with ExitStack() as stack:
             m = _enter_fresh_install_patches(
                 stack,
-                prompt=("clover_cli.setup.prompt_choice", {"return_value": 2}),
+                # index 1 of the 2-item "How would you like to set up
+                # Clover?" menu (0=Full setup, 1=Blank Slate) — the removed
+                # Portal-only third choice used to push Blank Slate to
+                # index 2.
+                prompt=("clover_cli.setup.prompt_choice", {"return_value": 1}),
                 blank="clover_cli.setup._run_blank_slate_setup",
             )
             from clover_cli import setup as setup_mod
