@@ -74,6 +74,7 @@ def _run_keygen(
     )
 
 
+@pytest.mark.live_system_guard_bypass  # extracted keygen-block shell text mentions "gateway"/"docker run" in comments; no gateway is ever spawned
 def test_keygen_creates_env_when_missing(stage2_text: str, tmp_path: Path) -> None:
     """No .env at all (failed/absent first-boot seed) must still yield a key."""
     home = tmp_path / "home"
@@ -87,6 +88,7 @@ def test_keygen_creates_env_when_missing(stage2_text: str, tmp_path: Path) -> No
     assert mode == 0o600, f".env must be owner-only, got {oct(mode)}"
 
 
+@pytest.mark.live_system_guard_bypass  # extracted keygen-block shell text mentions "gateway"/"docker run" in comments; no gateway is ever spawned
 def test_keygen_appends_to_existing_env_without_key(
     stage2_text: str, tmp_path: Path
 ) -> None:
@@ -104,6 +106,7 @@ def test_keygen_appends_to_existing_env_without_key(
     assert len(re.findall(r"^API_SERVER_KEY=..+$", content, re.MULTILINE)) == 1
 
 
+@pytest.mark.live_system_guard_bypass  # extracted keygen-block shell text mentions "gateway"/"docker run" in comments; no gateway is ever spawned
 def test_keygen_never_overwrites_operator_key(
     stage2_text: str, tmp_path: Path
 ) -> None:
@@ -116,6 +119,7 @@ def test_keygen_never_overwrites_operator_key(
     assert content == "API_SERVER_KEY=operator-provided-key-123\n"
 
 
+@pytest.mark.live_system_guard_bypass  # extracted keygen-block shell text mentions "gateway"/"docker run" in comments; no gateway is ever spawned
 def test_keygen_refuses_symlinked_env(stage2_text: str, tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
@@ -128,6 +132,7 @@ def test_keygen_refuses_symlinked_env(stage2_text: str, tmp_path: Path) -> None:
     assert outside.read_text() == "HIJACK=1\n", "must not write through symlink"
 
 
+@pytest.mark.live_system_guard_bypass  # extracted keygen-block shell text mentions "gateway"/"docker run" in comments; no gateway is ever spawned
 def test_keygen_skips_when_container_env_provides_key(
     stage2_text: str, tmp_path: Path
 ) -> None:
@@ -147,6 +152,7 @@ def test_keygen_skips_when_container_env_provides_key(
         assert "API_SERVER_KEY=" not in env_path.read_text()
 
 
+@pytest.mark.live_system_guard_bypass  # extracted keygen-block shell text mentions "gateway"/"docker run" in comments; no gateway is ever spawned
 def test_keygen_env_key_with_existing_env_file_key_warns_not_clobbers(
     stage2_text: str, tmp_path: Path
 ) -> None:
@@ -161,6 +167,7 @@ def test_keygen_env_key_with_existing_env_file_key_warns_not_clobbers(
     assert content == "API_SERVER_KEY=file-key-abcdef0123456789\n"
 
 
+@pytest.mark.live_system_guard_bypass  # extracted keygen-block shell text mentions "gateway"/"docker run" in comments; no gateway is ever spawned
 def test_keygen_env_key_drops_stale_empty_assignment(
     stage2_text: str, tmp_path: Path
 ) -> None:
@@ -198,6 +205,7 @@ def _sed_is_gnu() -> bool:
     return probe.returncode == 0 and "GNU sed" in probe.stdout
 
 
+@pytest.mark.live_system_guard_bypass  # extracted keygen-block shell text mentions "gateway"/"docker run" in comments; no gateway is ever spawned
 def test_keygen_readonly_env_degrades_to_warning_not_boot_abort(
     stage2_text: str, tmp_path: Path
 ) -> None:
@@ -228,6 +236,7 @@ def test_keygen_readonly_env_degrades_to_warning_not_boot_abort(
         env_path.chmod(0o644)
 
 
+@pytest.mark.live_system_guard_bypass  # extracted keygen-block shell text mentions "gateway"/"docker run" in comments; no gateway is ever spawned
 def test_keygen_warns_on_weak_container_env_key(
     stage2_text: str, tmp_path: Path
 ) -> None:
@@ -242,6 +251,7 @@ def test_keygen_warns_on_weak_container_env_key(
     assert "skipping generation" in out
 
 
+@pytest.mark.live_system_guard_bypass  # extracted keygen-block shell text mentions "gateway"/"docker run" in comments; no gateway is ever spawned
 def test_keygen_weak_env_key_warning_suppressed_when_env_file_key_wins(
     stage2_text: str, tmp_path: Path
 ) -> None:
