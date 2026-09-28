@@ -19,7 +19,6 @@ const buildOverlayState = (): OverlayState => ({
   secret: null,
   sessions: false,
   skillsHub: false,
-  subscription: null,
   sudo: null
 })
 
