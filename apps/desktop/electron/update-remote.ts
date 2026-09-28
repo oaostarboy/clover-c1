@@ -12,7 +12,7 @@
  * testable without booting Electron (main.ts requires('electron') at load).
  */
 
-const OFFICIAL_REPO_HTTPS_URL = ''
+const OFFICIAL_REPO_HTTPS_URL = 'https://github.com/cloverc1/clover-c1'
 const OFFICIAL_REPO_CANONICAL = 'github.com/cloverc1/clover-c1'
 
 // Normalize common GitHub remote URL forms to `host/owner/repo` (lowercased,
