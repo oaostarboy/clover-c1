@@ -327,7 +327,7 @@ describe('dedupe helpers', () => {
   it('keys remote/cloud dupes on the normalized URL across both kinds', () => {
     expect(
       findDuplicateConnection(
-        { host: '', id: null, kind: 'cloud', remoteProfile: '', url: 'http://HOMELAB.lan:9119/' },
+        { host: '', id: null, kind: 'remote', remoteProfile: '', url: 'http://HOMELAB.lan:9119/' },
         registry.connections
       )
     ).toMatchObject({ id: 'homelab' })
