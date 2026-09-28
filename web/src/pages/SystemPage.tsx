@@ -9,7 +9,6 @@ import {
   Cpu,
   Database,
   Download,
-  Globe,
   HardDrive,
   KeyRound,
   Link2,
@@ -57,7 +56,6 @@ import type {
   SystemStats,
   UpdateCheckResponse,
   CuratorStatus,
-  PortalStatus,
   DebugShareResponse,
 } from "@/lib/api";
 
@@ -202,7 +200,6 @@ export default function SystemPage() {
   );
   const [hooks, setHooks] = useState<HooksResponse | null>(null);
   const [curator, setCurator] = useState<CuratorStatus | null>(null);
-  const [portal, setPortal] = useState<PortalStatus | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [activeAction, setActiveAction] = useState<string | null>(null);
@@ -262,12 +259,11 @@ export default function SystemPage() {
       api.getCheckpoints(),
       api.getHooks(),
       api.getCurator(),
-      api.getPortal(),
       // Cached (non-forced) check so the version row shows update status on
       // load without a separate effect / a forced network round-trip.
       api.checkCloverUpdate(false),
     ])
-      .then(([s, st, m, p, c, h, cur, prt, upd]) => {
+      .then(([s, st, m, p, c, h, cur, upd]) => {
         if (s.status === "fulfilled") setStatus(s.value);
         if (st.status === "fulfilled") setStats(st.value);
         if (m.status === "fulfilled") setMemory(m.value);
@@ -275,7 +271,6 @@ export default function SystemPage() {
         if (c.status === "fulfilled") setCheckpoints(c.value);
         if (h.status === "fulfilled") setHooks(h.value);
         if (cur.status === "fulfilled") setCurator(cur.value);
-        if (prt.status === "fulfilled") setPortal(prt.value);
         if (upd.status === "fulfilled") setUpdateInfo(upd.value);
       })
       .finally(() => setLoading(false));
@@ -950,53 +945,6 @@ export default function SystemPage() {
                   </span>
                 )}
               </div>
-            )}
-          </CardContent>
-        </Card>
-      </section>
-
-      {/* ── Portal ────────────────────────────────────────────────── */}
-      <section className="flex flex-col gap-3">
-        <H2 variant="sm" className="flex items-center gap-2 text-muted-foreground">
-          <Globe className="h-4 w-4" /> Clover Portal
-        </H2>
-        <Card>
-          <CardContent className="flex flex-col gap-3 py-4">
-            <div className="flex items-center gap-3">
-              <Badge tone={portal?.logged_in ? "success" : "secondary"}>
-                {portal?.logged_in ? "logged in" : "not logged in"}
-              </Badge>
-              {portal?.provider && (
-                <span className="text-sm text-muted-foreground">
-                  inference provider: {portal.provider}
-                </span>
-              )}
-              <a
-                href={portal?.subscription_url || ""}
-                target="_blank"
-                rel="noreferrer"
-                className="ml-auto text-xs text-primary underline"
-              >
-                Manage subscription
-              </a>
-            </div>
-            {portal?.features && portal.features.length > 0 && (
-              <div className="flex flex-col gap-1 border-t border-border pt-3">
-                <span className="text-xs uppercase tracking-wider text-muted-foreground">
-                  Tool Gateway routing
-                </span>
-                {portal.features.map((f) => (
-                  <div key={f.label} className="flex items-center justify-between text-sm">
-                    <span>{f.label}</span>
-                    <span className="text-muted-foreground">{f.state}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            {!portal?.logged_in && (
-              <p className="text-xs text-muted-foreground">
-                Log in with <span className="font-mono">clover portal</span>.
-              </p>
             )}
           </CardContent>
         </Card>
