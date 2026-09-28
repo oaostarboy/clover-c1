@@ -220,3 +220,49 @@ def test_every_adapter_send_reports_outbound():
             return None
 
     assert getattr(_A.send, "_notes_outbound", False) is True
+
+
+@pytest.mark.asyncio
+async def test_card_follows_even_if_publisher_was_idle_at_first_message(monkeypatch):
+    """A message goes out before the turn's first worker starts (the idle
+    publisher drops out of the registry); the worker's card must still follow."""
+    import asyncio
+
+    monkeypatch.setattr(da, "FOLLOW_DEBOUNCE_SECONDS", 0.05)
+    ad = _SeqAdapter()
+    pub = _make_publisher(ad)
+    await ad.send("chat-A", "Plan: starting workers")
+    await follow_latest_message(ad, "chat-A")  # idle → unregistered
+    assert da._LIVE == {}
+
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    card_id = ad._status_message_ids[("chat-A", "delegation:deleg_aaaa0001")]
+    await ad.send("chat-A", "later reply")
+    await asyncio.sleep(0.2)
+    assert card_id in ad.deleted
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_two_turn_cards_both_follow(monkeypatch):
+    """Workers launched in two different turns: both live cards move below."""
+    import asyncio
+
+    monkeypatch.setattr(da, "FOLLOW_DEBOUNCE_SECONDS", 0.05)
+    ad = _SeqAdapter()
+    p1, p2 = _make_publisher(ad), _make_publisher(ad)
+    _child_cb(_turn_runner(p1), delegation_id="deleg_1")("subagent.start", preview="a")
+    await p1.drain()
+    await ad.send("chat-A", "reply 1")
+    await asyncio.sleep(0.2)
+    _child_cb(_turn_runner(p2), delegation_id="deleg_2", subagent_id="sa-2")("subagent.start", preview="b")
+    await p2.drain()
+    await ad.send("chat-A", "reply 2")
+    await asyncio.sleep(0.2)
+    last = int(ad.sends[-1]["id"]) if ad.sends[-1]["content"] == "reply 2" else None
+    ids = [ad._status_message_ids[("chat-A", f"delegation:{g}")] for g in ("deleg_1", "deleg_2")]
+    reply2 = next(int(x["id"]) for x in ad.sends if x["content"] == "reply 2")
+    assert all(int(i) > reply2 for i in ids)
+    await p1.aclose(); await p2.aclose()

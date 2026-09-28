@@ -339,6 +339,7 @@ class DelegationActivityPublisher:
             return
         if not kwargs.get("delegation_id"):
             kwargs["delegation_id"] = self._fallback_group
+        self._ensure_live()
         try:
             group_id, alerts = self.tracker.observe(
                 event_type, tool_name, preview, args, **kwargs
@@ -496,6 +497,20 @@ class DelegationActivityPublisher:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+
+    def _ensure_live(self) -> None:
+        """(Re)join the chat's follow registry. A publisher is dropped while
+        idle (e.g. a message went out before its first worker started), so
+        activity must put it back or its card never follows."""
+        if self._closed:
+            return
+        key = _inbox_key(self._adapter, self._chat_id)
+        with _LIVE_LOCK:
+            pubs = _LIVE.setdefault(key, [])
+            if self not in pubs:
+                pubs.append(self)
+                if len(pubs) > _LIVE_MAX_PER_CHAT:
+                    del pubs[: len(pubs) - _LIVE_MAX_PER_CHAT]
 
     def _unregister_live(self) -> None:
         key = _inbox_key(self._adapter, self._chat_id)
