@@ -1074,10 +1074,6 @@ def test_explicit_plugin_toolset_admitted_against_real_a2a_plugin(monkeypatch):
 
 
 # ── _has_agent_browser / _local_browser_runnable ──────────────────────────────
-#
-# Moved from tests/clover_cli/test_clover_subscription.py when the helpers
-# were re-homed into clover_cli.tools_config (clover_cli.clover_subscription
-# was deleted along with the hosted Clover Portal subscription feature).
 
 
 def _block_legacy_agent_browser_checks(monkeypatch):

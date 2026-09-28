@@ -66,8 +66,8 @@ def _install_fake_tools_package():
     # The fake `agent` package has an empty __path__, so every real
     # agent.* submodule that production code imports needs an explicit
     # stand-in here. tools.browser_tool imports redact_cdp_url;
-    # clover_cli.auth (imported transitively by clover_account /
-    # tool_backend_helpers) imports sanitize_borrowed_credential_payload.
+    # clover_cli.auth (imported transitively by tool_backend_helpers)
+    # imports sanitize_borrowed_credential_payload.
     sys.modules["agent.redact"] = types.SimpleNamespace(
         redact_cdp_url=lambda value: str(value),
     )

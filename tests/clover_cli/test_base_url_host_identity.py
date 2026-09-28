@@ -82,15 +82,6 @@ def test_local_endpoint_hostname_detection():
     )
 
 
-def test_clover_portal_host_detection():
-    from utils import base_url_host_matches
-
-    assert base_url_host_matches("", "")
-    assert base_url_host_matches("", "")
-    assert not base_url_host_matches("", "")
-    assert not base_url_host_matches("https://proxy.example//v1", "")
-
-
 # ── Widened class coverage (follow-up to #85737) ─────────────────────────────
 
 
