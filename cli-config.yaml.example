@@ -1214,6 +1214,14 @@ platform_toolsets:
 #     max_events: 20        # messages allowed inside window_seconds
 #     window_seconds: 300
 #     cooldown_seconds: 600  # how long a tripped conversation stays dropped
+#   # How to handle a DM from someone not on the allowlist: "pair" (default —
+#   # send a pairing code), "decline" (one polite refusal per sender, then
+#   # silent), or "ignore" (say nothing). Whichever you pick, the owner gets a
+#   # WARNING log plus one home-channel line per sender per 24h ("Someone not
+#   # on your allowlist messaged the bot on <platform> (id ...). Ignored."),
+#   # so a mistyped allowlist is never silently invisible. The stranger's
+#   # message content is never forwarded.
+#   unauthorized_dm_behavior: pair
 
 # =============================================================================
 # Cron

@@ -954,3 +954,77 @@ class GatewayAuthorizationMixin:
             return "ignore"
 
         return "pair"
+
+    async def _send_unauthorized_dm_decline(self, source: SessionSource) -> None:
+        """``decline`` behavior: one short refusal per sender per
+        pairing.UNAUTHORIZED_DM_NOTICE_DEDUPE_SECONDS, then silence. The stamp is
+        written BEFORE the send so a delivery hiccup cannot become a decline
+        storm; without a pairing store there is no dedupe state, so stay silent
+        rather than risk repeating the decline on every message."""
+        from gateway.config import DEFAULT_UNAUTHORIZED_DM_DECLINE_MESSAGE
+
+        platform_name = source.platform.value if source.platform else "unknown"
+        pairing_store = self._pairing_store_for(source)
+        if pairing_store is None or pairing_store.has_recent_decline(platform_name, source.user_id):
+            return
+        pairing_store.record_decline(platform_name, source.user_id)
+        adapter = self._adapter_for_source(source)
+        if adapter is None:
+            return
+        try:
+            await adapter.send(source.chat_id, DEFAULT_UNAUTHORIZED_DM_DECLINE_MESSAGE)
+        except Exception:
+            from gateway.run import logger
+            logger.warning(
+                "Failed to deliver unauthorized-DM decline on %s", platform_name, exc_info=True
+            )
+
+    async def _notify_owner_of_unauthorized_sender(self, source: SessionSource) -> None:
+        """Owner-side signal for a dropped unauthorized DM (``ignore``/``decline``
+        behaviors): the WARNING log already carries the sender's ID (see the
+        caller), and this posts ONE line to the matching platform's home
+        channel, rate-limited to once per sender per
+        ``pairing.UNAUTHORIZED_DM_NOTICE_DEDUPE_SECONDS`` (24h) so a mistyped
+        allowlist is obvious without a stranger being able to spam the home
+        channel. Never forwards the stranger's message content — only the
+        platform and sender id/name."""
+        platform = source.platform
+        if platform is None or not source.user_id:
+            return
+        pairing_store = self._pairing_store_for(source)
+        if pairing_store is None:
+            return
+        platform_name = platform.value
+        if pairing_store.has_recent_unauthorized_notice(platform_name, source.user_id):
+            return
+
+        config = getattr(self, "config", None)
+        platforms = getattr(config, "platforms", None) or {}
+        platform_cfg = platforms.get(platform)
+        home = getattr(platform_cfg, "home_channel", None)
+        if not home or not home.chat_id:
+            return
+        if str(home.chat_id) == str(source.chat_id):
+            # The stranger's own DM IS the home channel (misconfiguration):
+            # posting there would answer the unauthorized user, defeating the
+            # point of ignoring/declining them.
+            return
+
+        pairing_store.record_unauthorized_notice(platform_name, source.user_id)
+
+        from gateway.delivery import resolve_delivery_transport
+        transport = resolve_delivery_transport(platform, config, getattr(self, "adapters", None))
+        if transport is None:
+            return
+        text = (
+            f"⚠️ Someone not on your allowlist messaged the bot on {platform_name} "
+            f"(id {source.user_id}). Ignored."
+        )
+        try:
+            await transport.adapter.send(str(home.chat_id), text)
+        except Exception:
+            from gateway.run import logger
+            logger.warning(
+                "Unauthorized-sender notice failed for %s:%s", platform_name, home.chat_id,
+                exc_info=True,
+            )
