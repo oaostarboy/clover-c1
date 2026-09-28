@@ -261,22 +261,22 @@ test('compareApiUrl builds the GitHub compare URL for HTTPS origins', () => {
   assert.equal(
     compareApiUrl({
       currentSha: SHA_A,
-      originUrl: 'https://github.com/cloverc1/clover-c1.git',
+      originUrl: 'https://github.com/oaostarboy/clover-c1.git',
       targetSha: SHA_B
     }),
-    `https://api.github.com/repos/cloverc1/clover-c1/compare/${SHA_A}...${SHA_B}`
+    `https://api.github.com/repos/oaostarboy/clover-c1/compare/${SHA_A}...${SHA_B}`
   )
 })
 
 test('compareApiUrl handles SSH origin forms', () => {
   for (const originUrl of [
-    'git@github.com:cloverc1/clover-c1.git',
-    'ssh://git@github.com/cloverc1/clover-c1.git',
-    'git@github.com:cloverc1/clover-c1'
+    'git@github.com:oaostarboy/clover-c1.git',
+    'ssh://git@github.com/oaostarboy/clover-c1.git',
+    'git@github.com:oaostarboy/clover-c1'
   ]) {
     assert.equal(
       compareApiUrl({ currentSha: SHA_A, originUrl, targetSha: SHA_B }),
-      `https://api.github.com/repos/cloverc1/clover-c1/compare/${SHA_A}...${SHA_B}`
+      `https://api.github.com/repos/oaostarboy/clover-c1/compare/${SHA_A}...${SHA_B}`
     )
   }
 })

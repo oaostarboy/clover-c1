@@ -7,7 +7,7 @@
   "author": "Clover Cognition",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cloverc1/clover-c1.git",
+    "url": "git+https://github.com/oaostarboy/clover-c1.git",
     "directory": "apps/desktop"
   },
   "type": "module",
