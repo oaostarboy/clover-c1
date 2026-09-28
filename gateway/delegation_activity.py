@@ -273,10 +273,20 @@ class _ChatBoard:
         self.last_edit = float("-inf")
         self._lock: Optional[asyncio.Lock] = None
         self._timer: Any = None
+        # Every board message ever posted and not yet confirmed deleted. A
+        # new post sweeps all older ones, so a failed edit/move can never
+        # leave a second board behind.
+        self._posted: List[str] = []
 
     @property
     def key(self) -> Tuple[int, str]:
         return _inbox_key(self.adapter, self.chat_id)
+
+    async def _sweep_except(self, keep: Optional[str]) -> None:
+        stale = [m for m in self._posted if m != keep]
+        self._posted = [keep] if keep else []
+        for mid in stale:
+            await self._delete(mid)
 
     def _publishers(self) -> List["DelegationActivityPublisher"]:
         with _LIVE_LOCK:
@@ -347,6 +357,7 @@ class _ChatBoard:
                 text = self.render()
                 if not text:
                     await self._delete()
+                    await self._sweep_except(None)
                     _BOARDS.pop(self.key, None)
                     return False
                 last_out = _LAST_OUT.get(self.key)
@@ -358,8 +369,8 @@ class _ChatBoard:
                         self.message_id = str(res.message_id)
                         self.last_text = text
                         self.last_edit = self.clock()
-                        if old and old != self.message_id:
-                            await self._delete(old)
+                        self._posted.append(self.message_id)
+                        await self._sweep_except(self.message_id)
                         return bool(old)
                     return False
                 if text == self.last_text:

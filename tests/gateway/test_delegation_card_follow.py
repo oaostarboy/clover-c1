@@ -341,3 +341,34 @@ async def test_board_drops_absorbed_worker_and_vanishes_when_empty(monkeypatch):
     assert board_id in ad.deleted
     assert da._inbox_key(ad, "chat-A") not in da._BOARDS
     await pub.aclose()
+
+
+
+@pytest.mark.asyncio
+async def test_failed_edit_never_leaves_a_second_board(monkeypatch):
+    """Telegram rejects an edit ("message can't be edited"): the board is
+    re-posted, and the old board message must still be deleted."""
+    from gateway.platforms.base import SendResult
+
+    monkeypatch.setattr(da, "BOARD_MIN_EDIT_SECONDS", 0.0)
+    ad = _SeqAdapter()
+
+    async def _bad_edit(chat_id, message_id, content, finalize=False, metadata=None):
+        return SendResult(success=False, error="Bad Request: message can't be edited")
+
+    ad.edit_message = _bad_edit
+    pub = await _board_pub(ad, monkeypatch)
+    a = _child_cb(_turn_runner(pub))
+    a("subagent.start", preview="g")
+    await pub.drain()
+    first = da._BOARDS[da._inbox_key(ad, "chat-A")].message_id
+    a("tool.started", "read_file", "x.py", {"path": "x.py"})
+    await pub.drain()
+    import asyncio
+    await asyncio.sleep(0.05)
+    await pub.drain()
+    board = da._BOARDS[da._inbox_key(ad, "chat-A")]
+    live = [s["id"] for s in ad.sends if s["id"] not in ad.deleted]
+    assert live == [board.message_id], f"exactly one board left, got {live}"
+    assert first in ad.deleted
+    await pub.aclose()
