@@ -233,6 +233,9 @@ def test_cli_command_waits_for_rollback_verdict_and_exits_nonzero(monkeypatch):
     from types import SimpleNamespace
     from clover_cli import main, config, update_contract, update_lock
     monkeypatch.setattr(config, "is_managed", lambda: False)
+    # Another test module sets CLOVER_UPDATE_REEXEC without cleanup; the
+    # verdict wait (correctly) skips the Windows hand-off child, so clear it.
+    monkeypatch.delenv(main._UPDATE_REEXEC_ENV, raising=False)
     monkeypatch.setattr(update_contract, "evaluate_update_admission", lambda root: None)
     monkeypatch.setattr(main, "_install_hangup_protection", lambda **kw: None)
     monkeypatch.setattr(main, "_finalize_update_output", lambda state: None)
@@ -240,7 +243,12 @@ def test_cli_command_waits_for_rollback_verdict_and_exits_nonzero(monkeypatch):
     monkeypatch.setattr(update_lock, "UpdateLock", lambda: SimpleNamespace(
         acquire=lambda: True, release=lambda: None))
     results = []
-    monkeypatch.setattr(watcher, "wait_for_cli_verdict", lambda: results.append("wait") or False)
+    # Other test modules purge clover_cli.* from sys.modules, so the
+    # module-level ``watcher`` can be a stale object; patch the live one
+    # that main.cmd_update will import.
+    import importlib
+    live_watcher = importlib.import_module("clover_cli.update_restart_watcher")
+    monkeypatch.setattr(live_watcher, "wait_for_cli_verdict", lambda: results.append("wait") or False)
     with pytest.raises(SystemExit) as exc:
         main.cmd_update(SimpleNamespace(gateway=False, plan=False, check=False))
     assert exc.value.code == 1

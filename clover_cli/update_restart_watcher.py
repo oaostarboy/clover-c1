@@ -157,7 +157,9 @@ def _restart_from_beacon(data: dict[str, Any]) -> None:
     services = data.get("windows_services") or []
     if services and os.name == "nt":
         root = Path(data["repo"])
-        python = Path(data.get("venv_python") or root / "venv" / "Scripts" / "python.exe")
+        # Standalone copy (no clover_constants import): same derivation as
+        # _restart_from_beacon above; this branch only runs on Windows.
+        python = Path(data.get("venv_python") or root / "venv" / "Scripts/python.exe")
         for name in services:
             subprocess.run(
                 [str(python), "-c",
