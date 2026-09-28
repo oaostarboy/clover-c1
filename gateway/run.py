@@ -25064,6 +25064,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
 
 
+    def _restart_after_repair(self) -> None:
+        """Detach gateway restart after a repaired venv's result was delivered."""
+        try:
+            import subprocess
+            from clover_cli._subprocess_compat import windows_detach_popen_kwargs
+            restart_cmd = _resolve_clover_bin()
+            if not restart_cmd:
+                logger.warning("Could not resolve Clover executable for repaired gateway restart")
+                return
+            if sys.platform == "win32":
+                subprocess.Popen([*restart_cmd, "gateway", "restart"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 **windows_detach_popen_kwargs())
+            else:
+                subprocess.Popen([*restart_cmd, "gateway", "restart"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                 start_new_session=True)
+        except Exception:
+            logger.exception("Could not restart gateway after dependency repair")
+
     def _schedule_update_notification_watch(self) -> None:
         """Ensure a background task is watching for update completion."""
         existing_task = getattr(self, "_update_notification_task", None)
@@ -25148,10 +25168,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         chat_id = None
         session_key = None
         metadata = None
+        platform = None
+        update_action = "update"
         for path in (claimed_path, pending_path):
             if path.exists():
                 try:
                     pending = json.loads(path.read_text(encoding="utf-8"))
+                    update_action = pending.get("action", "update")
                     platform_str = pending.get("platform")
                     chat_id = pending.get("chat_id")
                     chat_type = pending.get("chat_type")
@@ -25222,10 +25245,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         bytes_sent = 0
         last_stream_time = loop.time()
         buffer = ""
+        repair_reinstalled_packages = False
 
         async def _flush_buffer() -> None:
             """Send buffered output to the user."""
-            nonlocal buffer, last_stream_time
+            nonlocal buffer, last_stream_time, repair_reinstalled_packages
             if not buffer.strip():
                 buffer = ""
                 return
@@ -25234,6 +25258,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             buffer = ""
             last_stream_time = loop.time()
             if not clean:
+                return
+            if update_action == "repair":
+                repair_reinstalled_packages |= "reinstalled missing packages" in clean
+                # Repair has one user-facing summary, never a raw traceback.
+                if "Traceback" in clean:
+                    logger.error("Detached repair failed: %s", clean)
+                    clean = "Repair could not finish. Run clover doctor."
+                try:
+                    await adapter.send(chat_id, clean, metadata=_non_conversational_metadata(metadata, platform=platform))
+                except Exception:
+                    logger.exception("Repair result delivery failed")
                 return
             # Split into chunks if too long
             max_chunk = 3500
@@ -25266,10 +25301,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 await _flush_buffer()
 
                 # Send final status
+                exit_code = 1
                 try:
                     exit_code_raw = exit_code_path.read_text(encoding="utf-8").strip() or "1"
                     exit_code = int(exit_code_raw)
-                    if exit_code == 0:
+                    if update_action == "repair" and exit_code == 0:
+                        pass  # run_repair already sent the plain-language result
+                    elif update_action == "repair":
+                        await adapter.send(chat_id, "Repair failed. Run clover doctor.", metadata=_non_conversational_metadata(metadata, platform=platform))
+                    elif exit_code == 0:
                         await adapter.send(
                             chat_id,
                             "✅ Clover update finished.",
@@ -25293,6 +25333,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _up_done = self._peek_session_state(session_key)
                 if _up_done is not None:
                     _up_done.persistent.update_prompt_pending = False
+                if update_action == "repair" and repair_reinstalled_packages and exit_code == 0:
+                    from clover_constants import venv_python_path
+                    project_venv = venv_python_path(Path(__file__).resolve().parent.parent / "venv",
+                                                    windows=sys.platform == "win32")
+                    gateway_uses_repaired_venv = Path(sys.executable).resolve() == project_venv.resolve()
+                    if gateway_uses_repaired_venv:
+                        self._restart_after_repair()
                 return
 
             # Check for new output
@@ -25305,7 +25352,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     pass
 
             # Flush buffer periodically
-            if buffer.strip() and (loop.time() - last_stream_time) >= stream_interval:
+            if update_action != "repair" and buffer.strip() and (loop.time() - last_stream_time) >= stream_interval:
                 await _flush_buffer()
 
             # Check for prompts — only forward if we haven't already sent

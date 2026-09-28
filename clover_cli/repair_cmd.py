@@ -86,7 +86,15 @@ def run_repair() -> str:
                 manual.append(label)
                 return None
 
-        attempt("safe install checks", update_cmd._run_post_update_safe_repairs)
+        post_output = io.StringIO()
+        with contextlib.redirect_stdout(post_output):
+            attempt("safe install checks", update_cmd._run_post_update_safe_repairs)
+        if "Cleared" in post_output.getvalue():
+            fixed.append("cleared stuck git locks")
+        if "Reseeded bundled skills" in post_output.getvalue():
+            fixed.append("restored bundled skills")
+        if "Core runtime dependencies missing" in post_output.getvalue():
+            manual.append("core runtime imports (run clover doctor)")
         health = attempt("Python packages", update_cmd._venv_core_imports_healthy)
         if health is not None and not health[0]:
             if attempt("Python packages", _repair_dependencies):
@@ -109,7 +117,7 @@ def run_repair() -> str:
                     if state.is_file() and backup.verify_sqlite_integrity(state).get("valid"):
                         valid.append(candidate.name)
                 if valid:
-                    manual.append(f"state.db is corrupt; valid snapshot {sorted(valid)[-1]}; run clover snapshot restore {sorted(valid)[-1]} manually")
+                    manual.append(f"state.db is corrupt; valid snapshot {sorted(valid)[-1]}; open Clover chat and type /snapshot restore {sorted(valid)[-1]} (restores the whole snapshot)")
                 else:
                     manual.append("state.db is corrupt; no valid snapshot found. Run clover doctor")
     summary = f"Checked 6 things. Fixed {len(fixed)}" + (f": {', '.join(fixed)}." if fixed else ".")

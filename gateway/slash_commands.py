@@ -6352,6 +6352,7 @@ class GatewaySlashCommandsMixin:
         exit_code_path = _clover_home / ".update_exit_code"
         session_key = self._session_key_for_source(event.source)
         pending = {
+            "action": action,
             "platform": event.source.platform.value,
             "chat_id": event.source.chat_id,
             "chat_type": event.source.chat_type,
