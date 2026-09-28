@@ -410,7 +410,7 @@ class TestCompressContextForwarderOwnsTimeout:
             lambda compression_cfg=None: (0.05, 0.2),
         )
         monkeypatch.setattr(
-            "agent.portal_tags.get_conversation_context",
+            "agent.conversation_context.get_conversation_context",
             lambda: object(),
         )
 
@@ -477,7 +477,7 @@ class TestCompressContextForwarderOwnsTimeout:
             lambda compression_cfg=None: (0.05, 0.2),
         )
         monkeypatch.setattr(
-            "agent.portal_tags.get_conversation_context",
+            "agent.conversation_context.get_conversation_context",
             lambda: object(),
         )
 
@@ -519,7 +519,7 @@ class TestCompressContextForwarderOwnsTimeout:
             ),
         )
         monkeypatch.setattr(
-            "agent.portal_tags.get_conversation_context",
+            "agent.conversation_context.get_conversation_context",
             lambda: object(),
         )
 
