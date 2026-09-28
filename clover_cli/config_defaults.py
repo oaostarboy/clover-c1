@@ -2084,6 +2084,20 @@ DEFAULT_CONFIG = {
     "delegation": {
         "model": "",       # e.g. "google/gemini-3-flash-preview" (empty = inherit parent model)
         "provider": "",    # e.g. "openrouter" (empty = inherit parent provider + credentials)
+        # Value-routed model tiers: task.tier -> ordered "provider/model"
+        # candidates, first one the user has credentials for wins. Lets the
+        # parent pick a tier per subagent (code/read/check/fast/deep) instead
+        # of pinning every child to one model. A tier name here REPLACES the
+        # built-in list of the same name (lists don't merge); add new tier
+        # names freely. Set to {} to disable tiering entirely and fall back
+        # to delegation.provider/model (or parent inheritance) for every task.
+        "tiers": {
+            "deep": ["anthropic/claude-opus-5-5", "openai-codex/gpt-6-sol"],
+            "code": ["anthropic/claude-sonnet-5", "openai-codex/gpt-6-luna"],
+            "read": ["gemini/gemini-3.8-pro", "anthropic/claude-sonnet-5"],
+            "check": ["xai/grok-4.7", "xai-oauth/grok-4.7", "gemini/gemini-3.8-pro"],
+            "fast": ["gemini/gemini-3.8-flash-high", "openai-codex/gpt-6-luna"],
+        },
         "base_url": "",    # direct OpenAI-compatible endpoint for subagents
         "api_key": "",     # API key for delegation.base_url (falls back to OPENAI_API_KEY)
         "api_mode": "",    # wire protocol for delegation.base_url: "chat_completions",

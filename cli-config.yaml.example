@@ -1569,6 +1569,22 @@ delegation:
   #                                           # delegation.model to an inexpensive one — children carry the
   #                                           # vast majority of tokens, so this is where spend is cut while
   #                                           # planning quality stays with the frontier parent.
+  #
+  # Value-routed model tiers (on by default): the parent can pass a per-task
+  # `tier` to delegate_task instead of a fixed model. Each tier is an ordered
+  # list of "provider/model" candidates; the first one the user is actually
+  # signed in to wins. task.tier beats delegation.provider/model above, which
+  # in turn beats plain parent inheritance. Only tiers that resolve to an
+  # authenticated candidate are advertised to the model.
+  # tiers:
+  #   deep:  ["anthropic/claude-opus-5-5", "openai-codex/gpt-6-sol"]        # hard design, tricky bugs, tiebreaks
+  #   code:  ["anthropic/claude-sonnet-5", "openai-codex/gpt-6-luna"]       # write/fix code, tests
+  #   read:  ["gemini/gemini-3.8-pro", "anthropic/claude-sonnet-5"]         # big diffs, long docs, research reading
+  #   check: ["xai/grok-4.7", "xai-oauth/grok-4.7", "gemini/gemini-3.8-pro"] # adversarial review, find holes
+  #   fast:  ["gemini/gemini-3.8-flash-high", "openai-codex/gpt-6-luna"]    # quick lookups, visual checks, cheap chores
+  #                                           # Setting a tier name here REPLACES the built-in list of the same
+  #                                           # name (lists don't merge); add your own tier names freely.
+  #                                           # Set `tiers: {}` to disable tiering entirely.
 
 # =============================================================================
 # Honcho Integration (Cross-Session User Modeling)
