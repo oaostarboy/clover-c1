@@ -148,11 +148,6 @@ export interface Translations {
       remoteSignInHint: (signInLabel: string) => string
       signOutAndSignIn: string
       remoteFailureHint: string
-      cloudDownTitle: string
-      cloudDownDescription: string
-      cloudDownHint: string
-      cloudDownCheckPortal: string
-      cloudDownDiscord: string
       hideRecentLogs: string
       showRecentLogs: string
       signedInTitle: string
@@ -245,10 +240,8 @@ export interface Translations {
   }
 
   billingBlock: {
-    titleNous: string
     titleProvider: (provider: string) => string
     fallbackMessage: string
-    openBilling: string
     addCredits: string
     dismiss: string
   }
@@ -270,7 +263,6 @@ export interface Translations {
     links: {
       discord: string
       github: string
-      portal: string
     }
   }
 
@@ -345,7 +337,6 @@ export interface Translations {
       mcp: string
       archivedChats: string
       about: string
-      billing: string
       notifications: string
       plugins: string
     }
@@ -665,14 +656,11 @@ export interface Translations {
       updateAllRunning: string
       updateAllDone: string
       updateAllFailed: string
-      updateSkippedCloud: string
       kindLocal: string
       kindRemote: string
-      kindCloud: string
       kindSsh: string
       kindLocalDesc: string
       kindRemoteDesc: string
-      kindCloudDesc: string
       kindSshDesc: string
       labelTitle: string
       labelDesc: string
@@ -690,7 +678,6 @@ export interface Translations {
       duplicateSsh: (label: string) => string
       sameBackendHint: (label: string) => string
       localAddHint: string
-      cloudAddHint: string
       save: string
       saving: string
       cancel: string
@@ -728,12 +715,6 @@ export interface Translations {
       remoteTitle: string
       remoteDesc: string
       remoteAuthHint: string
-      cloudTitle: string
-      cloudDesc: string
-      cloudSignInTitle: string
-      cloudSignIn: string
-      cloudSignedIn: string
-      cloudNeedsSignIn: string
       cloudSignedInDesc: string
       cloudAgentsTitle: string
       cloudOrgPickerTitle: string
@@ -745,11 +726,7 @@ export interface Translations {
       cloudRefresh: string
       cloudConnect: string
       cloudConnecting: string
-      cloudDiscoverFailed: string
       cloudConnectFailed: string
-      cloudSignInFailed: string
-      cloudSignedOutTitle: string
-      cloudSignedOutMessage: string
       cloudConnectedTitle: string
       cloudConnectedPill: string
       cloudConnectedTo: (name: string) => string
@@ -1041,13 +1018,6 @@ export interface Translations {
       activeBackend: string
       activeBackendHint: string
       useBackend: string
-      cloverIncluded: string
-      cloverAuthNeededTitle: string
-      cloverAuthNeededMessage: (provider: string) => string
-      cloverAuthSignIn: string
-      cloverAuthDoneTitle: string
-      cloverAuthDoneMessage: string
-      cloverAuthFailed: string
       noApiKeyRequired: string
       postSetupHint: (step: string) => string
       postSetupInstalledHint: string
@@ -2462,7 +2432,6 @@ export interface Translations {
       connectionSsh: (host: string) => string
       connectionRemote: (host: string) => string
       connectionCloud: (host: string) => string
-      connectionCloudTooltip: (host: string) => string
       connectionSshTooltip: (host: string) => string
       connectionRemoteTooltip: (host: string) => string
       backendLabel: (version: string) => string
@@ -2781,7 +2750,6 @@ export interface Translations {
       errorOpenLogsFailed: string
       errorOpenDesktopLogs: string
       errorCopyDiagnostics: string
-      errorSendDiagnostics: string
       filesChanged: (count: number) => string
       reviewChanges: string
       readAloudFailed: string
