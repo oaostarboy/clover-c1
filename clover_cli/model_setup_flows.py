@@ -396,11 +396,6 @@ def _model_flow_moa(config, current_model=""):
     _print_moa_preset(selected_name, preset)
 
 
-def _model_flow_clover(config, current_model="", args=None):
-    """Temporary import shim until unowned CLI callers are removed."""
-    raise SystemExit("The hosted Clover provider has been removed. Choose another provider.")
-
-
 def _model_flow_openai_codex(config, current_model=""):
     """OpenAI Codex provider: ensure logged in, then pick model."""
     from clover_cli.auth import (
