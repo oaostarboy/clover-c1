@@ -444,7 +444,6 @@ import functools as _functools
 
 from clover_cli.subcommands._shared import add_accept_hooks_flag as _add_accept_hooks_flag
 from clover_cli.subcommands.cron import build_cron_parser
-from clover_cli.subcommands.sync import build_sync_parser
 from clover_cli.subcommands.gateway import build_gateway_parser
 from clover_cli.subcommands.profile import build_profile_parser
 from clover_cli.subcommands.model import build_model_parser
@@ -816,7 +815,6 @@ from clover_cli import __version__, __release_date__
 from clover_cli.model_setup_flows import (
     _prompt_auth_credentials_choice,
     _model_flow_openrouter,
-    _model_flow_clover,
     _model_flow_openai_codex,
     _model_flow_xai_oauth,
     _model_flow_qwen_oauth,
@@ -1057,7 +1055,7 @@ def _has_any_provider_configured() -> bool:
     # while the PROVIDER_REGISTRY sweep below spawns subprocesses (gh) and can
     # take 15-20s — long enough that desktop setup.status calls time out.
 
-    # Check for Clover Portal OAuth credentials
+    # Check for OAuth credentials in auth.json
     auth_file = get_clover_home() / "auth.json"
     if auth_file.exists():
         try:
@@ -4149,8 +4147,6 @@ def select_provider_and_model(args=None):
         _model_flow_moa(config, current_model)
     elif selected_provider == "ai-gateway":
         _model_flow_ai_gateway(config, current_model)
-    elif selected_provider == "clover":
-        _model_flow_clover(config, current_model, args=args)
     elif selected_provider == "openai-codex":
         _model_flow_openai_codex(config, current_model)
     elif selected_provider == "xai-oauth":
@@ -4478,9 +4474,9 @@ def _aux_config_menu() -> None:
         print()
         print("  Side tasks (vision, compression, web extraction, etc.) default")
         print('  to your main chat model.  "auto" means "use my main model" —')
-        print("  Clover only falls back to a lightweight backend (OpenRouter,")
-        print("  Clover Portal) if the main model is unavailable.  Override a")
-        print("  task below if you want it pinned to a specific provider/model.")
+        print("  Clover only falls back to a lightweight backend (e.g. OpenRouter)")
+        print("  if the main model is unavailable.  Override a task below if")
+        print("  you want it pinned to a specific provider/model.")
         print()
 
         # Build the task menu with current settings inline
@@ -5584,201 +5580,6 @@ def cmd_cron(args):
     from clover_cli.cron import cron_command
 
     cron_command(args)
-
-
-def cmd_sync(args):
-    """Skill Sync — personal sync across devices, plus sharing with your org."""
-    import json as _json
-
-    sub = getattr(args, "sync_command", None)
-
-    if sub in {None, ""}:
-        print(
-            "usage: clover sync "
-            "<status|pull|push|now|enable|disable|device|propose>\n"
-            "\n"
-            "Your skills, across your devices:\n"
-            "  status            Show what is synced, and from where\n"
-            "  pull              Pull your synced skills\n"
-            "  push              Push your opted-in skills\n"
-            "  now               Reconcile now: pull then push\n"
-            "  enable <skill>    Include a skill in your sync\n"
-            "  disable <skill>   Exclude a skill from your sync\n"
-            "  device [--name N] Show or set this device's label\n"
-            "\n"
-            "Shared with your team:\n"
-            "  propose <skill>   Share a skill with your organisation",
-            file=sys.stderr,
-        )
-        return 1
-
-    if sub == "device":
-        from tools import skills_sync_client as ssc
-
-        name = getattr(args, "device_name", None)
-        if name is not None:
-            try:
-                stored = ssc.set_device_name(name)
-            except ValueError as e:
-                print(f"error: {e}", file=sys.stderr)
-                return 1
-            print(f"device label set to '{stored}'.")
-            print(
-                "New commits from this device will use this label; existing "
-                "commits keep their previous one.",
-                file=sys.stderr,
-            )
-            return 0
-        # No --name: print the current (creating a default on first use).
-        print(ssc.stable_device_id())
-        return 0
-
-    if sub == "propose":
-        from tools import skills_sync_client as ssc
-
-        name = args.name
-        try:
-            result = ssc.propose_skill(name, message=args.message)
-        except ssc.SyncInertError as e:
-            print(f"cannot share this skill: {e}", file=sys.stderr)
-            return 1
-        except ssc.SyncError as e:
-            print(f"could not share '{name}': {e}", file=sys.stderr)
-            return 1
-        if result.get("proposal_pending"):
-            print(
-                f"Shared '{name}' with your organisation — an admin needs to "
-                f"approve it (proposal #{result.get('proposal_id')}). It is "
-                f"not live for the team until then."
-            )
-        else:
-            print(f"Added '{name}' to your organisation's shared skills.")
-        return 0
-
-    if sub in {"enable", "disable"}:
-        from tools.skill_usage import set_sync, is_curation_eligible
-
-        skill = args.skill
-        if not is_curation_eligible(skill):
-            print(
-                f"'{skill}' is not sync-eligible (bundled, hub-installed, "
-                f"external, or not found). Only agent-created / user-authored "
-                f"skills under ~/.clover/skills/ can sync.",
-                file=sys.stderr,
-            )
-            return 1
-        set_sync(skill, sub == "enable")
-        print(f"sync {'enabled' if sub == 'enable' else 'disabled'} for '{skill}'.")
-        return 0
-
-    from tools import skills_sync_client as ssc
-
-    if sub == "status":
-        status = ssc.sync_status()
-        print(_json.dumps(status, indent=2, ensure_ascii=False))
-        if status.get("org_available"):
-            n = len(status.get("org_skills") or [])
-            modified = status.get("org_skills_modified") or []
-            print(
-                f"\nOrg skills: {n} shared skill(s) from your organisation "
-                f"(your role: {status.get('org_role')}). They load alongside "
-                f"your own, labeled by origin, and you can edit them.",
-                file=sys.stderr,
-            )
-            if modified:
-                print(
-                    f"  {len(modified)} with local edits not yet shared: "
-                    f"{', '.join(modified)}\n"
-                    f"  Share them back with `clover sync propose <skill>`. "
-                    f"Org updates will not overwrite them.",
-                    file=sys.stderr,
-                )
-        elif status.get("logged_in"):
-            print(
-                "\nOrg skills: not applicable — this account isn't a member "
-                "of a shared organisation.",
-                file=sys.stderr,
-            )
-        if not status.get("logged_in"):
-            print("\nNot logged into Clover Portal — sync is inert.", file=sys.stderr)
-        elif not status.get("clover_admin"):
-            print(
-                "\nSync is not enabled for your account yet.",
-                file=sys.stderr,
-            )
-        elif not status.get("feature_enabled"):
-            print(
-                "\nSync feature is off for this instance (set CLOVER_SYNC_ENABLED=1 "
-                "or config.yaml sync.enabled: true). Sync is inert.",
-                file=sys.stderr,
-            )
-        elif not status.get("base_url"):
-            print(
-                "\nNo sync base URL configured (config.yaml sync.base_url or "
-                "CLOVER_SYNC_BASE_URL). Sync is inert.",
-                file=sys.stderr,
-            )
-        return 0
-
-    # pull / push / now — enforce the gate up front with a clear message.
-    try:
-        identity = ssc.resolve_identity()
-    except ssc.SyncInertError as e:
-        print(f"sync inert: {e}", file=sys.stderr)
-        return 1
-    if not identity.get("clover_admin"):
-        print(
-            "sync unavailable: not enabled for your account yet.",
-            file=sys.stderr,
-        )
-        return 1
-    if not ssc.resolve_sync_base_url():
-        print(
-            "sync inert: no sync base URL configured (config.yaml sync.base_url "
-            "or CLOVER_SYNC_BASE_URL).",
-            file=sys.stderr,
-        )
-        return 1
-
-    try:
-        if sub == "pull":
-            result = ssc.pull_skills(identity=identity)
-            # Refresh the org mirror too when this account belongs to an
-            # organisation (no-op otherwise), so one pull covers both.
-            org_result = ssc.maybe_pull_org_skills()
-            if org_result:
-                n = len(org_result.get("updated") or [])
-                print(
-                    f"org: refreshed {n} shared skill(s) from your "
-                    f"organisation.",
-                    file=sys.stderr,
-                )
-                clashes = org_result.get("conflicted") or []
-                if clashes:
-                    print(
-                        f"org: {len(clashes)} skill(s) have BOTH local edits "
-                        f"and org updates, so they were left as-is: "
-                        f"{', '.join(clashes)}\n"
-                        f"     Your local version is intact. Review it, then "
-                        f"either propose it or delete the local copy and pull "
-                        f"again to take the org version.",
-                        file=sys.stderr,
-                    )
-        elif sub == "push":
-            result = ssc.push_skills(identity=identity, message="clover sync push")
-        elif sub == "now":
-            pull_res = ssc.pull_skills(identity=identity)
-            push_res = ssc.push_skills(identity=identity, message="clover sync now")
-            result = {"pull": pull_res, "push": push_res}
-        else:
-            print(f"Unknown sync subcommand: {sub}", file=sys.stderr)
-            return 1
-    except ssc.SyncError as e:
-        print(f"sync failed: {e}", file=sys.stderr)
-        return 1
-
-    print(_json.dumps(result, indent=2, ensure_ascii=False))
-    return 0
 
 
 def cmd_webhook(args):
@@ -11742,8 +11543,7 @@ def _maybe_setup_dashboard_auth_interactively(args) -> None:
     print()
     print("  How do you want to authenticate the dashboard?")
     print("    [1] Username & password (quickest; for a trusted LAN / VPN)")
-    print("    [2] OAuth via Clover Portal (run `clover dashboard register`)")
-    print("    [3] Cancel")
+    print("    [2] Cancel")
     print()
 
     try:
@@ -11751,19 +11551,6 @@ def _maybe_setup_dashboard_auth_interactively(args) -> None:
     except (EOFError, KeyboardInterrupt):
         print("\n  Cancelled.")
         sys.exit(1)
-
-    if choice == "2":
-        print()
-        print(
-            "  Run this on the host where the dashboard lives, then start "
-            "the dashboard again:\n"
-            "    clover dashboard register\n"
-            "  It provisions a Clover Portal OAuth client and writes "
-            "CLOVER_DASHBOARD_OAUTH_CLIENT_ID into ~/.clover/.env for you.\n"
-            "  Docs: docs/"
-            "user-guide/features/web-dashboard#authentication-gated-mode"
-        )
-        sys.exit(0)
 
     if choice not in ("1",):
         print("  Cancelled.")
@@ -12271,13 +12058,6 @@ def cmd_dashboard(args):
     )
 
 
-def cmd_dashboard_register(args):
-    """Register a self-hosted dashboard OAuth client with Clover Portal."""
-    from clover_cli.dashboard_register import cmd_dashboard_register as _impl
-
-    _impl(args)
-
-
 def cmd_gateway_enroll(args):
     """Enroll a self-hosted gateway with a relay connector."""
     from clover_cli.gateway_enroll import cmd_gateway_enroll as _impl
@@ -12341,7 +12121,7 @@ def _build_provider_choices() -> list[str]:
     except Exception:
         # Fallback: static list guarantees the CLI always works
         return [
-            "auto", "openrouter", "clover", "openai-codex", "xai-oauth", "copilot-acp", "copilot",
+            "auto", "openrouter", "openai-codex", "xai-oauth", "copilot-acp", "copilot",
             "anthropic", "gemini", "vertex", "xai", "bedrock", "azure-foundry",
             "ollama-cloud", "huggingface", "zai", "kimi-coding", "kimi-coding-cn",
             "stepfun", "minimax", "minimax-cn", "kilocode", "novita", "xiaomi", "arcee",
@@ -12366,12 +12146,12 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "portal", "profile",
+        "model", "monitoring", "pairing", "pause", "peer", "pets", "plugins", "profile",
         "project", "proxy",
         "prompt-size",
         "resume",
         "send", "sessions", "setup",
-        "skin", "skills", "slack", "status", "sync", "tools", "uninstall", "update",
+        "skin", "skills", "slack", "status", "tools", "uninstall", "update",
         "webhook", "whatsapp", "whatsapp-cloud", "worktree", "chat", "secrets", "security",
         "browser",
         "verify",
@@ -13538,7 +13318,6 @@ def main():
     # cron command  (parser built in clover_cli/subcommands/cron.py)
     # =========================================================================
     build_cron_parser(subparsers, cmd_cron=cmd_cron)
-    build_sync_parser(subparsers, cmd_sync=cmd_sync)
 
     # =========================================================================
     # webhook command  (parser built in clover_cli/subcommands/webhook.py)
@@ -13551,17 +13330,6 @@ def main():
     from clover_cli.subcommands.peer import build_peer_parser
 
     build_peer_parser(subparsers)
-
-    # =========================================================================
-    # portal command — REMOVED 2026-08-30
-    # =========================================================================
-    # Clover Portal is a hosted subscription service the upstream project runs
-    # and this fork does not. Its address is empty here, so `clover portal`
-    # printed a subscription pitch, started a login, failed with "Request URL
-    # is missing an 'http://' or 'https://' protocol", and then reported
-    # "Portal setup complete". Removing the command removes the only way a
-    # user could reach that. The provider plumbing stays: "clover" is also a
-    # provider name shared with code paths that work.
 
     # =========================================================================
     # kanban command — multi-profile collaboration board
@@ -14623,7 +14391,6 @@ def main():
     build_dashboard_parser(
         subparsers,
         cmd_dashboard=cmd_dashboard,
-        cmd_dashboard_register=cmd_dashboard_register,
     )
 
 
