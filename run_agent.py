@@ -1694,10 +1694,6 @@ class AIAgent:
     ) -> bool:
         """Return True when this provider/model pair should use Responses API."""
         normalized_provider = (provider or "").strip().lower()
-        # Clover serves GPT-5.x models via its OpenAI-compatible chat
-        # completions endpoint; its /v1/responses endpoint returns 404.
-        if normalized_provider == "clover":
-            return False
         if normalized_provider == "custom":
             # Generic custom endpoints are conservative by default. They may
             # relay GPT-5 models without full Responses semantics, so only
@@ -5914,55 +5910,9 @@ class AIAgent:
 
         return True
 
-    def _try_refresh_clover_client_credentials(
-        self,
-        *,
-        force: bool = True,
-    ) -> bool:
-        if self.provider != "clover":
-            return False
-        # Portal serves anthropic/* on the native Messages route, so a session
-        # can be holding either client kind when its short-lived invoke JWT
-        # expires. Both need the refresh or the turn dies on a 401.
-        if self.api_mode not in ("chat_completions", "anthropic_messages"):
-            return False
-
-        try:
-            from clover_cli.auth import resolve_clover_runtime_credentials
-
-            creds = resolve_clover_runtime_credentials(
-                timeout_seconds=env_float("CLOVER_CLOVER_TIMEOUT_SECONDS", 15),
-                force_refresh=force,
-            )
-        except Exception as exc:
-            logger.debug("Clover credential refresh failed: %s", exc)
-            return False
-
-        api_key = creds.get("api_key")
-        base_url = creds.get("base_url")
-        if not isinstance(api_key, str) or not api_key.strip():
-            return False
-        if not isinstance(base_url, str) or not base_url.strip():
-            return False
-
-        self.api_key = api_key.strip()
-        self.base_url = base_url.strip().rstrip("/")
-
-        if self.api_mode == "anthropic_messages":
-            self._anthropic_api_key = self.api_key
-            self._anthropic_base_url = self.base_url
-            self._rebuild_anthropic_client()
-            return True
-
-        self._client_kwargs["api_key"] = self.api_key
-        self._client_kwargs["base_url"] = self.base_url
-        # Clover requests should not inherit OpenRouter-only attribution headers.
-        self._client_kwargs.pop("default_headers", None)
-
-        if not self._replace_primary_openai_client(reason="clover_credential_refresh"):
-            return False
-
-        return True
+    def _try_refresh_clover_client_credentials(self, *, force: bool = True) -> bool:
+        """Compatibility shim until the legacy retry callers are removed."""
+        return False
 
     def _try_refresh_env_client_credentials(self) -> bool:
         """Adopt ~/.clover/.env credential/base-url edits at the turn boundary.

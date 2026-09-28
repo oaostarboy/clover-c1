@@ -591,30 +591,6 @@ def _prompt_cache_scope_for_agent(agent) -> "str | None":
         return None
 
 
-def _merge_clover_portal_messages_extra_body(agent, anthropic_kwargs: dict) -> dict:
-    """Merge Portal ``tags`` / ``session_id`` onto an Anthropic Messages kwargs dict.
-
-    The Clover provider profile is only consulted by the OpenAI-wire transport;
-    anthropic_messages callers must merge it themselves. Passes ``session_id``
-    only — not ``provider_preferences`` (those become a top-level ``provider``
-    routing object on the OpenAI wire). Never blocks a turn on tagging.
-    """
-    if getattr(agent, "provider", None) not in {"clover", "clover-portal", "cloverc1"}:
-        return anthropic_kwargs
-    try:
-        from providers import get_provider_profile
-
-        clover_profile = get_provider_profile("clover")
-        if clover_profile is not None:
-            anthropic_kwargs.setdefault("extra_body", {}).update(
-                clover_profile.build_extra_body(
-                    session_id=getattr(agent, "session_id", None)
-                )
-            )
-    except Exception as exc:  # noqa: BLE001 — never block a turn on tagging
-        logger.debug("Clover Portal extra_body merge failed: %s", exc)
-    return anthropic_kwargs
-
 
 def _env_float(name: str, default: float) -> float:
     try:
@@ -1852,12 +1828,7 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
             fast_mode=(agent.request_overrides or {}).get("speed") == "fast",
             drop_context_1m_beta=bool(getattr(agent, "_oauth_1m_beta_disabled", False)),
         )
-        # Clover Portal reads ``tags`` and ``session_id`` as top-level body fields
-        # on its Messages route the same way it does on /chat/completions, but
-        # the profile hook that produces them is only consulted by the
-        # OpenAI-wire transport. Merge them here so Messages traffic keeps
-        # product attribution and sticky routing.
-        return _merge_clover_portal_messages_extra_body(agent, anthropic_kwargs)
+        return anthropic_kwargs
 
     # AWS Bedrock native Converse API — bypasses the OpenAI client entirely.
     # The adapter handles message/tool conversion and boto3 calls directly.
@@ -1964,7 +1935,6 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         base_url_host_matches(agent._base_url_lower, "models.github.ai")
         or base_url_host_matches(agent._base_url_lower, "githubcopilot.com")
     )
-    _is_clover = base_url_host_matches(agent._base_url_lower, "")
     _is_nvidia = base_url_host_matches(agent._base_url_lower, "integrate.api.nvidia.com")
     _is_kimi = (
         base_url_host_matches(agent.base_url, "api.kimi.com")
@@ -2084,7 +2054,7 @@ def build_api_kwargs(agent, api_messages: list, tools_for_api: list | None = Non
         cache_scope_id=_cache_scope_id,
         model_lower=(agent.model or "").lower(),
         is_openrouter=_is_or,
-        is_clover=_is_clover,
+        is_clover=False,  # Legacy transport parameter; removed provider never routes here.
         is_qwen_portal=_is_qwen,
         is_github_models=_is_gh,
         is_nvidia_nim=_is_nvidia,
@@ -2401,22 +2371,9 @@ def _fallback_entry_key(fb: dict) -> tuple[str, str, str]:
 
 
 def _fallback_entry_unavailable_without_network(agent, fb: dict) -> Optional[str]:
-    """Return a skip reason for fallback entries known to be unusable locally."""
-    fb_provider = (fb.get("provider") or "").strip().lower()
-    if fb_provider != "clover":
-        return None
-    try:
-        from clover_cli.auth import get_provider_auth_state
-
-        state = get_provider_auth_state("clover") or {}
-    except Exception as exc:
-        return f"clover_auth_unreadable:{type(exc).__name__}"
-    access_value = state.get("access_token")
-    refresh_value = state.get("refresh_token")
-    has_access = isinstance(access_value, str) and bool(access_value.strip())
-    has_refresh = isinstance(refresh_value, str) and bool(refresh_value.strip())
-    if not (has_access or has_refresh):
-        return "clover_token_missing"
+    """Skip a removed provider without attempting network auth."""
+    if (fb.get("provider") or "").strip().lower() in {"clover", "clover-portal", "cloverc1"}:
+        return "provider_removed"
     return None
 
 
@@ -2634,14 +2591,6 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         if not fb_api_mode_explicit and fb_api_mode == "chat_completions":
             if fb_provider == "openai-codex":
                 fb_api_mode = "codex_responses"
-            elif fb_provider in {"clover", "clover-portal", "cloverc1"}:
-                # Portal is dual-wire: anthropic/* must land on /v1/messages.
-                # resolve_provider_client still returns an OpenAI client for
-                # Clover; the anthropic_messages branch below rebuilds the native
-                # client from that credential + base_url.
-                from clover_cli.providers import clover_api_mode
-
-                fb_api_mode = clover_api_mode(fb_model)
             elif (
                 fb_base_url.rstrip("/").lower().endswith("/anthropic")
                 or base_url_hostname(fb_base_url) == "api.anthropic.com"
@@ -3086,7 +3035,6 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
         )
         _omit_summary_temperature = _raw_summary_temp is _OMIT_TEMP
         _summary_temperature = None if _omit_summary_temperature else _raw_summary_temp
-        _is_clover = "cloverc1" in agent._base_url_lower
         # LM Studio uses top-level `reasoning_effort` (not extra_body.reasoning).
         # Mirror ChatCompletionsTransport.build_kwargs() so the summary path
         # — which calls chat.completions.create() directly without going
@@ -3107,9 +3055,6 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                     "enabled": True,
                     "effort": "medium"
                 }
-        if _is_clover:
-            from agent.portal_tags import clover_portal_tags as _portal_tags
-            summary_extra_body["tags"] = _portal_tags()
 
         if agent.api_mode == "codex_responses":
             codex_kwargs = agent._build_api_kwargs(api_messages)
@@ -3193,7 +3138,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                     preserve_dots=agent._anthropic_preserve_dots(),
                     base_url=getattr(agent, "_anthropic_base_url", None),
                 )
-                _ant_kw = _merge_clover_portal_messages_extra_body(agent, _ant_kw)
+
                 summary_response = _managed_summary_call(
                     _ant_kw,
                     agent._anthropic_messages_create,
@@ -3245,7 +3190,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                     preserve_dots=agent._anthropic_preserve_dots(),
                     base_url=getattr(agent, "_anthropic_base_url", None),
                 )
-                _ant_kw2 = _merge_clover_portal_messages_extra_body(agent, _ant_kw2)
+
                 retry_response = _managed_summary_call(
                     _ant_kw2,
                     agent._anthropic_messages_create,
