@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from agent.portal_tags import get_conversation_context
+from agent.conversation_context import get_conversation_context
 from agent.transports.codex import _cache_scope_from_session_id
 from providers import register_provider
 from providers.base import ProviderProfile

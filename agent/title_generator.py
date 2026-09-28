@@ -550,7 +550,7 @@ def auto_title_session(
     via the default threading excepthook. The canonical trigger is the
     post-``clover update`` stale-module window, where this function's lazy
     imports read NEW source from disk while already-cached modules
-    (``agent.portal_tags`` etc.) are still the OLD version — the resulting
+    (``agent.conversation_context`` etc.) are still the OLD version — the resulting
     ImportError repeats on every auto-title attempt until the long-running
     process restarts.
     """
@@ -612,7 +612,7 @@ def _auto_title_session(
     # ``conversation=`` Portal tag as the turn it titles. Root-of-lineage for
     # consistency with the agent loop.
     from agent.aux_accounting import set_accounting_context
-    from agent.portal_tags import set_conversation_context
+    from agent.conversation_context import set_conversation_context
 
     conversation_id = session_id
     try:

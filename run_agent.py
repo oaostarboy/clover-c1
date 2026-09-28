@@ -8069,7 +8069,7 @@ class AIAgent:
             resolve_context_compression_timeouts,
             run_compress_context_with_progress_timeout,
         )
-        from agent.portal_tags import (
+        from agent.conversation_context import (
             get_conversation_context,
             reset_conversation_context,
             set_conversation_context,
@@ -8658,11 +8658,11 @@ class AIAgent:
             set_accounting_context,
         )
         from agent import relay_runtime
-        from agent.conversation_loop import run_conversation
-        from agent.portal_tags import (
+        from agent.conversation_context import (
             reset_conversation_context,
             set_conversation_context,
         )
+        from agent.conversation_loop import run_conversation
         from clover_cli.observability.relay_shared_metrics import (
             finish_task_run,
             start_task_run,
