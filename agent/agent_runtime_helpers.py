@@ -1431,9 +1431,9 @@ def try_recover_primary_transport(
     Anthropic, OpenAI, local models) where a TCP-level hiccup does not
     mean the provider is down.
 
-    Skipped for proxy/aggregator providers (OpenRouter, Clover) which
-    already manage connection pools and retries server-side — if our
-    retries through them are exhausted, one more rebuilt client won't help.
+    Skipped for proxy/aggregator providers (OpenRouter) which already
+    manage connection pools and retries server-side — if our retries
+    through them are exhausted, one more rebuilt client won't help.
     """
     if agent._fallback_activated:
         return False
@@ -1445,17 +1445,6 @@ def try_recover_primary_transport(
 
     # Skip for aggregator providers — they manage their own retry infra
     if agent._is_openrouter_url():
-        return False
-    provider_lower = (agent.provider or "").strip().lower()
-    # Portal OpenAI-wire traffic still rides aggregator retry infra, so one
-    # more rebuilt OpenAI client won't help. Portal Claude on the native
-    # Messages route holds a local Anthropic SDK client whose connection
-    # pool *does* need the rebuild every other anthropic_messages provider
-    # already gets — don't blanket-skip the dual-wire path.
-    if (
-        provider_lower in {"clover", "clover-portal", "cloverc1"}
-        and getattr(agent, "api_mode", None) != "anthropic_messages"
-    ):
         return False
 
     try:

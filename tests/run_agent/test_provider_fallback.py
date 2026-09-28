@@ -215,20 +215,16 @@ class TestFallbackChainAdvancement:
             assert mock_rpc.call_args.kwargs["explicit_api_key"] == "env-secret"
 
 
-    def test_clover_non_anthropic_fallback_stays_on_chat_completions(self):
-        portal = ""
-        fbs = [{"provider": "clover", "model": "clover-4-405b"}]
+    def test_non_anthropic_fallback_stays_on_chat_completions(self):
+        base_url = "https://openrouter.ai/api/v1"
+        fbs = [{"provider": "openrouter", "model": "anthropic/claude-sonnet-4.6"}]
         agent = _make_agent(fallback_model=fbs)
         with (
             patch(
-                "agent.chat_completion_helpers._fallback_entry_unavailable_without_network",
-                return_value=None,
-            ),
-            patch(
                 "agent.auxiliary_client.resolve_provider_client",
                 return_value=(
-                    _mock_client(base_url=portal, api_key="portal-jwt"),
-                    "clover-4-405b",
+                    _mock_client(base_url=base_url, api_key="or-key"),
+                    "anthropic/claude-sonnet-4.6",
                 ),
             ),
             patch(

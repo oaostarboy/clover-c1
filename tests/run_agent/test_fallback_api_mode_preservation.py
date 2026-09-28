@@ -50,10 +50,6 @@ def _activate(agent, resolved_base_url, resolved_model, build_anthropic=None):
     """
     patches = [
         patch(
-            "agent.chat_completion_helpers._fallback_entry_unavailable_without_network",
-            return_value=None,
-        ),
-        patch(
             "agent.auxiliary_client.resolve_provider_client",
             return_value=(
                 _mock_client(base_url=resolved_base_url),
@@ -70,7 +66,7 @@ def _activate(agent, resolved_base_url, resolved_model, build_anthropic=None):
             or (lambda api_key, base_url, timeout=None, **kw: MagicMock()),
         ),
     ]
-    with patches[0], patches[1] as mock_rpc, patches[2], patches[3]:
+    with patches[0] as mock_rpc, patches[1], patches[2]:
         assert agent._try_activate_fallback() is True
     return mock_rpc
 

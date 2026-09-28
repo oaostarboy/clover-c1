@@ -5590,7 +5590,6 @@ def _prompt_model_selection(
     current_model: str = "",
     pricing: Optional[Dict[str, Dict[str, str]]] = None,
     unavailable_models: Optional[List[str]] = None,
-    portal_url: str = "",
     unavailable_message: str = "",
     confirm_provider: str = "",
     confirm_base_url: str = "",
@@ -5602,7 +5601,7 @@ def _prompt_model_selection(
     price indicator is shown next to each model in aligned columns.
 
     If *unavailable_models* is provided, those models are shown grayed out
-    and unselectable, with an upgrade link to *portal_url*.
+    and unselectable.
     """
     from clover_cli.cli_output import line_input
     from clover_cli.models import (
@@ -5775,13 +5774,9 @@ def _prompt_model_selection(
         choices.append("Enter custom model name")
         choices.append("Skip (keep current)")
 
-        _upgrade_url = (portal_url or "").rstrip("/")
         unavailable_footer = unavailable_message.strip()
         if not unavailable_footer and _unavailable:
-            unavailable_footer = (
-                f"Upgrade at {_upgrade_url} for paid models" if _upgrade_url
-                else "Unavailable on your current plan"
-            )
+            unavailable_footer = "Unavailable on your current plan"
 
         # The pricing column header (and any unavailable-models block) is shown
         # as a multi-line description above the list so it survives the curses
@@ -5856,11 +5851,8 @@ def _prompt_model_selection(
     print(f"  {n + 2:>{num_width}}. Skip (keep current)")
 
     if _unavailable:
-        _upgrade_url = (portal_url or "").rstrip("/")
-        unavailable_footer = unavailable_message.strip() or (
-            f"Unavailable models (requires paid tier — upgrade at {_upgrade_url})"
-            if _upgrade_url
-            else "Unavailable models (requires paid tier)"
+        unavailable_footer = (
+            unavailable_message.strip() or "Unavailable models (requires paid tier)"
         )
         print()
         print(f"  {_DIM}── {unavailable_footer} ──{_RESET}")

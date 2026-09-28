@@ -2369,13 +2369,6 @@ def _fallback_entry_key(fb: dict) -> tuple[str, str, str]:
     )
 
 
-def _fallback_entry_unavailable_without_network(agent, fb: dict) -> Optional[str]:
-    """Skip a removed provider without attempting network auth."""
-    if (fb.get("provider") or "").strip().lower() in {"clover", "clover-portal", "cloverc1"}:
-        return "provider_removed"
-    return None
-
-
 def _fallback_reason_text(reason: "FailoverReason | None") -> str:
     """Return a concise operator-facing explanation for a fallback switch."""
     if reason is None:
@@ -2477,17 +2470,6 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
     fb_model = (fb.get("model") or "").strip()
     if not fb_provider or not fb_model:
         return agent._try_activate_fallback(reason)  # skip invalid, try next
-
-    local_skip_reason = _fallback_entry_unavailable_without_network(agent, fb)
-    if local_skip_reason:
-        unavailable.add(fb_key)
-        logger.warning(
-            "Fallback skip: %s/%s is not locally usable (%s); suppressing for this session",
-            fb_provider,
-            fb_model,
-            local_skip_reason,
-        )
-        return agent._try_activate_fallback(reason)
 
     # Skip entries that resolve to the same backend that just failed —
     # falling back to it loops the failure. Identity semantics (which axes
@@ -2889,8 +2871,6 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         )
         return True
     except Exception as e:
-        if fb_provider == "clover":
-            unavailable.add(fb_key)
         logger.error("Failed to activate fallback %s: %s", fb_model, e)
         return agent._try_activate_fallback(reason)  # try next in chain
 
