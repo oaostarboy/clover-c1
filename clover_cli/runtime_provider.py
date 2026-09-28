@@ -631,10 +631,11 @@ def _resolve_runtime_from_pool_entry(
 
 def resolve_requested_provider(requested: Optional[str] = None) -> str:
     """Resolve provider request from explicit arg, config, then env."""
+    from clover_cli.config_migrations import _V40_REMOVED_PROVIDERS
     if requested and requested.strip():
         value = requested.strip().lower()
-        if value == "clover":
-            logger.warning("Removed provider 'clover' selected; falling back to auto")
+        if value in _V40_REMOVED_PROVIDERS:
+            logger.warning("Removed provider %r selected; falling back to auto", value)
             return "auto"
         return value
 
@@ -642,8 +643,8 @@ def resolve_requested_provider(requested: Optional[str] = None) -> str:
     cfg_provider = model_cfg.get("provider")
     if isinstance(cfg_provider, str) and cfg_provider.strip():
         value = cfg_provider.strip().lower()
-        if value == "clover":
-            logger.warning("Removed provider 'clover' selected; falling back to auto")
+        if value in _V40_REMOVED_PROVIDERS:
+            logger.warning("Removed provider %r selected; falling back to auto", value)
             return "auto"
         return value
 
@@ -651,8 +652,8 @@ def resolve_requested_provider(requested: Optional[str] = None) -> str:
     # provider override so chat uses the endpoint the user last saved.
     env_provider = _getenv("CLOVER_INFERENCE_PROVIDER", "").strip().lower()
     if env_provider:
-        if env_provider == "clover":
-            logger.warning("Removed provider 'clover' selected; falling back to auto")
+        if env_provider in _V40_REMOVED_PROVIDERS:
+            logger.warning("Removed provider %r selected; falling back to auto", env_provider)
             return "auto"
         return env_provider
 

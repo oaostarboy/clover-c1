@@ -224,8 +224,7 @@ def read_selection(section: str) -> str | None:
     THE single runtime read of the persisted selection. Returns:
     - a vendor name (``"fal"``, ``"openai"``, ``"firecrawl"``, ...) — that
       vendor, direct, with the user's own credentials. A legacy ``"clover"``
-      selection is returned as-is; callers treat it like any other vendor
-      name (unrecognized, so it falls through to autodetect).
+      selection is treated as unset so callers autodetect instead.
     - ``None`` — the category has NEVER been configured; the legacy
       credential autodetect ladder is permitted (and must not be persisted).
 
@@ -236,7 +235,7 @@ def read_selection(section: str) -> str | None:
     Legacy interpretation (read-time only — nothing is migrated on disk):
     older picker versions wrote ``<section>.use_gateway`` beside the name
     key. ``use_gateway: true`` was only ever written by the retired managed
-    "Clover Subscription" row, so it maps to ``"clover"`` regardless of the
+    "Clover Subscription" row, so it maps to unset regardless of the
     name key; ``use_gateway: false`` beside a name key maps to that name.
     """
     try:
@@ -265,7 +264,7 @@ def read_selection(section: str) -> str | None:
     # Legacy shim: a truthy use_gateway means the retired managed row was
     # picked (it was the only writer of use_gateway: true).
     if "use_gateway" in raw and is_truthy_value(raw.get("use_gateway"), default=False):
-        return "clover"
+        return None
 
     # NOTE on the legacy DEFAULT_CONFIG ``stt.provider: local`` seed: it never
     # reached the raw config.yaml (``save_config`` strips schema defaults),
@@ -275,7 +274,7 @@ def read_selection(section: str) -> str | None:
     # name. The seeded-value ambiguity only exists in DEFAULT_CONFIG-merged
     # views, which this function never reads.
 
-    if name:
+    if name and name != "clover":
         return name
 
     # use_gateway: false with no name key is not a usable selection shape;

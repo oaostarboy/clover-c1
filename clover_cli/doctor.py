@@ -27,6 +27,32 @@ PROJECT_ROOT = get_project_root()
 CLOVER_HOME = get_clover_home()
 _DHH = display_clover_home()  # user-facing display path (e.g. ~/.clover or ~/.clover/profiles/coder)
 
+
+def _migrate_sibling_profiles_for_doctor():
+    """Use the same profile-scoped migration sweep as clover update."""
+    from clover_cli.update_cmd import _migrate_sibling_profile_configs
+    return _migrate_sibling_profile_configs()
+
+
+def _dashboard_auth_warning(config):
+    """Explain why a public dashboard will refuse startup, without opening it."""
+    from urllib.parse import urlparse
+    dashboard = config.get("dashboard", {})
+    if not isinstance(dashboard, dict):
+        return None
+    host = str(dashboard.get("host") or "127.0.0.1").strip().lower()
+    public_host = urlparse(str(dashboard.get("public_url") or "")).hostname
+    loopback = {"127.0.0.1", "localhost", "::1"}
+    if host in loopback and (not public_host or public_host.lower() in loopback):
+        return None
+    oauth = dashboard.get("oauth") or {}
+    if not isinstance(oauth, dict):
+        oauth = {}
+    if dashboard.get("basic_auth") or dashboard.get("self_hosted") or oauth.get("self_hosted"):
+        return None
+    return ("Non-loopback dashboard has no auth provider; it will not bind. "
+            "Configure basic_auth or self_hosted OIDC, or bind to loopback.")
+
 # Load environment variables from ~/.clover/.env so API key checks work
 _env_path = get_env_path()
 load_clover_dotenv(clover_home=_env_path.parent, project_env=PROJECT_ROOT / ".env")
@@ -1875,6 +1901,8 @@ def run_doctor(args):
                 if should_fix:
                     try:
                         migrate_config(interactive=False, quiet=False)
+                        for name, before, after in _migrate_sibling_profiles_for_doctor():
+                            check_ok(f"Profile {name} config migrated (v{before} → v{after})")
                         check_ok("Config migrated to latest version")
                         fixed_count += 1
                     except Exception as mig_err:
@@ -1884,6 +1912,9 @@ def run_doctor(args):
                     issues.append("Run 'clover doctor --fix' or 'clover setup' to migrate config")
             else:
                 check_ok(f"Config version up to date (v{current_ver})")
+                if should_fix:
+                    for name, before, after in _migrate_sibling_profiles_for_doctor():
+                        check_ok(f"Profile {name} config migrated (v{before} → v{after})")
         except Exception:
             pass
 
@@ -1892,6 +1923,10 @@ def run_doctor(args):
             # Raw-file diagnostic: stale-key detection must see the raw file.
             from clover_cli.config import read_user_config_raw
             raw_config = read_user_config_raw(config_path)
+            dashboard_warning = _dashboard_auth_warning(raw_config)
+            if dashboard_warning:
+                check_warn(dashboard_warning)
+                issues.append(dashboard_warning)
             stale_root_keys = [k for k in ("provider", "base_url") if k in raw_config and isinstance(raw_config[k], str)]
             if stale_root_keys:
                 check_warn(

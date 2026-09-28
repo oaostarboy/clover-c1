@@ -969,6 +969,14 @@ def _v40_rewrite_config(config: Dict[str, Any]) -> List[str]:
     # 4. Keys that only fed hosted surfaces.
     dashboard = config.get("dashboard")
     oauth = dashboard.get("oauth") if isinstance(dashboard, dict) else None
+    if isinstance(dashboard, dict) and dashboard.get("public_url") and isinstance(oauth, dict):
+        portal_only = any(key in oauth for key in ("client_id", "portal_url"))
+        other_auth = any(dashboard.get(key) for key in ("basic_auth", "self_hosted")) or bool(
+            oauth.get("self_hosted")
+        ) or str(oauth.get("provider") or "").strip().lower() not in ("", *_V40_REMOVED_PROVIDERS)
+        if portal_only and not other_auth:
+            dashboard.pop("public_url")
+            notes.append("removed dashboard.public_url (portal-only auth)")
     if isinstance(oauth, dict):
         for key in ("client_id", "portal_url"):
             if key in oauth:

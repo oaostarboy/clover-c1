@@ -43,6 +43,8 @@ logger = logging.getLogger(__name__)
 # so concurrent CLI/gateway loads of a broken config.yaml don't spam stderr
 # every time. Cleared automatically when the file changes (different mtime).
 _CONFIG_PARSE_WARNED: set = set()
+_STARTUP_MIGRATION_CHECKED: dict[str, tuple[int, int]] = {}
+_STARTUP_MIGRATION_GUARD = threading.local()
 
 
 def _backup_corrupt_config(config_path: Path) -> Optional[Path]:
@@ -3789,6 +3791,27 @@ def apply_terminal_config_to_env(
 
 
 def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
+    # One cheap stat per load; rerun the ladder only when this profile's file
+    # changes. The guard prevents migrations that themselves read config from
+    # recursing into the startup check.
+    path = get_config_path()
+    try:
+        st = path.stat()
+        signature = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        signature = None
+    if signature is not None and not getattr(_STARTUP_MIGRATION_GUARD, "active", False):
+        key = str(path)
+        if _STARTUP_MIGRATION_CHECKED.get(key) != signature:
+            _STARTUP_MIGRATION_GUARD.active = True
+            try:
+                current, latest = check_config_version()
+                if current < latest:
+                    migrate_config(interactive=False, quiet=True)
+                st = path.stat()
+                _STARTUP_MIGRATION_CHECKED[key] = (st.st_mtime_ns, st.st_size)
+            finally:
+                _STARTUP_MIGRATION_GUARD.active = False
     with _CONFIG_LOCK:
         ensure_clover_home()
         config_path = get_config_path()

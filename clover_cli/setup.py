@@ -2744,6 +2744,10 @@ def _setup_navigation_scope():
 
 def run_setup_wizard(args):
     """Run setup with navigation control scoped to this invocation."""
+    from clover_cli.config import check_config_version, migrate_config
+    current, latest = check_config_version()
+    if current < latest:
+        migrate_config(interactive=False, quiet=True)
     with _setup_navigation_scope():
         try:
             return _run_setup_wizard_impl(args)
@@ -3404,7 +3408,11 @@ def _run_quick_setup(config: dict, clover_home):
         get_missing_env_vars,
         get_missing_config_fields,
         check_config_version,
+        migrate_config,
     )
+    current, latest = check_config_version()
+    if current < latest:
+        migrate_config(interactive=False, quiet=True)
 
     print()
     print_header("Quick Setup — Missing Items Only")
@@ -3556,9 +3564,8 @@ def _run_quick_setup(config: dict, clover_home):
         for field in missing_config:
             print_success(f"  Added {field['key']} = {field['default']}")
 
-        # Update config version
-        config["_config_version"] = latest_ver
-        save_config(config)
+        # Defaults are supplied by load_config; never persist a stale
+        # pre-migration snapshot or stamp a version without its ladder.
 
     # Jump to summary
     _print_setup_summary(config, clover_home)

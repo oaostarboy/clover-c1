@@ -14494,6 +14494,13 @@ def main():
     if getattr(args, "yolo", False):
         os.environ["CLOVER_YOLO_MODE"] = "1"
 
+    # Migrate the selected profile before plugin discovery, provider selection,
+    # or cron scheduling. The config loader covers direct gateway/cron imports.
+    from clover_cli.config import check_config_version, migrate_config
+    current, latest = check_config_version()
+    if current < latest:
+        migrate_config(interactive=False, quiet=True)
+
     # Discover Python plugins and register shell hooks once, before any
     # command that can fire lifecycle hooks.  Both are idempotent; gated
     # so introspection/management commands (clover hooks list, cron
