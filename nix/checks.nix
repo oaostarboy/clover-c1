@@ -227,9 +227,9 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
             activation = cfg.home.activation.cloverAgentSetup.data;
 
             failures =
-              lib.optional (names != [
-                "clover-c1"
+              lib.optional (lib.sort lib.lessThan names != [
                 "clover-backend"
+                "clover-c1"
               ]) "expected clover-c1 + clover-backend processes, got: ${toString names}"
               ++ lib.optional (
                 !lib.hasInfix "bin/clover gateway" (argvOf "clover-c1")
@@ -664,9 +664,9 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
             activation = cfg.system.activationScripts."clover-c1-setup".text;
 
             failures =
-              lib.optional (names != [
-                "clover-c1"
+              lib.optional (lib.sort lib.lessThan names != [
                 "clover-backend"
+                "clover-c1"
               ]) "expected clover-c1 + clover-backend units, got: ${toString names}"
               ++ lib.optional (
                 !lib.hasInfix "bin/clover gateway" (execOf "clover-c1")
