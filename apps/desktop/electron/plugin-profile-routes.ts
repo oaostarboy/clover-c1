@@ -1,8 +1,7 @@
 import crypto from 'node:crypto'
 
 export interface ProfileRouteConfig {
-  cloudOrg: string
-  mode: 'cloud' | 'local' | 'remote' | 'ssh'
+  mode: 'local' | 'remote' | 'ssh'
   remoteUrl: string
   sshHost: string
   sshPort: null | number
@@ -32,7 +31,7 @@ interface RegistryProfileRouteAgent {
 interface RegistryProfileRouteSource {
   [field: string]: unknown
   id: string
-  kind: 'cloud' | 'local' | 'remote' | 'ssh'
+  kind: 'local' | 'remote' | 'ssh'
   remoteProfile?: string
 }
 
@@ -165,13 +164,6 @@ async function connectionScope(
     }
   }
 
-  if (config.mode === 'cloud') {
-    return {
-      key: `cloud\0${normalizeRemoteUrl(config.remoteUrl)}\0${config.cloudOrg.trim()}`,
-      mode: 'remote'
-    }
-  }
-
   if (config.mode === 'remote') {
     return { key: `remote\0${normalizeRemoteUrl(config.remoteUrl)}`, mode: 'remote' }
   }
@@ -190,16 +182,16 @@ function backendTargetProfile(scoped: ProfileRouteConfig, globalConfig: ProfileR
     return normalizeProfile(scoped.sshRemoteProfile || profile)
   }
 
-  // A per-profile URL/cloud override selects a standalone remote backend. It
-  // does not forward the Desktop alias as a backend profile scope, so that
-  // backend answers as its own root profile.
-  if (scoped.mode === 'remote' || scoped.mode === 'cloud') {
+  // A per-profile URL override selects a standalone remote backend. It does
+  // not forward the Desktop alias as a backend profile scope, so that backend
+  // answers as its own root profile.
+  if (scoped.mode === 'remote') {
     return 'default'
   }
 
   // An inherited global SSH route may explicitly pin the remote process to a
   // differently named profile. Without that pin, Desktop profile names remain
-  // the backend profile scope, like inherited URL/cloud connections.
+  // the backend profile scope, like inherited URL connections.
   if (globalConfig.mode === 'ssh' && globalConfig.sshRemoteProfile) {
     return normalizeProfile(globalConfig.sshRemoteProfile)
   }
@@ -296,7 +288,7 @@ export function buildRegistryProfileRoutes({
   return routes
 }
 
-/** Add the backend profile scope only for registry remote/cloud descriptors. */
+/** Add the backend profile scope only for registry remote descriptors. */
 export function registryGatewayWsUrl(
   connection: { profile?: null | string; sharedRemote?: boolean },
   wsUrl: string
