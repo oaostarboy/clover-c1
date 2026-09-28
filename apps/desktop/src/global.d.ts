@@ -159,7 +159,7 @@ declare global {
       getSecretStorageEncryption: () => Promise<{ on: boolean }>
       setSecretStorageEncryption: (on: boolean) => Promise<{ on: boolean }>
       // v2 multi-connection registry: named agent sources, all persisted
-      // together (local + any number of remote/cloud/ssh instances).
+      // together (local + any number of remote/ssh instances).
       connections: {
         list: () => Promise<DesktopConnectionsRegistry>
         save: (
@@ -173,10 +173,10 @@ declare global {
         setLastUsed?: (id: string) => Promise<{ ok: boolean; registry: DesktopConnectionsRegistry }>
         test: (id: string) => Promise<DesktopConnectionTestResult>
         // Drain/update/restore one Desktop-managed SSH install. External URL
-        // and cloud sources are refused without touching their processes.
+        // sources are refused without touching their processes.
         updateManaged?: (id: string) => Promise<DesktopManagedConnectionUpdateResult>
         // Fan out `clover update` to every eligible registered connection;
-        // cloud entries are skipped (platform-managed), each row independent.
+        // each row independent.
         // excludeIds skips connections the caller updates through another
         // path (the everything-update flow's active backend + local client).
         updateAll?: (options?: {
@@ -734,7 +734,7 @@ export interface CloverConnection {
   // A pooled backend also carries `profile`, so presence alone cannot identify
   // the shared-primary routing case.
   sharedPrimary?: boolean
-  // True when `profile` is a request scope on a SHARED registry remote/cloud
+  // True when `profile` is a request scope on a SHARED registry remote
   // backend (one host, many profiles) — the registry analogue of sharedPrimary.
   sharedRemote?: boolean
   windowButtonPosition: { x: number; y: number } | null
@@ -895,7 +895,7 @@ export interface DesktopRegistryConnectionInput {
   // Plaintext token to store (encrypted at rest); omit to keep the saved one.
   token?: string
   allowPlainTextToken?: boolean
-  // Extra gateway headers for remote/cloud entries (access proxies such as
+  // Extra gateway headers for remote entries (access proxies such as
   // Cloudflare Access). The map is authoritative when present: name → new
   // plaintext value (encrypted at rest), or null to keep the stored secret
   // for that name. Omit the field entirely to keep the saved set unchanged.
