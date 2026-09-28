@@ -92,14 +92,32 @@ def _gateway_identity() -> tuple[int, float] | None:
     return None
 
 
+def _current_head(root: Path) -> str | None:
+    try:
+        result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
+                                capture_output=True, text=True, encoding="utf-8",
+                                errors="replace", timeout=10)
+        return result.stdout.strip() if result.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
 def probe_gateway(root: Path, *, timeout: float = 90, stable_seconds: float = 20,
-                  poll: float = POLL_SECONDS) -> bool:
+                  poll: float = POLL_SECONDS, home: Path | None = None) -> bool:
     """One bounded startup probe: imports and continuously live gateway."""
     deadline = time.monotonic() + timeout
     stable_since = None
     stable_identity = None
+    expected_sha = _current_head(root) if home else None
     while True:
         alive = _gateway_running()
+        if alive and home and expected_sha:
+            try:
+                status = json.loads((home / "gateway_state.json").read_text(encoding="utf-8"))
+                if status.get("code_sha") and status["code_sha"] != expected_sha:
+                    alive = False
+            except (OSError, ValueError):
+                pass  # Legacy gateways have no stamped status file.
         if alive and _core_imports_healthy(root):
             identity = _gateway_identity()
             if stable_since is None or (identity is not None and stable_identity != identity):
@@ -183,7 +201,7 @@ def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
 def verify_or_rollback(data: dict[str, Any], beacon: Path, *, timeout: float = 90,
                        stable_seconds: float = 20) -> str:
     root = Path(data["repo"])
-    if probe_gateway(root, timeout=timeout, stable_seconds=stable_seconds):
+    if probe_gateway(root, timeout=timeout, stable_seconds=stable_seconds, home=beacon.parent):
         return "healthy"
     log_dir = beacon.parent / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -191,7 +209,7 @@ def verify_or_rollback(data: dict[str, Any], beacon: Path, *, timeout: float = 9
     try:
         _rollback_checkout(data, beacon)
         _restart_from_beacon(data)
-        restored = probe_gateway(root, timeout=timeout, stable_seconds=stable_seconds)
+        restored = probe_gateway(root, timeout=timeout, stable_seconds=stable_seconds, home=beacon.parent)
         outcome = "rolled-back" if restored else "rollback-unhealthy"
     except Exception as exc:
         logging.basicConfig(filename=str(log), level=logging.ERROR)
