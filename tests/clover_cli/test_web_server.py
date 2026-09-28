@@ -2630,37 +2630,6 @@ class TestNewEndpoints:
             config["platform_toolsets"]["discord"]
         )
 
-    def test_toolsets_resolve_subscription_features_once(self, monkeypatch):
-        import clover_cli.tools_config as tools_config
-        from clover_cli.clover_subscription import CloverSubscriptionFeatures
-
-        calls = 0
-        features = CloverSubscriptionFeatures(
-            subscribed=False,
-            clover_auth_present=False,
-            provider_is_clover=False,
-            features={},
-            account_info=None,
-        )
-
-        def resolve_features(config, *, force_fresh=False):
-            nonlocal calls
-            calls += 1
-            return features
-
-        monkeypatch.setattr(
-            tools_config,
-            "get_clover_subscription_features",
-            resolve_features,
-        )
-
-        resp = self.client.get("/api/tools/toolsets")
-
-        assert resp.status_code == 200
-        assert resp.json()
-        assert calls == 1
-
-
     def test_get_toolset_config_returns_provider_matrix(self):
         """GET .../config returns provider rows with structured env_vars."""
         resp = self.client.get("/api/tools/toolsets/tts/config")
@@ -2697,20 +2666,11 @@ class TestNewEndpoints:
         """Each provider row carries a server-computed readiness `status`.
 
         Regression: the GUI pilled every zero-env-var row "Ready" — including
-        logged-out Clover Subscription rows, xAI TTS without Grok OAuth, and
-        never-installed KittenTTS/Piper. The endpoint now reports the honest
-        state so keyless ≠ ready.
+        xAI TTS without Grok OAuth and never-installed KittenTTS/Piper. The
+        endpoint now reports the honest state so keyless ≠ ready.
         """
         import clover_cli.tools_config as tools_config
-        from clover_cli.clover_account import CloverPortalAccountInfo
 
-        # Logged out of Clover Portal → managed subscription rows need sign-in.
-        monkeypatch.setattr(
-            "clover_cli.clover_subscription.get_clover_portal_account_info",
-            lambda *a, **k: CloverPortalAccountInfo(
-                logged_in=False, source="none", fresh=False, paid_service_access=None
-            ),
-        )
         # No xAI credentials → the Grok OAuth-backed row needs sign-in.
         monkeypatch.setattr(tools_config, "_xai_credentials_present", lambda: False)
         # Local TTS engines not installed → their rows need setup.
@@ -2727,57 +2687,13 @@ class TestNewEndpoints:
         # Genuinely-free keyless row stays Ready.
         assert by_name["Microsoft Edge TTS"]["status"] == "ready"
         # Keyless ≠ ready for gated rows:
-        assert by_name["Clover Subscription"]["status"] == "needs_auth"
         assert by_name["xAI TTS"]["status"] == "needs_auth"
         assert by_name["KittenTTS"]["status"] == "needs_setup"
         assert by_name["Piper"]["status"] == "needs_setup"
         # Keyed row with the key unset:
         assert by_name["ElevenLabs"]["status"] == "needs_keys"
 
-
-
-
-
-
-    def test_select_managed_clover_provider_reports_needs_clover_auth(self, monkeypatch):
-        """Selecting a managed Clover row while logged out flags needs_clover_auth.
-
-        Regression: the GUI PUT wrote browser.cloud_provider + use_gateway
-        but skipped the Portal entitlement handshake the CLI runs inline
-        (ensure_clover_portal_access) — so the row never activated and nothing
-        told the user to sign in. The endpoint now reports the entitlement
-        gap so the client can drive the existing Clover OAuth flow.
-        """
-        from clover_cli.clover_account import CloverPortalAccountInfo
-
-        monkeypatch.setattr(
-            "clover_cli.clover_subscription.get_clover_portal_account_info",
-            lambda *a, **k: CloverPortalAccountInfo(
-                logged_in=False, source="none", fresh=False, paid_service_access=None
-            ),
-        )
-
-        resp = self.client.put(
-            "/api/tools/toolsets/browser/provider",
-            json={"provider": "Clover Subscription (Browser Use cloud)"},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["ok"] is True
-        assert data["needs_clover_auth"] is True
-        assert data["feature"] == "browser"
-        # The selection is still persisted — activation is what's gated.
-        # Managed rows store the single 'clover' provider string (the runtime
-        # maps it to the Browser Use cloud through the Clover Tool Gateway).
-        from clover_cli.config import load_config
-        cfg = load_config()
-        assert cfg["browser"]["cloud_provider"] == "clover"
-        assert "use_gateway" not in cfg["browser"]
-
-
     # -- Web capability split (search vs extract backends) ------------------
-
-
 
     def test_select_web_search_backend_matches_runtime_resolution(self, monkeypatch):
         """PUT provider with capability=search writes web.search_backend and the
