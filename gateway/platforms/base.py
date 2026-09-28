@@ -6,6 +6,7 @@ and implement the required methods.
 """
 
 import asyncio
+import functools
 import inspect
 import ipaddress
 import logging
@@ -3132,6 +3133,30 @@ class BasePlatformAdapter(ABC):
     # it) means EVERY platform adapter receives the injection, so profile
     # routing is platform-generic instead of Discord-only.
     gateway_runner = None  # type: ignore[assignment]  # set by gateway/run.py
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # Every new message the bot posts lets running subagent cards in that
+        # chat follow it (gateway.delegation_activity.note_outbound).
+        send = cls.__dict__.get("send")
+        if send is None or getattr(send, "_notes_outbound", False) or getattr(send, "__isabstractmethod__", False):
+            return
+
+        @functools.wraps(send)
+        async def _send_and_note(self, *args: Any, **kw: Any):
+            result = await send(self, *args, **kw)
+            try:
+                if getattr(result, "success", False):
+                    chat_id = args[0] if args else kw.get("chat_id")
+                    from gateway.delegation_activity import note_outbound
+
+                    note_outbound(self, chat_id, getattr(result, "message_id", None))
+            except Exception:
+                pass
+            return result
+
+        _send_and_note._notes_outbound = True  # type: ignore[attr-defined]
+        cls.send = _send_and_note  # type: ignore[assignment]
 
     def __init__(self, config: PlatformConfig, platform: Platform):
         self.config = config

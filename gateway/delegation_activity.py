@@ -30,6 +30,7 @@ Delivery rules (each exists because the alternative is wrong for a chat):
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import logging
 import threading
@@ -71,6 +72,64 @@ def _inbox_key(adapter: Any, chat_id: Any) -> Tuple[int, str]:
 _LIVE: Dict[Tuple[int, str], List["DelegationActivityPublisher"]] = {}
 _LIVE_LOCK = threading.Lock()
 _LIVE_MAX_PER_CHAT = 32
+# Newest outbound message id per chat (any message the bot sent), and the
+# pending debounced follow per chat.
+_LAST_OUT: Dict[Tuple[int, str], str] = {}
+_FOLLOW_TIMERS: Dict[Tuple[int, str], Any] = {}
+FOLLOW_DEBOUNCE_SECONDS = 1.5
+# True while a publisher itself is sending/editing cards, so its own posts
+# never count as "a newer message" and trigger another move.
+_CARD_SEND: "contextvars.ContextVar[bool]" = contextvars.ContextVar("_deleg_card_send", default=False)
+
+
+def _is_newer(a: Optional[str], b: Optional[str]) -> bool:
+    """True when message id ``a`` is newer than ``b`` (numeric ids only;
+    unknown ordering counts as newer so the card still follows)."""
+    if not a:
+        return False
+    if not b:
+        return True
+    try:
+        return int(a) > int(b)
+    except (TypeError, ValueError):
+        return a != b
+
+
+def note_outbound(adapter: Any, chat_id: Any, message_id: Any = None) -> None:
+    """Record that the bot just posted a message in this chat. When running
+    subagent cards live there, move them below it after a short quiet window
+    (coalesces streaming bursts into one move). Never raises."""
+    try:
+        if _CARD_SEND.get() or adapter is None or chat_id in (None, ""):
+            return
+        key = _inbox_key(adapter, chat_id)
+        if message_id:
+            prev = _LAST_OUT.get(key)
+            if prev is None or _is_newer(str(message_id), prev):
+                _LAST_OUT[key] = str(message_id)
+        with _LIVE_LOCK:
+            pubs = [p for p in _LIVE.get(key, []) if not p._closed]
+        if not pubs:
+            return
+        loop = pubs[-1]._loop
+        def _arm() -> None:
+            old = _FOLLOW_TIMERS.pop(key, None)
+            if old is not None:
+                old.cancel()
+            _FOLLOW_TIMERS[key] = loop.call_later(
+                FOLLOW_DEBOUNCE_SECONDS,
+                lambda: (_FOLLOW_TIMERS.pop(key, None), loop.create_task(follow_latest_message(adapter, chat_id))),
+            )
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            _arm()
+        else:
+            loop.call_soon_threadsafe(_arm)
+    except Exception:
+        logger.debug("note_outbound failed", exc_info=True)
 
 
 def _adapter_can_delete(adapter: Any) -> bool:
@@ -390,6 +449,13 @@ class DelegationActivityPublisher:
         if self._flush_lock is None:
             self._flush_lock = asyncio.Lock()
             self._wake = asyncio.Event()
+        token = _CARD_SEND.set(True)
+        try:
+            await self._flush_locked()
+        finally:
+            _CARD_SEND.reset(token)
+
+    async def _flush_locked(self) -> None:
         async with self._flush_lock:
             now = self._clock()
             with self._state_lock:
@@ -450,6 +516,14 @@ class DelegationActivityPublisher:
             self._flush_lock = asyncio.Lock()
             self._wake = asyncio.Event()
         moved = 0
+        token = _CARD_SEND.set(True)
+        try:
+            return await self._repost_locked()
+        finally:
+            _CARD_SEND.reset(token)
+
+    async def _repost_locked(self) -> int:
+        moved = 0
         async with self._flush_lock:
             with self._state_lock:
                 targets = [
@@ -460,8 +534,11 @@ class DelegationActivityPublisher:
             if not targets and not self.tracker.active_group_ids():
                 self._unregister_live()
                 return 0
+            last_out = _LAST_OUT.get(_inbox_key(self._adapter, self._chat_id))
             for gid, card in targets:
                 old_id = card.message_id
+                if old_id and last_out and not _is_newer(last_out, str(old_id)):
+                    continue  # already the newest message: nothing to follow
                 status_ids = getattr(self._adapter, "_status_message_ids", None)
                 if isinstance(status_ids, dict):
                     key_id = status_ids.pop((self._chat_id, f"delegation:{gid}"), None)
