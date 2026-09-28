@@ -9,18 +9,9 @@ from __future__ import annotations
 from agent.billing_links import (
     BillingBlock,
     build_billing_block,
-    is_clover_inference_route,
 )
 
 
-
-
-
-
-def test_is_clover_inference_route_helper():
-    assert is_clover_inference_route("clover", "") is True
-    assert is_clover_inference_route("", "") is True
-    assert is_clover_inference_route("openai", "https://api.openai.com/v1") is False
 
 
 def test_known_provider_by_slug_resolves_label_and_url():
