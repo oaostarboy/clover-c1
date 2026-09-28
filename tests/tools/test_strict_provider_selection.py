@@ -40,15 +40,15 @@ class TestReadSelection:
         with self._with_raw({"image_gen": {"provider": "fal"}}):
             assert tbh.read_selection("image_gen") == "fal"
 
-    def test_clover_provider_returned(self):
+    def test_clover_provider_autodetects(self):
         with self._with_raw({"image_gen": {"provider": "clover"}}):
-            assert tbh.read_selection("image_gen") == "clover"
+            assert tbh.read_selection("image_gen") is None
 
-    def test_legacy_use_gateway_true_maps_to_clover(self):
+    def test_legacy_use_gateway_true_autodetects(self):
         """Old configs stored use_gateway: true beside a vendor name — only
         the managed picker row ever wrote it, so it means 'clover'."""
         with self._with_raw({"video_gen": {"provider": "fal", "use_gateway": True}}):
-            assert tbh.read_selection("video_gen") == "clover"
+            assert tbh.read_selection("video_gen") is None
 
     def test_legacy_use_gateway_false_keeps_vendor(self):
         with self._with_raw({"tts": {"provider": "openai", "use_gateway": False}}):

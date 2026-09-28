@@ -60,6 +60,7 @@ def test_behavioral_read_gets_expansion_and_overlay_while_writeback_stays_raw(
     home = tmp_path / "clover_home"
     home.mkdir()
     user_yaml = (
+        "_config_version: 40\n"
         "custom_prompt: 'hello ${E2E_PROMPT_SUFFIX}'\n"
         "agent:\n"
         "  reasoning_effort: low\n"
