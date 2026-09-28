@@ -746,8 +746,7 @@ def _interactive_add() -> None:
 
     auth_add_command(SimpleNamespace(
         provider=provider, auth_type=auth_type, label=label, api_key=None,
-        portal_url=None, inference_url=None, client_id=None, scope=None,
-        no_browser=False, timeout=None, insecure=False, ca_bundle=None,
+        scope=None, no_browser=False, timeout=None, insecure=False, ca_bundle=None,
     ))
 
 

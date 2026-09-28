@@ -31,9 +31,6 @@ def build_auth_parser(subparsers, *, cmd_auth: Callable) -> None:
     auth_add.add_argument(
         "--api-key", help="API key value (otherwise prompted securely)"
     )
-    auth_add.add_argument("--portal-url", help="Clover portal base URL")
-    auth_add.add_argument("--inference-url", help="Clover inference base URL")
-    auth_add.add_argument("--client-id", help="OAuth client id")
     auth_add.add_argument("--scope", help="OAuth scope override")
     auth_add.add_argument(
         "--no-browser",
