@@ -2875,10 +2875,15 @@ def _resolve_clover_context_length(
     # infrastructure enforces and may differ from OR (e.g. OR reports 1M for
     # qwen3.6-plus; the portal correctly says 262144).  Fall back to the OR
     # catalog only if the portal doesn't list the model.
-    if base_url:
-        portal_ctx = _resolve_endpoint_context_length(model, base_url, api_key=api_key)
-        if portal_ctx is not None:
-            return portal_ctx, "portal"
+    #
+    # Called unconditionally (even with an unset base_url — Clover's default
+    # inference endpoint is resolved dynamically at OAuth time, not pinned
+    # to a static constant) — fetch_endpoint_model_metadata already returns
+    # {} for an unnormalizable URL, so this is a no-op when there's truly
+    # nothing to probe.
+    portal_ctx = _resolve_endpoint_context_length(model, base_url or "", api_key=api_key)
+    if portal_ctx is not None:
+        return portal_ctx, "portal"
 
     metadata = fetch_model_metadata()
 
@@ -3326,8 +3331,11 @@ def get_model_context_length(
             # OR's catalog is community-maintained and is precisely why the
             # Kimi/Qwen DEFAULT_CONTEXT_LENGTHS overrides exist — we don't
             # want it leaking into the persistent cache for Clover URLs.
-            if base_url and source == "portal":
-                save_context_length(model, base_url, ctx)
+            # base_url may legitimately be "" (Clover's default endpoint,
+            # resolved dynamically at OAuth time) — that's still a valid
+            # cache key, not a reason to skip persisting.
+            if source == "portal":
+                save_context_length(model, base_url or "", ctx)
             return ctx
     if effective_provider == "openai-codex":
         # Codex OAuth enforces lower context limits than the direct OpenAI
