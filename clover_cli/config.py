@@ -2042,7 +2042,7 @@ def _raw_config_has_explicit_version() -> bool:
     return isinstance(raw, dict) and "_config_version" in raw
 
 
-def check_config_version() -> Tuple[int, int]:
+def check_config_version(*, _warn_on_parse_failure: bool = True) -> Tuple[int, int]:
     """
     Check the raw on-disk config schema version.
 
@@ -2051,6 +2051,13 @@ def check_config_version() -> Tuple[int, int]:
     whether the user's persisted schema has been migrated. A config file with no
     raw ``_config_version`` must remain visible as legacy instead of inheriting
     the latest default version in memory.
+
+    ``_warn_on_parse_failure`` is internal — ``_load_config_impl``'s startup
+    migration probe passes ``False`` so a broken config.yaml doesn't consume
+    the (path, mtime, size) parse-warning dedup slot with this function's
+    context-free "falling back to defaults" message before the real load a
+    few lines later gets a chance to emit its more informative
+    last-known-good warning.
 
     Returns (current_version, latest_version).
     """
@@ -2065,7 +2072,8 @@ def check_config_version() -> Tuple[int, int]:
     except Exception as e:
         # Invalid YAML needs a parse warning, not an automatic schema rewrite
         # that could replace the user's broken file with defaults.
-        _warn_config_parse_failure(config_path, e)
+        if _warn_on_parse_failure:
+            _warn_config_parse_failure(config_path, e)
         return latest, latest
 
     if not isinstance(config, dict):
@@ -3805,7 +3813,7 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
         if _STARTUP_MIGRATION_CHECKED.get(key) != signature:
             _STARTUP_MIGRATION_GUARD.active = True
             try:
-                current, latest = check_config_version()
+                current, latest = check_config_version(_warn_on_parse_failure=False)
                 if current < latest:
                     migrate_config(interactive=False, quiet=True)
                 st = path.stat()

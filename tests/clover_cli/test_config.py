@@ -770,8 +770,18 @@ class TestConfigVersionDetection:
         config_path.write_text("model: {}\n", encoding="utf-8")
 
         with patch.dict(os.environ, {"CLOVER_HOME": str(tmp_path)}):
-            assert load_config()["_config_version"] == DEFAULT_CONFIG["_config_version"]
+            # Checked BEFORE load_config(): the raw file has no persisted
+            # _config_version, so it must read as legacy (0), not inherit the
+            # latest default version from memory.
             assert check_config_version() == (0, DEFAULT_CONFIG["_config_version"])
+            # load_config() now migrates retired settings on load (before
+            # provider/cron startup) and persists the bump to disk, so a
+            # check_config_version() call AFTER it correctly reports current.
+            assert load_config()["_config_version"] == DEFAULT_CONFIG["_config_version"]
+            assert check_config_version() == (
+                DEFAULT_CONFIG["_config_version"],
+                DEFAULT_CONFIG["_config_version"],
+            )
 
 
 class TestConfigSupportFloor:
