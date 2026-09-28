@@ -43,7 +43,7 @@ def test_create_get_list(conn):
     proj = pdb.get_project(conn, pid)
 
     assert proj is not None
-    assert proj.slug == "clover-c1"
+    assert proj.slug == "clover-cognition"
     assert proj.name == "Clover Cognition"
     # First folder becomes primary.
     assert proj.primary_path == "/tmp/clover"
@@ -51,7 +51,7 @@ def test_create_get_list(conn):
     assert proj.folders[0].is_primary is True
 
     # Lookup by slug too.
-    assert pdb.get_project(conn, "clover-c1").id == pid
+    assert pdb.get_project(conn, "clover-cognition").id == pid
     assert len(pdb.list_projects(conn)) == 1
 
 
