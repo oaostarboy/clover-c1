@@ -318,7 +318,7 @@ def build_gateway_parser(
         help="Local OpenAI-compatible proxy to OAuth providers",
         description=(
             "Run a local HTTP server that forwards OpenAI-compatible requests "
-            "to an OAuth-authenticated provider (e.g. Clover Portal). External "
+            "to an OAuth-authenticated provider (e.g. xAI Grok). External "
             "apps can point at the proxy with any bearer token; the proxy "
             "attaches your real credentials."
         ),
@@ -330,8 +330,8 @@ def build_gateway_parser(
     )
     proxy_start.add_argument(
         "--provider",
-        default="clover",
-        help="Upstream provider: clover or xai (default: clover). See `clover proxy providers`.",
+        default="xai",
+        help="Upstream provider: xai (default: xai). See `clover proxy providers`.",
     )
     proxy_start.add_argument(
         "--host",

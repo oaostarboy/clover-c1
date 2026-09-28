@@ -4,16 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import threading
 from pathlib import Path
 from typing import Any, Dict
-from unittest.mock import MagicMock, patch
 
 import pytest
 
 from clover_cli.proxy.adapters import ADAPTERS, get_adapter
 from clover_cli.proxy.adapters.base import UpstreamAdapter, UpstreamCredential
-from clover_cli.proxy.adapters.clover_portal import CloverPortalAdapter
 from clover_cli.proxy.adapters.xai import XAIGrokAdapter
 
 
@@ -26,84 +23,6 @@ from clover_cli.proxy.adapters.xai import XAIGrokAdapter
 
 
 
-
-
-# ---------------------------------------------------------------------------
-# CloverPortalAdapter
-# ---------------------------------------------------------------------------
-
-
-def _write_auth_store(clover_home: Path, clover_state: Dict[str, Any]) -> Path:
-    """Write an auth.json with the given clover state into a hermetic CLOVER_HOME."""
-    auth_path = clover_home / "auth.json"
-    auth_path.write_text(json.dumps({
-        "version": 1,
-        "providers": {"clover": clover_state},
-    }))
-    return auth_path
-
-
-
-
-def test_clover_adapter_concurrent_refresh_serialized(tmp_path, monkeypatch):
-    """Two parallel get_credential() calls must serialize through the lock."""
-    monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
-    _write_auth_store(tmp_path, {
-        "access_token": "a", "refresh_token": "r",
-    })
-
-    call_log: list = []
-    in_flight = threading.Event()
-    overlap_detected = threading.Event()
-    counter = [0]
-    counter_lock = threading.Lock()
-
-    def serializing_refresh(**kwargs):
-        # If another thread is already inside refresh, the lock is broken.
-        if in_flight.is_set():
-            overlap_detected.set()
-        in_flight.set()
-        try:
-            call_log.append(threading.current_thread().ident)
-            # Simulate refresh latency so any race window is exposed.
-            import time
-            time.sleep(0.05)
-            with counter_lock:
-                counter[0] += 1
-                idx = counter[0]
-            return {
-                "api_key": f"key-{idx}",
-                "expires_at": "2099-01-01T00:00:00Z",
-                "base_url": "",
-            }
-        finally:
-            in_flight.clear()
-
-    adapter = CloverPortalAdapter()
-    results: list = []
-    errors: list = []
-
-    def worker():
-        try:
-            results.append(adapter.get_credential().bearer)
-        except Exception as exc:  # pragma: no cover - shouldn't happen
-            errors.append(exc)
-
-    with patch(
-        "clover_cli.proxy.adapters.clover_portal.resolve_clover_runtime_credentials",
-        side_effect=serializing_refresh,
-    ):
-        threads = [threading.Thread(target=worker) for _ in range(3)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-
-    assert not errors, f"workers errored: {errors}"
-    assert len(results) == 3
-    assert len(call_log) == 3
-    assert not overlap_detected.is_set(), "refresh calls overlapped — lock is broken"
-    assert all(r.startswith("key-") for r in results)
 
 
 # ---------------------------------------------------------------------------
