@@ -139,18 +139,6 @@ def get_active_provider() -> Optional[ImageGenProvider]:
     except Exception as exc:
         logger.debug("Could not read image_gen.provider from config: %s", exc)
 
-    # The managed "Clover Subscription" selection is serviced by the FAL
-    # plugin through the managed fal-queue gateway (the legacy FAL pipeline
-    # routes managed when the stored selection is "clover").
-    if configured:
-        try:
-            from tools.tool_backend_helpers import CLOVER_MANAGED_PROVIDER
-
-            if configured.lower() == CLOVER_MANAGED_PROVIDER:
-                configured = "fal"
-        except Exception:  # pragma: no cover — helpers are in-repo
-            pass
-
     with _lock:
         snapshot = dict(_providers)
         snapshot.update(_scoped_providers.get(clover_home_key(), {}))

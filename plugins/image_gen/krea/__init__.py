@@ -146,8 +146,8 @@ def _load_krea_config() -> Dict[str, Any]:
 def _resolve_model(explicit: Optional[str] = None) -> Tuple[str, Dict[str, Any]]:
     """Decide which model to use and return ``(model_id, meta)``.
 
-    Precedence: explicit caller override (e.g. managed-mode routing or a direct
-    ``model`` kwarg) → ``KREA_IMAGE_MODEL`` env → ``image_gen.krea.model`` →
+    Precedence: explicit caller override (e.g. a direct ``model`` kwarg) →
+    ``KREA_IMAGE_MODEL`` env → ``image_gen.krea.model`` →
     ``image_gen.model`` → :data:`DEFAULT_MODEL`.
     """
     if isinstance(explicit, str) and explicit.strip() in _MODELS:
@@ -173,55 +173,6 @@ def _resolve_model(explicit: Optional[str] = None) -> Tuple[str, Dict[str, Any]]
         return candidate, _MODELS[candidate]
 
     return DEFAULT_MODEL, _MODELS[DEFAULT_MODEL]
-
-
-def _resolve_managed_krea_gateway():
-    """Return managed Krea gateway config when the user is on the managed path.
-
-    Strict selection model: the managed Krea gateway is used when the stored
-    ``image_gen`` selection is ``clover`` (or legacy ``use_gateway: true``), or
-    on a never-configured install when no direct ``KREA_API_KEY`` exists.
-    An explicit vendor selection (``krea``, ``fal``, ...) pins the direct
-    path. Returns ``None`` (direct/BYO path) otherwise, and never raises —
-    plugin discovery and availability scans must stay robust.
-    """
-    try:
-        from tools.managed_tool_gateway import resolve_managed_tool_gateway
-        from tools.tool_backend_helpers import (
-            CLOVER_MANAGED_PROVIDER,
-            read_selection,
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Managed Krea gateway resolution unavailable: %s", exc)
-        return None
-
-    try:
-        selected = read_selection("image_gen")
-    except Exception:  # noqa: BLE001
-        selected = None
-    if selected is not None and selected != CLOVER_MANAGED_PROVIDER:
-        # Explicit vendor selection: direct credentials only.
-        return None
-    if selected is None and get_secret("KREA_API_KEY"):
-        return None
-
-    try:
-        return resolve_managed_tool_gateway("krea")
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Managed Krea gateway resolution failed: %s", exc)
-        return None
-
-
-def _managed_krea_gateway_ready() -> bool:
-    """Cheap, offline-friendly probe for managed Krea availability."""
-    try:
-        from tools.managed_tool_gateway import is_managed_tool_gateway_ready
-    except Exception:  # noqa: BLE001
-        return False
-    try:
-        return bool(is_managed_tool_gateway_ready("krea"))
-    except Exception:  # noqa: BLE001
-        return False
 
 
 def _resolve_creativity(value: Optional[str]) -> str:
@@ -309,8 +260,6 @@ def _enhance_image(
     auth_token: str,
     image_url: str,
     prompt: str,
-    *,
-    managed: bool,
 ) -> Optional[str]:
     """Run Krea Enhance on ``image_url``; return the enhanced URL or None.
 
@@ -323,8 +272,6 @@ def _enhance_image(
         "Content-Type": "application/json",
         "User-Agent": "clover-c1/1.0 (krea-image-gen)",
     }
-    if managed:
-        headers["x-idempotency-key"] = str(uuid.uuid4())
     payload: Dict[str, Any] = {
         "image_url": image_url,
         "image_scaling_factor": _ENHANCE_SCALE_FACTOR,
@@ -370,10 +317,7 @@ class KreaImageGenProvider(ImageGenProvider):
         return "Krea"
 
     def is_available(self) -> bool:
-        # Available with a direct Krea key OR via the managed Clover gateway
-        # (Clover Subscription), so portal users with no Krea key can still
-        # reach Krea 2 through the gateway.
-        return bool(get_secret("KREA_API_KEY")) or _managed_krea_gateway_ready()
+        return bool(get_secret("KREA_API_KEY"))
 
     def list_models(self) -> List[Dict[str, Any]]:
         return [
@@ -394,7 +338,7 @@ class KreaImageGenProvider(ImageGenProvider):
         return {
             "name": "Krea",
             "badge": "paid",
-            "tag": "Krea 2 foundation model — Medium ($0.03), Large ($0.06), Medium Turbo ($0.015). Style transfer, moodboards, reference-guided generation. Direct key or managed Clover Subscription gateway.",
+            "tag": "Krea 2 foundation model — Medium ($0.03), Large ($0.06), Medium Turbo ($0.015). Style transfer, moodboards, reference-guided generation.",
             "env_vars": [
                 {
                     "key": "KREA_API_KEY",
@@ -472,66 +416,22 @@ class KreaImageGenProvider(ImageGenProvider):
                 aspect_ratio=aspect,
             )
 
-        # Route through the managed Clover gateway (Clover Subscription) when the
-        # user is on the managed path; otherwise use the direct Krea API with a
-        # BYO ``KREA_API_KEY``. The gateway owns the shared Krea credential and
-        # meters/bills per generation, so the caller token is the Clover access
-        # token, not a Krea key.
-        managed = _resolve_managed_krea_gateway()
-        if managed is not None:
-            base_url = managed.gateway_origin.rstrip("/")
-            auth_token = managed.clover_user_token
-        else:
-            base_url = BASE_URL
-            auth_token = get_secret("KREA_API_KEY")
-            if not auth_token:
-                return error_response(
-                    error=(
-                        "KREA_API_KEY not set. Run `clover tools` → Image "
-                        "Generation → Krea to configure, get a key at "
-                        "https://www.krea.ai/settings/api-tokens, or sign in to "
-                        "a Clover account with the managed Krea gateway enabled "
-                        "(`clover setup`)."
-                    ),
-                    error_type="auth_required",
-                    provider="krea",
-                    aspect_ratio=aspect,
-                )
+        base_url = BASE_URL
+        auth_token = get_secret("KREA_API_KEY")
+        if not auth_token:
+            return error_response(
+                error=(
+                    "KREA_API_KEY not set. Run `clover tools` → Image "
+                    "Generation → Krea to configure, or get a key at "
+                    "https://www.krea.ai/settings/api-tokens."
+                ),
+                error_type="auth_required",
+                provider="krea",
+                aspect_ratio=aspect,
+            )
 
         model_id, meta = _resolve_model(kwargs.get("model"))
         creativity = _resolve_creativity(kwargs.get("creativity"))
-
-        # The managed gateway only prices base text-to-image and URL
-        # ``image_style_references`` tiers. Trained styles (LoRAs) and
-        # moodboards have no managed price and are rejected at the gateway, so
-        # fail fast here with actionable guidance instead of a raw 400.
-        if managed is not None:
-            if isinstance(kwargs.get("styles"), list) and kwargs.get("styles"):
-                return error_response(
-                    error=(
-                        "Managed Krea (Clover Subscription) does not support "
-                        "trained styles (LoRAs). Set KREA_API_KEY to use Krea "
-                        "directly, or omit `styles`."
-                    ),
-                    error_type="unsupported_argument",
-                    provider="krea",
-                    model=model_id,
-                    prompt=prompt,
-                    aspect_ratio=aspect,
-                )
-            if isinstance(kwargs.get("moodboards"), list) and kwargs.get("moodboards"):
-                return error_response(
-                    error=(
-                        "Managed Krea (Clover Subscription) does not support "
-                        "moodboards. Set KREA_API_KEY to use Krea directly, or "
-                        "omit `moodboards`."
-                    ),
-                    error_type="unsupported_argument",
-                    provider="krea",
-                    model=model_id,
-                    prompt=prompt,
-                    aspect_ratio=aspect,
-                )
 
         payload: Dict[str, Any] = {
             "prompt": prompt,
@@ -576,12 +476,6 @@ class KreaImageGenProvider(ImageGenProvider):
             "Content-Type": "application/json",
             "User-Agent": "clover-c1/1.0 (krea-image-gen)",
         }
-        if managed is not None:
-            # The gateway derives the per-generation billing idempotency
-            # boundary from this header (else it falls back to a body
-            # fingerprint). A fresh key per submit keeps each generation a
-            # distinct billable execution.
-            headers["x-idempotency-key"] = str(uuid.uuid4())
 
         # 1. Submit job.
         submit_url = f"{base_url}/generate/image/krea/krea-2/{meta['path']}"
@@ -606,32 +500,6 @@ class KreaImageGenProvider(ImageGenProvider):
             except Exception:  # noqa: BLE001
                 err_msg = resp.text[:300] if resp is not None else str(exc)
             logger.error("Krea submit failed (%d): %s", status, err_msg)
-            # On a managed 4xx, surface actionable remediation mirroring the
-            # FAL managed gateway path: the model may not be enabled/priced on
-            # the Clover Portal, or the gateway's shared Krea key hit its
-            # concurrency cap (429).
-            if managed is not None and 400 <= status < 500:
-                hint = (
-                    "Krea's shared-key concurrency cap was hit — retry shortly."
-                    if status == 429
-                    else (
-                        f"Model '{model_id}' may not be enabled/priced on the "
-                        "Clover Portal's Krea gateway. Set KREA_API_KEY to use "
-                        "Krea directly, or pick a different model via "
-                        "`clover tools` → Image Generation."
-                    )
-                )
-                return error_response(
-                    error=(
-                        f"Clover Subscription Krea gateway rejected '{model_id}' "
-                        f"(HTTP {status}): {err_msg}. {hint}"
-                    ),
-                    error_type="api_error",
-                    provider="krea",
-                    model=model_id,
-                    prompt=prompt,
-                    aspect_ratio=aspect,
-                )
             return error_response(
                 error=f"Krea image generation failed ({status}): {err_msg}",
                 error_type="api_error",
@@ -682,9 +550,7 @@ class KreaImageGenProvider(ImageGenProvider):
                 aspect_ratio=aspect,
             )
 
-        # 2. Poll for completion. Status/result polling is bound to the same
-        # principal at the gateway, so the managed path polls the gateway's
-        # ``/jobs/{id}`` with the Clover token (404 on cross-user/unknown jobs).
+        # 2. Poll for completion.
         job_url = f"{base_url}/jobs/{job_id}"
         poll_headers = {
             "Authorization": f"Bearer {auth_token}",
@@ -864,7 +730,6 @@ class KreaImageGenProvider(ImageGenProvider):
                 auth_token,
                 result_image_url,
                 prompt,
-                managed=managed is not None,
             )
             if enhanced_url:
                 result_image_url = enhanced_url
