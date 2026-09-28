@@ -17,7 +17,6 @@ from clover_cli.auth import AuthError, resolve_provider
 from clover_cli.colors import Colors, color
 from clover_cli.config import get_env_path, get_env_value, get_clover_home, load_config
 from clover_cli.models import provider_label
-from clover_cli.clover_account import get_clover_portal_account_info
 from clover_cli.runtime_provider import resolve_requested_provider
 from clover_cli.vercel_auth import describe_vercel_auth
 from clover_constants import OPENROUTER_MODELS_URL
@@ -221,75 +220,17 @@ def show_status(args):
 
     try:
         from clover_cli.auth import (
-            get_clover_auth_status_local,
             get_codex_auth_status,
             get_qwen_auth_status,
             get_minimax_oauth_auth_status,
         )
-        # Read-only display: use the refresh-free snapshot so `clover status`
-        # never performs an OAuth refresh or burns a single-use refresh token.
-        clover_status = get_clover_auth_status_local()
         codex_status = get_codex_auth_status()
         qwen_status = get_qwen_auth_status()
         minimax_status = get_minimax_oauth_auth_status()
     except Exception:
-        clover_status = {}
         codex_status = {}
         qwen_status = {}
         minimax_status = {}
-
-    clover_account_info = None
-    if (
-        clover_status.get("logged_in")
-        or clover_status.get("access_token")
-        or clover_status.get("portal_base_url")
-        or clover_status.get("inference_credential_present")
-        or clover_status.get("error_code")
-    ):
-        try:
-            clover_account_info = get_clover_portal_account_info()
-        except Exception:
-            clover_account_info = None
-
-    clover_logged_in = bool(
-        clover_status.get("logged_in")
-        or (clover_account_info and clover_account_info.logged_in)
-    )
-    clover_inference_present = bool(
-        clover_status.get("inference_credential_present")
-        or (clover_account_info and clover_account_info.inference_credential_present)
-    )
-    clover_error = clover_status.get("error")
-    if clover_logged_in:
-        clover_label = "logged in"
-    elif clover_inference_present:
-        clover_label = "not logged in (Clover inference key configured)"
-    else:
-        clover_label = "not logged in (run: clover portal)"
-    print(
-        f"  {'Clover Portal':<12}  {check_mark(clover_logged_in)} "
-        f"{clover_label}"
-    )
-    portal_url = clover_status.get("portal_base_url") or "(unknown)"
-    inference_url = (
-        clover_status.get("inference_base_url")
-        or (clover_account_info.inference_base_url if clover_account_info else None)
-    )
-    access_exp = _format_iso_timestamp(clover_status.get("access_expires_at"))
-    key_exp = _format_iso_timestamp(clover_status.get("agent_key_expires_at"))
-    refresh_label = "yes" if clover_status.get("has_refresh_token") else "no"
-    if clover_logged_in or portal_url != "(unknown)" or clover_error:
-        print(f"    Portal URL: {portal_url}")
-    if clover_inference_present and inference_url:
-        print(f"    Inference:  {inference_url}")
-    if clover_logged_in or clover_status.get("access_expires_at"):
-        print(f"    Access exp: {access_exp}")
-    if clover_logged_in or clover_inference_present or clover_status.get("agent_key_expires_at"):
-        print(f"    Key exp:    {key_exp}")
-    if clover_logged_in or clover_status.get("has_refresh_token"):
-        print(f"    Refresh:    {refresh_label}")
-    if clover_error:
-        print(f"    Error:      {clover_error}")
 
     codex_logged_in = bool(codex_status.get("logged_in"))
     print(
@@ -335,7 +276,7 @@ def show_status(args):
         print(f"    Error:      {minimax_status.get('error')}")
 
     # xAI OAuth — separate try/except so an import failure here cannot
-    # disrupt the already-printed Clover/Codex/Qwen/MiniMax rows above.
+    # disrupt the already-printed Codex/Qwen/MiniMax rows above.
     try:
         from clover_cli.auth import get_xai_oauth_auth_status
         xai_oauth_status = get_xai_oauth_auth_status() or {}
