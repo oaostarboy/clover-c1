@@ -114,3 +114,16 @@ def test_probe_rejects_old_gateway_identity_even_if_process_is_up(monkeypatch, t
     monkeypatch.setattr(watcher, "_gateway_identity", lambda: (123, 1.0))
     monkeypatch.setattr(watcher, "_current_head", lambda root: "new")
     assert not watcher.probe_gateway(tmp_path, home=home, timeout=0.03, stable_seconds=0, poll=0)
+
+
+@pytest.mark.parametrize("supervisor,helper", [
+    ("systemd", "_restart_systemd_gateway_units_best_effort"),
+    ("launchd", "_restart_macos_launchd_gateways"),
+])
+def test_rollback_restarts_via_existing_service_manager(monkeypatch, tmp_path, supervisor, helper):
+    calls = []
+    monkeypatch.setattr(watcher.subprocess, "run", lambda args, **kw: calls.append(args))
+    monkeypatch.setattr(watcher.subprocess, "Popen", lambda *a, **kw: pytest.fail("manual duplicate gateway"))
+    watcher._restart_from_beacon({"repo": str(tmp_path), "supervisor": supervisor,
+                                  "gateway_argv": ["clover"]})
+    assert helper in calls[0][2]
