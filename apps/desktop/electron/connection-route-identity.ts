@@ -23,8 +23,7 @@ export type StoredRoute =
   | {
       authMode?: unknown
       headers?: Record<string, unknown>
-      kind: 'cloud' | 'remote'
-      org?: unknown
+      kind: 'remote'
       token?: unknown
       url?: unknown
     }
@@ -79,7 +78,6 @@ function routeIdentity(route: StoredRoute): null | string {
       authMode,
       headers: canonicalHeaders(route.headers),
       kind: route.kind,
-      org: route.kind === 'cloud' ? String(route.org || '').trim() : '',
       token: authMode === 'token' ? (route.token ?? null) : null,
       url: normalizeRemoteBaseUrl(route.url)
     })
