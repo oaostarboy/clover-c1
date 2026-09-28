@@ -2572,6 +2572,139 @@ def _apply_summary_budget(results: List[Dict[str, Any]], parent_agent) -> None:
         )
 
 
+
+# ── Auto-continue on step-budget exhaustion ──────────────────────────────
+# A child that runs out of iterations mid-task used to hand back a partial
+# "here's what I got to" summary and stop, leaving the parent (and the user)
+# to notice and re-dispatch. Instead, when the ONLY reason a child stopped is
+# its step budget, give it a fresh budget and let it resume from its own
+# transcript. Bounded by ``delegation.auto_continue`` (default 2) and only
+# while each leg is still making progress (it called at least one tool).
+DEFAULT_AUTO_CONTINUE = 2
+
+AUTO_CONTINUE_MESSAGE = (
+    "[SYSTEM NOTICE: step budget refreshed] You ran out of tool-calling steps "
+    "before finishing, and your step budget has been reset. Continue the "
+    "ORIGINAL task from where you stopped. Do not redo finished work or "
+    "repeat your previous summary. When the whole task is done, give the "
+    "final answer in the format the task asked for."
+)
+
+
+def _auto_continue_limit(cfg: Optional[dict] = None) -> int:
+    """Max budget-refresh continuations per child (0 disables)."""
+    if cfg is None:
+        try:
+            cfg = _load_config()
+        except Exception:
+            cfg = {}
+    raw = (cfg or {}).get("auto_continue", DEFAULT_AUTO_CONTINUE)
+    if isinstance(raw, bool):
+        return DEFAULT_AUTO_CONTINUE if raw else 0
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_AUTO_CONTINUE
+
+
+def _stopped_on_step_budget(result: Any) -> bool:
+    """True only when a child ended because it ran out of iterations."""
+    if not isinstance(result, dict):
+        return False
+    if result.get("interrupted") or result.get("failed"):
+        return False
+    reason = str(result.get("turn_exit_reason") or "")
+    return reason.startswith("max_iterations_reached") or reason == "budget_exhausted"
+
+
+def _made_tool_progress(result: Dict[str, Any], prior_len: int) -> bool:
+    """True when the leg's new messages include at least one tool call."""
+    msgs = result.get("messages")
+    if not isinstance(msgs, list):
+        return False
+    for m in msgs[prior_len:]:
+        if isinstance(m, dict) and m.get("role") == "assistant" and m.get("tool_calls"):
+            return True
+    return False
+
+
+def _refresh_child_budget(child: Any) -> None:
+    """Give the child a fresh iteration budget of its original size."""
+    budget = getattr(child, "iteration_budget", None)
+    max_total = getattr(budget, "max_total", None) or getattr(child, "max_iterations", None)
+    if not max_total:
+        return
+    try:
+        from agent.iteration_budget import IterationBudget
+
+        child.iteration_budget = IterationBudget(int(max_total))
+    except Exception:
+        logger.debug("Could not refresh child iteration budget", exc_info=True)
+    try:
+        child._budget_grace_call = False
+    except Exception:
+        pass
+
+
+def _auto_continue_child(
+    child: Any,
+    result: Dict[str, Any],
+    *,
+    task_index: int,
+    task_id: Any,
+    stream_callback: Any,
+    limit: int,
+) -> Dict[str, Any]:
+    """Resume a budget-exhausted child up to ``limit`` times. Returns merged result."""
+    continuations = 0
+    while continuations < limit and _stopped_on_step_budget(result):
+        history = result.get("messages")
+        if not isinstance(history, list) or not history:
+            break
+        # Stop when the last leg did no real work; a fresh budget won't help.
+        if continuations > 0 and not _made_tool_progress(result, result.get("_leg_start", 0)):
+            break
+        _refresh_child_budget(child)
+        continuations += 1
+        logger.info(
+            "Subagent %d ran out of steps; auto-continuing (%d/%d)",
+            task_index, continuations, limit,
+        )
+        progress_cb = getattr(child, "tool_progress_callback", None)
+        if progress_cb:
+            try:
+                progress_cb(
+                    "subagent.status",
+                    preview=f"out of steps, continuing ({continuations}/{limit})",
+                )
+            except Exception:
+                pass
+        try:
+            nxt = child.run_conversation(
+                user_message=AUTO_CONTINUE_MESSAGE,
+                conversation_history=history,
+                task_id=task_id,
+                stream_callback=stream_callback,
+            )
+        except Exception as exc:
+            logger.warning("Subagent %d auto-continue failed: %s", task_index, exc)
+            break
+        if not isinstance(nxt, dict):
+            break
+        try:
+            api_total = int(result.get("api_calls", 0) or 0) + int(nxt.get("api_calls", 0) or 0)
+        except (TypeError, ValueError):
+            api_total = nxt.get("api_calls", 0)
+        if not (nxt.get("final_response") or "").strip():
+            nxt["final_response"] = result.get("final_response") or ""
+        nxt["api_calls"] = api_total
+        nxt["_leg_start"] = len(history)
+        result = nxt
+    result.pop("_leg_start", None)
+    result["auto_continuations"] = continuations
+    return result
+
+
 def _run_single_child(
     task_index: int,
     goal: str,
@@ -3077,6 +3210,17 @@ def _run_single_child(
         # stays byte-identical (wire-shape pinning).
         # Pattern from: github/copilot-cli ctx.agent(prompt, {schema}) —
         # PATTERN ONLY, no code copied.
+        _auto_limit = _auto_continue_limit()
+        if _auto_limit and _stopped_on_step_budget(result):
+            result = _auto_continue_child(
+                child,
+                result,
+                task_index=task_index,
+                task_id=child_task_id,
+                stream_callback=_relay_child_text,
+                limit=_auto_limit,
+            )
+
         _output_schema = getattr(child, "_delegate_output_schema", None)
         _schema_valid: Optional[bool] = None
         _schema_errors: List[str] = []
@@ -3244,6 +3388,9 @@ def _run_single_child(
             # work except by parsing the summary prose. exit_reason is computed
             # authoritatively from the child's `completed` flag.
             "truncated": exit_reason == "max_iterations",
+            # How many times the child was resumed with a fresh step budget
+            # (delegation.auto_continue). 0 when it finished on the first leg.
+            "auto_continuations": int(result.get("auto_continuations", 0) or 0),
             "tokens": {
                 "input": (
                     _input_tokens if isinstance(_input_tokens, (int, float)) else 0
