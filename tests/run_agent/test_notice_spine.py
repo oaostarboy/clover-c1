@@ -6,16 +6,35 @@ Covers:
   B. Constructor / init_agent signature threading.
   C. TUI _agent_cbs notice binding — mirrors the status_callback tests already
      in tests/test_tui_gateway_server.py.
+
+The notice-spine plumbing (_emit_notice, AIAgent's notice_callback slot,
+tui_gateway's _agent_cbs binding) is driver-agnostic infrastructure, not
+credits-specific — it survives the Clover-credits removal. AgentNotice
+itself used to live in agent.credits_tracker (now deleted); it is
+reconstructed here as a plain dataclass matching that shape since nothing
+in the production code constructs one anymore (run_agent._emit_notice and
+tui_gateway's notice_callback both just duck-type the object they're given).
 """
 from __future__ import annotations
 
 import inspect
+from dataclasses import dataclass
+from typing import Optional
 from unittest.mock import patch
 
 import pytest
 
-from agent.credits_tracker import AgentNotice
 from run_agent import AIAgent
+
+
+@dataclass
+class AgentNotice:
+    text: str
+    level: str = "info"
+    kind: str = "sticky"
+    ttl_ms: Optional[int] = None
+    key: Optional[str] = None
+    id: Optional[str] = None
 
 
 # ── A. Emitter behaviour ─────────────────────────────────────────────────────
