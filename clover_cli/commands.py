@@ -394,7 +394,6 @@ COMMAND_REGISTRY: list[CommandDef] = [
                args_hint="[reset [--force]]"),
     CommandDef("subscription", "View your Clover plan and change it in the browser", "Info",
                cli_only=True, aliases=("upgrade",)),
-    CommandDef("topup", "Show your Clover balance and manage billing on the portal", "Info"),
     CommandDef("insights", "Show usage insights and analytics", "Info",
                args_hint="[days]", desktop="advanced"),
     CommandDef("platforms", "Show gateway/messaging platform status", "Info",
@@ -1445,8 +1444,6 @@ _SLACK_PRIORITY_ALIASES: tuple[str, ...] = ()
 # surface (CLI, TUI, Telegram, Discord). Keep this list TIGHT and intentional —
 # the telegram-parity test reads it so an entry here is a deliberate
 # "Slack-via-/clover" decision, not a silent clamp.
-#   - topup: the billing/balance surface; reached via /clover topup on Slack.
-#     (the rehaul folded the old /credits + /billing surfaces into /topup.)
 #   - moa: high-cost slash mode, available through /clover moa to avoid
 #     displacing existing native Slack slash commands at the 50-command cap.
 #   - debug: the log/report upload surface; reached via /clover debug on Slack.
@@ -1481,7 +1478,7 @@ _SLACK_PRIORITY_ALIASES: tuple[str, ...] = ()
 #     (session export is an interactive surface; platform is a rare
 #     informational lookup) — without this entry /save tips the registry
 #     past the 50-cap and silently clamps /platform, breaking parity.
-_SLACK_VIA_CLOVER_ONLY = frozenset({"topup", "moa", "council", "debug", "egress", "init", "version", "diff", "update", "heartbeat", "refine", "review", "pause", "whoami", "platform", "insights"})
+_SLACK_VIA_CLOVER_ONLY = frozenset({"moa", "council", "debug", "egress", "init", "version", "diff", "update", "heartbeat", "refine", "review", "pause", "whoami", "platform", "insights"})
 
 
 def _sanitize_slack_name(raw: str) -> str:
