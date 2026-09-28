@@ -418,24 +418,6 @@ test('resolvedConnectionId reuses the exact URL envelope and rejects weak or dup
         url: `${sharedUrl}/`,
         authMode: 'oauth',
         headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-b' } }
-      },
-      {
-        id: 'cloud-clover',
-        kind: 'cloud',
-        label: 'Clover cloud',
-        url: sharedUrl,
-        authMode: 'oauth',
-        headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-cloud' } },
-        org: 'clover'
-      },
-      {
-        id: 'cloud-labs',
-        kind: 'cloud',
-        label: 'Labs cloud',
-        url: sharedUrl,
-        authMode: 'oauth',
-        headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-cloud' } },
-        org: 'labs'
       }
     ]
   }
@@ -461,32 +443,8 @@ test('resolvedConnectionId reuses the exact URL envelope and rejects weak or dup
     }),
     'remote-oauth'
   )
-  assert.equal(
-    resolvedConnectionId(registry, {
-      authMode: 'oauth',
-      baseUrl: sharedUrl,
-      headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-cloud' } },
-      mode: 'remote',
-      org: 'clover',
-      remoteKind: 'cloud'
-    }),
-    'cloud-clover'
-  )
-  assert.equal(
-    resolvedConnectionId(registry, {
-      authMode: 'oauth',
-      baseUrl: sharedUrl,
-      headers: { 'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'header-cloud' } },
-      mode: 'remote',
-      org: 'labs',
-      remoteKind: 'cloud'
-    }),
-    'cloud-labs'
-  )
-
   // Post-dial URL-only shapes do not contain enough proof to choose a source.
   assert.equal(resolvedConnectionId(registry, { baseUrl: sharedUrl, mode: 'remote', remoteKind: 'url' }), null)
-  assert.equal(resolvedConnectionId(registry, { baseUrl: sharedUrl, mode: 'remote', remoteKind: 'cloud' }), null)
 
   // Even a complete envelope fails closed when two registrations are exact twins.
   const duplicate: ConnectionRegistry = {
@@ -901,15 +859,13 @@ test('roster: collapse prefers the active (primary) connection', () => {
   assert.equal(roster[0].connectionId, 'spark-ts')
 })
 
-test('roster: collapse pick order is local > ssh > remote > cloud, then registration order', () => {
+test('roster: collapse pick order is local > ssh > remote, then registration order', () => {
   const local = { id: 'local', kind: 'local' as const, label: 'This device' }
   const remote = { id: 'loop', kind: 'remote' as const, label: 'Loopback', url: 'http://127.0.0.1:8642' }
-  const cloud = { id: 'cl', kind: 'cloud' as const, label: 'Cloud twin', url: 'http://cl:1' }
   const ssh = { id: 'tun', kind: 'ssh' as const, label: 'Tunnel', host: 'box' }
 
-  // Same box registered four ways; primary is NOT one of them (unset).
+  // Same box registered three ways; primary is NOT one of them (unset).
   const roster = buildAgentRoster([
-    { connection: cloud, profiles: ['default'], installId: 'aaa' },
     { connection: remote, profiles: ['default'], installId: 'aaa' },
     { connection: ssh, profiles: ['default'], installId: 'aaa' },
     { connection: local, profiles: ['default'], installId: 'aaa' }
@@ -918,9 +874,8 @@ test('roster: collapse pick order is local > ssh > remote > cloud, then registra
   assert.equal(roster.length, 1)
   assert.equal(roster[0].connectionId, 'local')
 
-  // Without the local candidate, ssh wins over remote/cloud.
+  // Without the local candidate, ssh wins over remote.
   const noLocal = buildAgentRoster([
-    { connection: cloud, profiles: ['default'], installId: 'aaa' },
     { connection: remote, profiles: ['default'], installId: 'aaa' },
     { connection: ssh, profiles: ['default'], installId: 'aaa' }
   ])
@@ -996,11 +951,7 @@ test('roster: collapse also folds a third same-box connection from a per-profile
 
 // --- updateEligibility ---
 
-test('update fan-out: cloud is platform-managed, everything else eligible', () => {
-  assert.deepEqual(updateEligibility({ id: 'c', kind: 'cloud', label: 'Cloud' }), {
-    eligible: false,
-    reason: 'cloud-managed'
-  })
+test('update fan-out: local, remote, and ssh are all eligible', () => {
   assert.equal(updateEligibility({ id: 'local', kind: 'local', label: 'x' }).eligible, true)
   assert.equal(updateEligibility({ id: 'r', kind: 'remote', label: 'x' }).eligible, true)
   assert.equal(updateEligibility({ id: 's', kind: 'ssh', label: 'x' }).eligible, true)
@@ -1016,7 +967,7 @@ test('save rejects the reserved "local" id on non-local kinds', () => {
   )
 })
 
-test('token only persists on token-auth remotes; oauth/cloud drop it', () => {
+test('token only persists on token-auth remotes; oauth drops it', () => {
   const registry = emptyRegistry()
 
   const tokenAuth = normalizeConnectionInput(
@@ -1032,31 +983,11 @@ test('token only persists on token-auth remotes; oauth/cloud drop it', () => {
   )
 
   assert.equal(oauth.token, undefined)
-
-  const cloud = normalizeConnectionInput(
-    { kind: 'cloud', label: 'C', url: 'https://c.clover.cloud', authMode: 'oauth', token: { enc: 'x' } },
-    registry
-  )
-
-  assert.equal(cloud.token, undefined)
 })
 
 // --- mergeConnectionInput (edit inheritance) ---
 
-test('merge preserves fields the editor does not carry (org, ssh extras)', () => {
-  const cloud = {
-    authMode: 'oauth' as const,
-    id: 'c',
-    kind: 'cloud' as const,
-    label: 'Cloud',
-    org: 'clover',
-    url: 'https://a.cloud'
-  }
-
-  const renamed = mergeConnectionInput({ id: 'c', kind: 'cloud', label: 'Renamed', url: 'https://a.cloud' }, cloud)
-
-  assert.equal(renamed.org, 'clover')
-
+test('merge preserves fields the editor does not carry (ssh extras)', () => {
   const ssh = {
     host: 'homelab.lan',
     id: 's',
@@ -1127,20 +1058,16 @@ test('editing an entry does not collide with its own label', () => {
   assert.equal(edited.url, 'http://10.0.0.6:9119')
 })
 
-test('duplicate gateway URLs are rejected across remote and cloud kinds', () => {
+test('duplicate gateway URLs are rejected for remote kind', () => {
   let registry = emptyRegistry()
   registry = upsertConnection(
     registry,
     normalizeConnectionInput({ kind: 'remote', label: 'Homelab', url: 'http://10.0.0.5:9119' }, registry)
   )
 
-  // Same URL modulo trailing slash → dupe, even as a different kind.
+  // Same URL modulo trailing slash → dupe.
   assert.throws(
     () => normalizeConnectionInput({ kind: 'remote', label: 'Twin', url: 'http://10.0.0.5:9119/' }, registry),
-    /already exists/
-  )
-  assert.throws(
-    () => normalizeConnectionInput({ kind: 'cloud', label: 'Cloud twin', url: 'http://10.0.0.5:9119' }, registry),
     /already exists/
   )
   // Editing the entry itself keeps its own URL without self-colliding.
@@ -1179,7 +1106,7 @@ test('duplicate ssh targets are rejected on user@host:port + remote profile', ()
   assert.equal(otherProfile.kind, 'ssh')
 })
 
-test('remote input normalizes URL and auth mode; cloud keeps org', () => {
+test('remote input normalizes URL and auth mode', () => {
   const registry = emptyRegistry()
 
   const remote = normalizeConnectionInput(
@@ -1189,15 +1116,6 @@ test('remote input normalizes URL and auth mode; cloud keeps org', () => {
 
   assert.equal(remote.url, 'http://10.0.0.5:9119')
   assert.equal(remote.authMode, 'token')
-
-  const cloud = normalizeConnectionInput(
-    { kind: 'cloud', label: 'Cloud', url: 'https://foo.clover.cloud', authMode: 'oauth', org: 'clover' },
-    registry
-  )
-
-  assert.equal(cloud.kind, 'cloud')
-  assert.equal(cloud.org, 'clover')
-  assert.equal(cloud.authMode, 'oauth')
 })
 
 test('ssh input requires a host; local input only carries the label', () => {
@@ -1270,14 +1188,6 @@ test('normalizeRegistry round-trips a valid registry unchanged in shape', () => 
         authMode: 'token',
         token: { v: 1 }
       },
-      {
-        id: 'cloud-1',
-        kind: 'cloud',
-        label: 'Clover Cloud',
-        url: 'https://a.clover.cloud',
-        authMode: 'oauth',
-        org: 'clover'
-      },
       { id: 'spark', kind: 'ssh', label: 'Spark', host: 'spark1', user: 'tek', port: 2222 }
     ]
   }
@@ -1287,13 +1197,13 @@ test('normalizeRegistry round-trips a valid registry unchanged in shape', () => 
   assert.equal(registry.primary, 'homelab')
   assert.equal(registry.launchMode, 'last-used')
   assert.equal(registry.lastUsed, 'homelab')
-  assert.equal(registry.connections.length, 4)
+  assert.equal(registry.connections.length, 3)
   assert.deepEqual(
     registry.connections.map(c => c.id),
-    ['local', 'homelab', 'cloud-1', 'spark']
+    ['local', 'homelab', 'spark']
   )
   assert.deepEqual(registry.connections[1].token, { v: 1 })
-  assert.equal(registry.connections[3].port, 2222)
+  assert.equal(registry.connections[2].port, 2222)
 })
 
 test('normalizeRegistry falls back to Primary when the last-used source is missing', () => {
@@ -1335,17 +1245,19 @@ test('migrate: v1 global remote becomes a labeled entry and the primary', () => 
   assert.deepEqual(remote.token, { enc: 'x' })
 })
 
-test('migrate: v1 cloud keeps cloud provenance + org', () => {
+test('migrate: v1 legacy cloud mode is not remote-like and is dropped', () => {
+  // modeIsRemoteLike() only recognizes 'remote' now — a raw legacy 'cloud'
+  // global mode fed into migrateV1ToRegistry matches neither the remote-like
+  // nor the ssh branch, so it contributes no connection and the registry
+  // stays local-only.
   const registry = migrateV1ToRegistry({
     mode: 'cloud',
     remote: { url: 'https://a.clover.cloud', authMode: 'oauth', org: 'clover' }
   })
 
-  const cloud = registry.connections.find(c => c.kind === 'cloud')
-
-  assert.ok(cloud)
-  assert.equal(registry.primary, cloud.id)
-  assert.equal(cloud.org, 'clover')
+  assert.equal(registry.primary, LOCAL_CONNECTION_ID)
+  assert.equal(registry.connections.length, 1)
+  assert.equal(registry.connections[0].kind, 'local')
 })
 
 test('migrate: per-profile overrides become extra sources, deduped by URL', () => {
