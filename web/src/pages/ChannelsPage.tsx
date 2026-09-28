@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
-  Bot,
   CheckCircle2,
   ExternalLink,
   Info,
