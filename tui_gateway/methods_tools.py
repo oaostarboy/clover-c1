@@ -1497,10 +1497,6 @@ def _(rid, params: dict) -> dict:
     try:
         cfg = _load_cfg()
         model = _resolve_model()
-        from agent.secret_scope import get_secret
-
-        api_key = get_secret("CLOVER_API_KEY", "") or cfg.get("api_key", "")
-        masked = f"****{api_key[-4:]}" if len(api_key) > 4 else "(not set)"
         base_url = os.environ.get("CLOVER_BASE_URL", "") or cfg.get("base_url", "")
 
         sections = [
@@ -1509,7 +1505,6 @@ def _(rid, params: dict) -> dict:
                 "rows": [
                     ["Model", model],
                     ["Base URL", base_url or "(default)"],
-                    ["API Key", masked],
                 ],
             },
             {
