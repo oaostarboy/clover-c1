@@ -30,12 +30,13 @@ class TestGetDefaultModelForProvider:
             return_value="qwen/qwen3.8-max",
         ):
             assert (
-                models_mod.get_preferred_silent_default_model("clover")
+                models_mod.get_preferred_silent_default_model("openrouter")
                 == "qwen/qwen3.8-max"
             )
-            # clover catalog carries qwen3.8-max, so the full resolver follows.
+            # openrouter carries no static curated snapshot (its list is
+            # fetched live), so the full resolver must trust the catalog label.
             assert (
-                models_mod.get_default_model_for_provider("clover")
+                models_mod.get_default_model_for_provider("openrouter")
                 == "qwen/qwen3.8-max"
             )
 
