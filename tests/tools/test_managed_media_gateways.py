@@ -5,8 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from clover_cli.clover_account import CloverPortalAccountInfo
-
 
 TOOLS_DIR = Path(__file__).resolve().parents[2] / "tools"
 
@@ -46,21 +44,6 @@ def _restore_tool_and_agent_modules():
         sys.modules.update(original_modules)
 
 
-@pytest.fixture(autouse=True)
-def _enable_managed_clover_tools(monkeypatch):
-    """Patch the source modules so managed_clover_tools_enabled() returns True
-    even after tool modules are dynamically reloaded."""
-    monkeypatch.setattr(
-        "clover_cli.clover_account.get_clover_portal_account_info",
-        lambda: CloverPortalAccountInfo(
-            logged_in=True,
-            source="jwt",
-            fresh=False,
-            paid_service_access=True,
-        ),
-    )
-
-
 def _install_fake_tools_package():
     tools_package = types.ModuleType("tools")
     tools_package.__path__ = [str(TOOLS_DIR)]  # type: ignore[attr-defined]
@@ -74,62 +57,6 @@ def _install_fake_tools_package():
             get_session_info=lambda: {},
         )
     )
-    sys.modules["tools.managed_tool_gateway"] = _load_tool_module(
-        "tools.managed_tool_gateway",
-        "managed_tool_gateway.py",
-    )
-
-
-def _install_fake_fal_client(captured):
-    def submit(model, arguments=None, headers=None):
-        raise AssertionError("managed FAL gateway mode should use fal_client.SyncClient")
-
-    class FakeResponse:
-        def json(self):
-            return {
-                "request_id": "req-123",
-                "response_url": "http://127.0.0.1:3009/requests/req-123",
-                "status_url": "http://127.0.0.1:3009/requests/req-123/status",
-                "cancel_url": "http://127.0.0.1:3009/requests/req-123/cancel",
-            }
-
-    def _maybe_retry_request(client, method, url, json=None, timeout=None, headers=None):
-        captured["submit_via"] = "managed_client"
-        captured["http_client"] = client
-        captured["method"] = method
-        captured["submit_url"] = url
-        captured["arguments"] = json
-        captured["timeout"] = timeout
-        captured["headers"] = headers
-        return FakeResponse()
-
-    class SyncRequestHandle:
-        def __init__(self, request_id, response_url, status_url, cancel_url, client):
-            captured["request_id"] = request_id
-            captured["response_url"] = response_url
-            captured["status_url"] = status_url
-            captured["cancel_url"] = cancel_url
-            captured["handle_client"] = client
-
-    class SyncClient:
-        def __init__(self, key=None, default_timeout=120.0):
-            captured["sync_client_inits"] = captured.get("sync_client_inits", 0) + 1
-            captured["client_key"] = key
-            captured["client_timeout"] = default_timeout
-            self.default_timeout = default_timeout
-            self._client = object()
-
-    fal_client_module = types.SimpleNamespace(
-        submit=submit,
-        SyncClient=SyncClient,
-        client=types.SimpleNamespace(
-            _maybe_retry_request=_maybe_retry_request,
-            _raise_for_status=lambda response: None,
-            SyncRequestHandle=SyncRequestHandle,
-        ),
-    )
-    sys.modules["fal_client"] = fal_client_module
-    return fal_client_module
 
 
 def _install_fake_openai_module(captured, transcription_response=None):
@@ -174,64 +101,12 @@ def _install_fake_openai_module(captured, transcription_response=None):
     sys.modules["openai"] = fake_module
 
 
-def test_managed_fal_submit_uses_gateway_origin_and_clover_token(monkeypatch):
-    captured = {}
-    _install_fake_tools_package()
-    _install_fake_fal_client(captured)
-    monkeypatch.delenv("FAL_KEY", raising=False)
-    monkeypatch.setenv("FAL_QUEUE_GATEWAY_URL", "http://127.0.0.1:3009")
-    monkeypatch.setenv("TOOL_GATEWAY_USER_TOKEN", "clover-token")
-
-    image_generation_tool = _load_tool_module(
-        "tools.image_generation_tool",
-        "image_generation_tool.py",
-    )
-    monkeypatch.setattr(image_generation_tool.uuid, "uuid4", lambda: "fal-submit-123")
-    
-    image_generation_tool._submit_fal_request(
-        "fal-ai/flux-2-pro",
-        {"prompt": "test prompt", "num_images": 1},
-    )
-
-    assert captured["submit_via"] == "managed_client"
-    assert captured["client_key"] == "clover-token"
-    assert captured["submit_url"] == "http://127.0.0.1:3009/fal-ai/flux-2-pro"
-    assert captured["method"] == "POST"
-    assert captured["arguments"] == {"prompt": "test prompt", "num_images": 1}
-    assert captured["headers"] == {"x-idempotency-key": "fal-submit-123"}
-    assert captured["sync_client_inits"] == 1
-
-
-def test_openai_tts_uses_managed_audio_gateway_when_direct_key_absent(monkeypatch, tmp_path):
-    captured = {}
-    _install_fake_tools_package()
-    _install_fake_openai_module(captured)
-    monkeypatch.delenv("VOICE_TOOLS_OPENAI_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("TOOL_GATEWAY_DOMAIN", "")
-    monkeypatch.setenv("TOOL_GATEWAY_USER_TOKEN", "clover-token")
-
-    tts_tool = _load_tool_module("tools.tts_tool", "tts_tool.py")
-    monkeypatch.setattr(tts_tool.uuid, "uuid4", lambda: "tts-call-123")
-    output_path = tmp_path / "speech.mp3"
-    tts_tool._generate_openai_tts("hello world", str(output_path), {"openai": {}})
-
-    assert captured["api_key"] == "clover-token"
-    assert captured["base_url"] == "https://openai-audio-gateway./v1"
-    assert captured["speech_kwargs"]["model"] == "gpt-4o-mini-tts"
-    assert captured["speech_kwargs"]["extra_headers"] == {"x-idempotency-key": "tts-call-123"}
-    assert captured["stream_to_file"] == str(output_path)
-    assert captured["close_calls"] == 1
-
-
-def test_openai_tts_accepts_openai_api_key_as_direct_fallback(monkeypatch, tmp_path):
+def test_openai_tts_accepts_direct_openai_api_key(monkeypatch, tmp_path):
     captured = {}
     _install_fake_tools_package()
     _install_fake_openai_module(captured)
     monkeypatch.delenv("VOICE_TOOLS_OPENAI_KEY", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "openai-direct-key")
-    monkeypatch.setenv("TOOL_GATEWAY_DOMAIN", "")
-    monkeypatch.setenv("TOOL_GATEWAY_USER_TOKEN", "clover-token")
 
     tts_tool = _load_tool_module("tools.tts_tool", "tts_tool.py")
     output_path = tmp_path / "speech.mp3"
@@ -247,25 +122,21 @@ def test_transcription_uses_model_specific_response_formats(monkeypatch, tmp_pat
     _install_fake_tools_package()
     _install_fake_openai_module(whisper_capture, transcription_response="hello from whisper")
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
-    # The managed audio route is the stored "clover" selection (strict model);
-    # a stored "openai" selection now means direct credentials only.
-    (tmp_path / "config.yaml").write_text("stt:\n  provider: clover\n")
+    (tmp_path / "config.yaml").write_text("stt:\n  provider: openai\n")
     monkeypatch.delenv("VOICE_TOOLS_OPENAI_KEY", raising=False)
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("TOOL_GATEWAY_DOMAIN", "")
-    monkeypatch.setenv("TOOL_GATEWAY_USER_TOKEN", "clover-token")
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-direct-key")
 
     transcription_tools = _load_tool_module(
         "tools.transcription_tools",
         "transcription_tools.py",
     )
-    transcription_tools._load_stt_config = lambda: {"provider": "clover"}
+    transcription_tools._load_stt_config = lambda: {"provider": "openai"}
     audio_path = tmp_path / "audio.wav"
     audio_path.write_bytes(b"RIFF0000WAVEfmt ")
 
     whisper_result = transcription_tools.transcribe_audio(str(audio_path), model="whisper-1")
     assert whisper_result["success"] is True
-    assert whisper_capture["base_url"] == "https://openai-audio-gateway./v1"
+    assert whisper_capture["api_key"] == "openai-direct-key"
     assert whisper_capture["transcription_kwargs"]["response_format"] == "text"
     assert whisper_capture["close_calls"] == 1
 
@@ -290,31 +161,6 @@ def test_transcription_uses_model_specific_response_formats(monkeypatch, tmp_pat
 
 
 PLUGINS_DIR = Path(__file__).resolve().parents[2] / "plugins"
-
-
-def _load_video_gen_plugin(monkeypatch):
-    """Load the FAL video gen plugin in isolation."""
-    _install_fake_tools_package()
-
-    # Also need the agent.video_gen_provider ABC
-    agent_dir = Path(__file__).resolve().parents[2] / "agent"
-    spec = spec_from_file_location(
-        "agent.video_gen_provider",
-        agent_dir / "video_gen_provider.py",
-    )
-    assert spec and spec.loader
-    mod = module_from_spec(spec)
-    sys.modules["agent.video_gen_provider"] = mod
-    spec.loader.exec_module(mod)
-
-    # Load the plugin
-    plugin_init = PLUGINS_DIR / "video_gen" / "fal" / "__init__.py"
-    spec = spec_from_file_location("plugins.video_gen.fal", plugin_init)
-    assert spec and spec.loader
-    plugin_mod = module_from_spec(spec)
-    sys.modules["plugins.video_gen.fal"] = plugin_mod
-    spec.loader.exec_module(plugin_mod)
-    return plugin_mod
 
 
 def test_video_gen_happy_horse_uses_alibaba_namespace():
