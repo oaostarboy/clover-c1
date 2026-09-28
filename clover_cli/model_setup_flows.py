@@ -415,7 +415,6 @@ def _model_flow_clover(config, current_model="", args=None):
         save_config,
         save_env_value,
     )
-    from clover_cli.clover_subscription import prompt_enable_tool_gateway
 
     state = get_provider_auth_state("clover")
     if not state or not state.get("access_token"):
@@ -433,12 +432,6 @@ def _model_flow_clover(config, current_model="", args=None):
                 insecure=bool(getattr(args, "insecure", False)),
             )
             _login_clover(mock_args, PROVIDER_REGISTRY["clover"])
-            # Offer Tool Gateway enablement for paid subscribers
-            try:
-                _refreshed = load_config() or {}
-                prompt_enable_tool_gateway(_refreshed)
-            except Exception:
-                pass
         except SystemExit:
             print("Login cancelled or failed.")
             return
@@ -613,8 +606,6 @@ def _model_flow_clover(config, current_model="", args=None):
             save_env_value("OPENAI_API_KEY", "")
         save_config(config)
         print(f"Default model set to: {selected} (via Clover Portal)")
-        # Offer Tool Gateway enablement for paid subscribers
-        prompt_enable_tool_gateway(config)
     else:
         print("No change.")
 
