@@ -41,6 +41,8 @@ def test_admits_unfinished_phrases():
         "U10 remains incomplete.",
         "the suite is not fully verified",
         "I can't honestly report this as a completed wave.",
+        "this unit's scope is not fully integrated or verified yet.",
+        "Remaining callers need follow-up edits before the wave is complete.",
     ]
     no = [
         "All done. 52/52 tests pass.",
