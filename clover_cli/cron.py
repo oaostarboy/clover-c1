@@ -50,7 +50,7 @@ def _cron_api(**kwargs):
 
 
 def _active_cron_provider_name() -> str:
-    """Name of the resolved cron scheduler provider ('builtin', 'chronos', …).
+    """Name of the resolved cron scheduler provider ('builtin', …).
 
     Best-effort + offline (``resolve_cron_scheduler`` reads config and the
     provider's ``is_available()`` contract forbids network). Returns 'builtin'
