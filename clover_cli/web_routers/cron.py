@@ -199,12 +199,3 @@ async def instantiate_blueprint(body: AutomationBlueprintInstantiate, profile: s
         _raise_if_cron_registration_error(e)
         _log.exception("POST /api/cron/blueprints/instantiate failed")
         raise HTTPException(status_code=400, detail=str(e))
-
-
-def cron_fire_webhook(*_args, **_kwargs):  # pragma: no cover - removal shim
-    """Removed with the hosted Chronos cron provider.
-
-    Kept only so ``clover_cli.web_server``'s legacy re-export block still
-    imports until that hot file drops the name. Not registered as a route.
-    """
-    raise RuntimeError("The hosted Chronos cron fire webhook was removed.")
