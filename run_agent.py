@@ -5910,10 +5910,6 @@ class AIAgent:
 
         return True
 
-    def _try_refresh_clover_client_credentials(self, *, force: bool = True) -> bool:
-        """Compatibility shim until the legacy retry callers are removed."""
-        return False
-
     def _try_refresh_env_client_credentials(self) -> bool:
         """Adopt ~/.clover/.env credential/base-url edits at the turn boundary.
 

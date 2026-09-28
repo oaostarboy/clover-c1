@@ -4126,46 +4126,6 @@ class TestRunConversation:
             for m in replayed
         )
 
-    def test_clover_401_refreshes_after_remint_and_retries(self, agent):
-        self._setup_agent(agent)
-        agent.provider = "clover"
-        agent.api_mode = "chat_completions"
-
-        calls = {"api": 0, "refresh": 0}
-
-        class _UnauthorizedError(RuntimeError):
-            def __init__(self):
-                super().__init__("Error code: 401 - unauthorized")
-                self.status_code = 401
-
-        def _fake_api_call(api_kwargs):
-            calls["api"] += 1
-            if calls["api"] == 1:
-                raise _UnauthorizedError()
-            return _mock_response(
-                content="Recovered after remint", finish_reason="stop"
-            )
-
-        def _fake_refresh(*, force=True):
-            calls["refresh"] += 1
-            assert force is True
-            return True
-
-        with (
-            patch.object(agent, "_persist_session"),
-            patch.object(agent, "_save_trajectory"),
-            patch.object(agent, "_cleanup_task_resources"),
-            patch.object(agent, "_interruptible_api_call", side_effect=_fake_api_call),
-            patch.object(
-                agent, "_try_refresh_clover_client_credentials", side_effect=_fake_refresh
-            ),
-        ):
-            result = agent.run_conversation("hello")
-
-        assert calls["api"] == 2
-        assert calls["refresh"] == 1
-        assert result["completed"] is True
-        assert result["final_response"] == "Recovered after remint"
 
     def test_context_compression_triggered(self, agent):
         """When compressor says should_compress, compression runs."""
