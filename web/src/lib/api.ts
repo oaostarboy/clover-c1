@@ -2282,7 +2282,6 @@ export interface ToolsetProvider {
   tag: string;
   env_vars: ToolsetProviderEnvVar[];
   post_setup: string | null;
-  requires_clover_auth: boolean;
   is_active: boolean;
 }
 
