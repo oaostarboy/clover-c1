@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { Settings2, Wrench } from '@/lib/icons'
-import type { ConfigFieldSchema, CloverConfigRecord } from '@/types/clover'
+import type { CloverConfigRecord, ConfigFieldSchema } from '@/types/clover'
 
 import {
   buildConfigSearchEntries,

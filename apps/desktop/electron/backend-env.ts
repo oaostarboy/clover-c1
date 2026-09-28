@@ -153,8 +153,8 @@ export {
   appendUniquePathEntries,
   buildDesktopBackendEnv,
   buildDesktopBackendPath,
-  delimiterForPlatform,
   cloverManagedNodePathEntries,
+  delimiterForPlatform,
   normalizeCloverHomeRoot,
   pathEnvKey,
   POSIX_SANE_PATH_ENTRIES

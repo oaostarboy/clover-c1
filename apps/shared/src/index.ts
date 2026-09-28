@@ -102,11 +102,11 @@ export {
 } from './translucency'
 export {
   buildCloverWebSocketUrl,
+  type CloverWebSocketUrlOptions,
   type GatewayAuthMode,
   GatewayReauthRequiredError,
   type GatewayWsConnection,
   type GatewayWsUrlResult,
-  type CloverWebSocketUrlOptions,
   isGatewayReauthRequired,
   resolveGatewayWsUrl,
   type ResolveGatewayWsUrlDeps,

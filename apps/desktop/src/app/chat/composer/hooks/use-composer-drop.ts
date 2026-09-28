@@ -2,7 +2,7 @@ import { type DragEvent as ReactDragEvent, useRef, useState } from 'react'
 
 import { triggerHaptic } from '@/lib/haptics'
 
-import { extractDroppedFiles, CLOVER_PATHS_MIME, partitionDroppedFiles } from '../../hooks/use-composer-actions'
+import { CLOVER_PATHS_MIME, extractDroppedFiles, partitionDroppedFiles } from '../../hooks/use-composer-actions'
 import { dragHasAttachments, droppedFileInlineRefs, type InlineRefInput } from '../inline-refs'
 import type { ChatBarProps } from '../types'
 

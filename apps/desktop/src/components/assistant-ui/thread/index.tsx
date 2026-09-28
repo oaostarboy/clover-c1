@@ -1,5 +1,6 @@
 import { createContext, memo, useCallback, useContext, useMemo, useRef, useState } from 'react'
 
+import type { CloverGateway } from '@/clover'
 import { ChatEmptySlot } from '@/components/assistant-ui/chat-empty-slot'
 import { AssistantMessage } from '@/components/assistant-ui/thread/assistant-message'
 import { ThreadMessageList } from '@/components/assistant-ui/thread/list'
@@ -11,7 +12,6 @@ import { UserEditComposer } from '@/components/assistant-ui/thread/user-edit-com
 import { UserMessage } from '@/components/assistant-ui/thread/user-message'
 import { Intro, type IntroProps } from '@/components/chat/intro'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
-import type { CloverGateway } from '@/clover'
 import { useI18n } from '@/i18n'
 import { notifyError } from '@/store/notifications'
 

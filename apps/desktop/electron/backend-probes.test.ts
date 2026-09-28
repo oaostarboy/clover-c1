@@ -14,8 +14,8 @@ import { test } from 'vitest'
 
 import {
   canImportCloverCli,
-  DEFAULT_PROBE_TIMEOUT_MS,
   cloverRuntimeImportProbe,
+  DEFAULT_PROBE_TIMEOUT_MS,
   PROBE_TIMEOUT_MS,
   resolveProbeTimeoutMs,
   shouldTrustCloverOverride,

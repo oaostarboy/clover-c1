@@ -6,9 +6,9 @@ import { $connection } from '@/store/session'
 
 import {
   attachmentPreviewDataUrl,
+  CLOVER_PATHS_MIME,
   type DroppedFile,
   extractDroppedFiles,
-  CLOVER_PATHS_MIME,
   partitionDroppedFiles,
   useComposerActions
 } from './use-composer-actions'

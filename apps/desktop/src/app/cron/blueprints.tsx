@@ -1,6 +1,6 @@
+import type { AutomationBlueprint, AutomationBlueprintField } from '@/clover'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import type { AutomationBlueprint, AutomationBlueprintField } from '@/clover'
 
 // The blueprint catalog is shared with the dashboard, so its deliver slot
 // defaults to "origin" (the chat/home-channel a dashboard or gateway job was
