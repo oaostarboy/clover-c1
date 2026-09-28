@@ -15,10 +15,10 @@ afterEach(cleanup)
 describe('a sent reference renders as the chip the composer showed', () => {
   it('chips a backtick-quoted @url: instead of splitting it into code', () => {
     render(
-      <UserMessageText text="@url:`` urls lose formatting" />
+      <UserMessageText text="@url:`https://github.com/foo/bar` urls lose formatting" />
     )
 
-    expect(screen.queryByTitle('')).not.toBeNull()
+    expect(screen.queryByTitle('https://github.com/foo/bar')).not.toBeNull()
     // The whole reference is one node — no bare `@url:` text left behind.
     expect(document.body.textContent).not.toContain('@url:')
   })

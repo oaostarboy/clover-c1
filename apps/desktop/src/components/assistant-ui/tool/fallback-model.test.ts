@@ -153,28 +153,28 @@ describe('buildToolView browser_navigate title', () => {
     const view = buildToolView(
       part({
         toolName: 'browser_navigate',
-        args: { url: 'docs/' },
+        args: { url: 'https://example.com/docs' },
         result: { success: false, error: 'Command timed out after 60 seconds' }
       }),
       ''
     )
 
     expect(view.status).toBe('error')
-    expect(view.title).toBe('Failed to open clover-c1./docs')
+    expect(view.title).toBe('Failed to open example.com/docs')
   })
 
   it('shows opened title on success', () => {
     const view = buildToolView(
       part({
         toolName: 'browser_navigate',
-        args: { url: 'docs/' },
-        result: { success: true, url: 'docs/', title: 'Docs' }
+        args: { url: 'https://example.com/docs' },
+        result: { success: true, url: 'https://example.com/docs', title: 'Docs' }
       }),
       ''
     )
 
     expect(view.status).toBe('success')
-    expect(view.title).toBe('Opened clover-c1./docs')
+    expect(view.title).toBe('Opened example.com/docs')
   })
 })
 

@@ -124,9 +124,9 @@ describe('directive scope is a browse mode, not text to maintain', () => {
   it('pasting into an open @url: scope consumes it instead of stacking', () => {
     const editor = typed('refer to @url:')
 
-    paste(editor, '')
+    paste(editor, 'https://example.com/x')
 
-    expect(composerPlainText(editor)).toBe('refer to @url:``')
+    expect(composerPlainText(editor)).toBe('refer to @url:`https://example.com/x`')
     expect(editor.textContent).not.toContain('@url:@url:')
   })
 
