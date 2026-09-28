@@ -25462,7 +25462,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if recent:
                 outcome = str(receipt.get("outcome") or "")
                 post = receipt.get("post_update") or {}
-                if outcome == "success" or post.get("sha"):
+                if outcome == "rolled-back":
+                    verdict = "rolled-back"
+                elif outcome == "success" or post.get("sha"):
                     verdict = "success"
                     detail = str(
                         post.get("short_sha") or post.get("sha") or ""
@@ -25473,7 +25475,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         except (OSError, ValueError, json.JSONDecodeError):
             pass
 
-        if verdict == "success":
+        if verdict == "rolled-back":
+            text = "The update didn't start correctly, so I went back to the version you had before. Nothing was lost. You can try again later."
+        elif verdict == "success":
             text = (
                 "✅ Clover update finished. (The updater exited during its "
                 "gateway-restart step — this notice comes from the restarted "

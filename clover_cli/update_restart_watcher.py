@@ -39,7 +39,10 @@ update could have broken: no config parsing, no plugin loading, no network.
 from __future__ import annotations
 
 import json
+import logging
 import os
+import re
+import shutil
 import subprocess
 import sys
 import time
@@ -59,6 +62,109 @@ BEACON_STALE_SECONDS = 90.0
 WATCHER_MAX_LIFETIME_SECONDS = 3600.0
 
 BEACON_NAME = ".clover-update-heartbeat.json"
+ROLLBACK_MESSAGE = ("The update didn't start correctly, so I went back to the version "
+                    "you had before. Nothing was lost. You can try again later.")
+
+
+def _core_imports_healthy(root: Path) -> bool:
+    python = root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if not python.is_file():
+        return False
+    try:
+        return subprocess.run(
+            [str(python), "-c", "import clover_cli.main, gateway.run"], cwd=root,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+        ).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def probe_gateway(root: Path, *, timeout: float = 90, stable_seconds: float = 20,
+                  poll: float = POLL_SECONDS) -> bool:
+    """One bounded startup probe: imports and continuously live gateway."""
+    deadline = time.monotonic() + timeout
+    stable_since = None
+    while True:
+        alive = _gateway_running()
+        if alive and _core_imports_healthy(root):
+            if stable_since is None:
+                stable_since = time.monotonic()
+            if time.monotonic() - stable_since >= stable_seconds:
+                return True
+        else:
+            stable_since = None
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(min(max(poll, 0.01), max(0, deadline - time.monotonic())))
+
+
+def _restart_from_beacon(data: dict[str, Any]) -> None:
+    argv = data.get("gateway_argv") or []
+    if not argv:
+        raise RuntimeError("No saved gateway restart command")
+    kwargs: dict[str, Any] = {"cwd": data.get("cwd") or None, "close_fds": True}
+    if os.name == "nt":
+        kwargs["creationflags"] = (getattr(subprocess, "DETACHED_PROCESS", 0)
+                                    | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen(argv, **kwargs)
+
+
+def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
+    """Reset only a validated saved commit, repair the existing venv, restore config."""
+    root = Path(data["repo"])
+    sha = data["pre_pull_sha"]
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError("Invalid saved pre-pull commit")
+    subprocess.run(["git", "reset", "--hard", sha], cwd=root, check=True,
+                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    python = root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if python.is_file():
+        # Delegate to the same repair helper as `clover update` after the old
+        # checkout is back in place. The watcher itself stays dependency-free.
+        repair = ("from clover_cli.main import _install_python_dependencies_with_optional_fallback as install; "
+                  "import sys; install([sys.executable, '-m', 'pip'], group='all')")
+        subprocess.run([str(python), "-c", repair], cwd=root, check=True,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    snapshot_id = data.get("pre_update_snapshot_id")
+    home = beacon.parent
+    if snapshot_id and Path(snapshot_id).name == snapshot_id:
+        config = home / "state-snapshots" / snapshot_id / "config.yaml"
+        if config.is_file():
+            shutil.copy2(config, home / "config.yaml")
+
+
+def verify_or_rollback(data: dict[str, Any], beacon: Path, *, timeout: float = 90,
+                       stable_seconds: float = 20) -> str:
+    root = Path(data["repo"])
+    if probe_gateway(root, timeout=timeout, stable_seconds=stable_seconds):
+        return "healthy"
+    log_dir = beacon.parent / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log = log_dir / "update-rollback.log"
+    try:
+        _rollback_checkout(data, beacon)
+        _restart_from_beacon(data)
+        restored = probe_gateway(root, timeout=timeout, stable_seconds=stable_seconds)
+        outcome = "rolled-back" if restored else "rollback-unhealthy"
+    except Exception:
+        logging.basicConfig(filename=str(log), level=logging.ERROR)
+        logging.exception("Update rollback failed")
+        outcome = "rollback-failed"
+    receipt = log_dir / "update_receipts" / "latest.json"
+    try:
+        record = json.loads(receipt.read_text(encoding="utf-8")) if receipt.is_file() else {}
+        record.update(outcome=outcome, user_message=ROLLBACK_MESSAGE if outcome == "rolled-back" else
+                      "The update failed and automatic recovery couldn't confirm the gateway is healthy. Check the update log.")
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_text(json.dumps(record), encoding="utf-8")
+    except OSError:
+        logging.basicConfig(filename=str(log), level=logging.ERROR)
+        logging.exception("Could not persist rollback result")
+    print(ROLLBACK_MESSAGE if outcome == "rolled-back" else
+          "The update failed and automatic recovery couldn't confirm the gateway is healthy. Check the update log.")
+    return outcome
 
 
 def beacon_path(clover_home: Optional[Path] = None) -> Path:
@@ -68,7 +174,9 @@ def beacon_path(clover_home: Optional[Path] = None) -> Path:
     return home / BEACON_NAME
 
 
-def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None) -> Path:
+def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None,
+                 pre_pull_sha: str | None = None, repo: str | None = None,
+                 pre_update_snapshot_id: str | None = None) -> Path:
     """Record how to restart the gateway, and that the updater is alive.
 
     ``argv`` is the command line of the gateway being stopped, captured before
@@ -81,6 +189,9 @@ def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None) -> Path
         "refreshed_at": time.time(),
         "gateway_argv": list(argv),
         "cwd": os.getcwd(),
+        "pre_pull_sha": pre_pull_sha,
+        "repo": repo,
+        "pre_update_snapshot_id": pre_update_snapshot_id,
     }
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
@@ -104,7 +215,13 @@ def refresh_beacon(*, clover_home: Optional[Path] = None) -> None:
 def clear_beacon(*, clover_home: Optional[Path] = None) -> None:
     """The update finished. Stand the watcher down. Never raises."""
     try:
-        beacon_path(clover_home).unlink()
+        path = beacon_path(clover_home)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if data.get("pre_pull_sha") and data.get("repo"):
+            # The separate watcher must survive normal updater exit as well:
+            # the freshly restarted gateway can still crash after atexit.
+            return
+        path.unlink()
     except Exception:
         pass
 
@@ -116,7 +233,7 @@ def _pid_alive(pid: int) -> bool:
         try:
             out = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, encoding="utf-8", timeout=10,
             ).stdout
             return str(pid) in out
         except Exception:
@@ -158,11 +275,11 @@ def _gateway_running() -> bool:
         if os.name == "nt":  # pragma: no cover
             out = subprocess.run(
                 ["wmic", "process", "get", "commandline"],
-                capture_output=True, text=True, timeout=20,
+                capture_output=True, text=True, encoding="utf-8", timeout=20,
             ).stdout
         else:
             out = subprocess.run(
-                ["ps", "-eo", "args"], capture_output=True, text=True, timeout=20
+                ["ps", "-eo", "args"], capture_output=True, text=True, encoding="utf-8", timeout=20
             ).stdout
     except Exception:
         return True  # cannot tell: assume healthy rather than start a second one
@@ -202,7 +319,23 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
         updater_gone = not _pid_alive(updater_pid)
         beacon_stale = age > BEACON_STALE_SECONDS
 
-        if updater_gone or beacon_stale:
+        if updater_gone or (beacon_stale and not data.get("pre_pull_sha")):
+            if data.get("pre_pull_sha") and data.get("repo"):
+                try:
+                    head = subprocess.run(
+                        ["git", "rev-parse", "HEAD"], cwd=data["repo"],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+                    )
+                    if head.returncode == 0 and head.stdout.strip() == data["pre_pull_sha"]:
+                        if not _gateway_running() and data.get("gateway_argv"):
+                            _restart_from_beacon(data)
+                        beacon.unlink(missing_ok=True)
+                        return "update-finished"
+                    result = verify_or_rollback(data, beacon)
+                    beacon.unlink(missing_ok=True)
+                    return result
+                except Exception:
+                    return "rollback-failed"
             # Give the updater's own atexit restart a moment to win the race.
             time.sleep(poll)
             if _gateway_running():
