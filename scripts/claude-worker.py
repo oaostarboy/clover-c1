@@ -39,12 +39,19 @@ UNFINISHED = re.compile(
 
 
 def run(argv: list[str]) -> tuple[int, dict]:
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True, bufsize=1)
+    # Explicit UTF-8: stream-json is UTF-8, and the locale code page on
+    # Windows (cp1252 etc.) would crash on the first non-ASCII character.
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", bufsize=1)
     last: dict = {}
     assert proc.stdout is not None
+    out = sys.stdout
+    try:
+        out.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    except Exception:
+        pass
     for line in proc.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
+        out.write(line)
+        out.flush()
         try:
             obj = json.loads(line)
         except Exception:
