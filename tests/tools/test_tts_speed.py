@@ -61,7 +61,7 @@ class TestOpenaiTtsSpeed:
 
         with patch("tools.tts_tool._import_openai_client", return_value=mock_cls), \
              patch("tools.tts_tool._resolve_openai_audio_client_config",
-                   return_value=("test-key", None, False)):
+                   return_value=("test-key", None)):
             from tools.tts_tool import _generate_openai_tts
             _generate_openai_tts("Hello", str(tmp_path / "out.mp3"), tts_config)
         return mock_client.audio.speech.create
@@ -94,7 +94,7 @@ class TestOpenaiTtsLangCode:
 
         with patch("tools.tts_tool._import_openai_client", return_value=mock_cls), \
              patch("tools.tts_tool._resolve_openai_audio_client_config",
-                   return_value=("test-key", None, False)):
+                   return_value=("test-key", None)):
             from tools.tts_tool import _generate_openai_tts
             _generate_openai_tts("Hola", str(tmp_path / "out.mp3"), tts_config)
         return mock_client.audio.speech.create
@@ -228,7 +228,7 @@ class TestToolLevelSpeed:
 
         with patch("tools.tts_tool._import_openai_client", return_value=mock_cls), \
              patch("tools.tts_tool._resolve_openai_audio_client_config",
-                   return_value=("test-key", None, False)), \
+                   return_value=("test-key", None)), \
              patch("tools.tts_tool._load_tts_config", return_value={"provider": "openai", "openai": {}}), \
              patch("tools.tts_tool._get_provider", return_value="openai"), \
              patch("tools.tts_tool._resolve_command_provider_config", return_value=None), \

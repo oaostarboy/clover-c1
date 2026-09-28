@@ -30,7 +30,7 @@ class TestOpenaiBackendInstructions:
 
         with patch("tools.tts_tool._import_openai_client", return_value=mock_cls), \
              patch("tools.tts_tool._resolve_openai_audio_client_config",
-                   return_value=("test-key", None, False)):
+                   return_value=("test-key", None)):
             from tools.tts_tool import _generate_openai_tts
             kwargs = {}
             if instructions is not None:
@@ -75,7 +75,7 @@ class TestToolLevelInstructions:
 
         with patch("tools.tts_tool._import_openai_client", return_value=mock_cls), \
              patch("tools.tts_tool._resolve_openai_audio_client_config",
-                   return_value=("test-key", None, False)), \
+                   return_value=("test-key", None)), \
              patch("tools.tts_tool._load_tts_config",
                    return_value={"provider": "openai"}):
             from tools.tts_tool import text_to_speech_tool

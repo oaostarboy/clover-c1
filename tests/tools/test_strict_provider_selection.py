@@ -1,30 +1,23 @@
 """Strict tool-provider selection: the `clover tools` choice always wins.
 
 Policy (owner decision): the provider string stored in config.yaml is what
-runs at call time. "clover" → managed Clover Tool Gateway only; a vendor name →
-that vendor direct with the user's own credentials; no key ever written →
-today's credential autodetect. Credential presence must NEVER select or
-reroute; a selected-but-broken provider produces an honest error naming the
-selection and pointing at `clover tools`.
+runs at call time. A vendor name → that vendor direct with the user's own
+credentials; a legacy "clover" selection is treated like any other
+unrecognized vendor name (direct path, honest selection-naming error); no
+key ever written ⇒ today's credential autodetect. Credential presence must
+NEVER select or reroute; a selected-but-broken provider produces an honest
+error naming the selection and pointing at `clover tools`.
 
-Per category these tests pin the three strict behaviors:
-  (a) managed selection + direct key present ⇒ managed route (key ignored)
-  (b) vendor selection + key missing ⇒ selection-naming error, NO managed call
-  (c) never-configured ⇒ legacy autodetect unchanged
+Per category these tests pin the strict behaviors:
+  (a) vendor selection + key missing ⇒ selection-naming error
+  (b) never-configured ⇒ legacy autodetect unchanged
 """
 
-from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from tools import tool_backend_helpers as tbh
-
-
-MANAGED = SimpleNamespace(
-    clover_user_token="managed-token",
-    gateway_origin="https://gateway.",
-)
 
 
 # ---------------------------------------------------------------------------
@@ -99,72 +92,62 @@ class TestReadSelection:
 
 
 class TestImageFalStrictSelection:
-    def test_clover_selection_routes_managed_even_with_fal_key(self):
+    def test_clover_selection_missing_key_raises_selection_error(self):
+        """A stale 'clover' selection is now a plain vendor name — missing
+        FAL_KEY is a selection-naming error, never a managed reroute."""
         from tools import image_generation_tool as it
 
         with patch.object(it, "read_selection", return_value="clover"), \
-             patch.object(it, "fal_key_is_configured", return_value=True), \
-             patch.object(it, "resolve_managed_tool_gateway", return_value=MANAGED) as gw:
-            assert it._resolve_managed_fal_gateway() is MANAGED
-        gw.assert_called_once_with("fal-queue")
-
-    def test_clover_selection_unentitled_raises_selection_error(self):
-        from tools import image_generation_tool as it
-
-        with patch.object(it, "read_selection", return_value="clover"), \
-             patch.object(it, "fal_key_is_configured", return_value=True), \
-             patch.object(it, "resolve_managed_tool_gateway", return_value=None):
+             patch.object(it, "fal_key_is_configured", return_value=False), \
+             patch.object(it, "_load_fal_client"):
             with pytest.raises(ValueError) as exc:
-                it._resolve_managed_fal_gateway()
+                it._submit_fal_request("fal-ai/some-model", {})
         assert "image_gen is configured to use clover" in str(exc.value)
+        assert "FAL_KEY" in str(exc.value)
         assert "clover tools" in str(exc.value)
 
-    def test_fal_selection_missing_key_errors_without_managed_call(self):
+    def test_fal_selection_missing_key_errors(self):
         from tools import image_generation_tool as it
 
         with patch.object(it, "read_selection", return_value="fal"), \
              patch.object(it, "fal_key_is_configured", return_value=False), \
-             patch.object(it, "resolve_managed_tool_gateway") as gw:
+             patch.object(it, "_load_fal_client"):
             with pytest.raises(ValueError) as exc:
-                it._resolve_managed_fal_gateway()
-        gw.assert_not_called()
+                it._submit_fal_request("fal-ai/some-model", {})
         assert "FAL_KEY" in str(exc.value)
         assert "image_gen is configured to use fal" in str(exc.value)
         assert "clover tools" in str(exc.value)
 
-    def test_fal_selection_with_key_routes_direct(self):
+    def test_fal_selection_with_key_calls_fal_client_directly(self):
         from tools import image_generation_tool as it
 
+        mock_client = MagicMock()
         with patch.object(it, "read_selection", return_value="fal"), \
              patch.object(it, "fal_key_is_configured", return_value=True), \
-             patch.object(it, "resolve_managed_tool_gateway") as gw:
-            assert it._resolve_managed_fal_gateway() is None
-        gw.assert_not_called()
+             patch.object(it, "_load_fal_client"), \
+             patch.object(it, "fal_client", mock_client):
+            it._submit_fal_request("fal-ai/some-model", {"prompt": "x"})
+        mock_client.submit.assert_called_once()
+        assert mock_client.submit.call_args[0][0] == "fal-ai/some-model"
 
-    def test_never_configured_autodetect_direct_when_key_present(self):
+    def test_never_configured_calls_fal_client_directly(self):
         from tools import image_generation_tool as it
 
+        mock_client = MagicMock()
         with patch.object(it, "read_selection", return_value=None), \
-             patch.object(it, "fal_key_is_configured", return_value=True):
-            assert it._resolve_managed_fal_gateway() is None
+             patch.object(it, "fal_key_is_configured", return_value=True), \
+             patch.object(it, "_load_fal_client"), \
+             patch.object(it, "fal_client", mock_client):
+            it._submit_fal_request("fal-ai/some-model", {})
+        mock_client.submit.assert_called_once()
 
-    def test_never_configured_autodetect_managed_when_no_key(self):
+    def test_check_fal_api_key_reflects_key_presence(self):
         from tools import image_generation_tool as it
 
-        with patch.object(it, "read_selection", return_value=None), \
-             patch.object(it, "fal_key_is_configured", return_value=False), \
-             patch.object(it, "resolve_managed_tool_gateway", return_value=MANAGED):
-            assert it._resolve_managed_fal_gateway() is MANAGED
-
-    def test_check_fal_api_key_reflects_selection(self):
-        from tools import image_generation_tool as it
-
-        with patch.object(it, "read_selection", return_value="fal"), \
-             patch.object(it, "fal_key_is_configured", return_value=False), \
-             patch.object(it, "resolve_managed_tool_gateway", return_value=MANAGED):
-            # Broken vendor selection reports unavailable even though the
-            # managed gateway would resolve.
+        with patch.object(it, "fal_key_is_configured", return_value=False):
             assert it.check_fal_api_key() is False
+        with patch.object(it, "fal_key_is_configured", return_value=True):
+            assert it.check_fal_api_key() is True
 
 
 # ---------------------------------------------------------------------------
@@ -173,32 +156,38 @@ class TestImageFalStrictSelection:
 
 
 class TestVideoFalStrictSelection:
-    def test_clover_selection_routes_managed_even_with_fal_key(self):
+    def test_clover_selection_missing_key_raises_selection_error(self):
         from plugins.video_gen import fal as vf
 
         with patch("tools.tool_backend_helpers.read_selection", return_value="clover"), \
-             patch("tools.tool_backend_helpers.fal_key_is_configured", return_value=True), \
-             patch("tools.managed_tool_gateway.resolve_managed_tool_gateway", return_value=MANAGED):
-            assert vf._resolve_managed_fal_video_gateway() is MANAGED
+             patch("tools.tool_backend_helpers.fal_key_is_configured", return_value=False), \
+             patch.object(vf, "_load_fal_client"):
+            with pytest.raises(ValueError) as exc:
+                vf._submit_fal_video_request("fal-ai/some-model", {})
+        assert "video_gen is configured to use clover" in str(exc.value)
+        assert "FAL_KEY" in str(exc.value)
 
-    def test_fal_selection_missing_key_errors_without_managed_call(self):
+    def test_fal_selection_missing_key_errors(self):
         from plugins.video_gen import fal as vf
 
         with patch("tools.tool_backend_helpers.read_selection", return_value="fal"), \
              patch("tools.tool_backend_helpers.fal_key_is_configured", return_value=False), \
-             patch("tools.managed_tool_gateway.resolve_managed_tool_gateway") as gw:
+             patch.object(vf, "_load_fal_client"):
             with pytest.raises(ValueError) as exc:
-                vf._resolve_managed_fal_video_gateway()
-        gw.assert_not_called()
+                vf._submit_fal_video_request("fal-ai/some-model", {})
         assert "video_gen is configured to use fal" in str(exc.value)
         assert "FAL_KEY" in str(exc.value)
 
     def test_never_configured_autodetect_unchanged(self):
         from plugins.video_gen import fal as vf
 
+        mock_client = MagicMock()
         with patch("tools.tool_backend_helpers.read_selection", return_value=None), \
-             patch("tools.tool_backend_helpers.fal_key_is_configured", return_value=True):
-            assert vf._resolve_managed_fal_video_gateway() is None
+             patch("tools.tool_backend_helpers.fal_key_is_configured", return_value=True), \
+             patch.object(vf, "_load_fal_client"), \
+             patch.object(vf, "_fal_client", mock_client):
+            vf._submit_fal_video_request("fal-ai/some-model", {})
+        mock_client.submit.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -207,26 +196,22 @@ class TestVideoFalStrictSelection:
 
 
 class TestSttStrictSelection:
-    def test_clover_selection_beats_direct_openai_key(self):
+    def test_stale_clover_selection_requires_direct_credentials(self):
         from tools import transcription_tools as tt
 
         with patch.object(tt, "_load_stt_config", return_value={"openai": {"api_key": "sk-direct"}}), \
-             patch("tools.tool_backend_helpers.read_selection", return_value="clover"), \
-             patch.object(tt, "resolve_managed_tool_gateway", return_value=MANAGED):
+             patch("tools.tool_backend_helpers.read_selection", return_value="clover"):
             api_key, base_url = tt._resolve_openai_audio_client_config()
-        assert api_key == "managed-token"
-        assert base_url.startswith("https://gateway.")
+        assert api_key == "sk-direct"
 
-    def test_vendor_selection_missing_key_errors_without_managed_call(self):
+    def test_vendor_selection_missing_key_errors(self):
         from tools import transcription_tools as tt
 
         with patch.object(tt, "_load_stt_config", return_value={}), \
              patch("tools.tool_backend_helpers.read_selection", return_value="openai"), \
-             patch.object(tt, "resolve_openai_audio_api_key", return_value=""), \
-             patch.object(tt, "resolve_managed_tool_gateway") as gw:
+             patch.object(tt, "resolve_openai_audio_api_key", return_value=""):
             with pytest.raises(ValueError) as exc:
                 tt._resolve_openai_audio_client_config()
-        gw.assert_not_called()
         assert "stt is configured to use openai" in str(exc.value)
         assert "clover tools" in str(exc.value)
 
@@ -251,23 +236,12 @@ class TestBrowserUseStrictSelection:
 
         return BrowserUseBrowserProvider()
 
-    def test_clover_selection_routes_managed_even_with_direct_key(self):
-        provider = self._provider()
-        with patch("plugins.browser.browser_use.provider.get_secret", return_value="bu-key"), \
-             patch("tools.tool_backend_helpers.read_selection", return_value="clover"), \
-             patch("tools.managed_tool_gateway.resolve_managed_tool_gateway", return_value=MANAGED):
-            config = provider._get_config_or_none()
-        assert config["managed_mode"] is True
-        assert config["api_key"] == "managed-token"
-
-    def test_vendor_selection_missing_key_errors_without_managed_call(self):
+    def test_vendor_selection_missing_key_errors(self):
         provider = self._provider()
         with patch("plugins.browser.browser_use.provider.get_secret", return_value=""), \
-             patch("tools.tool_backend_helpers.read_selection", return_value="browser-use"), \
-             patch("tools.managed_tool_gateway.resolve_managed_tool_gateway") as gw:
+             patch("tools.tool_backend_helpers.read_selection", return_value="browser-use"):
             with pytest.raises(ValueError) as exc:
                 provider._get_config()
-        gw.assert_not_called()
         assert "browser is configured to use browser-use" in str(exc.value)
         assert "BROWSER_USE_API_KEY" in str(exc.value)
 
@@ -276,7 +250,6 @@ class TestBrowserUseStrictSelection:
         with patch("plugins.browser.browser_use.provider.get_secret", return_value="bu-key"), \
              patch("tools.tool_backend_helpers.read_selection", return_value=None):
             config = provider._get_config_or_none()
-        assert config["managed_mode"] is False
         assert config["api_key"] == "bu-key"
 
 

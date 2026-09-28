@@ -44,12 +44,7 @@ from urllib.parse import urljoin
 
 from clover_cli._subprocess_compat import windows_hide_flags
 from utils import is_truthy_value
-from tools.managed_tool_gateway import resolve_managed_tool_gateway
-from tools.tool_backend_helpers import (
-    managed_clover_tools_enabled,
-    clover_tool_gateway_unavailable_message,
-    resolve_openai_audio_api_key,
-)
+from tools.tool_backend_helpers import resolve_openai_audio_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +206,7 @@ def _resolve_stt_language(
 
 
 def _has_openai_audio_backend() -> bool:
-    """Return True when OpenAI audio can use config credentials, env credentials, or the managed gateway."""
+    """Return True when OpenAI audio can use config credentials or env credentials."""
     try:
         _resolve_openai_audio_client_config()
         return True
@@ -1025,12 +1020,6 @@ def _get_provider(stt_config: dict) -> str:
     explicit = "provider" in stt_config
     provider = stt_config.get("provider", DEFAULT_PROVIDER)
 
-    # The managed "Clover Subscription" selection (stt.provider: clover) is
-    # serviced by the OpenAI provider implementation, routed through the
-    # managed openai-audio gateway by _resolve_openai_audio_client_config.
-    if isinstance(provider, str) and provider.strip().lower() == "clover":
-        provider = "openai"
-
     if explicit and provider == "local":
         # Legacy DEFAULT_CONFIG seeded ``stt.provider: local`` on every
         # install, so a merged-config "local" is not proof of a user pick.
@@ -1087,9 +1076,8 @@ def _get_provider(stt_config: dict) -> str:
             if _HAS_OPENAI:
                 # Resolve directly instead of via the boolean probe: the
                 # probe flattens _resolve_openai_audio_client_config's
-                # selection-specific ValueError into False, so a managed
-                # openai-audio gateway outage would be logged as a generic
-                # "no API key" hint (#93045).
+                # selection-specific ValueError into False, which would be
+                # logged as a generic "no API key" hint (#93045).
                 try:
                     _resolve_openai_audio_client_config()
                     return "openai"
@@ -3170,9 +3158,8 @@ def _dispatch_stt_provider(
         return _unregistered_stt_provider_error(provider_key)
 
     # An explicit openai selection flattened to "none" carries a
-    # selection-specific reason (e.g. the managed openai-audio gateway is
-    # unavailable). Surface it — with its `clover tools` remediation —
-    # instead of the all-provider setup hint (#93045).
+    # selection-specific reason. Surface it — with its `clover tools`
+    # remediation — instead of the all-provider setup hint (#93045).
     if provider_key == "none" and str(stt_config.get("provider") or "") == "openai" and _HAS_OPENAI:
         try:
             _resolve_openai_audio_client_config()
@@ -3307,20 +3294,12 @@ def _resolve_openai_audio_client_config() -> tuple[str, str]:
     """Return ``(api_key, base_url)`` for the OpenAI STT client.
 
     Strict selection semantics (switch on the stored ``stt`` provider
-    string; previously this resolver never read the stored gateway intent):
-    - ``"clover"`` (or legacy ``use_gateway: true``) → managed gateway ONLY;
-      unentitled/unreachable is a selection-naming error (a direct
-      OPENAI_API_KEY must NOT override it).
-    - any other stored stt provider → direct credentials ONLY; missing
-      credentials is a selection-naming error — no silent managed fallback.
-    - never-configured stt section → legacy ladder: config key → local
-      base_url → env key → managed gateway.
+    string): a stored selection (including a stale legacy ``"clover"``
+    value) requires direct credentials — missing credentials is a
+    selection-naming error. A never-configured stt section falls back to
+    the legacy credential ladder.
     """
-    from tools.tool_backend_helpers import (
-        CLOVER_MANAGED_PROVIDER,
-        read_selection,
-        selection_error,
-    )
+    from tools.tool_backend_helpers import read_selection, selection_error
 
     stt_config = _load_stt_config()
     openai_cfg = stt_config.get("openai") or {}
@@ -3328,19 +3307,6 @@ def _resolve_openai_audio_client_config() -> tuple[str, str]:
     cfg_base_url = openai_cfg.get("base_url", "")
 
     selected = read_selection("stt")
-
-    if selected == CLOVER_MANAGED_PROVIDER:
-        managed_gateway = resolve_managed_tool_gateway("openai-audio")
-        if managed_gateway is None:
-            raise ValueError(selection_error(
-                "stt",
-                CLOVER_MANAGED_PROVIDER,
-                "the Clover Tool Gateway is not available (not entitled or "
-                "unreachable)",
-            ))
-        return managed_gateway.clover_user_token, urljoin(
-            f"{managed_gateway.gateway_origin.rstrip('/')}/", "v1"
-        )
 
     if selected is not None:
         # Stored vendor selection: direct credentials only.
@@ -3371,20 +3337,9 @@ def _resolve_openai_audio_client_config() -> tuple[str, str]:
     if direct_api_key:
         return direct_api_key, OPENAI_BASE_URL
 
-    managed_gateway = resolve_managed_tool_gateway("openai-audio")
-    if managed_gateway is None:
-        message = "Neither stt.openai.api_key in config nor VOICE_TOOLS_OPENAI_KEY/OPENAI_API_KEY is set"
-        if managed_clover_tools_enabled():
-            message += (
-                ". "
-                + clover_tool_gateway_unavailable_message(
-                    "managed OpenAI audio for transcription",
-                )
-            )
-        raise ValueError(message)
-
-    return managed_gateway.clover_user_token, urljoin(
-        f"{managed_gateway.gateway_origin.rstrip('/')}/", "v1"
+    raise ValueError(
+        "Neither stt.openai.api_key in config nor "
+        "VOICE_TOOLS_OPENAI_KEY/OPENAI_API_KEY is set"
     )
 
 
