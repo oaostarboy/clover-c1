@@ -1305,8 +1305,8 @@ export const api = {
  *
  * Returned by the dashboard's gated middleware when a valid session cookie
  * is attached. ``email`` and ``display_name`` are empty strings under the
- * Clover Portal contract V1 (the access token has no email/name claims —
- * see Contract Anchor C4 in the plan). The AuthWidget surfaces a
+ * dashboard OAuth gate contract V1 (the access token has no email/name
+ * claims — see Contract Anchor C4 in the plan). The AuthWidget surfaces a
  * truncated ``user_id`` instead.
  */
 export interface AuthMeResponse {

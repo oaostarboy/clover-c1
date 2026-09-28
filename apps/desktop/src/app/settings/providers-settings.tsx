@@ -5,8 +5,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { runInTerminal } from '@/app/right-sidebar/store'
 import { disconnectOAuthProvider, listOAuthProviders } from '@/clover'
 import {
-  FEATURED_ID,
-  FeaturedProviderRow,
   FireworksProviderRow,
   OpenRouterProviderRow,
   ProviderRow,
@@ -148,13 +146,11 @@ function OAuthPicker({
 
   const select = (p: OAuthProvider) => startManualProviderOAuth(p.id)
 
-  const featured = ordered.find(p => p.id === FEATURED_ID && !p.status?.logged_in) ?? null
-  const rest = featured ? ordered.filter(p => p.id !== FEATURED_ID) : ordered
   // Keep connected accounts grouped and always visible; only the unconnected
   // providers hide behind the disclosure, so the page leads with what's set up.
   // Both lists preserve `sortProviders` order (curated priority, then name).
-  const connected = rest.filter(p => p.status?.logged_in)
-  const others = rest.filter(p => !p.status?.logged_in)
+  const connected = ordered.filter(p => p.status?.logged_in)
+  const others = ordered.filter(p => !p.status?.logged_in)
   const collapsible = others.length > 0
   const showOthers = !collapsible || showAll
 
@@ -175,7 +171,6 @@ function OAuthPicker({
       <p className="-mt-2 mb-1 text-[length:var(--conversation-caption-font-size)] leading-(--conversation-caption-line-height) text-(--ui-text-tertiary)">
         {p.intro}
       </p>
-      {featured && <FeaturedProviderRow onSelect={select} provider={featured} />}
       {/* Slot #2 — always visible, matching onboarding / CANONICAL_PROVIDERS. */}
       <FireworksProviderRow onClick={onWantApiKey} />
       {connected.length > 0 && (

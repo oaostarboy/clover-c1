@@ -417,9 +417,6 @@ Future messages in this room will use that transcript until `/reset` or another 
     unknown_subcommand:       "不明な /usage サブコマンド: `{args}`。`/usage` または `/usage reset [--force]` をお試しください。"
     reset_wrong_provider:     "バンクされた使用制限リセットは openai-codex プロバイダーでのみ利用できます。まず `/model` で切り替えてください。"
 
-  credits:
-    not_logged_in:            "Clover Portal にログインしていません。ログインすると残高の確認とチャージができます。"
-
   verbose:
     not_enabled:           "`/verbose` コマンドはメッセージングプラットフォームで有効になっていません。\n\n`config.yaml` で有効にしてください:\n```yaml\ndisplay:\n  tool_progress_command: true\n```"
     mode_off:              "⚙️ ツール進捗: **OFF** — ツールの動作は表示されません。"

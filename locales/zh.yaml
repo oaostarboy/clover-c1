@@ -417,9 +417,6 @@ Future messages in this room will use that transcript until `/reset` or another 
     unknown_subcommand:       "未知的 /usage 子命令：`{args}`。请尝试 `/usage` 或 `/usage reset [--force]`。"
     reset_wrong_provider:     "存储的用量重置仅在 openai-codex 提供商上可用。请先使用 `/model` 切换。"
 
-  credits:
-    not_logged_in:            "未登录 Clover Portal。登录后即可查看额度余额并充值。"
-
   verbose:
     not_enabled:           "`/verbose` 命令未在消息平台启用。\n\n请在 `config.yaml` 中启用：\n```yaml\ndisplay:\n  tool_progress_command: true\n```"
     mode_off:              "⚙️ 工具进度：**OFF** — 不显示任何工具活动。"
