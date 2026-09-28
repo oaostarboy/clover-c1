@@ -6815,6 +6815,259 @@ class APIServerAdapter(BasePlatformAdapter):
         except Exception as e:
             return web.json_response({"error": _redact_api_error_text(e)}, status=500)
 
+
+
+    # ------------------------------------------------------------------
+    # Output extraction helper
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_response_conversation_history(
+        conversation_history: List[Dict[str, Any]],
+        user_message: Any,
+        result: Dict[str, Any],
+        final_response: Any,
+    ) -> List[Dict[str, Any]]:
+        """Build the stored Responses transcript without duplicating history.
+
+        When context compression occurs during a turn the agent returns a
+        compressed full transcript in ``result["messages"]`` (starting with a
+        summary) and sets ``result["_compressed"] = True``.  Because the
+        compressed transcript does not share the input ``conversation_history``
+        prefix, the normal turn-start detection fails and old code would
+        concatenate the uncompressed history on front, bloating the stored
+        context and re-triggering compression on every subsequent request.
+        """
+        prior = list(conversation_history)
+        current_user = {"role": "user", "content": user_message}
+        agent_messages = result.get("messages") if isinstance(result, dict) else None
+
+        if isinstance(agent_messages, list) and agent_messages:
+            turn_start = APIServerAdapter._response_messages_turn_start_index(
+                conversation_history,
+                user_message,
+                result,
+            )
+            if turn_start:
+                return list(agent_messages)
+
+            # turn_start == 0: agent_messages does not start with prior.
+            # This can happen because compression rewrote the transcript
+            # (summary prefix replaces original history), OR because
+            # agent_messages only carries the current turn without prior.
+            # The ``_compressed`` flag (set by _run_agent after compaction)
+            # distinguishes — skip the concatenation and use the compressed
+            # transcript directly.
+            if result.get("_compressed"):
+                return list(agent_messages)
+
+            full_history = prior
+            full_history.append(current_user)
+            full_history.extend(agent_messages)
+            return full_history
+
+        full_history = prior
+        full_history.append(current_user)
+        full_history.append({"role": "assistant", "content": final_response})
+        return full_history
+
+    @staticmethod
+    def _response_messages_turn_start_index(
+        conversation_history: List[Dict[str, Any]],
+        user_message: Any,
+        result: Dict[str, Any],
+    ) -> int:
+        """Detect transcript-shaped result["messages"] and return turn start."""
+        agent_messages = result.get("messages") if isinstance(result, dict) else None
+        if not isinstance(agent_messages, list) or not agent_messages:
+            return 0
+
+        prior = list(conversation_history)
+        current_user = {"role": "user", "content": user_message}
+        expected_prefix = prior + [current_user]
+        if agent_messages[:len(expected_prefix)] == expected_prefix:
+            return len(expected_prefix)
+        if prior and agent_messages[:len(prior)] == prior:
+            return len(prior)
+        return 0
+
+    @classmethod
+    def _turn_transcript_messages(
+        cls,
+        conversation_history: List[Dict[str, Any]],
+        user_message: Any,
+        result: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Return this turn's assistant/tool messages in client-safe shape.
+
+        The streaming SSE contract delivers all assistant text as
+        ``assistant.delta`` events under one ``message_id`` interleaved with
+        ``tool.*`` events, and a single ``assistant.completed`` carrying only
+        the final reply.  A client that accumulates deltas into one buffer
+        cannot reconstruct *intermediate* assistant text segments that preceded
+        tool calls — so when the page is re-opened mid/post-stream those
+        segments appear lost, even though state.db persisted them correctly.
+
+        Emitting the authoritative per-turn transcript on ``run.completed`` lets
+        any SSE consumer reconcile its live view against ground truth without a
+        separate ``GET /messages`` round-trip.  Purely additive: clients that
+        ignore the field are unaffected.  Refs #34703.
+        """
+        agent_messages = result.get("messages") if isinstance(result, dict) else None
+        if not isinstance(agent_messages, list) or not agent_messages:
+            return []
+        start = cls._response_messages_turn_start_index(
+            conversation_history, user_message, result
+        )
+        turn = agent_messages[start:]
+        out: List[Dict[str, Any]] = []
+        for msg in turn:
+            if not isinstance(msg, dict):
+                continue
+            if msg.get("role") not in {"assistant", "tool"}:
+                continue
+            # _message_response projects compaction scaffolding itself and
+            # marks pure handoffs display_kind == "hidden"; classifying here
+            # first would re-run the content classifier (a full content
+            # flatten + prefix scan) a second time per message.
+            projected = cls._message_response(msg)
+            if projected.get("display_kind") == "hidden":
+                continue
+            out.append(projected)
+        return out
+
+    @staticmethod
+    def _extract_output_items(result: Dict[str, Any], start_index: int = 0) -> List[Dict[str, Any]]:
+        """
+        Build the output item array from the agent's messages.
+
+        Walks *result["messages"]* starting at *start_index* and emits:
+        - ``function_call`` items for each tool_call on assistant messages
+        - ``function_call_output`` items for each tool-role message
+        - a final ``message`` item with the assistant's text reply
+        """
+        items: List[Dict[str, Any]] = []
+        messages = result.get("messages", [])
+        if start_index > 0:
+            messages = messages[start_index:]
+
+        for msg in messages:
+            role = msg.get("role")
+            if role == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    func = tc.get("function", {})
+                    items.append({
+                        "id": f"fc_{uuid.uuid4().hex[:24]}",
+                        "type": "function_call",
+                        # These calls were already executed server-side by the
+                        # Clover agent; they are replayed for structured tool
+                        # UI only.  Mark them completed (matching the SSE
+                        # streaming path) so OpenAI clients don't interpret
+                        # them as pending calls the client must execute.
+                        "status": "completed",
+                        "name": func.get("name", ""),
+                        "arguments": func.get("arguments", ""),
+                        "call_id": tc.get("id", ""),
+                    })
+            elif role == "tool":
+                items.append({
+                    "id": f"fco_{uuid.uuid4().hex[:24]}",
+                    "type": "function_call_output",
+                    "status": "completed",
+                    "call_id": msg.get("tool_call_id", ""),
+                    "output": msg.get("content", ""),
+                })
+
+        # Final assistant message
+        final = result.get("final_response", "")
+        if not final:
+            final = _redact_api_error_text(result.get("error", "(No response generated)"))
+
+        items.append({
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": final,
+                }
+            ],
+        })
+        return items
+
+    # ------------------------------------------------------------------
+    # Agent execution
+    # ------------------------------------------------------------------
+
+    def _concurrency_limited_response(self) -> Optional["web.Response"]:
+        """Return a 429 response if the concurrent-run cap is reached, else None.
+
+        The cap bounds total in-flight agent activity across every
+        agent-serving endpoint. Reuse the same adapter-owned work count that
+        shutdown draining uses, including an admitted request before it reaches
+        agent/task bookkeeping. Stream queues are transport state and may
+        disappear while their underlying run remains active, so they must not
+        define run concurrency. A configured value of 0 disables the cap.
+        """
+        limit = self._max_concurrent_runs
+        if limit <= 0:
+            return None
+        inflight = self.active_agent_work_count()
+        # The current request owns one reservation until it hands off to
+        # _run_agent() or /v1/runs task registration. It must not consume its
+        # own last available slot; other admitted requests remain counted.
+        reservation = _api_agent_request_reservation.get()
+        if reservation and reservation["active"]:
+            inflight -= 1
+        if inflight >= limit:
+            return web.json_response(
+                _openai_error(
+                    f"Too many concurrent runs (max {limit})",
+                    err_type="rate_limit_error",
+                    code="rate_limit_exceeded",
+                ),
+                status=429,
+                headers={"Retry-After": "1"},
+            )
+        return None
+
+    @staticmethod
+    def _bind_api_server_session(
+        *,
+        chat_id: str = "",
+        session_key: str = "",
+        session_id: str = "",
+        browser_control_principal: str = "",
+        browser_control_transport_family: str = "",
+    ) -> list:
+        """Bind session contextvars for an API-server agent run.
+
+        This is the SINGLE structural chokepoint every API-server agent-entry
+        path must use to seed session context — it hardwires
+        ``platform="api_server"`` and ``async_delivery=False`` so a new route
+        physically cannot reintroduce the silent-no-op bug (#10760) by
+        forgetting to mark the channel as non-delivering. There is no
+        ``async_delivery`` parameter to get wrong; the stateless HTTP path can
+        never wake the agent after the turn ends, on ANY route.
+
+        Returns reset tokens; pass them to ``clear_session_vars`` in a
+        ``finally`` block (the binding is request-scoped and must not outlive
+        the turn — a session resumed later on a delivering interface, e.g. the
+        CLI or a gateway platform, re-binds fresh and is NOT blocked).
+        """
+        from gateway.session_context import set_session_vars
+
+        return set_session_vars(
+            platform="api_server",
+            chat_id=chat_id,
+            session_key=session_key,
+            session_id=session_id,
+            browser_control_principal=browser_control_principal,
+            browser_control_transport_family=browser_control_transport_family,
+            async_delivery=False,
+            cron_session="",
+        )
+
     async def _run_agent(
         self,
         user_message: str,
