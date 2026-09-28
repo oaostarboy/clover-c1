@@ -17,15 +17,10 @@ from clover_cli.auth import AuthError, resolve_provider
 from clover_cli.colors import Colors, color
 from clover_cli.config import get_env_path, get_env_value, get_clover_home, load_config
 from clover_cli.models import provider_label
-from clover_cli.clover_account import (
-    format_clover_portal_entitlement_message,
-    get_clover_portal_account_info,
-)
-from clover_cli.clover_subscription import get_clover_subscription_features
+from clover_cli.clover_account import get_clover_portal_account_info
 from clover_cli.runtime_provider import resolve_requested_provider
 from clover_cli.vercel_auth import describe_vercel_auth
 from clover_constants import OPENROUTER_MODELS_URL
-from tools.tool_backend_helpers import managed_clover_tools_enabled
 
 def check_mark(ok: bool) -> str:
     if ok:
@@ -359,43 +354,6 @@ def show_status(args):
         print(f"    Refreshed:  {_format_iso_timestamp(xai_oauth_status.get('last_refresh'))}")
     if xai_oauth_status.get("error") and not xai_oauth_logged_in:
         print(f"    Error:      {xai_oauth_status.get('error')}")
-
-    # =========================================================================
-    # Clover Subscription Features
-    # =========================================================================
-    if managed_clover_tools_enabled():
-        features = get_clover_subscription_features(config)
-        print()
-        print(color("◆ Clover Tool Gateway", Colors.CYAN, Colors.BOLD))
-        if not features.clover_auth_present:
-            print("  Clover Portal   ✗ not logged in")
-        else:
-            print("  Clover Portal   ✓ managed tools available")
-        for feature in features.items():
-            if feature.managed_by_clover:
-                state = "active via Clover subscription"
-            elif feature.active:
-                current = feature.current_provider or "configured provider"
-                state = f"active via {current}"
-            elif feature.included_by_default and features.clover_auth_present:
-                state = "included by subscription, not currently selected"
-            elif feature.key == "modal" and features.clover_auth_present:
-                state = "available via subscription (optional)"
-            else:
-                state = "not configured"
-            print(f"  {feature.label:<15} {check_mark(feature.available or feature.active or feature.managed_by_clover)} {state}")
-    elif clover_logged_in or clover_inference_present:
-        # Clover OAuth without entitlement, or an opaque inference key without
-        # Portal account information, cannot enable the Tool Gateway.
-        print()
-        print(color("◆ Clover Tool Gateway", Colors.CYAN, Colors.BOLD))
-        message = format_clover_portal_entitlement_message(
-            clover_account_info,
-            capability="managed web, image, TTS, STT, browser, and Modal tools",
-        )
-        if message:
-            for line in message.splitlines():
-                print(f"  {line}")
 
     # =========================================================================
     # API-Key Providers
