@@ -4399,63 +4399,6 @@ def _safe_call(mod, fn_name: str, default):
 
 
 # ---------------------------------------------------------------------------
-# Portal endpoint — Clover Portal auth + Tool Gateway routing status (read-only).
-# ---------------------------------------------------------------------------
-
-
-@app.get("/api/portal")
-async def get_portal_status():
-    # load_config() + auth/subscription snapshots are disk reads — this is a
-    # polled endpoint, so keep them off the event loop.
-    def _run():
-        return _get_portal_status_sync()
-
-    return await asyncio.to_thread(_run)
-
-
-def _get_portal_status_sync():
-    cfg = load_config() or {}
-    auth: Dict[str, Any] = {}
-    try:
-        from clover_cli.auth import get_clover_auth_status_local
-
-        # Read-only dashboard endpoint: refresh-free snapshot so polling
-        # never performs an OAuth refresh or burns a refresh token.
-        auth = get_clover_auth_status_local() or {}
-    except Exception:
-        auth = {}
-
-    features = []
-    try:
-        from clover_cli.clover_subscription import get_clover_subscription_features
-
-        feats = get_clover_subscription_features(cfg)
-        if feats is not None:
-            for feat in feats.items():
-                if getattr(feat, "managed_by_clover", False):
-                    state = "via Clover Portal"
-                elif getattr(feat, "active", False) and getattr(feat, "current_provider", None):
-                    state = feat.current_provider
-                elif getattr(feat, "active", False):
-                    state = "active"
-                else:
-                    state = "not configured"
-                features.append({"label": getattr(feat, "label", ""), "state": state})
-    except Exception:
-        _log.exception("portal features failed")
-
-    model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
-    return {
-        "logged_in": bool(auth.get("logged_in")),
-        "portal_url": auth.get("portal_base_url"),
-        "inference_url": auth.get("inference_base_url"),
-        "provider": str((model_cfg or {}).get("provider") or ""),
-        "subscription_url": "",
-        "features": features,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Diagnostics: prompt-size, support dump, debug upload, config migrate.
 # All produce text output, so they spawn background actions tailed via
 # /api/actions/<name>/status.
