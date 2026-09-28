@@ -71,15 +71,6 @@ class MessagingPlatformUpdate(BaseModel):
     profile: Optional[str] = None
 
 
-class TelegramOnboardingStart(BaseModel):
-    bot_name: Optional[str] = None
-
-
-class TelegramOnboardingApply(BaseModel):
-    allowed_user_ids: List[str]
-    profile: Optional[str] = None
-
-
 class WhatsAppOnboardingStart(BaseModel):
     mode: Optional[str] = "bot"
     allowed_users: Optional[str] = ""
