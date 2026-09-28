@@ -19,7 +19,6 @@ export const ar = defineLocale({
     handoffLead: 'تابع النقاش في:',
     links: {
       github: 'GitHub Issues',
-      portal: 'دعم بوابة Clover',
       discord: 'Discord'
     }
   },
@@ -109,12 +108,6 @@ export const ar = defineLocale({
       retry: 'إعادة المحاولة',
       repairInstall: 'إصلاح التثبيت',
       useLocalGateway: 'استخدام البوابة المحلية',
-      cloudDownTitle: 'عامل Clover Cloud معطّل',
-      cloudDownDescription:
-        'يعيد عامل السحابة المُدار من Clover الذي يتصل به هذا البوابة خطأً من الخادم. لا يمكن إعادة تشغيله من هنا — تحقق من حالته، أو بدّل إلى البوابة المحلية، أو احصل على الدعم.',
-      cloudDownHint: 'تفتح الأزرار أدناه بوابة Clover (حالة المثيل وعناصر التحكم) أو Discord للحصول على الدعم.',
-      cloudDownCheckPortal: 'التحقق من حالة البوابة',
-      cloudDownDiscord: 'الحصول على مساعدة عبر Discord',
       openLogs: 'فتح السجلات',
       repairHint: 'يعيد الإصلاح تشغيل المثبت وقد يستغرق بضع دقائق على جهاز جديد.',
       remoteSignInHint: signInLabel =>
@@ -979,7 +972,6 @@ export const ar = defineLocale({
       noProviderOptions: 'لا تحتوي مجموعة الأدوات هذه على خيارات مزوّد — فعّلها لتعمل مع إعدادك الحالي.',
       noProviders: 'لا يوجد مزوّدون متاحون لمجموعة الأدوات هذه الآن.',
       ready: 'جاهز',
-      cloverIncluded: 'مُضمّن مع اشتراك Clover — سجّل الدخول إلى Clover Portal للتفعيل.',
       noApiKeyRequired: 'لا يلزم مفتاح API.',
       postSetupHint: step =>
         `تحتاج هذه الخلفية إلى تثبيت لمرة واحدة (${step}). يعمل على هذا الجهاز — قد يستغرق بضع دقائق.`,
@@ -2535,7 +2527,6 @@ export const ar = defineLocale({
       errorOpenLogsFailed: 'تعذّر فتح مجلد السجلات',
       errorOpenDesktopLogs: 'فتح سجلات سطح المكتب',
       errorCopyDiagnostics: 'نسخ تفاصيل الخطأ',
-      errorSendDiagnostics: 'إرسال التشخيصات',
       filesChanged: count => `${count} ملفات تم تغييرها`,
       reviewChanges: 'مراجعة',
       readAloudFailed: 'فشلت القراءة بصوت عال',
