@@ -134,6 +134,21 @@ def probe_gateway(root: Path, *, timeout: float = 90, stable_seconds: float = 20
 
 
 def _restart_from_beacon(data: dict[str, Any]) -> None:
+    supervisor = data.get("supervisor")
+    if supervisor in {"systemd", "launchd"}:
+        root = Path(data["repo"])
+        python = root / "venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        if supervisor == "systemd":
+            code = ("from clover_cli.update_cmd import _restart_systemd_gateway_units_best_effort as restart; "
+                    "failed=[]; restart(failed); "
+                    "assert not failed, f'Service restart failed: {failed}'")
+        else:
+            code = ("from clover_cli.update_cmd import _restart_macos_launchd_gateways as restart; "
+                    "done=[]; failed=[]; restart(done, failed, 45.0); "
+                    "assert not failed, f'Launchd restart failed: {failed}'")
+        subprocess.run([str(python), "-c", code], cwd=root, check=True,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+        return
     services = data.get("windows_services") or []
     if services and os.name == "nt":
         root = Path(data["repo"])
@@ -243,7 +258,8 @@ def beacon_path(clover_home: Optional[Path] = None) -> Path:
 def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None,
                  pre_pull_sha: str | None = None, repo: str | None = None,
                  pre_update_snapshot_id: str | None = None,
-                 windows_services: list[str] | None = None) -> Path:
+                 windows_services: list[str] | None = None,
+                 supervisor: str | None = None) -> Path:
     """Record how to restart the gateway, and that the updater is alive.
 
     ``argv`` is the command line of the gateway being stopped, captured before
@@ -260,6 +276,7 @@ def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None,
         "repo": repo,
         "pre_update_snapshot_id": pre_update_snapshot_id,
         "windows_services": list(windows_services or []),
+        "supervisor": supervisor,
     }
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(payload), encoding="utf-8")
@@ -395,7 +412,7 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
                     )
                     if head.returncode == 0 and head.stdout.strip() == data["pre_pull_sha"]:
-                        if not _gateway_running() and (data.get("gateway_argv") or data.get("windows_services")):
+                        if not _gateway_running() and (data.get("gateway_argv") or data.get("windows_services") or data.get("supervisor")):
                             _restart_from_beacon(data)
                         beacon.unlink(missing_ok=True)
                         return "update-finished"
