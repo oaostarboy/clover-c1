@@ -604,10 +604,7 @@ def _model_flow_clover(config, current_model="", args=None):
             model_cfg = {}
         model_cfg["provider"] = "clover"
         model_cfg["default"] = selected
-        if inference_url and inference_url.strip():
-            model_cfg["base_url"] = inference_url.rstrip("/")
-        else:
-            model_cfg.pop("base_url", None)
+        model_cfg["base_url"] = (inference_url or "").rstrip("/")
         clear_model_endpoint_credentials(model_cfg)
         config["model"] = model_cfg
         # Clear any custom endpoint that might conflict
