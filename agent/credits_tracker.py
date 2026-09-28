@@ -249,15 +249,13 @@ def is_free_tier_model(model: str, base_url: str = "") -> bool:
     # under ``stealth/`` this would wrongly suppress the banner on it.
     if model.startswith("stealth/"):
         return True
-    if not base_url:
-        return False
     try:
         from clover_cli.models import _is_model_free, _pricing_cache
 
         # Mirror get_pricing_for_provider's key normalization: the agent's
-        # Clover base_url is /v1-suffixed ()
+        # Clover base_url is /v1-suffixed (possibly "" when unconfigured)
         # but the picker keys _pricing_cache on the pre-/v1 root.
-        key = base_url.rstrip("/")
+        key = (base_url or "").rstrip("/")
         if key.endswith("/v1"):
             key = key[:-3].rstrip("/")
         pricing = _pricing_cache.get(key)
