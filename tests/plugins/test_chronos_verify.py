@@ -139,13 +139,14 @@ def test_jwks_url_path_resolves_key(rsa_keys, monkeypatch):
 
     priv, pub = rsa_keys
     token = _mint(priv, _base_claims())
+    jwks_url = "https://portal.example.com/.well-known/jwks.json"
 
     class FakeKey:
         key = pub
 
     class FakeJWKClient:
         def __init__(self, url, **kwargs):
-            assert url == ""
+            assert url == jwks_url
 
         def get_signing_key_from_jwt(self, tok):
             return FakeKey()
@@ -155,7 +156,7 @@ def test_jwks_url_path_resolves_key(rsa_keys, monkeypatch):
     monkeypatch.setattr(verify_mod, "_JWK_CLIENTS", {})
     claims = verify_nas_fire_token(
         token=token, expected_audience=AUD,
-        jwks_or_key="",
+        jwks_or_key=jwks_url,
         issuer=ISS,
     )
     assert claims is not None and claims["purpose"] == "cron_fire"
