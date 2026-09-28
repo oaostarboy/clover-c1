@@ -48,7 +48,7 @@ describe('refreshProfileRemoteOverrides', () => {
       }
 
       if (profile === 'cloudy') {
-        return { mode: 'cloud', remoteUrl: 'https://cloud.example.com:8443' }
+        return { mode: 'remote', remoteUrl: 'https://cloud.example.com:8443' }
       }
 
       return { mode: 'local', remoteUrl: '' }
