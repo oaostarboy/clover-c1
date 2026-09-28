@@ -24,14 +24,7 @@ from clover_cli.config import (
     load_config, save_config, get_env_value, save_env_value,
 )
 from clover_cli.colors import Colors, color
-from clover_cli.clover_subscription import (
-    MANAGED_FEATURE_COVERAGE_CATEGORY,
-    CloverSubscriptionFeatures,
-    apply_clover_managed_defaults,
-    get_clover_subscription_features,
-)
-from clover_cli.clover_account import format_clover_portal_entitlement_message
-from tools.tool_backend_helpers import CLOVER_MANAGED_PROVIDER, fal_key_is_configured
+from tools.tool_backend_helpers import fal_key_is_configured
 from utils import base_url_hostname, is_truthy_value
 
 logger = logging.getLogger(__name__)
@@ -333,16 +326,6 @@ TOOL_CATEGORIES = {
                 "tts_provider": "edge",
             },
             {
-                "name": "Clover Subscription",
-                "badge": "subscription",
-                "tag": "Managed OpenAI TTS billed to your subscription",
-                "env_vars": [],
-                "tts_provider": "openai",
-                "requires_clover_auth": True,
-                "managed_clover_feature": "tts",
-                "override_env_vars": ["VOICE_TOOLS_OPENAI_KEY", "OPENAI_API_KEY"],
-            },
-            {
                 "name": "OpenAI TTS",
                 "badge": "paid",
                 "tag": "High quality voices",
@@ -426,16 +409,6 @@ TOOL_CATEGORIES = {
                 "post_setup": "faster_whisper",
             },
             {
-                "name": "Clover Subscription",
-                "badge": "subscription",
-                "tag": "Managed OpenAI transcription billed to your subscription",
-                "env_vars": [],
-                "stt_provider": "openai",
-                "requires_clover_auth": True,
-                "managed_clover_feature": "stt",
-                "override_env_vars": ["VOICE_TOOLS_OPENAI_KEY", "OPENAI_API_KEY"],
-            },
-            {
                 "name": "OpenAI",
                 "badge": "paid",
                 "tag": "whisper-1, gpt-4o-transcribe, gpt-transcribe",
@@ -492,22 +465,10 @@ TOOL_CATEGORIES = {
         # plugins.web.<vendor>.provider via _plugin_web_search_providers()
         # in _visible_providers(). Only non-provider UX setup-flow rows
         # for the firecrawl backend are listed here:
-        #   - "Clover Subscription" — managed Firecrawl billed via Clover
-        #     subscription (requires_clover_auth + override_env_vars).
         #   - "Firecrawl Self-Hosted" — points firecrawl at a private
         #     Docker instance via FIRECRAWL_API_URL only.
         # See PR #25182 for the migration rationale.
         "providers": [
-            {
-                "name": "Clover Subscription",
-                "badge": "subscription",
-                "tag": "Managed Firecrawl billed to your subscription",
-                "web_backend": "firecrawl",
-                "env_vars": [],
-                "requires_clover_auth": True,
-                "managed_clover_feature": "web",
-                "override_env_vars": ["FIRECRAWL_API_KEY", "FIRECRAWL_API_URL"],
-            },
             {
                 "name": "Firecrawl Self-Hosted",
                 "badge": "free · self-hosted",
@@ -526,48 +487,14 @@ TOOL_CATEGORIES = {
         # OpenAI Codex, and xAI are injected at runtime from each
         # ``plugins.image_gen.<vendor>`` package via
         # ``_plugin_image_gen_providers()`` in ``_visible_providers``.
-        # Only non-provider UX setup-flow rows remain here:
-        #   - "Clover Subscription" — managed FAL billed via the Clover
-        #     subscription (requires_clover_auth + override_env_vars).
-        #     Uses the fal plugin as the underlying backend but has a
-        #     distinct setup UX.
-        # Mirrors the shape browser/video_gen ship today.
-        "providers": [
-            {
-                "name": "Clover Subscription",
-                "badge": "subscription",
-                "tag": "Managed FAL image generation billed to your subscription",
-                "env_vars": [],
-                "requires_clover_auth": True,
-                "managed_clover_feature": "image_gen",
-                "override_env_vars": ["FAL_KEY"],
-                "imagegen_backend": "fal",
-            },
-        ],
+        "providers": [],
     },
     "video_gen": {
         "name": "Video Generation",
         "icon": "🎬",
-        # "Clover Subscription" row mirrors the image_gen pattern — managed
-        # FAL video generation billed via the Clover Portal.  Plugin-backed
-        # provider rows (FAL BYOK, xAI, …) are injected at runtime by
-        # ``_plugin_video_gen_providers()`` in ``_visible_providers``.
-        "providers": [
-            {
-                "name": "Clover Subscription",
-                "badge": "subscription",
-                "tag": "Managed FAL video generation billed to your subscription",
-                "env_vars": [],
-                "requires_clover_auth": True,
-                "managed_clover_feature": "video_gen",
-                "override_env_vars": ["FAL_KEY"],
-                # The underlying plugin backend — when the user picks
-                # "Clover Subscription" we set video_gen.provider = "fal"
-                # and video_gen.use_gateway = True so the FAL plugin
-                # routes through the managed queue gateway.
-                "video_gen_plugin_name": "fal",
-            },
-        ],
+        # Plugin-backed provider rows (FAL BYOK, xAI, …) are injected at
+        # runtime by ``_plugin_video_gen_providers()`` in ``_visible_providers``.
+        "providers": [],
     },
     "x_search": {
         "name": "X (Twitter) Search",
@@ -612,13 +539,8 @@ TOOL_CATEGORIES = {
         # _plugin_browser_providers() in _visible_providers(). Only
         # non-provider UX setup-flow rows remain here. "Local Browser" is
         # listed FIRST so it is the default-highlighted (index 0) choice on a
-        # fresh install — pressing Enter must land on the free, no-key local
-        # backend, never on the paid Clover Subscription gateway row:
+        # fresh install:
         #   - "Local Browser" — non-cloud option, no CloudBrowserProvider.
-        #   - "Clover Subscription (Browser Use cloud)" — managed Browser Use
-        #     billed via Clover subscription (requires_clover_auth +
-        #     override_env_vars). Uses the browser-use plugin as the
-        #     underlying backend but has a distinct setup UX.
         #   - "Camofox" — anti-detection local Firefox; short-circuits the
         #     cloud-provider dispatch path via _is_camofox_mode().
         #   - "Browser Use" — the Browser Use CLI 3.0
@@ -630,22 +552,6 @@ TOOL_CATEGORIES = {
                 "env_vars": [],
                 "browser_provider": "local",
                 "post_setup": "agent_browser",
-            },
-            {
-                "name": "Clover Subscription (Browser Use cloud)",
-                "badge": "subscription",
-                "tag": "Managed Browser Use billed to your subscription",
-                "env_vars": [],
-                "browser_provider": "browser-use",
-                "requires_clover_auth": True,
-                "managed_clover_feature": "browser",
-                "override_env_vars": ["BROWSER_USE_API_KEY"],
-                # Cloud hook: installs the agent-browser CLI only. Browser Use
-                # hosts its own Chromium, so the local-Chromium install (and
-                # the local-Chromium readiness gate) must not apply here —
-                # with "agent_browser" this row read "needs setup" forever on
-                # machines without a local Chromium build.
-                "post_setup": "browserbase",
             },
             {
                 "name": "Camofox",
@@ -3036,7 +2942,6 @@ def _toolset_has_keys(
     config: dict = None,
     *,
     force_fresh: bool = False,
-    features: Optional[CloverSubscriptionFeatures] = None,
 ) -> bool:
     """Check if a toolset's required API keys are configured."""
     if config is None:
@@ -3051,15 +2956,6 @@ def _toolset_has_keys(
         except Exception:
             return False
 
-    if ts_key in {"web", "image_gen", "video_gen", "tts", "stt", "browser"}:
-        if features is None:
-            features = get_clover_subscription_features(
-                config, force_fresh=force_fresh
-            )
-        feature = features.features.get(ts_key)
-        if feature and (feature.available or feature.managed_by_clover):
-            return True
-
     # Check TOOL_CATEGORIES first (provider-aware)
     cat = TOOL_CATEGORIES.get(ts_key)
     if cat:
@@ -3067,7 +2963,6 @@ def _toolset_has_keys(
             cat,
             config,
             force_fresh=force_fresh,
-            features=features,
         ):
             env_vars = provider.get("env_vars", [])
             if not env_vars:
@@ -3523,54 +3418,12 @@ def _visible_providers(
     config: dict,
     *,
     force_fresh: bool = False,
-    features: Optional[CloverSubscriptionFeatures] = None,
 ) -> list[dict]:
-    """Return provider entries visible for the current auth/config state.
-
-    Clover-managed Tool Gateway rows (``managed_clover_feature``) are always
-    shown — even to logged-out / unentitled users — so the picker advertises
-    that the capability exists.  Selecting one drives an inline Clover Portal
-    login + entitlement check (see ``_configure_provider``); the row only
-    *activates* the gateway once paid access is confirmed.
-    """
-    if features is None:
-        features = get_clover_subscription_features(config, force_fresh=force_fresh)
-    acct = features.account_info
-    # Pool-only users (entitled to managed tools via the free tool pool but with
-    # no paid access) get image gen but NOT video gen — the pool doesn't fund
-    # `fal-video`. Rather than advertise a managed video row that would be denied
-    # on select, hide it for them. Logged-out users still see it (advertising)
-    # and paid users are entitled to it.
-    pool_only = bool(
-        acct
-        and acct.logged_in
-        and acct.paid_service_access is not True
-        and acct.tool_gateway_entitled
-    )
-    visible = []
-    for provider in cat.get("providers", []):
-        # Clover-managed Tool Gateway rows stay visible regardless of auth —
-        # selecting one drives an inline Portal login. A `requires_clover_auth`
-        # row that is NOT a managed gateway feature (pure pre-auth UX) is
-        # still hidden until the user is logged in.
-        if (
-            provider.get("requires_clover_auth")
-            and not provider.get("managed_clover_feature")
-            and not features.clover_auth_present
-        ):
-            continue
-        # Hide the managed video-gen row from pool-only users — their free tool
-        # pool doesn't cover video, so showing it would only lead to a denial.
-        if (
-            pool_only
-            and provider.get("managed_clover_feature") == "video_gen"
-            and not (acct and acct.tool_gateway_entitled_for("fal-video"))
-        ):
-            continue
-        visible.append(provider)
+    """Return provider entries visible for the current auth/config state."""
+    visible = list(cat.get("providers", []))
 
     # Inject plugin-registered image_gen backends (OpenAI today, more
-    # later) so the picker lists them alongside FAL / Clover Subscription.
+    # later) so the picker lists them alongside FAL.
     if cat.get("name") == "Image Generation":
         visible.extend(_plugin_image_gen_providers())
 
@@ -3589,9 +3442,9 @@ def _visible_providers(
 
     # Inject plugin-registered cloud browser backends. After PR #25214,
     # Browserbase / Browser Use / Firecrawl are the plugin-supplied rows;
-    # the hardcoded "Clover Subscription" / "Local Browser" / "Camofox" rows
-    # stay because they're non-provider UX setup flows (subscription auth,
-    # local fallback, and the REST-API anti-detection backend respectively).
+    # the hardcoded "Local Browser" / "Camofox" rows stay because they're
+    # non-provider UX setup flows (local fallback, and the REST-API
+    # anti-detection backend respectively).
     if cat.get("name") == "Browser Automation":
         visible.extend(_plugin_browser_providers())
 
@@ -3602,25 +3455,6 @@ def _visible_providers(
         visible.extend(_plugin_tts_providers())
 
     return visible
-
-
-def _hidden_clover_gateway_message(
-    cat: dict,
-    config: dict,
-    capability: str,
-    *,
-    force_fresh: bool = False,
-) -> str:
-    """Deprecated: Clover Tool Gateway rows are no longer hidden.
-
-    Previously this returned a "log in / upgrade" banner shown above a
-    category when its Clover-managed rows were filtered out for unentitled
-    users. Those rows are now always listed (see ``_visible_providers``), and
-    the login + entitlement guidance happens inline when the user selects one
-    (``ensure_clover_portal_access``). Kept as a no-op so call sites stay simple;
-    always returns an empty string.
-    """
-    return ""
 
 
 _POST_SETUP_INSTALLED: dict = {
@@ -3704,6 +3538,89 @@ def restorable_python_tool_dependency(
     return _RESTORABLE_PYTHON_TOOL_DEPENDENCIES.get(name)
 
 
+def _has_agent_browser() -> bool:
+    from clover_constants import agent_browser_runnable
+
+    # agent-browser is no longer a root package.json dependency (#43564) — it
+    # resolves lazily via npx for most installs, which a bare PATH +
+    # node_modules probe can't see. Mirror the local-CLI tail of
+    # :func:`tools.browser_tool.check_browser_requirements` (same cascade, same
+    # Termux carve-out) so the setup/status surfaces can't diverge from what
+    # browser tools actually find at runtime; validate=False keeps this a cheap
+    # existence check with no subprocess spawn.
+    try:
+        from tools.browser_tool import (
+            _find_agent_browser,
+            _requires_real_termux_browser_install,
+        )
+    except Exception:
+        # If the runtime probe can't be imported, fall back to binary presence
+        # (prior behaviour) rather than crashing the setup/status surface.
+        # Validate the resolved binary actually runs — a dangling global
+        # symlink (issue #48521) is reported by ``which`` but fails at exec.
+        if agent_browser_runnable(shutil.which("agent-browser")):
+            return True
+
+        # Clover-managed Node dirs (Windows installer / POSIX $CLOVER_HOME/node)
+        # are prepended to PATH at runtime but usually absent from the *probe*
+        # process's PATH. Without this rung a successful install keeps
+        # reporting "needs setup" on Windows.
+        from clover_constants import with_clover_node_path
+        managed_path = with_clover_node_path().get("PATH", "")
+        if managed_path:
+            managed_hit = shutil.which("agent-browser", path=managed_path)
+            if managed_hit and agent_browser_runnable(managed_hit):
+                return True
+
+        # Local node_modules/.bin: resolve via PATHEXT-aware ``shutil.which`` so
+        # Windows picks the executable ``.cmd`` shim — probing the
+        # extensionless POSIX shim directly fails exec (WinError 193) even
+        # right after a successful ``npm install``.
+        local_bin_dir = Path(__file__).parent.parent / "node_modules" / ".bin"
+        if local_bin_dir.is_dir():
+            local_which = shutil.which("agent-browser", path=str(local_bin_dir))
+            if local_which and agent_browser_runnable(local_which):
+                return True
+        return False
+
+    try:
+        browser_cmd = _find_agent_browser(validate=False)
+    except FileNotFoundError:
+        return False
+    # On Termux, the bare npx fallback is too fragile to advertise as ready —
+    # require a real install, matching check_browser_requirements.
+    if _requires_real_termux_browser_install(browser_cmd):
+        return False
+    return True
+
+
+def _local_browser_runnable() -> bool:
+    """Return True when the *local* browser backend would actually start.
+
+    The ``agent-browser`` CLI being present is necessary but not sufficient for
+    local mode: agent-browser also needs a Chromium build on disk (without one
+    it hangs on first use until the command timeout fires), unless the
+    Lightpanda engine is selected — text-only navigation needs no Chromium.
+
+    This mirrors the local-mode tail of
+    :func:`tools.browser_tool.check_browser_requirements`, so the setup/status
+    surfaces advertise local browser readiness only when the runtime would
+    actually run it. Cloud providers (Browserbase, Browser Use, Firecrawl) host
+    their own Chromium and therefore gate on :func:`_has_agent_browser` alone.
+    """
+    if not _has_agent_browser():
+        return False
+    try:
+        from tools.browser_tool import _chromium_installed, _using_lightpanda_engine
+    except Exception:
+        # If the runtime probe can't be imported, fall back to binary presence
+        # (prior behaviour) rather than crashing the setup/status surface.
+        return True
+    if _using_lightpanda_engine():
+        return True
+    return _chromium_installed()
+
+
 def _agent_browser_installed() -> bool:
     """True when everything ``_run_post_setup("agent_browser")`` installs is
     present: the agent-browser CLI *and* the Chromium build it drives (or the
@@ -3711,8 +3628,6 @@ def _agent_browser_installed() -> bool:
     setup" flips to an installed state only when re-running it would be a
     no-op."""
     import sys
-
-    from clover_cli.clover_subscription import _local_browser_runnable
 
     # The install hook runs in a spawned ``clover tools post-setup`` process,
     # but this probe runs in the long-lived web-server/CLI process, whose
@@ -3756,8 +3671,6 @@ def _cloud_agent_browser_installed() -> bool:
 
     Cloud providers host their own Chromium, so their hook only installs the
     agent-browser npm package — presence of the CLI is the whole contract."""
-    from clover_cli.clover_subscription import _has_agent_browser
-
     return _has_agent_browser()
 
 
@@ -3774,52 +3687,20 @@ def provider_readiness_status(
 
     - ``"ready"``       — usable as-is (keys set / entitled / installed).
     - ``"needs_keys"``  — declares env vars and at least one is unset.
-    - ``"needs_auth"``  — needs a sign-in: Clover Portal login/entitlement for
-      managed Tool Gateway rows, or xAI Grok OAuth / XAI_API_KEY for
+    - ``"needs_auth"``  — needs a sign-in: xAI Grok OAuth / XAI_API_KEY for
       ``post_setup: "xai_grok"`` rows.
     - ``"needs_setup"`` — keyless row whose ``post_setup`` install hook has
       verifiably not run yet (see ``_POST_SETUP_READY``).
 
-    Keyless ≠ usable: this is the server-side truth the GUI "Ready" pill
-    renders from (the old client-side heuristic showed Ready for every
-    zero-env-var row, including logged-out Clover Subscription rows).
-
-    ``features`` (a ``CloverSubscriptionFeatures``) can be passed to avoid
-    re-fetching portal state per row. ``is_active`` is the completed-setup
-    fallback signal for post_setup hooks with no registered installed-check
-    (selecting a row runs its hook, so the active row has been set up).
+    ``is_active`` is the completed-setup fallback signal for post_setup hooks
+    with no registered installed-check (selecting a row runs its hook, so the
+    active row has been set up).
     """
     env_vars = provider.get("env_vars", [])
     if env_vars:
         if all(get_env_value(e["key"]) for e in env_vars):
             return "ready"
         return "needs_keys"
-
-    managed_feature = provider.get("managed_clover_feature")
-    if provider.get("requires_clover_auth") or managed_feature:
-        if features is None:
-            features = get_clover_subscription_features(config)
-        if not features.clover_auth_present:
-            return "needs_auth"
-        if managed_feature:
-            # Same per-category entitlement gate the CLI applies at selection
-            # time (free tool-pool users get image gen but not video gen).
-            acct = features.account_info
-            category = MANAGED_FEATURE_COVERAGE_CATEGORY.get(managed_feature)
-            entitled = bool(
-                acct
-                and acct.logged_in
-                and (
-                    acct.tool_gateway_entitled_for(category)
-                    if category
-                    else acct.tool_gateway_entitled
-                )
-            )
-            if not entitled:
-                return "needs_auth"
-        # Signed in and entitled — fall through: a managed row may still
-        # carry a local install hook (e.g. the managed browser row needs
-        # the agent-browser CLI on this machine).
 
     post_setup = provider.get("post_setup")
     if post_setup:
@@ -3921,12 +3802,6 @@ def _configure_tool_category(
     icon = cat.get("icon", "")
     name = cat["name"]
     providers = _visible_providers(cat, config, force_fresh=force_fresh)
-    hidden_clover_message = _hidden_clover_gateway_message(
-        cat,
-        config,
-        f"the Clover Subscription provider for {name}",
-        force_fresh=force_fresh,
-    )
 
     # Check Python version requirement
     if cat.get("requires_python"):
@@ -3947,9 +3822,6 @@ def _configure_tool_category(
         # For single-provider tools, show a note if available
         if cat.get("setup_note"):
             _print_info(f"  {cat['setup_note']}")
-        if hidden_clover_message:
-            for line in hidden_clover_message.splitlines():
-                _print_warning(f"  {line}")
         _configure_provider(provider, config, force_fresh=force_fresh)
     else:
         # Multiple providers - let user choose
@@ -3959,25 +3831,9 @@ def _configure_tool_category(
         print(color(f"  --- {icon} {name} - {title} ---", Colors.CYAN))
         if cat.get("setup_note"):
             _print_info(f"  {cat['setup_note']}")
-        if hidden_clover_message:
-            for line in hidden_clover_message.splitlines():
-                _print_warning(f"  {line}")
         print()
 
         # Plain text labels only (no ANSI codes in menu items)
-        # When the user is logged into Clover, surface a marker on providers
-        # whose access is included in their subscription so it's visually
-        # obvious which options cost extra vs. cost nothing on top of Clover.
-        try:
-            _clover_logged_in = bool(
-                get_clover_subscription_features(
-                    config,
-                    force_fresh=force_fresh,
-                ).clover_auth_present
-            )
-        except Exception:
-            _clover_logged_in = False
-
         provider_choices = []
         for p in providers:
             badge = f" [{p['badge']}]" if p.get("badge") else ""
@@ -3991,18 +3847,7 @@ def _configure_tool_category(
                     configured = ""
                 else:
                     configured = " [configured]"
-            # Mark Clover-managed entries. Logged-in paid subscribers get the
-            # "included" star; everyone else gets a "via Clover Portal" hint so
-            # it's clear selecting the row triggers a Portal login. The rows
-            # are always shown now (see _visible_providers) — selecting one
-            # drives an inline login + entitlement check.
-            sub_marker = ""
-            if p.get("managed_clover_feature"):
-                if _clover_logged_in:
-                    sub_marker = "  ★ Included with your Clover subscription"
-                else:
-                    sub_marker = "  ★ via Clover Portal (login on select)"
-            provider_choices.append(f"{p['name']}{badge}{tag}{configured}{sub_marker}")
+            provider_choices.append(f"{p['name']}{badge}{tag}{configured}")
 
         # Add skip option
         provider_choices.append("Skip — keep defaults / configure later")
@@ -4070,84 +3915,16 @@ def _is_provider_active(
 ) -> bool:
     """Check if a provider entry matches the currently active config."""
     plugin_name = provider.get("image_gen_plugin_name")
-    if plugin_name and not provider.get("managed_clover_feature"):
-        # Managed (Clover-subscription) entries fall through to the
-        # managed_feature branch below, which also checks use_gateway —
-        # otherwise a managed FAL pick and a direct-key FAL pick would both
-        # report active for the same provider name (video already guards).
+    if plugin_name:
         image_cfg = config.get("image_gen", {})
         if not (isinstance(image_cfg, dict) and image_cfg.get("provider") == plugin_name):
             return False
-        # A direct-key entry is only active when the managed route is OFF —
-        # mirror of the managed branch's use_gateway check.
         return not is_truthy_value(image_cfg.get("use_gateway"), default=False)
 
     video_plugin_name = provider.get("video_gen_plugin_name")
-    if video_plugin_name and not provider.get("managed_clover_feature"):
+    if video_plugin_name:
         video_cfg = config.get("video_gen", {})
         return isinstance(video_cfg, dict) and video_cfg.get("provider") == video_plugin_name
-
-    managed_feature = provider.get("managed_clover_feature")
-    if managed_feature:
-        features = get_clover_subscription_features(config, force_fresh=force_fresh)
-        feature = features.features.get(managed_feature)
-        if feature is None:
-            return False
-        if managed_feature == "image_gen":
-            image_cfg = config.get("image_gen", {})
-            if isinstance(image_cfg, dict):
-                configured_provider = image_cfg.get("provider")
-                if configured_provider not in {None, "", "fal", CLOVER_MANAGED_PROVIDER}:
-                    return False
-                if (
-                    configured_provider != CLOVER_MANAGED_PROVIDER
-                    and image_cfg.get("use_gateway") is not None
-                    and not is_truthy_value(image_cfg.get("use_gateway"), default=False)
-                ):
-                    return False
-            return feature.managed_by_clover
-        if managed_feature == "video_gen":
-            video_cfg = config.get("video_gen", {})
-            if isinstance(video_cfg, dict):
-                configured_provider = video_cfg.get("provider")
-                if configured_provider not in {None, "", "fal", CLOVER_MANAGED_PROVIDER}:
-                    return False
-                if (
-                    configured_provider != CLOVER_MANAGED_PROVIDER
-                    and video_cfg.get("use_gateway") is not None
-                    and not is_truthy_value(video_cfg.get("use_gateway"), default=False)
-                ):
-                    return False
-            return feature.managed_by_clover
-        if provider.get("tts_provider"):
-            return (
-                feature.managed_by_clover
-                and cfg_get(config, "tts", "provider")
-                in {provider["tts_provider"], CLOVER_MANAGED_PROVIDER}
-            )
-        if provider.get("stt_provider"):
-            return (
-                feature.managed_by_clover
-                and cfg_get(config, "stt", "provider")
-                in {provider["stt_provider"], CLOVER_MANAGED_PROVIDER}
-            )
-        if "browser_provider" in provider:
-            # Browser Use mode is a driver on top of the provider (it attaches
-            # to the provider's CDP endpoint), so the provider row stays
-            # active alongside the Browser Use row.
-            current = cfg_get(config, "browser", "cloud_provider")
-            return feature.managed_by_clover and current in {
-                provider["browser_provider"],
-                CLOVER_MANAGED_PROVIDER,
-            }
-        if provider.get("web_backend"):
-            current = cfg_get(config, "web", "backend")
-            return (
-                feature.managed_by_clover
-                and current in {provider["web_backend"], CLOVER_MANAGED_PROVIDER}
-                and _web_tier_matches(provider, config)
-            )
-        return feature.managed_by_clover
 
     if provider.get("tts_provider"):
         return cfg_get(config, "tts", "provider") == provider["tts_provider"]
@@ -4458,20 +4235,17 @@ def _configure_xai_imagine_storage(section_name: str, config: dict) -> None:
         _print_success("  xAI stored public URLs enabled without automatic expiry")
 
 
-def _select_plugin_image_gen_provider(plugin_name: str, config: dict, *, use_gateway: bool = False) -> None:
+def _select_plugin_image_gen_provider(plugin_name: str, config: dict) -> None:
     """Persist a plugin-backed image generation provider selection.
 
-    ``use_gateway=True`` marks a provider picked through the Clover-managed
-    flow: the stored selection becomes ``image_gen.provider: clover`` (the
-    single provider string the runtime switches on). BYOK picks store the
-    plugin name. Any legacy ``use_gateway`` key is removed so old-config
-    read-time shims cannot override the fresh selection.
+    Any legacy ``use_gateway`` key is removed so old-config read-time shims
+    cannot override the fresh selection.
     """
     img_cfg = config.setdefault("image_gen", {})
     if not isinstance(img_cfg, dict):
         img_cfg = {}
         config["image_gen"] = img_cfg
-    img_cfg["provider"] = CLOVER_MANAGED_PROVIDER if use_gateway else plugin_name
+    img_cfg["provider"] = plugin_name
     img_cfg.pop("use_gateway", None)
     _print_success(f"  image_gen.provider set to: {img_cfg['provider']}")
     _configure_imagegen_model_for_plugin(plugin_name, config)
@@ -4612,18 +4386,17 @@ def _configure_stt_model(stt_provider: str, config: dict) -> None:
     _print_success(f"  STT model set to: {chosen}")
 
 
-def _select_plugin_video_gen_provider(plugin_name: str, config: dict, *, use_gateway: bool = False) -> None:
+def _select_plugin_video_gen_provider(plugin_name: str, config: dict) -> None:
     """Persist a plugin-backed video generation provider selection.
 
-    Mirrors :func:`_select_plugin_image_gen_provider`: managed picks store
-    ``video_gen.provider: clover``; BYOK picks store the plugin name; any
-    legacy ``use_gateway`` key is removed.
+    Mirrors :func:`_select_plugin_image_gen_provider`: stores the plugin
+    name and removes any legacy ``use_gateway`` key.
     """
     vid_cfg = config.setdefault("video_gen", {})
     if not isinstance(vid_cfg, dict):
         vid_cfg = {}
         config["video_gen"] = vid_cfg
-    vid_cfg["provider"] = CLOVER_MANAGED_PROVIDER if use_gateway else plugin_name
+    vid_cfg["provider"] = plugin_name
     vid_cfg.pop("use_gateway", None)
     _print_success(f"  video_gen.provider set to: {vid_cfg['provider']}")
     _configure_videogen_model_for_plugin(plugin_name, config)
@@ -4631,30 +4404,28 @@ def _select_plugin_video_gen_provider(plugin_name: str, config: dict, *, use_gat
         _configure_xai_imagine_storage("video_gen", config)
 
 
-def _write_provider_config(provider: dict, config: dict, *, managed_feature) -> None:
+def _write_provider_config(provider: dict, config: dict) -> None:
     """Persist the provider/backend config keys for a selected provider.
 
     This is the pure, non-interactive core of :func:`_configure_provider` —
     it writes ``tts.provider`` / ``browser.cloud_provider`` / ``web.backend``
     based on the provider's markers, but does NOT prompt for env vars, run
-    post-setup hooks, gate on Clover auth, or run interactive model pickers.
-    Both the CLI configurator and the desktop GUI ``PUT .../provider``
-    endpoint call through here so there is one code path.
+    post-setup hooks, or run interactive model pickers. Both the CLI
+    configurator and the desktop GUI ``PUT .../provider`` endpoint call
+    through here so there is one code path.
 
     Selection model: every row writes exactly ONE provider string per
-    category. Managed "Clover Subscription" rows write ``clover``; BYOK rows
-    write the vendor name. ``use_gateway`` is no longer written — a fresh
-    pick removes any legacy key from the touched section so the read-time
-    legacy shim (use_gateway: true ⇒ clover) cannot override the new choice.
+    category (the vendor name). ``use_gateway`` is no longer written — a
+    fresh pick removes any legacy key from the touched section so the
+    read-time legacy shim (use_gateway: true ⇒ clover) cannot override the
+    new choice.
     """
     def _set_selection(section_key: str, name_key: str, vendor_value) -> None:
         section = config.setdefault(section_key, {})
         if not isinstance(section, dict):
             section = {}
             config[section_key] = section
-        section[name_key] = (
-            CLOVER_MANAGED_PROVIDER if managed_feature else vendor_value
-        )
+        section[name_key] = vendor_value
         section.pop("use_gateway", None)
 
     # Set TTS provider in config if applicable
@@ -4669,7 +4440,7 @@ def _write_provider_config(provider: dict, config: dict, *, managed_feature) -> 
     if "browser_provider" in provider:
         bp = provider["browser_provider"]
         browser_cfg = config.setdefault("browser", {})
-        if bp or managed_feature:
+        if bp:
             # Browser Use mode (browser.backend) composes with the provider —
             # switching providers keeps the driver choice intact.
             _set_selection("browser", "cloud_provider", bp)
@@ -4699,44 +4470,35 @@ def _write_provider_config(provider: dict, config: dict, *, managed_feature) -> 
         cu_cfg = config.setdefault("computer_use", {})
         cu_cfg["backend"] = provider["computer_use_backend"]
 
-    # Managed rows for categories without a marker handled above (e.g. the
-    # image_gen/video_gen "Clover Subscription" rows carry only
-    # managed_clover_feature) still persist the "clover" selection.
-    if managed_feature and managed_feature not in {"web", "tts", "stt", "browser"}:
-        section = config.setdefault(managed_feature, {})
-        if isinstance(section, dict):
-            section["provider"] = CLOVER_MANAGED_PROVIDER
-            section.pop("use_gateway", None)
-    elif not managed_feature:
-        # User picked a non-gateway provider — clear any stale legacy
-        # use_gateway key on the category so the read-time shim cannot
-        # override the fresh selection. Resolve the category from the
-        # provider's own markers first (plugin-injected rows are NOT in
-        # TOOL_CATEGORIES' hardcoded provider lists and previously skipped
-        # this clear), then fall back to the category-membership walk.
-        marker_sections = {
-            "tts_provider": "tts",
-            "stt_provider": "stt",
-            "browser_provider": "browser",
-            "web_backend": "web",
-            "image_gen_plugin_name": "image_gen",
-            "imagegen_backend": "image_gen",
-            "video_gen_plugin_name": "video_gen",
-        }
-        cleared = False
-        for marker, section_key in marker_sections.items():
-            if provider.get(marker) or marker in provider:
-                section = config.get(section_key)
+    # User picked a provider — clear any stale legacy use_gateway key on the
+    # category so the read-time shim cannot override the fresh selection.
+    # Resolve the category from the provider's own markers first
+    # (plugin-injected rows are NOT in TOOL_CATEGORIES' hardcoded provider
+    # lists and previously skipped this clear), then fall back to the
+    # category-membership walk.
+    marker_sections = {
+        "tts_provider": "tts",
+        "stt_provider": "stt",
+        "browser_provider": "browser",
+        "web_backend": "web",
+        "image_gen_plugin_name": "image_gen",
+        "imagegen_backend": "image_gen",
+        "video_gen_plugin_name": "video_gen",
+    }
+    cleared = False
+    for marker, section_key in marker_sections.items():
+        if provider.get(marker) or marker in provider:
+            section = config.get(section_key)
+            if isinstance(section, dict):
+                section.pop("use_gateway", None)
+            cleared = True
+    if not cleared:
+        for cat_key, cat in TOOL_CATEGORIES.items():
+            if provider in cat.get("providers", []):
+                section = config.get(cat_key)
                 if isinstance(section, dict):
                     section.pop("use_gateway", None)
-                cleared = True
-        if not cleared:
-            for cat_key, cat in TOOL_CATEGORIES.items():
-                if provider in cat.get("providers", []):
-                    section = config.get(cat_key)
-                    if isinstance(section, dict):
-                        section.pop("use_gateway", None)
-                    break
+                break
 
 
 def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> None:
@@ -4746,9 +4508,9 @@ def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> N
     rows the GUI/CLI picker shows via :func:`_visible_providers`) and writes
     the corresponding backend/provider config keys. Unlike
     :func:`_configure_provider`, this does NOT prompt for API keys, run
-    post-setup hooks, gate on Clover Portal auth, or run interactive model
-    pickers — those are handled separately (env endpoints, post-setup
-    endpoints, the model picker) in the desktop GUI.
+    post-setup hooks, or run interactive model pickers — those are handled
+    separately (env endpoints, post-setup endpoints, the model picker) in
+    the desktop GUI.
 
     Raises ``KeyError`` if the toolset has no category or the provider name
     is not found among the visible providers.
@@ -4762,22 +4524,19 @@ def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> N
     if provider is None:
         raise KeyError(f"Unknown provider {provider_name!r} for toolset {ts_key!r}")
 
-    managed_feature = provider.get("managed_clover_feature")
-    _write_provider_config(provider, config, managed_feature=managed_feature)
+    _write_provider_config(provider, config)
 
     # Plugin-registered image/video gen backends record the provider name in
     # their own config section. Write that here (without the interactive
     # model picker the CLI runs afterwards — model choice is a separate GUI
-    # flow). Managed picks store the "clover" selection.
+    # flow).
     plugin_name = provider.get("image_gen_plugin_name")
     if plugin_name:
         img_cfg = config.setdefault("image_gen", {})
         if not isinstance(img_cfg, dict):
             img_cfg = {}
             config["image_gen"] = img_cfg
-        img_cfg["provider"] = (
-            CLOVER_MANAGED_PROVIDER if managed_feature else plugin_name
-        )
+        img_cfg["provider"] = plugin_name
         img_cfg.pop("use_gateway", None)
 
     video_plugin = provider.get("video_gen_plugin_name")
@@ -4786,16 +4545,14 @@ def apply_provider_selection(ts_key: str, provider_name: str, config: dict) -> N
         if not isinstance(vid_cfg, dict):
             vid_cfg = {}
             config["video_gen"] = vid_cfg
-        vid_cfg["provider"] = (
-            CLOVER_MANAGED_PROVIDER if managed_feature else video_plugin
-        )
+        vid_cfg["provider"] = video_plugin
         vid_cfg.pop("use_gateway", None)
 
     # In-tree FAL imagegen backend (BYOK): always persist the explicit
     # ``image_gen.provider: fal`` selection — historically this row could
     # leave the provider key unset, making a deliberate BYOK pick
     # indistinguishable from a never-configured install.
-    if provider.get("imagegen_backend") and not managed_feature:
+    if provider.get("imagegen_backend"):
         img_cfg = config.setdefault("image_gen", {})
         if not isinstance(img_cfg, dict):
             img_cfg = {}
@@ -4812,52 +4569,11 @@ def _configure_provider(
 ):
     """Configure a single provider - prompt for API keys and set config."""
     env_vars = provider.get("env_vars", [])
-    managed_feature = provider.get("managed_clover_feature")
-
-    # Clover-managed Tool Gateway backends are always listed (see
-    # _visible_providers), but only *activate* once the user has paid Clover
-    # Portal access. Selecting one runs an inline Portal login when needed —
-    # auth + entitlement only, no inference-provider switch and no bulk
-    # "enable all tools" prompt (that lives in `clover model`).
-    if managed_feature:
-        from clover_cli.clover_subscription import (
-            MANAGED_FEATURE_COVERAGE_CATEGORY,
-            ensure_clover_portal_access,
-        )
-
-        if not ensure_clover_portal_access(
-            capability=f"{provider.get('name', 'the Clover Tool Gateway')}",
-            coverage_category=MANAGED_FEATURE_COVERAGE_CATEGORY.get(managed_feature),
-        ):
-            _print_warning(
-                "  Not enabled — Clover Portal access is required for this backend."
-            )
-            return
-
-    # Pure pre-auth UX rows (requires_clover_auth without a managed gateway
-    # feature) keep the old gate. Managed rows are handled by the inline
-    # login above, so don't double-check them here.
-    if provider.get("requires_clover_auth") and not managed_feature:
-        features = get_clover_subscription_features(config, force_fresh=force_fresh)
-        entitled = bool(
-            features.account_info and features.account_info.paid_service_access is True
-        )
-        if not features.clover_auth_present or not entitled:
-            message = format_clover_portal_entitlement_message(
-                features.account_info,
-                capability=f"{provider.get('name', 'Clover Subscription')}",
-            )
-            _print_warning(
-                f"  {message or 'Clover Subscription is only available after logging into Clover Portal.'}"
-            )
-            return
 
     # Set TTS provider in config if applicable
     if provider.get("tts_provider"):
         tts_cfg = config.setdefault("tts", {})
-        tts_cfg["provider"] = (
-            CLOVER_MANAGED_PROVIDER if managed_feature else provider["tts_provider"]
-        )
+        tts_cfg["provider"] = provider["tts_provider"]
         tts_cfg.pop("use_gateway", None)
 
     # Set STT provider in config if applicable
@@ -4882,72 +4598,40 @@ def _configure_provider(
     # Persist the provider/backend config keys + use_gateway flags. Shared
     # with the GUI provider-select endpoint via apply_provider_selection so
     # there is a single source of truth for these writes.
-    _write_provider_config(provider, config, managed_feature=managed_feature)
+    _write_provider_config(provider, config)
 
     if not env_vars:
         if provider.get("post_setup"):
             _run_post_setup(provider["post_setup"])
         _print_success(f"  {provider['name']} - no configuration needed!")
-        if managed_feature:
-            _print_info("  Requests for this tool will be billed to your Clover subscription.")
         # Plugin-registered image_gen provider: write image_gen.provider
         # and route model selection to the plugin's own catalog.
         plugin_name = provider.get("image_gen_plugin_name")
         if plugin_name:
-            _select_plugin_image_gen_provider(plugin_name, config, use_gateway=bool(managed_feature))
+            _select_plugin_image_gen_provider(plugin_name, config)
             return
         # Plugin-registered video_gen provider — same flow, different
         # registry.
         video_plugin = provider.get("video_gen_plugin_name")
         if video_plugin:
-            _select_plugin_video_gen_provider(video_plugin, config, use_gateway=bool(managed_feature))
+            _select_plugin_video_gen_provider(video_plugin, config)
             return
         # Imagegen backends prompt for model selection after backend pick.
         backend = provider.get("imagegen_backend")
         if backend:
             _configure_imagegen_model(backend, config)
-            # In-tree FAL is the only non-plugin backend today. Persist the
-            # explicit selection: "clover" for a managed row, "fal" for BYOK.
+            # In-tree FAL is the only non-plugin backend today.
             img_cfg = config.setdefault("image_gen", {})
             if isinstance(img_cfg, dict):
-                img_cfg["provider"] = (
-                    CLOVER_MANAGED_PROVIDER if managed_feature else "fal"
-                )
+                img_cfg["provider"] = "fal"
                 img_cfg.pop("use_gateway", None)
-        # STT providers prompt for model selection after backend pick
-        # (skipped for managed rows — the gateway pins the model).
-        if provider.get("stt_provider") and not managed_feature:
+        # STT providers prompt for model selection after backend pick.
+        if provider.get("stt_provider"):
             _configure_stt_model(provider["stt_provider"], config)
         return
 
     # Prompt for each required env var
     all_configured = True
-    # If this BYOK provider lives in a category that ALSO has a
-    # Clover-managed sibling, show a single dim hint so users know
-    # they can avoid the key entirely via a Portal subscription.
-    # Suppressed when the user is already authed to Clover.
-    _show_portal_hint = False
-    if env_vars and not managed_feature and not provider.get("requires_clover_auth"):
-        try:
-            _has_managed_sibling = False
-            for _cat_key, _cat in TOOL_CATEGORIES.items():
-                _providers = _cat.get("providers", [])
-                if provider in _providers and any(
-                    sib.get("managed_clover_feature") for sib in _providers
-                ):
-                    _has_managed_sibling = True
-                    break
-            if _has_managed_sibling:
-                _features = get_clover_subscription_features(
-                    config,
-                    force_fresh=force_fresh,
-                )
-                _show_portal_hint = not _features.clover_auth_present
-        except Exception:
-            _show_portal_hint = False
-
-    if _show_portal_hint:
-        _print_info("  Available through Clover Portal subscription.")
 
     for var in env_vars:
         existing = get_env_value(var["key"])
@@ -4981,11 +4665,11 @@ def _configure_provider(
         _print_success(f"  {provider['name']} configured!")
         plugin_name = provider.get("image_gen_plugin_name")
         if plugin_name:
-            _select_plugin_image_gen_provider(plugin_name, config, use_gateway=bool(managed_feature))
+            _select_plugin_image_gen_provider(plugin_name, config)
             return
         video_plugin = provider.get("video_gen_plugin_name")
         if video_plugin:
-            _select_plugin_video_gen_provider(video_plugin, config, use_gateway=bool(managed_feature))
+            _select_plugin_video_gen_provider(video_plugin, config)
             return
         # Imagegen backends prompt for model selection after env vars are in.
         backend = provider.get("imagegen_backend")
@@ -4993,12 +4677,10 @@ def _configure_provider(
             _configure_imagegen_model(backend, config)
             img_cfg = config.setdefault("image_gen", {})
             if isinstance(img_cfg, dict):
-                img_cfg["provider"] = (
-                    CLOVER_MANAGED_PROVIDER if managed_feature else "fal"
-                )
+                img_cfg["provider"] = "fal"
                 img_cfg.pop("use_gateway", None)
         # STT providers prompt for model selection after env vars are in.
-        if provider.get("stt_provider") and not managed_feature:
+        if provider.get("stt_provider"):
             _configure_stt_model(provider["stt_provider"], config)
 
 
@@ -5275,27 +4957,15 @@ def _configure_tool_category_for_reconfig(
     icon = cat.get("icon", "")
     name = cat["name"]
     providers = _visible_providers(cat, config, force_fresh=force_fresh)
-    hidden_clover_message = _hidden_clover_gateway_message(
-        cat,
-        config,
-        f"the Clover Subscription provider for {name}",
-        force_fresh=force_fresh,
-    )
 
     if len(providers) == 1:
         provider = providers[0]
         print()
         print(color(f"  --- {icon} {name} ({provider['name']}) ---", Colors.CYAN))
-        if hidden_clover_message:
-            for line in hidden_clover_message.splitlines():
-                _print_warning(f"  {line}")
         _reconfigure_provider(provider, config, force_fresh=force_fresh)
     else:
         print()
         print(color(f"  --- {icon} {name} - Choose a provider ---", Colors.CYAN))
-        if hidden_clover_message:
-            for line in hidden_clover_message.splitlines():
-                _print_warning(f"  {line}")
         print()
 
         provider_choices = []
@@ -5335,69 +5005,27 @@ def _reconfigure_provider(
 ):
     """Reconfigure a provider - update API keys."""
     env_vars = provider.get("env_vars", [])
-    managed_feature = provider.get("managed_clover_feature")
-
-    # Same inline Clover Portal login + entitlement gate as _configure_provider:
-    # managed Tool Gateway backends only activate with paid Portal access.
-    if managed_feature:
-        from clover_cli.clover_subscription import (
-            MANAGED_FEATURE_COVERAGE_CATEGORY,
-            ensure_clover_portal_access,
-        )
-
-        if not ensure_clover_portal_access(
-            capability=f"{provider.get('name', 'the Clover Tool Gateway')}",
-            coverage_category=MANAGED_FEATURE_COVERAGE_CATEGORY.get(managed_feature),
-        ):
-            _print_warning(
-                "  Not enabled — Clover Portal access is required for this backend."
-            )
-            return
-
-    # Pure pre-auth UX rows keep the old gate; managed rows already handled
-    # by the inline login above.
-    if provider.get("requires_clover_auth") and not managed_feature:
-        features = get_clover_subscription_features(config, force_fresh=force_fresh)
-        entitled = bool(
-            features.account_info and features.account_info.paid_service_access is True
-        )
-        if not features.clover_auth_present or not entitled:
-            message = format_clover_portal_entitlement_message(
-                features.account_info,
-                capability=f"{provider.get('name', 'Clover Subscription')}",
-            )
-            _print_warning(
-                f"  {message or 'Clover Subscription is only available after logging into Clover Portal.'}"
-            )
-            return
 
     # Selection model (mirrors _write_provider_config): every row writes ONE
-    # provider string per category — "clover" for managed rows, the vendor name
-    # for BYOK rows — and drops any legacy use_gateway key so the read-time
-    # shim (use_gateway: true ⇒ clover) cannot override the fresh pick.
+    # provider string per category — the vendor name — and drops any legacy
+    # use_gateway key so the read-time shim (use_gateway: true ⇒ clover)
+    # cannot override the fresh pick.
     if provider.get("tts_provider"):
         tts_cfg = config.setdefault("tts", {})
-        tts_cfg["provider"] = (
-            CLOVER_MANAGED_PROVIDER if managed_feature else provider["tts_provider"]
-        )
+        tts_cfg["provider"] = provider["tts_provider"]
         tts_cfg.pop("use_gateway", None)
         _print_success(f"  TTS provider set to: {provider['tts_provider']}")
 
     if provider.get("stt_provider"):
         stt_cfg = config.setdefault("stt", {})
-        stt_cfg["provider"] = (
-            CLOVER_MANAGED_PROVIDER if managed_feature else provider["stt_provider"]
-        )
+        stt_cfg["provider"] = provider["stt_provider"]
         stt_cfg.pop("use_gateway", None)
         _print_success(f"  STT provider set to: {provider['stt_provider']}")
 
     if "browser_provider" in provider:
         bp = provider["browser_provider"]
         browser_cfg = config.setdefault("browser", {})
-        if managed_feature:
-            browser_cfg["cloud_provider"] = CLOVER_MANAGED_PROVIDER
-            _print_success(f"  Browser cloud provider set to: {bp or 'clover'}")
-        elif bp == "local":
+        if bp == "local":
             browser_cfg["cloud_provider"] = "local"
             _print_success("  Browser set to local mode")
         elif bp:
@@ -5415,9 +5043,7 @@ def _reconfigure_provider(
     # Set web search backend in config if applicable
     if provider.get("web_backend"):
         web_cfg = config.setdefault("web", {})
-        web_cfg["backend"] = (
-            CLOVER_MANAGED_PROVIDER if managed_feature else provider["web_backend"]
-        )
+        web_cfg["backend"] = provider["web_backend"]
         web_cfg.pop("use_gateway", None)
         if provider.get("web_tier"):
             tiers = web_cfg.setdefault("provider_tier", {})
@@ -5439,35 +5065,25 @@ def _reconfigure_provider(
         cu_cfg["backend"] = provider["computer_use_backend"]
         _print_success(f"  Computer Use backend set to: {provider['computer_use_backend']}")
 
-    if managed_feature and managed_feature not in {"web", "tts", "stt", "browser"}:
-        section = config.setdefault(managed_feature, {})
-        if not isinstance(section, dict):
-            section = {}
-            config[managed_feature] = section
-        section["provider"] = CLOVER_MANAGED_PROVIDER
-        section.pop("use_gateway", None)
-    elif not managed_feature:
-        for cat_key, cat in TOOL_CATEGORIES.items():
-            if provider in cat.get("providers", []):
-                section = config.get(cat_key)
-                if isinstance(section, dict):
-                    section.pop("use_gateway", None)
-                break
+    for cat_key, cat in TOOL_CATEGORIES.items():
+        if provider in cat.get("providers", []):
+            section = config.get(cat_key)
+            if isinstance(section, dict):
+                section.pop("use_gateway", None)
+            break
 
     if not env_vars:
         if provider.get("post_setup"):
             _run_post_setup(provider["post_setup"])
         _print_success(f"  {provider['name']} - no configuration needed!")
-        if managed_feature:
-            _print_info("  Requests for this tool will be billed to your Clover subscription.")
         plugin_name = provider.get("image_gen_plugin_name")
         if plugin_name:
-            _select_plugin_image_gen_provider(plugin_name, config, use_gateway=bool(managed_feature))
+            _select_plugin_image_gen_provider(plugin_name, config)
             return
         # Plugin-registered video_gen provider — same flow, different registry.
         video_plugin = provider.get("video_gen_plugin_name")
         if video_plugin:
-            _select_plugin_video_gen_provider(video_plugin, config, use_gateway=bool(managed_feature))
+            _select_plugin_video_gen_provider(video_plugin, config)
             return
         # Imagegen backends prompt for model selection on reconfig too.
         backend = provider.get("imagegen_backend")
@@ -5476,16 +5092,10 @@ def _reconfigure_provider(
             if backend == "fal":
                 img_cfg = config.setdefault("image_gen", {})
                 if isinstance(img_cfg, dict):
-                    # A managed (Clover Subscription) row also carries
-                    # imagegen_backend="fal" — store the "clover" selection
-                    # for it, "fal" for BYOK, and drop any legacy
-                    # use_gateway key.
-                    img_cfg["provider"] = (
-                        CLOVER_MANAGED_PROVIDER if managed_feature else "fal"
-                    )
+                    img_cfg["provider"] = "fal"
                     img_cfg.pop("use_gateway", None)
         # STT providers prompt for model selection on reconfig too.
-        if provider.get("stt_provider") and not managed_feature:
+        if provider.get("stt_provider"):
             _configure_stt_model(provider["stt_provider"], config)
         return
 
@@ -5510,13 +5120,13 @@ def _reconfigure_provider(
     # Imagegen backends prompt for model selection on reconfig too.
     plugin_name = provider.get("image_gen_plugin_name")
     if plugin_name:
-        _select_plugin_image_gen_provider(plugin_name, config, use_gateway=bool(managed_feature))
+        _select_plugin_image_gen_provider(plugin_name, config)
         return
 
     # Plugin-registered video_gen provider — same flow, different registry.
     video_plugin = provider.get("video_gen_plugin_name")
     if video_plugin:
-        _select_plugin_video_gen_provider(video_plugin, config, use_gateway=bool(managed_feature))
+        _select_plugin_video_gen_provider(video_plugin, config)
         return
 
     backend = provider.get("imagegen_backend")
@@ -5525,15 +5135,11 @@ def _reconfigure_provider(
         if backend == "fal":
             img_cfg = config.setdefault("image_gen", {})
             if isinstance(img_cfg, dict):
-                # Same managed-row guard as the no-env-vars branch above:
-                # never clobber a Clover-managed pick back onto direct keys.
-                img_cfg["provider"] = (
-                    CLOVER_MANAGED_PROVIDER if managed_feature else "fal"
-                )
+                img_cfg["provider"] = "fal"
                 img_cfg.pop("use_gateway", None)
 
     # STT providers prompt for model selection on reconfig too.
-    if provider.get("stt_provider") and not managed_feature:
+    if provider.get("stt_provider"):
         _configure_stt_model(provider["stt_provider"], config)
 
 
@@ -5642,15 +5248,6 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
                     label = next((l for k, l, _ in _get_effective_configurable_toolsets() if k == ts), ts)
                     print(color(f"  - {label}", Colors.RED))
 
-            auto_configured = apply_clover_managed_defaults(
-                config,
-                enabled_toolsets=new_enabled,
-                force_fresh=True,
-            )
-            for ts_key in sorted(auto_configured):
-                label = next((l for k, l, _ in CONFIGURABLE_TOOLSETS if k == ts_key), ts_key)
-                print(color(f"  ✓ {label}: using your Clover subscription defaults", Colors.GREEN))
-
             # Walk through ALL selected tools that have provider options or
             # need API keys.  This ensures browser (Local vs Browserbase),
             # TTS (Edge vs OpenAI vs ElevenLabs), etc. are shown even when
@@ -5658,7 +5255,6 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
             to_configure = [
                 ts_key for ts_key in sorted(new_enabled)
                 if (TOOL_CATEGORIES.get(ts_key) or TOOLSET_ENV_REQUIREMENTS.get(ts_key))
-                and ts_key not in auto_configured
             ]
 
             if to_configure:
