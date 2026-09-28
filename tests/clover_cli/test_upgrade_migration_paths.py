@@ -74,6 +74,19 @@ def test_doctor_fix_command_migrates_sibling_when_active_is_current(tmp_path):
     _assert_migrated(sibling)
 
 
+def test_doctor_fix_command_migrates_sibling_without_active_config(tmp_path):
+    home = tmp_path / ".clover"
+    sibling = home / "profiles" / "work"
+    _legacy(sibling)
+    env = {**os.environ, "HOME": str(tmp_path), "CLOVER_HOME": str(home)}
+    result = subprocess.run(
+        [sys.executable, "-c", "from clover_cli.main import main; main()", "doctor", "--fix"],
+        env=env, capture_output=True, text=True, timeout=45,
+    )
+    assert result.returncode == 0, result.stderr[-1000:]
+    _assert_migrated(sibling)
+
+
 def test_portal_only_public_url_removed_but_basic_auth_preserved():
     portal = copy.deepcopy(LEGACY)
     _v40_rewrite_config(portal)
@@ -82,6 +95,14 @@ def test_portal_only_public_url_removed_but_basic_auth_preserved():
     basic["dashboard"]["basic_auth"] = {"enabled": True}
     _v40_rewrite_config(basic)
     assert basic["dashboard"]["public_url"] == LEGACY["dashboard"]["public_url"]
+
+
+def test_portal_only_public_url_kept_when_oidc_auth_is_configured_in_env(monkeypatch):
+    monkeypatch.setenv("CLOVER_DASHBOARD_OIDC_ISSUER", "configured")
+    monkeypatch.setenv("CLOVER_DASHBOARD_OIDC_CLIENT_ID", "configured")
+    data = copy.deepcopy(LEGACY)
+    _v40_rewrite_config(data)
+    assert data["dashboard"]["public_url"] == LEGACY["dashboard"]["public_url"]
 
 
 def test_basic_auth_public_url_survives_real_migration(tmp_path, monkeypatch):

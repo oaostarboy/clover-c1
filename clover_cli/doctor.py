@@ -48,7 +48,15 @@ def _dashboard_auth_warning(config):
     oauth = dashboard.get("oauth") or {}
     if not isinstance(oauth, dict):
         oauth = {}
-    if dashboard.get("basic_auth") or dashboard.get("self_hosted") or oauth.get("self_hosted"):
+    from clover_cli.config_migrations import _V40_REMOVED_PROVIDERS
+    configured_provider = str(oauth.get("provider") or "").strip().lower()
+    env_oidc = bool(os.environ.get("CLOVER_DASHBOARD_OIDC_ISSUER") and os.environ.get("CLOVER_DASHBOARD_OIDC_CLIENT_ID"))
+    env_basic = bool(os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_USERNAME") and (
+        os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
+        or os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_PASSWORD")
+    ))
+    if (dashboard.get("basic_auth") or dashboard.get("self_hosted") or oauth.get("self_hosted")
+            or env_oidc or env_basic or (configured_provider and configured_provider not in _V40_REMOVED_PROVIDERS)):
         return None
     return ("Non-loopback dashboard has no auth provider; it will not bind. "
             "Configure basic_auth or self_hosted OIDC, or bind to loopback.")
