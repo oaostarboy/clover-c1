@@ -228,8 +228,7 @@ function scrollableAncestor(element: HTMLElement): HTMLElement | null {
 
 /**
  * The connections registry section of Settings → Gateways: manage the named
- * agent sources (local runtime + any number of remote gateways / Clover Cloud
- * instances / SSH hosts). Storage-level management — the active/primary
+ * agent sources (local runtime + any number of remote gateways / SSH hosts). Storage-level management — the active/primary
  * switchover UX is the connection-mode controls above this section.
  */
 export function ConnectionsRegistrySection() {
@@ -577,8 +576,6 @@ export function ConnectionsRegistrySection() {
       for (const row of results) {
         if (row.ok) {
           notify({ title: row.label, message: row.detail || s.updateAllDone })
-        } else if (row.skipped && row.reason === 'cloud-managed') {
-          notify({ title: row.label, message: s.updateSkippedCloud })
         } else {
           notifyError(new Error(row.error || row.detail || row.reason || row.label), s.updateAllFailed)
         }
@@ -588,7 +585,7 @@ export function ConnectionsRegistrySection() {
     } finally {
       setUpdatingAll(false)
     }
-  }, [bridge, s.updateAllDone, s.updateAllFailed, s.updateSkippedCloud])
+  }, [bridge, s.updateAllDone, s.updateAllFailed])
 
   const kindMeta: Record<DesktopConnectionKind, { label: string; desc: string }> = {
     local: { desc: s.kindLocalDesc, label: s.kindLocal },
