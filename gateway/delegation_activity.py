@@ -246,6 +246,58 @@ _BOARDS: Dict[Tuple[int, str], "_ChatBoard"] = {}
 BOARD_MIN_EDIT_SECONDS = 3.0
 
 
+# Board message ids survive a gateway restart on disk, so a board left behind
+# by the previous process is swept by the next board in that chat (otherwise
+# a restart mid-run leaves an orphan board no one will ever delete).
+_BOARD_STORE_LOCK = threading.Lock()
+
+
+def _board_store_path():
+    try:
+        from clover_constants import get_clover_home
+
+        return get_clover_home() / "state" / "delegation_boards.json"
+    except Exception:
+        return None
+
+
+def _board_store_key(adapter: Any, chat_id: Any) -> str:
+    name = getattr(adapter, "name", None) or type(adapter).__name__
+    return f"{name}:{chat_id}"
+
+
+def _board_store_load() -> Dict[str, List[str]]:
+    path = _board_store_path()
+    if path is None or not path.exists():
+        return {}
+    try:
+        import json as _json
+
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        return {str(k): [str(i) for i in v] for k, v in data.items() if isinstance(v, list)}
+    except Exception:
+        return {}
+
+
+def _board_store_set(key: str, ids: List[str]) -> None:
+    path = _board_store_path()
+    if path is None:
+        return
+    with _BOARD_STORE_LOCK:
+        try:
+            data = _board_store_load()
+            if ids:
+                data[key] = list(ids)[-20:]
+            else:
+                data.pop(key, None)
+            from utils import atomic_json_write
+
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_json_write(path, data)
+        except Exception:
+            logger.debug("delegation board store write failed", exc_info=True)
+
+
 class _BoardGroup:
     """Duck-typed stand-in for DelegationGroup so _render_active can draw
     workers from several groups/turns as one card."""
@@ -277,6 +329,12 @@ class _ChatBoard:
         # new post sweeps all older ones, so a failed edit/move can never
         # leave a second board behind.
         self._posted: List[str] = []
+        self._store_key = _board_store_key(adapter, chat_id)
+        # Boards left behind by a previous gateway process: swept on first post.
+        try:
+            self._posted.extend(_board_store_load().get(self._store_key, []))
+        except Exception:
+            pass
 
     @property
     def key(self) -> Tuple[int, str]:
@@ -285,6 +343,7 @@ class _ChatBoard:
     async def _sweep_except(self, keep: Optional[str]) -> None:
         stale = [m for m in self._posted if m != keep]
         self._posted = [keep] if keep else []
+        _board_store_set(self._store_key, self._posted)
         for mid in stale:
             await self._delete(mid)
 

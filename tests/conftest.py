@@ -1795,11 +1795,16 @@ def _reset_delegation_card_registries():
     """Per-chat card registries (live publishers, boards, last outbound id)
     are module globals keyed by id(adapter); a recycled id from an earlier
     test's adapter must never leak a board or publisher into the next test."""
-    yield
     try:
         import gateway.delegation_activity as _da
+        _orig_store = _da._board_store_path
+        _da._board_store_path = lambda: None  # tests never touch ~/.clover
     except Exception:
+        _da = None
+    yield
+    if _da is None:
         return
+    _da._board_store_path = _orig_store
     for _h in list(getattr(_da, "_FOLLOW_TIMERS", {}).values()):
         try:
             _h.cancel()

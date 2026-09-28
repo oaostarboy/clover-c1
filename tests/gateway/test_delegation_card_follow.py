@@ -372,3 +372,27 @@ async def test_failed_edit_never_leaves_a_second_board(monkeypatch):
     assert live == [board.message_id], f"exactly one board left, got {live}"
     assert first in ad.deleted
     await pub.aclose()
+
+
+
+@pytest.mark.asyncio
+async def test_board_left_by_previous_gateway_is_swept(monkeypatch, tmp_path):
+    """A gateway restart mid-run forgets its board in memory; the next board
+    in that chat deletes the orphan (ids persisted on disk)."""
+    monkeypatch.setattr(da, "_board_store_path", lambda: tmp_path / "boards.json")
+    ad = _SeqAdapter()
+    pub = await _board_pub(ad, monkeypatch)
+    _child_cb(_turn_runner(pub))("subagent.start", preview="g")
+    await pub.drain()
+    orphan = da._BOARDS[da._inbox_key(ad, "chat-A")].message_id
+    assert orphan in da._board_store_load().get(da._board_store_key(ad, "chat-A"), [])
+
+    # "Restart": all in-memory state gone, same chat, new workers.
+    da._BOARDS.clear(); da._LIVE.clear(); da._LAST_OUT.clear()
+    pub2 = await _board_pub(ad, monkeypatch)
+    _child_cb(_turn_runner(pub2), delegation_id="deleg_new", subagent_id="sa-9")("subagent.start", preview="h")
+    await pub2.drain()
+    assert orphan in ad.deleted
+    new = da._BOARDS[da._inbox_key(ad, "chat-A")].message_id
+    assert da._board_store_load()[da._board_store_key(ad, "chat-A")] == [new]
+    await pub.aclose(); await pub2.aclose()
