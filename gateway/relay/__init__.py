@@ -522,10 +522,10 @@ def _resolve_relay_identity_token() -> str:
     """Resolve the caller-identity bearer token the connector introspects to a tenant.
 
     Canonical resolver shared by the runtime self-provision path and the
-    ``clover gateway enroll`` CLI. Three modes, in precedence order:
+    ``clover gateway enroll`` CLI. Two modes, in precedence order:
 
-      1. **Generic OIDC client-credentials** (air-gapped / self-hosted-IdP, NO
-         Clover Portal): when ``gateway.idp.token_url`` (or
+      1. **Generic OIDC client-credentials** (self-hosted IdP): when
+         ``gateway.idp.token_url`` (or
          ``GATEWAY_RELAY_IDP_TOKEN_URL``) is configured together with a client
          id/secret, obtain a workload access token via the OAuth2
          ``client_credentials`` grant against the operator's own IdP (Entra;
@@ -538,8 +538,9 @@ def _resolve_relay_identity_token() -> str:
          IS the token — either a raw JWT string or a JSON envelope with an
          ``access_token`` field. No client registration involved; possession
          of the (typically loopback) endpoint is the credential.
-      2. **Clover Portal** (default): ``resolve_clover_access_token()`` — existing
-         managed/hosted behaviour.
+
+    With no ``token_url`` configured there is no identity source, so this
+    raises.
 
     Raises on failure; callers decide whether that's fatal (enroll CLI) or a
     graceful boot no-op (self-provision).
@@ -561,10 +562,10 @@ def _resolve_relay_identity_token() -> str:
             token_url = token_url or ""
 
     if not token_url:
-        # Mode 2 — Clover Portal (default, unchanged behaviour).
-        from clover_cli.auth import resolve_clover_access_token
-
-        return resolve_clover_access_token()
+        raise RuntimeError(
+            "No relay identity source configured: set gateway.idp.token_url "
+            "(or GATEWAY_RELAY_IDP_TOKEN_URL)."
+        )
 
     import json
     import urllib.error
@@ -644,9 +645,9 @@ def self_provision_relay() -> bool:
     """Boot-time relay self-provision: mint relay creds in-process, no human, no disk.
 
     Fires when relay is configured (``relay_url()`` set) and NO per-gateway secret
-    is already present, AND the agent can resolve its own Clover access token. In
-    that case the runtime resolves the agent's own Clover access token (the same
-    ``resolve_clover_access_token()`` the enroll CLI / dashboard register use),
+    is already present, AND the agent can resolve its relay identity token. In
+    that case the runtime resolves that token (the same
+    ``_resolve_relay_identity_token()`` the enroll CLI uses),
     POSTs ``/relay/provision`` asserting its own endpoint + route keys, and sets
     ``GATEWAY_RELAY_ID`` / ``GATEWAY_RELAY_SECRET`` / ``GATEWAY_RELAY_DELIVERY_KEY``
     into ``os.environ`` so the subsequent ``register_relay_adapter()`` picks them
@@ -663,8 +664,8 @@ def self_provision_relay() -> bool:
         bootstrapped NAS token -> self-provisions.
       - A self-hosted operator who ran ``clover gateway enroll``: has a PINNED
         ``GATEWAY_RELAY_SECRET`` -> skipped (the secret-present guard below).
-      - A self-hosted box with a relay URL but no NAS identity:
-        ``resolve_clover_access_token()`` fails -> graceful no-op.
+      - A self-hosted box with a relay URL but no configured IdP:
+        ``_resolve_relay_identity_token()`` fails -> graceful no-op.
 
     Stateless: process-env creds don't survive a restart, so a hosted container
     re-provisions every boot; the connector's rotation window covers a still-
