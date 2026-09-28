@@ -8673,8 +8673,8 @@ function sanitizeConnectionsRegistry(registry = readDesktopConnectionsRegistry()
 /**
  * Save (create or edit) a registry connection from a renderer payload.
  * Edits merge over the stored entry (mergeConnectionInput) so fields the
- * editor doesn't carry — cloud `org`, ssh `remoteCloverPath`/`remoteProfile` —
- * survive a rename. Token handling mirrors coerceDesktopConnectionConfig: an
+ * editor doesn't carry — ssh `remoteCloverPath`/`remoteProfile` — survive a
+ * rename. Token handling mirrors coerceDesktopConnectionConfig: an
  * incoming plaintext token is encrypted (honoring the same allowPlainTextToken
  * opt-in seam as Settings → Gateway); an absent token field inherits the
  * stored envelope on edit; switching auth away from 'token' clears it
@@ -8707,8 +8707,8 @@ async function saveRegistryConnection(input: any = {}) {
   const merged = mergeConnectionInput({ ...input, token, headers }, existing)
   const entry = normalizeConnectionInput(merged, registry)
 
-  // Token-auth remotes must actually have a token to be dialable. OAuth and
-  // cloud entries authenticate via cookies/native tokens instead.
+  // Token-auth remotes must actually have a token to be dialable. OAuth
+  // entries authenticate via cookies instead.
   if (entry.kind === 'remote' && entry.authMode !== 'oauth' && !decryptDesktopSecret(entry.token)) {
     throw new Error('Remote gateway session token is required.')
   }
@@ -9896,7 +9896,7 @@ async function resolveRemoteBackend(profile, options: { poolKey?: string; primar
       token,
       route.source,
       undefined,
-      route.kind === 'cloud' ? 'cloud' : 'url',
+      'url',
       undefined,
       route.headers
     )
@@ -9934,7 +9934,7 @@ function globalRemoteActive() {
     return true
   }
 
-  // Registry-primary transport (#91564/#90316): a registered remote/cloud/ssh
+  // Registry-primary transport (#91564/#90316): a registered remote/ssh
   // gateway promoted to primary via connections.json makes the primary
   // backend remote even while the v1 config.mode still says 'local'. Every
   // consumer of this flag ("one remote host serves every profile") must see
@@ -9951,7 +9951,7 @@ function registryPrimaryIsRemote() {
     const registry = readDesktopConnectionsRegistry()
     const entry = registry.connections.find(c => c.id === registry.primary)
 
-    return Boolean(entry && (entry.kind === 'remote' || entry.kind === 'cloud' || entry.kind === 'ssh'))
+    return Boolean(entry && (entry.kind === 'remote' || entry.kind === 'ssh'))
   } catch {
     return false
   }
@@ -10782,7 +10782,7 @@ async function connectRegistryBackend(
     token,
     `registry:${source.id}`,
     undefined,
-    source.kind === 'cloud' ? 'cloud' : 'url',
+    'url',
     undefined,
     source.headers
   )
@@ -14583,11 +14583,11 @@ async function requestManagedSshUpdate(rawId) {
 
 ipcMain.handle('clover:connections:update-managed', async (_event, rawId) => requestManagedSshUpdate(rawId))
 
-// Fan out `clover update` to every eligible registered connection at once.
-// Cloud entries are excluded (platform-managed); each dispatch reports
-// independently so one dead LAN box can't wedge the batch. Local reuses the
-// app's own update pipeline; Desktop-managed SSH uses the transactional
-// drain/update/restore lifecycle; URL remotes POST their backend updater.
+// Fan out `clover update` to every registered connection at once; each
+// dispatch reports independently so one dead LAN box can't wedge the batch.
+// Local reuses the app's own update pipeline; Desktop-managed SSH uses the
+// transactional drain/update/restore lifecycle; URL remotes POST their
+// backend updater.
 ipcMain.handle('clover:connections:update-all', async (_event, payload) => {
   const registry = readDesktopConnectionsRegistry()
 
