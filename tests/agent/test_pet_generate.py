@@ -428,20 +428,20 @@ def test_list_sprite_providers_marks_default(monkeypatch):
     """Lists only available ref-capable backends, flagging the default pick."""
     from agent.pet.generate import imagegen
 
-    registry = {"openai": _FakeImgProvider("openai"), "clover": _FakeImgProvider("clover")}
+    registry = {"openai": _FakeImgProvider("openai"), "openrouter": _FakeImgProvider("openrouter")}
     monkeypatch.setattr(imagegen, "_discover", lambda: None)
     monkeypatch.setattr("agent.image_gen_registry.get_active_provider", lambda: registry["openai"])
     monkeypatch.setattr("agent.image_gen_registry.get_provider", lambda name: registry.get(name))
 
     listed = imagegen.list_sprite_providers()
     names = {p["name"] for p in listed}
-    assert names == {"openai", "clover"}
+    assert names == {"openai", "openrouter"}
     # Every entry carries a display label (no quality note — all backends are equal).
     assert all(p["label"] for p in listed)
     assert all("note" not in p for p in listed)
     assert [p["name"] for p in listed if p["default"]] == ["openai"]
-    # Listed in preference order: Clover Portal before OpenAI.
-    assert [p["name"] for p in listed] == ["clover", "openai"]
+    # Listed in preference order: OpenAI before OpenRouter.
+    assert [p["name"] for p in listed] == ["openai", "openrouter"]
 
 
 def test_generate_retries_without_transparent_background(monkeypatch, tmp_path):

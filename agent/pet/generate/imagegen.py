@@ -21,15 +21,14 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Providers that can ground generation on a reference image, in preference order
-# (Clover Portal → OpenAI → OpenRouter → …). OpenRouter/Clover run a quality-first
+# (OpenAI → OpenRouter → …). OpenRouter runs a quality-first
 # model chain and may fall back depending on account access and endpoint behavior,
 # so fidelity can vary by configured backend + model availability.
-_REF_CAPABLE = ("clover", "openai", "openai-codex", "openrouter", "krea")
+_REF_CAPABLE = ("openai", "openai-codex", "openrouter", "krea")
 
 # Friendly display label per reference-capable provider, surfaced in the desktop
 # pet-gen picker.
 _PROVIDER_LABELS: dict[str, str] = {
-    "clover": "Clover Portal",
     "openrouter": "OpenRouter",
     "openai": "OpenAI",
     "openai-codex": "OpenAI (Codex)",
@@ -121,8 +120,8 @@ def resolve_provider(*, require_references: bool = True, prefer: str | None = No
 
     raise GenerationError(
         "Pet generation needs an image backend that supports reference images. "
-        "Open `clover tools` → Image Generation and configure Clover Portal, "
-        "OpenRouter, or OpenAI (gpt-image-2) with an API key."
+        "Open `clover tools` → Image Generation and configure "
+        "OpenRouter or OpenAI (gpt-image-2) with an API key."
     )
 
 
@@ -211,8 +210,8 @@ def generate(
     def _run(extra: dict) -> tuple[Path | None, str]:
         kwargs: dict = {"aspect_ratio": aspect_ratio, **extra}
         if refs:
-            # Providers disagree on the ref kwarg name: our OpenRouter/Clover
-            # backends read ``reference_images``, OpenAI's gpt-image-2 reads
+            # Providers disagree on the ref kwarg name: our OpenRouter
+            # backend reads ``reference_images``, OpenAI's gpt-image-2 reads
             # ``reference_image_urls``. Send both; each ignores the other.
             kwargs["reference_images"] = refs
             kwargs["reference_image_urls"] = refs
