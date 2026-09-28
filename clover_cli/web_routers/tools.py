@@ -285,11 +285,10 @@ async def get_toolset_config(name: str, profile: Optional[str] = None):
                         "tag": prov.get("tag", ""),
                         "env_vars": env_vars,
                         "post_setup": prov.get("post_setup"),
-                        "requires_clover_auth": bool(prov.get("requires_clover_auth")),
                         "is_active": is_active,
                         # Honest server-side readiness. The GUI's old client-side
                         # heuristic showed "Ready" for every zero-env-var row —
-                        # including logged-out Clover Subscription rows and never-run
+                        # including signed-out rows and never-run
                         # post_setup installs (see provider_readiness_status).
                         "status": provider_readiness_status(
                             prov, config, is_active=is_active
