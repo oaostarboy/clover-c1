@@ -167,3 +167,32 @@ def test_empty_continuation_keeps_previous_summary(monkeypatch):
 def test_config_default_is_on():
     from clover_cli.config_defaults import DEFAULT_CONFIG
     assert DEFAULT_CONFIG["delegation"]["auto_continue"] == 2
+
+
+
+def test_resumed_leg_runs_in_child_safety_context(monkeypatch):
+    """A resumed leg must run like the first: delegated-child context set,
+    subagent approval callback installed, off the calling thread."""
+    import threading
+
+    from agent.delegation_context import is_delegated_child_context
+    from tools import terminal_tool
+
+    monkeypatch.setattr(dt, "_load_config", lambda: {"auto_continue": 1})
+    sentinel = object()
+    monkeypatch.setattr(dt, "_get_subagent_approval_callback", lambda: sentinel)
+    seen = {}
+    caller = threading.current_thread()
+
+    def second(h):
+        seen["child_ctx"] = is_delegated_child_context()
+        seen["thread"] = threading.current_thread()
+        getter = getattr(terminal_tool, "_get_approval_callback", None)
+        seen["approval"] = getter() if getter else sentinel
+        return _leg("done", exhausted=False, prior=h)
+
+    child = _Child([_leg("half", exhausted=True), second])
+    _run_single_child(0, "t", child, _Parent())
+    assert seen["child_ctx"] is True
+    assert seen["thread"] is not caller
+    assert seen["approval"] is sentinel

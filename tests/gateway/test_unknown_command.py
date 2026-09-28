@@ -225,3 +225,18 @@ async def test_command_hook_rewrite_routes_to_plugin(monkeypatch):
     # First emit_collect fires on the original command; after rewrite the
     # dispatcher does NOT re-fire for the new command (one decision per turn).
     assert call_log == ["command:status"]
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cmd", ["/topup", "/subscription", "/upgrade"])
+async def test_removed_portal_commands_are_just_unknown(cmd, monkeypatch):
+    """Removed portal commands must get the normal unknown-command reply,
+    never an AttributeError from a stale dispatch branch."""
+    import gateway.run as gateway_run
+
+    runner = _make_runner()
+    runner._run_agent = AsyncMock(side_effect=AssertionError("leaked to the agent"))
+    monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"})
+    result = await runner._handle_message(_make_event(cmd))
+    assert result is not None and "Unknown command" in result

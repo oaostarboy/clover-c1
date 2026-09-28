@@ -2585,14 +2585,44 @@ def _auto_continue_limit(cfg: Optional[dict] = None) -> int:
     return auto_continue_limit(cfg)
 
 
-def _auto_continue_child(child, result, *, task_index, task_id, stream_callback, limit):
+def _auto_continue_child(child, result, *, task_index, task_id, stream_callback, limit,
+                         timeout=None):
+    """Resume a child that stopped early. Each leg runs exactly like the
+    first one: on a fresh worker thread with the non-interactive subagent
+    approval callback, inside the delegated-child context, bounded by the
+    child timeout."""
+
+    def _leg(message, history):
+        from agent.delegation_context import delegated_child_context
+
+        with delegated_child_context(str(getattr(child, "session_id", "") or "")):
+            return child.run_conversation(
+                user_message=message,
+                conversation_history=history,
+                task_id=task_id,
+                stream_callback=stream_callback,
+            )
+
     def _run(message, history):
-        return child.run_conversation(
-            user_message=message,
-            conversation_history=history,
-            task_id=task_id,
-            stream_callback=stream_callback,
+        from tools.daemon_pool import DaemonThreadPoolExecutor
+
+        ex = DaemonThreadPoolExecutor(
+            max_workers=1,
+            initializer=_set_subagent_approval_cb,
+            initargs=(_get_subagent_approval_callback(),),
         )
+        try:
+            fut = ex.submit(contextvars.copy_context().run, _leg, message, history)
+            return fut.result(timeout=timeout)
+        except Exception:
+            try:
+                if hasattr(child, "interrupt"):
+                    child.interrupt()
+            except Exception:
+                pass
+            raise
+        finally:
+            ex.shutdown(wait=False)
 
     def _note(kind, n, lim):
         logger.info("Subagent %d stopped early (%s); continuing (%d/%d)", task_index, kind, n, lim)
@@ -3121,6 +3151,7 @@ def _run_single_child(
                 task_id=child_task_id,
                 stream_callback=_relay_child_text,
                 limit=_auto_limit,
+                timeout=child_timeout,
             )
 
         _output_schema = getattr(child, "_delegate_output_schema", None)
