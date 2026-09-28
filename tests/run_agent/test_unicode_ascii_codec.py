@@ -154,7 +154,7 @@ class TestSanitizeStructureNonAscii:
             }
         }
         assert _sanitize_structure_non_ascii(payload) is True
-        assert payload["default_headers"]["X-Title"] == "Clover Cognition"
+        assert payload["default_headers"]["X-Title"] == "Clover  Agent"
         assert payload["default_headers"]["User-Agent"] == "Clover/1.0 "
 
 
