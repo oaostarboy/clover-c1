@@ -432,7 +432,6 @@ const NON_CONFIG_SETTINGS: ReadonlyArray<{
       'multi',
       'instances',
       'ssh',
-      'cloud',
       'add gateway',
       'registry'
     ],
