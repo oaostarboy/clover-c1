@@ -1053,11 +1053,10 @@ export interface ToolProvider {
   tag: string
   env_vars: ToolEnvVar[]
   post_setup: string | null
-  requires_clover_auth: boolean
   /** True when this is the provider currently written to config (mirrors the
    *  CLI `clover tools` active-provider detection). */
   is_active: boolean
-  /** Honest readiness computed server-side (keys ∧ Clover entitlement ∧
+  /** Honest readiness computed server-side (keys ∧ sign-in ∧
    *  post-setup install state). Optional for older backends. */
   status?: ToolProviderStatus
   /** Web toolset only: the backend key written to web.*backend config
