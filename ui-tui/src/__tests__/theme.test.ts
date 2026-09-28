@@ -435,7 +435,7 @@ describe('derived tone ladder', () => {
 
     const cases: Array<[string, string, string]> = [
       [dark.DARK_THEME.color.muted, '#18ac6f', 'dark muted'],
-      [dark.DARK_THEME.color.label, '#3FBF7F', 'dark label'],
+      [dark.DARK_THEME.color.label, '#19b875', 'dark label'],
       [dark.DARK_THEME.color.statusFg, '#C0C0C0', 'dark statusFg'],
       [dark.DARK_THEME.color.completionBg, '#1a1a2e', 'dark surface'],
       [dark.DARK_THEME.color.completionCurrentBg, '#333355', 'dark chip'],
