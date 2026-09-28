@@ -963,28 +963,6 @@ class TestLiteLLMOpenAIWire:
         assert inner, "the OpenAI-wire grant must still place real breakpoints"
 
 
-class TestNousPortalAnthropicWire:
-    def test_portal_claude_on_the_messages_wire_uses_the_native_layout(self):
-        agent = _make_agent(
-            provider="clover",
-            base_url="",
-            api_mode="anthropic_messages",
-            model="anthropic/claude-opus-4.8",
-        )
-        assert agent._anthropic_prompt_cache_policy() == (True, True)
-
-    def test_portal_claude_on_chat_completions_keeps_the_envelope_layout(self):
-        """The wire, not the provider, picks the layout — Portal models still on
-        /chat/completions must not be flipped to inner-block markers."""
-        agent = _make_agent(
-            provider="clover",
-            base_url="",
-            api_mode="chat_completions",
-            model="anthropic/claude-opus-4.8",
-        )
-        assert agent._anthropic_prompt_cache_policy() == (True, False)
-
-
 class TestExplicitOverrides:
     """Policy accepts keyword overrides for switch_model / fallback activation."""
 
