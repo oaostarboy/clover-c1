@@ -500,7 +500,6 @@ class TestLoginNousSkipKeepsCurrent:
         """Patch OAuth + model-list + prompt so _login_clover doesn't hit network."""
         import clover_cli.auth as auth_mod
         import clover_cli.models as models_mod
-        import clover_cli.clover_subscription as ns
 
         fake_auth_state = {
             "access_token": "fake-clover-token",
@@ -530,7 +529,6 @@ class TestLoginNousSkipKeepsCurrent:
             models_mod, "partition_clover_models_by_tier",
             lambda ids, p, free_tier=False: (ids, []),
         )
-        monkeypatch.setattr(ns, "prompt_enable_tool_gateway", lambda cfg: None)
         return free_tier_calls
 
     def test_skip_keep_current_preserves_provider_and_model(self, tmp_path, monkeypatch):
