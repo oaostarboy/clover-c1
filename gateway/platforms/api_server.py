@@ -2271,10 +2271,6 @@ class APIServerAdapter(BasePlatformAdapter):
             ("POST", "/v1/runs/{run_id}/steer", self._handle_steer_run),
             ("POST", "/v1/runs/{run_id}/stop", self._handle_stop_run),
         ]
-        if _CRON_AVAILABLE:
-            # Chronos managed-cron fire webhook (NAS → agent). Authenticated
-            # by a NAS-minted JWT (NOT API_SERVER_KEY).
-            routes.append(("POST", "/api/cron/fire", self._handle_cron_fire))
         return routes
 
     # ------------------------------------------------------------------
