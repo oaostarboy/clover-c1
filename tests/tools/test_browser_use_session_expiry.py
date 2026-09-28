@@ -31,7 +31,6 @@ def test_browser_use_preserves_provider_timeout(monkeypatch):
         lambda: {
             "api_key": "test-key",
             "base_url": "https://api.browser-use.example/api/v3",
-            "managed_mode": False,
         },
     )
     monkeypatch.setattr(browser_use_provider.requests, "post", Mock(return_value=response))

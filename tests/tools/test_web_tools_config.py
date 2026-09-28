@@ -25,65 +25,25 @@ class TestFirecrawlClientConfig:
         import tools.web_tools
         tools.web_tools._firecrawl_client = None
         tools.web_tools._firecrawl_client_config = None
-        for key in (
-            "FIRECRAWL_API_KEY",
-            "FIRECRAWL_API_URL",
-            "FIRECRAWL_GATEWAY_URL",
-            "TOOL_GATEWAY_DOMAIN",
-            "TOOL_GATEWAY_SCHEME",
-            "TOOL_GATEWAY_USER_TOKEN",
-        ):
+        for key in ("FIRECRAWL_API_KEY", "FIRECRAWL_API_URL"):
             os.environ.pop(key, None)
-        # Enable managed tools by default for these tests — patch both the
-        # local web_tools import and the managed_tool_gateway import so the
-        # full firecrawl client init path sees True.
-        self._managed_patchers = [
-            patch("tools.web_tools.managed_clover_tools_enabled", return_value=True),
-            patch("tools.managed_tool_gateway.managed_clover_tools_enabled", return_value=True),
-        ]
-        for p in self._managed_patchers:
-            p.start()
 
     def teardown_method(self):
         """Reset client after each test."""
         import tools.web_tools
         tools.web_tools._firecrawl_client = None
         tools.web_tools._firecrawl_client_config = None
-        for key in (
-            "FIRECRAWL_API_KEY",
-            "FIRECRAWL_API_URL",
-            "FIRECRAWL_GATEWAY_URL",
-            "TOOL_GATEWAY_DOMAIN",
-            "TOOL_GATEWAY_SCHEME",
-            "TOOL_GATEWAY_USER_TOKEN",
-        ):
+        for key in ("FIRECRAWL_API_KEY", "FIRECRAWL_API_URL"):
             os.environ.pop(key, None)
-        for p in self._managed_patchers:
-            p.stop()
 
     # ── Configuration matrix ─────────────────────────────────────────
 
     def test_no_config_raises_with_helpful_message(self):
         """Neither key nor URL → ValueError with guidance."""
         with patch("tools.web_tools.Firecrawl"):
-            with patch("tools.web_tools._read_clover_access_token", return_value=None):
-                from tools.web_tools import _get_firecrawl_client
-                with pytest.raises(ValueError, match="FIRECRAWL_API_KEY"):
-                    _get_firecrawl_client()
-
-    def test_tool_gateway_domain_builds_firecrawl_gateway_origin(self):
-        """Shared gateway domain should derive the Firecrawl vendor hostname."""
-        with patch.dict(os.environ, {"TOOL_GATEWAY_DOMAIN": ""}):
-            with patch("tools.web_tools._read_clover_access_token", return_value="clover-token"):
-                with patch("tools.web_tools.Firecrawl") as mock_fc:
-                    from tools.web_tools import _get_firecrawl_client
-                    result = _get_firecrawl_client()
-                    mock_fc.assert_called_once_with(
-                        api_key="clover-token",
-                        api_url="https://firecrawl-gateway.",
-                    )
-                    assert result is mock_fc.return_value
-
+            from tools.web_tools import _get_firecrawl_client
+            with pytest.raises(ValueError, match="FIRECRAWL_API_KEY"):
+                _get_firecrawl_client()
 
     # ── Singleton caching ────────────────────────────────────────────
 
@@ -110,21 +70,19 @@ class TestFirecrawlClientConfig:
         """FIRECRAWL_API_KEY='' with no URL → should raise."""
         with patch.dict(os.environ, {"FIRECRAWL_API_KEY": ""}):
             with patch("tools.web_tools.Firecrawl"):
-                with patch("tools.web_tools._read_clover_access_token", return_value=None):
-                    from tools.web_tools import _get_firecrawl_client
-                    with pytest.raises(ValueError):
-                        _get_firecrawl_client()
+                from tools.web_tools import _get_firecrawl_client
+                with pytest.raises(ValueError):
+                    _get_firecrawl_client()
 
     def test_explicit_firecrawl_config_without_creds_uses_keyless_client(self):
         """Explicit Firecrawl config should build the keyless cloud client."""
         from plugins.web.firecrawl import provider as firecrawl_provider
 
         with patch("tools.web_tools._load_web_config", return_value={"backend": "firecrawl"}):
-            with patch("tools.web_tools._read_clover_access_token", return_value=None):
-                with patch("tools.web_tools.Firecrawl", side_effect=AssertionError("SDK path should not run")):
-                    from tools.web_tools import _get_firecrawl_client
+            with patch("tools.web_tools.Firecrawl", side_effect=AssertionError("SDK path should not run")):
+                from tools.web_tools import _get_firecrawl_client
 
-                    result = _get_firecrawl_client()
+                result = _get_firecrawl_client()
 
         assert isinstance(result, firecrawl_provider._KeylessFirecrawlClient)
         assert result.api_url == "https://api.firecrawl.dev"
@@ -215,18 +173,10 @@ class TestBackendSelection:
     def setup_method(self):
         for key in self._ENV_KEYS:
             os.environ.pop(key, None)
-        self._managed_patchers = [
-            patch("tools.web_tools.managed_clover_tools_enabled", return_value=True),
-            patch("tools.managed_tool_gateway.managed_clover_tools_enabled", return_value=True),
-        ]
-        for p in self._managed_patchers:
-            p.start()
 
     def teardown_method(self):
         for key in self._ENV_KEYS:
             os.environ.pop(key, None)
-        for p in self._managed_patchers:
-            p.stop()
 
     # ── Config-based selection (web.backend in config.yaml) ───────────
 
@@ -300,7 +250,6 @@ class TestBackendSelection:
         """
         from tools.web_tools import _get_backend
         with patch("tools.web_tools._load_web_config", return_value={}), \
-             patch("tools.web_tools._is_tool_gateway_ready", return_value=False), \
              patch("tools.web_tools._ddgs_package_importable", return_value=False), \
              patch("tools.web_tools._list_registered_web_providers", return_value=[]), \
              patch("agent.web_search_registry._keyless_tier_enabled", return_value=False):
@@ -323,33 +272,13 @@ class TestBackendSelection:
              patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test"}):
             assert _get_backend() == "firecrawl"
 
-    def test_clover_backend_maps_to_firecrawl(self):
-        """The managed 'clover' selection is serviced by the firecrawl
-        provider (whose client resolver routes managed)."""
+    def test_clover_backend_returned_verbatim(self):
+        """A legacy 'clover' managed selection is now treated like any other
+        unrecognized vendor name — returned as-is so the dispatch path
+        raises an honest selection error, never remapped to firecrawl."""
         from tools.web_tools import _get_backend
         with patch("tools.web_tools._load_web_config", return_value={"backend": "clover"}):
-            assert _get_backend() == "firecrawl"
-
-    def test_managed_gateway_does_not_preempt_explicit_tavily(self):
-        """Regression: a Clover OAuth token (managed gateway "ready") must NOT
-        beat an explicitly configured TAVILY_API_KEY in the fallback path.
-        Free Clover tiers don't include web search, so the user's deliberate
-        Tavily setup would fail at runtime with "no subscription" if the
-        gateway pre-empted it."""
-        from tools.web_tools import _get_backend
-        with patch("tools.web_tools._load_web_config", return_value={}), \
-             patch("tools.web_tools._is_tool_gateway_ready", return_value=True), \
-             patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test"}):
-            assert _get_backend() == "tavily"
-
-    def test_managed_gateway_only_falls_through_to_firecrawl(self):
-        """When no explicit-credential backend is configured, a Clover-managed
-        gateway token still selects firecrawl — the convenience path is
-        preserved, just no longer pre-empts."""
-        from tools.web_tools import _get_backend
-        with patch("tools.web_tools._load_web_config", return_value={}), \
-             patch("tools.web_tools._is_tool_gateway_ready", return_value=True):
-            assert _get_backend() == "firecrawl"
+            assert _get_backend() == "clover"
 
 
 class TestParallelClientConfig:
@@ -499,25 +428,23 @@ class TestCheckWebApiKey:
     def setup_method(self):
         for key in self._ENV_KEYS:
             os.environ.pop(key, None)
-        self._managed_patchers = [
-            patch("tools.web_tools.managed_clover_tools_enabled", return_value=True),
-            patch("tools.managed_tool_gateway.managed_clover_tools_enabled", return_value=True),
+        self._patchers = [
             # ddgs availability is package-presence driven and the plugin
             # registry can hold an available ddgs provider. Neutralize both
-            # fallback surfaces so this class only exercises env-key/gateway
+            # fallback surfaces so this class only exercises env-key
             # resolution — otherwise these tests flip on machines where the
             # optional ``ddgs`` package is installed (dev venvs) vs CI.
             patch("tools.web_tools._ddgs_package_importable", return_value=False),
             patch("agent.web_search_registry.get_active_search_provider", return_value=None),
             patch("agent.web_search_registry.get_active_extract_provider", return_value=None),
         ]
-        for p in self._managed_patchers:
+        for p in self._patchers:
             p.start()
 
     def teardown_method(self):
         for key in self._ENV_KEYS:
             os.environ.pop(key, None)
-        for p in self._managed_patchers:
+        for p in self._patchers:
             p.stop()
 
     def test_parallel_key_only(self):
@@ -537,13 +464,6 @@ class TestCheckWebApiKey:
             from tools.web_tools import check_web_api_key
             assert check_web_api_key() is False
 
-
-    def test_configured_firecrawl_backend_accepts_managed_gateway(self):
-        with patch("tools.web_tools._load_web_config", return_value={"backend": "firecrawl"}):
-            with patch("tools.web_tools._peek_clover_access_token", return_value="clover-token"):
-                with patch.dict(os.environ, {"FIRECRAWL_GATEWAY_URL": "http://127.0.0.1:3002"}, clear=False):
-                    from tools.web_tools import check_web_api_key
-                    assert check_web_api_key() is True
 
     def test_explicit_unavailable_active_provider_is_not_ready(self):
         """#78412: get_active_* may return a configured backend whose
@@ -674,16 +594,14 @@ class TestNonBuiltinProviderAvailability:
     def test_check_web_api_key_returns_true_for_custom_provider(self):
         """With only a custom provider registered (no built-in creds),
         check_web_api_key() must return True."""
-        with patch("tools.web_tools._ddgs_package_importable", return_value=False), \
-             patch("tools.web_tools._peek_clover_access_token", return_value=None):
+        with patch("tools.web_tools._ddgs_package_importable", return_value=False):
             from tools.web_tools import check_web_api_key
             assert check_web_api_key() is True
 
     def test_get_backend_discovers_custom_provider(self):
         """_get_backend() must return the custom provider name when it's
         the only available provider."""
-        with patch("tools.web_tools._ddgs_package_importable", return_value=False), \
-             patch("tools.web_tools._peek_clover_access_token", return_value=None):
+        with patch("tools.web_tools._ddgs_package_importable", return_value=False):
             from tools.web_tools import _get_backend
             assert _get_backend() == "fake-plugin-prov"
 
@@ -692,7 +610,6 @@ class TestNonBuiltinProviderAvailability:
         """Per-capability selection (_get_extract_backend) must resolve the
         custom provider when configured, instead of dead-ending — issue #32698."""
         with patch("tools.web_tools._ddgs_package_importable", return_value=False), \
-             patch("tools.web_tools._peek_clover_access_token", return_value=None), \
              patch("tools.web_tools._load_web_config",
                    return_value={"extract_backend": "fake-plugin-prov"}):
             from tools.web_tools import _get_extract_backend
@@ -701,8 +618,7 @@ class TestNonBuiltinProviderAvailability:
     def test_tool_registry_entries_not_filtered_out(self):
         """web_search and web_extract tool entries must remain in the
         registry when only a custom provider is available."""
-        with patch("tools.web_tools._ddgs_package_importable", return_value=False), \
-             patch("tools.web_tools._peek_clover_access_token", return_value=None):
+        with patch("tools.web_tools._ddgs_package_importable", return_value=False):
             import tools.web_tools
             web_search_entry = tools.web_tools.registry.get_entry("web_search")
             web_extract_entry = tools.web_tools.registry.get_entry("web_extract")
