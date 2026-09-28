@@ -8,7 +8,6 @@ that the setup wizard correctly syncs config from disk after the call.
 from __future__ import annotations
 
 from clover_cli.config import load_config, save_config, save_env_value
-from clover_cli.clover_subscription import CloverFeatureState, CloverSubscriptionFeatures
 from clover_cli.setup import _print_setup_summary, setup_model_provider
 
 
@@ -135,9 +134,9 @@ def test_setup_summary_local_browser_unavailable_without_chromium(
     """End-to-end: agent-browser present but no Chromium in local mode must
     render as unavailable with an install hint — not a false 'available'.
 
-    Unlike the mocked-feature tests above, this drives the real
-    ``get_clover_subscription_features`` so the surface stays aligned with the
-    runtime gate in ``tools.browser_tool.check_browser_requirements``.
+    Drives the real ``_toolset_has_keys`` / ``_visible_providers`` so the
+    surface stays aligned with the runtime gate in
+    ``tools.browser_tool.check_browser_requirements``.
     """
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
     _clear_provider_env(monkeypatch)
@@ -150,12 +149,8 @@ def test_setup_summary_local_browser_unavailable_without_chromium(
     browser_cfg["cloud_provider"] = "local"
     save_config(cfg)
 
-    # Only stub the readiness probes; the feature resolver itself is real.
-    monkeypatch.setattr("clover_cli.clover_subscription._has_agent_browser", lambda: True)
-    monkeypatch.setattr(
-        "clover_cli.clover_subscription.get_clover_portal_account_info",
-        lambda *a, **k: None,
-    )
+    # Only stub the readiness probes; the visibility resolver itself is real.
+    monkeypatch.setattr("clover_cli.tools_config._has_agent_browser", lambda: True)
     monkeypatch.setattr("tools.browser_tool._chromium_installed", lambda: False)
     monkeypatch.setattr("tools.browser_tool._using_lightpanda_engine", lambda: False)
     monkeypatch.setattr(

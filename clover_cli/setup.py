@@ -523,7 +523,13 @@ def _print_setup_summary(config: dict, clover_home):
 
     # Browser tools (local Chromium, Camofox, Browserbase, Browser Use, or Firecrawl)
     browser_provider = cfg_get(config, "browser", "cloud_provider") or "local"
-    if _toolset_has_keys("browser", config):
+    if browser_provider == "local":
+        from clover_cli.tools_config import _local_browser_runnable
+
+        browser_available = _local_browser_runnable()
+    else:
+        browser_available = _toolset_has_keys("browser", config)
+    if browser_available:
         tool_status.append((f"Browser Automation ({browser_provider})", True, None))
     else:
         missing_browser_hint = "npm install -g agent-browser, set CAMOFOX_URL, or configure Browser Use or Browserbase"
