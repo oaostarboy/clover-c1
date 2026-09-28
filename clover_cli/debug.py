@@ -960,7 +960,7 @@ def _run_debug_share_clover(args, *, log_lines: int, redact: bool) -> None:
         res = share_to_clover(blob)
     except Exception as exc:
         print(
-            f"\nNous upload failed: {exc}\n"
+            f"\nClover upload failed: {exc}\n"
             "\nThe Clover diagnostics service may be unavailable or not yet "
             "provisioned.\n"
             "Run `clover debug share --local` to print the report instead, "
