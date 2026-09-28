@@ -65,15 +65,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_CATALOG_URL = (
     "docs/api/model-catalog.json"
 )
-# Fallback fetch chain. The Docusaurus site is served through Vercel, which
-# occasionally returns HTTP 403 + x-vercel-mitigated: challenge for non-
-# browser clients (urllib, curl). When that happens the disk cache goes
-# stale and new model releases never reach the picker. The raw GitHub URL
-# is the same manifest published from the same repo and is not bot-gated,
-# so we fall through to it whenever the primary URL fails.
-DEFAULT_CATALOG_FALLBACK_URLS: tuple[str, ...] = (
-    "",
-)
 DEFAULT_TTL_HOURS = 1
 DEFAULT_FETCH_TIMEOUT = 8.0
 SUPPORTED_SCHEMA_VERSION = 1
@@ -152,26 +143,17 @@ def _fetch_manifest(url: str, timeout: float) -> dict[str, Any] | None:
 def _fetch_manifest_with_fallback(
     primary_url: str,
     timeout: float,
-    fallback_urls: tuple[str, ...] = DEFAULT_CATALOG_FALLBACK_URLS,
 ) -> dict[str, Any] | None:
-    """Try ``primary_url`` first, then walk ``fallback_urls``.
+    """Fetch ``primary_url``, or None when it fails or fails validation.
 
-    Returns the first manifest that fetches and validates, or None when
-    every URL fails. Skips fallback URLs identical to the primary so an
-    operator who configured the catalog URL to point at the raw GitHub
-    copy doesn't double-fetch.
+    Historically this also walked a fallback chain (a raw-GitHub mirror of
+    the manifest, used when the primary docs-site fetch was bot-gated).
+    That mirror lived under the docs site's own repo tree, which is no
+    longer shipped, so there is no working fallback URL to walk — every
+    failure now falls through to ``get_catalog()``'s own stale-disk-cache
+    handling instead.
     """
-    data = _fetch_manifest(primary_url, timeout)
-    if data is not None:
-        return data
-    for url in fallback_urls:
-        if not url or url == primary_url:
-            continue
-        data = _fetch_manifest(url, timeout)
-        if data is not None:
-            logger.info("model catalog primary URL failed; using fallback %s", url)
-            return data
-    return None
+    return _fetch_manifest(primary_url, timeout)
 
 
 def _validate_manifest(data: Any) -> bool:

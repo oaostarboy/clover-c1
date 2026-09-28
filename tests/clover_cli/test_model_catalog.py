@@ -130,18 +130,15 @@ class TestFetchFailure:
 
 
 class TestFallbackChain:
-    """``_fetch_manifest_with_fallback`` walks ``DEFAULT_CATALOG_FALLBACK_URLS``
-    when the primary URL fails. Regression: the Docusaurus site behind Vercel
-    occasionally returns HTTP 403 + x-vercel-mitigated: challenge for urllib;
-    without a fallback URL the user's disk cache freezes and new model
-    releases (opus 4.8, etc.) never reach the picker.
+    """``_fetch_manifest_with_fallback`` fetches the primary URL only.
+
+    It used to also walk a raw-GitHub mirror of the manifest for when the
+    docs-site fetch was bot-gated by Vercel, but that mirror lived under
+    the docs site's own repo tree, which is no longer shipped — there is
+    no working second URL to fall through to anymore.
     """
 
     PRIMARY = "docs/api/model-catalog.json"
-    FALLBACK = (
-        ""
-        "/main/website/static/api/model-catalog.json"
-    )
 
     def test_uses_primary_when_it_succeeds(self, isolated_home):
         from clover_cli import model_catalog
@@ -155,43 +152,15 @@ class TestFallbackChain:
             result = model_catalog._fetch_manifest_with_fallback(self.PRIMARY, 5.0)
 
         assert result is not None
-        assert calls == [self.PRIMARY], "fallback URLs must not be touched on primary success"
+        assert calls == [self.PRIMARY]
 
-    def test_falls_through_to_raw_github_on_primary_failure(self, isolated_home):
+    def test_primary_failure_returns_none(self, isolated_home):
         from clover_cli import model_catalog
-        calls: list[str] = []
 
-        def fake_fetch(url, timeout):
-            calls.append(url)
-            if url == self.PRIMARY:
-                return None  # simulate Vercel 403
-            return _valid_manifest()
-
-        with patch.object(model_catalog, "_fetch_manifest", side_effect=fake_fetch):
+        with patch.object(model_catalog, "_fetch_manifest", return_value=None):
             result = model_catalog._fetch_manifest_with_fallback(self.PRIMARY, 5.0)
 
-        assert result is not None
-        assert calls == [self.PRIMARY, self.FALLBACK]
-
-
-    def test_get_catalog_uses_fallback_chain(self, isolated_home):
-        """End-to-end: ``get_catalog`` routes through the fallback helper so
-        a primary URL failure transparently produces a working catalog."""
-        from clover_cli import model_catalog
-        manifest = _valid_manifest()
-        calls: list[str] = []
-
-        def fake_fetch(url, timeout):
-            calls.append(url)
-            if url == self.PRIMARY:
-                return None
-            return manifest
-
-        with patch.object(model_catalog, "_fetch_manifest", side_effect=fake_fetch):
-            result = model_catalog.get_catalog(force_refresh=True)
-
-        assert result == manifest
-        assert self.FALLBACK in calls
+        assert result is None
 
 
 class TestCuratedAccessors:
@@ -244,25 +213,6 @@ class TestDefaultModelFromCache:
         with patch.object(model_catalog, "_fetch_manifest") as fetch:
             assert model_catalog.get_default_model_from_cache("openrouter") is None
             fetch.assert_not_called()
-
-
-    def test_shipped_manifest_labels_glm52_default(self, isolated_home):
-        """Contract with the in-repo manifest: both provider blocks label the
-        same default entry the code constant points at."""
-        import clover_cli.model_catalog as model_catalog
-        from clover_cli.models import PREFERRED_SILENT_DEFAULT_MODEL
-
-        repo_root = Path(model_catalog.__file__).resolve().parent.parent
-        manifest = json.loads(
-            (repo_root / "website" / "static" / "api" / "model-catalog.json").read_text()
-        )
-        for provider in ("openrouter", "clover"):
-            block = manifest["providers"][provider]
-            labeled = [m["id"] for m in block["models"] if m.get("default")]
-            assert labeled == [PREFERRED_SILENT_DEFAULT_MODEL], (
-                f"{provider}: exactly one entry must be labeled default and it "
-                f"must match PREFERRED_SILENT_DEFAULT_MODEL"
-            )
 
 
 class TestProviderOverride:
