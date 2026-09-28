@@ -282,7 +282,7 @@ describe('undialedSshRouteSeeds', () => {
         [],
         [
           { id: 'homelab', kind: 'ssh', remoteProfile: 'venture' },
-          { id: 'cloud-prod', kind: 'cloud' }
+          { id: 'remote-prod', kind: 'remote' }
         ]
       )
     ).toEqual([{ connectionId: 'homelab', profile: 'default' }])

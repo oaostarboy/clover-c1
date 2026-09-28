@@ -758,6 +758,7 @@ function pickCanonicalConnection<T extends { connection: RegistryConnection; ord
 
 export interface UpdateEligibility {
   eligible: boolean
+  reason?: string
 }
 
 /**
