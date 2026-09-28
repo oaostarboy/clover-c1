@@ -60,3 +60,46 @@ def test_windows_service_rollback_uses_existing_restore_path(monkeypatch, tmp_pa
     watcher._restart_from_beacon({"repo": str(tmp_path), "windows_services": ["clover-gateway"]})
     assert "_restore_windows_gateway_service" in calls[0][2]
     assert calls[0][-1] == "clover-gateway"
+
+
+def test_probe_rejects_restarting_gateway_even_if_always_running(monkeypatch, tmp_path):
+    from itertools import cycle
+    monkeypatch.setattr(watcher, "_gateway_running", lambda: True)
+    monkeypatch.setattr(watcher, "_core_imports_healthy", lambda root: True)
+    monkeypatch.setattr(watcher, "_gateway_identity", lambda: next(cycle_ids))
+    cycle_ids = cycle([1, 2])
+    assert not watcher.probe_gateway(tmp_path, timeout=0.05, stable_seconds=0.02, poll=0)
+
+
+def test_receipt_preserves_current_run_when_updater_dies(tmp_path, monkeypatch):
+    from clover_cli import update_receipt
+    monkeypatch.setattr(update_receipt, "_receipt_dir", lambda: tmp_path)
+    update_receipt.begin_update_receipt()
+    try:
+        update_receipt.save_pending_receipt("a" * 40, "snap-1")
+        record = json.loads((tmp_path / "latest.json").read_text(encoding="utf-8"))
+        assert record["outcome"] == "running"
+        assert record["pre_pull_sha"] == "a" * 40
+        assert record["pre_update_snapshot_id"] == "snap-1"
+    finally:
+        update_receipt._current = None
+
+
+def test_rollback_keeps_local_checkout_edits(tmp_path):
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=tmp_path, check=True,
+                              capture_output=True, text=True, encoding="utf-8").stdout.strip()
+    git("init", "-q")
+    git("config", "user.email", "tester")
+    git("config", "user.name", "Test")
+    source = tmp_path / "file.txt"
+    source.write_text("old", encoding="utf-8")
+    git("add", ".")
+    git("commit", "-qm", "old")
+    old_sha = git("rev-parse", "HEAD")
+    source.write_text("new", encoding="utf-8")
+    git("commit", "-qam", "new")
+    source.write_text("my edit", encoding="utf-8")
+    watcher._rollback_checkout({"repo": str(tmp_path), "pre_pull_sha": old_sha}, tmp_path / "beacon")
+    assert git("rev-parse", "HEAD") == old_sha
+    assert source.read_text(encoding="utf-8") == "my edit" or "stash@" in git("stash", "list")
