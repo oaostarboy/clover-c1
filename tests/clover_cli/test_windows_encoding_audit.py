@@ -42,6 +42,11 @@ def test_probe_run_passes_the_chosen_codec_to_the_child(monkeypatch):
 
     monkeypatch.setattr(sc.subprocess, "Popen", spy)
     monkeypatch.setattr(sc, "probe_output_encoding", lambda: "cp1252")
-    res = sc.bounded_probe_run([sys.executable, "-c", "print('ok')"], timeout=30)
+    res = sc.bounded_probe_run(
+        [sys.executable, "-c", "print('ok')"], timeout=30, encoding=sc.probe_output_encoding()
+    )
     assert res is not None and res.stdout.strip() == "ok"
     assert seen["encoding"] == "cp1252"
+    # Default stays UTF-8: git and Python children always emit UTF-8.
+    sc.bounded_probe_run([sys.executable, "-c", "print('ok')"], timeout=30)
+    assert seen["encoding"] == "utf-8"

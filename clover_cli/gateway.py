@@ -775,7 +775,7 @@ def _scan_gateway_pids(
             # inside the windowless pythonw.exe gateway/desktop backend, so a
             # bare wmic/powershell spawn would flash a conhost window on every
             # watchdog probe.
-            from clover_cli._subprocess_compat import bounded_probe_run
+            from clover_cli._subprocess_compat import bounded_probe_run, probe_output_encoding
 
             wmic_path = shutil.which("wmic")
             result = None
@@ -790,6 +790,7 @@ def _scan_gateway_pids(
                     ],
                     timeout=10,
                     errors="ignore",
+                    encoding=probe_output_encoding(),
                 )
             if result is None or result.returncode != 0 or not (result.stdout or ""):
                 # Fallback: PowerShell Get-CimInstance, emit LIST-style output
@@ -809,6 +810,7 @@ def _scan_gateway_pids(
                     [powershell, "-NoProfile", "-Command", ps_cmd],
                     timeout=15,
                     errors="ignore",
+                    encoding=probe_output_encoding(),
                 )
                 if result is None:
                     return []

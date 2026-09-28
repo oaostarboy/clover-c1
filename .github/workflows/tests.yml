@@ -104,7 +104,9 @@ jobs:
         # set is identical to the list the removed matrix job used to pass in.
         run: |
           source .venv/bin/activate
-          scripts/run_tests.sh
+          # --slice, not the CLOVER_TEST_SLICE env var: the env var leaks
+          # into run_tests_parallel.py's own tests, which spawn the runner.
+          scripts/run_tests.sh --slice ${{ matrix.slice }}/8
         env:
           # This is the maximum number of test FILES that run together.
           # run_tests_parallel.py starts one pytest subprocess for each file
@@ -127,7 +129,6 @@ jobs:
           # size. The remaining time is the slowest files plus the setup.
           # Workers above the core count only add contention.
           CLOVER_TEST_WORKERS: 8
-          CLOVER_TEST_SLICE: ${{ matrix.slice }}/8
           # Ensure tests don't accidentally call real APIs
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
