@@ -366,15 +366,12 @@ function remoteRequestMatchesBaseUrl(requestUrl, baseUrl) {
   }
 }
 
-// True for connection modes that resolve to a REMOTE backend. 'cloud' is a
-// Clover Cloud connection (cloud-auto-discovery Q3/Q6): it carries a
-// remote-shaped block and reuses the entire remote connect/probe/reconnect
-// path, so every resolution site treats it exactly like 'remote'. The only
-// places that distinguish cloud from remote are the settings UI (which card to
-// show) and config persistence (remembering the provenance). Centralized here
-// so no resolution site forgets the third arm.
+// True for connection modes that resolve to a REMOTE backend. A legacy saved
+// 'cloud' connection (portal-based agent discovery, removed) is coerced to
+// 'remote' at the point the saved config is read from disk
+// (readDesktopConnectionConfig), so this only ever sees 'remote'/'local'/'ssh'.
 function modeIsRemoteLike(mode) {
-  return mode === 'remote' || mode === 'cloud'
+  return mode === 'remote'
 }
 
 function normalizeSshConfig(entry) {

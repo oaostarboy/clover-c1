@@ -14,7 +14,6 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { makeNousCloudBackendDownError } from './backend-health'
 import {
   apiRequestRegistryConnectionId,
   AT_COOKIE_VARIANTS,
@@ -121,11 +120,8 @@ test('remoteRequestMatchesBaseUrl treats HTTPS and WSS as the same gateway origi
 
 // --- modeIsRemoteLike ---
 
-test('modeIsRemoteLike is true for remote and cloud, false otherwise', () => {
-  // cloud resolves to a remote backend under the hood (Q6), so every resolution
-  // site treats it like remote.
+test('modeIsRemoteLike is true only for remote', () => {
   assert.equal(modeIsRemoteLike('remote'), true)
-  assert.equal(modeIsRemoteLike('cloud'), true)
   assert.equal(modeIsRemoteLike('local'), false)
   assert.equal(modeIsRemoteLike(undefined), false)
   assert.equal(modeIsRemoteLike(null), false)
@@ -192,22 +188,6 @@ test('profileRemoteOverride preserves normalized remote headers', () => {
     headers: {
       'CF-Access-Client-Id': { encoding: 'safeStorage', value: 'encrypted-id' }
     }
-  })
-})
-
-test('profileRemoteOverride treats a cloud entry as a remote override', () => {
-  // A 'cloud' per-profile entry resolves to the same remote backend a 'remote'
-  // entry would (Q6) — the override must be returned, not dropped.
-  const config = {
-    profiles: {
-      coder: { mode: 'cloud', url: 'https://agent-1.agents.', authMode: 'oauth' }
-    }
-  }
-
-  assert.deepEqual(profileRemoteOverride(config, 'coder'), {
-    url: 'https://agent-1.agents.',
-    authMode: 'oauth',
-    token: undefined
   })
 })
 
@@ -302,14 +282,14 @@ test('normalizeSshConfig strips a pasted "ssh " command prefix', () => {
   })
 })
 
-test('localProfileEntry preserves inactive SSH drafts but drops Cloud state', () => {
+test('localProfileEntry preserves inactive SSH drafts but drops remote state', () => {
   const ssh = { mode: 'ssh', host: 'box', user: 'alice', remoteCloverPath: '/clover' }
   assert.deepEqual(localProfileEntry(ssh), { mode: 'local', savedSsh: ssh })
   assert.deepEqual(localProfileEntry({ mode: 'local', savedSsh: ssh }), {
     mode: 'local',
     savedSsh: ssh
   })
-  assert.equal(localProfileEntry({ mode: 'cloud', url: 'https://agent' }), null)
+  assert.equal(localProfileEntry({ mode: 'remote', url: 'https://agent' }), null)
 })
 
 test('saved SSH drafts are inactive and explicit overrides take precedence', () => {
@@ -1290,55 +1270,12 @@ test('gatewayTicketFailure keeps 401 and 403 as reauth with needsOauthLogin', ()
 })
 
 test('gatewayTicketFailure only copies an integer statusCode, not a message prefix', () => {
-  // A legacy "503: ..." message carries no structured statusCode; the Cloud
-  // classifier (makeNousCloudBackendDownError) handles the prefix at the mint
-  // boundary. The wrapper must not invent an integer from the message.
+  // A legacy "503: ..." message carries no structured statusCode; the wrapper
+  // must not invent an integer from the message.
   const source = new Error('503: Service Unavailable') as any
 
   const wrapped = gatewayTicketFailure(source, 'auth message', 'transport message')
 
   assert.equal((wrapped as any).statusCode, undefined)
   assert.equal((wrapped as any).needsOauthLogin, undefined)
-})
-
-// OAuth integration regression (#85373): the WS-ticket mint boundary runs
-// BEFORE waitForCloverReady. This mirrors main.ts buildRemoteConnection's
-// catch — classify a Clover Cloud server fault via the shared factory, else
-// fall through to gatewayTicketFailure. Proves the production composition:
-//   1. Cloud + OAuth ticket mint + 503  -> actionable Cloud-down error
-//   2. Cloud + OAuth ticket mint + 401  -> reauth (never Cloud-down)
-test('OAuth ticket-mint 503 surfaces the Cloud-down error (startup boundary)', () => {
-  const baseUrl = 'https://ares-3009.agents.'
-  const ticketErr = new Error('upstream unavailable') as any
-  ticketErr.statusCode = 503
-
-  // The exact production sequence from main.ts.
-  const cloudError = makeNousCloudBackendDownError(baseUrl, ticketErr)
-
-  if (cloudError !== null) {
-    assert.equal((cloudError as any).isCloudBackendDown, true)
-    assert.equal((cloudError as any).statusCode, 503)
-    assert.ok(cloudError.message.includes('Clover Cloud agent ares-3009.agents. is down'))
-
-    return
-  }
-
-  const wrapped = gatewayTicketFailure(ticketErr, 'auth', 'transport')
-
-  assert.fail(`expected Cloud-down classification, got wrapper: ${wrapped.message}`)
-})
-
-test('OAuth ticket-mint 401 stays on the reauth path (never Cloud-down)', () => {
-  const baseUrl = 'https://ares-3009.agents.'
-  const ticketErr = new Error('Unauthorized') as any
-  ticketErr.statusCode = 401
-
-  const cloudError = makeNousCloudBackendDownError(baseUrl, ticketErr)
-  assert.equal(cloudError, null, 'a 401 must not become a Cloud-down error')
-
-  const wrapped = gatewayTicketFailure(ticketErr, 'auth message', 'transport message')
-
-  assert.equal(wrapped.message, 'auth message')
-  assert.equal((wrapped as any).needsOauthLogin, true)
-  assert.equal((wrapped as any).statusCode, 401)
 })
