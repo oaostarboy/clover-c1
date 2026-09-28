@@ -3016,8 +3016,8 @@ DEFAULT_CONFIG = {
     },
 
     # Remotely-hosted model catalog manifest.  When enabled, the CLI fetches
-    # curated model lists for OpenRouter and Clover Portal from this URL,
-    # falling back to the in-repo snapshot on network failure.  Lets us
+    # curated model lists for OpenRouter from this URL, falling back to the
+    # in-repo snapshot on network failure.  Lets us
     # update model picker lists without shipping a clover-c1 release.
     # The default URL is served by the docs site GitHub Pages deploy.
     "model_catalog": {
@@ -3935,8 +3935,8 @@ DEFAULT_CONFIG = {
 OPTIONAL_ENV_VARS = {
     # ── Provider (handled in provider selection, not shown in checklists) ──
     "CLOVER_BASE_URL": {
-        "description": "Clover Portal base URL override",
-        "prompt": "Clover Portal base URL (leave empty for default)",
+        "description": "Base URL override for the active inference provider",
+        "prompt": "Provider base URL override (leave empty for default)",
         "url": None,
         "password": False,
         "category": "provider",
