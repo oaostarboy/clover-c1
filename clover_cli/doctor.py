@@ -55,8 +55,19 @@ def _dashboard_auth_warning(config):
         os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
         or os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_PASSWORD")
     ))
-    if (dashboard.get("basic_auth") or dashboard.get("self_hosted") or oauth.get("self_hosted")
-            or env_oidc or env_basic or (configured_provider and configured_provider not in _V40_REMOVED_PROVIDERS)):
+    basic = dashboard.get("basic_auth") or {}
+    basic_ready = isinstance(basic, dict) and bool(
+        (basic.get("username") or os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_USERNAME"))
+        and (basic.get("password_hash") or basic.get("password")
+             or os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_PASSWORD_HASH")
+             or os.environ.get("CLOVER_DASHBOARD_BASIC_AUTH_PASSWORD"))
+    )
+    oidc = oauth.get("self_hosted") or dashboard.get("self_hosted") or {}
+    oidc_ready = isinstance(oidc, dict) and bool(
+        (oidc.get("issuer") or os.environ.get("CLOVER_DASHBOARD_OIDC_ISSUER"))
+        and (oidc.get("client_id") or os.environ.get("CLOVER_DASHBOARD_OIDC_CLIENT_ID"))
+    )
+    if basic_ready or oidc_ready or env_oidc or env_basic or (configured_provider and configured_provider not in _V40_REMOVED_PROVIDERS):
         return None
     return ("Non-loopback dashboard has no auth provider; it will not bind. "
             "Configure basic_auth or self_hosted OIDC, or bind to loopback.")

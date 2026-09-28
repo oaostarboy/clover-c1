@@ -121,7 +121,8 @@ def test_doctor_reports_public_dashboard_without_auth():
     assert "no auth provider" in _dashboard_auth_warning({"dashboard": {"host": "0.0.0.0"}})
     assert "no auth provider" in _dashboard_auth_warning({"dashboard": {"public_url": "https://example.invalid"}})
     assert _dashboard_auth_warning({"dashboard": {"host": "127.0.0.1"}}) is None
-    assert _dashboard_auth_warning({"dashboard": {"host": "0.0.0.0", "basic_auth": {"enabled": True}}}) is None
+    assert "no auth provider" in _dashboard_auth_warning({"dashboard": {"host": "0.0.0.0", "basic_auth": {"enabled": True}}})
+    assert _dashboard_auth_warning({"dashboard": {"host": "0.0.0.0", "basic_auth": {"username": "owner", "password_hash": "hash"}}}) is None
 
 
 @pytest.mark.parametrize("alias", ["clover", "clover-portal", "cloverc1"])
