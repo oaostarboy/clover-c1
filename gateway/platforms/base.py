@@ -7141,6 +7141,17 @@ class BasePlatformAdapter(ABC):
                         )
                 except (asyncio.TimeoutError, Exception):
                     pass
+            # Running subagent cards follow the conversation: the reply just
+            # landed below them, so re-post them underneath it.
+            try:
+                from gateway.delegation_activity import follow_latest_message
+
+                await asyncio.wait_for(
+                    follow_latest_message(self, event.source.chat_id),
+                    timeout=_POST_DELIVERY_CALLBACK_TIMEOUT_SECONDS,
+                )
+            except (asyncio.TimeoutError, Exception):
+                pass
             # Some adapters keep platform-level typing tasks.  If callback
             # work or a late refresh recreated one, make one final bounded stop
             # before releasing the session guard.

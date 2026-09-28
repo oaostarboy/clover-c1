@@ -65,6 +65,51 @@ def _inbox_key(adapter: Any, chat_id: Any) -> Tuple[int, str]:
     return (id(adapter), str(chat_id))
 
 
+# (adapter id, chat id) -> publishers that may still own a LIVE card there.
+# After the parent's reply lands, those cards are re-posted below it so the
+# running roster always follows the latest message instead of scrolling away.
+_LIVE: Dict[Tuple[int, str], List["DelegationActivityPublisher"]] = {}
+_LIVE_LOCK = threading.Lock()
+_LIVE_MAX_PER_CHAT = 32
+
+
+def _adapter_can_delete(adapter: Any) -> bool:
+    deleter = getattr(type(adapter), "delete_message", None)
+    if deleter is None:
+        return False
+    try:
+        from gateway.platforms.base import BasePlatformAdapter
+
+        return deleter is not BasePlatformAdapter.delete_message
+    except Exception:
+        return True
+
+
+async def follow_latest_message(adapter: Any, chat_id: Any) -> int:
+    """Move every live (still running) delegation card in this chat below the
+    message just delivered. Returns how many cards were moved.
+
+    Only on adapters that can delete: without delete, re-posting would leave
+    duplicate cards behind, which is worse than a card that stays put.
+    """
+    if adapter is None or chat_id in (None, "") or not _adapter_can_delete(adapter):
+        return 0
+    key = _inbox_key(adapter, chat_id)
+    with _LIVE_LOCK:
+        pubs = [p for p in _LIVE.get(key, []) if not p._closed]
+        if pubs:
+            _LIVE[key] = pubs
+        else:
+            _LIVE.pop(key, None)
+    moved = 0
+    for pub in pubs:
+        try:
+            moved += await pub.repost_live_cards()
+        except Exception:
+            logger.debug("delegation card follow failed", exc_info=True)
+    return moved
+
+
 def inbox_pending(adapter: Any, chat_id: Any) -> int:
     with _INBOX_LOCK:
         return len(_INBOX.get(_inbox_key(adapter, chat_id), ()))
@@ -199,6 +244,13 @@ class DelegationActivityPublisher:
         # transcript creation failed). Per publisher, so two turns in one chat
         # never share a status key like "delegation:delegation".
         self._fallback_group = f"deleg_{uuid.uuid4().hex[:8]}"
+        with _LIVE_LOCK:
+            pubs = _LIVE.setdefault(_inbox_key(adapter, self._chat_id), [])
+            pubs.append(self)
+            # Publishers are per turn and never explicitly closed; idle ones
+            # drop out on the next follow pass. Cap as a backstop.
+            if len(pubs) > _LIVE_MAX_PER_CHAT:
+                del pubs[: len(pubs) - _LIVE_MAX_PER_CHAT]
 
     def external_job_identity(self) -> Tuple[str, int]:
         """Group id + index for an external agent job registered this turn.
@@ -370,6 +422,7 @@ class DelegationActivityPublisher:
 
     async def aclose(self) -> None:
         self._closed = True
+        self._unregister_live()
         for task in (self._pump_task, self._heartbeat_task):
             if task is not None and not task.done():
                 task.cancel()
@@ -377,6 +430,68 @@ class DelegationActivityPublisher:
                     await task
                 except (asyncio.CancelledError, Exception):
                     pass
+
+    def _unregister_live(self) -> None:
+        key = _inbox_key(self._adapter, self._chat_id)
+        with _LIVE_LOCK:
+            pubs = _LIVE.get(key)
+            if pubs and self in pubs:
+                pubs.remove(self)
+                if not pubs:
+                    _LIVE.pop(key, None)
+
+    async def repost_live_cards(self) -> int:
+        """Delete each posted, still-running card and post it again at the
+        bottom of the chat. Finished cards are left alone (their summary
+        path already posts at the bottom)."""
+        if self._closed:
+            return 0
+        if self._flush_lock is None:
+            self._flush_lock = asyncio.Lock()
+            self._wake = asyncio.Event()
+        moved = 0
+        async with self._flush_lock:
+            with self._state_lock:
+                targets = [
+                    (gid, card) for gid, card in self._cards.items()
+                    if card.posted and not card.suppressed and not card.summary_posted
+                    and not self.tracker.group_finished(gid)
+                ]
+            if not targets and not self.tracker.active_group_ids():
+                self._unregister_live()
+                return 0
+            for gid, card in targets:
+                old_id = card.message_id
+                status_ids = getattr(self._adapter, "_status_message_ids", None)
+                if isinstance(status_ids, dict):
+                    key_id = status_ids.pop((self._chat_id, f"delegation:{gid}"), None)
+                    old_id = old_id or (str(key_id) if key_id else None)
+                text = self._render(gid)
+                if not text:
+                    continue
+                try:
+                    result = await _maybe_await(
+                        self._adapter.send(self._chat_id, text, metadata=self._metadata)
+                    )
+                except Exception:
+                    logger.debug("delegation card repost failed", exc_info=True)
+                    continue
+                new_id = getattr(result, "message_id", None)
+                if not (getattr(result, "success", False) and new_id):
+                    continue
+                with self._state_lock:
+                    card.message_id = str(new_id)
+                    card.last_text = text
+                    card.last_publish = self._clock()
+                if isinstance(status_ids, dict):
+                    status_ids[(self._chat_id, f"delegation:{gid}")] = str(new_id)
+                if old_id and str(old_id) != str(new_id):
+                    try:
+                        await _maybe_await(self._adapter.delete_message(self._chat_id, old_id))
+                    except Exception:
+                        logger.debug("old delegation card delete failed", exc_info=True)
+                moved += 1
+        return moved
 
     # -- combined turn card ------------------------------------------------
 
