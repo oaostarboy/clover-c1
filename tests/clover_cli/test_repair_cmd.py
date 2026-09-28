@@ -102,7 +102,7 @@ async def test_gateway_repair_reuses_detached_update_ipc(tmp_path):
          patch("subprocess.Popen") as spawn:
         message = await runner._handle_repair_command(event)
     assert "safely repairing" in message
-    assert json.loads((tmp_path / ".update_pending.json").read_text())["action"] == "repair"
+    assert json.loads((tmp_path / ".update_pending.json").read_text(encoding="utf-8"))["action"] == "repair"
     assert "repair" in spawn.call_args.args[0][-1]
     assert "update --gateway" not in spawn.call_args.args[0][-1]
 
