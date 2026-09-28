@@ -374,6 +374,12 @@ function modeIsRemoteLike(mode) {
   return mode === 'remote'
 }
 
+// Preserve the meaning of legacy saved cloud-mode configs after removing the
+// Cloud connection type: a usable URL remains a generic remote gateway.
+function coerceSavedConnectionMode(mode, remoteUrl) {
+  return mode === 'cloud' ? (String(remoteUrl || '').trim() ? 'remote' : 'local') : mode
+}
+
 function normalizeSshConfig(entry) {
   if (!entry || typeof entry !== 'object' || entry.mode !== 'ssh') {
     return null
@@ -1004,6 +1010,7 @@ export {
   buildGatewayWsUrl,
   buildGatewayWsUrlWithTicket,
   connectionScopeKey,
+  coerceSavedConnectionMode,
   cookiesHaveLiveSession,
   cookiesHavePrivyAccessToken,
   cookiesHavePrivySession,

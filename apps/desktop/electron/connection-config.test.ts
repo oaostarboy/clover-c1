@@ -21,6 +21,7 @@ import {
   buildGatewayWsUrl,
   buildGatewayWsUrlWithTicket,
   connectionScopeKey,
+  coerceSavedConnectionMode,
   cookiesHaveLiveSession,
   cookiesHavePrivyAccessToken,
   cookiesHavePrivySession,
@@ -119,6 +120,13 @@ test('remoteRequestMatchesBaseUrl treats HTTPS and WSS as the same gateway origi
 })
 
 // --- modeIsRemoteLike ---
+
+test('coerceSavedConnectionMode maps legacy cloud configs to remote only when a URL exists', () => {
+  assert.equal(coerceSavedConnectionMode('cloud', 'https://gateway.example'), 'remote')
+  assert.equal(coerceSavedConnectionMode('cloud', '  https://gateway.example  '), 'remote')
+  assert.equal(coerceSavedConnectionMode('cloud', ''), 'local')
+  assert.equal(coerceSavedConnectionMode('cloud', undefined), 'local')
+})
 
 test('modeIsRemoteLike is true only for remote', () => {
   assert.equal(modeIsRemoteLike('remote'), true)

@@ -89,6 +89,7 @@ import {
   buildGatewayWsUrl,
   buildGatewayWsUrlWithTicket,
   connectionScopeKey,
+  coerceSavedConnectionMode,
   cookiesHaveLiveSession,
   cookiesHavePrivyAccessToken,
   cookiesHavePrivySession,
@@ -8455,7 +8456,7 @@ function readDesktopConnectionConfig() {
         // A legacy 'cloud' connection mode (portal-based agent discovery,
         // removed) always carried a remote-shaped block, so it coerces to
         // 'remote' here — the one point where saved config is read from disk.
-        mode: parsed.mode === 'ssh' ? 'ssh' : parsed.mode === 'cloud' || parsed.mode === 'remote' ? 'remote' : 'local',
+        mode: parsed.mode === 'ssh' ? 'ssh' : coerceSavedConnectionMode(parsed.mode, parsed.remote?.url) === 'remote' ? 'remote' : 'local',
         remote,
         // Per-profile remote overrides: each profile may point at its own
         // backend (local spawn or its own remote URL). Preserved verbatim so

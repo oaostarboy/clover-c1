@@ -24,7 +24,7 @@ function config(overrides: Partial<DesktopConnectionConfig> = {}): DesktopConnec
     secureTokenStorage: true,
     remoteTokenPlainText: false,
     remoteUrl: 'https://box:9119',
-    cloudOrg: '',
+
     sshHost: '',
     sshUser: '',
     sshPort: null,
