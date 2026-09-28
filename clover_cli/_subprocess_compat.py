@@ -532,7 +532,7 @@ def bounded_probe_run(
             stderr=subprocess.PIPE,
             stdin=subprocess.DEVNULL,
             text=True,
-            encoding=encoding or probe_output_encoding(),
+            encoding=encoding or "utf-8",
             errors=errors,
             **_popen_kwargs,
         )
@@ -585,7 +585,8 @@ def bounded_git_probe(argv: Sequence[str], *, timeout: float) -> str:
     openai/codex#36793). ``process_group`` only changes which group the child
     belongs to; it does not detach the terminal or alter the fast path.
     """
-    result = bounded_probe_run(argv, timeout=timeout)
+    # git emits UTF-8 regardless of the console code page.
+    result = bounded_probe_run(argv, timeout=timeout, encoding="utf-8")
     if result is None or result.returncode != 0:
         return ""
     return (result.stdout or "").strip()

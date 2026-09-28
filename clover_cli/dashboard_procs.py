@@ -84,12 +84,13 @@ def _scan_dashboard_processes(
             # CREATE_NO_WINDOW: this scan can run from the windowless
             # pythonw.exe desktop/gateway backend during an update, where a
             # bare wmic spawn would pop a console window.
-            from clover_cli._subprocess_compat import bounded_probe_run
+            from clover_cli._subprocess_compat import bounded_probe_run, probe_output_encoding
 
             result = bounded_probe_run(
                 ["wmic", "process", "get", "ProcessId,CommandLine", "/FORMAT:LIST"],
                 timeout=10,
                 errors="ignore",
+                encoding=probe_output_encoding(),
             )
             if result is None or result.returncode != 0 or result.stdout is None:
                 return []
