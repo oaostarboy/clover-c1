@@ -83,6 +83,92 @@ def test_unpinned_success_is_unaffected_by_the_new_result_key():
     assert result.stdout == b"the answer\n"
 
 
+def test_preflight_substitutes_closest_same_provider_model_and_exits_zero():
+    """Case (a): the resolved provider's own catalog has a close enough
+    match (cutoff ~0.6) -- run on it instead of failing, exit 0, and name
+    both models on stderr (#93412 follow-up)."""
+    program = textwrap.dedent(
+        """
+        from unittest.mock import MagicMock, patch
+        import clover_cli.oneshot as oneshot
+
+        with (
+            patch("clover_cli.models.detect_provider_for_model", return_value=None),
+            patch(
+                "clover_cli.runtime_provider.resolve_runtime_provider",
+                return_value={
+                    "api_key": "k", "base_url": "https://chatgpt.com/backend-api/codex",
+                    "provider": "openai-codex", "requested_provider": "openai-codex",
+                    "api_mode": "codex_responses", "credential_pool": None,
+                },
+            ),
+            patch(
+                "clover_cli.models._PROVIDER_MODELS",
+                {"openai-codex": ["gpt-5.3-codex-real"]},
+            ),
+            patch("run_agent.AIAgent") as MockAgent,
+        ):
+            MockAgent.return_value.run_conversation.return_value = {
+                "final_response": "ok", "failed": False, "completed": True,
+                "model_substituted": True,
+                "requested_model": "gpt-5.3-codex-typo",
+                "requested_provider": "openai-codex",
+                "actual_model": "gpt-5.3-codex-real",
+            }
+            raise SystemExit(
+                oneshot.run_oneshot("hello", model="gpt-5.3-codex-typo")
+            )
+        """
+    )
+    result = _run(program)
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    assert result.stdout == b"ok\n"
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    assert "gpt-5.3-codex-typo" in stderr
+    assert "gpt-5.3-codex-real" in stderr
+    assert "openai-codex" in stderr
+
+
+def test_preflight_substitute_unknown_false_keeps_old_fail_fast_behavior():
+    """``model.substitute_unknown: false`` opts back into the original
+    stop-with-error contract even when a close same-provider match exists."""
+    program = textwrap.dedent(
+        """
+        from unittest.mock import patch
+        import clover_cli.oneshot as oneshot
+
+        with (
+            patch("clover_cli.models.detect_provider_for_model", return_value=None),
+            patch(
+                "clover_cli.runtime_provider.resolve_runtime_provider",
+                return_value={
+                    "api_key": "k", "base_url": "https://chatgpt.com/backend-api/codex",
+                    "provider": "openai-codex", "requested_provider": "openai-codex",
+                    "api_mode": "codex_responses", "credential_pool": None,
+                },
+            ),
+            patch(
+                "clover_cli.models._PROVIDER_MODELS",
+                {"openai-codex": ["gpt-5.3-codex-real"]},
+            ),
+            patch(
+                "clover_cli.config.load_config",
+                return_value={"model": {"substitute_unknown": False}},
+            ),
+        ):
+            raise SystemExit(
+                oneshot.run_oneshot("hello", model="gpt-5.3-codex-typo")
+            )
+        """
+    )
+    result = _run(program)
+    assert result.returncode == 2, result.stderr.decode("utf-8", errors="replace")
+    assert result.stdout == b""
+    stderr = result.stderr.decode("utf-8", errors="replace")
+    assert "gpt-5.3-codex-typo" in stderr
+    assert "Nothing was run on another model" in stderr
+
+
 def test_unknown_model_without_provider_fails_fast_with_suggestions():
     """The -m preflight: detect_provider_for_model finds nothing, the
     resolved (default) provider has a static catalog, and the requested

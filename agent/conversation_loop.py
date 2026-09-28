@@ -6040,6 +6040,38 @@ def run_conversation(
                         classified.reason == FailoverReason.model_not_found
                         and getattr(agent, "model_pinned", False)
                     ):
+                        # Before aborting, try a substitute -- closest real
+                        # model on the SAME provider, then the user's own
+                        # configured default -- instead of leaving a pinned
+                        # typo dead in the water. Deliberately NOT the
+                        # configured fallback_providers chain (that's for
+                        # outages); guarded so a substitute that itself
+                        # 404s doesn't loop back through here forever.
+                        # See #93412 follow-up.
+                        _substitute = None
+                        if getattr(agent, "_model_substitution", None) is None:
+                            from agent.model_substitute import substitute_unknown_models_enabled
+                            from clover_cli.config import load_config
+
+                            if substitute_unknown_models_enabled(load_config()):
+                                _substitute = agent._try_substitute_unknown_model(
+                                    requested_model=_model, provider=_provider,
+                                )
+                        if _substitute is not None:
+                            _substitute_notice = (
+                                f"⚠ '{_model}' doesn't exist on {_provider}, "
+                                f"so I used {_substitute.model} instead."
+                            )
+                            agent._flush_status_buffer()
+                            agent._emit_status(_substitute_notice)
+                            active_system_prompt = _sync_failover_system_message(
+                                agent, api_messages, active_system_prompt)
+                            retry_count = 0
+                            compression_attempts = 0
+                            _retry.primary_recovery_attempted = False
+                            _retry.restart_with_rebuilt_messages = True
+                            break
+
                         _pinned_summary = agent._summarize_api_error(api_error)
                         _pinned_msg = (
                             f"Model '{_model}' isn't available on provider "

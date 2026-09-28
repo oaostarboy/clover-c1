@@ -2895,6 +2895,126 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         return agent._try_activate_fallback(reason)  # try next in chain
 
 
+def try_substitute_unknown_model(agent, *, requested_model: str, provider: str):
+    """Switch a pinned model that doesn't exist on its provider onto a
+    substitute, in place.
+
+    Deliberately separate from ``try_activate_fallback`` / the configured
+    ``fallback_providers`` chain: that chain is for outage recovery, and a
+    pinned model that's simply misspelled is not an outage — walking the
+    chain for it is how a typo ended up silently draining a different paid
+    plan (#93412). This never touches ``agent._fallback_chain`` /
+    ``agent._fallback_index``.
+
+    Returns the ``ModelSubstitute`` actually applied, or ``None`` when
+    ``agent/model_substitute.resolve_model_substitute`` found nothing to
+    substitute -- the caller keeps the existing stop-with-error behaviour.
+    """
+    from agent.model_substitute import configured_default_model, resolve_model_substitute
+    from clover_cli.config import load_config
+    from clover_cli.models import _PROVIDER_MODELS
+
+    provider = (provider or "").strip().lower()
+    cfg = load_config()
+    default_model, default_provider = configured_default_model(cfg)
+    substitute = resolve_model_substitute(
+        requested_model, provider,
+        known_models=_PROVIDER_MODELS.get(provider) or [],
+        default_model=default_model,
+        default_provider=default_provider,
+    )
+    if substitute is None:
+        return None
+
+    old_model, old_provider = agent.model, agent.provider
+    if substitute.provider == old_provider:
+        # Same provider: the existing client/credentials already work --
+        # just rename the model, same as try_activate_fallback would for a
+        # same-backend swap.
+        agent.model = substitute.model
+    else:
+        from agent.auxiliary_client import resolve_provider_client
+
+        try:
+            client, resolved_model = resolve_provider_client(
+                substitute.provider, model=substitute.model, raw_codex=True,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Model substitute failed: could not build a client for %s/%s: %s",
+                substitute.provider, substitute.model, exc,
+            )
+            return None
+        if client is None:
+            logger.warning(
+                "Model substitute failed: provider %s is not configured",
+                substitute.provider,
+            )
+            return None
+        agent.client = client
+        agent.model = resolved_model or substitute.model
+        agent.provider = substitute.provider
+        agent.requested_provider = substitute.provider
+        agent.base_url = str(client.base_url)
+        if hasattr(agent, "_transport_cache"):
+            agent._transport_cache.clear()
+
+    # Clear the per-config context_length override so the substitute
+    # model's actual context window is resolved instead of inheriting the
+    # stale value from the model that doesn't exist. See #22387.
+    agent._config_context_length = None
+    # Durable record for the result/usage-file contract (requested_model /
+    # actual_model) and a same-substitution guard so a substitute that
+    # itself 404s doesn't loop back through here forever.
+    agent._model_substitution = {
+        "requested_model": old_model,
+        "requested_provider": old_provider,
+        "actual_model": agent.model,
+        "actual_provider": agent.provider,
+        "reason": "model_not_found_substituted",
+    }
+    # Reuse the SAME bookkeeping try_activate_fallback maintains so the
+    # subagent/job card's existing "Y (fallback from X)" relabel logic
+    # (delegate_tool._model_label_for_child) picks this up with no new
+    # plumbing. This flag alone (without agent._fallback_activated) also
+    # means restore_primary_runtime() never tries to switch back to the
+    # model that doesn't exist on the next turn.
+    agent._provider_fallback_active = True
+    agent._provider_fallback_route = (str(agent.model), str(agent.provider))
+    # WARNING (not INFO), same convention as try_activate_fallback: a
+    # model switch is a durable, billable state change.
+    logger.warning(
+        "Model substitute activated: %s (%s) → %s (%s); "
+        "reason=model_not_found_substituted",
+        old_model, old_provider, agent.model, agent.provider,
+    )
+    _fallback_cb = getattr(agent, "model_fallback_callback", None)
+    if _fallback_cb is not None:
+        try:
+            _fallback_cb(
+                from_model=old_model,
+                from_provider=old_provider,
+                to_model=agent.model,
+                to_provider=agent.provider,
+                reason="model_not_found_substituted",
+            )
+        except Exception:
+            logger.debug("model_fallback_callback failed", exc_info=True)
+    _reset_stale_streak(agent)
+    try:
+        from agent.native_compaction import resolve_native_compaction_capabilities
+
+        agent.runtime_capabilities = resolve_native_compaction_capabilities(
+            model=agent.model,
+            base_url=agent.base_url,
+            provider=agent.provider,
+            is_codex_backend=agent.provider == "openai-codex",
+        )
+    except Exception:
+        logger.debug("runtime_capabilities refresh after model substitute failed", exc_info=True)
+
+    return substitute
+
 
 def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     """Request a summary when max iterations are reached. Returns the final response text."""

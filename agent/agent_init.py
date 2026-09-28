@@ -668,6 +668,11 @@ def init_agent(
     _install_safe_stdio()
 
     agent.model = model
+    # Snapshot of what was actually requested at construction time -- read
+    # back by finalize_turn() for the requested_model/actual_model result
+    # contract (#93412 follow-up: a model substitute changes agent.model,
+    # this stays the original so the result/usage file can report both).
+    agent._requested_model = model
     # Set only when the caller explicitly chose this model (clover -z -m,
     # clover chat -m, delegate_task per-task/delegation.model override) —
     # never for a value that only came from config/env defaults. Gates the

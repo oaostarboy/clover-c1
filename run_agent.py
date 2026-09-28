@@ -6899,6 +6899,11 @@ class AIAgent:
         from agent.chat_completion_helpers import try_activate_fallback
         return try_activate_fallback(self, reason)
 
+    def _try_substitute_unknown_model(self, *, requested_model: str, provider: str):
+        """Forwarder — see ``agent.chat_completion_helpers.try_substitute_unknown_model``."""
+        from agent.chat_completion_helpers import try_substitute_unknown_model
+        return try_substitute_unknown_model(self, requested_model=requested_model, provider=provider)
+
     def _has_pending_fallback(self) -> bool:
         """Whether a fallback provider is actually available to switch to.
 

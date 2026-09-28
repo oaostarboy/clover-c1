@@ -185,6 +185,13 @@ def _write_usage_file(path: Optional[str], result: dict, failure: Optional[str] 
             "api_calls": result.get("api_calls"),
             "model": result.get("model"),
             "provider": result.get("provider"),
+            # requested_model/actual_model contract (#93412 follow-up): when
+            # a pinned model that doesn't exist got silently substituted for
+            # a real one, pipelines auditing spend need both names, not just
+            # the one that ended up running.
+            "model_substituted": bool(result.get("model_substituted")),
+            "requested_model": result.get("requested_model"),
+            "actual_model": result.get("actual_model"),
             "session_id": result.get("session_id"),
             "completed": result.get("completed"),
             "failed": bool(result.get("failed")) or failure is not None,
@@ -357,6 +364,18 @@ def run_oneshot(
         real_stderr.flush()
         return 2
 
+    if result.get("model_substituted"):
+        # A pinned model that doesn't exist ran on a substitute instead of
+        # stopping (#93412 follow-up). Exit 0 -- the job DID run -- but the
+        # stderr line still names both models so the caller isn't left
+        # thinking their requested model actually answered.
+        real_stderr.write(
+            f"clover -z: ⚠ '{result.get('requested_model')}' doesn't exist "
+            f"on {result.get('requested_provider')}, so I used "
+            f"{result.get('actual_model')} instead.\n"
+        )
+        real_stderr.flush()
+
     _write_usage_file(usage_file, result)
 
     # Model text can contain lone UTF-16 surrogates (invalid in UTF-8). Writing
@@ -491,24 +510,64 @@ def _run_agent(
     # through to the caller's default provider. If that provider's model name is
     # simply unknown to Clover's own static catalog (no network probe — a typo'd
     # model would otherwise run the whole job on whatever provider the fallback
-    # chain happens to land on with no visible warning, #93412), fail fast instead
-    # of spending a real API call to discover it.
+    # chain happens to land on with no visible warning, #93412), substitute
+    # instead of spending a real API call to discover the failure: the closest
+    # real model on the same provider, then the user's own configured default
+    # (model.substitute_unknown: false keeps the old fail-fast behavior).
+    _model_substitution_info: Optional[dict] = None
     if (model or "").strip() and not (provider or "").strip() and effective_provider is None:
         from clover_cli.models import _PROVIDER_MODELS
 
         _resolved_provider = str(runtime.get("provider") or "").strip().lower()
         _known_models = _PROVIDER_MODELS.get(_resolved_provider) or []
         if _known_models and effective_model not in _known_models:
-            from difflib import get_close_matches
-
-            _suggestions = get_close_matches(effective_model, _known_models, n=5, cutoff=0.4)
-            _msg = (
-                f"Model '{effective_model}' isn't available on provider "
-                f"'{_resolved_provider}'. Nothing was run on another model."
+            from agent.model_substitute import (
+                configured_default_model,
+                resolve_model_substitute,
+                substitute_unknown_models_enabled,
             )
-            if _suggestions:
-                _msg += " Did you mean: " + ", ".join(_suggestions) + "?"
-            raise ModelNotAvailableError(_msg)
+
+            _substitute = None
+            if substitute_unknown_models_enabled(cfg):
+                _default_model, _default_provider = configured_default_model(cfg)
+                _substitute = resolve_model_substitute(
+                    effective_model, _resolved_provider,
+                    known_models=_known_models,
+                    default_model=_default_model,
+                    default_provider=_default_provider,
+                )
+            if _substitute is not None:
+                logging.getLogger(__name__).warning(
+                    "Model substitute activated: %s (%s) → %s (%s); "
+                    "reason=model_not_found_substituted",
+                    effective_model, _resolved_provider,
+                    _substitute.model, _substitute.provider,
+                )
+                _model_substitution_info = {
+                    "requested_model": effective_model,
+                    "requested_provider": _resolved_provider,
+                    "actual_model": _substitute.model,
+                    "actual_provider": _substitute.provider,
+                }
+                effective_model = _substitute.model
+                if _substitute.provider != _resolved_provider:
+                    effective_provider = _substitute.provider
+                    runtime = resolve_runtime_provider(
+                        requested=effective_provider,
+                        target_model=effective_model,
+                        explicit_base_url=explicit_base_url_from_alias,
+                    )
+            else:
+                from difflib import get_close_matches
+
+                _suggestions = get_close_matches(effective_model, _known_models, n=5, cutoff=0.4)
+                _msg = (
+                    f"Model '{effective_model}' isn't available on provider "
+                    f"'{_resolved_provider}'. Nothing was run on another model."
+                )
+                if _suggestions:
+                    _msg += " Did you mean: " + ", ".join(_suggestions) + "?"
+                raise ModelNotAvailableError(_msg)
 
     # Pull in explicit toolsets when provided; otherwise use whatever the user
     # has enabled for "cli". sorted() gives stable ordering for config-derived
@@ -582,12 +641,31 @@ def _run_agent(
         agent.suppress_status_output = True
         agent.stream_delta_callback = None
         agent.tool_gen_callback = None
+        if _model_substitution_info is not None:
+            # Durable record for the requested_model/actual_model result
+            # contract, and the same-substitution guard conversation_loop.py's
+            # pinned branch checks before trying a second substitute.
+            agent._model_substitution = _model_substitution_info
         if activity_writer is not None:
             # Structured, redacted worker activity for a parent session.
             agent.tool_progress_callback = activity_writer.tool_progress_callback
             agent.interim_assistant_callback = activity_writer.interim_callback
             agent.model_fallback_callback = activity_writer.model_fallback
             activity_writer.start(effective_model)
+            if _model_substitution_info is not None:
+                activity_writer.model_fallback(
+                    from_model=_model_substitution_info["requested_model"],
+                    from_provider=_model_substitution_info["requested_provider"],
+                    to_model=_model_substitution_info["actual_model"],
+                    to_provider=_model_substitution_info["actual_provider"],
+                    reason="model_not_found_substituted",
+                )
+        if _model_substitution_info is not None:
+            agent._emit_status(
+                f"⚠ '{_model_substitution_info['requested_model']}' doesn't "
+                f"exist on {_model_substitution_info['requested_provider']}, "
+                f"so I used {_model_substitution_info['actual_model']} instead."
+            )
 
         result = agent.run_conversation(prompt)
         # Keep a worker going when it stops early: out of steps, or quit
