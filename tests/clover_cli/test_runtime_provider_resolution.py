@@ -8,6 +8,18 @@ import pytest
 from clover_cli import runtime_provider as rp
 
 
+def test_saved_removed_clover_provider_falls_back_to_auto(monkeypatch, caplog):
+    monkeypatch.setattr(rp, "_get_model_config", lambda: {"provider": "clover"})
+    monkeypatch.setattr(rp, "_getenv", lambda key, default="": "openrouter")
+
+    with caplog.at_level("WARNING"):
+        assert rp.resolve_requested_provider() == "auto"
+
+    assert [record.message for record in caplog.records if "Removed provider" in record.message] == [
+        "Removed provider 'clover' selected; falling back to auto"
+    ]
+
+
 def test_configured_api_key_provider_without_key_fails_closed(monkeypatch):
     """A saved provider must not resolve as another authenticated provider."""
     monkeypatch.setattr(

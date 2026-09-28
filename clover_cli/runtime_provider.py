@@ -647,17 +647,28 @@ def _resolve_runtime_from_pool_entry(
 def resolve_requested_provider(requested: Optional[str] = None) -> str:
     """Resolve provider request from explicit arg, config, then env."""
     if requested and requested.strip():
-        return requested.strip().lower()
+        value = requested.strip().lower()
+        if value == "clover":
+            logger.warning("Removed provider 'clover' selected; falling back to auto")
+            return "auto"
+        return value
 
     model_cfg = _get_model_config()
     cfg_provider = model_cfg.get("provider")
     if isinstance(cfg_provider, str) and cfg_provider.strip():
-        return cfg_provider.strip().lower()
+        value = cfg_provider.strip().lower()
+        if value == "clover":
+            logger.warning("Removed provider 'clover' selected; falling back to auto")
+            return "auto"
+        return value
 
     # Prefer the persisted config selection over any stale shell/.env
     # provider override so chat uses the endpoint the user last saved.
     env_provider = _getenv("CLOVER_INFERENCE_PROVIDER", "").strip().lower()
     if env_provider:
+        if env_provider == "clover":
+            logger.warning("Removed provider 'clover' selected; falling back to auto")
+            return "auto"
         return env_provider
 
     return "auto"
