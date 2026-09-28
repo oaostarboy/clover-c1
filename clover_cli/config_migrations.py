@@ -859,8 +859,201 @@ def _migrate_to_39(results: Dict[str, Any], quiet: bool) -> None:
             print(
                 "  ✓ Removed the retired BFL FLUX 3 toolset from saved toolset "
                 "lists — video generation now lives under `clover tools` → "
-                "Video Generation (Clover Subscription or FAL)."
+                "Video Generation."
             )
+
+
+#: v40: provider ids that named the removed hosted provider.
+_V40_REMOVED_PROVIDERS = frozenset({"clover", "clover-portal", "cloverc1"})
+
+#: v40: tool selections that pointed at the removed managed tool gateway,
+#: mapped to the direct vendor the gateway fronted.
+_V40_TOOL_VENDORS: Tuple[Tuple[str, str, str], ...] = (
+    ("web", "backend", "firecrawl"),
+    ("web", "search_backend", "firecrawl"),
+    ("web", "extract_backend", "firecrawl"),
+    ("tts", "provider", "openai"),
+    ("stt", "provider", "openai"),
+    ("browser", "cloud_provider", "browser-use"),
+    ("image_gen", "provider", "fal"),
+    ("video_gen", "provider", "fal"),
+)
+
+
+def _v40_is_removed_provider(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().lower() in _V40_REMOVED_PROVIDERS
+
+
+def _v40_rewrite_config(config: Dict[str, Any]) -> List[str]:
+    """Rewrite hosted-provider / managed-tool selections in *config* in place.
+
+    Returns a human-readable note per change. Pure (no I/O) and idempotent:
+    a config that already went through it yields no changes.
+    """
+    from utils import is_truthy_value
+
+    notes: List[str] = []
+
+    # 1. Main model provider → auto (drop the hosted endpoint override).
+    model = config.get("model")
+    if isinstance(model, dict) and _v40_is_removed_provider(model.get("provider")):
+        model["provider"] = "auto"
+        for key in ("base_url", "api_key", "api_mode"):
+            model.pop(key, None)
+        notes.append("model.provider → auto")
+
+    # Fallback chain: drop entries for the removed provider.
+    fallback = config.get("fallback_model")
+    if isinstance(fallback, dict) and _v40_is_removed_provider(fallback.get("provider")):
+        config.pop("fallback_model")
+        notes.append("removed fallback_model")
+    providers = config.get("fallback_providers")
+    if isinstance(providers, list):
+        kept = [
+            entry for entry in providers
+            if not _v40_is_removed_provider(
+                entry.get("provider") if isinstance(entry, dict) else entry
+            )
+        ]
+        if len(kept) != len(providers):
+            config["fallback_providers"] = kept
+            notes.append("removed fallback_providers entries")
+
+    # Auxiliary tasks and delegation.
+    aux = config.get("auxiliary")
+    if isinstance(aux, dict):
+        for task, task_cfg in aux.items():
+            if isinstance(task_cfg, dict) and _v40_is_removed_provider(task_cfg.get("provider")):
+                task_cfg["provider"] = "auto"
+                task_cfg.pop("base_url", None)
+                notes.append(f"auxiliary.{task}.provider → auto")
+    delegation = config.get("delegation")
+    if isinstance(delegation, dict) and _v40_is_removed_provider(delegation.get("provider")):
+        delegation["provider"] = ""
+        delegation.pop("base_url", None)
+        notes.append("delegation.provider → inherit")
+
+    # 2. Managed tool selections → the direct vendor.
+    for section_name, key, vendor in _V40_TOOL_VENDORS:
+        section = config.get(section_name)
+        if isinstance(section, dict) and _v40_is_removed_provider(section.get(key)):
+            section[key] = vendor
+            notes.append(f"{section_name}.{key} → {vendor}")
+    primary_key = {"web": "backend", "tts": "provider", "stt": "provider",
+                   "browser": "cloud_provider", "image_gen": "provider",
+                   "video_gen": "provider"}
+    vendor_for = {(s, k): v for s, k, v in _V40_TOOL_VENDORS}
+    for section_name, key in primary_key.items():
+        section = config.get(section_name)
+        if not isinstance(section, dict) or "use_gateway" not in section:
+            continue
+        routed = is_truthy_value(section.pop("use_gateway"), default=False)
+        if routed and not str(section.get(key) or "").strip():
+            section[key] = vendor_for[(section_name, key)]
+        notes.append(f"{section_name}.use_gateway removed")
+    terminal = config.get("terminal")
+    if isinstance(terminal, dict) and str(terminal.get("modal_mode") or "").strip().lower() == "managed":
+        terminal["modal_mode"] = "direct"
+        notes.append("terminal.modal_mode → direct")
+
+    # 3. Hosted cron provider.
+    cron = config.get("cron")
+    if isinstance(cron, dict):
+        if str(cron.get("provider") or "").strip().lower() == "chronos":
+            cron["provider"] = ""
+            notes.append("cron.provider → built-in")
+        if "chronos" in cron:
+            cron.pop("chronos")
+            notes.append("removed cron.chronos")
+
+    # 4. Keys that only fed hosted surfaces.
+    dashboard = config.get("dashboard")
+    oauth = dashboard.get("oauth") if isinstance(dashboard, dict) else None
+    if isinstance(oauth, dict):
+        for key in ("client_id", "portal_url"):
+            if key in oauth:
+                oauth.pop(key)
+                notes.append(f"removed dashboard.oauth.{key}")
+    display = config.get("display")
+    if isinstance(display, dict) and "credits_notices" in display:
+        display.pop("credits_notices")
+        notes.append("removed display.credits_notices")
+    for key in ("tool_gateway_declined_tools", "sync"):
+        if key in config:
+            config.pop(key)
+            notes.append(f"removed {key}")
+    return notes
+
+
+def _v40_clean_auth_store() -> List[str]:
+    """Drop hosted-provider credentials from auth.json and the shared store."""
+    import os
+    from pathlib import Path
+
+    from clover_cli import auth as _auth
+    from clover_constants import get_clover_home, get_default_clover_root
+
+    notes: List[str] = []
+    auth_path = _auth._auth_file_path()
+    if auth_path.exists():
+        with _auth._auth_store_lock():
+            store = _auth._load_auth_store()
+            changed = False
+            for bucket in ("providers", "credential_pool"):
+                entries = store.get(bucket)
+                if isinstance(entries, dict):
+                    for name in [k for k in entries if _v40_is_removed_provider(k)]:
+                        entries.pop(name)
+                        changed = True
+            if _v40_is_removed_provider(store.get("active_provider")):
+                store.pop("active_provider")
+                changed = True
+            if changed:
+                _auth._save_auth_store(store)
+                notes.append("removed hosted-provider credentials from auth.json")
+
+    shared_dir = os.environ.get("CLOVER_SHARED_AUTH_DIR", "").strip()
+    stale_files = [
+        (Path(shared_dir) if shared_dir else get_default_clover_root() / "shared") / "clover_auth.json",
+        get_clover_home() / "rate_limits" / "clover.json",
+    ]
+    for path in stale_files:
+        try:
+            if path.is_file():
+                path.unlink()
+                notes.append(f"deleted {path.name}")
+        except OSError:
+            pass
+    return notes
+
+
+def _migrate_to_40(results: Dict[str, Any], quiet: bool) -> None:
+    # ── Version 39 → 40: the hosted provider and its managed tools are gone ──
+    # A saved model.provider for the removed provider becomes "auto"; tool
+    # selections that routed through the managed gateway point at the vendor
+    # the gateway fronted; keys that only fed hosted surfaces are dropped;
+    # and hosted-provider credentials leave the auth store.
+    _c = _cfg()
+    read_raw_config = _c.read_raw_config
+    _persist_migration = _c._persist_migration
+
+    config = read_raw_config()
+    notes = _v40_rewrite_config(config)
+    if notes:
+        _persist_migration(config)
+    try:
+        notes.extend(_v40_clean_auth_store())
+    except Exception as exc:  # never block the config migration on auth I/O
+        results["warnings"].append(f"Could not clean the auth store: {exc}")
+    if not notes:
+        return
+    results["config_added"].extend(notes)
+    if not quiet:
+        print("  ✓ Removed settings for the discontinued hosted service:")
+        for note in notes:
+            print(f"    • {note}")
+        if "model.provider → auto" in notes:
+            print("    Run `clover model` to pick a provider.")
 
 
 #: Registry of (target_version, migration_fn), strictly ascending. The driver
@@ -890,6 +1083,7 @@ MIGRATIONS: Tuple[Tuple[int, Callable[[Dict[str, Any], bool], None]], ...] = (
     (37, _migrate_to_37),
     (38, _migrate_to_38),
     (39, _migrate_to_39),
+    (40, _migrate_to_40),
 )
 
 
