@@ -36,8 +36,8 @@ Selection precedence for the active family:
        or a full endpoint path that contains a family ID)
     5. ``DEFAULT_MODEL``
 
-Authentication via ``FAL_KEY`` or the managed Clover gateway. Output is an
-HTTPS URL from FAL's CDN; the gateway downloads and delivers it.
+Authentication via ``FAL_KEY``. Output is an HTTPS URL from FAL's CDN;
+Clover downloads and delivers it.
 """
 
 from __future__ import annotations
@@ -488,8 +488,8 @@ def _build_payload(
         key = family.get("image_param_key") or "image_url"
         payload[key] = image_url
     # Several newer endpoints (seedance 2.x, minimax h3, flux-3, grok, gemini)
-    # declare no `seed` field, and the managed gateway forwards whatever we
-    # send — so gate it on the family rather than leaking an unknown key.
+    # declare no `seed` field — gate it on the family rather than sending an
+    # unsupported key.
     if seed is not None and family.get("seed", True):
         payload["seed"] = seed
 
@@ -567,136 +567,39 @@ def _load_fal_client() -> Any:
         return _fal_client
 
 
-# ---------------------------------------------------------------------------
-# Managed FAL gateway (Clover Subscription)
-# ---------------------------------------------------------------------------
+def _submit_fal_video_request(endpoint: str, arguments: Dict[str, Any]):
+    """Submit a FAL video request using direct credentials.
 
-_managed_fal_video_client: Any = None
-_managed_fal_video_client_config: Any = None
-_managed_fal_video_client_lock = threading.Lock()
-
-
-def _resolve_managed_fal_video_gateway():
-    """Resolve the FAL video route from the stored selection.
-
-    Plain switch on the stored ``video_gen`` provider string — mirrors the
-    image FAL resolver: ``"clover"`` (or legacy ``use_gateway: true``) →
-    managed only (unentitled ⇒ selection-naming error); any other stored
-    provider → direct only (missing FAL_KEY ⇒ selection-naming error);
-    never-configured category → legacy credential autodetect.
+    Returns a request handle whose ``.get()`` blocks until the result is ready.
     """
-    from tools.managed_tool_gateway import resolve_managed_tool_gateway
     from tools.tool_backend_helpers import (
-        CLOVER_MANAGED_PROVIDER,
         fal_key_is_configured,
         read_selection,
         selection_error,
     )
 
-    selected = read_selection("video_gen")
-    if selected == CLOVER_MANAGED_PROVIDER:
-        gateway = resolve_managed_tool_gateway("fal-queue")
-        if gateway is None:
-            raise ValueError(selection_error(
-                "video_gen",
-                CLOVER_MANAGED_PROVIDER,
-                "the Clover Tool Gateway is not available (not entitled or "
-                "unreachable)",
-            ))
-        return gateway
-    if selected is not None:
-        if not fal_key_is_configured():
-            raise ValueError(selection_error(
-                "video_gen",
-                selected,
-                "FAL_KEY is not set",
-            ))
-        return None
-    # Never-configured category: legacy credential autodetect (do NOT persist).
-    if fal_key_is_configured():
-        return None
-    return resolve_managed_tool_gateway("fal-queue")
-
-
-def _get_managed_fal_video_client(managed_gateway):
-    """Reuse the managed FAL client so its internal httpx.Client is not leaked per call."""
-    global _managed_fal_video_client, _managed_fal_video_client_config
-    from tools.fal_common import _ManagedFalSyncClient
-
-    client_config = (
-        managed_gateway.gateway_origin.rstrip("/"),
-        managed_gateway.clover_user_token,
-    )
-    with _managed_fal_video_client_lock:
-        if _managed_fal_video_client is not None and _managed_fal_video_client_config == client_config:
-            return _managed_fal_video_client
-
-        _load_fal_client()
-        _managed_fal_video_client = _ManagedFalSyncClient(
-            _fal_client,
-            key=managed_gateway.clover_user_token,
-            queue_run_origin=managed_gateway.gateway_origin,
-        )
-        _managed_fal_video_client_config = client_config
-        return _managed_fal_video_client
-
-
-def _submit_fal_video_request(endpoint: str, arguments: Dict[str, Any]):
-    """Submit a FAL video request using direct credentials or the managed queue gateway.
-
-    Returns a request handle whose ``.get()`` blocks until the result is ready.
-    """
     _load_fal_client()
     request_headers = {"x-idempotency-key": str(uuid.uuid4())}
-    managed_gateway = _resolve_managed_fal_video_gateway()
-    if managed_gateway is None:
-        return _fal_client.submit(endpoint, arguments=arguments, headers=request_headers)
-
-    managed_client = _get_managed_fal_video_client(managed_gateway)
-    try:
-        return managed_client.submit(
-            endpoint,
-            arguments=arguments,
-            headers=request_headers,
-        )
-    except Exception as exc:
-        from tools.fal_common import _extract_http_status
-
-        status = _extract_http_status(exc)
-        if status is not None and 400 <= status < 500:
-            raise ValueError(
-                f"Clover Subscription gateway rejected endpoint '{endpoint}' "
-                f"(HTTP {status}). This model may not yet be enabled on "
-                f"the Clover Portal's FAL proxy. Either:\n"
-                f"  • Set FAL_KEY in your environment to use FAL.ai directly, or\n"
-                f"  • Pick a different model via `clover tools` → Video Generation."
-            ) from exc
-        raise
+    selected = read_selection("video_gen")
+    if selected is not None and not fal_key_is_configured():
+        raise ValueError(selection_error(
+            "video_gen",
+            selected,
+            "FAL_KEY is not set",
+        ))
+    return _fal_client.submit(endpoint, arguments=arguments, headers=request_headers)
 
 
 def _check_fal_video_available() -> bool:
-    """True if the FAL video backend selected via `clover tools` (or, on a
-    never-configured install, any FAL backend) is reachable.
+    """True if FAL_KEY is configured.
 
     Never raises — a stored-but-broken selection reports False here; the
     honest selection-naming error surfaces at call time from
-    ``_resolve_managed_fal_video_gateway``.
+    ``_submit_fal_video_request``.
     """
-    from tools.managed_tool_gateway import resolve_managed_tool_gateway
-    from tools.tool_backend_helpers import (
-        CLOVER_MANAGED_PROVIDER,
-        fal_key_is_configured,
-        read_selection,
-    )
+    from tools.tool_backend_helpers import fal_key_is_configured
 
-    selected = read_selection("video_gen")
-    if selected == CLOVER_MANAGED_PROVIDER:
-        return resolve_managed_tool_gateway("fal-queue") is not None
-    if selected is not None:
-        return fal_key_is_configured()
-    if fal_key_is_configured():
-        return True
-    return resolve_managed_tool_gateway("fal-queue") is not None
+    return fal_key_is_configured()
 
 
 # ---------------------------------------------------------------------------
@@ -710,10 +613,7 @@ UPSCALER_ENDPOINT = "fal-ai/seedvr/upscale/video"
 UPSCALER_FACTOR = 2
 
 
-def _upscale_video(
-    video_url: str,
-    source_request_id: Optional[str] = None,
-) -> Optional[str]:
+def _upscale_video(video_url: str) -> Optional[str]:
     """Upscale a generated video via SeedVR2; return the new URL or None.
 
     Best-effort: any failure logs and returns ``None`` so the caller falls
@@ -727,10 +627,6 @@ def _upscale_video(
             "upscale_mode": "factor",
             "upscale_factor": UPSCALER_FACTOR,
         }
-        if _resolve_managed_fal_video_gateway() is not None:
-            if not source_request_id:
-                raise RuntimeError("Managed SeedVR upscale requires the source FAL request id")
-            arguments["source_request_id"] = source_request_id
         handle = _submit_fal_video_request(UPSCALER_ENDPOINT, arguments)
         result = handle.get()
     except Exception as exc:  # noqa: BLE001
@@ -900,25 +796,26 @@ class FALVideoGenProvider(VideoGenProvider):
         **kwargs: Any,
     ) -> Dict[str, Any]:
         if not _check_fal_video_available():
-            from tools.tool_backend_helpers import read_selection
+            from tools.tool_backend_helpers import read_selection, selection_error
 
-            if read_selection("video_gen") is not None:
+            selected = read_selection("video_gen")
+            if selected is not None:
                 # A stored selection that cannot run gets the honest
-                # selection-naming error from the strict resolver.
-                try:
-                    _resolve_managed_fal_video_gateway()
-                except ValueError as exc:
-                    return error_response(
-                        error=str(exc),
-                        error_type="auth_required",
-                        provider="fal",
-                        prompt=prompt,
-                    )
+                # selection-naming error.
+                return error_response(
+                    error=selection_error(
+                        "video_gen",
+                        selected,
+                        "FAL_KEY is not set",
+                    ),
+                    error_type="auth_required",
+                    provider="fal",
+                    prompt=prompt,
+                )
             return error_response(
                 error=(
-                    "No FAL backend available. Either set FAL_KEY "
-                    "(run `clover tools` → Video Generation → FAL to configure) "
-                    "or sign in to Clover (`clover setup`) for managed gateway access."
+                    "No FAL backend available. Set FAL_KEY "
+                    "(run `clover tools` → Video Generation → FAL to configure)."
                 ),
                 error_type="auth_required",
                 provider="fal",
@@ -988,7 +885,6 @@ class FALVideoGenProvider(VideoGenProvider):
 
         try:
             handle = _submit_fal_video_request(endpoint, payload)
-            source_request_id = getattr(handle, "request_id", None)
             result = handle.get()
         except Exception as exc:
             logger.warning(
@@ -1021,7 +917,7 @@ class FALVideoGenProvider(VideoGenProvider):
         # video rather than failing the generation.
         upscaled = False
         if upscale:
-            upscaled_url = _upscale_video(url, source_request_id)
+            upscaled_url = _upscale_video(url)
             if upscaled_url:
                 url = upscaled_url
                 upscaled = True
