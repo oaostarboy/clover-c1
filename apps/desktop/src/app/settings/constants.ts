@@ -45,18 +45,11 @@ export const CONTROL_TEXT = 'text-xs'
 
 export const PROVIDER_GROUPS: ProviderPrefix[] = [
   {
-    prefix: 'CLOVER_',
-    name: 'Clover Portal',
-    description: 'Hosted Clover & Clover-trained models',
-    docsUrl: '',
-    priority: 0
-  },
-  {
     prefix: 'FIREWORKS_',
     name: 'Fireworks AI',
     description: 'OpenAI-compatible direct model API',
     docsUrl: 'https://app.fireworks.ai/settings/users/api-keys',
-    // Slot #2 — mirrors CANONICAL_PROVIDERS (after Clover, ahead of OpenRouter).
+    // Slot #2 — mirrors CANONICAL_PROVIDERS (ahead of OpenRouter).
     // Same numeric priority as OpenRouter; name sort puts Fireworks first.
     priority: 1
   },
