@@ -2,7 +2,7 @@
 
 Clover talks to a dozen services that speak the Anthropic Messages API but
 differ in auth style, accepted beta headers, and request quirks: MiniMax,
-Kimi/Moonshot, DeepSeek, OpenCode, Azure AI Foundry, the Clover portal, Bedrock.
+Kimi/Moonshot, DeepSeek, OpenCode, Azure AI Foundry, Bedrock.
 Every one of those differences is decided by inspecting the configured base
 URL, so the predicates live together here instead of being scattered through
 client construction and message conversion.
@@ -16,7 +16,7 @@ is what lets both ``agent/anthropic_adapter.py`` and
 
 from urllib.parse import urlparse
 
-from utils import base_url_host_matches, base_url_hostname
+from utils import base_url_host_matches
 
 
 def _normalize_base_url_text(base_url) -> str:
@@ -150,48 +150,14 @@ def _is_deepseek_anthropic_endpoint(base_url: str | None) -> bool:
     return "/anthropic" in normalized.rstrip("/").lower()
 
 
-def _is_clover_portal_endpoint(base_url: str | None) -> bool:
-    """Return True for Clover Portal's Anthropic Messages route.
-
-    Portal serves its ``anthropic/*`` catalog natively at
-    ````.  Portal-specific
-    behaviours key off this: Bearer JWT auth, verbatim catalog model ids,
-    and native thinking-signature replay.
-
-    Trusted hosts only:
-
-    1. Prod hostname ``inference-api.``
-    2. The operator-set ``CLOVER_INFERENCE_BASE_URL`` hostname (staging/preview)
-
-    Lookalikes such as ``inference-api..attacker.test`` are
-    rejected (hostname match, not substring).
-    """
-    if base_url_host_matches(base_url or "", "inference-api."):
-        return True
-    try:
-        from clover_cli.auth import _clover_inference_env_override
-
-        override = _clover_inference_env_override()
-    except Exception:
-        return False
-    if not override:
-        return False
-    # Exact host equality (not subdomain) so the env override can't broaden
-    # into sibling hosts the operator did not set.
-    override_host = base_url_hostname(override)
-    return bool(override_host) and base_url_hostname(base_url or "") == override_host
-
-
 def _requires_bearer_auth(base_url: str | None) -> bool:
     """Return True for Anthropic-compatible providers that require Bearer auth.
 
     Some third-party /anthropic endpoints implement Anthropic's Messages API but
     require Authorization: Bearer instead of Anthropic's native x-api-key header.
     MiniMax's global and China Anthropic-compatible endpoints, Azure AI
-    Foundry's Anthropic-style endpoint, Palantir Foundry's LLM proxy, and Clover Portal's Messages route follow this pattern.
+    Foundry's Anthropic-style endpoint, Palantir Foundry's LLM proxy follow this pattern.
     """
-    if _is_clover_portal_endpoint(base_url):
-        return True
     normalized = _normalize_base_url_text(base_url)
     if not normalized:
         return False
