@@ -644,7 +644,7 @@ app.add_middleware(
 # OAuth gate middleware can honour the same allowlist — keeping the two
 # gates in lockstep avoids drift like the wildcard-subdomain regression
 # where ``/api/status`` was public under the legacy gate but 401'd under
-# the OAuth gate (breaking the portal's liveness probe).
+# the OAuth gate (breaking external liveness probes).
 #
 # Keep the upstream list minimal — only truly non-sensitive, read-only
 # endpoints belong there.
@@ -3959,21 +3959,6 @@ async def get_status(profile: Optional[str] = None):
             # Module not importable yet (early startup) — leave as [].
             pass
 
-        # Clover bootstrap-session validity for the NAS health sweep. A hosted
-        # agent whose Clover auth dies terminally (invalid_grant / quarantine)
-        # looks HEALTHY to every liveness/connectivity probe — the machine,
-        # relay, and this dashboard all stay up — yet every inference turn
-        # fails. This is the ONLY signal that surfaces that condition, and it
-        # is determinable with no working token (local auth-store state). NAS
-        # re-mints the bootstrap session when it reads "terminal". Best-effort:
-        # never let auth classification break the public liveness probe.
-        clover_session_valid = "unknown"
-        try:
-            from clover_cli.auth import get_clover_session_validity
-            clover_session_valid = get_clover_session_validity()
-        except Exception:
-            clover_session_valid = "unknown"
-
         # Always-public liveness + auth-gate shape. Safe for external uptime
         # probes (NAS's wildcard-subdomain liveness probe), the SPA's pre-login
         # bootstrap, and anyone who can curl the host — i.e. exactly the audience
@@ -3997,7 +3982,6 @@ async def get_status(profile: Optional[str] = None):
             "auth_required": auth_required,
             "auth_providers": auth_providers,
             "auth_flows": auth_flows,
-            "clover_session_valid": clover_session_valid,
         }
 
         # Stable per-install identity (see get_install_id above). First call
@@ -4111,9 +4095,9 @@ async def get_status(profile: Optional[str] = None):
         # process table, so keep it off the event loop.
         #
         # Split by sensitivity: profile NAMES (``profiles``) and the gateway
-        # ``gateway_mode`` are low-sensitivity PRODUCT surface — Clover Cloud
-        # renders the profile list in the Portal, which reads this endpoint over
-        # the network (a gated bind), so they must survive the auth gate. The
+        # ``gateway_mode`` are low-sensitivity PRODUCT surface — remote
+        # clients render the profile list by reading this endpoint over the
+        # network (a gated bind), so they must survive the auth gate. The
         # per-gateway ``gateways[]`` detail carries host ports (deployment
         # recon), so it stays gated with the host paths / PID below.
         # (``topology`` was already fetched above, before the platform rollup,
@@ -7416,60 +7400,14 @@ def get_recommended_default_model(provider: str = ""):
     """Return the recommended default model for a freshly-authenticated provider.
 
     Mirrors the model-curation `clover model` does so GUI onboarding lands on a
-    sensible default instead of blindly taking the first curated entry. For
-    Clover this honors the user's free/paid tier: free users get a free model,
-    paid users get the full curated default. For any other provider it falls
-    back to the first curated model (same as before).
+    sensible default instead of blindly taking the first curated entry.
 
-    Response: {"provider": str, "model": str, "free_tier": bool | None}
-    where free_tier is True/False for Clover and None otherwise. `model` may be
-    empty if nothing could be resolved (caller degrades gracefully).
+    Response: {"provider": str, "model": str, "free_tier": None}. `model` may
+    be empty if nothing could be resolved (caller degrades gracefully).
     """
     slug = (provider or "").strip().lower()
 
-    if slug == "clover":
-        try:
-            from clover_cli.models import (
-                get_curated_clover_model_ids,
-                get_pricing_for_provider,
-                check_clover_free_tier,
-                partition_clover_models_by_tier,
-                pick_silent_default_model,
-                union_with_portal_free_recommendations,
-                union_with_portal_paid_recommendations,
-            )
-            from clover_cli.auth import get_provider_auth_state
-
-            model_ids = get_curated_clover_model_ids()
-            pricing = get_pricing_for_provider("clover") or {}
-            free_tier = check_clover_free_tier(force_fresh=True)
-
-            portal_url = ""
-            try:
-                state = get_provider_auth_state("clover") or {}
-                portal_url = state.get("portal_base_url", "") or ""
-            except Exception:
-                portal_url = ""
-
-            if free_tier:
-                model_ids, pricing = union_with_portal_free_recommendations(
-                    model_ids, pricing, portal_url
-                )
-                model_ids, _unavailable = partition_clover_models_by_tier(
-                    model_ids, pricing, free_tier=True
-                )
-            else:
-                model_ids, pricing = union_with_portal_paid_recommendations(
-                    model_ids, pricing, portal_url
-                )
-
-            model = pick_silent_default_model(model_ids, provider="clover")
-            return {"provider": "clover", "model": model, "free_tier": bool(free_tier)}
-        except Exception:
-            _log.exception("GET /api/model/recommended-default (clover) failed")
-            return {"provider": "clover", "model": "", "free_tier": None}
-
-    # Non-Clover: preferred silent default when the provider's curated list
+    # Preferred silent default when the provider's curated list
     # carries it, else the first curated model. Aggregator lists lead with the
     # priciest Anthropic flagship (claude-fable-5), which must never be the
     # model a user lands on without explicitly picking it.
@@ -7716,35 +7654,6 @@ def _apply_model_assignment_sync(
             model_cfg["api_key"] = provider_entry["api_key"]
         cfg["model"] = model_cfg
 
-        # When switching the main provider to Clover, mirror the CLI's
-        # post-model-selection behaviour (clover_cli/main.py
-        # prompt_enable_tool_gateway / tools_config apply_clover_managed_defaults):
-        # auto-route any *unconfigured* tools through the Clover Tool Gateway.
-        # This is purely additive — apply_clover_managed_defaults skips every
-        # tool where the user already has a direct key (FIRECRAWL_API_KEY,
-        # FAL_KEY, etc.) or an explicit backend/provider in config, so it
-        # never overwrites a user's own setup. GUI users thus land on the
-        # gateway the same way CLI users do, without a separate prompt.
-        gateway_tools: list[str] = []
-        if provider.strip().lower() == "clover":
-            try:
-                from clover_cli.clover_subscription import apply_clover_managed_defaults
-                from clover_cli.tools_config import _get_platform_tools
-
-                enabled = _get_platform_tools(
-                    cfg, "cli", include_default_mcp_servers=False
-                )
-                changed = apply_clover_managed_defaults(
-                    cfg,
-                    enabled_toolsets=enabled,
-                    force_fresh=True,
-                )
-                gateway_tools = sorted(changed)
-            except Exception:
-                # Portal lookup hiccups / non-subscriber / non-clover gating
-                # must never block saving the model assignment.
-                _log.debug("apply_clover_managed_defaults skipped", exc_info=True)
-
         save_config(cfg)
 
         # Register a named ``custom_providers`` entry for a custom/local
@@ -7817,7 +7726,6 @@ def _apply_model_assignment_sync(
             "provider": provider,
             "model": model,
             "base_url": model_cfg.get("base_url", ""),
-            "gateway_tools": gateway_tools,
             "stale_aux": stale_aux,
             "cron_model_impact": cron_model_impact,
         }
@@ -10596,18 +10504,6 @@ def _resolve_provider_status(provider_id: str, status_fn) -> Dict[str, Any]:
             return {"logged_in": False, "error": str(e)}
     try:
         from clover_cli import auth as hauth
-        if provider_id == "clover":
-            # Read-only accounts-tab card: refresh-free snapshot so listing
-            # providers never performs an OAuth refresh.
-            raw = hauth.get_clover_auth_status_local()
-            return {
-                "logged_in": bool(raw.get("logged_in")),
-                "source": "clover_portal",
-                "source_label": raw.get("portal_base_url") or "Clover Portal",
-                "token_preview": _truncate_token(raw.get("access_token")),
-                "expires_at": raw.get("access_expires_at"),
-                "has_refresh_token": bool(raw.get("has_refresh_token")),
-            }
         if provider_id == "openai-codex":
             raw = hauth.get_codex_auth_status()
             return {
@@ -10882,10 +10778,8 @@ async def disconnect_oauth_provider(
                 return {"ok": bool(cleared), "provider": provider_id}
 
             try:
-                from clover_cli.auth import clear_provider_auth, invalidate_clover_auth_status_cache
+                from clover_cli.auth import clear_provider_auth
                 cleared = clear_provider_auth(provider_id)
-                if provider_id == "clover":
-                    invalidate_clover_auth_status_cache()
                 _log.info("oauth/disconnect: %s (cleared=%s)", provider_id, cleared)
                 return {"ok": bool(cleared), "provider": provider_id}
             except Exception as e:
@@ -10991,64 +10885,12 @@ async def _start_device_code_flow(
     provider_id: str,
     profile: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Initiate a device-code flow (Clover, OpenAI Codex, MiniMax, or xAI).
+    """Initiate a device-code flow (OpenAI Codex, MiniMax, or xAI).
 
     Calls the provider's device-auth endpoint via the existing CLI helpers,
     then spawns a background poller. Returns the user-facing display fields
     so the UI can render the verification page link + user code.
     """
-    if provider_id == "clover":
-        from clover_cli.auth import (
-            _request_device_code,
-            PROVIDER_REGISTRY,
-        )
-        import httpx
-        pconfig = PROVIDER_REGISTRY["clover"]
-        portal_base_url = (
-            os.getenv("CLOVER_PORTAL_BASE_URL")
-            or os.getenv("CLOVER_PORTAL_BASE_URL")
-            or pconfig.portal_base_url
-        ).rstrip("/")
-        client_id = pconfig.client_id
-        scope = pconfig.scope
-
-        def _do_clover_device_request():
-            with httpx.Client(
-                timeout=httpx.Timeout(15.0),
-                headers={"Accept": "application/json"},
-            ) as client:
-                return (
-                    _request_device_code(
-                        client=client,
-                        portal_base_url=portal_base_url,
-                        client_id=client_id,
-                        scope=scope,
-                    ),
-                    scope,
-                )
-
-        device_data, effective_scope = await asyncio.get_running_loop().run_in_executor(
-            None, _do_clover_device_request
-        )
-        sid, sess = _new_oauth_session("clover", "device_code", profile=profile)
-        sess["device_code"] = str(device_data["device_code"])
-        sess["interval"] = int(device_data["interval"])
-        sess["expires_at"] = time.time() + int(device_data["expires_in"])
-        sess["portal_base_url"] = portal_base_url
-        sess["client_id"] = client_id
-        sess["scope"] = effective_scope
-        threading.Thread(
-            target=_clover_poller, args=(sid,), daemon=True, name=f"oauth-poll-{sid[:6]}"
-        ).start()
-        return {
-            "session_id": sid,
-            "flow": "device_code",
-            "user_code": str(device_data["user_code"]),
-            "verification_url": str(device_data["verification_uri_complete"]),
-            "expires_in": int(device_data["expires_in"]),
-            "poll_interval": int(device_data["interval"]),
-        }
-
     if provider_id == "openai-codex":
         # Codex uses fixed OpenAI device-auth endpoints; reuse the helper.
         sid, _ = _new_oauth_session("openai-codex", "device_code", profile=profile)
@@ -11199,76 +11041,11 @@ async def _start_device_code_flow(
     raise HTTPException(status_code=400, detail=f"Provider {provider_id} does not support device-code flow")
 
 
-def _clover_poller(session_id: str) -> None:
-    """Background poller that drives a Clover device-code flow to completion."""
-    from clover_cli.auth import (
-        _poll_for_token,
-        refresh_clover_oauth_from_state,
-    )
-    from datetime import datetime, timezone
-    import httpx
-    with _oauth_sessions_lock:
-        sess = _oauth_sessions.get(session_id)
-    if not sess:
-        return
-    portal_base_url = sess["portal_base_url"]
-    client_id = sess["client_id"]
-    device_code = sess["device_code"]
-    interval = sess["interval"]
-    scope = sess.get("scope")
-    expires_in = max(60, int(sess["expires_at"] - time.time()))
-    try:
-        with httpx.Client(timeout=httpx.Timeout(15.0), headers={"Accept": "application/json"}) as client:
-            token_data = _poll_for_token(
-                client=client,
-                portal_base_url=portal_base_url,
-                client_id=client_id,
-                device_code=device_code,
-                expires_in=expires_in,
-                poll_interval=interval,
-            )
-        # Same post-processing as _clover_device_code_login (validate/refresh JWT)
-        now = datetime.now(timezone.utc)
-        token_ttl = int(token_data.get("expires_in") or 0)
-        auth_state = {
-            "portal_base_url": portal_base_url,
-            "inference_base_url": token_data.get("inference_base_url"),
-            "client_id": client_id,
-            "scope": token_data.get("scope") or scope,
-            "token_type": token_data.get("token_type", "Bearer"),
-            "access_token": token_data["access_token"],
-            "refresh_token": token_data.get("refresh_token"),
-            "obtained_at": now.isoformat(),
-            "expires_at": (
-                datetime.fromtimestamp(now.timestamp() + token_ttl, tz=timezone.utc).isoformat()
-                if token_ttl else None
-            ),
-            "expires_in": token_ttl,
-        }
-        with _profile_scope(_oauth_session_profile(session_id)):
-            full_state = refresh_clover_oauth_from_state(
-                auth_state,
-                timeout_seconds=15.0,
-                force_refresh=False,
-            )
-            from clover_cli.auth import persist_clover_credentials
-            persist_clover_credentials(full_state)
-        with _oauth_sessions_lock:
-            sess["status"] = "approved"
-        _log.info("oauth/device: clover login completed (session=%s)", session_id)
-    except Exception as e:
-        _log.warning("clover device-code poll failed (session=%s): %s", session_id, e)
-        with _oauth_sessions_lock:
-            sess["status"] = "error"
-            sess["error_message"] = str(e)
-
-
 def _minimax_poller(session_id: str) -> None:
     """Background poller that drives a MiniMax OAuth flow to completion.
 
-    Mirrors `_clover_poller` but calls the MiniMax-specific token endpoint,
-    which uses a PKCE-style ``code_verifier`` + ``user_code`` rather than
-    the ``device_code`` field used by Clover. On success, builds the same
+    Calls the MiniMax-specific token endpoint, which uses a PKCE-style
+    ``code_verifier`` + ``user_code`` rather than a ``device_code`` field. On success, builds the same
     auth_state dict that ``_minimax_oauth_login`` (the CLI flow) builds
     and persists via ``_minimax_save_auth_state`` — so the dashboard
     path leaves the system in the same state as
@@ -18908,13 +18685,6 @@ def start_server(
 
     import uvicorn
 
-    try:
-        from clover_cli.clover_auth_keepalive import start_clover_auth_keepalive
-
-        start_clover_auth_keepalive()
-    except Exception as exc:
-        _log.debug("Clover auth keepalive did not start: %s", exc)
-
     # A configured browser-facing URL is also the exact Host/Origin trust
     # declaration for reverse-proxy deployments. Resolve it once at startup so
     # request middleware never reloads config. Any non-loopback public hostname
@@ -18948,18 +18718,18 @@ def start_server(
         from clover_cli.dashboard_auth import list_providers
         if not list_providers():
             # Surface the *specific* reason any bundled provider declined
-            # to register (e.g. missing CLOVER_DASHBOARD_OAUTH_CLIENT_ID).
-            # Each provider plugin that ships with Clover Cognition exposes a
-            # module-level ``LAST_SKIP_REASON`` string for this purpose;
-            # without it the operator would only see "no providers" which
-            # is misleading when the provider IS installed but unconfigured.
+            # to register (e.g. a half-configured basic_auth block). The
+            # bundled basic provider exposes a module-level
+            # ``LAST_SKIP_REASON`` string for this purpose; without it the
+            # operator would only see "no providers" which is misleading
+            # when the provider IS installed but unconfigured.
             skip_reasons: list[str] = []
             try:
-                from plugins.dashboard_auth import clover as _clover_plugin
+                from plugins.dashboard_auth import basic as _basic_plugin
 
-                if _clover_plugin.LAST_SKIP_REASON:
+                if _basic_plugin.LAST_SKIP_REASON:
                     skip_reasons.append(
-                        f"  • clover: {_clover_plugin.LAST_SKIP_REASON}"
+                        f"  • basic: {_basic_plugin.LAST_SKIP_REASON}"
                     )
             except Exception:
                 pass
