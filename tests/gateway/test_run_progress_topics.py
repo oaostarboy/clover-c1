@@ -350,7 +350,7 @@ class LongPreviewAgent:
 
 
 class UrlPreviewAgent:
-    URL = "docs/gateway/discord/tool-progress"
+    URL = "https://example.com/gateway/discord/tool-progress"
 
     def __init__(self, **kwargs):
         self.tool_progress_callback = kwargs.get("tool_progress_callback")
