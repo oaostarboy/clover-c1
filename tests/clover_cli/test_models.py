@@ -487,10 +487,6 @@ class TestFormatPricePerMtok:
 
 
 
-    def test_clover_list_includes_sonnet_5(self):
-        from clover_cli.models import _PROVIDER_MODELS
-        assert "anthropic/claude-sonnet-5" in _PROVIDER_MODELS["clover"]
-
 
 class _FakeOllamaTagsHandler(BaseHTTPRequestHandler):
     """Serve Ollama-native /api/tags while rejecting OpenAI /v1/models."""

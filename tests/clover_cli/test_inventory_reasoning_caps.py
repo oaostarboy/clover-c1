@@ -5,18 +5,17 @@ so a route that can't disable reasoning must be describable here — otherwise
 the UI offers an off switch whose setting the upstream rejects.
 
 The catalog's `supported_efforts` is intentionally absent from the payload:
-the Portal honors levels a route doesn't advertise, so publishing it would
-invite a picker filter that hides working levels.
+the catalog can omit levels that work, so publishing it would invite a
+picker filter that hides working levels.
 """
 
 import clover_cli.inventory as inv
 import clover_cli.models as models_mod
 
 
-def _patch_catalog(monkeypatch, caps_by_model, *, provider="clover"):
-    """Point the Clover/OpenRouter catalog readers at a fixed capability map."""
+def _patch_catalog(monkeypatch, caps_by_model, *, provider="openrouter"):
+    """Point the OpenRouter catalog reader at a fixed capability map."""
     monkeypatch.setattr(models_mod, "model_supports_fast_mode", lambda model: False)
-    monkeypatch.setattr(models_mod, "warm_clover_reasoning_caps_async", lambda: None)
     monkeypatch.setattr(models_mod, "warm_openrouter_reasoning_caps_async", lambda: None)
     monkeypatch.setattr(
         models_mod,
@@ -34,7 +33,7 @@ def test_optional_reasoning_route_can_disable(monkeypatch):
             "mandatory": False,
         },
     })
-    rows = [{"slug": "clover", "models": ["deepseek/deepseek-v4-pro"]}]
+    rows = [{"slug": "openrouter", "models": ["deepseek/deepseek-v4-pro"]}]
     inv._apply_capabilities(rows)
 
     assert rows[0]["capabilities"]["deepseek/deepseek-v4-pro"]["can_disable_reasoning"] is True
@@ -53,7 +52,7 @@ def test_advertised_efforts_never_reach_the_picker(monkeypatch):
             "mandatory": False,
         },
     })
-    rows = [{"slug": "clover", "models": ["deepseek/deepseek-v4-pro"]}]
+    rows = [{"slug": "openrouter", "models": ["deepseek/deepseek-v4-pro"]}]
     inv._apply_capabilities(rows)
 
     assert "supported_efforts" not in rows[0]["capabilities"]["deepseek/deepseek-v4-pro"]
@@ -70,7 +69,7 @@ def test_non_reasoning_route_offers_no_reasoning_controls(monkeypatch):
     _patch_catalog(monkeypatch, {
         "moonshotai/kimi-k3-instruct": {"supports_reasoning": False},
     })
-    rows = [{"slug": "clover", "models": ["moonshotai/kimi-k3-instruct"]}]
+    rows = [{"slug": "openrouter", "models": ["moonshotai/kimi-k3-instruct"]}]
     inv._apply_capabilities(rows)
 
     caps = rows[0]["capabilities"]["moonshotai/kimi-k3-instruct"]
@@ -81,7 +80,7 @@ def test_non_reasoning_route_offers_no_reasoning_controls(monkeypatch):
 def test_reasoning_mandatory_route_cannot_disable(monkeypatch):
     """`mandatory` inverts into the flag the Thinking toggle keys off.
 
-    The Portal answers a disable on these routes with HTTP 400, so offering
+    The aggregator rejects a disable on these routes, so offering
     the toggle would be offering a control that cannot work.
     """
     _patch_catalog(monkeypatch, {
@@ -91,7 +90,7 @@ def test_reasoning_mandatory_route_cannot_disable(monkeypatch):
             "mandatory": True,
         },
     })
-    rows = [{"slug": "clover", "models": ["z-ai/glm-5.3"]}]
+    rows = [{"slug": "openrouter", "models": ["z-ai/glm-5.3"]}]
     inv._apply_capabilities(rows)
 
     assert rows[0]["capabilities"]["z-ai/glm-5.3"]["can_disable_reasoning"] is False
@@ -105,7 +104,7 @@ def test_unlisted_model_states_no_restriction(monkeypatch):
     actually accepts.
     """
     _patch_catalog(monkeypatch, {})
-    rows = [{"slug": "clover", "models": ["mystery/model"]}]
+    rows = [{"slug": "openrouter", "models": ["mystery/model"]}]
     inv._apply_capabilities(rows)
 
     caps = rows[0]["capabilities"]["mystery/model"]
@@ -143,13 +142,13 @@ def test_openrouter_uses_its_own_catalog(monkeypatch):
 def test_catalog_failure_never_breaks_the_picker(monkeypatch):
     """A raising catalog reader degrades to "unknown", not to a broken payload."""
     monkeypatch.setattr(models_mod, "model_supports_fast_mode", lambda model: False)
-    monkeypatch.setattr(models_mod, "warm_clover_reasoning_caps_async", lambda: None)
+    monkeypatch.setattr(models_mod, "warm_openrouter_reasoning_caps_async", lambda: None)
 
     def _boom(model, **kw):
         raise RuntimeError("catalog exploded")
 
-    monkeypatch.setattr(models_mod, "clover_model_reasoning_capabilities", _boom)
-    rows = [{"slug": "clover", "models": ["deepseek/deepseek-v4-pro"]}]
+    monkeypatch.setattr(models_mod, "openrouter_model_reasoning_capabilities", _boom)
+    rows = [{"slug": "openrouter", "models": ["deepseek/deepseek-v4-pro"]}]
     inv._apply_capabilities(rows)
 
     caps = rows[0]["capabilities"]["deepseek/deepseek-v4-pro"]

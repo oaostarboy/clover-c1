@@ -264,56 +264,6 @@ def _xai_curated_models() -> list[str]:
 
 _PROVIDER_MODELS: dict[str, list[str]] = {
     "moa": ["default"],
-    "clover": [
-        # Anthropic
-        "anthropic/claude-fable-5",
-        "anthropic/claude-opus-5",
-        "anthropic/claude-opus-4.8",
-        "anthropic/claude-sonnet-5",
-        "anthropic/claude-haiku-4.5",
-        # OpenAI
-        "openai/gpt-5.6-sol",
-        "openai/gpt-5.6-sol-pro",
-        "openai/gpt-5.6-terra",
-        "openai/gpt-5.6-terra-pro",
-        "openai/gpt-5.6-luna",
-        "openai/gpt-5.6-luna-pro",
-        "openai/gpt-5.5",
-        "openai/gpt-5.5-pro",
-        "openai/gpt-5.4-mini",
-        # Google
-        "google/gemini-3.1-pro-preview",
-        "google/gemini-3.7-flash",
-        # xAI
-        "x-ai/grok-4.6",
-        # DeepSeek
-        "deepseek/deepseek-v4-pro",
-        "deepseek/deepseek-v4-pro-0813",
-        "deepseek/deepseek-v4-flash",
-        "deepseek/deepseek-v4-flash-0731",
-        # Qwen
-        "qwen/qwen3.8-max",
-        "qwen/qwen3.8-flash",
-        # MoonshotAI
-        "moonshotai/kimi-k3",
-        # MiniMax
-        "minimax/minimax-m3",
-        # Z-AI
-        "z-ai/glm-5.3",
-        "z-ai/glm-5.3-flash",
-        "z-ai/glm-5.2",
-        # Xiaomi
-        "xiaomi/mimo-v2.5-pro",
-        # Tencent
-        "tencent/hy4-preview",
-        "tencent/hy3",
-        # StepFun
-        "stepfun/step-3.7-flash",
-        # NVIDIA
-        "nvidia/nemotron-3-super-120b-a12b",
-        # Sakana
-        "sakana/fugu-ultra",
-    ],
     # Native OpenAI Chat Completions (api.openai.com). Used by /model counts and
     # provider_model_ids fallback when /v1/models is unavailable.
     "openai": [
@@ -1305,7 +1255,6 @@ class ProviderEntry(NamedTuple):
     tui_desc: str   # detailed description for `clover model` TUI
 
 CANONICAL_PROVIDERS: list[ProviderEntry] = [
-    ProviderEntry("clover",           "Clover Portal",              "Clover Portal (Everything your agent needs, 300+ models with bundled tool use)"),
     ProviderEntry("fireworks",      "Fireworks AI",             "Fireworks AI (OpenAI-compatible direct model API)"),
     ProviderEntry("openrouter",     "OpenRouter",               "OpenRouter (Pay-per-use API aggregator)"),
     ProviderEntry("moa",            "Mixture of Agents",        "Mixture of Agents (named presets; aggregator acts after reference models)"),
@@ -1639,7 +1588,7 @@ def pick_silent_default_model(model_ids: list[str], provider: str = "openrouter"
 # ``clover model``) uses the richer free/paid-tier-aware resolver — see
 # ``get_recommended_default_model`` in clover_cli/web_server.py and
 # ``partition_clover_models_by_tier`` — which can hit the Portal.
-_SILENT_DEFAULT_PROVIDERS: frozenset[str] = frozenset({"clover", "openrouter"})
+_SILENT_DEFAULT_PROVIDERS: frozenset[str] = frozenset({"openrouter"})
 
 
 def get_default_model_for_provider(provider: str) -> str:
@@ -2687,16 +2636,6 @@ def get_pricing_for_provider(provider: str, *, force_refresh: bool = False) -> d
         return _fetch_deepinfra_pricing(force_refresh=force_refresh)
     if normalized == "fireworks":
         return _fireworks_pricing_from_models_dev(force_refresh=force_refresh)
-    if normalized == "clover":
-        api_key, base_url = _resolve_clover_pricing_credentials()
-        if base_url:
-            return fetch_models_with_pricing(
-                api_key=api_key,
-                base_url=base_url,
-                force_refresh=force_refresh,
-                # Sale chrome (pricing.original) is Clover Portal-only.
-                include_sale_original=True,
-            )
     return {}
 
 
@@ -3288,7 +3227,6 @@ def should_use_ollama_native_catalog(
 
     known_non_local_providers = {
         "openrouter",
-        "clover",
         "anthropic",
         "openai",
         "openai-codex",
@@ -3424,7 +3362,7 @@ def _model_in_provider_catalog(name_lower: str, providers: set[str]) -> bool:
 
 
 _AGGREGATOR_PROVIDERS = frozenset(
-    {"clover", "openrouter", "ai-gateway", "copilot", "kilocode"}
+    {"openrouter", "ai-gateway", "copilot", "kilocode"}
 )
 
 # OpenRouter request-time routing variants (docs: guides/routing/model-variants).
@@ -4049,23 +3987,6 @@ def provider_model_ids(provider: Optional[str], *, force_refresh: bool = False) 
             pass
         if normalized == "copilot-acp":
             return list(_PROVIDER_MODELS.get("copilot", []))
-    if normalized == "clover":
-        # Try live Clover Portal /models endpoint
-        try:
-            from clover_cli.auth import fetch_clover_models, resolve_clover_runtime_credentials
-            creds = resolve_clover_runtime_credentials()
-            if creds:
-                live = fetch_clover_models(api_key=creds.get("api_key", ""), inference_base_url=creds.get("base_url", ""))
-                if live:
-                    return live
-        except Exception:
-            pass
-        # Live failed (or no creds). Fall back to the docs-hosted manifest
-        # — NOT the in-repo _PROVIDER_MODELS["clover"] snapshot — so newly
-        # added Portal models still surface without a Clover release.
-        manifest_ids = get_curated_clover_model_ids()
-        if manifest_ids:
-            return manifest_ids
     if normalized == "stepfun":
         try:
             from clover_cli.auth import resolve_api_key_provider_credentials
@@ -7136,40 +7057,6 @@ def validate_requested_model(
                     ),
                 }
 
-            # Clover provider: also check the Portal's live
-            # /api/clover/recommended-models feed. That feed can list a model
-            # (e.g. a newly-promoted free/paid recommendation) before it's
-            # been added to the hardcoded _PROVIDER_MODELS["clover"] curated
-            # list or the docs-hosted catalog manifest has been rebuilt.
-            # `clover chat` already accepts these models via
-            # union_with_portal_free/paid_recommendations() at model-list
-            # build time; this mirrors that same source of truth for the
-            # per-message /model validation path (messaging platform
-            # pickers, /model command), which previously only checked the
-            # curated catalog and rejected valid Portal-recommended models.
-            if normalized == "clover":
-                try:
-                    portal_payload = fetch_clover_recommended_models(
-                        _resolve_clover_portal_url()
-                    )
-                    portal_model_names = {
-                        name.lower()
-                        for tier in ("freeRecommendedModels", "paidRecommendedModels")
-                        for entry in (portal_payload.get(tier) or [])
-                        if (name := _extract_model_name(entry))
-                    }
-                except Exception:
-                    portal_model_names = set()
-                if requested_for_lookup.lower() in portal_model_names:
-                    return {
-                        "accepted": True,
-                        "persist": True,
-                        "recognized": True,
-                        "message": (
-                            f"Note: `{requested}` was not found in the live /v1/models "
-                            f"listing but is a current Clover Portal recommendation — accepted."
-                        ),
-                    }
 
         return {
             "accepted": False,

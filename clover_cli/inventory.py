@@ -417,17 +417,12 @@ def _reasoning_catalog_reader(slug: str):
     """
     try:
         from clover_cli.models import (
-            clover_model_reasoning_capabilities,
             openrouter_model_reasoning_capabilities,
-            warm_clover_reasoning_caps_async,
             warm_openrouter_reasoning_caps_async,
         )
     except Exception:
         return None
 
-    if slug == "clover":
-        warm_clover_reasoning_caps_async()
-        return clover_model_reasoning_capabilities
     if slug == "openrouter":
         warm_openrouter_reasoning_caps_async()
         return openrouter_model_reasoning_capabilities
@@ -451,11 +446,8 @@ def _apply_capabilities(rows: list[dict]) -> None:
     parameter — a definitive negative from the provider actually serving the
     model outranks the models.dev inference.
 
-    The catalog's `supported_efforts` list is deliberately NOT forwarded: it
-    under-reports. The Portal accepts and honors levels a route doesn't
-    advertise (``z-ai/glm-5.3`` publishes ``max, high, low`` yet serves
-    ``minimal`` at its lowest thinking), so filtering the picker by that list
-    would hide levels that demonstrably work.
+    The catalog's `supported_efforts` list is deliberately NOT forwarded:
+    it may under-report accepted values on provider endpoints.
     """
     from clover_cli.models import model_supports_fast_mode
 
@@ -900,14 +892,8 @@ def _apply_pricing(
     """
     from clover_cli.models import (
         _format_price_per_mtok,
-        check_clover_free_tier,
-        compute_sale_discount,
         get_pricing_for_provider,
-        partition_clover_models_by_tier,
     )
-
-    # Resolve Clover free-tier once (cached in models.py for the TTL window).
-    clover_free_tier: Optional[bool] = None
 
     for row in rows:
         slug = str(row.get("slug", "")).lower()
@@ -940,50 +926,11 @@ def _apply_pricing(
                 "cache": cache,
                 "free": is_free,
             }
-            # Sale chrome is Clover Portal-only. Other providers (OpenRouter,
-            # Novita, …) never get discount_percent / was_* even if a nested
-            # pricing.original somehow appeared in their catalog. Free / $0
-            # models get flat -100% chrome (was_* only when the gateway
-            # served an original).
-            if slug == "clover":
-                sale = compute_sale_discount(
-                    inp_raw, out_raw, p.get("original")
-                )
-                if sale is not None:
-                    discount_percent, was_prompt_raw, was_out_raw = sale
-                    entry["discount_percent"] = discount_percent
-                    if was_prompt_raw != "":
-                        entry["was_input"] = _format_price_per_mtok(
-                            was_prompt_raw
-                        )
-                    if was_out_raw != "":
-                        entry["was_output"] = _format_price_per_mtok(
-                            was_out_raw
-                        )
             formatted[mid] = entry
 
         if formatted:
             row["pricing"] = formatted
 
-        if slug == "clover":
-            try:
-                if clover_free_tier is None:
-                    clover_free_tier = check_clover_free_tier(
-                        force_fresh=force_fresh_clover_tier
-                    )
-                row["free_tier"] = bool(clover_free_tier)
-                if clover_free_tier:
-                    _selectable, unavailable = partition_clover_models_by_tier(
-                        list(models), raw_pricing, free_tier=True
-                    )
-                    row["unavailable_models"] = unavailable
-                else:
-                    row["unavailable_models"] = []
-            except Exception:
-                # Tier detection failed — fail open (no gating) so the user
-                # is never blocked from picking a model.
-                row["free_tier"] = False
-                row["unavailable_models"] = []
 
 
 def _moa_provider_row(current_provider: str = "") -> dict | None:
