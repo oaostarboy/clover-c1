@@ -30,6 +30,7 @@ def config_home(tmp_path, monkeypatch):
     home = tmp_path / "clover"
     home.mkdir()
     (home / "config.yaml").write_text(
+        f"_config_version: {hc.DEFAULT_CONFIG['_config_version']}\n"
         "model:\n  default: test-model\n"
         "approvals:\n  mode: manual\n  timeout: 300\n  cron_mode: deny\n"
         "command_allowlist: []\n"

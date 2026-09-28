@@ -1260,9 +1260,14 @@ def get_missing_config_fields() -> List[Dict[str, Any]]:
     Check which config fields are missing or outdated (recursive).
     
     Walks the DEFAULT_CONFIG tree at arbitrary depth and reports any keys
-    present in defaults but absent from the user's loaded config.
+    present in defaults but absent from the user's loaded config. Read-only
+    (never mutates ``config``), so uses ``load_config_readonly()`` — this
+    runs from ``migrate_config()``, which the startup-migration probe inside
+    ``_load_config_impl()`` can call reentrantly, and a deepcopying
+    ``load_config()`` here would defeat that probe's whole point of using
+    the cheap readonly path.
     """
-    config = load_config()
+    config = load_config_readonly()
     missing = []
 
     def _check(defaults: dict, current: dict, prefix: str = ""):
@@ -1309,7 +1314,7 @@ def get_missing_skill_config_vars() -> List[Dict[str, Any]]:
     if not all_vars:
         return []
 
-    config = load_config()
+    config = load_config_readonly()
     missing: List[Dict[str, Any]] = []
     for var in all_vars:
         # Skill config is stored under skills.config.<logical_key>
