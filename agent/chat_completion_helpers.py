@@ -4005,7 +4005,6 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             response = getattr(raw_stream, "response", None)
             attempt_stream_response["value"] = response
             agent._capture_rate_limits(response)
-            agent._capture_credits(response)
             agent._stream_diag_capture_response(_diag, response)
             agent._check_openrouter_cache_status(response)
             _writer_token["value"] = claim_stream_writer(agent)
