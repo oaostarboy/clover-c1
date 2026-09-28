@@ -27,8 +27,8 @@ function firstBillingLine(text: string): string {
  * A turn failed on a billing wall (out of credits / payment required). The
  * gateway forwards the structured descriptor built by `agent/billing_links.py`;
  * we cache it per-session (drives the in-chat banner) AND raise one sticky,
- * billing-specific toast — never the generic "Clover error" — with a smart CTA
- * (Clover → in-app Settings → Billing, other providers → their billing page).
+ * billing-specific toast — never the generic "Clover error" — with a CTA that
+ * deep-links to the provider's own billing page.
  */
 function surfaceBillingBlock(sessionId: string, raw: unknown): void {
   if (!raw || typeof raw !== 'object') {
@@ -43,23 +43,18 @@ function surfaceBillingBlock(sessionId: string, raw: unknown): void {
 
   setBillingBlock(sessionId, block)
 
-  const ctaCopy = {
-    addCredits: translateNow('billingBlock.addCredits'),
-    openBilling: translateNow('billingBlock.openBilling')
-  }
+  const ctaCopy = { addCredits: translateNow('billingBlock.addCredits') }
 
   notify({
     // Collapse repeat walls from the same provider into one toast.
     id: `billing-block:${block.provider}`,
     kind: 'warning',
     icon: 'credit-card',
-    title: block.is_clover
-      ? translateNow('billingBlock.titleNous')
-      : translateNow('billingBlock.titleProvider', block.provider_label),
+    title: translateNow('billingBlock.titleProvider', block.provider_label),
     message: firstBillingLine(block.message) || translateNow('billingBlock.fallbackMessage'),
     // Sticky: a credit wall blocks every turn until resolved.
     durationMs: 0,
-    action: { label: billingCtaLabel(block, ctaCopy), onClick: () => runBillingRecovery(block) }
+    action: { label: billingCtaLabel(ctaCopy), onClick: () => runBillingRecovery(block) }
   })
 }
 
