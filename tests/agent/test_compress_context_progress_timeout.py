@@ -293,7 +293,7 @@ class TestRunCompressContextWithProgressTimeout:
 
 
     def test_propagates_conversation_context_into_worker(self):
-        from agent.portal_tags import (
+        from agent.conversation_context import (
             get_conversation_context,
             reset_conversation_context,
             set_conversation_context,
