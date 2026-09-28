@@ -55,14 +55,14 @@ def _stub_post(captured: dict):
 
 
 def _arm(monkeypatch, *, url="wss://connector.example/relay", token="nas-token"):
-    """Arm the real trigger: a relay URL + a resolvable NAS token.
+    """Arm the real trigger: a relay URL + a resolvable identity token.
 
     Note there is intentionally no `managed` knob — self-provision no longer
-    consults is_managed(). A test that wants the "no NAS identity" branch
-    monkeypatches resolve_clover_access_token to raise instead.
+    consults is_managed(). A test that wants the "no identity" branch
+    monkeypatches _resolve_relay_identity_token to raise instead.
     """
     monkeypatch.setattr(relay, "relay_url", lambda: url)
-    monkeypatch.setattr("clover_cli.auth.resolve_clover_access_token", lambda: token)
+    monkeypatch.setattr(relay, "_resolve_relay_identity_token", lambda: token)
 
 
 # ─────────────────────────── config readers ───────────────────────────
@@ -234,7 +234,7 @@ def test_no_nas_token_is_non_fatal(monkeypatch):
     def _boom():
         raise RuntimeError("no token")
 
-    monkeypatch.setattr("clover_cli.auth.resolve_clover_access_token", _boom)
+    monkeypatch.setattr(relay, "_resolve_relay_identity_token", _boom)
     # Must not raise; returns False; no creds set.
     assert relay.self_provision_relay() is False
     assert relay.relay_connection_auth() == (None, None)
