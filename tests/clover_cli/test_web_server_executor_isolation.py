@@ -90,7 +90,6 @@ def test_toolsets_route_survives_default_executor_starvation(monkeypatch):
     )
     monkeypatch.setattr(tools_config, "_toolset_configuration_platform", lambda _name: "cli")
     monkeypatch.setattr(tools_config, "_get_platform_tools", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(tools_config, "get_clover_subscription_features", lambda _cfg: {})
     monkeypatch.setattr(tools_config, "_toolset_has_keys", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(tools_config, "gui_toolset_label", lambda label: label)
     monkeypatch.setattr(platforms, "platform_label", lambda _key, fallback: fallback)
