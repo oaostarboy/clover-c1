@@ -228,21 +228,7 @@ _DETAIL_MODES = frozenset({"hidden", "collapsed", "expanded"})
 # response writes are safe.
 _LONG_HANDLERS = frozenset(
     {
-        # Billing/usage reads each do a blocking portal HTTP fetch (state + usage
-        # is two serial round-trips); keep them off the main stdin loop so a slow
-        # portal can't stall approval.respond / session.interrupt / other RPCs.
-        "billing.state",
-        "subscription.state",
-        # Subscription change (V3): preview + the pending-change mutations + upgrade
-        # each do a blocking portal round-trip (preview + upgrade also hit Stripe,
-        # which can take seconds) — keep them off the main stdin loop.
-        "subscription.preview",
-        "subscription.change",
-        "subscription.resume",
-        "subscription.upgrade",
-        "usage.bars",
         "session.usage",
-        "billing.step_up",
         "browser.manage",
         "cli.exec",
         # Completion RPCs run inline on the reader thread by default, but both
@@ -3304,15 +3290,6 @@ def _start_agent_build(sid: str, session: dict) -> None:
                     "review.summary", _sid, {"text": str(message)}
                 )
                 agent.memory_notifications = _load_memory_notifications()
-            except Exception:
-                pass
-            # Hydrate credits notices at session OPEN (not just on the first
-            # message), so depletion / usage-band warnings show at "ready". Runs
-            # off the build thread, after the notice_callback is wired. Fail-open.
-            try:
-                from agent.credits_tracker import seed_credits_at_session_start
-
-                seed_credits_at_session_start(agent)
             except Exception:
                 pass
             with _sessions_lock:
@@ -7221,15 +7198,6 @@ def _get_usage(agent) -> dict:
         usage["active_subagents"] = _async_active_count()
     except Exception:
         pass
-    # Dev-only live credits-spent readout (L0 usage-aware-credits). Gated on
-    # CLOVER_DEV_CREDITS so the payload stays clean when the flag is off.
-    if is_truthy_value(os.environ.get("CLOVER_DEV_CREDITS")):
-        try:
-            spent = agent.get_credits_spent_micros()
-            if spent is not None:
-                usage["dev_credits_spent_micros"] = int(spent)
-        except Exception:
-            pass
     return usage
 
 
@@ -11209,305 +11177,6 @@ def _pet_cancel_release(token: str) -> None:
         _pet_cancelled.discard(token)
 
 
-# ===========================================================================
-# Phase 2b Remote Spending RPC methods
-# ===========================================================================
-#
-# These return STRUCTURED success envelopes (result.ok / result.error) rather
-# than JSON-RPC-level errors, so the TUI's rpc() promise always resolves and the
-# Ink side can branch on the typed billing error code (insufficient_scope,
-# rate_limited, no_payment_method, …) to render the right affordance instead of
-# landing in a generic catch. The data-building lives in the shared core
-# (agent/billing_view.py + clover_cli/clover_billing.py) — same as /topup.
-
-
-def _serialize_billing_error(exc) -> dict:
-    """Map a BillingError into the result.error envelope the TUI branches on."""
-    from clover_cli.clover_billing import (
-        BillingRemoteSpendingRevoked,
-        BillingScopeRequired,
-        BillingSessionRevoked,
-        BillingTransient,
-    )
-
-    kind = "error"
-    if isinstance(exc, BillingRemoteSpendingRevoked):
-        kind = "remote_spending_revoked"
-    elif isinstance(exc, BillingSessionRevoked):
-        kind = "session_revoked"
-    elif isinstance(exc, BillingScopeRequired):
-        kind = "insufficient_scope"
-    elif isinstance(exc, BillingTransient):
-        kind = str(exc.error) if getattr(exc, "error", None) else "rate_limited"
-    elif getattr(exc, "error", None):
-        kind = str(exc.error)
-    return {
-        "ok": False,
-        "error": kind,
-        "message": str(exc),
-        "portal_url": getattr(exc, "portal_url", None),
-        "retry_after": getattr(exc, "retry_after", None),
-        "payload": getattr(exc, "payload", {}) or {},
-        # Remote-Spending contract extras (threaded so the TUI can render
-        # actor-aware copy + route recovery without re-parsing the message).
-        "actor": getattr(exc, "actor", None),
-        "code": getattr(exc, "code", None),
-        "recovery": getattr(exc, "recovery", None),
-    }
-
-
-def _serialize_billing_state(state) -> dict:
-    """Serialize a BillingState for the wire (Decimals → strings, money-safe)."""
-    from agent.billing_view import format_money
-
-    def _s(value):
-        return None if value is None else str(value)
-
-    card = None
-    if state.card is not None:
-        card = {
-            "brand": state.card.brand,
-            "last4": state.card.last4,
-            "masked": state.card.masked,
-            # Post-card-resolver fields (None/False on older NAS payloads):
-            # display = "Visa ····4242 — the card on your subscription";
-            # resolved_via = the raw resolution rung, for rung-gated surfaces
-            # (the /subscription confirm only shows the card when the rung
-            # matches what a subscription charge would use).
-            "display": state.card.display,
-            "resolved_via": state.card.resolved_via,
-        }
-    payment_method = None
-    if state.payment_method is not None:
-        pm = state.payment_method
-        # Each kind sends only its own fields. Emitting every key with nulls
-        # would contradict the shared type — a client checking `'brand' in pm`
-        # would read every Link method as a card.
-        if pm.kind == "card":
-            payment_method = {
-                "kind": "card",
-                "brand": pm.brand,
-                "last4": pm.last4,
-                "wallet": pm.wallet,
-                "resolved_via": pm.resolved_via,
-            }
-        elif pm.kind == "link":
-            payment_method = {
-                "kind": "link",
-                "email": pm.email,
-                "resolved_via": pm.resolved_via,
-            }
-        else:
-            payment_method = {
-                "kind": "unknown",
-                "raw_kind": pm.raw_kind,
-                "resolved_via": pm.resolved_via,
-            }
-    monthly_cap = None
-    if state.monthly_cap is not None:
-        mc = state.monthly_cap
-        monthly_cap = {
-            "limit_usd": _s(mc.limit_usd),
-            "limit_display": format_money(mc.limit_usd),
-            "spent_this_month_usd": _s(mc.spent_this_month_usd),
-            "spent_display": format_money(mc.spent_this_month_usd),
-            "is_default_ceiling": mc.is_default_ceiling,
-        }
-    auto_reload = None
-    if state.auto_reload is not None:
-        ar = state.auto_reload
-        card_out = None
-        if ar.card is not None:
-            if ar.card.kind == "distinct":
-                card_out = {
-                    "kind": "distinct",
-                    "payment_method_id": ar.card.payment_method_id,
-                    "brand": ar.card.brand,
-                    "last4": ar.card.last4,
-                }
-            else:
-                card_out = {"kind": ar.card.kind}
-        auto_reload = {
-            "enabled": ar.enabled,
-            "threshold_usd": _s(ar.threshold_usd),
-            "threshold_display": format_money(ar.threshold_usd),
-            "reload_to_usd": _s(ar.reload_to_usd),
-            "reload_to_display": format_money(ar.reload_to_usd),
-            "card": card_out,
-        }
-    return {
-        "ok": True,
-        "logged_in": state.logged_in,
-        "org_name": state.org_name,
-        "org_slug": state.org_slug,
-        "role": state.role,
-        "is_admin": state.is_admin,
-        "can_change_plan": state.can_change_plan,
-        "can_charge": state.can_charge,
-        "balance_usd": _s(state.balance_usd),
-        "balance_display": format_money(state.balance_usd),
-        "cli_billing_enabled": state.cli_billing_enabled,
-        "charge_presets": [_s(p) for p in state.charge_presets],
-        "charge_presets_display": [format_money(p) for p in state.charge_presets],
-        "min_usd": _s(state.min_usd),
-        "max_usd": _s(state.max_usd),
-        "card": card,
-        "payment_method": payment_method,
-        "monthly_cap": monthly_cap,
-        "auto_reload": auto_reload,
-        "portal_url": state.portal_url,
-        "error": state.error,
-        # Shared dollar usage model (two-bar view) embedded so /topup renders the
-        # same plan + top-up bars as /usage and /subscription from its single
-        # fetch. Built from the separate account-info path; fail-open when logged
-        # out or the portal is down.
-        "usage": _usage_payload(state),
-    }
-
-
-def _usage_payload(state) -> dict:
-    """Best-effort shared usage model for the /topup + /subscription overlay bars.
-
-    Only fetched when logged in; fail-open to {available:false} so the overview
-    still renders if the account-info path is down.
-    """
-    if not getattr(state, "logged_in", False):
-        return {"available": False}
-    try:
-        from agent.billing_usage import build_usage_model
-
-        return _serialize_usage_model(build_usage_model())
-    except Exception:
-        return {"available": False}
-
-
-def _serialize_usage_bar(bar) -> Optional[dict]:
-    """Serialize a UsageBar (dollar magnitudes → display strings + fractions)."""
-    if bar is None:
-        return None
-    from agent.billing_usage import _fmt_usd
-
-    return {
-        "kind": bar.kind,
-        "remaining_display": _fmt_usd(bar.remaining_usd),
-        "total_display": _fmt_usd(bar.total_usd),
-        "spent_display": _fmt_usd(bar.spent_usd),
-        "pct_used": bar.pct_used,
-        "fill_fraction": bar.fill_fraction,
-    }
-
-
-def _serialize_usage_model(model) -> dict:
-    """Serialize a UsageModel for the wire — the shared two-bar dollar view.
-
-    Dollars-only (no 'credits'); fail-open shape mirrors the other billing RPCs
-    ({ok, available:false} when logged out / unreachable).
-    """
-    from agent.billing_usage import _fmt_usd, format_renews
-
-    if model is None or not getattr(model, "available", False):
-        return {"ok": True, "available": False}
-
-    return {
-        "ok": True,
-        "available": True,
-        "status": model.status,
-        "plan_name": model.plan_name,
-        "renews_at": model.renews_at,
-        "renews_display": getattr(model, "renews_display", None) or format_renews(model.renews_at),
-        "subscription_remaining_display": (
-            None if model.subscription_remaining_usd is None else _fmt_usd(model.subscription_remaining_usd)
-        ),
-        "topup_remaining_display": (
-            None if model.topup_remaining_usd is None else _fmt_usd(model.topup_remaining_usd)
-        ),
-        "total_spendable_display": (
-            None if model.total_spendable_usd is None else _fmt_usd(model.total_spendable_usd)
-        ),
-        "has_topup": model.has_topup,
-        "plan_bar": _serialize_usage_bar(model.plan_bar),
-        "topup_bar": _serialize_usage_bar(model.topup_bar),
-    }
-
-
-def _serialize_subscription_state(state) -> dict:
-    """Serialize a SubscriptionState for the wire (Decimals → strings)."""
-    from agent.billing_usage import format_renews
-    from agent.billing_view import format_money
-
-    def _s(value):
-        return None if value is None else str(value)
-
-    current = None
-    if state.current is not None:
-        c = state.current
-        current = {
-            "tier_id": c.tier_id,
-            "tier_name": c.tier_name,
-            "monthly_credits": _s(c.monthly_credits),
-            "credits_remaining": _s(c.credits_remaining),
-            "cycle_ends_at": c.cycle_ends_at,
-            "pending_downgrade_tier_name": c.pending_downgrade_tier_name,
-            "pending_downgrade_at": c.pending_downgrade_at,
-            "pending_downgrade_display": format_renews(c.pending_downgrade_at),
-            "cancel_at_period_end": c.cancel_at_period_end,
-            "cancellation_effective_at": c.cancellation_effective_at,
-            "cancellation_effective_display": format_renews(c.cancellation_effective_at),
-        }
-    # Selectable catalog for the in-terminal tier picker; price is pre-formatted
-    # ($X / $X.YY) so the TUI renders it directly.
-    tiers = [
-        {
-            "tier_id": t.tier_id,
-            "name": t.name,
-            "tier_order": t.tier_order,
-            "dollars_per_month_display": format_money(t.dollars_per_month),
-            "monthly_credits": _s(t.monthly_credits),
-            "is_current": t.is_current,
-            "is_enabled": t.is_enabled,
-        }
-        for t in state.tiers
-    ]
-    return {
-        "ok": True,
-        "logged_in": state.logged_in,
-        "is_admin": state.is_admin,
-        "can_change_plan": state.can_change_plan,
-        "org_name": state.org_name,
-        "org_id": state.org_id,
-        "role": state.role,
-        "context": state.context,
-        "current": current,
-        "tiers": tiers,
-        "portal_url": state.portal_url,
-        "error": state.error,
-        # Shared dollar usage model (two-bar view) embedded so /subscription
-        # renders the same bars as /usage from its single fetch. Built from the
-        # separate account-info path (the only source with top-up dollars);
-        # fail-open → {available:false}. Computed lazily so a logged-out state
-        # adds no cost.
-        "usage": _usage_payload(state),
-    }
-
-
-def _serialize_subscription_preview(p) -> dict:
-    """Serialize a SubscriptionChangePreview for the wire (Decimal → string)."""
-    return {
-        "ok": True,
-        "effect": p.effect,
-        "reason": p.reason,
-        "current_tier_id": p.current_tier_id,
-        "current_tier_name": p.current_tier_name,
-        "target_tier_id": p.target_tier_id,
-        "target_tier_name": p.target_tier_name,
-        "monthly_credits_delta": (
-            None if p.monthly_credits_delta is None else str(p.monthly_credits_delta)
-        ),
-        "amount_due_now_cents": p.amount_due_now_cents,
-        "effective_at": p.effective_at,
-    }
-
-
 # ── Delegation: subagent tree observability + controls ───────────────
 # Powers the TUI's /agents overlay (see ui-tui/src/components/agentsOverlay).
 # The registry lives in tools/delegate_tool — these handlers are thin
@@ -13128,7 +12797,7 @@ def _run_prompt_submit(
             if result.get("response_previewed"):
                 payload["response_previewed"] = True
             # Forward the structured billing-wall descriptor (provider,
-            # billing_url, is_clover, message) so the TUI/desktop render a
+            # billing_url, message) so the TUI/desktop render a
             # billing-specific recovery surface instead of re-parsing text.
             _billing_block = result.get("billing_block") if isinstance(result, dict) else None
             if _billing_block:
