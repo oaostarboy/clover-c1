@@ -1,9 +1,8 @@
 """Regression tests for the ``auto`` → main-model-first policy.
 
-Prior to this change, aggregator users (OpenRouter / Clover Portal) had aux
-tasks routed through a cheap provider-side default (Gemini Flash) while
-non-aggregator users got their main model.  This made behavior inconsistent
-and surprising — users picked Claude but got Gemini Flash summaries.
+Previously, aggregator users (such as OpenRouter) had aux tasks routed
+through a cheap provider-side default (Gemini Flash) while other users
+got their main model. This made behavior inconsistent and surprising.
 
 The current policy: ``auto`` means "use my main chat model" for every user,
 regardless of provider type.  Explicit per-task overrides in ``config.yaml``
@@ -390,6 +389,8 @@ class TestResolveVisionCustomProvider:
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_BASE_URL", "https://my.endpoint.example/v1")
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_API_KEY", "sk-runtime-key")
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_API_MODE", "anthropic_messages")
+        monkeypatch.setattr(aux, "_RUNTIME_MAIN_PROVIDER", "custom")
+        monkeypatch.setattr(aux, "_RUNTIME_MAIN_MODEL", "claude-opus-4-8")
 
         with patch(
             "agent.auxiliary_client._read_main_provider", return_value="custom",
@@ -425,6 +426,8 @@ class TestResolveVisionCustomProvider:
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_BASE_URL", "https://named.example/v1")
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_API_KEY", "sk-named")
         monkeypatch.setattr(aux, "_RUNTIME_MAIN_API_MODE", "")
+        monkeypatch.setattr(aux, "_RUNTIME_MAIN_PROVIDER", "custom:copilot-gateway")
+        monkeypatch.setattr(aux, "_RUNTIME_MAIN_MODEL", "claude-opus-4-8")
 
         with patch(
             "agent.auxiliary_client._read_main_provider",

@@ -83,7 +83,7 @@ class TestChatCompletionsBasic:
             "{}",
         ]
 
-    @pytest.mark.parametrize("provider", ["clover", "openrouter"])
+    @pytest.mark.parametrize("provider", ["openrouter"])
     def test_gpt56_ultra_uses_max_wire_effort(self, transport, provider):
         from providers import get_provider_profile
 
@@ -246,13 +246,6 @@ class TestChatCompletionsBuildKwargs:
 
 
 
-    def test_clover_tags(self, transport):
-        from agent.portal_tags import clover_portal_tags
-        from providers import get_provider_profile
-        profile = get_provider_profile("clover")
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(model="gpt-4o", messages=msgs, provider_profile=profile)
-        assert kw["extra_body"]["tags"] == clover_portal_tags()
 
     def test_reasoning_default(self, transport):
         msgs = [{"role": "user", "content": "Hi"}]
@@ -262,21 +255,6 @@ class TestChatCompletionsBuildKwargs:
         )
         assert kw["extra_body"]["reasoning"] == {"enabled": True, "effort": "medium"}
 
-    def test_clover_omits_disabled_reasoning_for_unknown_model(self, transport):
-        from providers import get_provider_profile
-        profile = get_provider_profile("clover")
-        msgs = [{"role": "user", "content": "Hi"}]
-        kw = transport.build_kwargs(
-            model="gpt-4o", messages=msgs,
-            provider_profile=profile,
-            supports_reasoning=True,
-            reasoning_config={"enabled": False},
-        )
-        # Not a Portal model id, so the catalog can't rule out a
-        # reasoning-mandatory route (which 400s on a disable) — omit.
-        # tests/plugins/model_providers/test_clover_profile.py covers the
-        # catalog-known cases where the disable IS forwarded.
-        assert "reasoning" not in kw.get("extra_body", {})
 
     def test_ollama_num_ctx(self, transport):
         from providers import get_provider_profile
@@ -621,53 +599,38 @@ class TestChatCompletionsCacheStats:
 
 
 class TestChatCompletionsGeminiNativeExtraBodyStrip:
-    """Profile extra_body (e.g. Clover portal tags) must not reach a native
-    Gemini endpoint — Google's REST API rejects unknown fields with HTTP 400.
-    """
+    """User-configured extra_body is preserved on compat wire, stripped on native Gemini."""
 
-    def _clover_profile(self):
+    @staticmethod
+    def _profile():
         from providers import get_provider_profile
-        return get_provider_profile("clover")
+        return get_provider_profile("openrouter")
 
-    def test_tags_stripped_when_endpoint_is_native_gemini(self, transport):
+    def test_custom_body_stripped_on_native_gemini(self, transport):
         kw = transport.build_kwargs(
             "anthropic/claude-sonnet-4.6",
             [{"role": "user", "content": "hi"}],
             None,
-            provider_profile=self._clover_profile(),
+            extra_body_additions={"custom_field": "value"},
+            provider_profile=self._profile(),
             base_url="https://generativelanguage.googleapis.com/v1beta",
             session_id="s1",
             max_tokens=None,
         )
-        eb = kw.get("extra_body")
-        assert not eb or "tags" not in eb
+        assert "custom_field" not in kw.get("extra_body", {})
 
-    def test_tags_preserved_on_clover_endpoint(self, transport):
-        kw = transport.build_kwargs(
-            "clover-3-405b",
-            [{"role": "user", "content": "hi"}],
-            None,
-            provider_profile=self._clover_profile(),
-            base_url="https://inference./v1",
-            session_id="s1",
-            max_tokens=None,
-        )
-        eb = kw.get("extra_body")
-        assert eb and "tags" in eb
-
-    def test_tags_pass_through_on_gemini_openai_compat(self, transport):
-        # /openai compat endpoint is not "native" — unchanged behavior.
+    def test_custom_body_preserved_on_gemini_openai_compat(self, transport):
         kw = transport.build_kwargs(
             "anthropic/claude-sonnet-4.6",
             [{"role": "user", "content": "hi"}],
             None,
-            provider_profile=self._clover_profile(),
+            extra_body_additions={"custom_field": "value"},
+            provider_profile=self._profile(),
             base_url="https://generativelanguage.googleapis.com/v1beta/openai",
             session_id="s1",
             max_tokens=None,
         )
-        eb = kw.get("extra_body")
-        assert eb and "tags" in eb
+        assert kw["extra_body"]["custom_field"] == "value"
 
 
 class TestPromptCacheKeyCapability:

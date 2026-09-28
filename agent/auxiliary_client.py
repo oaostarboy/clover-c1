@@ -7194,18 +7194,12 @@ def resolve_vision_provider_client(
         #      _PROVIDER_VISION_MODELS provides per-provider vision model
         #      overrides when the provider has a dedicated multimodal model
         #      that differs from the chat model (e.g. xiaomi → mimo-v2-omni,
-        #      zai → glm-5v-turbo). DeepInfra is similar but resolves its
-        #      default vision model live from the catalog (see
-        #      :func:`_resolve_provider_vision_default`). Clover is the
-        #      exception: it has a dedicated strict vision backend with
-        #      tier-aware defaults, so it must not fall through to the
-        #      user's text chat model here.
+        #      zai → glm-5v-turbo). DeepInfra resolves its default vision
+        #      model live from the catalog (see
+        #      :func:`_resolve_provider_vision_default`).
         #   2. OpenRouter (vision-capable aggregator fallback)
-        #   3. Clover Portal (vision-capable aggregator fallback)
-        #   4. DeepInfra   (OpenAI-compatible; vision model discovered
-        #                   live from the catalog — tried when
-        #                   DEEPINFRA_API_KEY is set)
-        #   5. Stop
+        #   3. DeepInfra (vision model discovered live from the catalog)
+        #   4. Stop
         main_provider = str(runtime.get("provider") or _read_main_provider())
         main_model = str(runtime.get("model") or _read_main_model())
         if main_provider.strip().lower() == "moa":

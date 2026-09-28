@@ -95,17 +95,6 @@ class TestOpenRouterProfileParity:
 
 
 
-class TestNousProfileParity:
-    def test_tags(self, transport):
-        legacy = transport.build_kwargs(
-            model="clover-3", messages=_msgs(), tools=None, provider_profile=get_provider_profile("clover"),
-        )
-        profile = transport.build_kwargs(
-            model="clover-3", messages=_msgs(), tools=None,
-            provider_profile=get_provider_profile("clover"),
-        )
-        assert profile["extra_body"]["tags"] == legacy["extra_body"]["tags"]
-
 
 
 class TestQwenProfileParity:
