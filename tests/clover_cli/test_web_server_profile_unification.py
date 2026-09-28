@@ -264,7 +264,7 @@ class TestProfileScopedModel:
             "/api/model/set",
             json={
                 "scope": "main",
-                "provider": "clover",
+                "provider": "anthropic",
                 "model": "new/model",
                 "confirm_expensive_model": True,
                 "profile": "worker_beta",

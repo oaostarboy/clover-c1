@@ -294,32 +294,14 @@ class TestCamofoxSelection:
 
 
 class TestWriteProviderConfig:
-    def test_managed_row_writes_clover_and_clears_legacy_flag(self):
-        from clover_cli.tools_config import _write_provider_config
-
-        config = {"tts": {"provider": "edge", "use_gateway": False}}
-        provider = {"name": "Clover Subscription", "tts_provider": "openai"}
-        _write_provider_config(provider, config, managed_feature="tts")
-        assert config["tts"]["provider"] == "clover"
-        assert "use_gateway" not in config["tts"]
-
     def test_byok_row_writes_vendor_and_clears_legacy_flag(self):
         from clover_cli.tools_config import _write_provider_config
 
         config = {"web": {"backend": "clover", "use_gateway": True}}
         provider = {"name": "Tavily", "web_backend": "tavily"}
-        _write_provider_config(provider, config, managed_feature=None)
+        _write_provider_config(provider, config)
         assert config["web"]["backend"] == "tavily"
         assert "use_gateway" not in config["web"]
-
-    def test_managed_image_row_persists_clover_provider(self):
-        from clover_cli.tools_config import _write_provider_config
-
-        config = {}
-        provider = {"name": "Clover Subscription", "imagegen_backend": "fal"}
-        _write_provider_config(provider, config, managed_feature="image_gen")
-        assert config["image_gen"]["provider"] == "clover"
-        assert "use_gateway" not in config["image_gen"]
 
     def test_plugin_injected_byok_row_clears_stale_use_gateway(self):
         """Plugin-injected rows are not in TOOL_CATEGORIES' hardcoded
@@ -328,6 +310,6 @@ class TestWriteProviderConfig:
 
         config = {"stt": {"provider": "clover", "use_gateway": True}}
         provider = {"name": "Groq Whisper", "stt_provider": "groq"}
-        _write_provider_config(provider, config, managed_feature=None)
+        _write_provider_config(provider, config)
         assert config["stt"]["provider"] == "groq"
         assert "use_gateway" not in config["stt"]

@@ -80,22 +80,3 @@ class TestNousFallbackLocalAvailability:
             "",
         )
         assert key in getattr(agent, "_unavailable_fallback_keys", set())
-
-    def test_present_clover_token_allows_activation(self):
-        """Clover is considered when token material exists."""
-        agent = _make_agent(
-            fallback_model=[
-                {"provider": "clover", "model": "anthropic/claude-sonnet-4.6"},
-                {"provider": "openai-codex", "model": "gpt-5.5"},
-            ]
-        )
-        with patch(
-            "clover_cli.auth.get_provider_auth_state",
-            return_value={"access_token": "abc", "refresh_token": "xyz"},
-        ), patch(
-            "agent.auxiliary_client.resolve_provider_client",
-            return_value=(_mock_client(api_key="fb"), "anthropic/claude-sonnet-4.6"),
-        ):
-            activated = agent._try_activate_fallback(None)
-        assert activated is True
-        assert agent.provider == "clover"

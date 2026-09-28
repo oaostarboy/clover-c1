@@ -603,7 +603,7 @@ class TestProviderPickerIntegration:
         row = next(r for r in self._rows() if r.get("browser_backend"))
         config = {"browser": {"cloud_provider": "browserbase"}}
         assert row["name"] == "Browser Use"
-        _write_provider_config(row, config, managed_feature=None)
+        _write_provider_config(row, config)
         assert config["browser"]["backend"] == "browser-use"
         assert config["browser"]["cloud_provider"] == "browserbase"
 
@@ -616,7 +616,7 @@ class TestProviderPickerIntegration:
             r for r in self._rows() if r.get("browser_provider") == "local"
         )
         config = {"browser": {"backend": "browser-use"}}
-        _write_provider_config(local_row, config, managed_feature=None)
+        _write_provider_config(local_row, config)
         assert config["browser"]["backend"] == "browser-use"
         assert config["browser"]["cloud_provider"] == "local"
 

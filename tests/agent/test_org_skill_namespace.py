@@ -207,7 +207,6 @@ def test_no_internal_jargon_in_user_facing_strings():
 
     root = pathlib.Path(__file__).resolve().parents[2]
     targets = [
-        root / "clover_cli" / "subcommands" / "sync.py",
         root / "clover_cli" / "subcommands" / "skills.py",
     ]
     banned = re.compile(

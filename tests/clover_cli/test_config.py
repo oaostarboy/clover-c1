@@ -918,7 +918,8 @@ class TestConfigSupportFloor:
         # v31 writes verify_on_stop=False, but False now equals the schema
         # default (opt-in) so the write invariant strips it from disk.
         "agent": {},
-        "model": {"default": "anthropic/claude-fable-5", "provider": "clover"},
+        # v40 rewrites the removed hosted provider to "auto".
+        "model": {"default": "anthropic/claude-fable-5", "provider": "auto"},
         "model_catalog": {"ttl_hours": 1},
         "plugins": {"disabled": ["foo"], "enabled": []},
     }
