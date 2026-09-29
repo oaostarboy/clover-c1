@@ -104,6 +104,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Existing users run the OLD updater (69a75bb8), which can only reach
+          # branches in the single-branch clone's fetch scope (fixed in 9faa3826,
+          # but that fix only helps once the updater itself is new). Real users
+          # update to main, which is in scope; add the PR branch to mirror that.
+          git -C "$INSTALL_DIR" remote set-branches --add origin "${{ env.TO_BRANCH }}"
           "$CLOVER_BIN" update --branch "${{ env.TO_BRANCH }}" --yes
 
       - name: (POSIX) d. Assert update outcome
@@ -330,6 +335,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          # See the POSIX step: the old updater needs the branch in fetch scope.
+          git -C "$env:INSTALL_DIR" remote set-branches --add origin "${{ env.TO_BRANCH }}"
           & "$env:CLOVER_BIN" update --branch "${{ env.TO_BRANCH }}" --yes
           if ($LASTEXITCODE -ne 0) { throw "clover update exited $LASTEXITCODE" }
 
