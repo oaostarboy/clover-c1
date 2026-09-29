@@ -88,7 +88,7 @@ def test_explicit_skin_wins(name):
     skin_engine.init_skin_from_config({"display": {"skin": name}})
     assert skin_engine.get_active_skin().name == name
     assert skin_engine.get_active_skin().spinner.get("flavor") is None
-    assert get_tool_emoji("terminal") != "🪵"
+    assert get_tool_emoji("terminal") != "⌨️"
 
 
 def test_clover_skin_uses_leaf_faces_and_verbs():
@@ -243,8 +243,8 @@ def test_module_level_note_reaches_current_turn():
 
 @pytest.mark.parametrize(
     "tool,emoji",
-    [("terminal", "🪵"), ("read_file", "🍃"), ("write_file", "🌱"), ("patch", "✂️"),
-     ("search_files", "🍄"), ("web_search", "🔭"), ("browser_click", "🧭"),
+    [("terminal", "⌨️"), ("read_file", "👁️"), ("write_file", "✏️"), ("patch", "✂️"),
+     ("search_files", "🔎"), ("web_search", "🕸️"), ("browser_click", "🧭"),
      ("browser_navigate", "🧭"), ("browser_snapshot", "📸"), ("browser_vision", "👁️"),
      ("web_extract", "📜"), ("execute_code", "⚗️"), ("delegate_task", "🌿"),
      ("memory", "🌰"), ("session_search", "🍂"), ("skill_view", "🧺"),
@@ -268,7 +268,7 @@ def test_gateway_generic_fallback_is_a_leaf_under_clover_only():
 
 def test_completion_line_follows_skin_emoji():
     line = get_cute_tool_message("terminal", {"command": "ls"}, 1.0)
-    assert "🪵" in line and "💻" not in line
+    assert "⌨️" in line and "💻" not in line
     skin_engine.set_active_skin("default")
     assert "💻" in get_cute_tool_message("terminal", {"command": "ls"}, 1.0)
 
@@ -329,7 +329,7 @@ def test_cp1252_console_falls_back_to_classic_look(monkeypatch):
     assert faces == KawaiiSpinner.KAWAII_THINKING
     assert verbs == KawaiiSpinner.THINKING_VERBS
     assert KawaiiSpinner.get_waiting_faces() == KawaiiSpinner.KAWAII_WAITING
-    assert get_tool_emoji("terminal") != "🪵"
+    assert get_tool_emoji("terminal") != "⌨️"
     assert get_tool_emoji("no_such_tool_xyz", default="⚙️") == "⚙️"
     assert (get_done_mark(), get_fail_mark()) == ("✅", "❌")
     assert KawaiiSpinner("x", spinner_type="moon").spinner_type == "moon"
