@@ -6225,6 +6225,30 @@ def _restore_windows_gateway_service(name: str, *, timeout: float = 60.0) -> Non
     )
 
 
+def _own_ancestor_pids() -> set[int]:
+    """PIDs of this process's live ancestors (empty without psutil)."""
+    try:
+        import psutil
+
+        return {int(p.pid) for p in psutil.Process().parents()}
+    except Exception:
+        return set()
+
+
+def _force_stop_single_process(pid: int) -> None:
+    """Force-stop ONE process, never its descendants (unlike taskkill /T)."""
+    try:
+        import psutil
+    except Exception as exc:
+        raise OSError(f"psutil unavailable: {exc}") from exc
+    try:
+        psutil.Process(int(pid)).kill()
+    except psutil.NoSuchProcess as exc:
+        raise ProcessLookupError(pid) from exc
+    except psutil.AccessDenied as exc:
+        raise PermissionError(pid) from exc
+
+
 def _pause_windows_gateways_for_update() -> dict | None:
     """Stop running Windows gateways before mutating the checkout or venv.
 
@@ -6425,9 +6449,16 @@ def _pause_windows_gateways_for_update() -> dict | None:
     # already exited with its drained worker raises ProcessLookupError below
     # and is skipped.
     force_killed = []
+    own_ancestry = _m()._own_ancestor_pids()
     for pid in sorted(set(survivors).union(unmapped_pids).union(launcher_pids)):
         try:
-            terminate_pid(int(pid), force=True)
+            if int(pid) in own_ancestry:
+                # /update from a chat runs this updater INSIDE the gateway's
+                # process tree; ``terminate_pid(force=True)`` is taskkill /T
+                # and would take the updater down with the gateway.
+                _m()._force_stop_single_process(int(pid))
+            else:
+                terminate_pid(int(pid), force=True)
             force_killed.append(int(pid))
         except (ProcessLookupError, PermissionError, OSError):
             pass
@@ -7970,13 +8001,27 @@ def _cmd_update_impl(args, gateway_mode: bool):
     # post-update cron-jobs safety net uses it to detect job loss.
     pre_update_snapshot_id = _m()._run_pre_update_backup(args)
     try:
-        from clover_cli.update_receipt import record_step
+        from clover_cli.update_receipt import record_skip, record_step
 
-        record_step(
-            "pre_update_backup",
-            pre_update_snapshot_id is not None,
-            f"snapshot={pre_update_snapshot_id}" if pre_update_snapshot_id else "disabled or failed",
-        )
+        if pre_update_snapshot_id is not None:
+            record_step("pre_update_backup", True, f"snapshot={pre_update_snapshot_id}")
+        else:
+            # Never a failed STEP: the backup is best-effort and never stops
+            # the update (a locked or in-use file is skipped per file). The
+            # shipped example config even turns it off. Recording it as a
+            # failure made every such update read "pre-update backup step
+            # failed" (Windows 11 report, 2026-09-29) even when the real stop
+            # was elsewhere.
+            try:
+                _backup_mode = _m()._resolve_pre_update_backup_mode(args)
+            except Exception:
+                _backup_mode = "unknown"
+            record_skip(
+                "pre_update_backup",
+                "disabled (updates.pre_update_backup / --no-backup)"
+                if _backup_mode == "off"
+                else "no snapshot captured (non-fatal; update continued)",
+            )
     except Exception:
         pass
 
@@ -8081,9 +8126,15 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     f"  ⚠ {len(_gateway_holders)} gateway process(es) still "
                     "hold the venv after the pause; stopping them"
                 )
+                _own_ancestry = _m()._own_ancestor_pids()
                 for _pid in _gateway_holders:
                     try:
-                        terminate_pid(int(_pid), force=True)
+                        if int(_pid) in _own_ancestry:
+                            # Never tree-kill our own ancestry (/update
+                            # from a chat runs inside the gateway tree).
+                            _m()._force_stop_single_process(int(_pid))
+                        else:
+                            terminate_pid(int(_pid), force=True)
                     except Exception as exc:
                         logger.debug(
                             "Could not stop leftover gateway %s: %s", _pid, exc

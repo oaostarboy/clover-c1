@@ -6494,17 +6494,33 @@ class GatewaySlashCommandsMixin:
                         f.write(str(rc))
                     """
                 ).strip()
-                subprocess.Popen(
-                    [
-                        sys.executable, "-c", helper,
-                        str(output_path), str(exit_code_path),
-                        sys.executable, "-m", "clover_cli.main",
-                        action, *( ["--gateway"] if action == "update" else [] ),
-                    ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    **windows_detach_popen_kwargs(),
-                )
+                _update_argv = [
+                    sys.executable, "-c", helper,
+                    str(output_path), str(exit_code_path),
+                    sys.executable, "-m", "clover_cli.main",
+                    action, *( ["--gateway"] if action == "update" else [] ),
+                ]
+                try:
+                    subprocess.Popen(
+                        _update_argv,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        **windows_detach_popen_kwargs(),
+                    )
+                except OSError:
+                    # A job that refuses CREATE_BREAKAWAY_FROM_JOB fails the
+                    # spawn with access denied; the rest of the detach
+                    # still keeps the updater alive across the gateway stop.
+                    from clover_cli._subprocess_compat import (
+                        windows_detach_flags_without_breakaway,
+                    )
+
+                    subprocess.Popen(
+                        _update_argv,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=windows_detach_flags_without_breakaway(),
+                    )
             else:
                 clover_cmd_str = " ".join(shlex.quote(part) for part in clover_cmd)
                 update_cmd = (

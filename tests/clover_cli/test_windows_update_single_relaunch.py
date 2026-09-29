@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -331,3 +332,38 @@ def test_resume_verifies_its_relaunch(home, monkeypatch):
                         lambda **k: verified.append(k) or True)
     update_cmd._resume_windows_gateways_after_update(_paused_token())
     assert verified == [{"current_profile": True}]
+
+
+def test_pause_never_tree_kills_the_updaters_own_ancestry(home, monkeypatch, tmp_path):
+    """/update from a chat: the updater is a descendant of the gateway it pauses.
+
+    ``terminate_pid(force=True)`` is ``taskkill /T``; used on a gateway that
+    did not drain in time it killed the updater (and the /update helper that
+    writes the exit code) along with it.
+    """
+    import gateway.status as status_mod
+    import clover_cli.gateway as gateway_mod
+    from clover_cli import main
+
+    profile_home = tmp_path / "profiles" / "default"
+    profile_home.mkdir(parents=True)
+    gateway = SimpleNamespace(profile="default", path=profile_home, pid=101)
+    monkeypatch.setattr(main, "_is_windows", lambda: True)
+    monkeypatch.setattr(gateway_mod, "find_gateway_pids", lambda **_k: [101])
+    monkeypatch.setattr(gateway_mod, "find_windows_gateway_services", lambda **_k: [])
+    monkeypatch.setattr(gateway_mod, "find_profile_gateway_processes", lambda **_k: [gateway])
+    monkeypatch.setattr(gateway_mod, "_get_restart_drain_timeout", lambda: 0.1)
+    monkeypatch.setattr(gateway_mod, "_capture_gateway_argv", lambda pid: None)
+    monkeypatch.setattr(main, "_venv_launcher_ancestors", lambda pids: set())
+    monkeypatch.setattr(main, "_wait_for_windows_update_gateway_exit",
+                        lambda pids, *, timeout: {101})  # did not drain
+    monkeypatch.setattr(main, "_own_ancestor_pids", lambda: {101, 7})
+    tree_killed, single_killed = [], []
+    monkeypatch.setattr(status_mod, "terminate_pid",
+                        lambda pid, force=False: tree_killed.append(pid))
+    monkeypatch.setattr(main, "_force_stop_single_process", lambda pid: single_killed.append(pid))
+
+    main._pause_windows_gateways_for_update()
+
+    assert tree_killed == []
+    assert single_killed == [101]
