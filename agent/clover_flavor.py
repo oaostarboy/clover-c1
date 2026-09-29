@@ -162,3 +162,92 @@ def note_tool_result(is_error: bool) -> None:
     turn = _turn
     if turn is not None:
         turn.note_tool_result(is_error)
+
+
+# --- background self-improvement notice ---------------------------------------------
+
+REVIEW_FACES = ("☘️(◕ᴗ◕✿)", "☘️(｀・ω・´)ゞ", "☘️(・ω・)ノ", "☘️(๑•̀ㅂ•́)و✧")
+REVIEW_SAVED_LINES = (
+    "🍀 saved something new", "🍀 learned something",
+    "🍀 noted for next time", "🍀 filed that away",
+)
+REVIEW_TIDY_LINES = (
+    "🧹 tidied up my notes", "🧹 cleaned up a little", "🧹 swept out an old note",
+)
+_MAX_REMEMBERED_REVIEW_CHATS = 1024
+_review_last_pick: dict = {}
+_review_lock = threading.Lock()
+
+
+def _pick_review_header(saved: bool, chat_key: str, rng: Any) -> str:
+    """``"<face> <line>"``, never the same pair twice in a row for *chat_key*."""
+    lines = REVIEW_SAVED_LINES if saved else REVIEW_TIDY_LINES
+    with _review_lock:
+        last = _review_last_pick.get(chat_key)
+        pair = (rng.choice(REVIEW_FACES), rng.choice(lines))
+        for _ in range(20):
+            if pair != last:
+                break
+            pair = (rng.choice(REVIEW_FACES), rng.choice(lines))
+        else:  # a stubborn RNG: force a different line
+            pair = (pair[0], next(x for x in lines if (pair[0], x) != last))
+        if len(_review_last_pick) >= _MAX_REMEMBERED_REVIEW_CHATS and chat_key not in _review_last_pick:
+            _review_last_pick.pop(next(iter(_review_last_pick)))
+        _review_last_pick[chat_key] = pair
+    return f"{pair[0]} {pair[1]}"
+
+
+def _italic(text: str, markdown: bool = True) -> str:
+    body = " ".join((text or "").split()).strip("*").strip()
+    return f"*{body}*" if markdown else body
+
+
+def _review_item_line(group: str, op: str, text: str, markdown: bool) -> str:
+    """One Clo-style line for a structured ``(group, op, text)`` review action."""
+    it = _italic(text, markdown)
+    if group == "skill":
+        if op == "create":
+            return f"🧬 new skill: {it}" if text else f"🧬 {_italic('new skill', markdown)}"
+        if op == "improve":
+            return f"🧬 improved: {it}"
+        if op == "delete":
+            return f"🧹 removed skill: {it}" if text else f"🧹 {_italic('skill removed', markdown)}"
+        return f"🧬 {_italic('skill updated', markdown)}"
+    if op == "remove":
+        if text:
+            return f"🧹 {it}"
+        return f"🧹 {_italic('profile tidied' if group == 'user' else 'memory tidied', markdown)}"
+    if group == "user":
+        if op in ("add", "replace") and text:
+            return f"🧠 about you: {it}"
+        return f"🧠 {_italic('profile updated', markdown)}"
+    if op == "replace" and text:
+        return f"🧠 updated: {it}"
+    if op == "add" and text:
+        return f"🧠 {it}"
+    return f"🧠 {_italic('memory updated', markdown)}"
+
+
+def render_review_notice(
+    items: Any, chat_key: str = "", rng: Optional[Any] = None
+) -> Tuple[list, str]:
+    """Clo-style background-review notice: ``(cli_lines, gateway_message)``.
+
+    *items* are ``(group, op, text)`` tuples from
+    ``summarize_background_review_actions(structured=...)``.  The header shows
+    🍀 when anything was saved and 🧹 when the pass only removed things.  The
+    gateway message uses markdown ``*italics*``; CLI lines drop the asterisks.
+    """
+    items = list(items or [])
+    saved = any(op not in ("remove", "delete") for _, op, _ in items)
+    header = _pick_review_header(saved, chat_key, rng if rng is not None else random)
+
+    def _lines(markdown: bool) -> list:
+        return list(dict.fromkeys(_review_item_line(g, o, t, markdown) for g, o, t in items))
+
+    return [header] + _lines(False), "\n".join([header] + _lines(True))
+
+
+def reset_review_notices() -> None:
+    with _review_lock:
+        _review_last_pick.clear()
