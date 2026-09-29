@@ -1566,6 +1566,7 @@ class GatewaySlashCommandsMixin:
 
         The session is preserved so the user can continue the conversation.
         """
+        from gateway.clover_acks import stop_ack
         from gateway.run import _AGENT_PENDING_SENTINEL, _INTERRUPT_REASON_STOP
         source = event.source
         session_entry = await self.async_session_store.get_or_create_session(source)
@@ -1581,7 +1582,7 @@ class GatewaySlashCommandsMixin:
                 invalidation_reason="stop_command_pending",
             )
             logger.info("STOP (pending) for session %s — sentinel cleared", session_key)
-            return EphemeralReply(t("gateway.stop.stopped_pending"))
+            return EphemeralReply(stop_ack(t("gateway.stop.stopped_pending"), session_key))
         if agent:
             # Force-clean the session lock so a truly hung agent doesn't
             # keep it locked forever.
@@ -1591,7 +1592,7 @@ class GatewaySlashCommandsMixin:
                 interrupt_reason=_INTERRUPT_REASON_STOP,
                 invalidation_reason="stop_command_handler",
             )
-            return EphemeralReply(t("gateway.stop.stopped"))
+            return EphemeralReply(stop_ack(t("gateway.stop.stopped"), session_key))
 
         # No run under the caller's own session key.  In a per-user thread
         # (thread_sessions_per_user=True) each participant is isolated even
@@ -1614,7 +1615,7 @@ class GatewaySlashCommandsMixin:
                 len(sibling_keys),
                 ", ".join(sibling_keys),
             )
-            return EphemeralReply(t("gateway.stop.stopped"))
+            return EphemeralReply(stop_ack(t("gateway.stop.stopped"), session_key))
 
         # No running agent anywhere for this scope. A platform status
         # indicator can still be stuck — e.g. Slack's persistent

@@ -2704,6 +2704,7 @@ os.environ["CLOVER_QUIET"] = "1"
 # by the config bridge above).  Placeholder values are resolved per-backend —
 # see gateway/cwd_placeholder.py for the three-case contract (local vs docker
 # mount-off vs docker mount-on).  MESSAGING_CWD is a backward-compat fallback.
+from gateway import clover_acks as _clover_acks
 from gateway.cwd_placeholder import CWD_PLACEHOLDERS, resolve_placeholder_terminal_cwd
 
 _configured_cwd = os.environ.get("TERMINAL_CWD", "")
@@ -10981,7 +10982,31 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 pass
 
         status_detail = f" ({', '.join(status_parts)})" if status_parts else ""
-        if is_steer_mode:
+        if _clover_acks.active():
+            # Clo's acks: only the leading emoji + first phrase change; the
+            # functional sentence is exactly today's text.
+            if is_steer_mode:
+                message = _clover_acks.build_ack(
+                    "steer", session_key,
+                    "Your message arrives after the next tool call.", status_detail)
+            elif is_redirect_mode:
+                message = _clover_acks.build_ack(
+                    "redirect", session_key,
+                    "I'll adjust using your correction.", status_detail)
+            elif is_queue_mode and (demoted_for_subagents or demoted_for_compression):
+                message = _clover_acks.build_ack(
+                    "queued", session_key,
+                    "Your message is queued for when it finishes "
+                    "(use /stop to cancel everything).", status_detail)
+            elif is_queue_mode:
+                message = _clover_acks.build_ack(
+                    "queued", session_key,
+                    "I'll respond once the current task finishes.", status_detail)
+            else:
+                message = _clover_acks.build_ack(
+                    "interrupt", session_key,
+                    "I'll respond to your message shortly.", status_detail)
+        elif is_steer_mode:
             message = (
                 f"⏩ Steered into current run{status_detail}. "
                 f"Your message arrives after the next tool call."
@@ -13048,6 +13073,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         Returns True if at least one adapter connected successfully.
         """
         logger.info("Starting Clover Gateway...")
+        try:
+            # Honor an explicit display.skin (the gateway never read it before).
+            from clover_cli.skin_engine import init_skin_from_config
+
+            init_skin_from_config(_load_gateway_config())
+        except Exception:
+            logger.debug("skin init failed", exc_info=True)
         # Enable faulthandler for stack dumps on freezes/crashes (#70344).
         # Falls back to a log file when sys.stderr is None (Windows VBS /
         # pythonw / detached service) — otherwise the gateway would die
@@ -17519,7 +17551,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             invalidation_reason="stop_command",
         )
         logger.info("STOP for session %s — agent interrupted, session lock released", quick_key)
-        return EphemeralReply(t("gateway.stop.stopped"))
+        return EphemeralReply(_clover_acks.stop_ack(t("gateway.stop.stopped"), quick_key))
 
     async def _busy_new_command(self, event: MessageEvent, quick_key: str, source):
         # /reset and /new must bypass the running-agent guard so they
@@ -18320,7 +18352,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # Force-clean the sentinel so the session is unlocked.
                     self._release_running_agent_state(_quick_key)
                     logger.info("HARD STOP (pending) for session %s — sentinel cleared", _quick_key)
-                    return EphemeralReply("⚡ Force-stopped. The agent was still starting — session unlocked.")
+                    return EphemeralReply(_clover_acks.stop_ack(
+                        "⚡ Force-stopped. The agent was still starting — session unlocked.",
+                        _quick_key,
+                    ))
                 # Queue the message so it will be picked up after the
                 # agent starts.
                 adapter = self._adapter_for_source(source)
