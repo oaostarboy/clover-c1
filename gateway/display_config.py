@@ -85,6 +85,10 @@ _GLOBAL_DEFAULTS: dict[str, Any] = {
     # Seconds between quiet-period refreshes of a delegation card (elapsed
     # time, waiting/stalled classification). Edits only; 0 disables.
     "delegation_heartbeat_seconds": 60,
+    # Live 🏛 council card. "v2" = one collapsible card with the question, every
+    # seat and its model, that follows the latest message and ends as ONE final
+    # message (card + answer). "classic" = the compact stage-only card.
+    "council_card": "v2",
 }
 
 # ---------------------------------------------------------------------------
@@ -358,6 +362,8 @@ def _normalise(setting: str, value: Any) -> Any:
         if val in {"false", "0", "no", "off"}:
             return "off"
         return "auto"
+    if setting == "council_card":
+        return "classic" if str(value).strip().lower() == "classic" else "v2"
     if setting == "delegation_heartbeat_seconds":
         if isinstance(value, bool):
             return None

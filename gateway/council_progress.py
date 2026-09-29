@@ -116,8 +116,12 @@ def render_council_card(state: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def format_council_result(summary: Mapping[str, Any]) -> str:
-    """Format the actual reply; the compact card deliberately omits the verdict."""
+def format_council_result(summary: Mapping[str, Any], *, header: bool = True) -> str:
+    """Format the actual reply; the compact card deliberately omits the verdict.
+
+    ``header=False`` drops the ``🏛 Council answer`` title line, for the v2
+    final message whose quote header already says it.
+    """
     mode = str(summary.get("mode") or "full").title()
     verdict = _compact_council_text(
         summary.get("verdict") or "No verdict returned.",
@@ -140,8 +144,9 @@ def format_council_result(summary: Mapping[str, Any]) -> str:
         if stalled
         else "all seats returned"
     )
+    title = "🏛 **Council answer**\n\n" if header else ""
     return (
-        "🏛 **Council answer**\n\n"
+        f"{title}"
         "**Answer**\n"
         f"• {verdict}\n\n"
         "**Why**\n"
@@ -204,6 +209,8 @@ class CouncilCard:
         self.status_key = status_key
         self.metadata = metadata
         self._last_card = ""
+        self.final_delivered = False
+        self.final_maybe_delivered = False
 
     async def publish(self, state: Mapping[str, Any]) -> None:
         if self.adapter is None:
@@ -224,6 +231,24 @@ class CouncilCard:
             return
         if inspect.isawaitable(result):
             await result
+
+    # v2 cards own the final message; the classic card leaves it to the caller.
+    owns_final = False
+
+    async def finish_done(self, state: Mapping[str, Any], summary: Mapping[str, Any]) -> None:
+        """Collapse the card, then post the formatted answer as its own message."""
+        await self.publish(state)
+        sent = self.adapter.send(
+            self.chat_id, format_council_result(summary), metadata=self.metadata
+        )
+        if inspect.isawaitable(sent):
+            sent = await sent
+        self.final_delivered = bool(getattr(sent, "success", False))
+
+    async def finish_failed(self, state: Mapping[str, Any]) -> None:
+        failed = dict(state)
+        failed["status"] = "failed"
+        await self.publish(failed)
 
     async def follow(
         self,
@@ -251,6 +276,51 @@ class CouncilCard:
             await (sleep or asyncio.sleep)(poll_s)
 
 
+CARD_STYLES = ("v2", "classic")
+
+
+def resolve_card_style(value: Any) -> str:
+    """``display.council_card``: ``v2`` (default) or ``classic``."""
+    text = str(value if value is not None else "v2").strip().lower()
+    return text if text in CARD_STYLES else "v2"
+
+
+def make_card(
+    style: str,
+    adapter: Any,
+    chat_id: str,
+    run_id: str,
+    metadata: Optional[Mapping[str, Any]] = None,
+    *,
+    work: Path,
+    question: str = "",
+    mode: str = "full",
+    expandable: bool = True,
+    home: Optional[Path] = None,
+):
+    """The one card implementation for /council and agent-launched runs."""
+    if resolve_card_style(style) == "classic":
+        return CouncilCard(adapter, chat_id, f"council:{run_id}", metadata)
+    from gateway.council_card import CouncilLiveCard, load_seat_models, read_question
+
+    if home is None:
+        try:
+            home = Path(work).parents[2]
+        except IndexError:
+            home = None
+    return CouncilLiveCard(
+        adapter,
+        chat_id,
+        run_id,
+        metadata,
+        work=Path(work),
+        question=question or read_question(Path(work)),
+        mode=mode,
+        models=load_seat_models(home),
+        expandable=expandable,
+    )
+
+
 def _pid_alive(pid: Any) -> bool:
     # Never os.kill(pid, 0): on Windows it sends CTRL_C_EVENT to the target.
     try:
@@ -261,6 +331,20 @@ def _pid_alive(pid: Any) -> bool:
         return True
     except Exception:
         return True
+
+
+GATEWAY_ACK = "gateway-card.json"
+GATEWAY_UNCERTAIN = "gateway-card-uncertain.json"
+
+
+def _write_gateway_ack(work: Path) -> None:
+    """Mark a run as delivered by the gateway (read by the runner at exit)."""
+    try:
+        (Path(work) / GATEWAY_ACK).write_text(
+            json.dumps({"pid": os.getpid(), "at": time.time()}), encoding="utf-8"
+        )
+    except OSError:
+        logger.debug("could not write %s", GATEWAY_ACK, exc_info=True)
 
 
 class CouncilRunWatcher:
@@ -282,8 +366,10 @@ class CouncilRunWatcher:
         resolve_target: Callable[[dict], Optional[tuple[Any, str, Optional[Mapping[str, Any]]]]],
         poll_s: float = 1.0,
         managed: Optional[set[str]] = None,
+        card_style: Optional[Callable[[dict], str]] = None,
     ) -> None:
         self._homes = homes
+        self._card_style = card_style or (lambda origin: "v2")
         self._resolve_target = resolve_target
         self._poll_s = poll_s
         self._managed = _MANAGED_RUN_IDS if managed is None else managed
@@ -327,13 +413,26 @@ class CouncilRunWatcher:
             age = time.time() - float(origin.get("created_at") or 0)
         except (TypeError, ValueError):
             age = self.MAX_RUN_AGE_S + 1
-        if age > self.MAX_RUN_AGE_S or str(state.get("status") or "running") != "running":
-            return None  # finished before we saw it (e.g. gateway restart)
+        if age > self.MAX_RUN_AGE_S or (work / GATEWAY_ACK).exists() or (work / GATEWAY_UNCERTAIN).exists():
+            return None
+        status = str(state.get("status") or "running")
+        if status != "running" and not (status == "done" and _read_json(work / "summary.json")):
+            return None
         target = self._resolve_target(origin)
         if target is None:
             return None
         adapter, chat_id, metadata = target
-        card = CouncilCard(adapter, chat_id, f"council:{run_id}", metadata)
+        card = make_card(
+            self._card_style(origin),
+            adapter,
+            chat_id,
+            run_id,
+            metadata,
+            work=work,
+            mode=str(state.get("mode") or "full"),
+            expandable=str(origin.get("platform") or "") == "telegram",
+            home=Path(work).parents[2],
+        )
         task = asyncio.ensure_future(self._drive(card, work, origin, state))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
@@ -365,15 +464,18 @@ class CouncilRunWatcher:
             status = str(last.get("status") or "running")
             summary = _read_json(work / "summary.json")
             if status == "done" and summary is not None:
-                await card.publish(last)
-                reply = format_council_result(summary)
-                sent = card.adapter.send(card.chat_id, reply, metadata=card.metadata)
-                if inspect.isawaitable(sent):
-                    await sent
+                await card.finish_done(last, summary)
+                if card.final_delivered:
+                    _write_gateway_ack(work)
+                elif card.final_maybe_delivered:
+                    # A lost response is not an ack. Do not replay it after a
+                    # restart: it may already be visible in the chat.
+                    try:
+                        (work / GATEWAY_UNCERTAIN).write_text("{}", encoding="utf-8")
+                    except OSError:
+                        logger.warning("Could not record uncertain council delivery: %s", work)
             else:
-                failed = dict(last)
-                failed["status"] = "failed"
-                await card.publish(failed)
+                await card.finish_failed(last)
         except Exception:
             logger.warning("Council card for %s failed", work.name, exc_info=True)
 

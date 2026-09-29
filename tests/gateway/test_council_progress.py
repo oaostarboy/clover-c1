@@ -292,6 +292,9 @@ async def test_gateway_edits_one_council_card_then_returns_verdict(tmp_path):
     adapter = Adapter()
 
     class Runner(GatewaySlashCommandsMixin):
+        def _council_card_style(self, platform):
+            return "classic"  # this test pins the rollback card
+
         def _resolve_profile_home_for_source(self, source):
             return tmp_path
 

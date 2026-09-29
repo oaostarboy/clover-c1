@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from gateway.council_progress import CouncilRunWatcher
+from gateway.platforms.base import SendResult
 from gateway.slash_commands import GatewaySlashCommandsMixin
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +43,7 @@ class Adapter:
 
     async def send(self, chat_id, content, metadata=None):
         self.sends.append((chat_id, content, metadata))
+        return SendResult(success=True, message_id=str(len(self.sends)))
 
 
 def _watcher(home: Path, adapter: Adapter) -> CouncilRunWatcher:
@@ -49,6 +51,7 @@ def _watcher(home: Path, adapter: Adapter) -> CouncilRunWatcher:
         homes=lambda: [home],
         resolve_target=lambda origin: (adapter, origin["chat_id"], {"thread_id": origin["thread_id"]}),
         poll_s=0.01,
+        card_style=lambda origin: "classic",  # these tests pin the rollback card
     )
 
 
@@ -128,6 +131,9 @@ async def test_slash_council_run_is_not_duplicated_by_the_watcher(tmp_path):
     adapter = Adapter()
 
     class Runner(GatewaySlashCommandsMixin):
+        def _council_card_style(self, platform):
+            return "classic"
+
         def _resolve_profile_home_for_source(self, source):
             return tmp_path
 
