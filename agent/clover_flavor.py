@@ -166,29 +166,62 @@ def note_tool_result(is_error: bool) -> None:
 
 # --- background self-improvement notice ---------------------------------------------
 
-REVIEW_FACES = ("☘️(◕ᴗ◕✿)", "☘️(｀・ω・´)ゞ", "☘️(・ω・)ノ", "☘️(๑•̀ㅂ•́)و✧")
-REVIEW_SAVED_LINES = (
-    "🍀 saved something new", "🍀 learned something",
-    "🍀 noted for next time", "🍀 filed that away",
-)
-REVIEW_TIDY_LINES = (
-    "🧹 tidied up my notes", "🧹 cleaned up a little", "🧹 swept out an old note",
-)
+# Header pools by what the pass did, so "learned about you", "saved a note",
+# "learned a trick" and "tidied up" each read differently at a glance.
+REVIEW_POOLS = {
+    "user": (
+        ("☘️(◍•ᴗ•◍)", "☘️(˶ᵔ ᵕ ᵔ˶)", "☘️(◕ᴗ◕✿)"),
+        ("🍀 got to know you a little better", "🍀 noted something about you",
+         "🍀 I'll remember that about you"),
+    ),
+    "memory": (
+        ("☘️(｀・ω・´)ゞ", "☘️(・ω・)ノ", "☘️(•̀ᴗ•́)و"),
+        ("🍀 noted for next time", "🍀 filed that away", "🍀 jotted that down"),
+    ),
+    "skill": (
+        ("☘️(๑•̀ㅂ•́)و✧", "☘️(ง •̀_•́)ง", "☘️(ﾉ◕ヮ◕)ﾉ"),
+        ("🍀 learned a new trick", "🍀 got a little better at something",
+         "🍀 sharpened a skill"),
+    ),
+    "mixed": (
+        ("☘️(◕ᴗ◕✿)", "☘️(๑•̀ㅂ•́)و✧", "☘️(｀・ω・´)ゞ"),
+        ("🍀 learned a few things", "🍀 picked up a few things", "🍀 a good little lesson"),
+    ),
+    "tidy": (
+        ("☘️(・ω・)ノ", "☘️( ˘▽˘)っ", "☘️(￣▽￣)ゞ"),
+        ("🧹 tidied up my notes", "🧹 cleaned up a little", "🧹 swept out an old note"),
+    ),
+}
+# Back-compat aliases (older callers/tests import these).
+REVIEW_FACES = tuple(dict.fromkeys(f for faces, _ in REVIEW_POOLS.values() for f in faces))
+REVIEW_SAVED_LINES = REVIEW_POOLS["memory"][1]
+REVIEW_TIDY_LINES = REVIEW_POOLS["tidy"][1]
 _MAX_REMEMBERED_REVIEW_CHATS = 1024
 _review_last_pick: dict = {}
 _review_lock = threading.Lock()
 
 
-def _pick_review_header(saved: bool, chat_key: str, rng: Any) -> str:
+def _review_kind(items: list) -> str:
+    saved = {g for g, op, _ in items if op not in ("remove", "delete")}
+    if not saved:
+        return "tidy"
+    if len(saved) > 1:
+        return "mixed"
+    return next(iter(saved)) if next(iter(saved)) in REVIEW_POOLS else "memory"
+
+
+def _pick_review_header(kind, chat_key: str, rng: Any) -> str:
     """``"<face> <line>"``, never the same pair twice in a row for *chat_key*."""
-    lines = REVIEW_SAVED_LINES if saved else REVIEW_TIDY_LINES
+    if isinstance(kind, bool):  # legacy signature: saved flag
+        kind = "memory" if kind else "tidy"
+    faces, lines = REVIEW_POOLS.get(kind, REVIEW_POOLS["memory"])
     with _review_lock:
         last = _review_last_pick.get(chat_key)
-        pair = (rng.choice(REVIEW_FACES), rng.choice(lines))
+        pair = (rng.choice(faces), rng.choice(lines))
         for _ in range(20):
             if pair != last:
                 break
-            pair = (rng.choice(REVIEW_FACES), rng.choice(lines))
+            pair = (rng.choice(faces), rng.choice(lines))
         else:  # a stubborn RNG: force a different line
             pair = (pair[0], next(x for x in lines if (pair[0], x) != last))
         if len(_review_last_pick) >= _MAX_REMEMBERED_REVIEW_CHATS and chat_key not in _review_last_pick:
@@ -216,16 +249,16 @@ def _review_item_line(group: str, op: str, text: str, markdown: bool) -> str:
     if op == "remove":
         if text:
             return f"🧹 {it}"
-        return f"🧹 {_italic('profile tidied' if group == 'user' else 'memory tidied', markdown)}"
+        return f"🧹 {_italic('an old note about you' if group == 'user' else 'an old note', markdown)}"
     if group == "user":
         if op in ("add", "replace") and text:
-            return f"🧠 about you: {it}"
-        return f"🧠 {_italic('profile updated', markdown)}"
+            return f"🫶 about you: {it}"
+        return f"🫶 {_italic('something about you', markdown)}"
     if op == "replace" and text:
         return f"🧠 updated: {it}"
     if op == "add" and text:
         return f"🧠 {it}"
-    return f"🧠 {_italic('memory updated', markdown)}"
+    return f"🧠 {_italic('a note for later', markdown)}"
 
 
 def render_review_notice(
@@ -234,13 +267,13 @@ def render_review_notice(
     """Clo-style background-review notice: ``(cli_lines, gateway_message)``.
 
     *items* are ``(group, op, text)`` tuples from
-    ``summarize_background_review_actions(structured=...)``.  The header shows
-    🍀 when anything was saved and 🧹 when the pass only removed things.  The
+    ``summarize_background_review_actions(structured=...)``.  The header is
+    picked by what changed (about you / a note / a skill / a mix, 🍀) or 🧹
+    when the pass only removed things.  The
     gateway message uses markdown ``*italics*``; CLI lines drop the asterisks.
     """
     items = list(items or [])
-    saved = any(op not in ("remove", "delete") for _, op, _ in items)
-    header = _pick_review_header(saved, chat_key, rng if rng is not None else random)
+    header = _pick_review_header(_review_kind(items), chat_key, rng if rng is not None else random)
 
     def _lines(markdown: bool) -> list:
         return list(dict.fromkeys(_review_item_line(g, o, t, markdown) for g, o, t in items))

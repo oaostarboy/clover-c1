@@ -60,8 +60,8 @@ def test_add_only_header_has_clover_and_items_use_brain_and_dna():
     cli, message = _notice(msgs)
     header, *items = message.split("\n")
     assert header.startswith("☘️(") and "🍀" in header and "🧹" not in header
-    assert items == ["🧠 *Likes tea*", "🧠 about you: *Name is Ant*", "🧬 new skill: *tea-brewing*"]
-    assert cli[1:] == ["🧠 Likes tea", "🧠 about you: Name is Ant", "🧬 new skill: tea-brewing"]
+    assert items == ["🧠 *Likes tea*", "🫶 about you: *Name is Ant*", "🧬 new skill: *tea-brewing*"]
+    assert cli[1:] == ["🧠 Likes tea", "🫶 about you: Name is Ant", "🧬 new skill: tea-brewing"]
 
 
 def test_remove_only_header_uses_broom():
@@ -101,7 +101,7 @@ def test_previews_lose_stray_asterisks_and_newlines():
 def test_default_mode_falls_back_to_generic_lines():
     msgs = _mem("add") + _skill("create", "s1", "Skill 's1' created.")
     _, message = _notice(msgs, mode="on")
-    assert message.split("\n")[1:] == ["🧠 *memory updated*", "🧬 new skill: *s1*"]
+    assert message.split("\n")[1:] == ["🧠 *a note for later*", "🧬 new skill: *s1*"]
 
 
 def test_off_mode_produces_nothing_to_render():
@@ -151,3 +151,32 @@ def test_structured_collection_does_not_change_returned_actions():
         assert summarize_background_review_actions(
             msgs, [], notification_mode=mode, structured=items) == plain
         assert len(items) == len(plain)
+
+
+# --- each kind of change reads differently -------------------------------------------
+
+def _header(msgs, mode="on"):
+    return _notice(msgs, mode=mode)[1].split("\n")[0]
+
+
+def test_profile_only_reads_as_about_you_and_differs_from_a_note():
+    pools = clover_flavor.REVIEW_POOLS
+    user_hdr = _header(_mem("add", "user"))
+    assert any(user_hdr.endswith(line) for line in pools["user"][1])
+    assert _notice(_mem("add", "user"), mode="on")[1].split("\n")[1] == "🫶 *something about you*"
+    mem_hdr = _header(_mem("add"))
+    assert any(mem_hdr.endswith(line) for line in pools["memory"][1])
+    assert _notice(_mem("add"), mode="on")[1].split("\n")[1] == "🧠 *a note for later*"
+
+
+def test_skill_only_and_mixed_headers():
+    pools = clover_flavor.REVIEW_POOLS
+    hdr = _header(_skill("create", "s1", "Skill 's1' created."))
+    assert any(hdr.endswith(line) for line in pools["skill"][1])
+    hdr = _header(_mem("add") + _skill("create", "s1", "Skill 's1' created."))
+    assert any(hdr.endswith(line) for line in pools["mixed"][1])
+
+
+def test_header_pools_do_not_share_lines():
+    seen = [line for _, lines in clover_flavor.REVIEW_POOLS.values() for line in lines]
+    assert len(seen) == len(set(seen))
