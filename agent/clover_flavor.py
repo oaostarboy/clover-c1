@@ -252,8 +252,8 @@ def _review_item_line(group: str, op: str, text: str, markdown: bool) -> str:
         return f"🧹 {_italic('an old note about you' if group == 'user' else 'an old note', markdown)}"
     if group == "user":
         if op in ("add", "replace") and text:
-            return f"🫶 about you: {it}"
-        return f"🫶 {_italic('something about you', markdown)}"
+            return f"🪪 about you: {it}"
+        return f"🪪 {_italic('something about you', markdown)}"
     if op == "replace" and text:
         return f"🧠 updated: {it}"
     if op == "add" and text:
@@ -278,10 +278,9 @@ def render_review_notice(
     def _lines(markdown: bool) -> list:
         return list(dict.fromkeys(_review_item_line(g, o, t, markdown) for g, o, t in items))
 
-    # Chat surfaces get a code box so the notice can't be mistaken for a real
-    # reply. Italics don't render inside one, so the box holds plain text.
-    body = "\n".join([header] + _lines(False)).replace("`", "'")
-    return [header] + _lines(False), "```\n" + body + "\n```"
+    # Chat surfaces get a quote bar (like the turn card) so the notice can't be
+    # mistaken for a real reply; the item text stays italic.
+    return [header] + _lines(False), "\n".join("> " + ln for ln in [header] + _lines(True))
 
 
 def reset_review_notices() -> None:
