@@ -685,14 +685,31 @@ jobs:
           Write-Host "pre-update gateway roots: $(($roots | ForEach-Object { "$($_.ProcessId): $($_.CommandLine)" }) -join ' | ')"
           if ($roots.Count -ne 1) { throw "expected one pre-update gateway, saw $($roots.Count)" }
 
-      - name: d. Update 1 (69a75bb -> fix branch; OLD parent updater, new hand-off child)
+      - name: d0. Refused update never leaves the gateway down (69a75bb, the 10:26 exit 2)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           . "$env:RUNNER_TEMP\wdr.ps1"
           $logStart = (Get-LogLines).Count
           git -C "$env:INSTALL_DIR" remote set-branches --add origin "${{ env.FIX_BRANCH }}"
+          # 69a75bb counts its own restart watcher as a venv holder and
+          # refuses (fixed on main by 715fb4cc). Whatever it exits with, the
+          # paused gateway must come back as exactly one.
           & "$env:CLOVER_BIN" update --branch "${{ env.FIX_BRANCH }}" --yes
+          Write-Host "legacy update exit=$LASTEXITCODE"
+          $global:LASTEXITCODE = 0
+          if ((git -C "$env:INSTALL_DIR" rev-parse HEAD) -ne "${{ env.FROM_REF }}") { Write-Host "note: legacy update was not refused" }
+          Assert-SingleGateway "refused legacy update" $logStart $false
+
+      - name: d. Update 1 (69a75bb -> fix branch; OLD parent updater, new hand-off child)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:RUNNER_TEMP\wdr.ps1"
+          $logStart = (Get-LogLines).Count
+          # --force-venv only gets the 69a75bb updater past its own-watcher
+          # refusal (step d0); the gateway chain under test is unchanged.
+          & "$env:CLOVER_BIN" update --branch "${{ env.FIX_BRANCH }}" --yes --force-venv
           if ($LASTEXITCODE -ne 0) { throw "update exited $LASTEXITCODE" }
           # The 69a75bb parent still relaunches before handing off (old code
           # cannot be fixed retroactively), so one extra stop is expected
