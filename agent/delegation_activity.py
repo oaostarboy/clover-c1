@@ -751,10 +751,20 @@ class DelegationActivityTracker:
         if (info or {}).get("external"):
             # External CLI worker: activity = its own output growth.
             age = quiet if activity_age is None else activity_age
-            if age >= self.stall_seconds:
+            if (info or {}).get("has_output") is False:
+                # Nothing printed yet: the real work hasn't started (e.g. a
+                # queue waiting on another worker). Silence is expected, so
+                # it is never a stall, however long it lasts.
+                if self.heartbeat_seconds and age >= self.heartbeat_seconds:
+                    child.state = "waiting"
+                    child.reason = "queued (waiting to start)"
+                else:
+                    child.state = "running"
+                    child.reason = None
+            elif age >= self.stall_seconds:
                 child.state = "blocked"
                 child.reason = f"no output for {format_duration(age)}"
-                self._alert(child, "blocked", alerts)
+                self._alert(child, "blocked", alerts, quiet_for=age)
             elif self.heartbeat_seconds and age >= self.heartbeat_seconds:
                 child.state = "waiting"
                 child.reason = f"no new output for {format_duration(age)}"
@@ -771,7 +781,7 @@ class DelegationActivityTracker:
             child.reason = f"no activity observed for {format_duration(idle)}" + (
                 f" (last: {desc})" if desc else ""
             )
-            self._alert(child, "blocked", alerts)
+            self._alert(child, "blocked", alerts, quiet_for=idle)
         elif self.heartbeat_seconds and quiet >= self.heartbeat_seconds:
             tool = (info or {}).get("current_tool")
             child.state = "waiting"
@@ -782,7 +792,13 @@ class DelegationActivityTracker:
 
     # -- alerts / findings -------------------------------------------------
 
-    def _alert(self, child: ChildActivity, kind: str, alerts: List[str]) -> None:
+    def _alert(
+        self,
+        child: ChildActivity,
+        kind: str,
+        alerts: List[str],
+        quiet_for: Optional[float] = None,
+    ) -> None:
         """Out-of-band pings. Only a stall is worth interrupting the chat for:
         completion, failure and cancellation are reported once, in the final
         summary message, so a result never shows up twice."""
@@ -791,8 +807,11 @@ class DelegationActivityTracker:
         child.alerted.add(kind)
         if kind != "blocked":
             return
-        who = _who(child)
-        alerts.append(f"⚠️ Subagent {who} looks stuck: {child.reason}. Still running; nothing was stopped.")
+        title = _truncate_words(child.title, _FEED_TITLE_MAX)
+        alerts.append(
+            f"⚠️ {title} has been quiet for {_quiet_minutes(quiet_for)}. "
+            "It's still running; I'll keep watching."
+        )
 
     # -- rendering -------------------------------------------------------
 
@@ -866,14 +885,11 @@ def _tool_phrase(name: str, summary: str) -> str:
     return f"{name} {arg}" if arg else name
 
 
-def _who(child: ChildActivity, *, with_title: bool = True) -> str:
-    bits = []
-    if with_title:
-        bits.append(_truncate_words(child.title, _FEED_TITLE_MAX))
-    model = pretty_model(child.model)
-    if model:
-        bits.append(model)
-    return " · ".join(bits)
+def _quiet_minutes(seconds: Optional[float]) -> str:
+    total = max(0, int(seconds or 0))
+    hours, rem = divmod(total, 3600)
+    minutes = rem // 60
+    return f"{hours}h{minutes:02d}m" if hours else f"{minutes}m"
 
 
 def _elapsed(child: ChildActivity, now: float) -> str:
