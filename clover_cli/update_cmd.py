@@ -3394,12 +3394,22 @@ def _run_pending_fleet_restart() -> bool:
                 failed.append("windows-gateway")
         leftover: list = []
         try:
-            leftover = list(find_gateway_pids(all_profiles=True))
+            live = list(find_gateway_pids(all_profiles=True))
         except Exception:
-            leftover = list(pids or [])
+            live = list(pids or [])
+        # Leftovers are gateways that were ALREADY running before the
+        # restarts above and survived them. A gateway those restarts just
+        # started is the result, not a leftover: sweeping every live PID
+        # killed the gateway gateway_windows.restart() had just spawned and
+        # left Windows with none (2026-09-29).
+        if pids is None:
+            leftover = live
+        else:
+            leftover = [pid for pid in live if pid in set(pids)]
         if leftover:
             try:
-                kill_gateway_processes(all_profiles=True)
+                keep = {pid for pid in live if pid not in set(leftover)}
+                kill_gateway_processes(all_profiles=True, exclude_pids=keep or None)
                 _wait_for_gateway_exit(timeout=5.0, force_after=None)
             except Exception as exc:
                 logger.debug("Pending fleet restart: PID stop failed: %s", exc)
@@ -3416,6 +3426,18 @@ def _run_pending_fleet_restart() -> bool:
             surviving = pids
         _warn_gateway_restart_phase_aborted(exc, surviving)
         return False
+
+
+def _windows_gateways_relaunched_now(token: dict | None) -> bool:
+    """True when this run's Windows resume just relaunched paused gateways."""
+    if not isinstance(token, dict) or token.get("resume_needed"):
+        return False
+    return bool(
+        token.get("relaunched_profiles")
+        or token.get("restarted_services")
+        or token.get("unmapped_pids")
+        or token.get("cold_start_if_installed") is False
+    )
 
 
 def _apply_pending_fleet_restart_catchup() -> None:
@@ -8642,6 +8664,15 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 )
                 print("  Restart each of them to pick up the repaired runtime.")
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
+            if _windows_gateways_relaunched_now(_windows_gateway_resume):
+                # This run paused the Windows gateways and just relaunched
+                # them on the current checkout, which IS the restart a prior
+                # pull owed. Running the catch-up too made it a second
+                # relauncher: it stopped the fresh gateway seconds after
+                # startup, spawned another, then swept both (2026-09-29,
+                # Windows: no gateway left, state stuck at restart_requested).
+                _clear_fleet_restart_pending_marker()
+                return
             # Git is current, but a prior pull may still owe the fleet a
             # restart (#95294). Catch up even on the "Already up to date"
             # path — that early return is what left the gateway on stale
