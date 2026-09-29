@@ -211,7 +211,10 @@ function Invoke-PathUpdateInner([string]$label, [string[]]$cliArgs) {
     $side = try { Get-Content "$env:CLOVER_HOME\.clover-last-update" -Raw | ConvertFrom-Json } catch { $null }
     $code = if ($side -and $side.outcome -eq 'success') { 0 } else { "unknown (outcome=$($side.outcome))" }
   }
-  if (Test-Path "$env:CLOVER_HOME\.update_output.txt") { Copy-Item "$env:CLOVER_HOME\.update_output.txt" "$env:RUNNER_TEMP\update-output.txt" -Force }
+  # The gateway rotates the chat run's transcript into logs\update-output.last.txt
+  # once it has sent the result (D8); take whichever is there.
+  $transcript = @("$env:CLOVER_HOME\.update_output.txt", "$env:CLOVER_HOME\logs\update-output.last.txt") | Where-Object { Test-Path $_ } | Select-Object -First 1
+  if ($transcript) { Copy-Item $transcript "$env:RUNNER_TEMP\update-output.txt" -Force; Write-Host "[$label] transcript: $transcript" }
   Write-Host "--- [$label] updater output (.update_output.txt, tail) ---"
   Get-Content "$env:RUNNER_TEMP\update-output.txt" -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
   Write-Host "--- [$label] IRC transcript (bot replies, tail) ---"
