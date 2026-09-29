@@ -15709,7 +15709,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _stop_guards = getattr(self, "_stop_loop_liveness_guards", None)
         if callable(_stop_guards):
             _stop_guards()
-        if not restart and await self._fold_into_pending_restart():
+        # Called through the class: shutdown-path tests drive this method on
+        # duck-typed runners, and the fold only reads state via getattr.
+        if not restart and await GatewayRunner._fold_into_pending_restart(self):
             return
         if restart:
             self._restart_requested = True
