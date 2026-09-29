@@ -10667,8 +10667,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if self._queue_during_drain_enabled(effective_mode):
                 self._queue_or_replace_pending_event(session_key, event)
                 message = f"⏳ Gateway {self._status_action_gerund()} — queued for the next turn after it comes back."
+                message = _clover_acks.notice(
+                    "draining", f"{event.source.platform.value}:{event.source.chat_id}", message,
+                    "I saved your message for when I'm back.")
             else:
                 message = f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now."
+                message = _clover_acks.notice(
+                    "draining", f"{event.source.platform.value}:{event.source.chat_id}", message,
+                    "Send it again once I'm back.")
 
             await adapter._send_with_retry(
                 chat_id=event.source.chat_id,
@@ -11479,10 +11485,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     home.thread_id,
                     adapter=adapter,
                 )
+                home_msg = _clover_acks.notice(
+                    "restarting" if self._restart_requested else "shutting_down",
+                    f"{platform.value}:{home.chat_id}", msg,
+                    "Your task got paused. Message me after and I'll pick up "
+                    "where we left off."
+                    if self._restart_requested else "Your task got stopped.")
                 if metadata:
-                    result = await adapter.send(str(home.chat_id), msg, metadata=metadata)
+                    result = await adapter.send(str(home.chat_id), home_msg, metadata=metadata)
                 else:
-                    result = await adapter.send(str(home.chat_id), msg)
+                    result = await adapter.send(str(home.chat_id), home_msg)
                 if result is not None and getattr(result, "success", True) is False:
                     logger.debug(
                         "Failed to send shutdown notification to home channel %s:%s: %s",
@@ -18403,11 +18415,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 if queue_during_drain:
                     self._queue_or_replace_pending_event(_quick_key, event)
-                return (
+                _drain_stock = (
                     f"⏳ Gateway {self._status_action_gerund()} — queued for the next turn after it comes back."
                     if queue_during_drain
                     else f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now."
                 )
+                return _clover_acks.notice(
+                    "draining", f"{event.source.platform.value}:{event.source.chat_id}", _drain_stock,
+                    "I saved your message for when I'm back." if queue_during_drain
+                    else "Send it again once I'm back.")
             if effective_busy_input_mode == "queue":
                 logger.debug("PRIORITY queue follow-up for session %s", _quick_key)
                 self._queue_or_replace_pending_event(_quick_key, event)
@@ -18969,7 +18985,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return await self._handle_voice_command(event)
 
         if self._draining:
-            return f"⏳ Gateway is {self._status_action_gerund()} and is not accepting new work right now."
+            return _clover_acks.notice(
+                "draining", f"{event.source.platform.value}:{event.source.chat_id}",
+                f"⏳ Gateway is {self._status_action_gerund()} and is not accepting new work right now.",
+                "Send it again once I'm back.")
 
         # User-defined quick commands (bypass agent loop, no LLM call)
         if command:
@@ -25968,7 +25987,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             result = await transport.send(
                 platform,
                 str(chat_id),
-                "♻ Gateway restarted successfully. Your session continues.",
+                _clover_acks.notice(
+                    "back_online", f"{platform}:{chat_id}",
+                    "♻ Gateway restarted successfully. Your session continues.",
+                    "Your chat picks up right where it was."),
                 metadata=_non_conversational_metadata(metadata, platform=platform),
             )
             # adapter.send() catches provider errors (e.g. "Chat not found")
