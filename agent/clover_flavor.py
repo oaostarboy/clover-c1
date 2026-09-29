@@ -252,8 +252,8 @@ def _review_item_line(group: str, op: str, text: str, markdown: bool) -> str:
         return f"🧹 {_italic('an old note about you' if group == 'user' else 'an old note', markdown)}"
     if group == "user":
         if op in ("add", "replace") and text:
-            return f"👤 about you: {it}"
-        return f"👤 {_italic('something about you', markdown)}"
+            return f"🪪 about you: {it}"
+        return f"🪪 {_italic('something about you', markdown)}"
     if op == "replace" and text:
         return f"🧠 updated: {it}"
     if op == "add" and text:
