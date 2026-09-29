@@ -56,6 +56,24 @@ function Use-TrackingBranch([string]$branch) {
   Write-Host "local $branch at $(git -C $d rev-parse --short HEAD), origin/$branch at $(git -C $d rev-parse --short origin/$branch)"
 }
 
+function Remove-MainFromHistory([string]$target, [string]$mainSha) {
+  # The replace trick needs main's commit OUTSIDE the target's history. Once
+  # the fix branch merges main, "main reads as target" loops: the local HEAD
+  # already contains the replaced main, `rev-list HEAD..origin/main` is 0 and
+  # the updater reports "up to date" without pulling. Graft main out as a
+  # parent (runner clone only; trees are unchanged).
+  $d = $env:INSTALL_DIR
+  foreach ($line in @(git -C $d rev-list --parents $target)) {
+    $ids = @($line -split ' ')
+    if ($ids.Count -gt 1 -and ($ids[1..($ids.Count - 1)] -contains $mainSha)) {
+      $keep = @($ids[1..($ids.Count - 1)] | Where-Object { $_ -ne $mainSha })
+      git -C $d replace -f --graft $ids[0] @keep
+      if ($LASTEXITCODE -ne 0) { throw "graft of $($ids[0]) failed" }
+      Write-Host "grafted main $($mainSha.Substring(0,8)) out of $($ids[0].Substring(0,8))'s parents"
+    }
+  }
+}
+
 function Set-MainIsFix([string]$fixBranch) {
   # `clover update` and the gateway's /update always target main. To run
   # those EXACT commands against an unmerged fix without touching main, the
@@ -67,6 +85,7 @@ function Set-MainIsFix([string]$fixBranch) {
   if ($LASTEXITCODE -ne 0) { throw "fetch failed" }
   $mainSha = (git -C $d rev-parse refs/remotes/origin/main).Trim()
   $fixSha = (git -C $d rev-parse "refs/remotes/origin/$fixBranch").Trim()
+  Remove-MainFromHistory $fixSha $mainSha
   git -C $d replace -f $mainSha $fixSha
   if ($LASTEXITCODE -ne 0) { throw "git replace failed" }
   git -C $d checkout -q -B main HEAD
@@ -139,6 +158,7 @@ function Set-MainIsNext([string]$nextBranch) {
   $fixSha = (git -C $d rev-parse "refs/remotes/origin/$env:FIX_BRANCH").Trim()
   $nextSha = (git -C $d rev-parse "refs/remotes/origin/$nextBranch").Trim()
   git -C $d update-ref refs/heads/main $fixSha
+  Remove-MainFromHistory $nextSha $env:MAIN_SHA
   git -C $d replace -f $env:MAIN_SHA $nextSha
   $dirty = git -C $d status --porcelain --untracked-files=no
   Write-Host "local main at $(git -C $d rev-parse --short HEAD); main $env:MAIN_SHA now reads as $nextBranch $nextSha; tracked changes: $(@($dirty).Count)"
