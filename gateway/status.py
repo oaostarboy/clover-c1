@@ -1200,6 +1200,22 @@ def write_runtime_status(
         pass
 
 
+def record_gateway_starting() -> None:
+    """Persist a fresh process's "starting" state.
+
+    A fresh process has no restart pending. The previous life's planned stop
+    must not leave the file reading ``restart_requested`` forever: after a
+    Windows update the state stayed "stopped / restart_requested" with no
+    restart coming, which read as a gateway stuck mid-restart.
+    """
+    write_runtime_status(
+        gateway_state="starting",
+        exit_reason=None,
+        restart_requested=False,
+        clear_profile_platforms=True,
+    )
+
+
 def read_runtime_status(
     path: Optional[Path] = None,
     *,

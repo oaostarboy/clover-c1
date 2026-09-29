@@ -5228,8 +5228,83 @@ def _abort_dependency_sync_if_self_locked(gateway_resume=None) -> None:
 
     if _m()._reexec_dependency_sync_off_windows_shim():
         if gateway_resume is not None:
-            _m()._resume_windows_gateways_after_update(gateway_resume)
+            # The child finishes the install and relaunches the gateways. It
+            # must be the ONLY relauncher: a gateway started here would hold
+            # the .pyd files the child is about to replace, and the child's
+            # own pause would then stop it seconds after startup (Windows,
+            # 2026-09-29: "Gateway restart requested" 8 s after the fresh
+            # gateway connected, then nothing came back).
+            if not _m()._hand_off_windows_gateway_resume(gateway_resume):
+                _m()._resume_windows_gateways_after_update(gateway_resume)
         sys.exit(0)
+
+
+_HANDOFF_RESUME_NAME = ".clover-update-handoff-resume.json"
+
+
+def _handoff_resume_path() -> Path:
+    from clover_cli import update_restart_watcher as _urw
+
+    return _urw.beacon_path().parent / _HANDOFF_RESUME_NAME
+
+
+def _hand_off_windows_gateway_resume(token: dict | None) -> bool:
+    """Pass the paused-gateway resume token to the Windows hand-off child.
+
+    Returns True when the child now owns the relaunch; the token is marked
+    done so this process's atexit resume cannot fire a second relaunch.
+    False (nothing to hand off, or the write failed) leaves the caller on the
+    old path of resuming in-process.
+    """
+    if not token or not token.get("resume_needed"):
+        return False
+    try:
+        path = _handoff_resume_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(token), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception as exc:
+        logger.debug("Could not hand off the Windows gateway resume: %s", exc)
+        return False
+    token["resume_needed"] = False
+    token["handed_off"] = True
+    return True
+
+
+def _adopt_handed_off_gateway_resume(token: dict | None) -> tuple[dict | None, bool]:
+    """In the hand-off child, take over the parent's paused-gateway resume.
+
+    Returns ``(token, adopted)``. The parent paused the gateways and handed
+    their relaunch here; this process's own pause found them already down and
+    at most planned a cold start, which the parent's richer token replaces.
+    """
+    if os.environ.get(_m()._UPDATE_REEXEC_ENV) != "1":
+        return token, False
+    path = _handoff_resume_path()
+    try:
+        handed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return token, False
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    if not isinstance(handed, dict) or not handed.get("resume_needed"):
+        return token, False
+    if token and token.get("resume_needed"):
+        # Anything this process paused itself (e.g. a gateway the login task
+        # started meanwhile) is resumed alongside the handed-off set.
+        for key in ("profiles",):
+            merged = dict(handed.get(key) or {})
+            merged.update(token.get(key) or {})
+            handed[key] = merged
+        for key in ("unmapped", "unmapped_pids", "services"):
+            handed[key] = list(handed.get(key) or []) + [
+                item for item in (token.get(key) or []) if item not in (handed.get(key) or [])
+            ]
+    handed.pop("handed_off", None)
+    return handed, True
 
 
 def _defer_update_for_self_lock(loaded: list[str]) -> None:
@@ -7306,6 +7381,16 @@ def _resume_windows_gateways_after_update(token: dict | None) -> None:
     # current hidden-console design at the next login too.
     _m()._refresh_windows_gateway_launchers()
 
+    # Claim the relaunch: this process is its one owner. The restart watcher
+    # and any automatic ``gateway run --replace`` stand down while the claim
+    # is fresh instead of starting (or taking over) a second gateway.
+    try:
+        from clover_cli import update_restart_watcher as _urw
+
+        _urw.write_relaunch_marker(sorted((token.get("profiles") or {}).keys()))
+    except Exception as exc:
+        logger.debug("Could not write the gateway relaunch claim: %s", exc)
+
     services = list(token.get("services") or [])
     token.setdefault("expected_services", list(services))
     verified_restarts = list(token.get("restarted_services") or [])
@@ -7815,6 +7900,11 @@ def _cmd_update_impl(args, gateway_mode: bool):
     _pre_armed_watcher = _m()._arm_restart_watcher_before_pause()
 
     _windows_gateway_resume = _m()._pause_windows_gateways_for_update()
+    # Windows hand-off child: the parent paused the gateways and passed their
+    # relaunch (and its restart watcher's beacon) to this process.
+    _windows_gateway_resume, _handoff_adopted = (
+        _m()._adopt_handed_off_gateway_resume(_windows_gateway_resume)
+    )
     if _windows_gateway_resume:
         import atexit as _atexit
 
@@ -7840,7 +7930,13 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _restart_argv = _m()._gateway_restart_argv_for_resume(
                 _windows_gateway_resume
             )
-            if _restart_argv:
+            if _handoff_adopted:
+                # The parent's watcher already polls the beacon, which the
+                # parent re-pointed at this process. Rewriting it would drop
+                # the parent's rollback data; a second watcher would double
+                # the restart attempts.
+                _atexit.register(_urw.clear_beacon)
+            elif _restart_argv:
                 _beacon = _urw.write_beacon(_restart_argv)
                 if _pre_armed_watcher:
                     # A watcher is already running from the pre-pause arming

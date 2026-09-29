@@ -13252,12 +13252,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         except Exception:
             pass
         try:
-            from gateway.status import write_runtime_status
-            write_runtime_status(
-                gateway_state="starting",
-                exit_reason=None,
-                clear_profile_platforms=True,
-            )
+            from gateway.status import record_gateway_starting
+            record_gateway_starting()
         except Exception:
             pass
         try:
@@ -32419,6 +32415,32 @@ def _looks_like_profile_conflict_from_cmdline(command: str, our_home) -> bool:
 
 
 
+def _is_fresh_post_update_gateway(pid: int) -> bool:
+    """True when ``pid`` is a healthy gateway the updater relaunched moments ago.
+
+    A gateway that is already stopping (restart requested, draining) is not
+    protected: its replacement must still be allowed to take over.
+    """
+    try:
+        from clover_cli.update_restart_watcher import is_fresh_post_update_gateway
+        from clover_constants import get_clover_home, get_default_clover_root
+        from gateway.status import read_runtime_status
+
+        homes = list(dict.fromkeys([get_default_clover_root(), get_clover_home()]))
+        if not any(is_fresh_post_update_gateway(pid, clover_home=home) for home in homes):
+            return False
+        status = read_runtime_status(reconcile=False) or {}
+        if status.get("pid") not in (None, pid):
+            return True  # status not yet written by the new life; still fresh
+        if status.get("restart_requested") or status.get("gateway_state") in {
+            "draining", "stopping", "stopped", "restarting",
+        }:
+            return False
+        return True
+    except Exception:
+        return False
+
+
 async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = False, verbosity: Optional[int] = 0) -> bool:
     """
     Start the gateway and run until interrupted.
@@ -32462,8 +32484,20 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         remove_pid_file,
         terminate_pid,
     )
+    # Automatic post-update respawns mark themselves; a human's --replace
+    # does not. Pop it so nothing this gateway spawns inherits the mark.
+    _auto_relaunch = os.environ.pop("CLOVER_GATEWAY_AUTORELAUNCH", "") == "1"
     existing_pid = get_running_pid()
     if existing_pid is not None and existing_pid != os.getpid():
+        if replace and _auto_relaunch and _is_fresh_post_update_gateway(existing_pid):
+            # One owner per post-update relaunch: the gateway the updater
+            # just started is the result, not a stale process to take over.
+            logger.info(
+                "Not replacing PID %d: it is the gateway the update just "
+                "relaunched. Standing down.",
+                existing_pid,
+            )
+            return True
         if replace:
             # Cross-profile ownership gate (#89315): never signal a live
             # process we cannot prove belongs to this CLOVER_HOME. A poisoned
