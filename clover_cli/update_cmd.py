@@ -2212,6 +2212,16 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
                 "    → see them: clover skills list-modified  "
                 "(diff/reset to resume updates)"
             )
+        if result.get("optional_refreshed"):
+            print(
+                f"  ↑ {len(result['optional_refreshed'])} optional refreshed: "
+                f"{', '.join(result['optional_refreshed'])}"
+            )
+        if result.get("optional_user_modified"):
+            print(
+                "  ~ optional skills with local edits (kept): "
+                f"{', '.join(result['optional_user_modified'])}"
+            )
         if result.get("cleaned"):
             print(f"  − {len(result['cleaned'])} removed from manifest")
         if result.get("relocated"):
@@ -9170,6 +9180,16 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 print(
                     "    → see them: clover skills list-modified  "
                     "(diff/reset to resume updates)"
+                )
+            if result.get("optional_refreshed"):
+                print(
+                    f"  ↑ {len(result['optional_refreshed'])} optional refreshed: "
+                    f"{', '.join(result['optional_refreshed'])}"
+                )
+            if result.get("optional_user_modified"):
+                print(
+                    "  ~ optional skills with local edits (kept): "
+                    f"{', '.join(result['optional_user_modified'])}"
                 )
             if result.get("cleaned"):
                 print(f"  − {len(result['cleaned'])} removed from manifest")
