@@ -125,3 +125,44 @@ def test_a_lost_receipt_is_reported_loudly(monkeypatch, capsys):
     assert "did not record its receipt" in capsys.readouterr().err
     monkeypatch.setattr(update_receipt, "_written_in_process", True)
     assert update_receipt.warn_if_receipt_lost() is False
+
+
+def test_restart_watcher_stays_armed_until_a_gateway_is_confirmed(monkeypatch):
+    """D4: a no-op update must not stand the watcher down over a dead gateway."""
+    import gateway.status as status
+    from clover_cli import update_restart_watcher as urw
+
+    beacon = urw.write_beacon(["python", "-m", "clover_cli.main", "gateway", "run"])
+    monkeypatch.setattr(status, "get_running_pid", lambda *a, **k: None)
+    assert update_cmd._clear_restart_beacon_if_gateway_up() is False
+    assert beacon.exists(), "watcher stood down while no gateway was running"
+
+    monkeypatch.setattr(status, "get_running_pid", lambda *a, **k: 4242)
+    assert update_cmd._clear_restart_beacon_if_gateway_up() is True
+    assert not beacon.exists()
+
+
+def test_windows_ready_check_needs_a_claimed_gateway_not_a_process_match(monkeypatch):
+    """D4/D9: "Gateway started" was printed for gateways that never ran."""
+    import clover_cli.gateway as gw
+    import gateway.status as status
+    from clover_cli import gateway_windows
+
+    monkeypatch.setattr(gw, "find_gateway_pids", lambda *a, **k: [15744, 24024])  # spawned, not up
+    monkeypatch.setattr(status, "get_running_pid", lambda *a, **k: None)
+    assert gateway_windows._wait_for_gateway_ready(timeout_s=0) == []
+    monkeypatch.setattr(status, "get_running_pid", lambda *a, **k: 24024)
+    assert gateway_windows._wait_for_gateway_ready(timeout_s=0) == [24024]
+
+
+def test_handoff_parent_never_cold_starts_a_gateway(monkeypatch):
+    """D9: the clover.exe parent cold-started a gateway that the hand-off
+    child then force-stopped; the child owns the only (re)start."""
+    token = {"resume_needed": True, "profiles": {}, "unmapped_pids": [], "unmapped": [],
+             "cold_start_if_installed": True}
+    started = []
+    monkeypatch.setattr(clover_main, "_cold_start_windows_gateway_after_update",
+                        lambda: started.append(1) or True)
+    assert update_cmd._hand_off_windows_gateway_resume(token) is True
+    update_cmd._resume_windows_gateways_after_update(token)  # the parent's atexit resume
+    assert started == []

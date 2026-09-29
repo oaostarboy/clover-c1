@@ -5056,6 +5056,7 @@ _LAZY_COMMAND_EXPORTS = {
         "_hand_off_windows_gateway_resume",
         "_verify_windows_gateway_relaunch",
         "_own_ancestor_pids",
+        "_clear_restart_beacon_if_gateway_up",
         "_force_stop_single_process",
         "_add_upstream_remote",
         "_apply_pending_fleet_restart_catchup",

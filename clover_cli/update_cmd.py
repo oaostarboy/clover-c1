@@ -7365,6 +7365,38 @@ def _refresh_bootstrap_cache_scripts(branch: str = "main") -> None:
     except Exception as exc:
         logger.debug("Could not refresh bootstrap-cache scripts after update: %s", exc)
 
+def _clear_restart_beacon_if_gateway_up() -> bool:
+    """Stand the restart watcher down only once a gateway is confirmed up.
+
+    Registered at exit on every Windows path that paused or stopped a
+    gateway, including updates that pulled nothing. Clearing the beacon
+    unconditionally stood the watcher down while no gateway ran; Emilio's
+    no-op update left Telegram offline for 21 minutes with no watcher and no
+    supervisor (Windows 11 report, D4). A gateway that owns the PID file has
+    passed its imports; anything less keeps the watcher armed, and it starts
+    one after this process exits. Never raises.
+    """
+    try:
+        from clover_cli import update_restart_watcher as _urw
+
+        try:
+            from gateway.status import get_running_pid
+
+            confirmed = get_running_pid() is not None
+        except Exception:
+            confirmed = False
+        if confirmed:
+            _urw.clear_beacon()
+            return True
+        logger.warning(
+            "No gateway confirmed running as the updater exits; leaving the "
+            "restart watcher armed to bring one back"
+        )
+        return False
+    except Exception:
+        return False
+
+
 def _arm_restart_watcher_before_pause() -> bool:
     """Arm the out-of-process restart watcher BEFORE stopping any gateway.
 
@@ -7420,7 +7452,7 @@ def _arm_restart_watcher_before_pause() -> bool:
 
         import atexit as _atexit
 
-        _atexit.register(_urw.clear_beacon)
+        _atexit.register(_m()._clear_restart_beacon_if_gateway_up)
         return True
     except Exception as exc:
         logger.debug("Could not pre-arm the update restart watcher: %s", exc)
@@ -8139,7 +8171,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 # parent re-pointed at this process. Rewriting it would drop
                 # the parent's rollback data; a second watcher would double
                 # the restart attempts.
-                _atexit.register(_urw.clear_beacon)
+                _atexit.register(_m()._clear_restart_beacon_if_gateway_up)
             elif _restart_argv:
                 _beacon = _urw.write_beacon(_restart_argv)
                 if _pre_armed_watcher:
@@ -8147,7 +8179,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     # and polls this same beacon; refreshing the argv above is
                     # all it needs. Spawning a second one would double the
                     # restart attempts.
-                    _atexit.register(_urw.clear_beacon)
+                    _atexit.register(_m()._clear_restart_beacon_if_gateway_up)
                 else:
                     _watcher_kwargs = {"close_fds": True}
                     if _m()._is_windows():
@@ -8164,7 +8196,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         stderr=subprocess.DEVNULL,
                         **_watcher_kwargs,
                     )
-                    _atexit.register(_urw.clear_beacon)
+                    _atexit.register(_m()._clear_restart_beacon_if_gateway_up)
         except Exception as _watch_err:
             # The watcher is a safety net. Failing to arm it must never stop
             # an update that would otherwise succeed.
