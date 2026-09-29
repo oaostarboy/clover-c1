@@ -1,0 +1,723 @@
+name: Upgrade E2E (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      from_ref:
+        description: "Commit users are upgrading FROM (pre-release state)"
+        required: false
+        default: "69a75bb87740dda7461825f864d678c72fce5eec"
+      to_branch:
+        description: "Branch users are upgrading TO"
+        required: false
+        default: "fix/restart-and-reasoning"
+  # workflow_dispatch can only be triggered via API/gh once this file exists
+  # on the default branch, which this repo's rules forbid pushing to. Trigger
+  # via push to this branch instead; defaults below match the dispatch inputs.
+  push:
+    branches: [ci/upgrade-e2e, ci/win-double-restart]
+
+
+jobs:
+  upgrade-e2e:
+    if: github.ref_name != 'ci/win-double-restart'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+        # day 1 (Clover Cognition 1.0, 2026-08-23) and the last pre-release main
+        from_ref: ['3c5326ee0663eaa8adb11e24ab8108a9c468bc25', '69a75bb87740dda7461825f864d678c72fce5eec']
+    runs-on: ${{ matrix.os }}
+    env:
+      FROM_REF: ${{ matrix.from_ref }}
+      TO_BRANCH: ${{ github.event.inputs.to_branch || 'main' }}
+    timeout-minutes: 45
+    steps:
+      # ----------------------------------------------------------------
+      # POSIX (ubuntu-latest, macos-latest)
+      # ----------------------------------------------------------------
+      - name: (POSIX) a. Install Clover at from_ref via scripts/install.sh
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://raw.githubusercontent.com/oaostarboy/clover-c1/${{ github.ref_name }}/scripts/install.sh" -o /tmp/install.sh
+          chmod +x /tmp/install.sh
+          bash /tmp/install.sh --branch main --commit "${{ env.FROM_REF }}" --non-interactive --skip-setup --skip-browser --skip-computer-use
+          # Resolve the to_branch tip ONCE; main can move mid-run (other PRs merging).
+          TO_SHA="$(git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}" | cut -f1)"
+          echo "TO_SHA=$TO_SHA" >> "$GITHUB_ENV"
+          echo "CLOVER_HOME=$HOME/.clover" >> "$GITHUB_ENV"
+          echo "INSTALL_DIR=$HOME/.clover/clover-c1" >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            echo "CLOVER_BIN=$HOME/.clover/clover-c1/venv/bin/clover" >> "$GITHUB_ENV"
+          else
+            echo "CLOVER_BIN=$HOME/.clover/clover-c1/venv/bin/clover" >> "$GITHUB_ENV"
+          fi
+
+      - name: (POSIX) a. Record pre-update version
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CLOVER_BIN" --version | tee /tmp/version-before.txt
+          git -C "$INSTALL_DIR" rev-parse HEAD | tee /tmp/head-before.txt
+
+      - name: (POSIX) b. Seed old-style config + user data
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CLOVER_HOME"/memories "$CLOVER_HOME"/sessions "$CLOVER_HOME"/skills/my
+
+          cat > "$CLOVER_HOME/config.yaml" <<'YAML'
+          _config_version: 39
+          model:
+            provider: clover
+          web:
+            use_gateway: true
+          dashboard:
+            public_url: "https://example-public-url.invalid"
+            oauth:
+              client_id: "old-portal-client"
+          YAML
+
+          echo "# seeded memory $(date -u +%s)" > "$CLOVER_HOME/memories/MEMORY.md"
+          echo '{"role":"user","content":"seed"}' > "$CLOVER_HOME/sessions/x.jsonl"
+          python3 - "$CLOVER_HOME/state.db" <<'PY'
+          import sqlite3, sys
+          conn = sqlite3.connect(sys.argv[1])
+          conn.execute("CREATE TABLE IF NOT EXISTS probe (id INTEGER PRIMARY KEY, val TEXT)")
+          conn.execute("INSERT INTO probe (val) VALUES ('seed-row')")
+          conn.commit()
+          conn.close()
+          PY
+          cat > "$CLOVER_HOME/skills/my/SKILL.md" <<'MD'
+          ---
+          name: my-seed-skill
+          description: Seed skill for upgrade e2e test.
+          ---
+          Seed content.
+          MD
+
+          for f in "$CLOVER_HOME/memories/MEMORY.md" "$CLOVER_HOME/sessions/x.jsonl" "$CLOVER_HOME/state.db" "$CLOVER_HOME/skills/my/SKILL.md"; do
+            shasum -a 256 "$f" >> /tmp/user-data-before.sha256
+          done
+          cat /tmp/user-data-before.sha256
+
+      - name: (POSIX) c. Run clover update to to_branch (non-interactive)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Existing users run the OLD updater (69a75bb8), which can only reach
+          # branches in the single-branch clone's fetch scope (fixed in 9faa3826,
+          # but that fix only helps once the updater itself is new). Real users
+          # update to main, which is in scope; add the PR branch to mirror that.
+          # Dirty copy, like Suni: a hand edit to a tracked file must survive the update.
+          echo "# local hand edit (e2e)" >> "$INSTALL_DIR/README.md"
+          git -C "$INSTALL_DIR" remote set-branches --add origin "${{ env.TO_BRANCH }}"
+          "$CLOVER_BIN" update --branch "${{ env.TO_BRANCH }}" --yes
+          grep -q "local hand edit (e2e)" "$INSTALL_DIR/README.md" \
+            || git -C "$INSTALL_DIR" stash list | grep -q clover-update-autostash \
+            || { echo "FINDING: hand edit lost (not in tree, not parked in a stash)"; exit 1; }
+          echo "dirty-copy check: hand edit preserved"
+
+      - name: (POSIX) d. Assert update outcome
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          FAIL=0
+
+          CURRENT_TIP="$(git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}" | cut -f1)"
+          LOCAL_HEAD="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+          echo "to_sha=$TO_SHA current_tip=$CURRENT_TIP local_head=$LOCAL_HEAD"
+          if [ "$LOCAL_HEAD" != "$TO_SHA" ] && [ "$LOCAL_HEAD" != "$CURRENT_TIP" ]; then
+            echo "FINDING: HEAD ($LOCAL_HEAD) is neither the tip at job start ($TO_SHA) nor the current tip ($CURRENT_TIP)"; FAIL=1
+          fi
+
+          "$CLOVER_BIN" --version | tee /tmp/version-after.txt
+          if diff -q /tmp/version-before.txt /tmp/version-after.txt > /dev/null; then
+            echo "FINDING: version output did not change after update"; FAIL=1
+          fi
+
+          # The OLD updater process (from_ref) does not know config v40; the NEW code
+          # migrates on first config load (a restarted gateway does this after /update).
+          # Do one load with the new code before asserting. Expected, not a bug.
+          (cd "$INSTALL_DIR" && "$INSTALL_DIR/venv/bin/python" -c "from clover_cli.config import load_config; load_config()")
+
+          "$INSTALL_DIR/venv/bin/python" - "$CLOVER_HOME/config.yaml" <<'PY' || FAIL=1
+          import sys, yaml
+          cfg = yaml.safe_load(open(sys.argv[1])) or {}
+          assert cfg.get("_config_version") == 40, f"_config_version={cfg.get('_config_version')!r}, want 40"
+          assert cfg.get("model", {}).get("provider") != "clover", f"model.provider still clover"
+          web = cfg.get("web", {})
+          assert "use_gateway" not in web, "web.use_gateway not migrated away"
+          assert web.get("backend") == "firecrawl", f"web.backend={web.get('backend')!r}, want firecrawl"
+          assert "public_url" not in cfg.get("dashboard", {}), "dashboard.public_url not cleared"
+          print("config migration assertions: PASS")
+          PY
+
+          for f in "$CLOVER_HOME/memories/MEMORY.md" "$CLOVER_HOME/sessions/x.jsonl" "$CLOVER_HOME/state.db" "$CLOVER_HOME/skills/my/SKILL.md"; do
+            shasum -a 256 "$f" >> /tmp/user-data-after.sha256
+          done
+          if ! diff /tmp/user-data-before.sha256 /tmp/user-data-after.sha256; then
+            echo "FINDING: seeded user data sha256 changed across update"; FAIL=1
+          fi
+
+          set +e
+          "$CLOVER_BIN" doctor > /tmp/doctor.log 2>&1
+          DOCTOR_EXIT=$?
+          set -e
+          cat /tmp/doctor.log
+          echo "doctor exit=$DOCTOR_EXIT"
+          if [ "$DOCTOR_EXIT" -gt 1 ]; then
+            echo "FINDING: clover doctor exited $DOCTOR_EXIT (expected 0 or warnings-only=1)"; FAIL=1
+          fi
+
+          if [ "$FAIL" -ne 0 ]; then
+            echo "UPGRADE_ASSERTIONS_FAILED=1" >> "$GITHUB_ENV"
+          fi
+          exit "$FAIL"
+
+      - name: (POSIX) e. Break install, repair, assert fixed
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VPY="$INSTALL_DIR/venv/bin/python"
+          PKG_DIR="$("$VPY" -c "import fastapi,os;print(os.path.dirname(fastapi.__file__))")"
+          echo "fastapi package dir: $PKG_DIR"
+          case "$PKG_DIR" in */fastapi) ;; *) echo "unexpected fastapi dir: $PKG_DIR"; exit 1 ;; esac
+          # Remove the package dir AND its dist-info, i.e. a genuinely uninstalled package.
+          # (Leaving dist-info makes uv believe it is still installed.)
+          rm -rf "$PKG_DIR" "$(dirname "$PKG_DIR")"/fastapi-*.dist-info
+          set +e
+          "$VPY" -c "import fastapi" 2>/tmp/broken-import.log
+          BROKEN_EXIT=$?
+          set -e
+          if [ "$BROKEN_EXIT" -eq 0 ]; then
+            echo "FINDING: deleting the fastapi package dir did not break the import"; exit 1
+          fi
+
+          "$CLOVER_BIN" repair | tee /tmp/repair.log
+          "$INSTALL_DIR/venv/bin/python" -c "import fastapi"
+          if ! grep -qiE "Fixed [1-9]|reinstalled" /tmp/repair.log; then
+            echo "FINDING: clover repair output did not describe what it fixed"; exit 1
+          fi
+          echo "repair: PASS"
+
+      - name: (POSIX) f. Gateway exit timing
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          PORT=8791
+          mkdir -p "$CLOVER_HOME"
+          cat >> "$CLOVER_HOME/.env" <<ENV
+          API_SERVER_ENABLED=true
+          API_SERVER_KEY=upgrade-e2e-test-key-0123456789
+          API_SERVER_PORT=$PORT
+          API_SERVER_HOST=127.0.0.1
+          ENV
+
+          "$CLOVER_BIN" gateway run --replace > /tmp/gateway.log 2>&1 &
+          GW_PID=$!
+          echo "gateway pid=$GW_PID"
+
+          UP=0
+          for i in $(seq 1 30); do
+            if python3 -c "import socket,sys; s=socket.socket(); s.settimeout(1); sys.exit(0) if s.connect_ex(('127.0.0.1', $PORT))==0 else sys.exit(1)"; then
+              UP=1; break
+            fi
+            sleep 2
+          done
+          if [ "$UP" -ne 1 ]; then
+            echo "FINDING: gateway did not open port $PORT within 60s"
+            cat /tmp/gateway.log
+            kill -9 "$GW_PID" 2>/dev/null || true
+            exit 1
+          fi
+
+          kill -TERM "$GW_PID"
+          GONE=0
+          for i in $(seq 1 20); do
+            if ! kill -0 "$GW_PID" 2>/dev/null; then GONE=1; break; fi
+            sleep 1
+          done
+          if [ "$GONE" -ne 1 ]; then
+            echo "FINDING: gateway process $GW_PID still alive 20s after SIGTERM"
+            cat /tmp/gateway.log
+            kill -9 "$GW_PID" 2>/dev/null || true
+            exit 1
+          fi
+          echo "gateway exit timing: PASS"
+
+      - name: (POSIX) g. Upload logs on failure
+        if: runner.os != 'Windows' && failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: upgrade-e2e-logs-${{ matrix.os }}
+          path: |
+            ${{ env.CLOVER_HOME }}/logs
+            ${{ env.CLOVER_HOME }}/logs/update_receipts
+            /tmp/*.log
+            /tmp/*.txt
+            /tmp/*.sha256
+          if-no-files-found: ignore
+
+      # ----------------------------------------------------------------
+      # Windows
+      # ----------------------------------------------------------------
+      - name: (Windows) a. Install Clover at from_ref via scripts/install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cloverHome = "$env:LOCALAPPDATA\clover"
+          $installDir = "$cloverHome\clover-c1"
+
+          # PRODUCT BUG WORKAROUND (see evidence/upgrade-e2e-findings.md,
+          # Finding 1): install.ps1's fresh-clone path runs `git clone`
+          # before it sets core.autocrlf=false, so Windows' default
+          # core.autocrlf=true renormalizes uv.lock to CRLF during the
+          # clone's own checkout -- then the immediate -Commit pin
+          # checkout aborts on that renormalization diff. Pre-clone the
+          # repo ourselves with autocrlf disabled BEFORE cloning, and pin
+          # the commit ourselves too, so install.ps1 finds an
+          # already-valid, already-clean checkout at $installDir and takes
+          # its "Existing installation found, updating..." branch instead
+          # -- which already sets core.autocrlf=false before its own
+          # fetch/checkout and does not hit this bug.
+          git config --global core.autocrlf false
+          New-Item -ItemType Directory -Force -Path (Split-Path $installDir) | Out-Null
+          git clone --branch main https://github.com/oaostarboy/clover-c1.git $installDir
+          git -C $installDir checkout --detach "${{ env.FROM_REF }}"
+          if ($LASTEXITCODE -ne 0) { throw "pre-clone checkout of ${{ env.FROM_REF }} failed" }
+
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/${{ github.ref_name }}/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
+          & "$env:TEMP\install.ps1" -Branch main -Commit "${{ env.FROM_REF }}" -NonInteractive -SkipComputerUse -CloverHome $cloverHome -InstallDir $installDir
+
+          # Resolve the to_branch tip ONCE; main can move mid-run (other PRs merging).
+          $toSha = ((git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}") -split "`t" | Select-Object -First 1).Trim()
+          "TO_SHA=$toSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CLOVER_HOME=$cloverHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALL_DIR=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CLOVER_BIN=$installDir\venv\Scripts\clover.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: (Windows) a. Record pre-update version
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & "$env:CLOVER_BIN" --version | Tee-Object -FilePath "$env:TEMP\version-before.txt"
+          git -C "$env:INSTALL_DIR" rev-parse HEAD | Tee-Object -FilePath "$env:TEMP\head-before.txt"
+
+      - name: (Windows) b. Seed old-style config + user data
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path "$env:CLOVER_HOME\memories","$env:CLOVER_HOME\sessions","$env:CLOVER_HOME\skills\my" | Out-Null
+
+          @"
+          _config_version: 39
+          model:
+            provider: clover
+          web:
+            use_gateway: true
+          dashboard:
+            public_url: "https://example-public-url.invalid"
+            oauth:
+              client_id: "old-portal-client"
+          "@ | Set-Content -Path "$env:CLOVER_HOME\config.yaml" -Encoding utf8
+
+          "# seeded memory" | Set-Content -Path "$env:CLOVER_HOME\memories\MEMORY.md" -Encoding utf8
+          '{"role":"user","content":"seed"}' | Set-Content -Path "$env:CLOVER_HOME\sessions\x.jsonl" -Encoding utf8
+          & "$env:INSTALL_DIR\venv\Scripts\python.exe" -c @"
+          import sqlite3
+          conn = sqlite3.connect(r'$env:CLOVER_HOME\state.db')
+          conn.execute('CREATE TABLE IF NOT EXISTS probe (id INTEGER PRIMARY KEY, val TEXT)')
+          conn.execute("INSERT INTO probe (val) VALUES ('seed-row')")
+          conn.commit()
+          conn.close()
+          "@
+          @"
+          ---
+          name: my-seed-skill
+          description: Seed skill for upgrade e2e test.
+          ---
+          Seed content.
+          "@ | Set-Content -Path "$env:CLOVER_HOME\skills\my\SKILL.md" -Encoding utf8
+
+          $files = @("$env:CLOVER_HOME\memories\MEMORY.md","$env:CLOVER_HOME\sessions\x.jsonl","$env:CLOVER_HOME\state.db","$env:CLOVER_HOME\skills\my\SKILL.md")
+          $hashes = foreach ($f in $files) { "$((Get-FileHash -Algorithm SHA256 -Path $f).Hash)  $f" }
+          $hashes | Set-Content -Path "$env:TEMP\user-data-before.sha256" -Encoding utf8
+          $hashes
+
+      - name: (Windows) c. Run clover update to to_branch (non-interactive)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # See the POSIX step: the old updater needs the branch in fetch scope.
+          # Dirty copy, like an older Windows install: autocrlf=true CRLF working tree + a hand edit.
+          git -C "$env:INSTALL_DIR" config core.autocrlf true
+          git -C "$env:INSTALL_DIR" rm -q -r --cached .
+          git -C "$env:INSTALL_DIR" reset -q --hard
+          Add-Content -Path "$env:INSTALL_DIR\README.md" -Value "# local hand edit (e2e)"
+          git -C "$env:INSTALL_DIR" remote set-branches --add origin "${{ env.TO_BRANCH }}"
+          & "$env:CLOVER_BIN" update --branch "${{ env.TO_BRANCH }}" --yes
+          if ($LASTEXITCODE -ne 0) { throw "update exited $LASTEXITCODE" }
+          $edit = Select-String -Path "$env:INSTALL_DIR\README.md" -Pattern "local hand edit \(e2e\)" -Quiet
+          $parked = (git -C "$env:INSTALL_DIR" stash list) -match "clover-update-autostash"
+          if (-not $edit -and -not $parked) { throw "FINDING: hand edit lost (not in tree, not parked)" }
+          $dirty = git -C "$env:INSTALL_DIR" status --porcelain -- uv.lock
+          if ($dirty) { throw "FINDING: uv.lock still dirty after update (EOL): $dirty" }
+          Write-Host "dirty-copy check: hand edit preserved, uv.lock clean"
+          if ($LASTEXITCODE -ne 0) { throw "clover update exited $LASTEXITCODE" }
+
+      - name: (Windows) d. Assert update outcome
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $fail = 0
+
+          $currentTip = ((git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}") -split "`t" | Select-Object -First 1).Trim()
+          $localHead = (git -C "$env:INSTALL_DIR" rev-parse HEAD).Trim()
+          Write-Host "to_sha=$env:TO_SHA current_tip=$currentTip local_head=$localHead"
+          if (($localHead -ne $env:TO_SHA) -and ($localHead -ne $currentTip)) {
+            Write-Host "FINDING: HEAD ($localHead) is neither the tip at job start ($env:TO_SHA) nor the current tip ($currentTip)"
+            $fail = 1
+          }
+
+          & "$env:CLOVER_BIN" --version | Tee-Object -FilePath "$env:TEMP\version-after.txt"
+          $before = Get-Content "$env:TEMP\version-before.txt" -Raw
+          $after = Get-Content "$env:TEMP\version-after.txt" -Raw
+          if ($before -eq $after) {
+            Write-Host "FINDING: version output did not change after update"
+            $fail = 1
+          }
+
+          $venvPy = "$env:INSTALL_DIR\venv\Scripts\python.exe"
+
+          # The OLD updater process (from_ref) does not know config v40; the NEW code
+          # migrates on first config load (a restarted gateway does this after /update).
+          # Do one load with the new code before asserting. Expected, not a bug.
+          Push-Location "$env:INSTALL_DIR"
+          & $venvPy -c "from clover_cli.config import load_config; load_config()"
+          $loadExit = $LASTEXITCODE
+          Pop-Location
+          if ($loadExit -ne 0) { Write-Host "FINDING: load_config() exited $loadExit"; $fail = 1 }
+
+          $cfgPy = "$env:TEMP\check_config.py"
+          @'
+          import sys, yaml
+          cfg = yaml.safe_load(open(sys.argv[1])) or {}
+          errs = []
+          ver = cfg.get("_config_version")
+          if ver != 40:
+              errs.append("_config_version=%r" % (ver,))
+          if cfg.get("model", {}).get("provider") == "clover":
+              errs.append("model.provider still clover")
+          web = cfg.get("web", {})
+          if "use_gateway" in web:
+              errs.append("web.use_gateway not migrated")
+          if web.get("backend") != "firecrawl":
+              errs.append("web.backend=%r" % (web.get("backend"),))
+          if "public_url" in cfg.get("dashboard", {}):
+              errs.append("dashboard.public_url not cleared")
+          if errs:
+              print("CONFIG_FINDINGS: " + "; ".join(errs))
+          else:
+              print("config migration assertions: PASS")
+          '@ | Set-Content -Path $cfgPy -Encoding utf8
+          $cfgCheck = (& $venvPy $cfgPy "$env:CLOVER_HOME\config.yaml") -join "`n"
+          Write-Host $cfgCheck
+          if ($cfgCheck -notmatch "config migration assertions: PASS") { $fail = 1 }
+
+          $files = @("$env:CLOVER_HOME\memories\MEMORY.md","$env:CLOVER_HOME\sessions\x.jsonl","$env:CLOVER_HOME\state.db","$env:CLOVER_HOME\skills\my\SKILL.md")
+          $hashesAfter = foreach ($f in $files) { "$((Get-FileHash -Algorithm SHA256 -Path $f).Hash)  $f" }
+          $hashesAfter | Set-Content -Path "$env:TEMP\user-data-after.sha256" -Encoding utf8
+          $diff = Compare-Object (Get-Content "$env:TEMP\user-data-before.sha256") (Get-Content "$env:TEMP\user-data-after.sha256")
+          if ($diff) {
+            Write-Host "FINDING: seeded user data sha256 changed across update"
+            $diff | Format-Table | Out-String | Write-Host
+            $fail = 1
+          }
+
+          & "$env:CLOVER_BIN" doctor *> "$env:TEMP\doctor.log"
+          $doctorExit = $LASTEXITCODE
+          Get-Content "$env:TEMP\doctor.log"
+          Write-Host "doctor exit=$doctorExit"
+          if ($doctorExit -gt 1) {
+            Write-Host "FINDING: clover doctor exited $doctorExit (expected 0 or warnings-only=1)"
+            $fail = 1
+          }
+
+          if ($fail -ne 0) { exit 1 }
+
+      - name: (Windows) e. Break install, repair, assert fixed
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $venvPy = "$env:INSTALL_DIR\venv\Scripts\python.exe"
+          $pkgDir = (& $venvPy -c "import fastapi,os;print(os.path.dirname(fastapi.__file__))").Trim()
+          Write-Host "fastapi package dir: $pkgDir"
+          if ((Split-Path $pkgDir -Leaf) -ne "fastapi") { throw "unexpected fastapi dir: $pkgDir" }
+          # Remove the package dir AND its dist-info, i.e. a genuinely uninstalled package.
+          # (Leaving dist-info makes uv believe it is still installed.)
+          Remove-Item -Recurse -Force $pkgDir
+          Get-ChildItem -Path (Split-Path $pkgDir -Parent) -Directory -Filter "fastapi-*.dist-info" | Remove-Item -Recurse -Force
+
+          $ErrorActionPreference = "Continue"
+          & $venvPy -c "import fastapi" 2> "$env:TEMP\broken-import.log"
+          $brokenExit = $LASTEXITCODE
+          if ($brokenExit -eq 0) {
+            Write-Host "FINDING: deleting the fastapi package dir did not break the import"
+            exit 1
+          }
+
+          & "$env:CLOVER_BIN" repair | Tee-Object -FilePath "$env:TEMP\repair.log"
+          $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = "Continue"
+          & $venvPy -c "import fastapi" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            # Diagnostics only: must NOT re-run the repair (that would heal the install and mask the result).
+            Write-Host "FINDING: clover repair (run as venv clover.exe) left fastapi broken; repair errors follow"
+            Get-Content "$env:CLOVER_HOME\logs\errors.log" -Tail 40 -ErrorAction SilentlyContinue | Write-Host
+            exit 1
+          }
+
+          $repairLog = Get-Content "$env:TEMP\repair.log" -Raw
+          if ($repairLog -notmatch "(?i)Fixed [1-9]|reinstalled") {
+            Write-Host "FINDING: clover repair output did not describe what it fixed"
+            exit 1
+          }
+          Write-Host "repair: PASS"
+
+      - name: (Windows) f. Gateway exit timing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $port = 8791
+          Add-Content -Path "$env:CLOVER_HOME\.env" -Value "API_SERVER_ENABLED=true`nAPI_SERVER_KEY=upgrade-e2e-test-key-0123456789`nAPI_SERVER_PORT=$port`nAPI_SERVER_HOST=127.0.0.1"
+
+          $proc = Start-Process -FilePath "$env:CLOVER_BIN" -ArgumentList "gateway","run","--replace" -RedirectStandardOutput "$env:TEMP\gateway.log" -RedirectStandardError "$env:TEMP\gateway.err.log" -PassThru -NoNewWindow
+          Write-Host "gateway pid=$($proc.Id)"
+
+          $up = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            $test = Test-NetConnection -ComputerName 127.0.0.1 -Port $port -WarningAction SilentlyContinue
+            if ($test.TcpTestSucceeded) { $up = $true; break }
+            Start-Sleep -Seconds 2
+          }
+          if (-not $up) {
+            Write-Host "FINDING: gateway did not open port $port within 60s"
+            Get-Content "$env:TEMP\gateway.log","$env:TEMP\gateway.err.log" -ErrorAction SilentlyContinue
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            exit 1
+          }
+
+          & "$env:CLOVER_BIN" gateway stop --all
+          $gone = $false
+          for ($i = 0; $i -lt 20; $i++) {
+            if (-not (Get-Process -Id $proc.Id -ErrorAction SilentlyContinue)) { $gone = $true; break }
+            Start-Sleep -Seconds 1
+          }
+          if (-not $gone) {
+            Write-Host "FINDING: gateway process $($proc.Id) still alive 20s after 'clover gateway stop'"
+            Get-Content "$env:TEMP\gateway.log","$env:TEMP\gateway.err.log" -ErrorAction SilentlyContinue
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            exit 1
+          }
+          Write-Host "gateway exit timing: PASS"
+
+      - name: (Windows) g. Upload logs on failure
+        if: runner.os == 'Windows' && failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: upgrade-e2e-logs-${{ matrix.os }}
+          path: |
+            ${{ env.CLOVER_HOME }}\logs
+            ${{ env.CLOVER_HOME }}\logs\update_receipts
+            ${{ runner.temp }}\*.log
+            ${{ runner.temp }}\*.txt
+            ${{ runner.temp }}\*.sha256
+          if-no-files-found: ignore
+
+  # Windows: exactly one gateway after an update (no double relaunch).
+  # Reported 2026-09-29 (Windows 11): after `clover update` the relaunched
+  # gateway got a second planned stop 8 s after startup and nothing came back.
+  # Gateway is installed + started the way Windows users run it
+  # (`clover gateway install`: Scheduled Task + immediate hidden start), with
+  # only the local api_server platform, so no real Telegram is needed.
+  win-double-restart:
+    if: github.ref_name == 'ci/win-double-restart'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      FROM_REF: 69a75bb87740dda7461825f864d678c72fce5eec
+      FIX_BRANCH: fix/win-update-double-restart
+      NEXT_BRANCH: ci/win-double-restart
+      API_PORT: "8791"
+    steps:
+      - name: a. Install Clover at from_ref via scripts/install.ps1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cloverHome = "$env:LOCALAPPDATA\clover"
+          $installDir = "$cloverHome\clover-c1"
+          # Same pre-clone workaround as the upgrade-e2e job (Finding 1).
+          git config --global core.autocrlf false
+          New-Item -ItemType Directory -Force -Path (Split-Path $installDir) | Out-Null
+          git clone --branch main https://github.com/oaostarboy/clover-c1.git $installDir
+          git -C $installDir checkout --detach "${{ env.FROM_REF }}"
+          if ($LASTEXITCODE -ne 0) { throw "pre-clone checkout of ${{ env.FROM_REF }} failed" }
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/${{ github.ref_name }}/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
+          & "$env:TEMP\install.ps1" -Branch main -Commit "${{ env.FROM_REF }}" -NonInteractive -SkipComputerUse -CloverHome $cloverHome -InstallDir $installDir
+          "CLOVER_HOME=$cloverHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALL_DIR=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CLOVER_BIN=$installDir\venv\Scripts\clover.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: b. Config (api_server only) + probe helpers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          @"
+          _config_version: 39
+          model:
+            provider: clover
+          "@ | Set-Content -Path "$env:CLOVER_HOME\config.yaml" -Encoding utf8
+          Add-Content -Path "$env:CLOVER_HOME\.env" -Value "API_SERVER_ENABLED=true`nAPI_SERVER_KEY=win-double-restart-key-0123456789`nAPI_SERVER_PORT=$env:API_PORT`nAPI_SERVER_HOST=127.0.0.1"
+          @'
+          function Get-GatewayRoots {
+            # Gateway processes, one per gateway: the venv python.exe launcher
+            # and the interpreter it starts share one command line, so count
+            # only processes whose parent is not itself a gateway process.
+            # Relaunch helpers (python -c ...) are not gateways.
+            $all = @(Get-CimInstance Win32_Process | Where-Object {
+              $_.CommandLine -and $_.CommandLine -match 'clover_cli[.]main' -and
+              $_.CommandLine -match 'gateway\s+run' -and $_.CommandLine -notmatch '\s-c\s' })
+            $ids = @($all | ForEach-Object { $_.ProcessId })
+            ,@($all | Where-Object { $ids -notcontains $_.ParentProcessId })
+          }
+          function Test-ApiPort {
+            $c = New-Object System.Net.Sockets.TcpClient
+            try { $ok = $c.ConnectAsync("127.0.0.1", [int]$env:API_PORT).Wait(1500); return ($ok -and $c.Connected) }
+            catch { return $false } finally { $c.Dispose() }
+          }
+          function Get-GatewayState {
+            try { Get-Content "$env:CLOVER_HOME\gateway_state.json" -Raw | ConvertFrom-Json } catch { $null }
+          }
+          function Get-LogLines {
+            $p = "$env:CLOVER_HOME\logs\gateway.log"
+            if (Test-Path $p) { @(Get-Content $p) } else { @() }
+          }
+          function Wait-UpdateChainDone([int]$timeoutS = 900) {
+            # The Windows shim hands the dependency sync to a child that keeps
+            # running after `clover update` returns; the restart watcher then
+            # verifies. Measure only once the whole chain has finished.
+            $deadline = (Get-Date).AddSeconds($timeoutS)
+            while ((Get-Date) -lt $deadline) {
+              $busy = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and (
+                ($_.CommandLine -match 'clover_cli[.]main' -and $_.CommandLine -match '\supdate(\s|$)') -or
+                ($_.CommandLine -match 'clover\.exe"?\s+update(\s|$)') -or
+                ($_.CommandLine -match 'update_restart_watcher')) })
+              if ($busy.Count -eq 0) { return }
+              Start-Sleep -Seconds 3
+            }
+            throw "update chain still running after ${timeoutS}s"
+          }
+          function Assert-SingleGateway([string]$label, [int]$logStart, [bool]$strictLog) {
+            Wait-UpdateChainDone
+            # Up within 120 s after the chain finished...
+            $deadline = (Get-Date).AddSeconds(120)
+            while ((Get-Date) -lt $deadline -and -not ((Get-GatewayRoots).Count -eq 1 -and (Test-ApiPort))) { Start-Sleep -Seconds 2 }
+            # ...then exactly one, bound, healthy state for 90 s straight.
+            $end = (Get-Date).AddSeconds(90); $n = 0; $bad = @()
+            while ((Get-Date) -lt $end) {
+              $roots = Get-GatewayRoots; $port = Test-ApiPort; $st = Get-GatewayState
+              $n++
+              $line = "[$label] t=$n roots=$($roots.Count) pids=$(($roots | ForEach-Object ProcessId) -join ',') port=$port state=$($st.gateway_state) restart_requested=$($st.restart_requested)"
+              Write-Host $line
+              if ($roots.Count -ne 1 -or -not $port -or $st.restart_requested -eq $true -or $st.gateway_state -ne 'running') { $bad += $line }
+              Start-Sleep -Seconds 3
+            }
+            $lines = Get-LogLines
+            $new = if ($lines.Count -gt $logStart) { $lines[$logStart..($lines.Count - 1)] } else { @() }
+            $first = -1
+            for ($i = 0; $i -lt $new.Count; $i++) { if ($new[$i] -match 'Starting Clover Gateway') { $first = $i; break } }
+            $starts = @($new | Where-Object { $_ -match 'Starting Clover Gateway' }).Count
+            $after = if ($first -ge 0) { @($new[$first..($new.Count - 1)] | Where-Object { $_ -match 'Gateway restart requested|Stopping gateway|service-restart requested|planned --replace takeover|Replacing existing gateway' }) } else { @() }
+            Write-Host "[$label] post-update gateway starts=$starts; restart/takeover lines after first post-update start=$($after.Count)"
+            $after | ForEach-Object { Write-Host "  $_" }
+            if ($first -lt 0) { $bad += "no post-update 'Starting Clover Gateway' in gateway.log" }
+            if ($strictLog -and $after.Count -gt 0) { $bad += "restart/takeover after the post-update start" }
+            if ($strictLog -and $starts -ne 1) { $bad += "expected exactly 1 post-update gateway start, saw $starts" }
+            if ($bad.Count) {
+              Write-Host "FAIL [$label]:"; $bad | Select-Object -First 20 | ForEach-Object { Write-Host "  $_" }
+              Write-Host "--- gateway.log tail ---"; Get-LogLines | Select-Object -Last 120
+              throw "[$label] not exactly one healthy gateway"
+            }
+            Write-Host "PASS [$label]: exactly one gateway for 90s, api port bound, state running, no stale restart_requested"
+          }
+          '@ | Set-Content -Path "$env:RUNNER_TEMP\wdr.ps1" -Encoding utf8
+
+      - name: c. Install + start the gateway the Windows-user way (Scheduled Task)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:RUNNER_TEMP\wdr.ps1"
+          $env:CLOVER_GATEWAY_INSTALL_START_NOW = "1"
+          $env:CLOVER_GATEWAY_INSTALL_START_ON_LOGIN = "1"
+          & "$env:CLOVER_BIN" gateway install
+          if ($LASTEXITCODE -ne 0) { throw "gateway install exited $LASTEXITCODE" }
+          schtasks /Query /TN Clover_Gateway /FO LIST | Out-String | Write-Host
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Get-Date) -lt $deadline -and -not (Test-ApiPort)) { Start-Sleep -Seconds 2 }
+          if (-not (Test-ApiPort)) { Get-LogLines | Select-Object -Last 80; throw "gateway did not bind $env:API_PORT" }
+          $roots = Get-GatewayRoots
+          Write-Host "pre-update gateway roots: $(($roots | ForEach-Object { "$($_.ProcessId): $($_.CommandLine)" }) -join ' | ')"
+          if ($roots.Count -ne 1) { throw "expected one pre-update gateway, saw $($roots.Count)" }
+
+      - name: d. Update 1 (69a75bb -> fix branch; OLD parent updater, new hand-off child)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:RUNNER_TEMP\wdr.ps1"
+          $logStart = (Get-LogLines).Count
+          git -C "$env:INSTALL_DIR" remote set-branches --add origin "${{ env.FIX_BRANCH }}"
+          & "$env:CLOVER_BIN" update --branch "${{ env.FIX_BRANCH }}" --yes
+          if ($LASTEXITCODE -ne 0) { throw "update exited $LASTEXITCODE" }
+          # The 69a75bb parent still relaunches before handing off (old code
+          # cannot be fixed retroactively), so one extra stop is expected
+          # here; the end state must still be exactly one healthy gateway.
+          Assert-SingleGateway "update-1 legacy parent" $logStart $false
+
+      - name: e. Update 2 (fix branch -> next commit; FIXED parent + child)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:RUNNER_TEMP\wdr.ps1"
+          git -C "$env:INSTALL_DIR" log --oneline -1
+          $logStart = (Get-LogLines).Count
+          git -C "$env:INSTALL_DIR" remote set-branches --add origin "${{ env.NEXT_BRANCH }}"
+          & "$env:CLOVER_BIN" update --branch "${{ env.NEXT_BRANCH }}" --yes
+          if ($LASTEXITCODE -ne 0) { throw "update exited $LASTEXITCODE" }
+          Assert-SingleGateway "update-2 fixed parent" $logStart $true
+          git -C "$env:INSTALL_DIR" log --oneline -1
+
+      - name: f. Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: win-double-restart-logs
+          path: |
+            ${{ env.CLOVER_HOME }}\logs
+            ${{ env.CLOVER_HOME }}\gateway_state.json
+          if-no-files-found: ignore
