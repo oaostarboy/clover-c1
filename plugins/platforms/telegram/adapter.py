@@ -6684,7 +6684,7 @@ class TelegramAdapter(BasePlatformAdapter):
             for i, choice in enumerate(choices):
                 label = str(choice.get("label") or choice.get("value") or "")
                 if choice.get("is_current"):
-                    label = f"✓ {label}"
+                    label = f"{_clo('✓ ', '🍀 ')}{label}"
                 buttons.append(
                     InlineKeyboardButton(label, callback_data=f"cp:{i}")
                 )

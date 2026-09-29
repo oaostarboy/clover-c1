@@ -3382,7 +3382,11 @@ def run_conversation(
                     # rate-limit symptom.  Switch to fallback immediately
                     # rather than retrying with extended backoff.
                     if agent._fallback_index < len(agent._fallback_chain):
-                        agent._buffer_status("⚠️ Empty/malformed response — switching to fallback...")
+                        agent._buffer_status(_clo_status(
+                            agent, "error",
+                            "⚠️ Empty/malformed response — switching to fallback...",
+                            "empty/malformed response — switching to fallback...",
+                        ))
                     if agent._try_activate_fallback():
                         active_system_prompt = _sync_failover_system_message(
                             agent, api_messages, active_system_prompt)
@@ -3456,7 +3460,11 @@ def run_conversation(
                     if retry_count >= max_retries:
                         # Try fallback before giving up
                         if agent._has_pending_fallback():
-                            agent._buffer_status(f"⚠️ Max retries ({max_retries}) for invalid responses — trying fallback...")
+                            agent._buffer_status(_clo_status(
+                                agent, "error",
+                                f"⚠️ Max retries ({max_retries}) for invalid responses — trying fallback...",
+                                f"max retries ({max_retries}) for invalid responses — trying fallback...",
+                            ))
                         if agent._try_activate_fallback():
                             active_system_prompt = _sync_failover_system_message(
                                 agent, api_messages, active_system_prompt)
@@ -3467,7 +3475,11 @@ def run_conversation(
                             break
                         # Terminal — flush buffered retry trace so user sees what happened.
                         agent._flush_status_buffer()
-                        agent._emit_status(f"❌ Max retries ({max_retries}) exceeded for invalid responses. Giving up.")
+                        agent._emit_status(_clo_status(
+                            agent, "error",
+                            f"❌ Max retries ({max_retries}) exceeded for invalid responses. Giving up.",
+                            f"max retries ({max_retries}) exceeded for invalid responses. Giving up.",
+                        ))
                         logger.error("%sInvalid API response after %d retries.", agent.log_prefix, max_retries)
                         agent._persist_session(messages, conversation_history)
                         _final_response = f"Invalid API response after {max_retries} retries: {_failure_hint}"
@@ -5441,13 +5453,17 @@ def run_conversation(
                                     "— switching to fallback provider..."
                                 )
                             else:
-                                agent._buffer_status(
-                                    "⚠️ Billing or credits exhausted — switching to fallback provider..."
-                                )
+                                agent._buffer_status(_clo_status(
+                                    agent, "error",
+                                    "⚠️ Billing or credits exhausted — switching to fallback provider...",
+                                    "billing or credits exhausted — switching to fallback provider...",
+                                ))
                         elif _is_transport_failure:
-                            agent._buffer_status(
-                                "⚠️ Provider unreachable — switching to fallback provider..."
-                            )
+                            agent._buffer_status(_clo_status(
+                                agent, "error",
+                                "⚠️ Provider unreachable — switching to fallback provider...",
+                                "provider unreachable — switching to fallback provider...",
+                            ))
                         else:
                             agent._buffer_status(_clo_status(
                                 agent, "rate_limited",
@@ -5484,10 +5500,13 @@ def run_conversation(
                     and agent._fallback_index < len(agent._fallback_chain)
                 ):
                     _retry.auth_failover_attempted = True
-                    agent._buffer_status(
+                    agent._buffer_status(_clo_status(
+                        agent, "error",
                         "🔐 Authentication failed and could not be refreshed — "
-                        "switching to fallback provider..."
-                    )
+                        "switching to fallback provider...",
+                        "authentication failed and could not be refreshed — "
+                        "switching to fallback provider...",
+                    ))
                     if agent._try_activate_fallback(reason=classified.reason):
                         active_system_prompt = _sync_failover_system_message(
                             agent, api_messages, active_system_prompt)
@@ -6127,11 +6146,23 @@ def run_conversation(
                     # abort silently (#35314, #17446).
                     if agent._has_pending_fallback():
                         if classified.reason == FailoverReason.content_policy_blocked:
-                            agent._buffer_status("⚠️ Provider safety filter blocked this request — trying fallback...")
+                            agent._buffer_status(_clo_status(
+                                agent, "error",
+                                "⚠️ Provider safety filter blocked this request — trying fallback...",
+                                "provider safety filter blocked this request — trying fallback...",
+                            ))
                         elif classified.reason == FailoverReason.ssl_cert_verification:
-                            agent._buffer_status("⚠️ TLS certificate verification failed — trying fallback...")
+                            agent._buffer_status(_clo_status(
+                                agent, "error",
+                                "⚠️ TLS certificate verification failed — trying fallback...",
+                                "TLS certificate verification failed — trying fallback...",
+                            ))
                         else:
-                            agent._buffer_status(f"⚠️ Non-retryable error (HTTP {status_code}) — trying fallback...")
+                            agent._buffer_status(_clo_status(
+                                agent, "error",
+                                f"⚠️ Non-retryable error (HTTP {status_code}) — trying fallback...",
+                                f"non-retryable error (HTTP {status_code}) — trying fallback...",
+                            ))
                     if agent._try_activate_fallback():
                         active_system_prompt = _sync_failover_system_message(
                             agent, api_messages, active_system_prompt)
@@ -6338,7 +6369,11 @@ def run_conversation(
                         continue
                     # Try fallback before giving up entirely
                     if agent._has_pending_fallback():
-                        agent._buffer_status(f"⚠️ Max retries ({max_retries}) exhausted — trying fallback...")
+                        agent._buffer_status(_clo_status(
+                            agent, "error",
+                            f"⚠️ Max retries ({max_retries}) exhausted — trying fallback...",
+                            f"max retries ({max_retries}) exhausted — trying fallback...",
+                        ))
                     if agent._try_activate_fallback():
                         active_system_prompt = _sync_failover_system_message(
                             agent, api_messages, active_system_prompt)

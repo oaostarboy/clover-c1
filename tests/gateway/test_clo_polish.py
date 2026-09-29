@@ -501,3 +501,48 @@ async def test_exec_approval_buttons_stock(monkeypatch, skin):
     _set_skin(monkeypatch, skin)
     buttons = await _approval_buttons(_adapter(), monkeypatch)
     assert buttons == ["✅ Allow Once", "✅ Session", "✅ Always", "❌ Deny"]
+
+
+# --- 1b. non-retryable error + fallback-trace statuses ------------------------------
+
+def _run_client_error_turn(monkeypatch):
+    import time as _time
+    import run_agent
+
+    monkeypatch.setattr(_time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(run_agent, "jittered_backoff", lambda *a, **k: 0.0)
+    agent = _agent()
+    events = []
+    agent.status_callback = lambda ev, msg: events.append(msg)
+    err = Exception("bad request: invalid parameter")
+    err.status_code = 400
+    agent.client.chat.completions.create.side_effect = err
+    with (
+        patch.object(agent, "_persist_session"),
+        patch.object(agent, "_save_trajectory"),
+        patch.object(agent, "_cleanup_task_resources"),
+    ):
+        agent.run_conversation("hello")
+    return events
+
+
+def test_real_agent_non_retryable_error_is_clo(monkeypatch):
+    events = _run_client_error_turn(monkeypatch)
+    assert any(m.startswith("☘️(") and "non-retryable error (HTTP 400): " in m for m in events), events
+    assert not any("Non-retryable error" in m for m in events)
+
+
+@pytest.mark.parametrize("skin", OTHER_SKINS)
+def test_real_agent_non_retryable_error_stock(monkeypatch, skin):
+    _set_skin(monkeypatch, skin)
+    events = _run_client_error_turn(monkeypatch)
+    assert any(m.startswith("❌ Non-retryable error (HTTP 400): ") for m in events), events
+    assert not any("☘️" in m for m in events)
+
+
+@pytest.mark.asyncio
+async def test_generic_choice_picker_current_marker(monkeypatch):
+    import inspect
+
+    src = inspect.getsource(TelegramAdapter)
+    assert src.count("_clo('✓ ', '🍀 ')") == 4
