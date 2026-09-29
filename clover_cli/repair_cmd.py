@@ -43,12 +43,18 @@ def _repair_doctor_safe_items() -> list[str]:
     return fixed
 
 
-def _repair_dependencies() -> bool:
+def _repair_dependencies(import_detail: str = "") -> bool:
     """Reuse the updater's dependency installer, never mutate the user home."""
     from clover_cli import update_cmd
     from clover_cli import main
     from clover_cli.managed_uv import ensure_uv, managed_python_env
     root = update_cmd._m().PROJECT_ROOT
+    # The health probe lists failed module imports, even when dist-info still
+    # exists. uv's normal incremental install skips those half-deleted wheels.
+    packages = {"fastapi": "fastapi", "uvicorn": "uvicorn", "pydantic": "pydantic",
+                "openai": "openai", "yaml": "PyYAML"}
+    reinstall = [package for module, package in packages.items()
+                 if any(line.startswith(f"{module}:") for line in import_detail.split("; "))]
     uv = ensure_uv()
     if uv:
         python = venv_python_path(root / "venv", windows=sys.platform == "win32")
@@ -57,8 +63,13 @@ def _repair_dependencies() -> bool:
             subprocess.run([uv, "venv", "venv"], cwd=root, check=True)
         env = managed_python_env()
         env["VIRTUAL_ENV"] = str(root / "venv")
-        main._install_python_dependencies_with_optional_fallback([uv, "pip"], env=env, group="all")
+        main._install_python_dependencies_with_optional_fallback(
+            [uv, "pip"], env=env, group="all", reinstall_packages=reinstall)
     else:
+        if reinstall:
+            import subprocess
+            subprocess.run([sys.executable, "-m", "pip", "install", "--force-reinstall",
+                            "--no-deps", *reinstall], check=True, cwd=root)
         main._install_python_dependencies_with_optional_fallback([sys.executable, "-m", "pip"], group="all")
     return update_cmd._venv_core_imports_healthy()[0]
 
@@ -97,7 +108,7 @@ def run_repair() -> str:
             manual.append("core runtime imports (run clover doctor)")
         health = attempt("Python packages", update_cmd._venv_core_imports_healthy)
         if health is not None and not health[0]:
-            if attempt("Python packages", _repair_dependencies):
+            if attempt("Python packages", lambda: _repair_dependencies(health[1])):
                 fixed.append("reinstalled missing packages")
             else:
                 manual.append("Python packages (run clover update)")
@@ -122,9 +133,16 @@ def run_repair() -> str:
                     manual.append("state.db is corrupt; no valid snapshot found. Run clover doctor")
     summary = f"Checked 6 things. Fixed {len(fixed)}" + (f": {', '.join(fixed)}." if fixed else ".")
     if manual:
-        summary += " Needs you: " + "; ".join(manual) + "."
+        summary += " Needs you: " + "; ".join(dict.fromkeys(
+            item for item in manual if item != "Python packages" or
+            "Python packages (run clover update)" not in manual)) + "."
     return summary + " Your chats and memories weren't touched."
 
 
 def cmd_repair(args):
+    from clover_cli import main
+    # Re-run the entire repair in the shim-free interpreter: its snapshot and
+    # every fix must happen once, after the parent releases clover.exe.
+    if main._reexec_dependency_sync_off_windows_shim(action="repair"):
+        return
     print(run_repair())
