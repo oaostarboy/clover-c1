@@ -69,8 +69,8 @@ def test_add_only_header_has_clover_and_items_use_brain_and_dna():
     cli, message = _notice(msgs)
     header, *items = message.replace("> ", "").split("\n")
     assert header.startswith("☘️(") and "🍀" in header and "🧹" not in header
-    assert items == ["🧠 *Likes tea*", "🫶 about you: *Name is Ant*", "🧬 new skill: *tea-brewing*"]
-    assert cli[1:] == ["🧠 Likes tea", "🫶 about you: Name is Ant", "🧬 new skill: tea-brewing"]
+    assert items == ["🧠 *Likes tea*", "👤 about you: *Name is Ant*", "🧬 new skill: *tea-brewing*"]
+    assert cli[1:] == ["🧠 Likes tea", "👤 about you: Name is Ant", "🧬 new skill: tea-brewing"]
 
 
 def test_remove_only_header_uses_broom():
@@ -172,7 +172,7 @@ def test_profile_only_reads_as_about_you_and_differs_from_a_note():
     pools = clover_flavor.REVIEW_POOLS
     user_hdr = _header(_mem("add", "user"))
     assert any(user_hdr.endswith(line) for line in pools["user"][1])
-    assert _notice(_mem("add", "user"), mode="on")[1].replace("> ", "").split("\n")[1] == "🫶 *something about you*"
+    assert _notice(_mem("add", "user"), mode="on")[1].replace("> ", "").split("\n")[1] == "👤 *something about you*"
     mem_hdr = _header(_mem("add"))
     assert any(mem_hdr.endswith(line) for line in pools["memory"][1])
     assert _notice(_mem("add"), mode="on")[1].replace("> ", "").split("\n")[1] == "🧠 *a note for later*"
