@@ -58,6 +58,13 @@ POLL_SECONDS = 5.0
 # for a while, and a false positive would start a second gateway.
 BEACON_STALE_SECONDS = 90.0
 
+# An updater PROVEN alive (pid + create_time match) is only treated as hung
+# after this long. Nothing refreshes the beacon mid-update, so the 90 s rule
+# above applied to a live updater relaunched the gateway in the middle of a
+# slow update (Windows runner, /update from chat, 2026-09-29): the gateway
+# then held the venv during the dependency sync and was relaunched twice more.
+HUNG_UPDATER_SECONDS = 2700.0
+
 # The watcher gives up after this long no matter what, so a forgotten watcher
 # cannot linger for days.
 WATCHER_MAX_LIFETIME_SECONDS = 3600.0
@@ -95,6 +102,37 @@ def _core_imports_healthy(root: Path, python: Path | None = None) -> bool:
         ).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+def _process_create_time(pid: int) -> float | None:
+    try:
+        import psutil  # type: ignore
+        return float(psutil.Process(int(pid)).create_time())
+    except Exception:
+        return None
+
+
+def _updater_identity_alive(data: dict[str, Any]) -> bool | None:
+    """Is the exact updater process recorded in the beacon still running?
+
+    True/False when the beacon recorded the updater's create_time and psutil
+    can check it (a recycled PID reads as gone); None when that is unknown,
+    so callers fall back to the legacy pid + staleness rule.
+    """
+    recorded = data.get("updater_create_time")
+    pid = int(data.get("updater_pid") or 0)
+    if not recorded or pid <= 0:
+        return None
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return None
+    try:
+        return abs(float(psutil.Process(pid).create_time()) - float(recorded)) < 1.0
+    except psutil.NoSuchProcess:
+        return False
+    except Exception:
+        return None
 
 
 def _gateway_identity() -> tuple[int, float] | None:
@@ -362,6 +400,7 @@ def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None,
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "updater_pid": os.getpid(),
+        "updater_create_time": _process_create_time(os.getpid()),
         "refreshed_at": time.time(),
         "gateway_argv": list(argv),
         "cwd": os.getcwd(),
@@ -463,6 +502,7 @@ def hand_off_beacon(child_pid: int, *, clover_home: Optional[Path] = None) -> bo
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         data["updater_pid"] = int(child_pid)
+        data["updater_create_time"] = _process_create_time(int(child_pid))
         data["refreshed_at"] = time.time()
         data.pop("ready_for_probe", None)
         tmp = path.with_suffix(".tmp")
@@ -625,7 +665,16 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
         age = time.time() - refreshed_at
 
         updater_gone = not _pid_alive(updater_pid)
-        beacon_stale = age > BEACON_STALE_SECONDS
+        identity = None if updater_gone else _updater_identity_alive(data)
+        if identity is None:
+            # Legacy beacon / no psutil: pid liveness, with staleness as the
+            # guard against a recycled PID.
+            beacon_stale = age > BEACON_STALE_SECONDS
+        else:
+            # The pid is live: its create_time says whether it is still OUR
+            # updater (a recycled pid reads as gone).
+            updater_gone = not identity
+            beacon_stale = age > HUNG_UPDATER_SECONDS
 
         if updater_gone or data.get("ready_for_probe") or (beacon_stale and not data.get("pre_pull_sha")):
             if data.get("pre_pull_sha") and data.get("repo"):

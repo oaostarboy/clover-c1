@@ -3428,6 +3428,24 @@ def _run_pending_fleet_restart() -> bool:
         return False
 
 
+def _drop_profiles_already_relaunched(token: dict | None, relaunched) -> None:
+    """Remove profiles another restart path already relaunched from ``token``."""
+    if not isinstance(token, dict) or not token.get("resume_needed"):
+        return
+    done = {str(p) for p in (relaunched or [])}
+    profiles = token.get("profiles") or {}
+    if not done or not isinstance(profiles, dict):
+        return
+    kept = {k: v for k, v in profiles.items() if str(k) not in done}
+    if len(kept) == len(profiles):
+        return
+    token["profiles"] = kept
+    token.setdefault("already_relaunched_profiles", sorted(done & set(map(str, profiles))))
+    if not kept and not any((u or {}).get("argv") for u in token.get("unmapped") or []) \
+            and not token.get("services") and not token.get("cold_start_if_installed"):
+        token["resume_needed"] = False
+
+
 def _windows_gateways_relaunched_now(token: dict | None) -> bool:
     """True when this run's Windows resume just relaunched paused gateways."""
     if not isinstance(token, dict) or token.get("resume_needed"):
@@ -10514,6 +10532,12 @@ def _cmd_update_impl(args, gateway_mode: bool):
             except Exception:
                 pass
 
+        # One relaunch per profile: a profile the restart phase above already
+        # relaunched (a gateway was up again by then) must not be relaunched
+        # a second time by the Windows resume -- the pair fired back to back
+        # and killed each other's fresh gateway (Windows runner, /update
+        # from chat, 2026-09-29).
+        _drop_profiles_already_relaunched(_windows_gateway_resume, relaunched_profiles)
         try:
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
         except Exception as _windows_resume_exc:

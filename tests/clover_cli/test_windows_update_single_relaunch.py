@@ -367,3 +367,52 @@ def test_pause_never_tree_kills_the_updaters_own_ancestry(home, monkeypatch, tmp
 
     assert tree_killed == []
     assert single_killed == [101]
+
+
+def _aged_beacon(age: float, **fields) -> Path:
+    beacon = urw.write_beacon([sys.executable, "-m", "clover_cli.main", "gateway", "run"])
+    data = json.loads(beacon.read_text(encoding="utf-8"))
+    data["refreshed_at"] = time.time() - age
+    data.update(fields)
+    beacon.write_text(json.dumps(data), encoding="utf-8")
+    return beacon
+
+
+def test_live_updater_with_a_stale_beacon_does_not_relaunch_mid_update(home, monkeypatch):
+    """Windows runner, /update from chat: 108 s into a live update the watcher
+    started a gateway because nothing refreshes the beacon; that gateway then
+    held the venv during the sync and was relaunched twice more."""
+    beacon = _aged_beacon(urw.BEACON_STALE_SECONDS + 60)  # this process = live updater
+    spawned = []
+    monkeypatch.setattr(urw, "_gateway_running", lambda: False)
+    monkeypatch.setattr(urw.subprocess, "Popen", lambda *a, **k: spawned.append(a))
+    monkeypatch.setattr(urw, "WATCHER_MAX_LIFETIME_SECONDS", 0.4)
+    assert urw.watch(beacon, poll=0.02) == "expired"
+    assert spawned == []
+
+
+def test_recycled_updater_pid_still_reads_as_gone(home, monkeypatch):
+    beacon = _aged_beacon(0, updater_create_time=12345.0)  # our pid, someone else's start time
+    spawned = []
+    monkeypatch.setattr(urw, "_gateway_running", lambda: False)
+    monkeypatch.setattr(urw.subprocess, "Popen", lambda argv, **k: spawned.append(argv))
+    assert urw.watch(beacon, poll=0.02) == "restarted"
+    assert len(spawned) == 1
+
+
+def test_a_truly_hung_updater_still_gets_its_gateway_back(home, monkeypatch):
+    beacon = _aged_beacon(urw.HUNG_UPDATER_SECONDS + 60)
+    spawned = []
+    monkeypatch.setattr(urw, "_gateway_running", lambda: False)
+    monkeypatch.setattr(urw.subprocess, "Popen", lambda argv, **k: spawned.append(argv))
+    assert urw.watch(beacon, poll=0.02) == "restarted"
+
+
+def test_resume_skips_profiles_the_restart_phase_already_relaunched():
+    from clover_cli import update_cmd
+
+    token = {"resume_needed": True, "profiles": {"default": 1, "work": 2}, "unmapped": []}
+    update_cmd._drop_profiles_already_relaunched(token, ["default"])
+    assert token["profiles"] == {"work": 2} and token["resume_needed"] is True
+    update_cmd._drop_profiles_already_relaunched(token, ["work"])
+    assert token["profiles"] == {} and token["resume_needed"] is False
