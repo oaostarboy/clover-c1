@@ -1071,13 +1071,12 @@ def summarize_background_review_actions(
 def _clover_review_notice(
     agent: Any, review_messages: List[Dict], messages_snapshot: List[Dict]
 ) -> Optional[Tuple[List[str], str]]:
-    """Clo-style ``(cli_lines, gateway_message)`` under the clover skin, else None."""
+    """Message-pack ``(cli_lines, gateway_message)`` (Clo's or a skin's own), else None."""
     try:
         from agent import clover_flavor
-        from agent.display import _get_skin
-        from agent.i18n import get_language
 
-        if not (clover_flavor.skin_flavor_enabled(_get_skin()) and get_language() == "en"):
+        pack = clover_flavor.active_pack()
+        if pack is None:
             return None
         items: List[Tuple[str, str, str]] = []
         summarize_background_review_actions(
@@ -1087,7 +1086,7 @@ def _clover_review_notice(
             structured=items,
         )
         chat_key = str(getattr(agent, "session_id", "") or "")
-        return clover_flavor.render_review_notice(items, chat_key)
+        return clover_flavor.render_review_notice(items, chat_key, pack=pack)
     except Exception:
         return None
 

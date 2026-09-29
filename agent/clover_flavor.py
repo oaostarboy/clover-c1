@@ -5,6 +5,15 @@ the small amount of *behavior* that needs per-turn state: the once-per-turn
 lucky roll, time-of-day / long-task picks, and the bad-luck / luck's-back
 status after a failed tool.  Randomness and the clock are injectable so tests
 never depend on real time or chance.
+
+It also owns the *message pack* machinery: every chat message Clo words
+(busy acks, lifecycle notices, status lines, the review notice, the cron
+header, the first hello, the /model + clarify + approval picker strings) is
+data in a pack dict.  ``CLOVER_PACK`` is the built-in clover skin's pack; any
+other skin can ship its own via a top-level ``messages:`` block (see the
+skin_engine docstring).  ``active_pack()`` returns the pack for the active
+skin, or None (stock text everywhere).  A kind a pack has no ``lines`` for
+always renders the stock text -- one skin's lines never leak into another.
 """
 
 from __future__ import annotations
@@ -56,6 +65,422 @@ def skin_flavor_enabled(skin: Any) -> bool:
     """True when *skin* opts into the clover flavor and the console can show it."""
     spinner = getattr(skin, "spinner", None) or {}
     return spinner.get("flavor") == "clover" and emoji_safe()
+
+
+# --- message packs ---------------------------------------------------------------------
+
+# Every kind a pack may re-skin via ``lines`` (ack / lifecycle / status / review).
+PACK_KINDS = (
+    "steer", "redirect", "interrupt", "queued", "stop",
+    "restarting", "shutting_down", "restart_requested", "restart_in_progress",
+    "draining", "back_online", "job_interrupted", "update_rolled_back",
+    "busy", "rate_limited", "error", "model_substitute",
+    "user", "memory", "skill", "mixed", "tidy",
+)
+_ACK_KINDS = PACK_KINDS[:13]
+_STATUS_KINDS = PACK_KINDS[13:17]
+_REVIEW_KINDS = PACK_KINDS[17:]
+
+_REVIEW_ITEM_DEFAULTS = {
+    "about_you": "🪪 about you",
+    "note": "🧠",
+    "note_updated": "🧠 updated",
+    "new_skill": "🧬 new skill",
+    "improved": "🧬 improved",
+    "removed": "🧹",
+}
+
+CLOVER_PACK: dict = {
+    "mark": NORMAL_LEAF,
+    "lucky_mark": LUCKY_LEAF,
+    "done_mark": "🍀",
+    "fail_mark": "🥀",
+    'faces': {
+        'steer': [
+            '(•̀ᴗ•́)و',
+            '(｀・ω・´)ゞ',
+            '(ง •̀_•́)ง',
+            '(๑•̀ㅂ•́)و✧',
+        ],
+        'redirect': [
+            '(・・ )?',
+            '(°ー°〃)',
+            '(⊙_⊙)ゞ',
+            '( •́ •̀ )',
+        ],
+        'interrupt': [
+            '(°ロ°)!',
+            '(⊙_⊙)',
+            '(ﾟДﾟ)',
+            '(｡•́︿•̀｡)',
+        ],
+        'queued': [
+            '(っ˘ω˘ς)',
+            '( ˘▽˘)っ',
+            '(◕ᴗ◕✿)',
+            '(ᵔᴥᵔ)',
+        ],
+        'stop': [
+            '(￣▽￣)ゞ',
+            '(・ω・)ノ',
+            '(´• ω •`)ﾉ',
+            '(ᵔᴥᵔ)ノ',
+        ],
+        'restarting': [
+            '(￣▽￣)ゞ',
+            '(・ω・)ノ',
+            '(｀・ω・´)ゞ',
+            '(◕ᴗ◕✿)',
+        ],
+        'shutting_down': [
+            '(´• ω •`)ﾉ',
+            '(・ω・)ノ',
+            '(ᵔᴥᵔ)ノ',
+        ],
+        'restart_requested': [
+            '(•̀ᴗ•́)و',
+            '(◕ᴗ◕✿)',
+            '(｀・ω・´)ゞ',
+        ],
+        'restart_in_progress': [
+            '(っ˘ω˘ς)',
+            '(°ー°〃)',
+        ],
+        'draining': [
+            '(っ˘ω˘ς)',
+            '( ˘▽˘)っ',
+        ],
+        'back_online': [
+            '(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧',
+            '(◕ᴗ◕✿)',
+            '(≧◡≦)',
+            'ヾ(＾∇＾)',
+        ],
+        'job_interrupted': [
+            '(｡•́︿•̀｡)',
+            '(´･_･`)',
+        ],
+        'update_rolled_back': [
+            '(´･_･`)',
+            '(｡•́︿•̀｡)',
+            '(・・ )?',
+        ],
+        'busy': [
+            '(｡•́︿•̀｡)',
+            '(´･_･`)',
+            '(っ˘ω˘ς)',
+        ],
+        'rate_limited': [
+            '(￣ω￣;)',
+            '(´･_･`)',
+        ],
+        'error': [
+            '(╥﹏╥)',
+            '(｡•́︿•̀｡)',
+        ],
+        'model_substitute': [
+            '(・・ )?',
+            '(°ー°〃)',
+        ],
+        'user': [
+            '(◍•ᴗ•◍)',
+            '(˶ᵔ ᵕ ᵔ˶)',
+            '(◕ᴗ◕✿)',
+        ],
+        'memory': [
+            '(｀・ω・´)ゞ',
+            '(・ω・)ノ',
+            '(•̀ᴗ•́)و',
+        ],
+        'skill': [
+            '(๑•̀ㅂ•́)و✧',
+            '(ง •̀_•́)ง',
+            '(ﾉ◕ヮ◕)ﾉ',
+        ],
+        'mixed': [
+            '(◕ᴗ◕✿)',
+            '(๑•̀ㅂ•́)و✧',
+            '(｀・ω・´)ゞ',
+        ],
+        'tidy': [
+            '(・ω・)ノ',
+            '( ˘▽˘)っ',
+            '(￣▽￣)ゞ',
+        ],
+    },
+    'lines': {
+        'steer': [
+            'got it, adding that in',
+            'noted, slipping it in',
+            'ooh, good call, adding it',
+            'on it, mixing that in',
+        ],
+        'redirect': [
+            'oh, changing course',
+            'turning around',
+            'new direction, got it',
+            'okay okay, switching paths',
+        ],
+        'interrupt': [
+            'stopping to listen',
+            'dropping everything',
+            'ears up',
+            'pausing for you',
+        ],
+        'queued': [
+            'saved for next',
+            'tucked in my pocket',
+            'on the list',
+            'right after this one',
+        ],
+        'stop': [
+            'stopped',
+            'okay, all stopped',
+            'paused right here',
+            'done for now',
+        ],
+        'restarting': [
+            'restarting, be right back',
+            'quick nap, back in a sec',
+            'brb, freshening up',
+            'stepping out for a moment',
+        ],
+        'shutting_down': [
+            'heading out',
+            'shutting down for now',
+            'signing off',
+        ],
+        'restart_requested': [
+            'restarting now',
+            'okay, one quick restart',
+            'be right back',
+        ],
+        'restart_in_progress': [
+            'already restarting, hang tight',
+            'on it already, one sec',
+        ],
+        'draining': [
+            'wrapping up before I restart',
+            'just finishing up',
+        ],
+        'back_online': [
+            "I'm back!",
+            'back and ready',
+            'all fresh, ready when you are',
+            'online again',
+        ],
+        'job_interrupted': [
+            'oops',
+            'sorry about that',
+            'bad timing',
+        ],
+        'update_rolled_back': [
+            "hmm, that didn't work",
+            'update hiccup',
+            'not this time',
+        ],
+        'busy': [
+            "the model's busy",
+            'a bit crowded right now',
+            'the model needs a sec',
+        ],
+        'rate_limited': [
+            'hit the usage limit',
+            'slowing down a little',
+        ],
+        'error': [
+            "that didn't work",
+            'hit a snag',
+        ],
+        'model_substitute': [
+            "couldn't find *{requested}*",
+            'no *{requested}* on {provider}',
+        ],
+        'user': [
+            'got to know you a little better',
+            'noted something about you',
+            "I'll remember that about you",
+        ],
+        'memory': [
+            'noted for next time',
+            'filed that away',
+            'jotted that down',
+        ],
+        'skill': [
+            'learned a new trick',
+            'got a little better at something',
+            'sharpened a skill',
+        ],
+        'mixed': [
+            'learned a few things',
+            'picked up a few things',
+            'a good little lesson',
+        ],
+        'tidy': [
+            'tidied up my notes',
+            'cleaned up a little',
+            'swept out an old note',
+        ],
+    },
+    "review_items": dict(_REVIEW_ITEM_DEFAULTS),
+    "hello": [
+        "🍀(◕ᴗ◕✿) hi! I'm Clo, your clover. ask me anything.",
+        "🍀(ﾉ◕ヮ◕)ﾉ hello! I'm Clo, your clover. what shall we grow today?",
+        "🍀(＾▽＾) hey, I'm Clo, your clover. what's on your mind?",
+    ],
+    "ui": {
+        "model_title": "🍀 *Pick a model*",
+        "using": "Using",
+        "choose_provider": "Choose a provider",
+        "choose_model": "Choose a model",
+        "switched": "🍀 switched!",
+        "switch_failed": "🥀 switch failed",
+        "expired": "☘️ this menu expired, send /model again",
+        "clarify_mark": "🌼",
+        "other": "✏️ something else",
+        "type_it": "✏️ type it in the chat",
+        "waiting_for": "waiting for {user} to type…",
+        "chosen_mark": "🍀",
+        "allow_mark": "🍀",
+        "deny_mark": "🥀",
+    },
+}
+
+
+def _str_list(value: Any) -> list:
+    if isinstance(value, (list, tuple)):
+        return [x for x in value if isinstance(x, str)]
+    return []
+
+
+def _str_map(value: Any) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    return {str(k): v for k, v in value.items() if isinstance(v, str)}
+
+
+def normalize_pack(raw: Any) -> Optional[dict]:
+    """A skin's raw ``messages:`` mapping as a pack dict (None when empty/invalid)."""
+    if not isinstance(raw, dict) or not raw:
+        return None
+
+    def _mark(key: str) -> str:
+        value = raw.get(key)
+        return value if isinstance(value, str) else ""
+
+    faces_raw = raw.get("faces") if isinstance(raw.get("faces"), dict) else {}
+    lines_raw = raw.get("lines") if isinstance(raw.get("lines"), dict) else {}
+    lines = {str(k): _str_list(v) for k, v in lines_raw.items()}
+    return {
+        "mark": _mark("mark"),
+        "lucky_mark": _mark("lucky_mark"),
+        "done_mark": _mark("done_mark"),
+        "fail_mark": _mark("fail_mark"),
+        "faces": {str(k): _str_list(v) for k, v in faces_raw.items()},
+        "lines": {k: v for k, v in lines.items() if v},
+        "review_items": {**_REVIEW_ITEM_DEFAULTS, **_str_map(raw.get("review_items"))},
+        "hello": _str_list(raw.get("hello")),
+        "ui": _str_map(raw.get("ui")),
+    }
+
+
+def pack_for_skin(skin: Any) -> Optional[dict]:
+    """The message pack *skin* ships: its own ``messages`` block, else Clo's for the clover skin."""
+    own = normalize_pack(getattr(skin, "messages", None))
+    if own is not None:
+        return own
+    spinner = getattr(skin, "spinner", None) or {}
+    if spinner.get("flavor") == "clover":
+        return CLOVER_PACK
+    return None
+
+
+def active_pack() -> Optional[dict]:
+    """The active skin's message pack, or None (stock text).
+
+    Same guards as the clover flavor always had: the console must be able to
+    show the emoji and the session language must be English.
+    """
+    try:
+        from agent.display import _get_skin
+        from agent.i18n import get_language
+
+        if get_language() != "en" or not emoji_safe():
+            return None
+        return pack_for_skin(_get_skin())
+    except Exception:
+        return None
+
+
+def has_lines(pack: Optional[dict], kind: str) -> bool:
+    return bool(pack and pack["lines"].get(kind))
+
+
+def _join(*parts: str) -> str:
+    return " ".join(p for p in parts if p)
+
+
+def ui(key: str, stock: Optional[str] = None) -> Optional[str]:
+    """The active pack's picker string for *key*; *stock* when unset / no pack."""
+    pack = active_pack()
+    if pack is not None:
+        value = pack["ui"].get(key)
+        if isinstance(value, str):
+            return value
+    return stock
+
+
+def pick_pair(
+    pack: dict,
+    kind: str,
+    store: dict,
+    lock: Any,
+    key: str,
+    rng: Any,
+    *,
+    lucky: bool = False,
+    mark: Optional[str] = None,
+    max_keep: int = 1024,
+) -> Tuple[str, str]:
+    """``(face, line)`` for *kind*; never the same pair twice in a row for *key*.
+
+    Face and line are picked independently.  The face is *mark* (default: the
+    pack's mark, or its lucky mark on a lucky turn) plus a face body; a kind
+    with no faces is just the mark.
+    """
+    faces = pack["faces"].get(kind) or [""]
+    lines = pack["lines"][kind]
+    with lock:
+        last = store.get(key)
+        body, line = rng.choice(faces), rng.choice(lines)
+        for _ in range(20):
+            if (body, line) != last:
+                break
+            body, line = rng.choice(faces), rng.choice(lines)
+        else:  # a stubborn RNG: force a different line (a one-line pack just repeats)
+            line = next((x for x in lines if (body, x) != last), line)
+        if len(store) >= max_keep and key not in store:
+            store.pop(next(iter(store)))
+        store[key] = (body, line)
+    if mark is None:
+        mark = pack["lucky_mark"] if lucky and pack["lucky_mark"] else pack["mark"]
+    return mark + body, line
+
+
+def clover_pool(pack: dict, kind: str, mark: Optional[str] = None, line_prefix: str = "") -> tuple:
+    """Legacy ``(faces, lines)`` pool view of *kind* (faces carry the mark)."""
+    mark = pack["mark"] if mark is None else mark
+    return (
+        tuple(mark + body for body in pack["faces"][kind]),
+        tuple(_join(line_prefix, line) for line in pack["lines"][kind]),
+    )
+
+
+def fill_line(line: str, fields: dict) -> str:
+    try:
+        return line.format(**fields)
+    except (KeyError, IndexError, ValueError):
+        return line
 
 
 def growth_frame(elapsed: float) -> str:
@@ -168,31 +593,14 @@ def note_tool_result(is_error: bool) -> None:
 
 # Header pools by what the pass did, so "learned about you", "saved a note",
 # "learned a trick" and "tidied up" each read differently at a glance.
+# Back-compat views of Clo's pack (older callers/tests import these).
 REVIEW_POOLS = {
-    "user": (
-        ("☘️(◍•ᴗ•◍)", "☘️(˶ᵔ ᵕ ᵔ˶)", "☘️(◕ᴗ◕✿)"),
-        ("🍀 got to know you a little better", "🍀 noted something about you",
-         "🍀 I'll remember that about you"),
-    ),
-    "memory": (
-        ("☘️(｀・ω・´)ゞ", "☘️(・ω・)ノ", "☘️(•̀ᴗ•́)و"),
-        ("🍀 noted for next time", "🍀 filed that away", "🍀 jotted that down"),
-    ),
-    "skill": (
-        ("☘️(๑•̀ㅂ•́)و✧", "☘️(ง •̀_•́)ง", "☘️(ﾉ◕ヮ◕)ﾉ"),
-        ("🍀 learned a new trick", "🍀 got a little better at something",
-         "🍀 sharpened a skill"),
-    ),
-    "mixed": (
-        ("☘️(◕ᴗ◕✿)", "☘️(๑•̀ㅂ•́)و✧", "☘️(｀・ω・´)ゞ"),
-        ("🍀 learned a few things", "🍀 picked up a few things", "🍀 a good little lesson"),
-    ),
-    "tidy": (
-        ("☘️(・ω・)ノ", "☘️( ˘▽˘)っ", "☘️(￣▽￣)ゞ"),
-        ("🧹 tidied up my notes", "🧹 cleaned up a little", "🧹 swept out an old note"),
-    ),
+    kind: clover_pool(
+        CLOVER_PACK, kind,
+        line_prefix=_REVIEW_ITEM_DEFAULTS["removed"] if kind == "tidy" else CLOVER_PACK["done_mark"],
+    )
+    for kind in _REVIEW_KINDS
 }
-# Back-compat aliases (older callers/tests import these).
 REVIEW_FACES = tuple(dict.fromkeys(f for faces, _ in REVIEW_POOLS.values() for f in faces))
 REVIEW_SAVED_LINES = REVIEW_POOLS["memory"][1]
 REVIEW_TIDY_LINES = REVIEW_POOLS["tidy"][1]
@@ -207,27 +615,34 @@ def _review_kind(items: list) -> str:
         return "tidy"
     if len(saved) > 1:
         return "mixed"
-    return next(iter(saved)) if next(iter(saved)) in REVIEW_POOLS else "memory"
+    return next(iter(saved)) if next(iter(saved)) in _REVIEW_KINDS else "memory"
 
 
-def _pick_review_header(kind, chat_key: str, rng: Any) -> str:
-    """``"<face> <line>"``, never the same pair twice in a row for *chat_key*."""
+def _icon(pack: dict, key: str) -> str:
+    """Leading icon of a ``review_items`` value (``"🧬 new skill"`` -> ``"🧬"``)."""
+    return pack["review_items"].get(key, "").partition(" ")[0]
+
+
+def _label(pack: dict, key: str) -> str:
+    return pack["review_items"].get(key, "").partition(" ")[2]
+
+
+def _pick_review_header(kind, chat_key: str, rng: Any, pack: Optional[dict] = None) -> Optional[str]:
+    """``"<face> <line>"``, never the same pair twice in a row for *chat_key*.
+
+    None when *pack* has no lines for *kind* (the caller keeps the stock notice).
+    """
+    pack = pack or CLOVER_PACK
     if isinstance(kind, bool):  # legacy signature: saved flag
         kind = "memory" if kind else "tidy"
-    faces, lines = REVIEW_POOLS.get(kind, REVIEW_POOLS["memory"])
-    with _review_lock:
-        last = _review_last_pick.get(chat_key)
-        pair = (rng.choice(faces), rng.choice(lines))
-        for _ in range(20):
-            if pair != last:
-                break
-            pair = (rng.choice(faces), rng.choice(lines))
-        else:  # a stubborn RNG: force a different line
-            pair = (pair[0], next(x for x in lines if (pair[0], x) != last))
-        if len(_review_last_pick) >= _MAX_REMEMBERED_REVIEW_CHATS and chat_key not in _review_last_pick:
-            _review_last_pick.pop(next(iter(_review_last_pick)))
-        _review_last_pick[chat_key] = pair
-    return f"{pair[0]} {pair[1]}"
+    if not has_lines(pack, kind):
+        return None
+    face, line = pick_pair(
+        pack, kind, _review_last_pick, _review_lock, chat_key, rng,
+        mark=pack["mark"], max_keep=_MAX_REMEMBERED_REVIEW_CHATS,
+    )
+    lead = _icon(pack, "removed") if kind == "tidy" else pack["done_mark"]
+    return _join(face, lead, line)
 
 
 def _italic(text: str, markdown: bool = True) -> str:
@@ -235,48 +650,59 @@ def _italic(text: str, markdown: bool = True) -> str:
     return f"*{body}*" if markdown else body
 
 
-def _review_item_line(group: str, op: str, text: str, markdown: bool) -> str:
-    """One Clo-style line for a structured ``(group, op, text)`` review action."""
+def _review_item_line(group: str, op: str, text: str, markdown: bool, pack: Optional[dict] = None) -> str:
+    """One line for a structured ``(group, op, text)`` review action (Clo's icons by default)."""
+    pack = pack or CLOVER_PACK
+    items = pack["review_items"]
     it = _italic(text, markdown)
     if group == "skill":
         if op == "create":
-            return f"🧬 new skill: {it}" if text else f"🧬 {_italic('new skill', markdown)}"
+            if text:
+                return f"{items['new_skill']}: {it}"
+            return _join(_icon(pack, "new_skill"), _italic(_label(pack, "new_skill") or "new skill", markdown))
         if op == "improve":
-            return f"🧬 improved: {it}"
+            return f"{items['improved']}: {it}"
         if op == "delete":
-            return f"🧹 removed skill: {it}" if text else f"🧹 {_italic('skill removed', markdown)}"
-        return f"🧬 {_italic('skill updated', markdown)}"
+            if text:
+                return _join(items["removed"], f"removed skill: {it}")
+            return _join(items["removed"], _italic("skill removed", markdown))
+        return _join(_icon(pack, "improved"), _italic("skill updated", markdown))
     if op == "remove":
         if text:
-            return f"🧹 {it}"
-        return f"🧹 {_italic('an old note about you' if group == 'user' else 'an old note', markdown)}"
+            return _join(items["removed"], it)
+        return _join(items["removed"], _italic("an old note about you" if group == "user" else "an old note", markdown))
     if group == "user":
         if op in ("add", "replace") and text:
-            return f"🪪 about you: {it}"
-        return f"🪪 {_italic('something about you', markdown)}"
+            return f"{items['about_you']}: {it}"
+        return _join(_icon(pack, "about_you"), _italic("something about you", markdown))
     if op == "replace" and text:
-        return f"🧠 updated: {it}"
+        return f"{items['note_updated']}: {it}"
     if op == "add" and text:
-        return f"🧠 {it}"
-    return f"🧠 {_italic('a note for later', markdown)}"
+        return _join(items["note"], it)
+    return _join(items["note"], _italic("a note for later", markdown))
 
 
 def render_review_notice(
-    items: Any, chat_key: str = "", rng: Optional[Any] = None
-) -> Tuple[list, str]:
-    """Clo-style background-review notice: ``(cli_lines, gateway_message)``.
+    items: Any, chat_key: str = "", rng: Optional[Any] = None, pack: Optional[dict] = None
+) -> Optional[Tuple[list, str]]:
+    """Message-pack background-review notice: ``(cli_lines, gateway_message)``.
 
     *items* are ``(group, op, text)`` tuples from
     ``summarize_background_review_actions(structured=...)``.  The header is
-    picked by what changed (about you / a note / a skill / a mix, 🍀) or 🧹
-    when the pass only removed things.  The
-    gateway message uses markdown ``*italics*``; CLI lines drop the asterisks.
+    picked by what changed (about you / a note / a skill / a mix) or by the
+    removed icon when the pass only removed things.  The gateway message uses
+    markdown ``*italics*``; CLI lines drop the asterisks.  *pack* defaults to
+    Clo's; None comes back when the pack has no header lines for this kind of
+    change (keep the stock notice).
     """
+    pack = pack or CLOVER_PACK
     items = list(items or [])
-    header = _pick_review_header(_review_kind(items), chat_key, rng if rng is not None else random)
+    header = _pick_review_header(_review_kind(items), chat_key, rng if rng is not None else random, pack)
+    if header is None:
+        return None
 
     def _lines(markdown: bool) -> list:
-        return list(dict.fromkeys(_review_item_line(g, o, t, markdown) for g, o, t in items))
+        return list(dict.fromkeys(_review_item_line(g, o, t, markdown, pack) for g, o, t in items))
 
     # Chat surfaces get a quote bar (like the turn card) so the notice can't be
     # mistaken for a real reply; the item text stays italic.
@@ -293,57 +719,15 @@ def reset_review_notices() -> None:
 # imports gateway code).  Each line is "<face> <line>. <tail>"; the tail keeps
 # every functional detail (retry timing, model names, error summary).
 
-STATUS_POOLS = {
-    "busy": (
-        ("☘️(｡•́︿•̀｡)", "☘️(´･_･`)", "☘️(っ˘ω˘ς)"),
-        ("the model's busy", "a bit crowded right now", "the model needs a sec"),
-    ),
-    "rate_limited": (
-        ("☘️(￣ω￣;)", "☘️(´･_･`)"),
-        ("hit the usage limit", "slowing down a little"),
-    ),
-    "error": (
-        ("☘️(╥﹏╥)", "☘️(｡•́︿•̀｡)"),
-        ("that didn't work", "hit a snag"),
-    ),
-    "model_substitute": (
-        ("☘️(・・ )?", "☘️(°ー°〃)"),
-        ("couldn't find *{requested}*", "no *{requested}* on {provider}"),
-    ),
-}
+STATUS_POOLS = {kind: clover_pool(CLOVER_PACK, kind) for kind in _STATUS_KINDS}
 _MAX_REMEMBERED_STATUS_CHATS = 1024
 _status_last_pick: dict = {}
 _status_lock = threading.Lock()
 
 
 def skin_active() -> bool:
-    """True when the clover skin is active, the console can show it, and the language is English."""
-    try:
-        from agent.display import _get_skin
-        from agent.i18n import get_language
-
-        return skin_flavor_enabled(_get_skin()) and get_language() == "en"
-    except Exception:
-        return False
-
-
-def _pick_status(kind: str, chat_key: str, rng: Any) -> Tuple[str, str]:
-    faces, lines = STATUS_POOLS[kind]
-    key = f"{kind}:{chat_key}"
-    with _status_lock:
-        last = _status_last_pick.get(key)
-        face, line = rng.choice(faces), rng.choice(lines)
-        for _ in range(20):
-            if (face, line) != last:
-                break
-            face, line = rng.choice(faces), rng.choice(lines)
-        else:  # a stubborn RNG: force a different line
-            line = next(x for x in lines if (face, x) != last)
-        if len(_status_last_pick) >= _MAX_REMEMBERED_STATUS_CHATS and key not in _status_last_pick:
-            _status_last_pick.pop(next(iter(_status_last_pick)))
-        _status_last_pick[key] = (face, line)
-    turn = _turn
-    return _with_leaf(face, bool(turn is not None and turn.lucky)), line
+    """True when the active skin ships a message pack the console can show (English only)."""
+    return active_pack() is not None
 
 
 def status_line(
@@ -355,19 +739,23 @@ def status_line(
     joiner: str = ". ",
     **fields: Any,
 ) -> str:
-    """Clo-style status ``"<face> <line><joiner><tail>"``; *stock* untouched off the clover skin.
+    """Pack-styled status ``"<face> <line><joiner><tail>"``; *stock* untouched without a pack line.
 
     *fields* fill ``{placeholders}`` in the line (e.g. ``requested``).  The same
     face+line pair is never used twice in a row for one (kind, chat).
     """
-    if kind not in STATUS_POOLS or not skin_active():
+    pack = active_pack()
+    if not has_lines(pack, kind):
         return stock
-    face, line = _pick_status(kind, str(chat_key or ""), rng if rng is not None else random)
-    try:
-        line = line.format(**fields)
-    except (KeyError, IndexError):
-        pass
-    return f"{face} {line}{joiner}{tail}" if tail else f"{face} {line}"
+    turn = _turn
+    face, line = pick_pair(
+        pack, kind, _status_last_pick, _status_lock, f"{kind}:{chat_key or ''}",
+        rng if rng is not None else random,
+        lucky=bool(turn is not None and turn.lucky),
+        max_keep=_MAX_REMEMBERED_STATUS_CHATS,
+    )
+    head = _join(face, fill_line(line, fields))
+    return f"{head}{joiner}{tail}" if tail else head
 
 
 def reset_status_lines() -> None:
@@ -378,16 +766,19 @@ def reset_status_lines() -> None:
 # --- cron result header ----------------------------------------------------------------
 
 def cron_header(name: str, failed: bool = False, rng: Optional[Any] = None) -> Optional[str]:
-    """Clo-style cron delivery header, or None off the clover skin (keep the stock header).
+    """Message-pack cron delivery header, or None without a pack (keep the stock header).
 
-    ``"☘️ <name>"`` (lucky 1/LUCKY_ODDS: ``"🍀 <name>"``); a failed job is
-    ``"🥀 <name> didn't finish"``.
+    Clo: ``"☘️ <name>"`` (lucky 1/LUCKY_ODDS: ``"🍀 <name>"``); a failed job is
+    ``"🥀 <name> didn't finish"``.  Packs without a ``lucky_mark`` never roll.
     """
-    if not skin_active():
+    pack = active_pack()
+    if pack is None:
         return None
     if failed:
-        return f"🥀 {name} didn't finish"
-    rng = rng if rng is not None else random
-    lucky = rng.randrange(LUCKY_ODDS) == 0
-    return f"{LUCKY_LEAF if lucky else NORMAL_LEAF} {name}"
-
+        return _join(pack["fail_mark"], f"{name} didn't finish")
+    mark = pack["mark"]
+    if pack["lucky_mark"]:
+        rng = rng if rng is not None else random
+        if rng.randrange(LUCKY_ODDS) == 0:
+            mark = pack["lucky_mark"]
+    return _join(mark, name)

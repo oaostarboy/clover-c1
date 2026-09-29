@@ -549,4 +549,4 @@ async def test_generic_choice_picker_current_marker(monkeypatch):
     import inspect
 
     src = inspect.getsource(TelegramAdapter)
-    assert src.count("_clo('✓ ', '🍀 ')") == 4
+    assert src.count("_pfx('chosen_mark', '✓')") == 4
