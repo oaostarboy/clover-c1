@@ -219,58 +219,11 @@ class TestLoadShowReasoningCoercion:
             'display:\n  show_reasoning: true\n',
         ) is True
 
-    def test_default_true_when_key_absent(self, tmp_path, monkeypatch):
-        """Owner decision: live thoughts default ON — no config.yaml at all."""
-        assert self._load_with_config(tmp_path, monkeypatch, "") is True
-
-    def test_default_true_when_display_section_present_but_key_absent(
-        self, tmp_path, monkeypatch
-    ):
-        assert self._load_with_config(
-            tmp_path, monkeypatch,
-            'display:\n  tool_progress: all\n',
-        ) is True
-
-    def test_explicit_false_still_wins(self, tmp_path, monkeypatch):
-        """Owner decision explicitly preserves an explicit opt-out."""
-        assert self._load_with_config(
-            tmp_path, monkeypatch,
-            'display:\n  show_reasoning: false\n',
-        ) is False
 
 
-class TestResolveGatewayDisplayBoolShowReasoningDefault:
-    """The second show_reasoning read (gateway/run.py ~21581) must also
-    default True when nothing configures it — both for platforms outside
-    the per-platform tier system and for tiered platforms (each tier dict
-    in gateway.display_config now sets show_reasoning True explicitly)."""
 
-    def test_untiered_platform_defaults_true(self):
-        # "qqbot" has no entry in gateway.display_config._PLATFORM_DEFAULTS,
-        # so resolution falls through to _GLOBAL_DEFAULTS — exactly the
-        # fallback this bug lived in.
-        assert gateway_run._resolve_gateway_display_bool(
-            {}, "qqbot", "show_reasoning", default=True,
-        ) is True
 
-    def test_explicit_false_still_wins_for_untiered_platform(self):
-        cfg = {"display": {"platforms": {"qqbot": {"show_reasoning": False}}}}
-        assert gateway_run._resolve_gateway_display_bool(
-            cfg, "qqbot", "show_reasoning", default=True,
-        ) is False
 
-    def test_tiered_platform_defaults_true(self):
-        # "discord" has its own tier entry in _PLATFORM_DEFAULTS — this must
-        # also resolve True, not just the global-default fallback above.
-        assert gateway_run._resolve_gateway_display_bool(
-            {}, "discord", "show_reasoning", default=True,
-        ) is True
-
-    def test_explicit_false_still_wins_for_tiered_platform(self):
-        cfg = {"display": {"platforms": {"discord": {"show_reasoning": False}}}}
-        assert gateway_run._resolve_gateway_display_bool(
-            cfg, "discord", "show_reasoning", default=True,
-        ) is False
 
 
 def _reasoning_prepend_source():
@@ -379,6 +332,12 @@ class TestReasoningPrependDeduplication:
         """thinking relay OFF this turn, show_reasoning on -> still prepends,
         but the code-fence style must not leak literal ** markers."""
         runner = _reasoning_prepend_runner(monkeypatch, tmp_path)
+        # show_reasoning is opt-in again (b20781d8 reverted), so opt in.
+        runner._show_reasoning = True
+        monkeypatch.setattr(
+            gateway_run, "_resolve_gateway_display_bool",
+            lambda cfg, pk, setting, default=False, **kw: True if setting == "show_reasoning" else default,
+        )
         runner._run_agent = AsyncMock(return_value=_reasoning_agent_result(
             last_reasoning="**Fetching remote updates**\nchecking origin/main",
             reasoning_relayed_live=False,

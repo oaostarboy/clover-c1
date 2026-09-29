@@ -9975,16 +9975,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
     @staticmethod
     def _load_show_reasoning() -> bool:
-        """Load show_reasoning toggle from config.yaml display section.
-
-        Owner decision: live thoughts default ON for every user, matching
-        ``config_defaults.py`` and the TUI gateway. An explicit
-        ``display.show_reasoning: false`` still wins.
-        """
+        """Load show_reasoning toggle from config.yaml display section."""
         cfg = _load_gateway_runtime_config()
         return is_truthy_value(
             cfg_get(cfg, "display", "show_reasoning"),
-            default=True,
+            default=False,
         )
 
     @staticmethod
@@ -21631,7 +21626,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _load_gateway_config(),
                     _platform_config_key(source.platform),
                     "show_reasoning",
-                    default=bool(getattr(self, "_show_reasoning", True)),
+                    default=bool(getattr(self, "_show_reasoning", False)),
                     platform=source.platform,
                     require_platform_override_for={Platform.MATTERMOST},
                 )
@@ -21639,7 +21634,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _show_reasoning_effective = (
                     False
                     if source.platform == Platform.MATTERMOST
-                    else getattr(self, "_show_reasoning", True)
+                    else getattr(self, "_show_reasoning", False)
                 )
             if (
                 _show_reasoning_effective
