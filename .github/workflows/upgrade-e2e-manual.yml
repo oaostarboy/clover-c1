@@ -482,6 +482,28 @@ jobs:
 
           & "$env:CLOVER_BIN" repair | Tee-Object -FilePath "$env:TEMP\repair.log"
           $ErrorActionPreference = "Stop"
+          $ErrorActionPreference = "Continue"
+          & $venvPy -c "import fastapi" 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "--- repair diagnostics: re-running the dependency repair directly ---"
+            $diagPy = "$env:TEMP\repair_diag.py"
+            @'
+          import traceback
+          from clover_cli.repair_cmd import _repair_dependencies
+          try:
+              print("_repair_dependencies ->", _repair_dependencies())
+          except Exception:
+              traceback.print_exc()
+          '@ | Set-Content -Path $diagPy -Encoding utf8
+            Push-Location "$env:INSTALL_DIR"
+            & $venvPy $diagPy 2>&1 | Write-Host
+            Pop-Location
+            foreach ($lf in "agent.log","errors.log") {
+              Write-Host "--- tail $lf ---"
+              Get-Content "$env:CLOVER_HOME\logs\$lf" -Tail 60 -ErrorAction SilentlyContinue | Write-Host
+            }
+          }
+          $ErrorActionPreference = "Stop"
           & $venvPy -c "import fastapi"
 
           $repairLog = Get-Content "$env:TEMP\repair.log" -Raw
