@@ -230,14 +230,21 @@ _TELEGRAM_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _FLOOD_INLINE_WAIT_CAP_SECS = 5.0
 
 
-def _clo(stock: str, clo: str) -> str:
-    """*clo* under the clover skin (English), *stock* untouched otherwise."""
+def _ui(key: str, stock: Optional[str] = None) -> Optional[str]:
+    """The active skin message pack's picker string for *key* (Clo's, or a skin's own
+    ``messages.ui``); *stock* untouched when there is no pack or the key is unset."""
     try:
-        from gateway.clover_acks import active
+        from gateway.clover_acks import ui
 
-        return clo if active() else stock
+        return ui(key, stock)
     except Exception:
         return stock
+
+
+def _pfx(key: str, stock: str = "") -> str:
+    """A pack mark plus a trailing space (nothing when the mark is empty)."""
+    mark = _ui(key, stock)
+    return f"{mark} " if mark else ""
 
 
 def _flood_cap_result(wait: float) -> "SendResult":
@@ -6412,17 +6419,17 @@ class TelegramAdapter(BasePlatformAdapter):
             approval_id = next(self._approval_counter)
 
             buttons = [
-                InlineKeyboardButton(_clo("✅ Allow Once", "🍀 Allow Once"), callback_data=f"ea:once:{approval_id}")
+                InlineKeyboardButton(f"{_ui('allow_mark', '✅')} Allow Once", callback_data=f"ea:once:{approval_id}")
             ]
             if not smart_denied and allow_session:
                 buttons.append(
-                    InlineKeyboardButton(_clo("✅ Session", "🍀 Session"), callback_data=f"ea:session:{approval_id}")
+                    InlineKeyboardButton(f"{_ui('allow_mark', '✅')} Session", callback_data=f"ea:session:{approval_id}")
                 )
                 if allow_permanent:
                     buttons.append(
-                        InlineKeyboardButton(_clo("✅ Always", "🍀 Always"), callback_data=f"ea:always:{approval_id}")
+                        InlineKeyboardButton(f"{_ui('allow_mark', '✅')} Always", callback_data=f"ea:always:{approval_id}")
                     )
-            buttons.append(InlineKeyboardButton(_clo("❌ Deny", "🥀 Deny"), callback_data=f"ea:deny:{approval_id}"))
+            buttons.append(InlineKeyboardButton(f"{_ui('deny_mark', '❌')} Deny", callback_data=f"ea:deny:{approval_id}"))
             # Pair into rows (2x2 for the full set) so labels stay readable on
             # mobile — a single 4-button row truncates to "Allo… / Ses… / …".
             rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
@@ -6470,11 +6477,11 @@ class TelegramAdapter(BasePlatformAdapter):
 
             keyboard = InlineKeyboardMarkup([
                 [
-                    InlineKeyboardButton(_clo("✅ Approve Once", "🍀 Approve Once"), callback_data=f"sc:once:{confirm_id}"),
+                    InlineKeyboardButton(f"{_ui('allow_mark', '✅')} Approve Once", callback_data=f"sc:once:{confirm_id}"),
                     InlineKeyboardButton("🔒 Always Approve", callback_data=f"sc:always:{confirm_id}"),
                 ],
                 [
-                    InlineKeyboardButton(_clo("❌ Cancel", "🥀 Cancel"), callback_data=f"sc:cancel:{confirm_id}"),
+                    InlineKeyboardButton(f"{_ui('deny_mark', '❌')} Cancel", callback_data=f"sc:cancel:{confirm_id}"),
                 ],
             ])
 
@@ -6529,7 +6536,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="Not connected")
 
         try:
-            text = f"{_clo('❓', '🌼')} {_html.escape(question)}"
+            text = f"{_ui('clarify_mark', '❓')} {_html.escape(question)}"
             thread_id = self._metadata_thread_id(metadata)
 
             if choices:
@@ -6563,7 +6570,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     ])
                 rows.append([
                     InlineKeyboardButton(
-                        _clo("✏️ Other (type answer)", "✏️ something else"),
+                        _ui("other", "✏️ Other (type answer)"),
                         callback_data=f"cl:{clarify_id}:other",
                     )
                 ])
@@ -6618,10 +6625,10 @@ class TelegramAdapter(BasePlatformAdapter):
             provider_label = get_label(current_provider)
             text = self.format_message(
                 (
-                    f"{_clo('⚙ *Model Configuration*', '🍀 *Pick a model*')}\n\n"
-                    f"{_clo('Current model', 'Using')}: `{current_model or 'unknown'}`\n"
+                    f"{_ui('model_title', '⚙ *Model Configuration*')}\n\n"
+                    f"{_ui('using', 'Current model')}: `{current_model or 'unknown'}`\n"
                     f"Provider: {provider_label}\n\n"
-                    f"{_clo('Select a provider', 'Choose a provider')}:{provider_page_info}"
+                    f"{_ui('choose_provider', 'Select a provider')}:{provider_page_info}"
                 )
             )
 
@@ -6684,7 +6691,7 @@ class TelegramAdapter(BasePlatformAdapter):
             for i, choice in enumerate(choices):
                 label = str(choice.get("label") or choice.get("value") or "")
                 if choice.get("is_current"):
-                    label = f"{_clo('✓ ', '🍀 ')}{label}"
+                    label = f"{_pfx('chosen_mark', '✓')}{label}"
                 buttons.append(
                     InlineKeyboardButton(label, callback_data=f"cp:{i}")
                 )
@@ -6757,7 +6764,7 @@ class TelegramAdapter(BasePlatformAdapter):
 
         callback = state.get("on_choice_selected")
         if not callback:
-            await query.answer(text=_clo("Picker expired.", "☘️ this menu expired, send /model again"))
+            await query.answer(text=_ui("expired", "Picker expired."))
             return
 
         try:
@@ -6805,7 +6812,7 @@ class TelegramAdapter(BasePlatformAdapter):
             count = p.get("total_models", len(p.get("models", [])))
             label = f"{p['name']} ({count})"
             if p.get("is_current"):
-                label = f"{_clo('✓ ', '🍀 ')}{label}"
+                label = f"{_pfx('chosen_mark', '✓')}{label}"
             return InlineKeyboardButton(label, callback_data=f"mp:{p['slug']}")
 
         buttons: list = []
@@ -6818,7 +6825,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     )
                     label = f"{row['label']} ▸ ({count})"
                     if any(m.get("is_current") for m in members):
-                        label = f"{_clo('✓ ', '🍀 ')}{label}"
+                        label = f"{_pfx('chosen_mark', '✓')}{label}"
                     buttons.append(
                         InlineKeyboardButton(label, callback_data=f"mpg:{row['group_id']}")
                     )
@@ -6895,7 +6902,7 @@ class TelegramAdapter(BasePlatformAdapter):
         """Handle model picker inline keyboard callbacks (mp:/mm:/mc:/mb:/mx:/mg:)."""
         state = self._model_picker_state.get(chat_id)
         if not state:
-            await query.answer(text=_clo("Picker expired — use /model again.", "☘️ this menu expired, send /model again"))
+            await query.answer(text=_ui("expired", "Picker expired — use /model again."))
             return
 
         try:
@@ -6931,9 +6938,9 @@ class TelegramAdapter(BasePlatformAdapter):
             await query.edit_message_text(
                 text=self.format_message(
                     (
-                        f"{_clo('⚙ *Model Configuration*', '🍀 *Pick a model*')}\n\n"
+                        f"{_ui('model_title', '⚙ *Model Configuration*')}\n\n"
                         f"Provider: *{pname}*{page_info}\n"
-                        f"{_clo('Select a model', 'Choose a model')}:{extra}"
+                        f"{_ui('choose_model', 'Select a model')}:{extra}"
                     )
                 ),
                 parse_mode=ParseMode.MARKDOWN_V2,
@@ -6967,9 +6974,9 @@ class TelegramAdapter(BasePlatformAdapter):
             await query.edit_message_text(
                 text=self.format_message(
                     (
-                        f"{_clo('⚙ *Model Configuration*', '🍀 *Pick a model*')}\n\n"
+                        f"{_ui('model_title', '⚙ *Model Configuration*')}\n\n"
                         f"Provider: *{pname}*{page_info}\n"
-                        f"{_clo('Select a model', 'Choose a model')}:{extra}"
+                        f"{_ui('choose_model', 'Select a model')}:{extra}"
                     )
                 ),
                 parse_mode=ParseMode.MARKDOWN_V2,
@@ -6998,10 +7005,10 @@ class TelegramAdapter(BasePlatformAdapter):
             await query.edit_message_text(
                 text=self.format_message(
                     (
-                        f"{_clo('⚙ *Model Configuration*', '🍀 *Pick a model*')}\n\n"
-                        f"{_clo('Current model', 'Using')}: `{state['current_model'] or 'unknown'}`\n"
+                        f"{_ui('model_title', '⚙ *Model Configuration*')}\n\n"
+                        f"{_ui('using', 'Current model')}: `{state['current_model'] or 'unknown'}`\n"
                         f"Provider: {provider_label}\n\n"
-                        f"{_clo('Select a provider', 'Choose a provider')}:{provider_page_info}"
+                        f"{_ui('choose_provider', 'Select a provider')}:{provider_page_info}"
                     )
                 ),
                 parse_mode=ParseMode.MARKDOWN_V2,
@@ -7027,7 +7034,7 @@ class TelegramAdapter(BasePlatformAdapter):
             callback = state.get("on_model_selected")
 
             if not callback:
-                await query.answer(text=_clo("Picker expired.", "☘️ this menu expired, send /model again"))
+                await query.answer(text=_ui("expired", "Picker expired."))
                 return
 
             switch_failed = False
@@ -7054,7 +7061,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 except Exception:
                     pass
             await query.answer(
-                text=_clo("Switch failed.", "🥀 switch failed") if switch_failed else _clo("Model switched!", "🍀 switched!")
+                text=_ui("switch_failed", "Switch failed.") if switch_failed else _ui("switched", "Model switched!")
             )
             self._model_picker_state.pop(chat_id, None)
 
@@ -7076,7 +7083,7 @@ class TelegramAdapter(BasePlatformAdapter):
             callback = state.get("on_model_selected")
 
             if not callback:
-                await query.answer(text=_clo("Picker expired.", "☘️ this menu expired, send /model again"))
+                await query.answer(text=_ui("expired", "Picker expired."))
                 return
 
             try:
@@ -7135,7 +7142,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 except Exception:
                     pass
             await query.answer(
-                text=_clo("Switch failed.", "🥀 switch failed") if switch_failed else _clo("Model switched!", "🍀 switched!")
+                text=_ui("switch_failed", "Switch failed.") if switch_failed else _ui("switched", "Model switched!")
             )
 
             # Clean up state
@@ -7161,7 +7168,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 count = p.get("total_models", len(p.get("models", [])))
                 label = f"{p['name']} ({count})"
                 if p.get("is_current"):
-                    label = f"{_clo('✓ ', '🍀 ')}{label}"
+                    label = f"{_pfx('chosen_mark', '✓')}{label}"
                 buttons.append(
                     InlineKeyboardButton(label, callback_data=f"mp:{p['slug']}")
                 )
@@ -7175,9 +7182,9 @@ class TelegramAdapter(BasePlatformAdapter):
             await query.edit_message_text(
                 text=self.format_message(
                     (
-                        f"{_clo('⚙ *Model Configuration*', '🍀 *Pick a model*')}\n\n"
+                        f"{_ui('model_title', '⚙ *Model Configuration*')}\n\n"
                         f"Provider family: *{_label or group_id}*\n\n"
-                        f"{_clo('Select a provider', 'Choose a provider')}:"
+                        f"{_ui('choose_provider', 'Select a provider')}:"
                     )
                 ),
                 parse_mode=ParseMode.MARKDOWN_V2,
@@ -7200,10 +7207,10 @@ class TelegramAdapter(BasePlatformAdapter):
             await query.edit_message_text(
                 text=self.format_message(
                     (
-                        f"{_clo('⚙ *Model Configuration*', '🍀 *Pick a model*')}\n\n"
-                        f"{_clo('Current model', 'Using')}: `{state['current_model'] or 'unknown'}`\n"
+                        f"{_ui('model_title', '⚙ *Model Configuration*')}\n\n"
+                        f"{_ui('using', 'Current model')}: `{state['current_model'] or 'unknown'}`\n"
                         f"Provider: {provider_label}\n\n"
-                        f"{_clo('Select a provider', 'Choose a provider')}:{provider_page_info}"
+                        f"{_ui('choose_provider', 'Select a provider')}:{provider_page_info}"
                     )
                 ),
                 parse_mode=ParseMode.MARKDOWN_V2,
@@ -7608,13 +7615,13 @@ class TelegramAdapter(BasePlatformAdapter):
                         await self._notify_clarify_expired(query, user_display)
                         return
 
-                    await query.answer(text=_clo("✏️ Type your answer in the chat.", "✏️ type it in the chat"))
+                    await query.answer(text=_ui("type_it", "✏️ Type your answer in the chat."))
+                    _waiting = _ui("waiting_for", "Awaiting typed response from {user}…").replace(
+                        "{user}", _html.escape(user_display)
+                    )
                     try:
                         await query.edit_message_text(
-                            text=_clo(
-                                f"❓ {query.message.text or ''}\n\n<i>Awaiting typed response from {_html.escape(user_display)}…</i>",
-                                f"🌼 {query.message.text or ''}\n\n<i>waiting for {_html.escape(user_display)} to type…</i>",
-                            ),
+                            text=f"{_ui('clarify_mark', '❓')} {query.message.text or ''}\n\n<i>{_waiting}</i>",
                             parse_mode=ParseMode.HTML,
                             reply_markup=None,
                         )
@@ -7657,10 +7664,10 @@ class TelegramAdapter(BasePlatformAdapter):
                     resolved = False
 
                 if resolved:
-                    await query.answer(text=f"{_clo('✓', '🍀')} {resolved_text[:60]}")
+                    await query.answer(text=f"{_ui('chosen_mark', '✓')} {resolved_text[:60]}")
                     try:
                         await query.edit_message_text(
-                            text=f"{_clo('❓', '🌼')} {_html.escape(query.message.text or '')}\n\n{_clo('', '🍀 ')}<b>{_html.escape(user_display)}:</b> {_html.escape(resolved_text)}",
+                            text=f"{_ui('clarify_mark', '❓')} {_html.escape(query.message.text or '')}\n\n{_pfx('chosen_mark')}<b>{_html.escape(user_display)}:</b> {_html.escape(resolved_text)}",
                             parse_mode=ParseMode.HTML,
                             reply_markup=None,
                         )

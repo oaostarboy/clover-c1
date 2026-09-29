@@ -101,6 +101,40 @@ All fields are optional. Missing values inherit from the ``default`` skin.
       prompt_symbol: "❯"                 # Input prompt symbol (bare token; renderers add trailing space)
       help_header: "(^_^)? Commands"      # /help header text
 
+    # Messages: an optional chat message pack -- re-words the agent's own chat
+    # messages (busy acks, restart/online notices, status lines, the background
+    # review notice, the cron header, the first hello, the /model + clarify +
+    # approval picker strings) for this skin.  Absent = stock text.  A kind you
+    # give no ``lines`` for keeps the stock text (nothing falls back to Clo's).
+    # Applies to English sessions on emoji-capable consoles.
+    messages:
+      mark: "🔻"                          # Put before every face; may be ""
+      lucky_mark: ""                      # Lucky-turn mark; "" = no lucky turns/cron roll
+      done_mark: "🎯"                     # Good-news / saved mark (back_online, review header)
+      fail_mark: "🩸"                     # Failure mark (cron "didn't finish")
+      faces:                              # Optional, per kind; none = just the mark
+        busy: ["(⌐■_■)", "(¬_¬)"]
+      lines:                              # Required per kind to re-skin that kind
+        busy: ["target's occupied", "queue's stacked"]
+        restart_requested: ["cycling now"]
+        back_online: ["back in the field"]
+        memory: ["logged it"]
+      # kinds: steer redirect interrupt queued stop restarting shutting_down
+      #   restart_requested restart_in_progress draining back_online
+      #   job_interrupted update_rolled_back busy rate_limited error
+      #   model_substitute user memory skill mixed tidy
+      #   ({requested}/{provider} fill in model_substitute lines)
+      review_items:                       # Optional icons/labels for review lines
+        about_you: "🪪 profile"           # (defaults: 🪪 about you, 🧠, 🧠 updated,
+        note: "🧠"                        #  🧬 new skill, 🧬 improved, 🧹)
+        removed: "🧹"
+      hello: ["🎯 online. ask away."]     # Optional first-contact lines (DMs only)
+      ui:                                 # Optional picker strings; unset = stock
+        model_title: "🎯 *Choose model*"  # keys: model_title using choose_provider
+        using: "Active"                   #  choose_model switched switch_failed expired
+        switched: "🎯 locked in"          #  clarify_mark other type_it waiting_for
+        deny_mark: "🩸"                   #  chosen_mark allow_mark deny_mark
+
     # Tool prefix: character for tool output lines (default: ┊)
     tool_prefix: "┊"
 
@@ -175,6 +209,8 @@ class SkinConfig:
     tool_emojis: Dict[str, str] = field(default_factory=dict)  # per-tool emoji overrides
     banner_logo: str = ""    # Rich-markup ASCII art logo (replaces CLOVER_AGENT_LOGO)
     banner_hero: str = ""    # Rich-markup hero art (replaces CLOVER_CADUCEUS)
+    # Optional chat message pack (see the ``messages:`` schema above); empty = stock text.
+    messages: Dict[str, Any] = field(default_factory=dict)
 
     def get_color(self, key: str, fallback: str = "") -> str:
         """Get a color value with fallback."""
@@ -920,6 +956,8 @@ def _build_skin_config(data: Dict[str, Any]) -> SkinConfig:
         tool_emojis=emoji_overrides,
         banner_logo=data.get("banner_logo", ""),
         banner_hero=data.get("banner_hero", ""),
+        # Not merged over the default skin: no `messages` means stock text.
+        messages=_mapping_or_empty(data.get("messages"), section="messages", skin_name=skin_name),
     )
 
 

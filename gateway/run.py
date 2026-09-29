@@ -11006,30 +11006,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 pass
 
         status_detail = f" ({', '.join(status_parts)})" if status_parts else ""
-        if _clover_acks.active():
-            # Clo's acks: only the leading emoji + first phrase change; the
-            # functional sentence is exactly today's text.
-            if is_steer_mode:
-                message = _clover_acks.build_ack(
-                    "steer", session_key,
-                    "Your message arrives after the next tool call.", status_detail)
-            elif is_redirect_mode:
-                message = _clover_acks.build_ack(
-                    "redirect", session_key,
-                    "I'll adjust using your correction.", status_detail)
-            elif is_queue_mode and (demoted_for_subagents or demoted_for_compression):
-                message = _clover_acks.build_ack(
-                    "queued", session_key,
-                    "Your message is queued for when it finishes "
-                    "(use /stop to cancel everything).", status_detail)
-            elif is_queue_mode:
-                message = _clover_acks.build_ack(
-                    "queued", session_key,
-                    "I'll respond once the current task finishes.", status_detail)
-            else:
-                message = _clover_acks.build_ack(
-                    "interrupt", session_key,
-                    "I'll respond to your message shortly.", status_detail)
+        # Message-pack acks (Clo's, or a skin's own ``messages:``): only the
+        # leading emoji + first phrase change; the functional sentence is
+        # exactly today's text.  A kind the pack has no lines for keeps stock.
+        if is_steer_mode:
+            _ack_kind, _ack_text = "steer", "Your message arrives after the next tool call."
+        elif is_redirect_mode:
+            _ack_kind, _ack_text = "redirect", "I'll adjust using your correction."
+        elif is_queue_mode and (demoted_for_subagents or demoted_for_compression):
+            _ack_kind, _ack_text = "queued", (
+                "Your message is queued for when it finishes "
+                "(use /stop to cancel everything)."
+            )
+        elif is_queue_mode:
+            _ack_kind, _ack_text = "queued", "I'll respond once the current task finishes."
+        else:
+            _ack_kind, _ack_text = "interrupt", "I'll respond to your message shortly."
+        if _clover_acks.active(_ack_kind):
+            message = _clover_acks.build_ack(
+                _ack_kind, session_key, _ack_text, status_detail)
         elif is_steer_mode:
             message = (
                 f"⏩ Steered into current run{status_detail}. "
