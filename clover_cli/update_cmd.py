@@ -2199,7 +2199,7 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
         from tools.skills_sync import sync_skills
 
         print("→ Syncing bundled skills...")
-        result = sync_skills(quiet=True)
+        result = sync_skills(quiet=True, refresh_optional=True)
         if result["copied"]:
             print(f"  + {len(result['copied'])} new: {', '.join(result['copied'])}")
         if result.get("updated"):
@@ -2211,6 +2211,16 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
             print(
                 "    → see them: clover skills list-modified  "
                 "(diff/reset to resume updates)"
+            )
+        if result.get("optional_refreshed"):
+            print(
+                f"  ↑ {len(result['optional_refreshed'])} optional refreshed: "
+                f"{', '.join(result['optional_refreshed'])}"
+            )
+        if result.get("optional_user_modified"):
+            print(
+                "  ~ optional skills with local edits (kept): "
+                f"{', '.join(result['optional_user_modified'])}"
             )
         if result.get("cleaned"):
             print(f"  − {len(result['cleaned'])} removed from manifest")
@@ -9170,6 +9180,16 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 print(
                     "    → see them: clover skills list-modified  "
                     "(diff/reset to resume updates)"
+                )
+            if result.get("optional_refreshed"):
+                print(
+                    f"  ↑ {len(result['optional_refreshed'])} optional refreshed: "
+                    f"{', '.join(result['optional_refreshed'])}"
+                )
+            if result.get("optional_user_modified"):
+                print(
+                    "  ~ optional skills with local edits (kept): "
+                    f"{', '.join(result['optional_user_modified'])}"
                 )
             if result.get("cleaned"):
                 print(f"  − {len(result['cleaned'])} removed from manifest")
