@@ -22,6 +22,7 @@ import copy
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import threading
 import time
@@ -805,10 +806,27 @@ _COMBINED_REVIEW_PROMPT = (
 
 
 
+_SKILL_ACTION_OPS = {
+    "create": "create",
+    "delete": "delete",
+    "patch": "improve",
+    "edit": "improve",
+    "write_file": "improve",
+    "remove_file": "improve",
+}
+
+
+def _quoted_name(message: str) -> str:
+    """Skill name from a ``Skill 'name' created.`` style tool message."""
+    match = re.search(r"'([^']+)'", message or "")
+    return match.group(1) if match else ""
+
+
 def summarize_background_review_actions(
     review_messages: List[Dict],
     prior_snapshot: List[Dict],
     notification_mode: str = "on",
+    structured: Optional[List[Tuple[str, str, str]]] = None,
 ) -> List[str]:
     """Build the human-facing action summary for a background review pass.
 
@@ -821,6 +839,11 @@ def summarize_background_review_actions(
     - ``off``: return no actions.
     - ``on``: generic "Memory updated"/tool messages.
     - ``verbose``: include compact content previews from tool-call arguments.
+
+    When *structured* is a list, one ``(group, op, text)`` tuple is appended
+    per returned action (``group`` memory|user|skill; ``op`` add|replace|
+    remove|create|improve|delete|update; ``text`` the preview or skill name)
+    so skins can render the same actions differently.
     """
     mode = str(notification_mode or "on").lower()
     if mode == "off":
@@ -878,6 +901,12 @@ def summarize_background_review_actions(
                 }
 
     actions: List[str] = []
+
+    def _add(text: str, group: str, op: str, item: str = "") -> None:
+        actions.append(text)
+        if structured is not None:
+            structured.append((group, op, item))
+
     for msg in review_messages or []:
         if not isinstance(msg, dict) or msg.get("role") != "tool":
             continue
@@ -913,15 +942,22 @@ def summarize_background_review_actions(
         is_skill = detail.get("tool") == "skill_manage"
 
         message_lower = message.lower()
+        skill_name_hint = detail.get("name", "") or _quoted_name(message)
         if not verbose:
             if "created" in message_lower:
-                actions.append(message)
+                if is_skill:
+                    _add(message, "skill", "create", skill_name_hint)
+                else:
+                    _add(message, target if target in ("memory", "user") else "memory", "update")
                 continue
             if "updated" in message_lower:
-                actions.append(message)
+                if is_skill:
+                    _add(message, "skill", "improve" if skill_name_hint else "update", skill_name_hint)
+                else:
+                    _add(message, "user" if target == "user" else "memory", "update")
                 continue
             if is_skill and "patched" in message_lower:
-                actions.append(message)
+                _add(message, "skill", "improve", skill_name_hint)
                 continue
 
         if is_skill:
@@ -930,6 +966,7 @@ def summarize_background_review_actions(
             label = "Memory" if target == "memory" else "User profile" if target == "user" else target
         else:
             continue
+        _grp = "skill" if is_skill else ("user" if target == "user" else "memory")
 
         if verbose:
             action = detail.get("action", "")
@@ -968,16 +1005,24 @@ def summarize_background_review_actions(
                     new_preview = new_string[:80].replace("\n", " ") + (
                         "…" if len(new_string) > 80 else ""
                     )
-                    actions.append(
+                    _add(
                         f"📝 Skill '{skill_name}' patched: "
-                        f"\"{old_preview}\" → \"{new_preview}\""
+                        f"\"{old_preview}\" → \"{new_preview}\"",
+                        "skill", "improve", skill_name,
                     )
                 elif action == "create" and description:
-                    actions.append(f"📝 Skill '{skill_name}' created: {description}")
+                    _add(f"📝 Skill '{skill_name}' created: {description}",
+                         "skill", "create", skill_name)
                 elif action == "edit" and description:
-                    actions.append(f"📝 Skill '{skill_name}' rewritten: {description}")
+                    _add(f"📝 Skill '{skill_name}' rewritten: {description}",
+                         "skill", "improve", skill_name)
                 else:
-                    actions.append(f"📝 {message}" if message else f"Skill {action}")
+                    _skill_op = _SKILL_ACTION_OPS.get(action, "update")
+                    _add(
+                        f"📝 {message}" if message else f"Skill {action}",
+                        "skill", _skill_op,
+                        skill_name or _quoted_name(message),
+                    )
             elif operations:
                 for op in operations:
                     # Each element must be a dict-of-fields; some
@@ -992,24 +1037,24 @@ def summarize_background_review_actions(
                     op_old = (op.get("old_text") or "")
                     if op_act == "add" and op_content:
                         preview = op_content[:max_preview] + ("…" if len(op_content) > max_preview else "")
-                        actions.append(f"{label} ➕ {preview}")
+                        _add(f"{label} ➕ {preview}", _grp, "add", preview)
                     elif op_act == "replace" and op_content:
                         preview = op_content[:max_preview] + ("…" if len(op_content) > max_preview else "")
-                        actions.append(f"{label} ✏️ {preview}")
+                        _add(f"{label} ✏️ {preview}", _grp, "replace", preview)
                     elif op_act == "remove" and op_old:
                         preview = op_old[:60] + ("…" if len(op_old) > 60 else "")
-                        actions.append(f"{label} ➖ {preview}")
+                        _add(f"{label} ➖ {preview}", _grp, "remove", preview)
             elif action == "add" and content:
                 preview = content[:max_preview] + ("…" if len(content) > max_preview else "")
-                actions.append(f"{label} ➕ {preview}")
+                _add(f"{label} ➕ {preview}", _grp, "add", preview)
             elif action == "replace" and content:
                 preview = content[:max_preview] + ("…" if len(content) > max_preview else "")
-                actions.append(f"{label} ✏️ {preview}")
+                _add(f"{label} ✏️ {preview}", _grp, "replace", preview)
             elif action == "remove" and old_text:
                 preview = old_text[:60] + ("…" if len(old_text) > 60 else "")
-                actions.append(f"{label} ➖ {preview}")
+                _add(f"{label} ➖ {preview}", _grp, "remove", preview)
             else:
-                actions.append(f"{label} updated")
+                _add(f"{label} updated", _grp, "update")
         elif (
             "added" in message_lower
             or "replaced" in message_lower
@@ -1018,8 +1063,33 @@ def summarize_background_review_actions(
             or (target and "add" in message.lower())
             or "Entry added" in message
         ):
-            actions.append(f"{label} updated")
+            _op = "remove" if "removed" in message_lower else "update"
+            _add(f"{label} updated", _grp, _op)
     return actions
+
+
+def _clover_review_notice(
+    agent: Any, review_messages: List[Dict], messages_snapshot: List[Dict]
+) -> Optional[Tuple[List[str], str]]:
+    """Clo-style ``(cli_lines, gateway_message)`` under the clover skin, else None."""
+    try:
+        from agent import clover_flavor
+        from agent.display import _get_skin
+        from agent.i18n import get_language
+
+        if not (clover_flavor.skin_flavor_enabled(_get_skin()) and get_language() == "en"):
+            return None
+        items: List[Tuple[str, str, str]] = []
+        summarize_background_review_actions(
+            review_messages,
+            messages_snapshot,
+            notification_mode=getattr(agent, "memory_notifications", "on"),
+            structured=items,
+        )
+        chat_key = str(getattr(agent, "session_id", "") or "")
+        return clover_flavor.render_review_notice(items, chat_key)
+    except Exception:
+        return None
 
 
 def build_memory_write_metadata(
@@ -1788,16 +1858,21 @@ def _run_review_in_thread(
         )
 
         if actions:
-            summary = " · ".join(dict.fromkeys(actions))
-            agent._safe_print(
-                f"  💾 Self-improvement review: {summary}"
-            )
+            _clo = _clover_review_notice(agent, review_messages, messages_snapshot)
+            if _clo is not None:
+                _cli_lines, _msg = _clo
+                for _line in _cli_lines:
+                    agent._safe_print(f"  {_line}")
+            else:
+                summary = " · ".join(dict.fromkeys(actions))
+                _msg = f"💾 Self-improvement review: {summary}"
+                agent._safe_print(
+                    f"  💾 Self-improvement review: {summary}"
+                )
             _bg_cb = agent.background_review_callback
             if _bg_cb:
                 try:
-                    _bg_cb(
-                        f"💾 Self-improvement review: {summary}"
-                    )
+                    _bg_cb(_msg)
                 except Exception:
                     pass
 
