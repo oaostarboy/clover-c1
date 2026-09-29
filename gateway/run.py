@@ -6333,6 +6333,30 @@ class TurnRunner:
         # tool_progress mode. Mattermost needs an explicit per-platform
         # opt-in so global scratch-text display does not leak into threads.
         agent.thinking_progress = ctx._thinking_enabled
+        # Live reasoning: relay provider reasoning summaries (Codex/Responses
+        # summaries, Gemini thoughts, Anthropic thinking) as compact "🧠 <line>"
+        # progress updates — independent of thinking_progress above, which only
+        # covers the model's visible assistant TEXT between tool calls. Never
+        # runs for delegated children (_delegate_depth > 0): they already relay
+        # through the subagent card. Reassigned every turn (not just for freshly
+        # constructed agents) since agents are cached and reused across turns.
+        if ctx._live_reasoning_enabled and getattr(agent, "_delegate_depth", 0) <= 0:
+            from gateway.stream_consumer import ReasoningProgressRelay
+
+            _reasoning_relay = ReasoningProgressRelay()
+
+            def _reasoning_progress_callback(text: str) -> None:
+                if not ctx.progress_queue or not ctx._run_still_current():
+                    return
+                line = _reasoning_relay.feed(text)
+                if not line:
+                    return
+                ctx.progress_queue.put(f"🧠 {line}")
+                ctx._summary_thoughts += 1
+
+            agent.reasoning_callback = _reasoning_progress_callback
+        else:
+            agent.reasoning_callback = None
         # Store agent reference for interrupt support
         ctx.agent_holder[0] = agent
         # Wire the platform thread-rename lane onto the agent, because the
@@ -29887,6 +29911,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             require_platform_override_for={Platform.MATTERMOST},
         )
         _thinking_enabled = _thinking_mode != "off"
+        # live_reasoning is independent of thinking_progress: thinking_progress
+        # relays the model's visible assistant TEXT between tool calls (Grok
+        # writes it; GPT-6/Gemini mostly don't), while live_reasoning relays
+        # structured provider REASONING summaries (Codex/Responses summaries,
+        # Gemini thoughts, Anthropic thinking) that reach agent.reasoning_callback
+        # regardless of whether the model ever writes interim assistant text.
+        # Default on — Mattermost gets the same per-platform opt-in carve-out
+        # as thinking_progress.
+        _live_reasoning_mode = _display_surface_mode(
+            "live_reasoning",
+            default=True,
+            require_platform_override_for={Platform.MATTERMOST},
+        )
+        _live_reasoning_enabled = _live_reasoning_mode != "off"
         # Slack-native task cards (#29483): when the Slack adapter's opt-in
         # is set, tool progress renders as native plan/task cards via
         # chat.startStream — the progress queue is needed even for a user
@@ -29908,6 +29946,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.debug("Slack native task-card config check failed", exc_info=True)
         needs_progress_queue = (
             tool_progress_enabled or _thinking_enabled or _native_slack_task_cards
+            or _live_reasoning_enabled
         )
 
 
@@ -30013,6 +30052,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _live_status_adapter=_live_status_adapter,
             _live_status_mode=_live_status_mode,
             _thinking_enabled=_thinking_enabled,
+            _live_reasoning_enabled=_live_reasoning_enabled,
             progress_mode=progress_mode,
             progress_grouping=progress_grouping,
             tool_progress_enabled=tool_progress_enabled,

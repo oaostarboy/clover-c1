@@ -79,6 +79,30 @@ class TestBackwardCompat:
 # YAML normalisation
 # ---------------------------------------------------------------------------
 
+class TestLiveReasoningDefault:
+    """``live_reasoning`` defaults on everywhere and coerces like the other
+    boolean display surfaces."""
+
+    def test_defaults_true_with_no_config(self):
+        from gateway.display_config import resolve_display_setting
+
+        for plat in ("telegram", "discord", "slack", "mattermost", "signal", "whatsapp_cloud"):
+            assert resolve_display_setting({}, plat, "live_reasoning") is True, plat
+
+    def test_explicit_platform_override_disables(self):
+        from gateway.display_config import resolve_display_setting
+
+        config = {"display": {"platforms": {"telegram": {"live_reasoning": False}}}}
+        assert resolve_display_setting(config, "telegram", "live_reasoning") is False
+        assert resolve_display_setting(config, "discord", "live_reasoning") is True
+
+    def test_string_false_coerced(self):
+        from gateway.display_config import resolve_display_setting
+
+        config = {"display": {"live_reasoning": "false"}}
+        assert resolve_display_setting(config, "telegram", "live_reasoning") is False
+
+
 class TestYAMLNormalisation:
     """YAML 1.1 quirks (bare off → False, on → True) are handled."""
 

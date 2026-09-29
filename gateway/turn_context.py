@@ -39,6 +39,7 @@ class TurnContext:
     _live_status_adapter: Any = None
     _live_status_mode: str = "off"
     _thinking_enabled: bool = False
+    _live_reasoning_enabled: bool = False
     progress_mode: str = "off"
     progress_grouping: str = "grouped"
     tool_progress_enabled: bool = False
