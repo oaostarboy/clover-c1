@@ -2503,6 +2503,9 @@ _CODEX_OAUTH_CONTEXT_FALLBACK: Dict[str, int] = {
     "gpt-5.6-terra": 272_000,
     "gpt-5.6-luna": 272_000,
     "gpt-daybreak-blue-latest": 272_000,
+    "gpt-6-astra": 272_000,
+    "gpt-6-sol": 272_000,
+    "gpt-6-luna": 272_000,
     "gpt-5.5": 272_000,
     "gpt-5.4": 272_000,
     "gpt-5.2": 272_000,
@@ -2546,6 +2549,12 @@ _CODEX_OAUTH_VERIFIED_ABOVE_ADVERTISED_PREFIXES: Dict[str, int] = {
 _CODEX_OAUTH_VERIFIED_ABOVE_ADVERTISED_EXACT: Dict[str, int] = {
     "gpt-5.4": 900_000,   # verified live at 900K; gpt-5.4-mini rejected 500K — excluded
     "gpt-daybreak-blue-latest": 900_000,  # exact Daybreak/Sol alias verified at 911,276
+    # GPT-6 family: Codex's own catalog reports context_window 272K with
+    # max_context_window 872K (same shape as the 5.6 bases). Offline
+    # fallback only — a live catalog max_context_window is used when known.
+    "gpt-6-astra": 872_000,
+    "gpt-6-sol": 872_000,
+    "gpt-6-luna": 872_000,
 }
 
 # The advertised value the verified-above table is allowed to override.
@@ -2567,9 +2576,85 @@ _CODEX_900K_ELIGIBLE_BASES = frozenset({
     "gpt-5.6-luna",
     "gpt-5.4",                    # exact; gpt-5.4-mini enforces 272K
     "gpt-daybreak-blue-latest",   # verified Sol alias
+    "gpt-6-astra",                # catalog max_context_window 872K
+    "gpt-6-sol",
+    "gpt-6-luna",
 })
 _CODEX_900K_SNAPSHOT_BASES = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
 _CODEX_900K_SNAPSHOT_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+# A Codex base is ALSO eligible for a ``-900k`` variant when the live Codex
+# catalog advertises ``max_context_window`` at or above this floor. A static
+# allowlist alone lags every new family (``gpt-6-astra-900k`` was offered by
+# the picker but sent literally to the wire and 400'd), so the catalog is
+# the primary source and the static set above is the offline fallback.
+_CODEX_900K_CATALOG_MAX_FLOOR = 800_000
+
+# {bare lowercase slug: max_context_window} from the live /codex/models
+# response (recorded by the fetchers) or Codex's own local models_cache.json.
+_codex_live_max_ctx: Dict[str, int] = {}
+_codex_local_cache_state: Tuple[str, float] = ("", -1.0)  # (path, mtime)
+_codex_local_max_ctx: Dict[str, int] = {}
+
+
+def record_codex_catalog_entries(entries: Any) -> None:
+    """Remember ``max_context_window`` for each entry of a live Codex catalog."""
+    if not isinstance(entries, list):
+        return
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        slug = item.get("slug")
+        max_ctx = item.get("max_context_window")
+        if (
+            isinstance(slug, str) and slug.strip()
+            and isinstance(max_ctx, int) and not isinstance(max_ctx, bool)
+            and max_ctx > 0
+        ):
+            _codex_live_max_ctx[slug.strip().lower()] = max_ctx
+
+
+def _codex_local_catalog_max_ctx() -> Dict[str, int]:
+    """``max_context_window`` per slug from Codex CLI's models_cache.json."""
+    global _codex_local_cache_state, _codex_local_max_ctx
+    codex_home = os.getenv("CODEX_HOME", "").strip() or str(Path.home() / ".codex")
+    path = Path(codex_home).expanduser() / "models_cache.json"
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return {}
+    if _codex_local_cache_state == (str(path), mtime):
+        return _codex_local_max_ctx
+    parsed: Dict[str, int] = {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        entries = raw.get("models") if isinstance(raw, dict) else None
+        if isinstance(entries, list):
+            for item in entries:
+                if not isinstance(item, dict):
+                    continue
+                slug = item.get("slug")
+                max_ctx = item.get("max_context_window")
+                if (
+                    isinstance(slug, str) and slug.strip()
+                    and isinstance(max_ctx, int) and not isinstance(max_ctx, bool)
+                    and max_ctx > 0
+                ):
+                    parsed[slug.strip().lower()] = max_ctx
+    except Exception:
+        parsed = {}
+    _codex_local_cache_state = (str(path), mtime)
+    _codex_local_max_ctx = parsed
+    return parsed
+
+
+def _codex_catalog_max_ctx(base: str) -> Optional[int]:
+    """Catalog-advertised ``max_context_window`` for a base slug, if known."""
+    slug = _bare_codex_slug(base)
+    live = _codex_live_max_ctx.get(slug)
+    if live is not None:
+        return live
+    return _codex_local_catalog_max_ctx().get(slug)
 
 
 def _bare_codex_slug(model: Optional[str]) -> str:
@@ -2593,6 +2678,9 @@ def is_codex_900k_base(model: Optional[str]) -> bool:
     if not slug or slug.endswith(CODEX_CONTEXT_VARIANT_SUFFIX):
         return False
     if slug in _CODEX_900K_ELIGIBLE_BASES:
+        return True
+    catalog_max = _codex_catalog_max_ctx(slug)
+    if catalog_max is not None and catalog_max >= _CODEX_900K_CATALOG_MAX_FLOOR:
         return True
     # Dated snapshots of the routable 5.6 bases (gpt-5.6-sol-2026-07-09).
     for base in _CODEX_900K_SNAPSHOT_BASES:
@@ -2664,7 +2752,9 @@ def _verified_codex_ctx_for_slug(model_bare: str) -> Optional[int]:
     for key, ctx in _CODEX_OAUTH_VERIFIED_ABOVE_ADVERTISED_PREFIXES.items():
         if base == key or base.startswith(key + "-") or base.startswith(key + "."):
             return ctx
-    return None
+    # Not live-verified in the static tables: use the catalog's own
+    # advertised max_context_window (eligibility already required >= floor).
+    return _codex_catalog_max_ctx(base)
 
 
 _codex_oauth_context_cache: Dict[str, Tuple[Dict[str, int], float]] = {}
@@ -2757,6 +2847,7 @@ def _fetch_codex_oauth_context_lengths_with_source(
         ctx = item.get("context_window")
         if isinstance(slug, str) and isinstance(ctx, int) and ctx > 0:
             result[slug.strip()] = ctx
+    record_codex_catalog_entries(entries)
 
     if result:
         _codex_oauth_context_cache[cache_key] = (result, now)

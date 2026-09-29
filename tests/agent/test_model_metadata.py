@@ -676,6 +676,10 @@ class TestCodexOAuthContextLength:
         ("gpt-5.6-luna-900k",             True,  900_000, "gpt-5.6-luna"),
         ("gpt-5.4-900k",                  True,  900_000, "gpt-5.4"),
         ("gpt-daybreak-blue-latest-900k", True,  900_000, "gpt-daybreak-blue-latest"),
+        # GPT-6 family: catalog max_context_window is 872K
+        ("gpt-6-astra-900k",              True,  872_000, "gpt-6-astra"),
+        ("gpt-6-sol-900k",                True,  872_000, "gpt-6-sol"),
+        ("gpt-6-luna-900k",               True,  872_000, "gpt-6-luna"),
         # dated snapshot of a routable 5.6 base
         ("gpt-5.6-sol-2026-07-09-900k",   True,  900_000, "gpt-5.6-sol-2026-07-09"),
         # vendor-namespaced variant (display/aux callers) resolves too
