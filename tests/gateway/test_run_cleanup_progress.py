@@ -458,3 +458,216 @@ async def test_queued_follow_up_still_collapses_first_turn_into_card(monkeypatch
     )
     cards = [e["content"] for e in adapter.edits if "tool call" in e["content"]]
     assert cards, "first turn's progress must collapse into the summary card"
+
+
+# ---------------------------------------------------------------------------
+# "⏳ Working — N min" heartbeat must never outlive a successful turn.
+# ---------------------------------------------------------------------------
+
+
+class SlowAgent:
+    """Runs long enough for several heartbeats, then finishes normally."""
+
+    run_seconds = 0.5
+
+    def __init__(self, **kwargs):
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+        self.tools = []
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        time.sleep(type(self).run_seconds)
+        return {"final_response": "done", "messages": [], "api_calls": 1}
+
+
+class SlowToolAgent(SlowAgent):
+    """Like SlowAgent but does real tool work, so the turn collapses into a
+    summary card (the live shape: tool bubble + Working heartbeat)."""
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        cb = self.tool_progress_callback
+        if cb is not None:
+            cb("tool.started", "terminal", "pwd", {})
+        return super().run_conversation(message, conversation_history, task_id)
+
+
+class SlowFailingAgent(SlowAgent):
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        time.sleep(type(self).run_seconds)
+        return {"final_response": "", "messages": [], "api_calls": 1,
+                "failed": True, "error": "simulated provider failure"}
+
+
+class FlakyNetworkAdapter(FinalizingCleanupAdapter):
+    """Real adapters (Telegram) signal API failure via the return value, not
+    an exception: ``edit_message`` -> ``SendResult(success=False)`` and
+    ``delete_message`` -> ``False``. A flaky network fails the first N calls."""
+
+    def __init__(self, *, edit_failures=0, delete_failures=0):
+        super().__init__()
+        self._edit_failures = edit_failures
+        self._delete_failures = delete_failures
+
+    async def edit_message(self, chat_id, message_id, content, *, finalize=False,
+                           metadata=None) -> SendResult:
+        if finalize and self._edit_failures > 0:
+            self._edit_failures -= 1
+            return SendResult(success=False, error="ConnectError", retryable=True)
+        return await super().edit_message(
+            chat_id, message_id, content, finalize=finalize, metadata=metadata
+        )
+
+    async def delete_message(self, chat_id, message_id) -> bool:
+        if self._delete_failures > 0:
+            self._delete_failures -= 1
+            return False
+        return await super().delete_message(chat_id, message_id)
+
+
+def _heartbeat_ids(adapter):
+    return [i["message_id"] for i in adapter.sent if i["content"].startswith("⏳ Working")]
+
+
+def _gone(adapter, mid):
+    """True when the bubble was deleted, or edited into something that is no
+    longer the Working text (the collapsed card)."""
+    if any(d["message_id"] == mid for d in adapter.deleted):
+        return True
+    edits = [e for e in adapter.edits if e["message_id"] == mid]
+    return bool(edits) and not edits[-1]["content"].startswith("⏳ Working")
+
+
+async def _run_turn(monkeypatch, tmp_path, adapter, agent_cls, *, notify="0.1"):
+    monkeypatch.setenv("CLOVER_AGENT_NOTIFY_INTERVAL", notify)
+    runner = _make_runner(adapter)
+    gateway_run = _install_fakes(monkeypatch, agent_cls, cleanup_on=True)
+    monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="-1001")
+    session_key = "agent:main:telegram:group:-1001"
+    result = await runner._run_agent(
+        message="hello", context_prompt="", history=[], source=source,
+        session_id="sess-heartbeat", session_key=session_key,
+    )
+    return result, session_key
+
+
+async def _drain_post_delivery(adapter, session_key):
+    cb = adapter.pop_post_delivery_callback(session_key)
+    if callable(cb):
+        await _fire_post_delivery_cb(cb)
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+    return cb
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_then_final_reply_leaves_no_working_bubble(monkeypatch, tmp_path):
+    adapter = CleanupCaptureAdapter()
+    SlowAgent.run_seconds = 0.35
+    result, key = await _run_turn(monkeypatch, tmp_path, adapter, SlowAgent)
+    assert result["final_response"] == "done"
+    await _drain_post_delivery(adapter, key)
+    hb = _heartbeat_ids(adapter)
+    assert hb, "heartbeat must have fired"
+    for mid in hb:
+        assert _gone(adapter, mid), f"Working bubble {mid} survived the turn"
+
+
+@pytest.mark.asyncio
+async def test_repeatedly_edited_heartbeat_is_gone_after_final_reply(monkeypatch, tmp_path):
+    adapter = CleanupCaptureAdapter()
+    SlowAgent.run_seconds = 0.6
+    result, key = await _run_turn(monkeypatch, tmp_path, adapter, SlowAgent, notify="0.1")
+    await _drain_post_delivery(adapter, key)
+    hb = _heartbeat_ids(adapter)
+    assert len(hb) == 1, "later heartbeats edit the first bubble in place"
+    assert len([e for e in adapter.edits if e["message_id"] == hb[0]
+                and e["content"].startswith("⏳ Working")]) >= 2
+    assert _gone(adapter, hb[0])
+
+
+@pytest.mark.asyncio
+async def test_failed_card_edit_does_not_leave_working_bubble(monkeypatch, tmp_path):
+    """Root cause of the live '⏳ Working — 3 min' leftover: the collapsed-card
+    edit returned SendResult(success=False) (no exception), so the bubble was
+    still treated as the kept card and never deleted."""
+    from gateway import progress_cleanup
+    monkeypatch.setattr(progress_cleanup, "_RETRY_DELAYS", (0.01, 0.01))
+    adapter = FlakyNetworkAdapter(edit_failures=1)
+    SlowToolAgent.run_seconds = 0.35
+    result, key = await _run_turn(monkeypatch, tmp_path, adapter, SlowToolAgent)
+    await _drain_post_delivery(adapter, key)
+    hb = _heartbeat_ids(adapter)
+    assert hb
+    for mid in hb:
+        assert _gone(adapter, mid), f"Working bubble {mid} survived a failed card edit"
+
+
+@pytest.mark.asyncio
+async def test_failed_delete_is_retried_so_working_bubble_does_not_survive(monkeypatch, tmp_path):
+    from gateway import progress_cleanup
+    monkeypatch.setattr(progress_cleanup, "_RETRY_DELAYS", (0.01, 0.01))
+    # Card edits keep failing -> the Working bubble (first tracked id) falls
+    # back to deletion, whose first attempt also fails.
+    adapter = FlakyNetworkAdapter(edit_failures=99, delete_failures=1)
+    SlowToolAgent.run_seconds = 0.35
+    result, key = await _run_turn(monkeypatch, tmp_path, adapter, SlowToolAgent)
+    await _drain_post_delivery(adapter, key)
+    hb = _heartbeat_ids(adapter)
+    assert hb
+    for mid in hb:
+        assert any(d["message_id"] == mid for d in adapter.deleted), (
+            f"Working bubble {mid} survived a failed delete"
+        )
+
+
+class SlowHeartbeatSendAdapter(CleanupCaptureAdapter):
+    """The heartbeat send is still in flight when the turn ends; it lands on
+    the platform (id minted) only after the run has been torn down."""
+
+    def __init__(self):
+        super().__init__()
+        self.release = asyncio.Event()
+        self.hb_send_started = asyncio.Event()
+
+    async def edit_message(self, chat_id, message_id, content, *, finalize=False,
+                           metadata=None) -> SendResult:
+        return await super().edit_message(chat_id, message_id, content)
+
+    async def send(self, chat_id, content, reply_to=None, metadata=None) -> SendResult:
+        if content.startswith("⏳ Working"):
+            self.hb_send_started.set()
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                # Cancelled locally, but the request already reached the server.
+                await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
+                raise
+        return await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_send_racing_final_response_is_still_cleaned_up(monkeypatch, tmp_path):
+    adapter = SlowHeartbeatSendAdapter()
+    SlowAgent.run_seconds = 0.4
+    result, key = await _run_turn(monkeypatch, tmp_path, adapter, SlowAgent)
+    assert adapter.hb_send_started.is_set(), "heartbeat send must be in flight at turn end"
+    await _drain_post_delivery(adapter, key)
+    adapter.release.set()
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+    hb = _heartbeat_ids(adapter)
+    assert hb, "the racing heartbeat still reached the chat"
+    for mid in hb:
+        assert _gone(adapter, mid), f"racing Working bubble {mid} survived the turn"
+
+
+@pytest.mark.asyncio
+async def test_failed_run_keeps_working_bubbles(monkeypatch, tmp_path):
+    adapter = CleanupCaptureAdapter()
+    SlowFailingAgent.run_seconds = 0.35
+    result, key = await _run_turn(monkeypatch, tmp_path, adapter, SlowFailingAgent)
+    assert result.get("failed")
+    await _drain_post_delivery(adapter, key)
+    assert _heartbeat_ids(adapter)
+    assert not adapter.deleted, "failed runs keep their bubbles as breadcrumbs"
+    assert not any("tool call" in e["content"] for e in adapter.edits)

@@ -41,7 +41,7 @@ Every key you may set:
 - `messages:` (the chat personality)
   - `mark` (before every face; `""` for none), `lucky_mark` (`""` = none), `done_mark` (good news), `fail_mark` (failures).
   - `faces:` per kind, a list. `lines:` per kind, a list of 3+ variations. A kind with no `lines` keeps the stock text.
-  - Kinds: steer redirect interrupt queued stop restarting shutting_down restart_requested restart_in_progress draining back_online job_interrupted update_rolled_back busy rate_limited error model_substitute user memory skill mixed tidy. `model_substitute` lines keep `{requested}` and `{provider}`.
+  - Kinds: steer redirect interrupt queued stop restarting shutting_down restart_requested restart_in_progress draining back_online job_interrupted update_rolled_back busy rate_limited error model_substitute user memory skill mixed tidy new_session. `model_substitute` lines keep `{requested}` and `{provider}`.
   - `review_items:` icons/labels: about_you, note, note_updated, new_skill, improved, removed.
   - `hello:` a list of first-contact lines. `ui:` optional picker strings (model_title, using, switched, expired, ...).
 - `tool_emojis:` tool name to one emoji (globs like `browser_*` work).

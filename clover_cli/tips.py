@@ -1,6 +1,7 @@
 """Random tips shown at CLI session start to help users discover features."""
 
 import random
+import re
 
 
 # ---------------------------------------------------------------------------
@@ -475,14 +476,73 @@ TIPS = [
 ]
 
 
-def get_random_tip(exclude_recent: int = 0) -> str:
+# Platforms whose users are chatting, not sitting in a terminal or dashboard.
+# Tips about keybindings, CLI commands, config files, env vars, the TUI, the
+# dashboard or the desktop app make no sense there.
+CLI_PLATFORMS = frozenset({"", "cli", "local", "tui", "desktop", "dashboard"})
+
+# A tip is NOT for chat if it names a terminal/dashboard-only surface.
+_NOT_FOR_CHAT = re.compile(
+    r"\bclover (?:-\w|\w+)"                    # CLI invocations: `clover doctor`, `clover -c`
+    r"|Ctrl\+|Alt\+|Shift\+|\bTab\b|\bEnter\b"  # keybindings
+    r"|\bTUI\b|dashboard|desktop|status ?bar|spinner|clipboard|\$EDITOR|tmux|drag"
+    r"|config\.yaml|\.env\b|~/|\.clover|\.worktree|\bCLOVER_[A-Z_]+|\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b"
+    r"|plugin|compressor|MCP|acp_command|well-known|Audio level|shell_quote|/reload-mcp|/save\b"
+    r"|^Set |--[a-z]|\b[a-z_]+\.[a-z_]+[:=]|\bCLI\b|\bterminal\b|\bstdout\b|\bSSH\b"
+)
+# ...and it is only worth showing in chat when it is about something a chat user does.
+_FOR_CHAT = re.compile(
+    r"^@|\bmemory\b|\bskills?\b|\bvoice\b|Telegram|Discord|WhatsApp|messaging|\bcron\b"
+    r"|send_message|session_search|\btodo\b|text_to_speech|image_generate|web_extract"
+    r"|browser_vision|delegate_task|execute_code|search_files|approval|dangerous"
+    r"|session titles?|\bcorrections?\b|\bcompress",
+    re.I,
+)
+_SLASH_HEAD = re.compile(r"^/([A-Za-z][\w-]*)")
+
+
+def _slash_tip_in_chat(tip: str) -> bool:
+    """True when a ``/command`` tip names a command that exists in messaging."""
+    match = _SLASH_HEAD.match(tip)
+    if not match:
+        return False
+    try:
+        from clover_cli.commands import resolve_command
+
+        cmd = resolve_command(match.group(1))
+    except Exception:
+        return False
+    return cmd is not None and not cmd.cli_only
+
+
+def tip_applies_to(tip: str, platform: str = "") -> bool:
+    """Whether *tip* makes sense on *platform* (``""``/``cli``/``tui``... see CLI_PLATFORMS: everything does)."""
+    if str(platform or "").lower() in CLI_PLATFORMS:
+        return True
+    if _NOT_FOR_CHAT.search(tip):
+        return False
+    if _SLASH_HEAD.match(tip):  # a /command tip stands or falls with the command
+        return _slash_tip_in_chat(tip)
+    return bool(_FOR_CHAT.search(tip))
+
+
+def chat_tips() -> list:
+    """The subset of TIPS that applies on messaging platforms."""
+    return [t for t in TIPS if tip_applies_to(t, "telegram")]
+
+
+def get_random_tip(exclude_recent: int = 0, platform: str = "") -> str:
     """Return a random tip string.
 
     Args:
         exclude_recent: not used currently; reserved for future
             deduplication across sessions.
+        platform: a messaging platform name (``"telegram"``...) restricts the
+            pool to tips that apply in chat; the default keeps the full pool.
     """
-    return random.choice(TIPS)
+    if str(platform or "").lower() in CLI_PLATFORMS:
+        return random.choice(TIPS)
+    return random.choice(chat_tips() or TIPS)
 
 
 # ---------------------------------------------------------------------------
