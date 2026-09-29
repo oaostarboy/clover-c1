@@ -8,12 +8,19 @@ non-English sessions) keep the stock text untouched.
 
 from __future__ import annotations
 
+import json
+import os
 import random
 import re
+import tempfile
 import threading
 from typing import Any, Dict, Optional, Tuple
 
 from agent import clover_flavor
+
+# Gateway status families for the chat-status pools the agent renders itself
+# (busy / rate_limited / error / model_substitute) live in
+# agent/clover_flavor.STATUS_POOLS; the adapters below need only the hello.
 
 ACK_POOLS: Dict[str, Tuple[Tuple[str, ...], Tuple[str, ...]]] = {
     "steer": (
@@ -159,3 +166,68 @@ def stop_ack(stock: str, chat_key: str, rng: Optional[Any] = None) -> str:
 def reset() -> None:
     with _lock:
         _last_pick.clear()
+
+
+# --- first hello to a brand-new chat -------------------------------------------------
+
+HELLO_LINES = (
+    "🍀(◕ᴗ◕✿) hi! I'm Clo, your clover. ask me anything.",
+    "🍀(ﾉ◕ヮ◕)ﾉ hello! I'm Clo, your clover. what shall we grow today?",
+    "🍀(＾▽＾) hey, I'm Clo, your clover. what's on your mind?",
+)
+# Never greet on machine-facing surfaces.
+_NO_HELLO_PLATFORMS = frozenset({
+    "local", "api_server", "webhook", "msgraph_webhook", "relay", "homeassistant", "cron",
+})
+_MAX_HELLO_KEYS = 5000
+
+
+def _hello_path(home: Any) -> str:
+    return os.path.join(str(home), "clo_hello_seen.json")
+
+
+def _load_hello_seen(path: str) -> list:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return [str(x) for x in data] if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def with_first_hello(
+    response: str,
+    platform: str,
+    chat_type: str,
+    chat_id: str,
+    home: Any,
+    rng: Optional[Any] = None,
+) -> str:
+    """Prepend one Clo hello to the first-ever reply in a DM chat; else *response* untouched.
+
+    Clover skin only, DMs only (never groups/channels), never machine-facing
+    platforms.  The chat is remembered in ``clo_hello_seen.json`` so the hello
+    is sent once, not on later turns or session resets.
+    """
+    if not response or not active():
+        return response
+    if str(chat_type or "dm") != "dm" or str(platform or "").lower() in _NO_HELLO_PLATFORMS:
+        return response
+    key = f"{platform}:{chat_id}"
+    path = _hello_path(home)
+    with _lock:
+        seen = _load_hello_seen(path)
+        if key in seen:
+            return response
+        seen.append(key)
+        try:
+            os.makedirs(str(home), exist_ok=True)
+            fd, tmp = tempfile.mkstemp(dir=str(home), prefix=".clo_hello_", suffix=".tmp")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(seen[-_MAX_HELLO_KEYS:], fh)
+            os.replace(tmp, path)
+        except OSError:
+            return response  # can't remember -> don't risk greeting every turn
+    hello = (rng if rng is not None else random).choice(HELLO_LINES)
+    return f"{hello}\n\n{response}"
+

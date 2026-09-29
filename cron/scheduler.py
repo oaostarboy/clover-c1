@@ -3066,7 +3066,7 @@ def _is_channel_dm_topic(
     return is_channel
 
 
-def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Optional[str]:
+def _deliver_result(job: dict, content: str, adapters=None, loop=None, failed: bool = False) -> Optional[str]:
     """
     Deliver job output to the configured target(s) (origin chat, specific platform, etc.).
 
@@ -3116,8 +3116,15 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
     if wrap_response:
         task_name = job.get("name", job["id"])
         job_id = job.get("id", "")
+        # Clover skin: "☘️ <job>" / "🥀 <job> didn't finish"; other skins keep the stock header.
+        try:
+            from agent import clover_flavor
+
+            _clo_header = clover_flavor.cron_header(str(task_name), failed=failed)
+        except Exception:
+            _clo_header = None
         delivery_content = (
-            f"Cronjob Response: {task_name}\n"
+            f"{_clo_header or 'Cronjob Response: ' + str(task_name)}\n"
             f"(job_id: {job_id})\n"
             f"-------------\n\n"
             f"{content}\n\n"
@@ -7439,6 +7446,7 @@ def _run_one_job_body(
                             deliver_content,
                             adapters=adapters,
                             loop=loop,
+                            failed=not success,
                         )
                 except Exception as de:
                     if isinstance(de, _FireClaimLostDuringSideEffect):
@@ -7606,6 +7614,7 @@ def _run_one_job_body(
                         + _failure_streak_nudge(job),
                         adapters=adapters,
                         loop=loop,
+                        failed=True,
                     )
                 except Exception as delivery_exc:
                     delivery_error = str(delivery_exc)

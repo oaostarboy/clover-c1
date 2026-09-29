@@ -111,6 +111,16 @@ from utils import base_url_host_matches, env_var_enabled
 logger = logging.getLogger(__name__)
 
 
+def _clo_status(agent: Any, kind: str, stock: str, tail: str = "", **kw: Any) -> str:
+    """Clo-style user-visible status under the clover skin; *stock* verbatim otherwise."""
+    try:
+        return clover_flavor.status_line(
+            kind, str(getattr(agent, "session_id", "") or ""), stock, tail, **kw
+        )
+    except Exception:
+        return stock
+
+
 # Scaffold marker used by _apply_active_turn_redirect and the ghost-row filter
 # in the api_messages loop. Module-level so both sites can never drift.
 _INTERRUPT_SCAFFOLD_MARKER = "[This response was interrupted by a user correction.]"
@@ -5415,10 +5425,13 @@ def run_conversation(
                             _upstream_name = (classified.error_context or {}).get(
                                 "upstream_provider", "aggregator"
                             )
-                            agent._buffer_status(
+                            agent._buffer_status(_clo_status(
+                                agent, "rate_limited",
                                 f"⚠️ Upstream {_upstream_name} rate-limited — "
-                                "switching to fallback model..."
-                            )
+                                "switching to fallback model...",
+                                f"upstream {_upstream_name} is rate-limited — "
+                                "switching to fallback model...",
+                            ))
                         elif classified.reason == FailoverReason.billing:
                             if classified.billing_unverified:
                                 # Ambiguous body (#82154) — don't assert billing.
@@ -5436,7 +5449,11 @@ def run_conversation(
                                 "⚠️ Provider unreachable — switching to fallback provider..."
                             )
                         else:
-                            agent._buffer_status("⚠️ Rate limited — switching to fallback provider...")
+                            agent._buffer_status(_clo_status(
+                                agent, "rate_limited",
+                                "⚠️ Rate limited — switching to fallback provider...",
+                                "switching to fallback provider...",
+                            ))
                         if agent._try_activate_fallback(reason=classified.reason):
                             active_system_prompt = _sync_failover_system_message(
                                 agent, api_messages, active_system_prompt)
@@ -6062,9 +6079,12 @@ def run_conversation(
                                     requested_model=_model, provider=_provider,
                                 )
                         if _substitute is not None:
-                            _substitute_notice = (
+                            _substitute_notice = _clo_status(
+                                agent, "model_substitute",
                                 f"⚠ '{_model}' doesn't exist on {_provider}, "
-                                f"so I used {_substitute.model} instead."
+                                f"so I used {_substitute.model} instead.",
+                                f"so I used *{_substitute.model}* instead.",
+                                joiner=", ", requested=_model, provider=_provider,
                             )
                             agent._flush_status_buffer()
                             agent._emit_status(_substitute_notice)
@@ -6135,20 +6155,29 @@ def run_conversation(
                     # ~60KB Cloudflare challenge page as 31 Discord messages).
                     _nonretryable_summary = agent._summarize_api_error(api_error)
                     if classified.reason == FailoverReason.content_policy_blocked:
-                        agent._emit_status(
+                        agent._emit_status(_clo_status(
+                            agent, "error",
                             f"❌ Provider safety filter blocked this request: "
-                            f"{_nonretryable_summary}"
-                        )
+                            f"{_nonretryable_summary}",
+                            f"provider safety filter blocked this request: "
+                            f"{_nonretryable_summary}",
+                        ))
                     elif classified.reason == FailoverReason.ssl_cert_verification:
-                        agent._emit_status(
+                        agent._emit_status(_clo_status(
+                            agent, "error",
                             f"❌ TLS certificate verification failed: "
-                            f"{_nonretryable_summary}"
-                        )
+                            f"{_nonretryable_summary}",
+                            f"TLS certificate verification failed: "
+                            f"{_nonretryable_summary}",
+                        ))
                     else:
-                        agent._emit_status(
+                        agent._emit_status(_clo_status(
+                            agent, "error",
                             f"❌ Non-retryable error (HTTP {status_code}): "
-                            f"{_nonretryable_summary}"
-                        )
+                            f"{_nonretryable_summary}",
+                            f"non-retryable error (HTTP {status_code}): "
+                            f"{_nonretryable_summary}",
+                        ))
                     agent._vprint(f"{agent.log_prefix}❌ Non-retryable client error (HTTP {status_code}). Aborting.", force=True)
                     agent._vprint(f"{agent.log_prefix}   🔌 Provider: {_provider}  Model: {_model}", force=True)
                     agent._vprint(f"{agent.log_prefix}   🌐 Endpoint: {_base}", force=True)
@@ -6325,12 +6354,19 @@ def run_conversation(
                     if classified.reason == FailoverReason.billing:
                         if classified.billing_unverified:
                             # Ambiguous body (#82154) — hedge the terminal line.
-                            agent._emit_status(
+                            agent._emit_status(_clo_status(
+                                agent, "error",
                                 "❌ Provider reported usage/credit exhaustion "
-                                f"(unverified — may be a content-filter rejection) — {_final_summary}"
-                            )
+                                f"(unverified — may be a content-filter rejection) — {_final_summary}",
+                                "provider reported usage/credit exhaustion "
+                                f"(unverified — may be a content-filter rejection) — {_final_summary}",
+                            ))
                         else:
-                            agent._emit_status(f"❌ Billing or credits exhausted — {_final_summary}")
+                            agent._emit_status(_clo_status(
+                                agent, "error",
+                                f"❌ Billing or credits exhausted — {_final_summary}",
+                                f"billing or credits exhausted — {_final_summary}",
+                            ))
                         _billing_guidance = _billing_or_entitlement_message(
                             capability="model access",
                             provider=_provider,
@@ -6347,9 +6383,17 @@ def run_conversation(
                             unverified=classified.billing_unverified,
                         )
                     elif is_rate_limited:
-                        agent._emit_status(f"❌ Rate limited after {max_retries} retries — {_final_summary}")
+                        agent._emit_status(_clo_status(
+                            agent, "rate_limited",
+                            f"❌ Rate limited after {max_retries} retries — {_final_summary}",
+                            f"still limited after {max_retries} retries — {_final_summary}",
+                        ))
                     else:
-                        agent._emit_status(f"❌ API failed after {max_retries} retries — {_final_summary}")
+                        agent._emit_status(_clo_status(
+                            agent, "error",
+                            f"❌ API failed after {max_retries} retries — {_final_summary}",
+                            f"API failed after {max_retries} retries — {_final_summary}",
+                        ))
                     agent._vprint(f"{agent.log_prefix}   💀 Final error: {_final_summary}", force=True)
 
                     # Detect SSE stream-drop pattern (e.g. "Network
@@ -6549,6 +6593,12 @@ def run_conversation(
                         _policy_note = " (Z.AI Coding overload short retry)"
                     _wait_reason = "Provider overloaded" if _is_zai_coding_overload and not is_rate_limited else "Rate limited"
                     _rate_limit_status = f"⏱️ {_wait_reason}. Waiting {wait_time:.1f}s (attempt {retry_count + 1}/{max_retries}){_policy_note}..."
+                    _rate_limit_status = _clo_status(
+                        agent,
+                        "busy" if _wait_reason == "Provider overloaded" else "rate_limited",
+                        _rate_limit_status,
+                        f"trying again in {wait_time:.1f}s (attempt {retry_count + 1}/{max_retries}){_policy_note}",
+                    )
                     # Normal retries are buffered to avoid noisy transient chatter. Long
                     # Z.AI Coding waits are different: they can last minutes, so surface
                     # progress immediately instead of making the TUI look frozen.
@@ -6557,7 +6607,11 @@ def run_conversation(
                     else:
                         agent._buffer_status(_rate_limit_status)
                 else:
-                    agent._buffer_status(f"⏳ Retrying in {wait_time:.1f}s (attempt {retry_count}/{max_retries})...")
+                    agent._buffer_status(_clo_status(
+                        agent, "busy",
+                        f"⏳ Retrying in {wait_time:.1f}s (attempt {retry_count}/{max_retries})...",
+                        f"trying again in {wait_time:.1f}s (attempt {retry_count}/{max_retries})",
+                    ))
                 logger.warning(
                     "Retrying API call in %ss (attempt %s/%s) %s policy=%s error=%s",
                     wait_time,

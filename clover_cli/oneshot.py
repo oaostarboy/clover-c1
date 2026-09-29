@@ -674,11 +674,19 @@ def _run_agent(
                     reason="model_not_found_substituted",
                 )
         if _model_substitution_info is not None:
-            agent._emit_status(
+            from agent import clover_flavor
+
+            agent._emit_status(clover_flavor.status_line(
+                "model_substitute",
+                str(getattr(agent, "session_id", "") or ""),
                 f"⚠ '{_model_substitution_info['requested_model']}' doesn't "
                 f"exist on {_model_substitution_info['requested_provider']}, "
-                f"so I used {_model_substitution_info['actual_model']} instead."
-            )
+                f"so I used {_model_substitution_info['actual_model']} instead.",
+                f"so I used *{_model_substitution_info['actual_model']}* instead.",
+                joiner=", ",
+                requested=_model_substitution_info["requested_model"],
+                provider=_model_substitution_info["requested_provider"],
+            ))
 
         result = agent.run_conversation(prompt)
         # Keep a worker going when it stops early: out of steps, or quit
