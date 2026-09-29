@@ -1696,6 +1696,12 @@ display:
   # 0 disables the heartbeat.
   delegation_heartbeat_seconds: 60
 
+  # Live 🏛 council card (/council and council runs the agent starts).
+  #   v2:      one collapsible card with the question, each seat and its model;
+  #            follows the latest message and ends as ONE message (card + answer)
+  #   classic: the compact stage-only card, answer as a separate message
+  council_card: v2
+
   # Natural mid-turn assistant updates.
   # On gateway platforms, when true, completed assistant status messages are
   # sent as separate chat messages. On the Desktop app, when true, mid-turn

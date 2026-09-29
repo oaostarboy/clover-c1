@@ -140,8 +140,8 @@ class GatewaySlashCommandsMixin:
     async def _handle_council_command(self, event: MessageEvent) -> str:
         """Run the installed council with one editable, council-specific card."""
         from gateway.council_progress import (
-            CouncilCard,
             format_council_result,
+            make_card,
             mark_council_run_managed,
             parse_council_args,
         )
@@ -169,10 +169,20 @@ class GatewaySlashCommandsMixin:
         work = profile_home / "council" / "runs" / run_id
         progress_path = work / "progress.json"
         summary_path = work / "summary.json"
-        status_key = f"council:{run_id}"
         metadata = self._thread_metadata_for_source(source)
         adapter = self._adapter_for_source(source)
-        card = CouncilCard(adapter, str(source.chat_id), status_key, metadata)
+        card = make_card(
+            self._council_card_style(getattr(source, "platform", None)),
+            adapter,
+            str(source.chat_id),
+            run_id,
+            metadata,
+            work=work,
+            question=question,
+            mode=mode,
+            expandable=getattr(getattr(source, "platform", None), "value", None) == "telegram",
+            home=profile_home,
+        )
         publish = card.publish
         # The watcher for agent-launched runs must skip this run: this handler
         # owns its card.
@@ -216,7 +226,10 @@ class GatewaySlashCommandsMixin:
         if process.returncode != 0:
             failed = dict(last_state)
             failed["status"] = "failed"
-            await publish(failed)
+            if card.owns_final:
+                await card.finish_failed(failed)
+            else:
+                await publish(failed)
             logger.warning(
                 "Council %s failed rc=%s stdout=%s stderr=%s",
                 run_id,
@@ -224,6 +237,8 @@ class GatewaySlashCommandsMixin:
                 (stdout or b"").decode(errors="replace")[-500:],
                 (stderr or b"").decode(errors="replace")[-500:],
             )
+            if card.owns_final:
+                return None  # the card's final message already says it failed
             return "🏛 Council failed. The stage is preserved in the council card."
 
         try:
@@ -231,13 +246,34 @@ class GatewaySlashCommandsMixin:
         except (OSError, ValueError):
             failed = dict(last_state)
             failed["status"] = "failed"
+            if card.owns_final:
+                await card.finish_failed(failed)
+                return None
             await publish(failed)
             return "🏛 Council finished without a readable verdict."
 
         done = dict(last_state)
         done["status"] = "done"
+        if card.owns_final:
+            # One message: the card and the answer travel together.
+            await card.finish_done(done, summary)
+            return None
         await publish(done)
         return format_council_result(summary)
+
+    def _council_card_style(self, platform: Any) -> str:
+        """``display.council_card``: ``v2`` (default) or ``classic``."""
+        from gateway.council_progress import resolve_card_style
+        from gateway.display_config import resolve_display_setting
+        from gateway.run import _load_gateway_config, _platform_config_key
+
+        try:
+            key = _platform_config_key(platform) if isinstance(platform, Platform) else str(platform)
+            return resolve_card_style(
+                resolve_display_setting(_load_gateway_config(), key, "council_card", "v2")
+            )
+        except Exception:
+            return "v2"
 
     def _council_scan_homes(self) -> list[Path]:
         """Profile homes whose ``council/runs`` the card watcher should scan."""
@@ -289,6 +325,7 @@ class GatewaySlashCommandsMixin:
         await CouncilRunWatcher(
             homes=self._council_scan_homes,
             resolve_target=self._council_run_target,
+            card_style=lambda origin: self._council_card_style(str(origin.get("platform") or "")),
         ).run()
 
     def _typed_command_prefix_for(self, platform) -> str:

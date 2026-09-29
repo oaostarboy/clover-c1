@@ -491,6 +491,7 @@ def run_council(
     work = home / "council" / "runs" / run_id
     work.mkdir(parents=True, exist_ok=False)
     write_origin(work)
+    (work / "question.txt").write_text(question, encoding="utf-8")
     report = work / "report.md"
     log_path = work / "agents.log"
     seats = MODE_SEATS[mode]
@@ -746,6 +747,43 @@ def run_council(
     return 0, report, summary
 
 
+GATEWAY_ACK = "gateway-card.json"
+
+
+def gateway_delivers_answer(work: Path) -> bool:
+    """True once a gateway card has adopted this run.
+
+    The gateway posts the live card and the one final answer message itself.
+    The launching agent reads this process's stdout (the terminal completion
+    notice), so repeating the verdict there makes the agent post the answer a
+    second time.
+    """
+    return (work / GATEWAY_ACK).exists()
+
+
+def final_stdout_lines(code: int, report: Path, summary: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    if code:
+        lines.append(f"COUNCIL_FAILED stage={summary.get('stage', 'unknown')}")
+    elif gateway_delivers_answer(report.parent):
+        lines.append(
+            "COUNCIL_DONE: the gateway is posting the answer to the chat. "
+            "Do not repeat the verdict, why, or caveat."
+        )
+        if summary.get("stalled"):
+            lines.append("STALLED: " + ", ".join(summary["stalled"]))
+    else:
+        lines.append(f"VERDICT: {summary['verdict']}")
+        lines.append(f"WHY: {summary['why']}")
+        lines.append(f"CAVEAT: {summary['caveat']}")
+        if summary["stalled"]:
+            lines.append("STALLED: " + ", ".join(summary["stalled"]))
+        if summary["attack_severity"]:
+            lines.append(f"ATTACK: {summary['attack_severity']} {summary['ruling']}")
+    lines.append(f"COUNCIL_REPORT={report.resolve()}")
+    return lines
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the adversarial Clover council")
     parser.add_argument("question")
@@ -763,17 +801,8 @@ def main() -> None:
         run_id=args.id,
         timeout_s=args.timeout,
     )
-    if code:
-        print(f"COUNCIL_FAILED stage={summary.get('stage', 'unknown')}")
-    else:
-        print(f"VERDICT: {summary['verdict']}")
-        print(f"WHY: {summary['why']}")
-        print(f"CAVEAT: {summary['caveat']}")
-        if summary["stalled"]:
-            print("STALLED: " + ", ".join(summary["stalled"]))
-        if summary["attack_severity"]:
-            print(f"ATTACK: {summary['attack_severity']} {summary['ruling']}")
-    print(f"COUNCIL_REPORT={report.resolve()}")
+    for line in final_stdout_lines(code, report, summary):
+        print(line)
     raise SystemExit(code)
 
 

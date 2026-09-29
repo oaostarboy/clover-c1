@@ -49,6 +49,7 @@ def _watcher(home: Path, adapter: Adapter) -> CouncilRunWatcher:
         homes=lambda: [home],
         resolve_target=lambda origin: (adapter, origin["chat_id"], {"thread_id": origin["thread_id"]}),
         poll_s=0.01,
+        card_style=lambda origin: "classic",  # these tests pin the rollback card
     )
 
 
@@ -128,6 +129,9 @@ async def test_slash_council_run_is_not_duplicated_by_the_watcher(tmp_path):
     adapter = Adapter()
 
     class Runner(GatewaySlashCommandsMixin):
+        def _council_card_style(self, platform):
+            return "classic"
+
         def _resolve_profile_home_for_source(self, source):
             return tmp_path
 

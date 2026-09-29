@@ -32,7 +32,7 @@ council of models, not a panel of people or independent legal/financial experts.
 
 ## How to Run
 
-Telegram and gateway syntax (this path uses one editable `🏛 Council` stage card and collapses it after the verdict):
+Telegram and gateway syntax (this path shows one live `🏛 Council` card and ends as a single message):
 
 - `/council <question>` — full council.
 - `/council quick <question>` — three blind seats, then chairman.
@@ -50,17 +50,19 @@ python "$CLOVER_HOME/skills/autonomous-ai-agents/council/scripts/council_run.py"
 Run it exactly like this (only `--mode` changes): the runner writes to
 `$CLOVER_HOME/council/runs/<id>/`, the same place `/council` uses. In a gateway
 chat (Telegram, Discord, Slack, ...) it also records which chat asked, and the
-gateway then shows the same live `🏛 Council` card in that chat and posts the
-formatted answer when the run ends. That happens automatically, once per run.
-Do not paste the card or the answer again; add only your own view, labeled as
-yours. From the plain CLI there is no card, so report the result yourself.
+gateway then shows one live `🏛 Council` card in that chat (question, each seat
+and its model, following the latest message) and, when the run ends, replaces it
+with ONE final message that holds the seats' takes and the answer. That happens
+automatically, once per run. Do not paste the card or the answer again; add only
+your own view, labeled as yours.
 
-Use a timeout of at least 1800 seconds. The runner prints the final verdict and
-an absolute `COUNCIL_REPORT=` path. Read that report only when the user asks for
-the complete debate; otherwise (CLI, or no card appeared) return the answer, reason,
-caveat, mode, and any stalled seats in three short sections: **Answer**, **Why**,
-and **What could change it**. Never paste the chairman's full analysis into the
-chat unless the user explicitly asks for it.
+Use a timeout of at least 1800 seconds. When the gateway owns delivery the runner
+prints `COUNCIL_DONE` and an absolute `COUNCIL_REPORT=` path, not the verdict, so
+there is nothing to relay. Read the report or `summary.json` only when the user
+asks for the complete debate. From the plain CLI (no card) the runner prints the
+verdict, reason, and caveat: return them in three short sections, **Answer**,
+**Why**, and **What could change it**, with the mode and any stalled seats. Never
+paste the chairman's full analysis into the chat unless the user explicitly asks.
 
 ## Seats
 
