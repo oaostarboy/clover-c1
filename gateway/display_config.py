@@ -33,12 +33,7 @@ from typing import Any
 _GLOBAL_DEFAULTS: dict[str, Any] = {
     "tool_progress": "all",
     "tool_progress_grouping": "accumulate",  # "accumulate" = edit one bubble; "separate" = one msg per tool
-    # Owner decision: live thoughts default ON for every user, matching
-    # config_defaults.py and the TUI gateway. This is the fallback for
-    # platforms with no per-platform tier entry; the tier dicts below set
-    # their own copy explicitly too, since a tier dict key always wins over
-    # _GLOBAL_DEFAULTS in resolve_display_setting.
-    "show_reasoning": True,
+    "show_reasoning": False,
     # How a reasoning/thinking summary is rendered when show_reasoning is on.
     #   "code"      -> 💭 **Reasoning:** + fenced code block (legacy default)
     #   "blockquote"-> each line prefixed with "> "
@@ -94,7 +89,7 @@ _GLOBAL_DEFAULTS: dict[str, Any] = {
 
 _TIER_HIGH = {
     "tool_progress": "all",
-    "show_reasoning": True,
+    "show_reasoning": False,
     "tool_preview_length": 40,
     "streaming": None,  # follow global
     "interim_assistant_messages": True,
@@ -104,7 +99,7 @@ _TIER_HIGH = {
 
 _TIER_MEDIUM = {
     "tool_progress": "new",
-    "show_reasoning": True,
+    "show_reasoning": False,
     "tool_preview_length": 40,
     "streaming": None,
     "interim_assistant_messages": True,
@@ -114,7 +109,7 @@ _TIER_MEDIUM = {
 
 _TIER_LOW = {
     "tool_progress": "off",
-    "show_reasoning": True,
+    "show_reasoning": False,
     "tool_preview_length": 40,
     "streaming": False,
     "interim_assistant_messages": False,
@@ -124,7 +119,7 @@ _TIER_LOW = {
 
 _TIER_MINIMAL = {
     "tool_progress": "off",
-    "show_reasoning": True,
+    "show_reasoning": False,
     "tool_preview_length": 0,
     "streaming": False,
     "interim_assistant_messages": False,

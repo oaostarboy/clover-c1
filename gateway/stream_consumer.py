@@ -20,6 +20,7 @@ import concurrent.futures
 import inspect
 import logging
 import queue
+import re
 import secrets
 import threading
 import time
@@ -101,6 +102,33 @@ def escape_code_fences_for_display(text: str) -> str:
     if not isinstance(text, str) or "```" not in text:
         return text
     return text.replace("```", "\\`\\`\\`")
+
+
+_REASONING_HEADING_RE = re.compile(r"^\*\*(.+)\*\*$")
+
+
+def strip_reasoning_heading_markers(text: str) -> str:
+    """Unwrap whole-line ``**heading**`` markdown from reasoning text.
+
+    Provider reasoning summaries format each section as a bold markdown
+    heading on its own line (e.g. ``**Fetching remote updates**``). That
+    renders fine inline, but when the summary is wrapped in a fenced code
+    block for display (the "code" reasoning style), markdown isn't
+    interpreted there and the ``**`` markers show up as literal asterisks.
+    Only a line that is ENTIRELY a ``**...**`` heading is unwrapped; a
+    partial bold span inside a sentence is left untouched.
+    """
+    if not isinstance(text, str) or "**" not in text:
+        return text
+    lines = []
+    for line in text.splitlines():
+        match = _REASONING_HEADING_RE.match(line.strip())
+        if match:
+            indent = line[: len(line) - len(line.lstrip())]
+            lines.append(f"{indent}{match.group(1)}")
+        else:
+            lines.append(line)
+    return "\n".join(lines)
 
 
 def ensure_closed_code_fences(text: str) -> str:

@@ -4042,6 +4042,31 @@ def _print_fetch_failure(stderr: str) -> None:
         print(f"  {stderr.splitlines()[0]}")
 
 
+def _fetch_branch_tracking(
+    git_cmd: list, cwd: Path, remote: str, branch: str, depth_args: list | None = None
+):
+    """Fetch a single branch from ``remote`` and write its remote-tracking ref.
+
+    Installer clones use ``git clone --depth 1 --branch <default>``, which
+    implies ``--single-branch`` and scopes ``remote.<remote>.fetch`` to only
+    the default branch. A plain ``git fetch <remote> <branch>`` for any other
+    branch then updates FETCH_HEAD only — ``refs/remotes/<remote>/<branch>``
+    is never written, so a later ``<remote>/<branch>`` reference (checkout
+    -B, rev-parse, rev-list, merge) fails to resolve even though the fetch
+    itself succeeded. An explicit refspec always writes the tracking ref,
+    regardless of the configured single-branch scope, while still fetching
+    only the one branch (this repo carries thousands of auto-generated
+    branches, so a bare ``git fetch <remote>`` is not an option).
+    """
+    refspec = f"+refs/heads/{branch}:refs/remotes/{remote}/{branch}"
+    return subprocess.run(
+        git_cmd + ["fetch"] + list(depth_args or []) + [remote, refspec],
+        cwd=cwd,
+        capture_output=True,
+        text=True, encoding="utf-8", errors="replace",
+    )
+
+
 def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     """Implement ``clover update --check``: fetch and report without installing.
 
@@ -4143,22 +4168,16 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
         else:
             # No upstream remote, or the upstream fetch failed — use origin.
             print("→ Fetching from origin...")
-            fetch_result = subprocess.run(
-                git_cmd + ["fetch"] + depth_args + ["origin", branch],
-                cwd=_m().PROJECT_ROOT,
-                capture_output=True,
-                text=True, encoding="utf-8", errors="replace",
+            fetch_result = _fetch_branch_tracking(
+                git_cmd, _m().PROJECT_ROOT, "origin", branch, depth_args
             )
             upstream_exists = False
             compare_branch = f"origin/{branch}"
     else:
         # Non-default branch: compare against origin/<branch> directly.
         print("→ Fetching from origin...")
-        fetch_result = subprocess.run(
-            git_cmd + ["fetch"] + depth_args + ["origin", branch],
-            cwd=_m().PROJECT_ROOT,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
+        fetch_result = _fetch_branch_tracking(
+            git_cmd, _m().PROJECT_ROOT, "origin", branch, depth_args
         )
         upstream_exists = False
         compare_branch = f"origin/{branch}"
@@ -7930,11 +7949,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
             print("  (removed %d aborted-fetch pack temp file(s))" % len(swept))
 
         print("→ Fetching updates...")
-        fetch_result = subprocess.run(
-            git_cmd + ["fetch", "origin", branch],
-            cwd=_m().PROJECT_ROOT,
-            capture_output=True,
-            text=True, encoding="utf-8", errors="replace",
+        fetch_result = _fetch_branch_tracking(
+            git_cmd, _m().PROJECT_ROOT, "origin", branch
         )
         if fetch_result.returncode != 0:
             _print_fetch_failure(fetch_result.stderr)

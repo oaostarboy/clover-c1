@@ -2764,7 +2764,7 @@ from gateway.session_state import (
 from gateway.authz_mixin import GatewayAuthorizationMixin
 from gateway.kanban_watchers import GatewayKanbanWatchersMixin
 from gateway.slash_commands import GatewaySlashCommandsMixin
-from gateway.turn_context import TurnContext
+from gateway.turn_context import TurnContext, turn_had_live_reasoning_relay
 from gateway.platforms.base import (
     BasePlatformAdapter,
     EphemeralReply,
@@ -7000,6 +7000,7 @@ class TurnRunner:
         return {
             "final_response": final_response,
             "last_reasoning": result.get("last_reasoning"),
+            "reasoning_relayed_live": turn_had_live_reasoning_relay(ctx),
             "messages": ctx.result_holder[0].get("messages", []) if ctx.result_holder[0] else [],
             "api_calls": ctx.result_holder[0].get("api_calls", 0) if ctx.result_holder[0] else 0,
             "failed": ctx.result_holder[0].get("failed", False) if ctx.result_holder[0] else False,
@@ -9974,16 +9975,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
     @staticmethod
     def _load_show_reasoning() -> bool:
-        """Load show_reasoning toggle from config.yaml display section.
-
-        Owner decision: live thoughts default ON for every user, matching
-        ``config_defaults.py`` and the TUI gateway. An explicit
-        ``display.show_reasoning: false`` still wins.
-        """
+        """Load show_reasoning toggle from config.yaml display section."""
         cfg = _load_gateway_runtime_config()
         return is_truthy_value(
             cfg_get(cfg, "display", "show_reasoning"),
-            default=True,
+            default=False,
         )
 
     @staticmethod
@@ -16083,6 +16079,37 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _shutdown_gateway_health_export(self)
             logger.info("Gateway stopped (total teardown %.2fs)", _phase_elapsed())
 
+            # Cancel every in-flight background self-improvement review
+            # (agent/background_review.py) now that the gateway itself has
+            # torn down. Without this, a review replaying a large context
+            # (an auxiliary compression retry, a slow provider fallback,
+            # ...) kept the process alive for minutes after "Gateway
+            # stopped" was logged, with launchd/systemd only relaunching
+            # once it finally exited (issue: restart-stall, 2026-09-28).
+            # Reviews run on daemon threads (AIAgent._spawn_background_review)
+            # and this wait is itself bounded, so it can never become a new
+            # source of the same stall — a review that doesn't acknowledge
+            # just keeps running unsupervised while the process exits.
+            _mark_gateway_stopped_at(time.monotonic())
+            try:
+                from agent.background_review import cancel_all_background_reviews
+
+                _still_running = cancel_all_background_reviews()
+            except Exception:
+                _still_running = []
+                logger.debug(
+                    "cancel_all_background_reviews failed during shutdown",
+                    exc_info=True,
+                )
+            if _still_running:
+                logger.warning(
+                    "Gateway shutdown: %d background review(s) did not "
+                    "acknowledge cancellation and are still running: %s "
+                    "— exiting anyway",
+                    len(_still_running),
+                    ", ".join(_still_running),
+                )
+
         self._stop_task = asyncio.create_task(_stop_impl())
         await self._stop_task
 
@@ -21599,7 +21626,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _load_gateway_config(),
                     _platform_config_key(source.platform),
                     "show_reasoning",
-                    default=bool(getattr(self, "_show_reasoning", True)),
+                    default=bool(getattr(self, "_show_reasoning", False)),
                     platform=source.platform,
                     require_platform_override_for={Platform.MATTERMOST},
                 )
@@ -21607,12 +21634,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _show_reasoning_effective = (
                     False
                     if source.platform == Platform.MATTERMOST
-                    else getattr(self, "_show_reasoning", True)
+                    else getattr(self, "_show_reasoning", False)
                 )
-            if _show_reasoning_effective and response and not _intentional_silence:
+            if (
+                _show_reasoning_effective
+                and response
+                and not _intentional_silence
+                and not agent_result.get("reasoning_relayed_live")
+            ):
                 last_reasoning = agent_result.get("last_reasoning")
                 if last_reasoning:
-                    from gateway.stream_consumer import escape_code_fences_for_display
+                    from gateway.stream_consumer import (
+                        escape_code_fences_for_display,
+                        strip_reasoning_heading_markers,
+                    )
                     # Collapse long reasoning to keep messages readable
                     lines = last_reasoning.strip().splitlines()
                     if len(lines) > 15:
@@ -21644,6 +21679,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         )
                         response = f"> 💭 **Reasoning:**\n{_quoted}\n\n{response}"
                     else:
+                        # The code fence doesn't interpret markdown, so a
+                        # provider's bold "**Heading**" reasoning lines would
+                        # otherwise show up as literal asterisks inside it.
+                        display_reasoning = strip_reasoning_heading_markers(display_reasoning)
                         # Escape ``` inside reasoning so inner fences don't
                         # break the outer code block used to render it.
                         display_reasoning = escape_code_fences_for_display(display_reasoning)
@@ -33000,8 +33039,20 @@ def main():
     # all of which complete teardown first. Routing those codes through the
     # same os._exit backstop means EVERY exit path is wedge-proof, not just the
     # boolean-return ones.
+    # A bare ``asyncio.run(start_gateway(config))`` would hand teardown to
+    # ``asyncio.Runner.close()``, which awaits
+    # ``loop.shutdown_default_executor(constants.THREAD_JOIN_TIMEOUT)`` —
+    # ``THREAD_JOIN_TIMEOUT`` is 300s on Python 3.12+. A single default-
+    # executor thread still busy at shutdown (e.g. a context-compression LLM
+    # call that hadn't timed out yet) then blocks *this* call for up to five
+    # minutes, even though ``start_gateway``'s own graceful teardown already
+    # completed and logged "Gateway stopped" (the restart-stall incident,
+    # 2026-09-28: exactly a 300s gap between that log line and process exit).
+    # We drive the loop ourselves so teardown is bounded instead.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        success = asyncio.run(start_gateway(config))
+        success = loop.run_until_complete(start_gateway(config))
         exit_code = 0 if success else 1
     except SystemExit as e:
         # e.code may be None (→ 0), an int, or a str (→ 1, like CPython).
@@ -33011,7 +33062,116 @@ def main():
             exit_code = e.code
         else:
             exit_code = 1
+    finally:
+        _teardown_gateway_loop(loop)
     _exit_after_graceful_shutdown(exit_code)
+
+
+_LOOP_TEARDOWN_STEP_TIMEOUT_SECONDS = 2.0
+
+
+def _teardown_gateway_loop(loop: "asyncio.AbstractEventLoop") -> None:
+    """Close ``loop`` without ever blocking on a default-executor thread join.
+
+    Mirrors what ``asyncio.run``/``asyncio.Runner.close()`` do — cancel any
+    remaining tasks, close async generators, shut down the default executor —
+    but with every step bounded to a couple of seconds, and the executor
+    shutdown made fire-and-forget (``wait=False``) instead of awaited with
+    Python 3.12+'s 300s ``THREAD_JOIN_TIMEOUT``. Each step is independently
+    best-effort: a failure or timeout in one must never block the next, since
+    the only thing that matters here is reaching ``_exit_after_graceful_
+    shutdown``'s unconditional ``os._exit`` quickly.
+    """
+    try:
+        to_cancel = asyncio.all_tasks(loop)
+    except Exception:
+        to_cancel = set()
+    if to_cancel:
+        for task in to_cancel:
+            task.cancel()
+        try:
+            loop.run_until_complete(
+                asyncio.wait_for(
+                    asyncio.gather(*to_cancel, return_exceptions=True),
+                    timeout=_LOOP_TEARDOWN_STEP_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception:
+            pass
+    try:
+        loop.run_until_complete(
+            asyncio.wait_for(
+                loop.shutdown_asyncgens(),
+                timeout=_LOOP_TEARDOWN_STEP_TIMEOUT_SECONDS,
+            )
+        )
+    except Exception:
+        pass
+    try:
+        executor = loop._default_executor  # noqa: SLF001 - no public getter
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
+    try:
+        loop.close()
+    except Exception:
+        pass
+
+
+# Shutdown-timing guard (restart-stall, 2026-09-28): how long the process is
+# allowed to take between logging "Gateway stopped" and actually reaching
+# ``os._exit`` in ``_exit_after_graceful_shutdown`` below. Cancelling
+# background reviews is already bounded to a few seconds (see
+# ``cancel_all_background_reviews`` in ``_stop_impl_body``); this is a
+# generous backstop so ANY unexpectedly slow step in between produces a
+# named WARNING instead of the silent multi-minute stall this replaces —
+# ``_exit_after_graceful_shutdown`` hard-exits unconditionally regardless of
+# this check, so the guard only ever adds a diagnostic, never a delay.
+_GATEWAY_EXIT_TIMING_BOUND_SECONDS = 10.0
+_gateway_stopped_at_lock = threading.Lock()
+_gateway_stopped_at: Optional[float] = None
+
+
+def _mark_gateway_stopped_at(monotonic_time: float) -> None:
+    """Record when "Gateway stopped" was logged, for the exit-timing guard."""
+    global _gateway_stopped_at
+    with _gateway_stopped_at_lock:
+        _gateway_stopped_at = monotonic_time
+
+
+def _warn_if_gateway_exit_running_late() -> None:
+    """Log what's still running if exit is taking longer than expected.
+
+    Best-effort diagnostic only, called right before the unconditional
+    ``os._exit`` in :func:`_exit_after_graceful_shutdown` — a slow or
+    failing check here can never itself delay process exit.
+    """
+    with _gateway_stopped_at_lock:
+        started = _gateway_stopped_at
+    if started is None:
+        return
+    elapsed = time.monotonic() - started
+    if elapsed <= _GATEWAY_EXIT_TIMING_BOUND_SECONDS:
+        return
+    try:
+        from agent.background_review import live_background_review_count
+
+        still_running = live_background_review_count()
+    except Exception:
+        still_running = None
+    detail = (
+        f"{still_running} background review(s) still registered"
+        if still_running
+        else "no known background reviews still registered"
+    )
+    logger.warning(
+        "Gateway exit took %.1fs after 'Gateway stopped' (bound %.0fs): %s "
+        "— hard-exiting now",
+        elapsed,
+        _GATEWAY_EXIT_TIMING_BOUND_SECONDS,
+        detail,
+    )
 
 
 def _exit_after_graceful_shutdown(exit_code: int) -> None:
@@ -33080,6 +33240,10 @@ def _exit_after_graceful_shutdown(exit_code: int) -> None:
     try:
         from clover_logging import drain_log_queue
         drain_log_queue(timeout=1.0)
+    except Exception:
+        pass
+    try:
+        _warn_if_gateway_exit_running_late()
     except Exception:
         pass
     os._exit(exit_code)
