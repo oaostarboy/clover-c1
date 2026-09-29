@@ -1516,6 +1516,13 @@ DEFAULT_CONFIG = {
             "last_lines": 2,
         },
         "interim_assistant_messages": True,  # Gateway: send natural mid-turn assistant status messages. Desktop: keep mid-turn narration between tool calls instead of collapsing to the final message.
+        # Live reasoning: surface provider reasoning summaries (Codex/Responses
+        # reasoning summaries, Gemini thoughts, Anthropic thinking) as compact
+        # "🧠 <line>" progress updates in messaging gateway chats. Independent
+        # of interim_assistant_messages, which only covers the model's visible
+        # assistant TEXT between tool calls (some providers never write that).
+        # Default on; see gateway.display_config for the Mattermost carve-out.
+        "live_reasoning": True,
         # Codex Responses models narrate progress in a dedicated commentary
         # channel. When true (default), completed commentary messages are
         # delivered as visible mid-turn updates via the interim message path.

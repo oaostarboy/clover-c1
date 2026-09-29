@@ -34,6 +34,14 @@ _GLOBAL_DEFAULTS: dict[str, Any] = {
     "tool_progress": "all",
     "tool_progress_grouping": "accumulate",  # "accumulate" = edit one bubble; "separate" = one msg per tool
     "show_reasoning": False,
+    # Live "🧠 <line>" progress updates relaying provider reasoning summaries
+    # (Codex/Responses reasoning summaries, Gemini thoughts, Anthropic
+    # thinking) as they stream in — independent of interim_assistant_messages
+    # (only the model's visible assistant TEXT between tool calls) and of
+    # show_reasoning (which pastes the full reasoning above the final reply
+    # instead). Default on: without it, providers that never write interim
+    # assistant text (GPT/Gemini) showed no live thought at all.
+    "live_reasoning": True,
     # How a reasoning/thinking summary is rendered when show_reasoning is on.
     #   "code"      -> 💭 **Reasoning:** + fenced code block (legacy default)
     #   "blockquote"-> each line prefixed with "> "
@@ -90,6 +98,7 @@ _GLOBAL_DEFAULTS: dict[str, Any] = {
 _TIER_HIGH = {
     "tool_progress": "all",
     "show_reasoning": False,
+    "live_reasoning": True,
     "tool_preview_length": 40,
     "streaming": None,  # follow global
     "interim_assistant_messages": True,
@@ -100,6 +109,7 @@ _TIER_HIGH = {
 _TIER_MEDIUM = {
     "tool_progress": "new",
     "show_reasoning": False,
+    "live_reasoning": True,
     "tool_preview_length": 40,
     "streaming": None,
     "interim_assistant_messages": True,
@@ -110,6 +120,7 @@ _TIER_MEDIUM = {
 _TIER_LOW = {
     "tool_progress": "off",
     "show_reasoning": False,
+    "live_reasoning": True,
     "tool_preview_length": 40,
     "streaming": False,
     "interim_assistant_messages": False,
@@ -120,6 +131,7 @@ _TIER_LOW = {
 _TIER_MINIMAL = {
     "tool_progress": "off",
     "show_reasoning": False,
+    "live_reasoning": True,
     "tool_preview_length": 0,
     "streaming": False,
     "interim_assistant_messages": False,
@@ -311,6 +323,7 @@ def _normalise(setting: str, value: Any) -> Any:
         "busy_ack_detail",
         "busy_steer_ack_enabled",
         "thinking_progress",
+        "live_reasoning",
     }:
         if isinstance(value, str):
             val = value.strip().lower()

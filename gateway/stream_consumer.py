@@ -131,6 +131,91 @@ def strip_reasoning_heading_markers(text: str) -> str:
     return "\n".join(lines)
 
 
+class ReasoningProgressRelay:
+    """Turns streamed provider reasoning text into compact live progress lines.
+
+    Provider reasoning arrives on ``agent.reasoning_callback`` in one of two
+    shapes: a single call carrying the complete summary text (non-streaming
+    turns), or a sequence of small deltas that together spell out one
+    reasoning item (token-streamed providers, or reasoning-summary providers
+    whose "part" delta already contains a whole ``**Heading**\\nbody`` chunk).
+    Either way, only the item's first non-empty line is worth surfacing live —
+    the body is detail the user doesn't need in a progress stream. Deltas are
+    buffered until a newline boundary (or a forced ``flush()`` at item end) so
+    emission is never per-token. Once a boundary line is found, any remaining
+    buffered text is dropped rather than carried forward, so a later heading
+    starts its own fresh line instead of being glued to the previous item.
+    """
+
+    MAX_LINE_LENGTH = 120
+    MIN_EMIT_INTERVAL_S = 2.0
+
+    def __init__(self, *, now_fn: Callable[[], float] = time.monotonic) -> None:
+        self._buf = ""
+        self._last_emitted: Optional[str] = None
+        self._last_emit_at: float = float("-inf")
+        self._now = now_fn
+
+    def feed(self, text: str) -> Optional[str]:
+        """Buffer a reasoning delta; return a formatted line once one is ready."""
+        if not text:
+            return None
+        self._buf += text
+        # Reasoning-summary providers (Codex/Responses) deliver each summary
+        # heading as one complete ``**Heading**`` chunk with no trailing
+        # newline, often twice (delta + done). A closed bold heading at the
+        # start of the buffer is a whole line already: emit it now instead of
+        # gluing the next heading onto it.
+        head = self._buf.lstrip()
+        if head.startswith("**"):
+            close = head.find("**", 2)
+            if close > 2:
+                heading = head[: close + 2]
+                self._buf = ""
+                normalized = self._normalize(heading)
+                return self._maybe_emit(normalized) if normalized else None
+        while "\n" in self._buf:
+            raw_line, _, rest = self._buf.partition("\n")
+            self._buf = rest
+            normalized = self._normalize(raw_line)
+            if normalized is None:
+                # Blank line (or a line that normalizes to nothing) — keep
+                # scanning the remainder for the item's real first line.
+                continue
+            self._buf = ""
+            return self._maybe_emit(normalized)
+        return None
+
+    def flush(self) -> Optional[str]:
+        """Force-emit whatever is buffered, e.g. at reasoning item end."""
+        if not self._buf:
+            return None
+        normalized = self._normalize(self._buf)
+        self._buf = ""
+        if normalized is None:
+            return None
+        return self._maybe_emit(normalized)
+
+    def _normalize(self, line: str) -> Optional[str]:
+        line = strip_reasoning_heading_markers(line.strip())
+        line = " ".join(line.split())
+        if not line:
+            return None
+        if len(line) > self.MAX_LINE_LENGTH:
+            line = line[: self.MAX_LINE_LENGTH - 1].rstrip() + "…"
+        return line
+
+    def _maybe_emit(self, line: str) -> Optional[str]:
+        if line == self._last_emitted:
+            return None
+        now = self._now()
+        if now - self._last_emit_at < self.MIN_EMIT_INTERVAL_S:
+            return None
+        self._last_emitted = line
+        self._last_emit_at = now
+        return line
+
+
 def ensure_closed_code_fences(text: str) -> str:
     """Append a closing `` ``` `` fence and/or `` ` `` if the text has
     orphaned code-block or inline-code markers.
