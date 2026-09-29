@@ -86,6 +86,12 @@ _STALE_PURGE_PROTECTED = frozenset(
         "clover_cli.main",
         "clover_cli.update_cmd",
         "clover_cli.clover_logging",
+        # Holds the OPEN update receipt in a module global. Evicting it made
+        # the command-boundary finalizer import a fresh module with no open
+        # receipt, so successful runs wrote no receipt and no
+        # .clover-last-update, and a stale refused receipt kept re-arming the
+        # fleet-restart catch-up (Windows 11 report, D3).
+        "clover_cli.update_receipt",
     }
 )
 

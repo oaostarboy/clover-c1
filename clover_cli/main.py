@@ -10704,6 +10704,12 @@ def cmd_update(args):
             pass
         _update_handoff_exit_code = 0
     finally:
+        try:
+            from clover_cli.update_receipt import warn_if_receipt_lost
+
+            warn_if_receipt_lost()
+        except Exception:
+            pass
         _update_lock.release()
         _finalize_update_output(_update_io_state)
         # The detached watcher owns post-restart verification. In direct CLI

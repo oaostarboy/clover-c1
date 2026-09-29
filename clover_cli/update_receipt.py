@@ -47,6 +47,11 @@ _RECEIPT_KEEP = 20  # keep the last N receipts per profile home
 # command; a module singleton lets the 7k-line updater record steps from
 # any depth without threading a handle through every helper.
 _current: Optional["UpdateReceipt"] = None
+# Did this process begin / write a receipt? A begun-but-unwritten receipt is
+# a bug (see the Update Pipeline notes in AGENTS.md); warn_if_receipt_lost()
+# makes it loud instead of silent.
+_began_in_process = False
+_written_in_process = False
 
 
 def _utc_now_iso() -> str:
@@ -154,9 +159,10 @@ def _receipt_dir() -> Path:
 
 def begin_update_receipt() -> None:
     """Start recording a new update receipt. Never raises."""
-    global _current
+    global _current, _began_in_process
     try:
         _current = UpdateReceipt()
+        _began_in_process = True
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Could not start update receipt: %s", exc)
         _current = None
@@ -271,6 +277,8 @@ def finalize_update_receipt(
         except OSError:
             pass
         _prune_old_receipts(directory)
+        global _written_in_process
+        _written_in_process = True
         return path
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Could not write update receipt: %s", exc)
@@ -311,6 +319,27 @@ def finalize_pending_update_receipt(
     except Exception:
         pass
     return finalize_update_receipt(outcome, stop_reason=stop_reason)
+
+
+def warn_if_receipt_lost() -> bool:
+    """Warn loudly when this process began a receipt but never wrote it.
+
+    Returns True when a warning was emitted. Never raises.
+    """
+    try:
+        if not _began_in_process or _written_in_process:
+            return False
+        logger.warning("clover update began an update receipt but never wrote it")
+        import sys as _sys
+
+        print(
+            "⚠ This update did not record its receipt (logs/update_receipts). "
+            "`clover update` status reports may describe an older run.",
+            file=_sys.stderr,
+        )
+        return True
+    except Exception:
+        return False
 
 
 def _prune_old_receipts(directory: Path) -> None:

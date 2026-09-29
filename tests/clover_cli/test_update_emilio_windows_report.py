@@ -98,3 +98,30 @@ def test_live_gateway_on_head_beats_any_receipt(monkeypatch):
     monkeypatch.setattr(status, "get_running_pid", lambda *a, **k: 4242)
     monkeypatch.setattr(status, "read_runtime_status", lambda *a, **k: {"pid": 4242, "code_sha": HEAD})
     assert update_cmd._receipt_reports_stale_runtime() is False
+
+
+def test_open_receipt_survives_the_stale_module_purge():
+    """E9, as a unit test."""
+    r1 = importlib.import_module("clover_cli.update_receipt")
+    sentinel = object()
+    saved = r1._current
+    r1._current = sentinel
+    try:
+        update_cmd._purge_stale_clover_modules()
+        r2 = importlib.import_module("clover_cli.update_receipt")
+        assert "clover_cli.update_receipt" in update_cmd._STALE_PURGE_PROTECTED
+        assert r2 is r1
+        assert r2._current is sentinel
+    finally:
+        r1._current = saved
+
+
+def test_a_lost_receipt_is_reported_loudly(monkeypatch, capsys):
+    from clover_cli import update_receipt
+
+    monkeypatch.setattr(update_receipt, "_began_in_process", True)
+    monkeypatch.setattr(update_receipt, "_written_in_process", False)
+    assert update_receipt.warn_if_receipt_lost() is True
+    assert "did not record its receipt" in capsys.readouterr().err
+    monkeypatch.setattr(update_receipt, "_written_in_process", True)
+    assert update_receipt.warn_if_receipt_lost() is False
