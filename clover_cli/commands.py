@@ -305,7 +305,7 @@ COMMAND_REGISTRY: list[CommandDef] = [
                subcommands=("normal", "fast", "status", "on", "off", "--global"),
                desktop="advanced"),
     CommandDef("skin", "Show or change the display skin/theme", "Configuration",
-               cli_only=True, args_hint="[name]", argument_mode="options"),
+               args_hint="[name]", argument_mode="options"),
     CommandDef("indicator", "Pick the TUI busy-indicator style", "Configuration",
                cli_only=True, args_hint=f"[{'|'.join(INDICATOR_STYLES)}]",
                subcommands=INDICATOR_STYLES, desktop="terminal"),
@@ -1478,7 +1478,7 @@ _SLACK_PRIORITY_ALIASES: tuple[str, ...] = ()
 #     (session export is an interactive surface; platform is a rare
 #     informational lookup) — without this entry /save tips the registry
 #     past the 50-cap and silently clamps /platform, breaking parity.
-_SLACK_VIA_CLOVER_ONLY = frozenset({"moa", "council", "debug", "egress", "init", "version", "diff", "update", "repair", "heartbeat", "refine", "review", "pause", "whoami", "platform", "insights"})
+_SLACK_VIA_CLOVER_ONLY = frozenset({"moa", "council", "debug", "egress", "init", "version", "diff", "update", "repair", "heartbeat", "refine", "review", "pause", "whoami", "platform", "insights", "skin"})
 
 
 def _sanitize_slack_name(raw: str) -> str:

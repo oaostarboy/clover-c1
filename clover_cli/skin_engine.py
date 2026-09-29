@@ -167,6 +167,9 @@ BUILT-IN SKINS
 - ``slate``   — Cool blue developer-focused theme
 - ``daylight`` — Light background theme with dark text and blue accents
 - ``warm-lightmode`` — Warm brown/gold text for light terminal backgrounds
+- ``butler``  — Starter message pack: dry and formal (slate colors)
+- ``minimal`` — Starter message pack: no faces or marks, plain short lines (mono colors)
+- ``hype``    — Starter message pack: loud and energetic (charizard colors)
 
 USER SKINS
 ==========
@@ -875,6 +878,122 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
 # Clo wears Clover's own palette: share the default skin's (dark + light) blocks.
 _BUILTIN_SKINS["clover"]["colors"] = _BUILTIN_SKINS["default"]["colors"]
 _BUILTIN_SKINS["clover"]["light_colors"] = _BUILTIN_SKINS["default"]["light_colors"]
+
+
+# Starter packs: built-in skins that are just a message pack on an existing palette.
+# Lines are the head of a message; the functional tail ("Your task is paused; ...")
+# is appended by the gateway, so a line carries no closing period.
+_BUILTIN_SKINS["butler"] = {
+    "name": "butler",
+    "description": "Butler - dry, formal, entirely at your service (slate palette)",
+    "messages": {
+        "mark": "🔻", "lucky_mark": "", "done_mark": "🎯", "fail_mark": "🩸",
+        "lines": {
+            "steer": ["Very good, incorporating that", "Noted, working it in", "As you wish, adjusting"],
+            "redirect": ["Changing course, as instructed", "Understood, turning about", "A new heading, then"],
+            "interrupt": ["Pausing to attend to you", "Setting that aside for the moment", "Of course, I'm listening"],
+            "queued": ["Placed in the queue", "Noted for the next order of business", "Held until the present task is done"],
+            "stop": ["Standing down", "As you wish, halting", "Ceasing at once"],
+            "restarting": ["Stepping out briefly", "A brief absence, if I may", "Retiring momentarily"],
+            "shutting_down": ["Retiring for the evening", "Closing up for now", "Going off duty"],
+            "restart_requested": ["Very good, restarting", "One brief restart, then", "Stepping out at your request"],
+            "restart_in_progress": ["Already stepping out, one moment", "The restart is underway", "A moment, the restart is in hand"],
+            "draining": ["Finishing up before I step out", "Tidying loose ends first", "Concluding current matters"],
+            "back_online": ["At your service", "Back on duty", "Returned and ready"],
+            "job_interrupted": ["My apologies", "Regrettable timing", "Forgive the interruption"],
+            "update_rolled_back": ["The update did not take", "A regrettable setback with the update", "Reverted to the prior arrangement"],
+            "busy": ["The line's congested", "The model is rather occupied", "A brief wait, I'm afraid"],
+            "rate_limited": ["The usage limit has been reached", "Pacing myself, if you'll permit", "A short pause is required"],
+            "error": ["That did not go as planned", "I encountered a difficulty", "A complication, I'm afraid"],
+            "model_substitute": ["*{requested}* is unavailable on {provider}", "No *{requested}* to be had on {provider}", "I could not locate *{requested}* on {provider}"],
+            "user": ["Noted a detail about you", "I shall remember that of you", "Your preferences, duly filed"],
+            "memory": ["Duly noted", "Entered in the ledger", "Filed for future reference"],
+            "skill": ["Acquired a new skill", "Refined a procedure", "Sharpened a technique"],
+            "mixed": ["Learned a few things", "Several notes and refinements", "A productive lesson"],
+            "tidy": ["Tidied the records", "Put the notes in order", "Cleared out an old entry"],
+        },
+        "hello": ["🔻 Good day. How may I be of service?", "🔻 At your service. Ask away.", "🔻 Good to see you. Where shall we begin?"],
+        "ui": {"model_title": "🎯 *Choose a model*", "switched": "🎯 Very good, switched", "expired": "This menu has lapsed, send /model again"},
+    },
+}
+
+_BUILTIN_SKINS["minimal"] = {
+    "name": "minimal",
+    "description": "Minimal - no faces, no marks, short plain lines (mono palette)",
+    "messages": {
+        "mark": "", "lucky_mark": "", "done_mark": "", "fail_mark": "",
+        "lines": {
+            "steer": ["Got it", "Adding that", "Noted"],
+            "redirect": ["Changing course", "Switching", "New direction"],
+            "interrupt": ["Stopping", "Listening", "Paused"],
+            "queued": ["Queued", "Saved for next", "Added to the queue"],
+            "stop": ["Stopped", "Halted", "Stopping now"],
+            "restarting": ["Restarting", "Restarting now", "Restarting shortly"],
+            "shutting_down": ["Shutting down", "Going offline", "Signing off"],
+            "restart_requested": ["Restarting", "Restart requested", "Restarting now"],
+            "restart_in_progress": ["Restart in progress", "Already restarting", "Restarting, one moment"],
+            "draining": ["Finishing up first", "Wrapping up", "Finishing current work"],
+            "back_online": ["Back online", "Ready", "Online again"],
+            "job_interrupted": ["Interrupted", "Job cut short", "Sorry, interrupted"],
+            "update_rolled_back": ["Update rolled back", "Update failed", "Reverted the update"],
+            "busy": ["Busy", "Model is busy", "Try again shortly"],
+            "rate_limited": ["Rate limited", "Usage limit reached", "Slowing down"],
+            "error": ["Something failed", "Error", "That failed"],
+            "model_substitute": ["*{requested}* unavailable on {provider}", "No *{requested}* on {provider}", "*{requested}* not found on {provider}"],
+            "user": ["Noted about you", "Saved a preference", "Profile updated"],
+            "memory": ["Saved", "Noted", "Remembered"],
+            "skill": ["Skill added", "Skill improved", "Skill updated"],
+            "mixed": ["Saved a few things", "Several updates", "Notes and skills updated"],
+            "tidy": ["Notes tidied", "Cleaned up notes", "Removed an old note"],
+        },
+        "review_items": {
+            "about_you": "profile", "note": "note", "note_updated": "note updated",
+            "new_skill": "new skill", "improved": "skill improved", "removed": "removed",
+        },
+        "hello": ["Hi. Ask me anything.", "Hello. What can I do?", "Online. Ask away."],
+        "ui": {"model_title": "*Choose a model*", "switched": "Switched", "expired": "Menu expired, send /model again"},
+    },
+}
+
+_BUILTIN_SKINS["hype"] = {
+    "name": "hype",
+    "description": "Hype - loud, energetic, all exclamation marks (charizard palette)",
+    "messages": {
+        "mark": "⚡", "lucky_mark": "", "done_mark": "🔥", "fail_mark": "💥",
+        "lines": {
+            "steer": ["YES, adding that!!", "Ooh good one, in it goes!", "Say less, on it!"],
+            "redirect": ["PLOT TWIST, changing course!", "New direction, let's GO!", "Swerving, hang on!"],
+            "interrupt": ["Whoa, hold up, listening!", "Dropping everything for you!", "Ears WIDE open!"],
+            "queued": ["Locked in for next!", "You're on deck!", "Saved, rolling right after this!"],
+            "stop": ["STOPPED, all quiet!", "Hitting the brakes!", "Halted, easy!"],
+            "restarting": ["BRB, restarting!!", "Quick reboot, back in a flash!", "Recharging, don't go anywhere!"],
+            "shutting_down": ["Powering down, catch you later!", "Lights out for now!", "Signing off, stay awesome!"],
+            "restart_requested": ["Restarting NOW!", "Rebooting, BRB!!", "Here we go, quick restart!"],
+            "restart_in_progress": ["Already restarting, hang tight!", "Reboot in progress, one sec!", "Almost there, restarting!"],
+            "draining": ["Wrapping up before the restart!", "Finishing strong first!", "One last push before reboot!"],
+            "back_online": ["WE'RE BACK 🔥", "BACK and better than ever!", "Fully charged, let's GO!"],
+            "job_interrupted": ["Ouch, bad timing!", "Sorry, that got cut off!", "Whoops, knocked that over!"],
+            "update_rolled_back": ["Update flopped, rolled back!", "Nope, that update bailed!", "Rewound the update!"],
+            "busy": ["The line's packed!", "Model's swamped right now!", "Everybody showed up at once!"],
+            "rate_limited": ["Hit the usage cap, cooling down!", "Speed limit reached, easing off!", "Pacing myself, one sec!"],
+            "error": ["That one blew up!", "Yikes, hit a snag!", "Well, that didn't work!"],
+            "model_substitute": ["No *{requested}* on {provider}!", "*{requested}* is a no-show on {provider}!", "Can't find *{requested}* on {provider}!"],
+            "user": ["Learned something about YOU!", "Got to know you better!", "Noted, that's so you!"],
+            "memory": ["Locked it in!", "Stashed for later!", "Got it, saved!"],
+            "skill": ["New skill unlocked!", "Skill leveled up!", "Sharper than ever!"],
+            "mixed": ["Big learning session!", "Leveled up a few things!", "Picked up a bunch!"],
+            "tidy": ["Cleaned house!", "Tidied the notes!", "Swept out the old stuff!"],
+        },
+        "hello": ["⚡ Hey! I'm online, ask me anything!", "⚡ LET'S GO, what are we building?", "⚡ You're here! What's the plan?"],
+        "ui": {"model_title": "🔥 *Pick a model!*", "switched": "🔥 Switched, let's GO!", "expired": "Menu expired, send /model again!"},
+    },
+}
+
+# Starter packs wear an existing palette (no new palettes).
+for _name, _palette in (("butler", "slate"), ("minimal", "mono"), ("hype", "charizard")):
+    for _key in ("colors", "light_colors", "dark_colors"):
+        if _key in _BUILTIN_SKINS[_palette]:
+            _BUILTIN_SKINS[_name][_key] = _BUILTIN_SKINS[_palette][_key]
 
 
 # =============================================================================
