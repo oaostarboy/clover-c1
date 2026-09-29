@@ -47,12 +47,20 @@ python "$CLOVER_HOME/skills/autonomous-ai-agents/council/scripts/council_run.py"
   --mode full "<the exact question>"
 ```
 
+Run it exactly like this (only `--mode` changes): the runner writes to
+`$CLOVER_HOME/council/runs/<id>/`, the same place `/council` uses. In a gateway
+chat (Telegram, Discord, Slack, ...) it also records which chat asked, and the
+gateway then shows the same live `🏛 Council` card in that chat and posts the
+formatted answer when the run ends. That happens automatically, once per run.
+Do not paste the card or the answer again; add only your own view, labeled as
+yours. From the plain CLI there is no card, so report the result yourself.
+
 Use a timeout of at least 1800 seconds. The runner prints the final verdict and
 an absolute `COUNCIL_REPORT=` path. Read that report only when the user asks for
-the complete debate; otherwise return the answer, reason, caveat, mode,
-and any stalled seats. On Telegram, keep the result in three short sections:
-**Answer**, **Why**, and **What could change it**. Never paste the chairman's full
-analysis into the chat unless the user explicitly asks for it.
+the complete debate; otherwise (CLI, or no card appeared) return the answer, reason,
+caveat, mode, and any stalled seats in three short sections: **Answer**, **Why**,
+and **What could change it**. Never paste the chairman's full analysis into the
+chat unless the user explicitly asks for it.
 
 ## Seats
 

@@ -9,6 +9,7 @@ import os
 import random
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -93,6 +94,34 @@ def write_progress(
     temporary = work / "progress.json.tmp"
     temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     temporary.replace(target)
+
+
+def write_origin(work: Path, *, now: float | None = None) -> bool:
+    """Record the gateway chat this run was launched from, if any.
+
+    The terminal tool exports the live gateway turn as CLOVER_SESSION_* to
+    child processes. The gateway watches ``council/runs/*/origin.json`` and
+    shows the same live card as ``/council`` in that chat. A CLI run has no
+    session env, writes nothing, and gets no card.
+    """
+    platform = os.environ.get("CLOVER_SESSION_PLATFORM", "").strip()
+    chat_id = os.environ.get("CLOVER_SESSION_CHAT_ID", "").strip()
+    if not platform or not chat_id:
+        return False
+    payload = {
+        "platform": platform,
+        "chat_id": chat_id,
+        "thread_id": os.environ.get("CLOVER_SESSION_THREAD_ID", "").strip() or None,
+        "session_key": os.environ.get("CLOVER_SESSION_KEY", "").strip() or None,
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "created_at": time.time() if now is None else now,
+    }
+    work.mkdir(parents=True, exist_ok=True)
+    temporary = work / "origin.json.tmp"
+    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    temporary.replace(work / "origin.json")
+    return True
 
 
 def load_roster(path: Path = DEFAULT_ROSTER_PATH) -> dict[str, dict[str, str]]:
@@ -461,6 +490,7 @@ def run_council(
     run_id = run_id or f"council-{time.strftime('%Y%m%d-%H%M%S')}"
     work = home / "council" / "runs" / run_id
     work.mkdir(parents=True, exist_ok=False)
+    write_origin(work)
     report = work / "report.md"
     log_path = work / "agents.log"
     seats = MODE_SEATS[mode]
