@@ -633,6 +633,15 @@ jobs:
             }
             throw "update chain still running after ${timeoutS}s"
           }
+          function Use-TrackingBranch([string]$branch) {
+            $d = $env:INSTALL_DIR
+            git -C $d remote set-branches --add origin $branch
+            git -C $d fetch -q origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"
+            if ($LASTEXITCODE -ne 0) { throw "fetch $branch failed" }
+            git -C $d checkout -q -B $branch HEAD
+            git -C $d branch -q -u "origin/$branch"
+            Write-Host "local $branch at $(git -C $d rev-parse --short HEAD), origin/$branch at $(git -C $d rev-parse --short origin/$branch)"
+          }
           function Assert-SingleGateway([string]$label, [int]$logStart, [bool]$strictLog) {
             Wait-UpdateChainDone
             # Up within 120 s after the chain finished...
@@ -707,6 +716,10 @@ jobs:
           $ErrorActionPreference = "Stop"
           . "$env:RUNNER_TEMP\wdr.ps1"
           $logStart = (Get-LogLines).Count
+          # A real in-branch pull like a user's `clover update` (not the
+          # detached-HEAD branch switch, which never hands off): point a
+          # local branch at the running commit and track the target.
+          Use-TrackingBranch "${{ env.FIX_BRANCH }}"
           # --force-venv only gets the 69a75bb updater past its own-watcher
           # refusal (step d0); the gateway chain under test is unchanged.
           & "$env:CLOVER_BIN" update --branch "${{ env.FIX_BRANCH }}" --yes --force-venv
@@ -723,7 +736,7 @@ jobs:
           . "$env:RUNNER_TEMP\wdr.ps1"
           git -C "$env:INSTALL_DIR" log --oneline -1
           $logStart = (Get-LogLines).Count
-          git -C "$env:INSTALL_DIR" remote set-branches --add origin "${{ env.NEXT_BRANCH }}"
+          Use-TrackingBranch "${{ env.NEXT_BRANCH }}"
           & "$env:CLOVER_BIN" update --branch "${{ env.NEXT_BRANCH }}" --yes
           if ($LASTEXITCODE -ne 0) { throw "update exited $LASTEXITCODE" }
           Assert-SingleGateway "update-2 fixed parent" $logStart $true
