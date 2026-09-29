@@ -28,6 +28,7 @@ from gateway.platforms.base import (  # noqa: E402
 )
 
 POOLS = clover_acks.ACK_POOLS
+BUSY_KINDS = ("steer", "redirect", "interrupt", "queued", "stop")
 FUNCTIONAL = {
     "steer": "Your message arrives after the next tool call.",
     "redirect": "I'll adjust using your correction.",
@@ -60,7 +61,7 @@ def _split(text, kind):
     return face, line
 
 
-@pytest.mark.parametrize("kind", sorted(POOLS))
+@pytest.mark.parametrize("kind", BUSY_KINDS)
 def test_every_ack_uses_pool_face_line_and_functional_sentence(kind):
     rng = random.Random(1)
     for _ in range(40):
@@ -70,7 +71,7 @@ def test_every_ack_uses_pool_face_line_and_functional_sentence(kind):
         assert text == f"{face} {line} (2 min elapsed). {FUNCTIONAL[kind]}"
 
 
-@pytest.mark.parametrize("kind", sorted(POOLS))
+@pytest.mark.parametrize("kind", BUSY_KINDS)
 def test_never_repeats_the_same_pair_back_to_back(kind):
     rng = random.Random(7)
     picks = [

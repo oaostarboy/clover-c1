@@ -1,4 +1,4 @@
-"""Clo's busy / stop acknowledgements (clover skin only).
+"""Clo's busy / stop acknowledgements and gateway lifecycle notices (clover skin only).
 
 Each ack is ``"<face> <cute line><status_detail>. <functional sentence>"``.
 Face and line are picked independently from the type's pool, and the same
@@ -38,6 +38,41 @@ ACK_POOLS: Dict[str, Tuple[Tuple[str, ...], Tuple[str, ...]]] = {
         ("☘️(￣▽￣)ゞ", "☘️(・ω・)ノ", "☘️(´• ω •`)ﾉ", "☘️(ᵔᴥᵔ)ノ"),
         ("stopped", "okay, all stopped", "paused right here", "done for now"),
     ),
+    # Gateway lifecycle notices (restart / shutdown / back online / ...).
+    "restarting": (
+        ("☘️(￣▽￣)ゞ", "☘️(・ω・)ノ", "☘️(｀・ω・´)ゞ", "☘️(◕ᴗ◕✿)"),
+        ("restarting, be right back", "quick nap, back in a sec",
+         "brb, freshening up", "stepping out for a moment"),
+    ),
+    "shutting_down": (
+        ("☘️(´• ω •`)ﾉ", "☘️(・ω・)ノ", "☘️(ᵔᴥᵔ)ノ"),
+        ("heading out", "shutting down for now", "signing off"),
+    ),
+    "restart_requested": (
+        ("☘️(•̀ᴗ•́)و", "☘️(◕ᴗ◕✿)", "☘️(｀・ω・´)ゞ"),
+        ("restarting now", "okay, one quick restart", "be right back"),
+    ),
+    "restart_in_progress": (
+        ("☘️(っ˘ω˘ς)", "☘️(°ー°〃)"),
+        ("already restarting, hang tight", "on it already, one sec"),
+    ),
+    "draining": (
+        ("☘️(っ˘ω˘ς)", "☘️( ˘▽˘)っ"),
+        ("wrapping up before I restart", "just finishing up"),
+    ),
+    "back_online": (
+        ("🍀(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧", "🍀(◕ᴗ◕✿)", "🍀(≧◡≦)", "🍀ヾ(＾∇＾)"),
+        ("I'm back!", "back and ready", "all fresh, ready when you are",
+         "online again"),
+    ),
+    "job_interrupted": (
+        ("☘️(｡•́︿•̀｡)", "☘️(´･_･`)"),
+        ("oops", "sorry about that", "bad timing"),
+    ),
+    "update_rolled_back": (
+        ("☘️(´･_･`)", "☘️(｡•́︿•̀｡)", "☘️(・・ )?"),
+        ("hmm, that didn't work", "update hiccup", "not this time"),
+    ),
 }
 
 _MAX_REMEMBERED_CHATS = 1024
@@ -56,7 +91,7 @@ def active() -> bool:
         return False
 
 
-def _pick(kind: str, chat_key: str, rng: Any) -> Tuple[str, str]:
+def _pick(kind: str, chat_key: str, rng: Any, always_lucky: bool = False) -> Tuple[str, str]:
     faces, lines = ACK_POOLS[kind]
     with _lock:
         last = _last_pick.get(chat_key)
@@ -71,7 +106,8 @@ def _pick(kind: str, chat_key: str, rng: Any) -> Tuple[str, str]:
             _last_pick.pop(next(iter(_last_pick)))
         _last_pick[chat_key] = (face, line)
     turn = clover_flavor.current_turn()
-    if turn is not None and turn.lucky:
+    lucky = always_lucky or (turn is not None and turn.lucky)
+    if lucky and face.startswith(clover_flavor.NORMAL_LEAF):
         face = clover_flavor.LUCKY_LEAF + face[len(clover_flavor.NORMAL_LEAF):]
     return face, line
 
@@ -86,6 +122,28 @@ def build_ack(
     """``"<face> <line><status_detail>. <functional>"`` for *kind* in *chat_key*."""
     face, line = _pick(kind, chat_key, rng if rng is not None else random)
     return f"{face} {line}{status_detail}. {functional}"
+
+
+def notice(
+    kind: str,
+    chat_key: str,
+    stock: str,
+    tail: str = "",
+    rng: Optional[Any] = None,
+) -> str:
+    """Clo-style gateway notice: ``"<face> <line>. <tail>"`` (no tail: ``"<face> <line>"``).
+
+    Returns *stock* untouched unless the clover skin is active (English only).
+    Picks are remembered per (kind, chat) so a chat never sees the same
+    face+line pair twice in a row.  ``back_online`` is good news, so it is
+    always the lucky 🍀 face.
+    """
+    if not active() or kind not in ACK_POOLS:
+        return stock
+    face, line = _pick(kind, f"notice:{kind}:{chat_key}",
+                       rng if rng is not None else random,
+                       always_lucky=kind == "back_online")
+    return f"{face} {line}. {tail}" if tail else f"{face} {line}"
 
 
 def stop_ack(stock: str, chat_key: str, rng: Optional[Any] = None) -> str:
