@@ -172,6 +172,11 @@ def _fetch_models_from_api(access_token: str) -> List[str]:
         logger.debug("Failed to fetch Codex models from API: %s", exc)
         return []
 
+    # Record catalog max_context_window BEFORE variant synthesis so the picker
+    # and the wire strip agree on which bases may carry ``-900k``.
+    from agent.model_metadata import record_codex_catalog_entries
+    record_codex_catalog_entries(entries)
+
     sortable = []
     for item in entries:
         if not isinstance(item, dict):

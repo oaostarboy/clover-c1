@@ -329,13 +329,13 @@ class TestBuiltinLiveFetchBeatsStaticCatalog:
     def test_context_variant_widening_ignores_the_pickers_static_eligibility_list(self):
         """``agent.model_metadata._CODEX_900K_ELIGIBLE_BASES`` is itself a
         static allowlist that lags a freshly-released family exactly like
-        ``_PROVIDER_MODELS`` does -- ``gpt-6-astra`` is deliberately NOT in
-        it (see agent/model_metadata.py). The preflight-only ``-900k``
-        widening must not consult that allowlist, or this exact regression
-        reappears one layer down."""
+        ``_PROVIDER_MODELS`` does. The preflight-only ``-900k`` widening must
+        not consult that allowlist, or a brand-new family regresses one layer
+        down. Uses a base that is in no static table."""
         import agent.model_metadata as model_metadata_mod
 
-        assert "gpt-6-astra" not in model_metadata_mod._CODEX_900K_ELIGIBLE_BASES
+        new_base = "gpt-99-zenith"
+        assert new_base not in model_metadata_mod._CODEX_900K_ELIGIBLE_BASES
         with (
             patch("clover_cli.models._PROVIDER_MODELS", {}),
             patch(
@@ -344,12 +344,12 @@ class TestBuiltinLiveFetchBeatsStaticCatalog:
             ),
             patch(
                 "clover_cli.codex_models._fetch_models_from_api",
-                return_value=["gpt-6-astra"],
+                return_value=[new_base],
             ),
         ):
             models, is_live = known_models_for_provider("openai-codex")
         assert is_live is True
-        assert "gpt-6-astra-900k" in models
+        assert new_base + "-900k" in models
 
     def test_context_variant_widening_never_double_suffixes(self):
         from agent.model_substitute import _with_codex_context_variants
