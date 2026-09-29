@@ -3980,6 +3980,33 @@ def _get_channel_override(
     return None
 
 
+def _retire_update_output(output_path: Path, keep: int = 3) -> None:
+    """Keep a chat-run update's transcript instead of deleting it.
+
+    ``.update_output.txt`` is the only full record of a /update started from
+    chat; deleting it after the notification erased the exact refusal text
+    of every failed Telegram /update (Windows 11 report, D8). Rotated into
+    ``logs/update-output.last.txt`` (+ ``.1``..). Never raises.
+    """
+    try:
+        if not output_path.exists():
+            return
+        logs = output_path.parent / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        base = logs / "update-output.last.txt"
+        for i in range(keep - 1, 0, -1):
+            older = logs / f"update-output.last.{i}.txt"
+            newer = base if i == 1 else logs / f"update-output.last.{i - 1}.txt"
+            if newer.exists():
+                os.replace(newer, older)
+        os.replace(output_path, base)
+    except Exception:
+        try:
+            output_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def _resolve_clover_bin() -> Optional[list[str]]:
     """Resolve the Clover update command as argv parts.
 
@@ -25539,7 +25566,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     logger.warning("Update final notification failed: %s", e)
 
                 # Cleanup
-                for p in (pending_path, claimed_path, output_path,
+                _retire_update_output(output_path)
+                for p in (pending_path, claimed_path,
                           exit_code_path, prompt_path):
                     p.unlink(missing_ok=True)
                 (_clover_home / ".update_response").unlink(missing_ok=True)
@@ -25664,7 +25692,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
             except Exception:
                 pass
-            for p in (pending_path, claimed_path, output_path,
+            _retire_update_output(output_path)
+            for p in (pending_path, claimed_path,
                       exit_code_path, prompt_path):
                 p.unlink(missing_ok=True)
             (_clover_home / ".update_response").unlink(missing_ok=True)
@@ -25796,7 +25825,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             verdict, detail,
         )
 
-        for p in (pending_path, claimed_path, output_path,
+        _retire_update_output(output_path)
+        for p in (pending_path, claimed_path,
                   exit_code_path, prompt_path):
             p.unlink(missing_ok=True)
         (_clover_home / ".update_response").unlink(missing_ok=True)
@@ -25919,8 +25949,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 elif exit_code == UPDATE_EXIT_REFUSED:
                     # A refusal is a safe no-op, not a breakage. Saying
                     # "failed" here sends the user hunting for damage that
-                    # does not exist -- reported 2026-09-04.
-                    msg = f"{UPDATE_REFUSED_HEADLINE}\n\n{UPDATE_REFUSED_DETAIL}"
+                    # does not exist -- reported 2026-09-04. Name the real
+                    # holders when the updater recorded them (D8).
+                    from clover_cli.update_contract import update_refused_detail
+
+                    try:
+                        _refusal = json.loads((_clover_home / ".update_refusal.json").read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        _refusal = None
+                    msg = f"{UPDATE_REFUSED_HEADLINE}\n\n{update_refused_detail(_refusal)}"
                 else:
                     msg = "❌ Clover update failed. Check the gateway logs or run `clover update` manually for details."
                 await adapter.send(
@@ -25940,8 +25977,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if cleanup:
                 active_pending_path.unlink(missing_ok=True)
                 claimed_path.unlink(missing_ok=True)
-                output_path.unlink(missing_ok=True)
+                _retire_update_output(output_path)
                 exit_code_path.unlink(missing_ok=True)
+                (_clover_home / ".update_refusal.json").unlink(missing_ok=True)
 
         return True
 

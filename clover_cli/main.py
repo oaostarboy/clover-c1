@@ -10472,7 +10472,11 @@ def _install_hangup_protection(gateway_mode: bool = False):
     signals the user or OS sent on purpose.
 
     In gateway mode (``clover update --gateway``) the update is already
-    spawned detached from a terminal, so this function is a no-op.
+    spawned detached from a terminal, so SIGHUP is left alone -- but the
+    output is still mirrored to ``update.log`` with a run header. The chat
+    path's only other copy, ``.update_output.txt``, is consumed by the
+    gateway, and /update from Telegram used to leave no transcript at all
+    (Windows 11 report, D8).
 
     Returns a dict that ``cmd_update`` can pass to
     ``_finalize_update_output`` on exit.  Returning a dict rather than a
@@ -10485,13 +10489,10 @@ def _install_hangup_protection(gateway_mode: bool = False):
         "installed": False,
     }
 
-    if gateway_mode:
-        return state
-
     import signal as _signal
 
     # (1) Ignore SIGHUP for the remainder of this process.
-    if hasattr(_signal, "SIGHUP"):
+    if not gateway_mode and hasattr(_signal, "SIGHUP"):
         try:
             _signal.signal(_signal.SIGHUP, _signal.SIG_IGN)
         except (ValueError, OSError):
@@ -10514,8 +10515,8 @@ def _install_hangup_protection(gateway_mode: bool = False):
         import datetime as _dt
 
         log_file.write(
-            f"\n=== clover update started "
-            f"{_dt.datetime.now().isoformat(timespec='seconds')} ===\n"
+            f"\n=== clover update{' --gateway (from chat)' if gateway_mode else ''} started "
+            f"{_dt.datetime.now().isoformat(timespec='seconds')} pid={os.getpid()} ===\n"
         )
 
         state["log_file"] = log_file

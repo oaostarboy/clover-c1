@@ -5505,6 +5505,31 @@ def _clover_holder_subcommand(cmdline: str) -> str | None:
     return None
 
 
+UPDATE_REFUSAL_NAME = ".update_refusal.json"
+
+
+def _record_update_refusal_holders(matches: list[tuple[int, str, str]]) -> None:
+    """Leave the exact holders behind for the chat notice. Never raises.
+
+    The /update notice used to blame "the running gateway" even when the
+    holder was the updater's own restart watcher (Windows 11 report, D8).
+    """
+    try:
+        payload = {
+            "holders": [
+                {"pid": int(pid), "name": str(name), "cmdline": str(cmdline)[:300]}
+                for pid, name, cmdline in matches[:6]
+            ],
+            "more": max(len(matches) - 6, 0),
+        }
+        path = get_clover_home() / UPDATE_REFUSAL_NAME
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception as exc:
+        logger.debug("Could not record update refusal holders: %s", exc)
+
+
 def _format_venv_python_holders_message(matches: list[tuple[int, str, str]]) -> str:
     """Explain which venv processes block the update and how to clear them.
 
@@ -8031,6 +8056,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
             logger.debug("Could not read updates.non_interactive_local_changes: %s", exc)
             discard_local_changes = False
 
+    try:
+        (get_clover_home() / UPDATE_REFUSAL_NAME).unlink(missing_ok=True)
+    except OSError:
+        pass
     print("☘ Updating Clover Cognition...")
     print()
 
@@ -8361,6 +8390,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     _venv_holders = _m()._detect_venv_python_processes()
         if _venv_holders:
             print(_format_venv_python_holders_message(_venv_holders))
+            _record_update_refusal_holders(_venv_holders)
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
             sys.exit(2)
 

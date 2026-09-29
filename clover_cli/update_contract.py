@@ -149,6 +149,25 @@ UPDATE_EXIT_REFUSED = 2
 
 UPDATE_REFUSED_HEADLINE = "\u26a0\ufe0f Update skipped \u2014 nothing was changed."
 
+def update_refused_detail(refusal: dict | None) -> str:
+    """The refusal detail for chat: the ACTUAL holders when the updater recorded them."""
+    holders = (refusal or {}).get("holders") if isinstance(refusal, dict) else None
+    if not holders:
+        return UPDATE_REFUSED_DETAIL
+    lines = ["These processes still hold the Python environment the update needs to replace:"]
+    for h in holders:
+        try:
+            lines.append(f"• PID {int(h.get('pid'))} {h.get('name', '')}: {str(h.get('cmdline', ''))[:160]}")
+        except Exception:
+            continue
+    more = int((refusal or {}).get("more") or 0)
+    if more:
+        lines.append(f"• …and {more} more")
+    lines.append("")
+    lines.append("Nothing was changed. Stop them (or run `clover update` from a terminal) and try again.")
+    return "\n".join(lines)
+
+
 UPDATE_REFUSED_DETAIL = (
     "The running gateway still holds the Python environment the update needs "
     "to replace, so the updater declined rather than force-stopping it. Your "
