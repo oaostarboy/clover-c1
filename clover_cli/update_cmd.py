@@ -7511,7 +7511,9 @@ def _resume_windows_gateways_after_update(token: dict | None) -> None:
             failed_unmapped.append(entry)
             continue
         try:
-            if launch_detached_gateway_restart_by_cmdline(int(old_pid), list(argv)):
+            if launch_detached_gateway_restart_by_cmdline(
+                int(old_pid), _with_current_gateway_interpreter(list(argv))
+            ):
                 unmapped_relaunched += 1
             else:
                 failed_unmapped.append(entry)
@@ -7538,6 +7540,70 @@ def _resume_windows_gateways_after_update(token: dict | None) -> None:
         print(
             f"  ✓ Restarting {unmapped_relaunched} unmapped Windows gateway process(es)"
         )
+    if relaunched or unmapped_relaunched:
+        _m()._verify_windows_gateway_relaunch(
+            current_profile="default" in relaunched or bool(unmapped_relaunched)
+        )
+
+
+# How long a fire-and-forget relaunch gets to prove itself before the resume
+# starts the gateway through the canonical verified path instead.
+_WINDOWS_RELAUNCH_VERIFY_SECONDS = 90.0
+
+
+def _with_current_gateway_interpreter(argv: list[str]) -> list[str]:
+    """Replay a captured ``-m clover_cli.main ... gateway run`` on THIS install's python.
+
+    The captured interpreter can be gone after the update: the dependency sync
+    may rebuild the managed runtime, and a gateway captured mid-startup may
+    carry a helper's interpreter. The command after it is kept verbatim.
+    """
+    if len(argv) >= 3 and argv[1] == "-m" and argv[2] == "clover_cli.main":
+        try:
+            from clover_cli.gateway import get_python_path
+
+            return [get_python_path(), *argv[1:]]
+        except Exception:
+            return argv
+    return argv
+
+
+def _verify_windows_gateway_relaunch(
+    timeout: float | None = None, *, current_profile: bool = True
+) -> bool:
+    """Prove the post-update relaunch produced a gateway; start one if not.
+
+    Relaunch helpers are fire-and-forget: a respawn that dies on import (or
+    whose interpreter vanished) used to leave Windows with no gateway and
+    nobody noticing (2026-09-29). A gateway that owns the PID file has passed
+    its imports and the duplicate guard. If none does in time, fall back to
+    the same verified start ``clover gateway start`` uses; it re-checks
+    liveness first, so a slow-but-alive relaunch is never doubled.
+    """
+    if sys.platform != "win32":
+        return True
+    try:
+        from clover_cli.gateway import find_gateway_pids
+        from gateway.status import get_running_pid
+    except Exception:
+        return True
+    deadline = _time.monotonic() + (
+        _WINDOWS_RELAUNCH_VERIFY_SECONDS if timeout is None else timeout
+    )
+    while True:
+        try:
+            if current_profile:
+                if get_running_pid() is not None:
+                    return True
+            elif list(find_gateway_pids(all_profiles=True)):
+                return True
+        except Exception:
+            pass
+        if _time.monotonic() >= deadline:
+            break
+        _time.sleep(1.0)
+    print("  ⚠ The relaunched gateway did not come up; starting it directly")
+    return bool(_m()._cold_start_windows_gateway_after_update())
 
 def _discard_lockfile_churn(git_cmd, repo_root):
     """Restore tracked ``package-lock.json`` files that npm dirtied locally.

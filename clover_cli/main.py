@@ -5054,6 +5054,7 @@ _LAZY_COMMAND_EXPORTS = {
         "_abort_dependency_sync_if_self_locked",
         "_adopt_handed_off_gateway_resume",
         "_hand_off_windows_gateway_resume",
+        "_verify_windows_gateway_relaunch",
         "_add_upstream_remote",
         "_apply_pending_fleet_restart_catchup",
         "_atomic_replace_dir",

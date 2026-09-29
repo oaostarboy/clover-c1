@@ -275,3 +275,59 @@ def test_runner_startup_uses_the_clearing_start_record():
     from gateway import run as gateway_run
 
     assert "record_gateway_starting()" in inspect.getsource(gateway_run.GatewayRunner)
+
+
+def test_captured_gateway_argv_is_replayed_on_the_current_interpreter(monkeypatch):
+    """A captured interpreter can vanish when the update rebuilds the runtime."""
+    from clover_cli import update_cmd
+    import clover_cli.gateway as gw
+
+    monkeypatch.setattr(gw, "get_python_path", lambda: r"C:\clover\venv\Scripts\python.exe")
+    old = [r"C:\old-runtime\python.exe", "-m", "clover_cli.main", "gateway", "run", "--replace"]
+    assert update_cmd._with_current_gateway_interpreter(old) == [
+        r"C:\clover\venv\Scripts\python.exe", "-m", "clover_cli.main", "gateway", "run", "--replace"]
+    other = ["pythonw.exe", "some_script.py"]
+    assert update_cmd._with_current_gateway_interpreter(other) == other
+
+
+def _fake_windows(monkeypatch, *, running_pid):
+    from clover_cli import main, update_cmd
+    import gateway.status as gs
+
+    monkeypatch.setattr(gs, "get_running_pid", lambda *a, **k: running_pid)
+    cold = []
+    monkeypatch.setattr(main, "_cold_start_windows_gateway_after_update",
+                        lambda: cold.append(1) or True)
+    monkeypatch.setattr(update_cmd.sys, "platform", "win32")
+    return cold
+
+
+def test_relaunch_that_never_comes_up_falls_back_to_a_verified_start(monkeypatch):
+    """Windows runner, 69a75bb -> fix: the replayed relaunch died silently, no gateway."""
+    from clover_cli import update_cmd
+
+    cold = _fake_windows(monkeypatch, running_pid=None)
+    assert update_cmd._verify_windows_gateway_relaunch(timeout=0) is True
+    assert cold == [1]
+
+
+def test_relaunch_that_came_up_is_not_started_again(monkeypatch):
+    from clover_cli import update_cmd
+
+    cold = _fake_windows(monkeypatch, running_pid=34128)
+    assert update_cmd._verify_windows_gateway_relaunch(timeout=0) is True
+    assert cold == []
+
+
+def test_resume_verifies_its_relaunch(home, monkeypatch):
+    from clover_cli import main, update_cmd
+    import clover_cli.gateway as gw
+
+    monkeypatch.setattr(main, "_is_windows", lambda: True)
+    monkeypatch.setattr(main, "_refresh_windows_gateway_launchers", lambda: None)
+    monkeypatch.setattr(gw, "launch_detached_profile_gateway_restart", lambda p, pid: True)
+    verified = []
+    monkeypatch.setattr(main, "_verify_windows_gateway_relaunch",
+                        lambda **k: verified.append(k) or True)
+    update_cmd._resume_windows_gateways_after_update(_paused_token())
+    assert verified == [{"current_profile": True}]
