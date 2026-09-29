@@ -67,7 +67,7 @@ MIN_EDIT_SECONDS = 2.0
 # an edit sooner than this.
 CLOCK_ONLY_EDIT_SECONDS = 10.0
 
-SPACER = da.SPACER
+SPACER = "\u2800"  # same invisible spacer the subagent board uses
 
 _STORE_PREFIX = "council:"
 _MODEL_FAMILIES = (("gemini", "Gemini"), ("grok", "Grok"), ("claude-fable", "Fable"))
