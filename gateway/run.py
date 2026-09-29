@@ -27265,7 +27265,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "the process tool if they affect the conclusion."
             )
         lines.append(
-            "If a result does not change the current conclusion, absorb it silently.]"
+            "If a result does not change the current conclusion, absorb it silently: "
+            "reply with exactly [SILENT] and nothing else, and nothing is sent to the user.]"
         )
         return "\n".join(lines)
 
@@ -27455,7 +27456,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "completed for this session. Treat these results as one "
             "completion batch and send at most one consolidated user-facing "
             "response. If a result does not change the current conclusion, "
-            "absorb it silently.]"
+            "absorb it silently: reply with exactly [SILENT] and nothing else, "
+            "and nothing is sent to the user.]"
         )
         return "\n\n".join([header, *blocks])
 
