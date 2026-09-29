@@ -99,10 +99,29 @@ class TestReasoningProgressRelayDedupeAndRateLimit:
         now[0] = 2.5  # past the 2s window
         assert relay.feed("**Second**\n") == "Second"
 
-    def test_flush_emits_pending_buffer_with_no_trailing_newline(self):
+    def test_closed_heading_without_newline_emits_immediately(self):
+        # Codex/Responses reasoning summaries arrive as whole "**Heading**"
+        # chunks with no trailing newline (captured live from gpt-6-sol).
         relay = ReasoningProgressRelay()
-        assert relay.feed("**Heading only, no newline**") is None
-        assert relay.flush() == "Heading only, no newline"
+        assert relay.feed("**Heading only, no newline**") == "Heading only, no newline"
+        assert relay.flush() is None
+
+    def test_codex_style_repeated_headings_become_separate_lines(self):
+        clock = [0.0]
+        relay = ReasoningProgressRelay(now_fn=lambda: clock[0])
+        out = []
+        for chunk in ["**Inspecting the working directory**", "**Inspecting the working directory**",
+                      "**Checking workspace contents**", "**Checking workspace contents**"]:
+            clock[0] += 3.0
+            line = relay.feed(chunk)
+            if line:
+                out.append(line)
+        assert out == ["Inspecting the working directory", "Checking workspace contents"]
+
+    def test_flush_emits_pending_plain_text_with_no_trailing_newline(self):
+        relay = ReasoningProgressRelay()
+        assert relay.feed("Plain thought, no newline") is None
+        assert relay.flush() == "Plain thought, no newline"
 
     def test_flush_on_empty_buffer_is_noop(self):
         relay = ReasoningProgressRelay()

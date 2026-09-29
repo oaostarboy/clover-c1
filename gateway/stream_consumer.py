@@ -161,6 +161,19 @@ class ReasoningProgressRelay:
         if not text:
             return None
         self._buf += text
+        # Reasoning-summary providers (Codex/Responses) deliver each summary
+        # heading as one complete ``**Heading**`` chunk with no trailing
+        # newline, often twice (delta + done). A closed bold heading at the
+        # start of the buffer is a whole line already: emit it now instead of
+        # gluing the next heading onto it.
+        head = self._buf.lstrip()
+        if head.startswith("**"):
+            close = head.find("**", 2)
+            if close > 2:
+                heading = head[: close + 2]
+                self._buf = ""
+                normalized = self._normalize(heading)
+                return self._maybe_emit(normalized) if normalized else None
         while "\n" in self._buf:
             raw_line, _, rest = self._buf.partition("\n")
             self._buf = rest
