@@ -19,6 +19,7 @@ always renders the stock text -- one skin's lines never leak into another.
 from __future__ import annotations
 
 import random
+import re
 import sys
 import threading
 import time
@@ -76,10 +77,11 @@ PACK_KINDS = (
     "draining", "back_online", "job_interrupted", "update_rolled_back",
     "busy", "rate_limited", "error", "model_substitute",
     "user", "memory", "skill", "mixed", "tidy",
+    "new_session",
 )
 _ACK_KINDS = PACK_KINDS[:13]
 _STATUS_KINDS = PACK_KINDS[13:17]
-_REVIEW_KINDS = PACK_KINDS[17:]
+_REVIEW_KINDS = PACK_KINDS[17:22]
 
 _REVIEW_ITEM_DEFAULTS = {
     "about_you": "🪪 about you",
@@ -207,6 +209,13 @@ CLOVER_PACK: dict = {
             '( ˘▽˘)っ',
             '(￣▽￣)ゞ',
         ],
+        'new_session': [
+            '(◕ᴗ◕✿)',
+            '(｡•̀ᴗ-)✧',
+            '(ﾉ◕ヮ◕)ﾉ',
+            '(•ᴗ•)ﾉ',
+            '(´• ω •`)ﾉ',
+        ],
     },
     'lines': {
         'steer': [
@@ -321,6 +330,16 @@ CLOVER_PACK: dict = {
             'cleaned up a little',
             'swept out an old note',
         ],
+        'new_session': [
+            "fresh patch of clover. what's next?",
+            'new sprout, clean slate',
+            'fresh start! ask me anything',
+            'a clean patch, ready to grow',
+            'all tidied up. what shall we plant?',
+            'turning over a new leaf',
+            "slate's clean. what's on your mind?",
+            'fresh dew, fresh start',
+        ],
     },
     "review_items": dict(_REVIEW_ITEM_DEFAULTS),
     "hello": [
@@ -340,6 +359,11 @@ CLOVER_PACK: dict = {
         "other": "✏️ something else",
         "type_it": "✏️ type it in the chat",
         "waiting_for": "waiting for {user} to type…",
+        "new_titled": "new patch: *{title}*",
+        "new_model_icon": "🤖",
+        "new_context_icon": "📏",
+        "new_local_icon": "🏠",
+        "new_tip": "🍀 tip:",
         "chosen_mark": "🍀",
         "allow_mark": "🍀",
         "deny_mark": "🥀",
@@ -782,3 +806,149 @@ def cron_header(name: str, failed: bool = False, rng: Optional[Any] = None) -> O
         if rng.randrange(LUCKY_ODDS) == 0:
             mark = pack["lucky_mark"]
     return _join(mark, name)
+
+
+# --- /new and /reset reply ------------------------------------------------------------
+# "<face> <line>" headline, a quote-bar info block (model / context / local
+# endpoint) and an italic tip.  Pretty names, not raw ids.
+
+_MAX_REMEMBERED_NEW_CHATS = 1024
+_new_last_pick: dict = {}
+_new_lock = threading.Lock()
+
+# Provider ids -> the short name people say out loud (provider_label() is the
+# picker's long form, e.g. "xAI Grok OAuth (SuperGrok / Premium+)").
+_SHORT_PROVIDERS = {
+    "xai": "xAI", "xai-oauth": "xAI", "grok": "xAI",
+    "openai": "OpenAI", "openai-codex": "OpenAI", "codex": "OpenAI",
+    "anthropic": "Anthropic", "claude": "Anthropic", "claude-code": "Anthropic",
+    "openrouter": "OpenRouter", "nous": "Nous", "gemini": "Google",
+    "google": "Google", "deepseek": "DeepSeek", "custom": "custom",
+    "ollama": "custom", "lmstudio": "custom", "vllm": "custom",
+}
+_FAMILY_NAMES = {
+    "grok": "Grok", "gemini": "Gemini", "gemma": "Gemma", "deepseek": "DeepSeek",
+    "kimi": "Kimi", "glm": "GLM", "llama": "Llama", "mistral": "Mistral",
+    "mixtral": "Mixtral", "qwen": "Qwen",
+}
+_MODEL_ID = re.compile(r"^[A-Za-z0-9.]+(?:-[A-Za-z0-9.]+)*$")
+
+
+def pretty_provider_name(provider: Any) -> str:
+    """``xai-oauth`` -> ``xAI``; unknown ids fall back to the picker label without its parenthetical."""
+    raw = str(provider or "").strip()
+    if not raw:
+        return ""
+    short = _SHORT_PROVIDERS.get(raw.lower())
+    if short:
+        return short
+    try:
+        from clover_cli.models import provider_label
+
+        label = provider_label(raw)
+    except Exception:
+        label = raw
+    return re.sub(r"\s*\(.*?\)\s*", " ", label).strip() or raw
+
+
+def pretty_model_name(model: Any) -> str:
+    """``grok-4.7`` -> ``Grok 4.7``, ``claude-opus-5-5`` -> ``Opus 5.5``; ids we don't know stay as they are."""
+    raw = str(model or "").strip()
+    if not raw:
+        return ""
+    try:
+        from agent.delegation_activity import pretty_model
+
+        nice = pretty_model(raw)
+    except Exception:
+        nice = raw
+    if nice != raw.rsplit("/", 1)[-1] or not _MODEL_ID.match(nice):
+        return nice or raw
+    head, *rest = nice.split("-")
+    family = _FAMILY_NAMES.get(head.lower())
+    if family is None:
+        return nice
+    words = [w.upper() if re.fullmatch(r"v\d[\d.]*", w) else (w if w[:1].isdigit() else w.capitalize())
+             for w in rest]
+    return " ".join([family, *words])
+
+
+def _one_line(text: Any) -> str:
+    """Single line with no ``*`` (a stray asterisk would break the surrounding italics)."""
+    return " ".join(str(text or "").replace("*", "").split())
+
+
+def _ui_or(pack: dict, key: str, default: str) -> str:
+    value = pack["ui"].get(key)
+    return value if isinstance(value, str) else default
+
+
+def new_session_active() -> bool:
+    """True when the active skin's pack has ``new_session`` lines (else /new keeps the stock reply)."""
+    return has_lines(active_pack(), "new_session")
+
+
+def render_new_session(
+    *,
+    chat_key: str = "",
+    title: str = "",
+    topic_header: str = "",
+    model: str = "",
+    provider: str = "",
+    context: str = "",
+    context_guess: bool = False,
+    local_endpoint: str = "",
+    tip: str = "",
+    rng: Optional[Any] = None,
+    pack: Optional[dict] = None,
+) -> Optional[Tuple[str, str, str]]:
+    """``(headline, info_block, tip_line)`` for the pack's /new reply; None = keep the stock reply.
+
+    *headline*: ``"<mark><face> <line>"`` (Telegram topic lanes keep their own
+    header text via *topic_header*; a titled session reads ``"<face> new patch:
+    *<title>*"``).  *info_block* is a quote bar (``> `` lines) with the model,
+    context size and, for local setups, the endpoint; empty when nothing is
+    known.  *tip_line* is the italic ``"<mark> tip: *<tip>*"`` (empty without a
+    tip).  Face and line are never the same pair twice in a row for a chat; a
+    pack with a lucky mark swaps it in 1 turn in LUCKY_ODDS.
+    """
+    pack = pack or active_pack()
+    if not has_lines(pack, "new_session"):
+        return None
+    rng = rng if rng is not None else random
+    lucky = bool(pack["lucky_mark"]) and rng.randrange(LUCKY_ODDS) == 0
+    face, line = pick_pair(
+        pack, "new_session", _new_last_pick, _new_lock, f"new:{chat_key}", rng,
+        lucky=lucky, max_keep=_MAX_REMEMBERED_NEW_CHATS,
+    )
+    if topic_header:
+        headline = topic_header
+    elif title:
+        body = _italic(_one_line(title))
+        headline = _join(face, _ui_or(pack, "new_titled", "new session: *{title}*").replace("*{title}*", body).replace("{title}", body))
+    else:
+        headline = _join(face, line)
+
+    m_icon = _ui_or(pack, "new_model_icon", "🤖")
+    c_icon = _ui_or(pack, "new_context_icon", "📏")
+    l_icon = _ui_or(pack, "new_local_icon", "🏠")
+    rows = []
+    who = pretty_model_name(model)
+    prov = pretty_provider_name(provider)
+    if who:
+        rows.append(_join(m_icon, f"{who} · {prov}" if prov else who))
+    if context:
+        hint = " *(default guess — set model.context_length to change)*" if context_guess else ""
+        rows.append(_join(c_icon, f"{context} context{hint}"))
+    if local_endpoint:
+        rows.append(_join(l_icon, f"local: {local_endpoint}"))
+    info = "\n".join("> " + r for r in rows)
+
+    tip_text = _one_line(tip)
+    tip_line = f"{_ui_or(pack, 'new_tip', (pack['done_mark'] + ' tip:').strip())} {_italic(tip_text)}" if tip_text else ""
+    return headline, info, tip_line
+
+
+def reset_new_session_picks() -> None:
+    with _new_lock:
+        _new_last_pick.clear()

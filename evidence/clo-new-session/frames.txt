@@ -1,0 +1,60 @@
+☘️\(◕ᴗ◕✿\) new sprout, clean slate
+
+> 🤖 Grok 4\.7 · xAI
+> 📏 500K context
+
+🍀 tip: _Try /compress when chats get long\._
+
+--- FRAME ---
+
+☘️\(´• ω •\`\)ﾉ fresh start\! ask me anything
+
+> 🤖 Grok 4\.7 · xAI
+> 📏 500K context
+
+🍀 tip: _Try /compress when chats get long\._
+
+--- FRAME ---
+
+☘️\(ﾉ◕ヮ◕\)ﾉ new sprout, clean slate
+
+> 🤖 Grok 4\.7 · xAI
+> 📏 500K context
+
+🍀 tip: _Try /compress when chats get long\._
+
+--- FRAME ---
+
+☘️\(ﾉ◕ヮ◕\)ﾉ turning over a new leaf
+
+> 🤖 Grok 4\.7 · xAI
+> 📏 500K context
+
+🍀 tip: _Try /compress when chats get long\._
+
+--- FRAME ---
+
+☘️\(◕ᴗ◕✿\) fresh dew, fresh start
+
+> 🤖 Grok 4\.7 · xAI
+> 📏 500K context
+
+🍀 tip: _Try /compress when chats get long\._
+
+--- FRAME ---
+
+☘️\(ﾉ◕ヮ◕\)ﾉ new patch: _my\_proj v2_
+
+> 🤖 Grok 4\.7 · xAI
+> 📏 500K context
+
+🍀 tip: _Try /compress when chats get long\._
+
+--- FRAME ---
+
+✨ Session reset\! Starting fresh\.
+
+◆ Model: `grok-4.7`
+◆ Provider: xai\-oauth
+◆ Context: 500K tokens \(detected\)
+✦ Tip: Try /compress when chats get long\.

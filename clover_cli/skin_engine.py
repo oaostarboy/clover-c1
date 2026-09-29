@@ -122,7 +122,7 @@ All fields are optional. Missing values inherit from the ``default`` skin.
       # kinds: steer redirect interrupt queued stop restarting shutting_down
       #   restart_requested restart_in_progress draining back_online
       #   job_interrupted update_rolled_back busy rate_limited error
-      #   model_substitute user memory skill mixed tidy
+      #   model_substitute user memory skill mixed tidy new_session
       #   ({requested}/{provider} fill in model_substitute lines)
       review_items:                       # Optional icons/labels for review lines
         about_you: "🪪 profile"           # (defaults: 🪪 about you, 🧠, 🧠 updated,
@@ -134,6 +134,9 @@ All fields are optional. Missing values inherit from the ``default`` skin.
         using: "Active"                   #  choose_model switched switch_failed expired
         switched: "🎯 locked in"          #  clarify_mark other type_it waiting_for
         deny_mark: "🩸"                   #  chosen_mark allow_mark deny_mark
+                                          #  new_titled ("new patch: *{title}*"),
+                                          #  new_model_icon/new_context_icon/
+                                          #  new_local_icon (the /new info bar), new_tip
 
     # Tool prefix: character for tool output lines (default: ┊)
     tool_prefix: "┊"
@@ -911,6 +914,7 @@ _BUILTIN_SKINS["butler"] = {
             "skill": ["Acquired a new skill", "Refined a procedure", "Sharpened a technique"],
             "mixed": ["Learned a few things", "Several notes and refinements", "A productive lesson"],
             "tidy": ["Tidied the records", "Put the notes in order", "Cleared out an old entry"],
+            "new_session": ["A fresh page, then", "A clean slate, as requested", "Ready when you are"],
         },
         "hello": ["🔻 Good day. How may I be of service?", "🔻 At your service. Ask away.", "🔻 Good to see you. Where shall we begin?"],
         "ui": {"model_title": "🎯 *Choose a model*", "switched": "🎯 Very good, switched", "expired": "This menu has lapsed, send /model again"},
@@ -945,6 +949,7 @@ _BUILTIN_SKINS["minimal"] = {
             "skill": ["Skill added", "Skill improved", "Skill updated"],
             "mixed": ["Saved a few things", "Several updates", "Notes and skills updated"],
             "tidy": ["Notes tidied", "Cleaned up notes", "Removed an old note"],
+            "new_session": ["New session", "Fresh session", "Ready"],
         },
         "review_items": {
             "about_you": "profile", "note": "note", "note_updated": "note updated",
@@ -983,6 +988,7 @@ _BUILTIN_SKINS["hype"] = {
             "skill": ["New skill unlocked!", "Skill leveled up!", "Sharper than ever!"],
             "mixed": ["Big learning session!", "Leveled up a few things!", "Picked up a bunch!"],
             "tidy": ["Cleaned house!", "Tidied the notes!", "Swept out the old stuff!"],
+            "new_session": ["FRESH START, let's GO!", "Clean slate, hit me!", "New session, big energy!"],
         },
         "hello": ["⚡ Hey! I'm online, ask me anything!", "⚡ LET'S GO, what are we building?", "⚡ You're here! What's the plan?"],
         "ui": {"model_title": "🔥 *Pick a model!*", "switched": "🔥 Switched, let's GO!", "expired": "Menu expired, send /model again!"},
