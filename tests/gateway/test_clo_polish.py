@@ -197,7 +197,7 @@ def test_first_hello_stock_on_other_skins(monkeypatch, tmp_path, skin):
 # --- 4. cron header ------------------------------------------------------------------
 
 def _deliver(job_name, failed=False):
-    from cron.scheduler import _deliver_result
+    from cron.scheduler import _DELIVERY_FAILED, _deliver_result
     from gateway.config import Platform
 
     pconfig = MagicMock()
@@ -207,11 +207,15 @@ def _deliver(job_name, failed=False):
     with patch("gateway.config.load_gateway_config", return_value=cfg), \
          patch("tools.send_message_tool._send_to_platform",
                new=AsyncMock(return_value={"success": True})) as send:
-        _deliver_result(
-            {"id": "j1", "name": job_name, "deliver": "origin",
-             "origin": {"platform": "telegram", "chat_id": "123"}},
-            "body text", failed=failed,
-        )
+        tok = _DELIVERY_FAILED.set(failed)
+        try:
+            _deliver_result(
+                {"id": "j1", "name": job_name, "deliver": "origin",
+                 "origin": {"platform": "telegram", "chat_id": "123"}},
+                "body text",
+            )
+        finally:
+            _DELIVERY_FAILED.reset(tok)
     return send.call_args.kwargs.get("content") or send.call_args[0][-1]
 
 
