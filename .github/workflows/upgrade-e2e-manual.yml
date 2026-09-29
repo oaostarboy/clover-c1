@@ -54,7 +54,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$CLOVER_BIN" version | tee /tmp/version-before.txt
+          "$CLOVER_BIN" --version | tee /tmp/version-before.txt
           git -C "$INSTALL_DIR" rev-parse HEAD | tee /tmp/head-before.txt
 
       - name: (POSIX) b. Seed old-style config + user data
@@ -120,7 +120,7 @@ jobs:
             echo "FINDING: HEAD ($LOCAL_HEAD) is not to_branch tip ($REMOTE_TIP)"; FAIL=1
           fi
 
-          "$CLOVER_BIN" version | tee /tmp/version-after.txt
+          "$CLOVER_BIN" --version | tee /tmp/version-after.txt
           if diff -q /tmp/version-before.txt /tmp/version-after.txt > /dev/null; then
             echo "FINDING: version output did not change after update"; FAIL=1
           fi
@@ -247,10 +247,30 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/${{ github.ref_name }}/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
-          & "$env:TEMP\install.ps1" -Branch main -Commit "${{ env.FROM_REF }}" -NonInteractive -SkipComputerUse
           $cloverHome = "$env:LOCALAPPDATA\clover"
           $installDir = "$cloverHome\clover-c1"
+
+          # PRODUCT BUG WORKAROUND (see evidence/upgrade-e2e-findings.md,
+          # Finding 1): install.ps1's fresh-clone path runs `git clone`
+          # before it sets core.autocrlf=false, so Windows' default
+          # core.autocrlf=true renormalizes uv.lock to CRLF during the
+          # clone's own checkout -- then the immediate -Commit pin
+          # checkout aborts on that renormalization diff. Pre-clone the
+          # repo ourselves with autocrlf disabled BEFORE cloning, and pin
+          # the commit ourselves too, so install.ps1 finds an
+          # already-valid, already-clean checkout at $installDir and takes
+          # its "Existing installation found, updating..." branch instead
+          # -- which already sets core.autocrlf=false before its own
+          # fetch/checkout and does not hit this bug.
+          git config --global core.autocrlf false
+          New-Item -ItemType Directory -Force -Path (Split-Path $installDir) | Out-Null
+          git clone --branch main https://github.com/oaostarboy/clover-c1.git $installDir
+          git -C $installDir checkout --detach "${{ env.FROM_REF }}"
+          if ($LASTEXITCODE -ne 0) { throw "pre-clone checkout of ${{ env.FROM_REF }} failed" }
+
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/${{ github.ref_name }}/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
+          & "$env:TEMP\install.ps1" -Branch main -Commit "${{ env.FROM_REF }}" -NonInteractive -SkipComputerUse -CloverHome $cloverHome -InstallDir $installDir
+
           "CLOVER_HOME=$cloverHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "INSTALL_DIR=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "CLOVER_BIN=$installDir\venv\Scripts\clover.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -260,7 +280,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          & "$env:CLOVER_BIN" version | Tee-Object -FilePath "$env:TEMP\version-before.txt"
+          & "$env:CLOVER_BIN" --version | Tee-Object -FilePath "$env:TEMP\version-before.txt"
           git -C "$env:INSTALL_DIR" rev-parse HEAD | Tee-Object -FilePath "$env:TEMP\head-before.txt"
 
       - name: (Windows) b. Seed old-style config + user data
@@ -328,7 +348,7 @@ jobs:
             $fail = 1
           }
 
-          & "$env:CLOVER_BIN" version | Tee-Object -FilePath "$env:TEMP\version-after.txt"
+          & "$env:CLOVER_BIN" --version | Tee-Object -FilePath "$env:TEMP\version-after.txt"
           $before = Get-Content "$env:TEMP\version-before.txt" -Raw
           $after = Get-Content "$env:TEMP\version-after.txt" -Raw
           if ($before -eq $after) {
