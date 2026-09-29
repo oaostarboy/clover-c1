@@ -37,6 +37,15 @@ from gateway.platforms.base import (  # noqa: E402
 from gateway.run import GatewayRunner, _AGENT_PENDING_SENTINEL  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _classic_skin(monkeypatch):
+    """Stock ack wording is pinned here; Clo's acks live in test_clover_acks.py."""
+    from clover_cli import skin_engine
+
+    monkeypatch.setattr(skin_engine, "_active_skin", None)
+    monkeypatch.setattr(skin_engine, "_active_skin_name", "default")
+
+
 def _make_event(text: str = "hello", chat_id: str = "123") -> MessageEvent:
     source = SessionSource(
         platform=MagicMock(value="telegram"),

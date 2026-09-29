@@ -194,7 +194,7 @@ registry.register(
     check_fn=_check_xai_video_requirements,
     requires_env=[],
     is_async=False,
-    emoji="video",
+    emoji="🎬",
 )
 
 registry.register(
@@ -205,5 +205,5 @@ registry.register(
     check_fn=_check_xai_video_requirements,
     requires_env=[],
     is_async=False,
-    emoji="video",
+    emoji="🎬",
 )

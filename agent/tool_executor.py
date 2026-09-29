@@ -28,10 +28,12 @@ from agent.display import (
     build_tool_preview as _build_tool_preview,
     build_tool_label as _build_tool_label,
     get_cute_tool_message as _get_cute_tool_message_impl,
+    get_done_mark,
     get_tool_emoji as _get_tool_emoji,
     redact_tool_args_for_display as _redact_tool_args_for_display,
     _detect_tool_failure,
 )
+from agent import clover_flavor
 from agent.message_sanitization import coalesce_tool_call_id
 from agent.tool_dispatch_helpers import (
     _NEVER_PARALLEL_TOOLS,
@@ -1456,6 +1458,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                     middleware_trace=list(middleware_trace),
                 )
             is_error, _ = _detect_tool_failure(function_name, result)
+            clover_flavor.note_tool_result(is_error)
             if is_error:
                 logger.info("tool %s failed (%.2fs): %s", function_name, duration, result[:200])
             else:
@@ -1493,7 +1496,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     # Start spinner for CLI mode (skip when TUI handles tool progress)
     spinner = None
     if agent._should_emit_quiet_tool_messages() and agent._should_start_quiet_spinner():
-        face = random.choice(KawaiiSpinner.get_waiting_faces())
+        face = KawaiiSpinner.pick_waiting_face()
         spinner = KawaiiSpinner(f"{face} ⚡ running {num_tools} tools concurrently", spinner_type='dots', print_fn=agent._print_fn)
         spinner.start()
 
@@ -1879,11 +1882,11 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
         elif not agent.quiet_mode and getattr(agent, "tool_progress_mode", "all") != "off":
             _preview_str = _multimodal_text_summary(display_function_result)
             if agent.verbose_logging:
-                print(f"  ✅ Tool {i+1} completed in {tool_duration:.2f}s")
+                print(f"  {get_done_mark()} Tool {i+1} completed in {tool_duration:.2f}s")
                 print(agent._wrap_verbose("Result: ", _preview_str))
             else:
                 response_preview = _preview_str[:agent.log_prefix_chars] + "..." if len(_preview_str) > agent.log_prefix_chars else _preview_str
-                print(f"  ✅ Tool {i+1} completed in {tool_duration:.2f}s - {response_preview}")
+                print(f"  {get_done_mark()} Tool {i+1} completed in {tool_duration:.2f}s - {response_preview}")
 
         if not blocked and agent.tool_complete_callback:
             try:
@@ -2401,7 +2404,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 )
             spinner = None
             if agent._should_emit_quiet_tool_messages() and agent._should_start_quiet_spinner():
-                face = random.choice(KawaiiSpinner.get_waiting_faces())
+                face = KawaiiSpinner.pick_waiting_face()
                 spinner = KawaiiSpinner(f"{face} {spinner_label}", spinner_type='dots', print_fn=agent._print_fn)
                 spinner.start()
             agent._delegate_spinner = spinner
@@ -2432,7 +2435,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             # Context engine tools (lcm_grep, lcm_describe, lcm_expand, etc.)
             spinner = None
             if agent._should_emit_quiet_tool_messages():
-                face = random.choice(KawaiiSpinner.get_waiting_faces())
+                face = KawaiiSpinner.pick_waiting_face()
                 emoji = _get_tool_emoji(function_name)
                 display_args = _redact_tool_args_for_display(function_name, function_args) or function_args
                 preview = _build_tool_label(function_name, display_args) or function_name
@@ -2468,7 +2471,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             # These are not in the tool registry — route through MemoryManager.
             spinner = None
             if agent._should_emit_quiet_tool_messages() and agent._should_start_quiet_spinner():
-                face = random.choice(KawaiiSpinner.get_waiting_faces())
+                face = KawaiiSpinner.pick_waiting_face()
                 emoji = _get_tool_emoji(function_name)
                 display_args = _redact_tool_args_for_display(function_name, function_args) or function_args
                 preview = _build_tool_label(function_name, display_args) or function_name
@@ -2502,7 +2505,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
         elif agent.quiet_mode:
             spinner = None
             if agent._should_emit_quiet_tool_messages() and agent._should_start_quiet_spinner():
-                face = random.choice(KawaiiSpinner.get_waiting_faces())
+                face = KawaiiSpinner.pick_waiting_face()
                 emoji = _get_tool_emoji(function_name)
                 display_args = _redact_tool_args_for_display(function_name, function_args) or function_args
                 preview = _build_tool_label(function_name, display_args) or function_name
@@ -2680,6 +2683,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
         # Log tool errors to the persistent error log so [error] tags
         # in the UI always have a corresponding detailed entry on disk.
         _is_error_result, _ = _detect_tool_failure(function_name, function_result)
+        clover_flavor.note_tool_result(_is_error_result)
         # The agent-runtime tools above (todo, session_search, memory,
         # context-engine, memory-manager, clarify, delegate_task) are
         # dispatched inline — they never reach handle_function_call, so the
@@ -2821,12 +2825,12 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
 
         if not agent.quiet_mode and getattr(agent, "tool_progress_mode", "all") != "off":
             if agent.verbose_logging:
-                print(f"  ✅ Tool {i} completed in {tool_duration:.2f}s")
+                print(f"  {get_done_mark()} Tool {i} completed in {tool_duration:.2f}s")
                 print(agent._wrap_verbose("Result: ", function_result))
             else:
                 _fr_str = function_result if isinstance(function_result, str) else str(function_result)
                 response_preview = _fr_str[:agent.log_prefix_chars] + "..." if len(_fr_str) > agent.log_prefix_chars else _fr_str
-                print(f"  ✅ Tool {i} completed in {tool_duration:.2f}s - {response_preview}")
+                print(f"  {get_done_mark()} Tool {i} completed in {tool_duration:.2f}s - {response_preview}")
 
         if agent._interrupt_requested and i < len(assistant_message.tool_calls):
             remaining = len(assistant_message.tool_calls) - i

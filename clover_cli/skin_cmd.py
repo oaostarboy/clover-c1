@@ -26,9 +26,10 @@ def _skins_dir() -> Path:
 
 def _active_skin() -> str:
     from clover_cli.config import load_config
+    from clover_cli.skin_engine import DEFAULT_SKIN_NAME
 
     display = (load_config() or {}).get("display") or {}
-    return str(display.get("skin") or "default")
+    return str(display.get("skin") or DEFAULT_SKIN_NAME)
 
 
 def _use(name: str) -> None:

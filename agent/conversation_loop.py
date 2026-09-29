@@ -37,6 +37,7 @@ from agent.conversation_compression import (
     conversation_history_after_compression,
 )
 from agent.context_engine import automatic_compaction_status_message
+from agent import clover_flavor
 from agent.display import KawaiiSpinner
 from agent.error_classifier import FailoverReason, classify_api_error
 from agent.message_metadata import append_message
@@ -1944,6 +1945,10 @@ def run_conversation(
     agent._compression_adoption_failed = False
 
     # Main conversation loop counters (pure locals consumed by the loop below).
+    if getattr(agent, "_delegate_depth", 0) == 0:
+        # Per-turn state for the clover skin (one lucky roll); a subagent's
+        # loop is part of the parent's turn, so it must not re-roll.
+        clover_flavor.begin_turn()
     api_call_count = 0
     final_response = None
     interrupted = False
@@ -2880,8 +2885,7 @@ def run_conversation(
             agent._vprint(f"{agent.log_prefix}   🔧 Available tools: {len(agent.tools) if agent.tools else 0}")
         else:
             # Animated thinking spinner in quiet mode
-            face = random.choice(KawaiiSpinner.get_thinking_faces())
-            verb = random.choice(KawaiiSpinner.get_thinking_verbs())
+            face, verb = KawaiiSpinner.pick_thinking()
             if agent.thinking_callback:
                 # CLI TUI mode: use prompt_toolkit widget instead of raw spinner
                 # (works in both streaming and non-streaming modes)

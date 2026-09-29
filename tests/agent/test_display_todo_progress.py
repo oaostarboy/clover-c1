@@ -168,8 +168,12 @@ class TestWebExtractDisplay:
         # First item is a string, so domain should come from it
         assert "direct.com" in msg
 
-    def test_web_extract_empty_urls(self):
-        """Empty urls list - shows 'pages' placeholder."""
+    def test_web_extract_empty_urls(self, monkeypatch):
+        """Empty urls list - shows 'pages' placeholder (classic tool emoji)."""
+        from clover_cli import skin_engine
+
+        monkeypatch.setattr(skin_engine, "_active_skin", None)
+        monkeypatch.setattr(skin_engine, "_active_skin_name", "default")
         args = {"urls": []}
         msg = get_cute_tool_message("web_extract", args, 0.1)
         assert "pages" in msg

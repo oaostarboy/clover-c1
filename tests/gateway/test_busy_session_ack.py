@@ -33,6 +33,15 @@ from gateway.platforms.base import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _classic_skin(monkeypatch):
+    """These tests pin the stock ack wording; Clo's acks live in test_clover_acks.py."""
+    from clover_cli import skin_engine
+
+    monkeypatch.setattr(skin_engine, "_active_skin", None)
+    monkeypatch.setattr(skin_engine, "_active_skin_name", "default")
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

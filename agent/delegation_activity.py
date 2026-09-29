@@ -891,7 +891,7 @@ def _doing(child: ChildActivity, now: float) -> str:
         extra = len(child.open_tools) - 1
         return phrase + (f" (+{extra})" if extra > 0 else "")
     if child.state in {"waiting", "blocked"} and child.reason:
-        return f"{_ICONS[child.state]} {child.reason}"
+        return f"{_state_icon(child.state)} {child.reason}"
     if child.state == "queued":
         return "queued"
     if child.visibility == "lifecycle":
@@ -952,7 +952,7 @@ def _worker_rows(child: ChildActivity, now: float, *, live: bool) -> List[str]:
     if live:
         icon = WORKER_ICON
     else:
-        icon = WORKER_ICON if child.state == "completed" else _ICONS.get(child.state, "•")
+        icon = WORKER_ICON if child.state == "completed" else _state_icon(child.state, "•")
     title = f"{icon} {_bold_title(child, _ROW_TITLE_MAX)}"
     calls = _calls(child, live=live)
     bits = [pretty_model(child.model)]
@@ -1111,7 +1111,7 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
     children = group.ordered()
     if len(children) == 1:
         child = children[0]
-        icon = _ICONS.get(child.state, "•")
+        icon = _state_icon(child.state, "•")
         head = _stats_head(icon, pretty_model(child.model) or "Subagent",
                            _calls(child, live=False), _elapsed(child, now),
                            child.tools_failed)
@@ -1158,16 +1158,29 @@ def _state_counts(children: List[ChildActivity]) -> str:
     return " · ".join(parts)
 
 
+def _state_icon(state: str, default: Optional[str] = None) -> str:
+    """Card icon for *state*; done/failed follow the active skin's marks."""
+    from agent.display import get_done_mark, get_fail_mark
+
+    if state == "completed":
+        return get_done_mark(_ICONS["completed"])
+    if state == "failed":
+        return get_fail_mark(_ICONS["failed"])
+    return _ICONS[state] if default is None else _ICONS.get(state, default)
+
+
 def group_icon(children: List[ChildActivity]) -> str:
     """❌ only for a real failure; running out of steps is ⏳, not red."""
+    from agent.display import get_done_mark, get_fail_mark
+
     states = {c.state for c in children}
     if "failed" in states:
-        return "❌"
+        return get_fail_mark()
     if "incomplete" in states:
         return "⏳"
     if "cancelled" in states:
         return "⏹"
-    return "✅"
+    return get_done_mark()
 
 
 def short_duration(seconds: Optional[float]) -> str:
