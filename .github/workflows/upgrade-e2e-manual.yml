@@ -772,13 +772,14 @@ jobs:
         from_ref: ['69a75bb87740dda7461825f864d678c72fce5eec', 'c7ec2d0e9a5c87b833542f1ddb5fe54a16e239c0']
         path: [cli, telegram]
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 100
     env:
       FROM_REF: ${{ matrix.from_ref }}
       UPDATE_PATH: ${{ matrix.path }}
       FIX_BRANCH: fix/win-update-double-restart
       API_PORT: "8791"
       IRC_PORT: "6667"
+      LLM_PORT: "8792"
     steps:
       - name: Checkout e2e helpers
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -902,9 +903,24 @@ jobs:
           Set-MainIsNext "${{ github.ref_name }}"
           $logStart = (Get-LogLines).Count
           $label = "$env:UPDATE_PATH next update"
+          # D5: a long agent turn is running when this update pauses the gateway.
+          $turn = Start-LongTurn
           $exitCode = Invoke-PathUpdate $label
           Write-Host "[$label] update exit=$exitCode"
+          Assert-LongTurnSurvived $turn $logStart $label
           Assert-UpdatePass $label $logStart $exitCode ".github\win-e2e\wdr.ps1"
+          exit 0
+
+      - name: e2. D1/D2 - Emilio's refused receipt, then a no-pull update (the path's exact command)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:E2E\wdr.ps1"
+          Write-EmilioReceipt
+          $label = "$env:UPDATE_PATH no-pull after Emilio's receipt"
+          $exitCode = Invoke-PathUpdateInner $label
+          Write-Host "[$label] update exit=$exitCode"
+          Assert-NoPullKeepsOneGateway $label $exitCode
           exit 0
 
       - name: f. Stage logs
@@ -913,7 +929,7 @@ jobs:
         run: |
           $dst = "$env:RUNNER_TEMP\artifacts"
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
-          foreach ($p in @("$env:CLOVER_HOME\logs", "$env:CLOVER_HOME\gateway_state.json", "$env:CLOVER_HOME\.clover-last-update", "$env:CLOVER_HOME\config.yaml", "$env:RUNNER_TEMP\irc.log", "$env:RUNNER_TEMP\update-output.txt", "$env:RUNNER_TEMP\config-trace.log")) {
+          foreach ($p in @("$env:CLOVER_HOME\logs", "$env:CLOVER_HOME\gateway_state.json", "$env:CLOVER_HOME\.clover-last-update", "$env:CLOVER_HOME\config.yaml", "$env:RUNNER_TEMP\irc.log", "$env:RUNNER_TEMP\update-output.txt", "$env:RUNNER_TEMP\config-trace.log", "$env:RUNNER_TEMP\llm.log")) {
             if (Test-Path $p) { Copy-Item -Recurse -Force $p $dst -ErrorAction SilentlyContinue }
           }
 

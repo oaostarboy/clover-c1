@@ -82,13 +82,14 @@ function Test-CleanupProgress {
   try { (& $py -c $code 2>$null | Select-Object -Last 1) } finally { Pop-Location }
 }
 
-function Measure-SingleGateway([string]$label, [int]$logStart, [bool]$strictLog) {
+function Measure-Liveness90([string]$label) {
+  # Up within 120 s after the update chain finished, then exactly one
+  # gateway, api port bound, state running, no stale restart request, for
+  # 90 s straight.
   $bad = @()
   Wait-UpdateChainDone 1800
-  # Up within 120 s after the chain finished...
   $deadline = (Get-Date).AddSeconds(120)
   while ((Get-Date) -lt $deadline -and -not ((Get-GatewayRoots).Count -eq 1 -and (Test-ApiPort))) { Start-Sleep -Seconds 2 }
-  # ...then exactly one, bound, healthy state for 90 s straight.
   $end = (Get-Date).AddSeconds(90); $n = 0
   while ((Get-Date) -lt $end) {
     $roots = Get-GatewayRoots; $port = Test-ApiPort; $st = Get-GatewayState
@@ -98,6 +99,12 @@ function Measure-SingleGateway([string]$label, [int]$logStart, [bool]$strictLog)
     if ($roots.Count -ne 1 -or -not $port -or $st.restart_requested -eq $true -or $st.gateway_state -ne 'running') { $bad += $line }
     Start-Sleep -Seconds 3
   }
+  ,@($bad)
+}
+
+function Measure-SingleGateway([string]$label, [int]$logStart, [bool]$strictLog) {
+  $bad = @()
+  $bad += Measure-Liveness90 $label
   $lines = Get-LogLines
   $new = if ($lines.Count -gt $logStart) { $lines[$logStart..($lines.Count - 1)] } else { @() }
   $first = -1
@@ -283,4 +290,98 @@ print("v41 dry run:", fn(copy.deepcopy(raw)) if fn else "NO _v41_rewrite_config"
   $landed = Select-String -Path "$env:INSTALL_DIR\clover_cli\update_cmd.py" -Pattern '_hand_off_windows_gateway_resume' -Quiet
   if (-not $landed -or -not (Test-Path "$env:INSTALL_DIR\$landedPath")) { $bad += "target code did not land ($landedPath; main moved during the run?)" }
   ,@($bad)
+}
+
+function Write-EmilioReceipt {
+  # D1/D2: the receipt Emilio's install carried for weeks (E4 in his
+  # report): a refused Telegram /update that never pulled, fleet [], and a
+  # plan naming an old code_sha. On unfixed code it armed the fleet-restart
+  # catch-up on every later no-op update, which killed the gateway.
+  $old = $env:FROM_REF
+  $gw = @(Get-GatewayRoots | ForEach-Object ProcessId) | Select-Object -First 1
+  $sha = [ordered]@{ sha = $old; short_sha = $old.Substring(0, 8); version = '1.0.0'; source = 'git' }
+  $r = [ordered]@{
+    outcome = 'refused'; exit_code = 2; stop_reason = 'sys.exit(2)'
+    pre_update = $sha; post_update = $sha; gateway_restart = @{}; fleet = @()
+    steps = @([ordered]@{ name = 'pre_update_backup'; ok = $false; detail = 'disabled or failed'; at = (Get-Date).ToUniversalTime().ToString('o') })
+    plan = [ordered]@{
+      runtimes = @([ordered]@{ kind = 'gateway'; profile = 'default'; pid = [int]$gw; supervisor = 'manual'; code_sha = $old; code_version = '1.0.0'; restart_via = 'manual'; detail = @{} })
+      install_method = 'git'
+    }
+  }
+  $dir = "$env:CLOVER_HOME\logs\update_receipts"
+  New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  $r | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8 "$dir\latest.json"
+  Write-Host "seeded Emilio-shaped latest.json (refused, fleet [], code_sha $($old.Substring(0,8)), gateway pid $gw)"
+}
+
+function Assert-NoPullKeepsOneGateway([string]$label, $exitCode) {
+  $bad = @()
+  if ("$exitCode" -ne "0") { $bad += "update exit=$exitCode" }
+  $bad += Measure-Liveness90 $label
+  $out = (Get-Content "$env:RUNNER_TEMP\update-output.txt" -Raw -ErrorAction SilentlyContinue)
+  if ("$out" -match 'Pending fleet restart|did not restart running gateways') { $bad += "the fleet-restart catch-up ran on a no-pull update" }
+  if ($bad.Count) {
+    Write-Host "FAIL [$label]:"; $bad | Select-Object -First 30 | ForEach-Object { Write-Host "  $_" }
+    Write-Host "--- update output ---"; "$out" | Out-Host
+    Write-Host "--- gateway.log tail ---"; Get-LogLines | Select-Object -Last 120 | Out-Host
+    throw "[$label] failed $($bad.Count) criteria"
+  }
+  Write-Host "PASS [$label]: exit 0, no catch-up, exactly one gateway for 90s, port bound, running"
+}
+
+function Start-LongTurn {
+  # D5: a slow agent turn through the api_server that is still running when
+  # the update pauses the gateway. The fake model streams for 75 s.
+  $llmLog = "$env:RUNNER_TEMP\llm.log"
+  if (-not (Test-Path $llmLog)) {
+    $py = (Get-Command python).Source  # system Python, never the Clover venv
+    Start-Process -FilePath $py -ArgumentList @("$env:E2E\fake_llm.py", $llmLog, $env:LLM_PORT, "75") -WindowStyle Hidden
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline -and -not (Select-String -Path $llmLog -Pattern 'listening' -Quiet -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 1 }
+  }
+  foreach ($kv in @(@('model.provider', 'custom'), @('model.base_url', "http://127.0.0.1:$env:LLM_PORT/v1"), @('model.default', 'fake-slow'), @('model.api_key', 'fake-e2e-key'))) {
+    & "$env:CLOVER_BIN" config set $kv[0] $kv[1] | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "clover config set $($kv[0]) failed" }
+  }
+  $body = @{ model = 'clover-c1'; stream = $false; messages = @(@{ role = 'user'; content = 'LONG-TURN: answer when you are done thinking.' }) } | ConvertTo-Json -Depth 5
+  $job = Start-Job -ArgumentList $env:API_PORT, $body -ScriptBlock {
+    param($port, $body)
+    try {
+      $r = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/v1/chat/completions" -Headers @{ Authorization = 'Bearer win-update-paths-key-0123456789' } -ContentType 'application/json' -Body $body -TimeoutSec 900
+      "STATUS=ok CONTENT=$($r.choices[0].message.content)"
+    } catch { "STATUS=error $($_.Exception.Message) $($_.ErrorDetails.Message)" }
+  }
+  $deadline = (Get-Date).AddSeconds(120)
+  while ((Get-Date) -lt $deadline -and -not (Select-String -Path $llmLog -Pattern 'long turn started' -Quiet)) { Start-Sleep -Seconds 1 }
+  if (-not (Select-String -Path $llmLog -Pattern 'long turn started' -Quiet)) {
+    Receive-Job $job -ErrorAction SilentlyContinue | Out-Host
+    Get-Content $llmLog | Out-Host; Get-LogLines | Select-Object -Last 60 | Out-Host
+    throw "the long turn never reached the model"
+  }
+  Write-Host "long turn in flight at $(Get-Date -Format HH:mm:ss)"
+  $job
+}
+
+function Assert-LongTurnSurvived($job, [int]$logStart, [string]$label) {
+  $bad = @()
+  $null = Wait-Job $job -Timeout 900
+  $result = "$(Receive-Job $job -ErrorAction SilentlyContinue)"
+  Write-Host "[$label] long turn result: $result"
+  Write-Host "--- model log ---"; Get-Content "$env:RUNNER_TEMP\llm.log" | Select-Object -Last 20 | Out-Host
+  if ($result -notmatch 'STATUS=ok' -or $result -notmatch 'LONG-TURN-DONE') { $bad += "the long turn did not complete: $result" }
+  if (Select-String -Path "$env:RUNNER_TEMP\llm.log" -Pattern 'CUT OFF' -Quiet) { $bad += "the model stream was cut off mid-turn" }
+  $lines = Get-LogLines
+  $new = if ($lines.Count -gt $logStart) { $lines[$logStart..($lines.Count - 1)] } else { @() }
+  $cut = @($new | Where-Object { $_ -match 'interrupting remaining work|Restart after-turn wait timed out' })
+  $cut | ForEach-Object { $bad += "gateway.log: $_" }
+  $waited = "$(Get-Content "$env:RUNNER_TEMP\update-output.txt" -Raw -ErrorAction SilentlyContinue)" -match 'in-flight turn'
+  Write-Host "[$label] updater said it waited for the in-flight turn: $waited"
+  if (-not $waited) { $bad += "the updater never said it was waiting for the in-flight turn" }
+  if ($bad.Count) {
+    Write-Host "FAIL [$label long turn]:"; $bad | ForEach-Object { Write-Host "  $_" }
+    Write-Host "--- gateway.log tail ---"; $new | Select-Object -Last 120 | Out-Host
+    throw "[$label] the active turn was amputated by the update"
+  }
+  Write-Host "PASS [$label long turn]: the turn running at update time completed; nothing interrupted; the updater waited for it"
 }
