@@ -5371,13 +5371,12 @@ def _adopt_handed_off_gateway_resume(token: dict | None) -> tuple[dict | None, b
     """
     if os.environ.get(_m()._UPDATE_REEXEC_ENV) != "1":
         return token, False
-    path = _handoff_resume_path()
     try:
-        handed = json.loads(path.read_text(encoding="utf-8"))
+        handed = json.loads(_handoff_resume_path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return token, False
     try:
-        path.unlink()
+        _handoff_resume_path().unlink(missing_ok=True)
     except OSError:
         pass
     if not isinstance(handed, dict) or not handed.get("resume_needed"):
