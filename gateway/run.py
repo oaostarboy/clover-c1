@@ -2707,6 +2707,10 @@ os.environ["CLOVER_QUIET"] = "1"
 from gateway import clover_acks as _clover_acks
 from gateway.cwd_placeholder import CWD_PLACEHOLDERS, resolve_placeholder_terminal_cwd
 from gateway.stream_consumer import format_thought
+from gateway.progress_cleanup import (
+    collapse_or_delete as _collapse_or_delete_bubbles,
+    delete_bubble as _delete_progress_bubble,
+)
 
 _configured_cwd = os.environ.get("TERMINAL_CWD", "")
 if not _configured_cwd or _configured_cwd in CWD_PLACEHOLDERS:
@@ -22526,6 +22530,39 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 return self._format_session_info()
         return self._format_session_info()
 
+    def _reset_notice_session_parts(self, source: SessionSource) -> dict:
+        """Same profile scoping as ``_reset_notice_session_info``, but the raw
+        fields (model, provider, context, endpoint) for a re-skinned /new reply."""
+        if getattr(getattr(self, "config", None), "multiplex_profiles", False):
+            with _profile_runtime_scope(self._resolve_profile_home_for_source(source)):
+                return self._session_info_parts()
+        return self._session_info_parts()
+
+    def _session_info_parts(self) -> dict:
+        """Resolve the current model config into display fields.
+
+        ``context_source`` is ``config`` / ``default`` / ``detected``;
+        ``context`` is ``500K`` / ``1.0M`` / ``8192``; ``local_endpoint`` is
+        the base URL for localhost setups, else ``""``.
+        """
+        resolved = _resolve_gateway_model_context()
+        context_length = resolved.context_length
+        if context_length >= 1_000_000:
+            ctx_display = f"{context_length / 1_000_000:.1f}M"
+        elif context_length >= 1_000:
+            ctx_display = f"{context_length // 1_000}K"
+        else:
+            ctx_display = str(context_length)
+        base_url = resolved.base_url
+        local = bool(base_url and base_url_hostname(base_url) in ("localhost", "127.0.0.1", "0.0.0.0"))
+        return {
+            "model": resolved.model,
+            "provider": resolved.provider,
+            "context": ctx_display,
+            "context_source": resolved.context_source,
+            "base_url": base_url if local else "",
+        }
+
     def _format_session_info(self) -> str:
         """Resolve current model config and return a formatted info block.
 
@@ -22533,27 +22570,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         users can immediately see if context detection went wrong (e.g.
         local models falling to the 128K default).
         """
-        resolved = _resolve_gateway_model_context()
-        model = resolved.model
-        provider = resolved.provider
-        base_url = resolved.base_url
-        context_length = resolved.context_length
+        parts = self._session_info_parts()
+        model = parts["model"]
+        provider = parts["provider"]
+        base_url = parts["base_url"]
+        ctx_display = parts["context"]
 
         # Format context source hint
-        if resolved.context_source == "config":
+        if parts["context_source"] == "config":
             ctx_source = "config"
-        elif resolved.context_source == "default":
+        elif parts["context_source"] == "default":
             ctx_source = "default — set model.context_length in config to override"
         else:
             ctx_source = "detected"
-
-        # Format context length for display
-        if context_length >= 1_000_000:
-            ctx_display = f"{context_length / 1_000_000:.1f}M"
-        elif context_length >= 1_000:
-            ctx_display = f"{context_length // 1_000}K"
-        else:
-            ctx_display = str(context_length)
 
         lines = [
             f"◆ Model: `{model}`",
@@ -22562,7 +22591,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         ]
 
         # Show endpoint for local/custom setups
-        if base_url and base_url_hostname(base_url) in ("localhost", "127.0.0.1", "0.0.0.0"):
+        if base_url:
             lines.append(f"◆ Endpoint: {base_url}")
 
         return "\n".join(lines)
@@ -30804,6 +30833,28 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _NOTIFY_INTERVAL = None
         _notify_start = time.time()
 
+        # Set once the turn's cleanup callback is registered (successful turn).
+        # A heartbeat send still in flight then is deleted as soon as it lands.
+        _cleanup_armed = [False]
+
+        def _track_late_heartbeat(fut: "asyncio.Future") -> None:
+            """A heartbeat send outlived its task (cancelled at turn end): the
+            platform may still have posted it, so track and reap the bubble."""
+            try:
+                _res = fut.result()
+            except BaseException:
+                return
+            _mid = getattr(_res, "message_id", None)
+            if not (getattr(_res, "success", False) and _mid):
+                return
+            _mid = str(_mid)
+            if _cleanup_progress and _mid not in _cleanup_msg_ids:
+                _cleanup_msg_ids.append(_mid)
+            if _cleanup_progress and _cleanup_armed[0] and _cleanup_adapter is not None:
+                asyncio.ensure_future(
+                    _delete_progress_bubble(_cleanup_adapter, source.chat_id, _mid)
+                )
+
         async def _notify_long_running():
             if _NOTIFY_INTERVAL is None:
                 return  # Notifications disabled (gateway_notify_interval: 0)
@@ -30880,11 +30931,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             logger.debug("Heartbeat edit failed: %s", _ee)
                             _notify_res = None
                     if not (_notify_res and getattr(_notify_res, "success", False)):
-                        _notify_res = await _notify_adapter.send(
+                        # Shielded: cancelling this task at turn end must not
+                        # orphan a send that already reached the platform.
+                        _send_fut = asyncio.ensure_future(_notify_adapter.send(
                             source.chat_id,
                             _heartbeat_text,
                             metadata=_interim_metadata(_non_conversational_metadata(_status_thread_metadata, platform=source.platform)),
-                        )
+                        ))
+                        try:
+                            _notify_res = await asyncio.shield(_send_fut)
+                        except asyncio.CancelledError:
+                            _send_fut.add_done_callback(_track_late_heartbeat)
+                            raise
                         if getattr(_notify_res, "success", False) and getattr(
                             _notify_res, "message_id", None
                         ):
@@ -30962,15 +31020,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # breadcrumbs for the user to see what work happened. Only fires on
             # adapters that support ``delete_message`` (see init above); failures
             # are swallowed — deletion is best-effort.
-            if (
+            _cleanup_eligible = bool(
                 _cleanup_progress
                 and _cleanup_adapter is not None
-                and _cleanup_msg_ids
                 and session_key
                 and isinstance(response, dict)
                 and not response.get("failed")
                 and hasattr(_cleanup_adapter, "register_post_delivery_callback")
-            ):
+            )
+            if _cleanup_eligible:
+                # From here on, any heartbeat bubble that lands late (its send
+                # was in flight when the turn ended) is deleted directly
+                # rather than tracked for a callback that already ran.
+                _cleanup_armed[0] = True
+            if _cleanup_eligible and _cleanup_msg_ids:
                 _ids_snapshot = list(_cleanup_msg_ids)
                 _chat_id_snapshot = source.chat_id
                 _adapter_snapshot = _cleanup_adapter
@@ -31013,32 +31076,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
                 def _cleanup_temp_bubbles() -> None:
                     async def _delete_all() -> None:
-                        _ids = list(_ids_snapshot)
-                        _keep = None
-                        if _can_card and _ids:
-                            _keep = _ids[0]
-                            try:
-                                # finalize=True is REQUIRED: without it the adapter
-                                # takes the streaming branch and pushes the text
-                                # through with NO parse_mode, so the card arrives
-                                # as literal "**> ... ||" markup in the chat.
-                                await _adapter_snapshot.edit_message(
-                                    _chat_id_snapshot, _keep, _card_text,
-                                    finalize=True,
-                                )
-                            except Exception:
-                                # Edit failed — fall back to deleting it too, so a
-                                # stale progress bubble is never left behind.
-                                _keep = None
-                        for _mid in _ids:
-                            if _keep is not None and _mid == _keep:
-                                continue
-                            try:
-                                await _adapter_snapshot.delete_message(
-                                    _chat_id_snapshot, _mid
-                                )
-                            except Exception:
-                                pass
+                        # Re-read the live list: a heartbeat send that was in
+                        # flight at turn end can land after the snapshot above.
+                        await _collapse_or_delete_bubbles(
+                            _adapter_snapshot,
+                            _chat_id_snapshot,
+                            _ids_snapshot,
+                            card_text=_card_text,
+                            can_card=_can_card,
+                            extra_ids=list(_cleanup_msg_ids),
+                        )
                     try:
                         safe_schedule_threadsafe(
                             _delete_all(), _loop_snapshot,

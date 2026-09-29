@@ -311,6 +311,10 @@ def _dir_hash(directory: Path) -> str:
     return hasher.hexdigest()
 
 
+def _is_disposable_skill_file(rel: Path) -> bool:
+    return "__pycache__" in rel.parts or rel.name.endswith(".pyc") or rel.name == ".DS_Store"
+
+
 def _safe_rel_install_path(path: Path, base: Path) -> str:
     """Return a normalized relative POSIX path, rejecting traversal/absolute paths."""
     rel = path.relative_to(base)
@@ -333,7 +337,7 @@ def _skill_file_list(skill_dir: Path) -> List[str]:
         if not fpath.is_file():
             continue
         rel = fpath.relative_to(skill_dir)
-        if any(part in EXCLUDED_SKILL_DIRS for part in rel.parts):
+        if _is_disposable_skill_file(rel):
             continue
         files.append(rel.as_posix())
     return files
@@ -506,6 +510,188 @@ def _find_installed_skill_dir_by_name(
     return matches[0]
 
 
+def _read_hub_lock(lock_path: Path) -> dict:
+    try:
+        data = json.loads(lock_path.read_text(encoding="utf-8")) if lock_path.exists() else {"version": 1, "installed": {}}
+    except (json.JSONDecodeError, OSError):
+        data = {"version": 1, "installed": {}}
+    return data
+
+
+def _write_hub_lock(lock_path: Path, data: dict) -> None:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    # Atomic write so a crash mid-write can't silently wipe all provenance
+    # via the JSONDecodeError fallback in _read_hub_lock (which resets
+    # `installed` to an empty dict).
+    import tempfile
+
+    payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    fd, tmp_path = tempfile.mkstemp(
+        dir=str(lock_path.parent),
+        prefix=".lock_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+            f.flush()
+            os.fsync(f.fileno())
+        atomic_replace(tmp_path, lock_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _lock_style_hash(directory: Path) -> str:
+    """``tools.skills_guard.content_hash`` over the shipped files only.
+
+    Unlike the guard's version this skips generated caches (``__pycache__``
+    ...): Python writes bytecode next to any skill script it runs, and that
+    must not make an untouched skill look user-edited.
+    """
+    entries = sorted(
+        (rel.as_posix(), fpath)
+        for fpath in directory.rglob("*")
+        if fpath.is_file()
+        for rel in [fpath.relative_to(directory)]
+        if not _is_disposable_skill_file(rel)
+    )
+    h = hashlib.sha256()
+    for rel, fpath in entries:
+        h.update(rel.encode("utf-8") + b"\x00")
+        h.update(fpath.read_bytes().replace(b"\r\n", b"\n"))
+    return f"sha256:{h.hexdigest()[:16]}"
+
+
+def _refresh_installed_optional_skills(quiet: bool = False) -> dict:
+    """Bring installed official optional skills up to the repo copy.
+
+    Bundled skills are re-synced by ``sync_skills`` itself, but an optional
+    skill is installed once (``clover skills install official/...``) and
+    nothing ever refreshed it, so fixes to its ``scripts/`` / ``references/``
+    / ``SKILL.md`` never reached existing installs.
+
+    Only skills recorded in the hub lock as official are considered — a skill
+    that is not installed is never installed here. The installed copy is
+    replaced ONLY when its files still hash to what the lock recorded for it
+    (an earlier shipped version the user never touched). A copy that differs
+    was edited by the user: it is left alone and one line naming it is logged.
+    The replaced directory is moved (not deleted) to
+    ``.restore-backups/official-optional-refresh-<ts>/``.
+    """
+    result = {"refreshed": [], "user_modified": [], "backed_up": []}
+    optional_dir = _get_optional_dir()
+    lock_path = _skills_dir() / ".hub" / "lock.json"
+    if not optional_dir.exists() or not lock_path.exists():
+        return result
+    data = _read_hub_lock(lock_path)
+    installed = data.get("installed")
+    if not isinstance(installed, dict):
+        return result
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    backup_root = _skills_dir() / ".restore-backups" / f"official-optional-refresh-{timestamp}"
+    changed = False
+    for lock_name, entry in sorted(installed.items()):
+        if not isinstance(entry, dict) or entry.get("source") != "official":
+            continue
+        install_path = entry.get("install_path")
+        if not isinstance(install_path, str) or not install_path:
+            continue
+        try:
+            src = (optional_dir / Path(*install_path.split("/"))).resolve()
+            src.relative_to(optional_dir.resolve())
+            dest = _skills_dir() / Path(*install_path.split("/"))
+            dest.resolve().relative_to(_skills_dir().resolve())
+        except (ValueError, OSError):
+            continue
+        if not (src / "SKILL.md").is_file() or not dest.is_dir() or dest.is_symlink():
+            continue  # not shipped anymore / not installed: never (re)install
+        try:
+            src_hash = _lock_style_hash(src)
+            dest_hash = _lock_style_hash(dest)
+        except OSError as e:
+            logger.debug("optional skill refresh: cannot hash %s: %s", lock_name, e)
+            continue
+        recorded = entry.get("content_hash", "")
+        recorded_files = set(entry.get("files") or [])
+        installed_files = set(_skill_file_list(dest))
+        if installed_files - recorded_files:
+            result["user_modified"].append(lock_name)
+            logger.info("optional skill %r has local edits; not refreshing it from the repo", lock_name)
+            continue
+        if dest_hash == src_hash:
+            if recorded != dest_hash:
+                # Refreshed by hand (or by an older updater): repair the
+                # record so a later repo change is still recognised as
+                # an untouched copy.
+                entry["content_hash"] = dest_hash
+                entry["files"] = _skill_file_list(dest)
+                changed = True
+            continue
+        if not recorded or dest_hash != recorded:
+            result["user_modified"].append(lock_name)
+            logger.info(
+                "optional skill %r has local edits; not refreshing it from the repo", lock_name,
+            )
+            if not quiet:
+                print(f"  ~ {lock_name} (locally modified — not refreshed)")
+            continue
+        try:
+            backed_up = _move_to_restore_backup(dest, backup_root)
+            try:
+                shutil.copytree(
+                    src, dest,
+                    ignore=shutil.ignore_patterns(*EXCLUDED_SKILL_DIRS),
+                )
+            except BaseException:
+                # Put the previous version back rather than leave a hole.
+                if dest.exists():
+                    shutil.rmtree(dest, ignore_errors=True)
+                shutil.move(str(backup_root / backed_up), str(dest))
+                raise
+        except OSError as e:
+            logger.warning("optional skill refresh failed for %s: %s", lock_name, e)
+            continue
+        entry["content_hash"] = _lock_style_hash(dest)
+        entry["files"] = _skill_file_list(dest)
+        entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+        changed = True
+        result["refreshed"].append(lock_name)
+        result["backed_up"].append(backed_up)
+        _prune_optional_restore_backups(_skills_dir() / ".restore-backups", Path(backed_up))
+        if not quiet:
+            print(f"  ↑ {lock_name} (optional skill refreshed from repo)")
+
+    if changed:
+        _write_hub_lock(lock_path, data)
+    return result
+
+
+def _prune_optional_restore_backups(backup_root: Path, skill_rel: Path) -> None:
+    """Keep the newest three refresh snapshots for this skill only."""
+    if not backup_root.exists():
+        return
+    snapshots = [snapshot for snapshot in backup_root.glob("official-optional-refresh-*")
+                 if snapshot.is_dir() and (snapshot / skill_rel).is_dir()]
+    for old in sorted(snapshots, key=lambda p: p.name, reverse=True)[3:]:
+        shutil.rmtree(old / skill_rel, ignore_errors=True)
+        for parent in reversed((old / skill_rel).parents):
+            if parent == old:
+                break
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+        try:
+            old.rmdir()
+        except OSError:
+            pass
+
+
 def _backfill_optional_provenance(quiet: bool = False) -> List[str]:
     """Mark already-present official optional skills as hub-installed.
 
@@ -591,30 +777,7 @@ def _backfill_optional_provenance(quiet: bool = False) -> List[str]:
             print(f"  = {lock_name} (official optional provenance backfilled)")
 
     if changed:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic write so a crash mid-write can't silently wipe all provenance
-        # via the JSONDecodeError fallback above (which resets `installed` to
-        # an empty dict).
-        import tempfile
-
-        payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
-        fd, tmp_path = tempfile.mkstemp(
-            dir=str(lock_path.parent),
-            prefix=".lock_",
-            suffix=".tmp",
-        )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(payload)
-                f.flush()
-                os.fsync(f.fileno())
-            atomic_replace(tmp_path, lock_path)
-        except BaseException:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        _write_hub_lock(lock_path, data)
     return backfilled
 
 
@@ -748,7 +911,7 @@ def bundled_skills_dir_is_unseeded() -> bool:
         return False
 
 
-def sync_skills(quiet: bool = False) -> dict:
+def sync_skills(quiet: bool = False, refresh_optional: bool = False) -> dict:
     """
     Sync bundled skills into ~/.clover/skills/ using the manifest.
 
@@ -1032,8 +1195,11 @@ def sync_skills(quiet: bool = False) -> dict:
 
     _write_manifest(manifest)
     optional_provenance_backfilled = _backfill_optional_provenance(quiet=quiet)
+    optional_refresh = _refresh_installed_optional_skills(quiet=quiet) if refresh_optional else {"refreshed": [], "user_modified": [], "backed_up": []}
 
     return {
+        "optional_refreshed": optional_refresh["refreshed"],
+        "optional_user_modified": optional_refresh["user_modified"],
         "copied": copied,
         "updated": updated,
         "skipped": skipped,
