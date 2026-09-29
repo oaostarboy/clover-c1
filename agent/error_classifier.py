@@ -410,6 +410,12 @@ _MODEL_NOT_FOUND_PATTERNS = [
     "no such model",
     "unknown model",
     "unsupported model",
+    # Codex 400 for a slug the ChatGPT account can't use ("The 'X' model is
+    # not supported when using Codex with a ChatGPT account"). Deterministic
+    # model unavailability, not an outage -- it must not read as a generic
+    # "provider failure" (which walks fallback_providers even for a pinned
+    # model).
+    "model is not supported when using codex",
     # OpenRouter returns 404 with this message when none of the candidate
     # endpoints for the selected model support tool/function calling.
     # Classifying this as model_not_found triggers fallback to a different

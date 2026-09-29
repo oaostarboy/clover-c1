@@ -2959,7 +2959,14 @@ class APIServerAdapter(BasePlatformAdapter):
         if session_override:
             override_model = resolve_effective_model(session_override, None, model)
             session_provider = _clean_request_string(session_override.get("provider"))
-            current_provider = _clean_request_string(runtime_kwargs.get("provider"))
+            # Prefer requested_provider: for a user-defined custom provider
+            # (config providers.<name> with base_url), resolve_runtime_provider
+            # canonicalizes runtime_kwargs["provider"] to "custom" while
+            # requested_provider keeps the named identity. Re-resolving from
+            # "custom" alone loses that provider's base_url/api_key.
+            current_provider = _clean_request_string(
+                runtime_kwargs.get("requested_provider") or runtime_kwargs.get("provider")
+            )
             provider_runtime = _resolve_provider_runtime(
                 session_provider or current_provider,
                 target_model=override_model,
@@ -2979,7 +2986,14 @@ class APIServerAdapter(BasePlatformAdapter):
             # alias).  Pins this session's turns ahead of per-request body
             # values — a session's chosen model is a standing selection,
             # matching the native gateway's session-model semantics.
-            current_provider = _clean_request_string(runtime_kwargs.get("provider"))
+            # Prefer requested_provider: for a user-defined custom provider
+            # (config providers.<name> with base_url), resolve_runtime_provider
+            # canonicalizes runtime_kwargs["provider"] to "custom" while
+            # requested_provider keeps the named identity. Re-resolving from
+            # "custom" alone loses that provider's base_url/api_key.
+            current_provider = _clean_request_string(
+                runtime_kwargs.get("requested_provider") or runtime_kwargs.get("provider")
+            )
             provider_runtime = _resolve_provider_runtime(
                 current_provider,
                 target_model=session_row_model,
@@ -3002,7 +3016,14 @@ class APIServerAdapter(BasePlatformAdapter):
                 effective_model = route_model or model
             else:
                 effective_model = request_model or model
-            current_provider = _clean_request_string(runtime_kwargs.get("provider"))
+            # Prefer requested_provider: for a user-defined custom provider
+            # (config providers.<name> with base_url), resolve_runtime_provider
+            # canonicalizes runtime_kwargs["provider"] to "custom" while
+            # requested_provider keeps the named identity. Re-resolving from
+            # "custom" alone loses that provider's base_url/api_key.
+            current_provider = _clean_request_string(
+                runtime_kwargs.get("requested_provider") or runtime_kwargs.get("provider")
+            )
             effective_provider = request_provider or route_provider or current_provider
             provider_runtime = None
             if effective_provider and (

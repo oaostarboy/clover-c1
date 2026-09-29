@@ -6073,9 +6073,11 @@ def run_conversation(
                             break
 
                         _pinned_summary = agent._summarize_api_error(api_error)
-                        _pinned_msg = (
-                            f"Model '{_model}' isn't available on provider "
-                            f"'{_provider}'. Nothing was run on another model."
+                        from agent.model_substitute import pinned_model_unavailable_message
+
+                        _pinned_msg = pinned_model_unavailable_message(
+                            _model, _provider,
+                            getattr(agent, "_model_substitution", None),
                         )
                         agent._flush_status_buffer()
                         agent._emit_status(f"❌ {_pinned_msg}")

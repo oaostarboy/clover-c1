@@ -2521,6 +2521,256 @@ def _resolve_cross_provider_backend(
     return client, model, base_url, api_mode, is_azure, api_mode_explicit
 
 
+def _apply_cross_provider_backend(
+    agent,
+    *,
+    provider: str,
+    model: str,
+    client,
+    base_url: str,
+    api_mode: str,
+) -> None:
+    """Swap ``agent`` in place onto the backend built by
+    ``_resolve_cross_provider_backend`` (client, ``_client_kwargs``, model /
+    provider identity, credential pool, prompt-cache policy, context window,
+    reasoning config, extra_body, capabilities).
+
+    Shared by ``try_activate_fallback`` and ``try_substitute_unknown_model``:
+    a cross-provider substitute that only replaced ``agent.client`` kept the
+    OLD provider's ``_client_kwargs``, so per-request clients were rebuilt
+    against the previous provider's base_url.
+    """
+    _req_timeout = get_provider_request_timeout(provider, model)
+    old_model = agent.model
+    old_provider = agent.provider
+    old_base_url = agent.base_url
+
+    # Clear the per-config context_length override so the fallback
+    # model's actual context window is resolved instead of inheriting
+    # the stale value from the previous model.  See #22387.
+    agent._config_context_length = None
+    agent.model = model
+    agent.provider = provider
+    agent.requested_provider = provider
+    agent.base_url = base_url
+    agent.api_mode = api_mode
+    if hasattr(agent, "_transport_cache"):
+        agent._transport_cache.clear()
+
+    # Rebind the credential pool to the fallback provider when the provider
+    # changes.  Keeping the primary pool attached would make downstream
+    # recovery (rate_limit / billing / auth) mutate the wrong credential
+    # set and can overwrite the fallback's base_url back to the primary
+    # endpoint.  See #33163.
+    #
+    # When the fallback shares the pool's provider (e.g. both openrouter
+    # entries with different routing) the pool is preserved.  When the
+    # providers differ, load the fallback provider's own pool if one exists
+    # so provider-specific rotation continues to work after the switch.
+    _existing_pool = getattr(agent, "_credential_pool", None)
+    if _existing_pool is not None:
+        _pool_provider = (getattr(_existing_pool, "provider", "") or "").strip().lower()
+        if _pool_provider and _pool_provider != provider:
+            logger.info(
+                "Fallback to %s/%s: clearing primary credential pool "
+                "(pool_provider=%s) to prevent cross-provider contamination",
+                provider, model, _pool_provider,
+            )
+            agent._credential_pool = None
+            agent._credential_pool_entry_id = None
+    if getattr(agent, "_credential_pool", None) is None:
+        try:
+            from agent.credential_pool import load_pool
+
+            fallback_pool = load_pool(provider)
+            if fallback_pool and fallback_pool.has_credentials():
+                agent._credential_pool = fallback_pool
+                logger.info(
+                    "Fallback to %s/%s: attached fallback credential pool",
+                    provider, model,
+                )
+        except Exception as exc:
+            logger.debug(
+                "Fallback to %s/%s: could not attach credential pool: %s",
+                provider, model, exc,
+            )
+
+    if api_mode == "anthropic_messages":
+        # Build native Anthropic client instead of using OpenAI client
+        from agent.anthropic_adapter import build_anthropic_client, resolve_anthropic_token, _is_oauth_token
+        effective_key = (client.api_key or resolve_anthropic_token() or "") if provider == "anthropic" else (client.api_key or "")
+        agent.api_key = effective_key
+        agent._anthropic_api_key = effective_key
+        agent._anthropic_base_url = base_url
+        agent._anthropic_client = build_anthropic_client(
+            effective_key, agent._anthropic_base_url, timeout=_req_timeout,
+        )
+        agent._is_anthropic_oauth = _is_oauth_token(effective_key) if provider == "anthropic" else False
+        agent.client = None
+        agent._client_kwargs = {}
+    else:
+        # Swap OpenAI client and config in-place
+        agent.api_key = client.api_key
+        agent.client = client
+        # Preserve provider-specific headers that
+        # resolve_provider_client() may have baked into
+        # client via the default_headers kwarg.  The OpenAI
+        # SDK stores these in _custom_headers.  Without this,
+        # subsequent request-client rebuilds (via
+        # _create_request_openai_client) drop the headers,
+        # causing 403s from providers like Kimi Coding that
+        # require a User-Agent sentinel.
+        fb_headers = getattr(client, "_custom_headers", None)
+        if not fb_headers:
+            fb_headers = getattr(client, "default_headers", None)
+        agent._client_kwargs = {
+            "api_key": client.api_key,
+            "base_url": base_url,
+            **({"default_headers": dict(fb_headers)} if fb_headers else {}),
+        }
+        if _req_timeout is not None:
+            agent._client_kwargs["timeout"] = _req_timeout
+            # Rebuild the shared OpenAI client so the configured
+            # timeout takes effect on the very next fallback request,
+            # not only after a later credential-rotation rebuild.
+            agent._replace_primary_openai_client(reason="fallback_timeout_apply")
+
+    from agent.agent_runtime_helpers import sync_credential_pool_entry_id
+    sync_credential_pool_entry_id(agent)
+
+    # Re-evaluate prompt caching for the new provider/model
+    agent._use_prompt_caching, agent._use_native_cache_layout = (
+        agent._anthropic_prompt_cache_policy(
+            provider=provider,
+            base_url=base_url,
+            api_mode=api_mode,
+            model=model,
+        )
+    )
+
+    # LM Studio: preload before probing the fallback's context length.
+    agent._ensure_lmstudio_runtime_loaded()
+
+    # Update context compressor limits for the fallback model.
+    # Without this, compression decisions use the primary model's
+    # context window (e.g. 200K) instead of the fallback's (e.g. 32K),
+    # causing oversized sessions to overflow the fallback.
+    # Also pass _config_context_length so the explicit config override
+    # (model.context_length in config.yaml) is respected — without this,
+    # the fallback activation drops to 128K even when config says 204800.
+    if hasattr(agent, 'context_compressor') and agent.context_compressor:
+        from agent.model_metadata import get_model_context_length
+        # ``agent.api_key`` may be callable (Entra ID); the
+        # context-length resolver expects a string for live
+        # probes. Foundry typically resolves via config/static
+        # catalogs anyway, so coerce defensively.
+        _ctx_api_key = agent.api_key if isinstance(agent.api_key, str) else ""
+        fb_context_length = get_model_context_length(
+            agent.model, base_url=agent.base_url,
+            api_key=_ctx_api_key, provider=agent.provider,
+            config_context_length=getattr(agent, "_config_context_length", None),
+            custom_providers=getattr(agent, "_custom_providers", None),
+        )
+        agent.context_compressor.update_model(
+            model=agent.model,
+            context_length=fb_context_length,
+            base_url=agent.base_url,
+            api_key=getattr(agent, "api_key", ""),  # callable preserved → call_llm
+            provider=agent.provider,
+            api_mode=agent.api_mode,
+        )
+
+    # Re-resolve reasoning_config for the new fallback model (Closes #21256).
+    # Shared chokepoint: per-model override > global reasoning_effort
+    # (YAML boolean False = disabled). Wrapped in try/except because a
+    # config load failure must not kill the swap.
+    try:
+        from clover_cli.config import load_config
+        from clover_constants import resolve_reasoning_config
+
+        agent.reasoning_config = resolve_reasoning_config(
+            load_config() or {}, agent.model
+        )
+        logger.info(
+            "Backend swap %s: reasoning_config resolved: %s",
+            agent.model, agent.reasoning_config,
+        )
+    except Exception as _reasoning_err:
+        logger.debug(
+            "Failed to resolve reasoning_config for %s; keeping current: %s",
+            agent.model, _reasoning_err,
+        )
+        # Keep whatever reasoning_config was active — don't break the fallback swap.
+
+    # Re-resolve extra_body for the fallback provider (Closes #75091).
+    # The OLD provider's custom_providers-contributed extra_body (e.g. a
+    # vendor-specific reasoning toggle) must not ride along onto the
+    # fallback provider, which is a different API that may reject those
+    # fields.  Removal is KEY-SCOPED: only keys the old provider's
+    # custom_providers entry contributed (value unchanged since init)
+    # are dropped; the fallback provider's own extra_body is then merged
+    # back in.  Caller/profile-provided extra_body keys
+    # (request_overrides passed at init, which win over provider config
+    # per _merge_custom_provider_extra_body precedence) MUST survive the
+    # swap untouched.
+    try:
+        from agent.agent_init import (
+            _custom_provider_extra_body_for_agent,
+            _merge_custom_provider_extra_body,
+        )
+        _custom_providers = getattr(agent, "_custom_providers", None) or []
+        # What did the OLD provider's config contribute?
+        _old_provider_eb = _custom_provider_extra_body_for_agent(
+            provider=old_provider,
+            model=old_model,
+            base_url=old_base_url,
+            custom_providers=_custom_providers,
+        ) or {}
+        _overrides = dict(getattr(agent, "request_overrides", {}) or {})
+        _existing_eb = _overrides.get("extra_body")
+        if isinstance(_existing_eb, dict) and _old_provider_eb:
+            _scrubbed = dict(_existing_eb)
+            for _k, _v in _old_provider_eb.items():
+                # Drop only keys the old provider contributed: the value
+                # must still match what its config injected — a caller
+                # override of the same key would have won at init and
+                # differ, so it survives.  Keys the new provider
+                # redefines are re-added with the NEW provider's value
+                # by the merge below.
+                if _k in _scrubbed and _scrubbed[_k] == _v:
+                    _scrubbed.pop(_k)
+            if _scrubbed:
+                _overrides["extra_body"] = _scrubbed
+            else:
+                _overrides.pop("extra_body", None)
+            agent.request_overrides = _overrides
+        # Merge in the fallback provider's own extra_body (existing
+        # caller-provided keys win on conflict inside the merge helper).
+        _merge_custom_provider_extra_body(agent, _custom_providers)
+        logger.info(
+            "Backend swap %s: extra_body resolved: %s",
+            agent.model,
+            (getattr(agent, "request_overrides", {}) or {}).get("extra_body"),
+        )
+    except Exception as _eb_err:
+        logger.debug(
+            "Failed to resolve extra_body for %s; keeping current: %s",
+            agent.model, _eb_err,
+        )
+
+    # Keep the prompt's self-identity in sync with the model actually
+    # answering, so "what model are you?" doesn't report the primary.
+    rewrite_prompt_model_identity(agent, model, provider)
+
+    from agent.native_compaction import resolve_native_compaction_capabilities
+    agent.runtime_capabilities = resolve_native_compaction_capabilities(
+        model=agent.model,
+        base_url=agent.base_url,
+        provider=provider,
+        is_codex_backend=provider == "openai-codex",
+    )
+
+
 def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool:
     """Switch to the next fallback model/provider in the chain.
 
@@ -2642,234 +2892,20 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
 
         old_model = agent.model
         old_provider = agent.provider
-        old_base_url = agent.base_url
-
-        # Clear the per-config context_length override so the fallback
-        # model's actual context window is resolved instead of inheriting
-        # the stale value from the previous model.  See #22387.
-        agent._config_context_length = None
-        agent.model = fb_model
-        agent.provider = fb_provider
-        agent.requested_provider = fb_provider
-        agent.base_url = fb_base_url
-        agent.api_mode = fb_api_mode
         # Per-provider reasoning_content echo opt-in (see _reasoning_echo_opt_in).
         # Read from the fallback entry so the flag travels with the active
         # provider; restore_primary_runtime will revert it from the snapshot.
         agent._reasoning_echo_flag = bool(fb.get("reasoning_echo", False))
-        if hasattr(agent, "_transport_cache"):
-            agent._transport_cache.clear()
         agent._fallback_activated = True
-
-        # Rebind the credential pool to the fallback provider when the provider
-        # changes.  Keeping the primary pool attached would make downstream
-        # recovery (rate_limit / billing / auth) mutate the wrong credential
-        # set and can overwrite the fallback's base_url back to the primary
-        # endpoint.  See #33163.
-        #
-        # When the fallback shares the pool's provider (e.g. both openrouter
-        # entries with different routing) the pool is preserved.  When the
-        # providers differ, load the fallback provider's own pool if one exists
-        # so provider-specific rotation continues to work after the switch.
-        _existing_pool = getattr(agent, "_credential_pool", None)
-        if _existing_pool is not None:
-            _pool_provider = (getattr(_existing_pool, "provider", "") or "").strip().lower()
-            if _pool_provider and _pool_provider != fb_provider:
-                logger.info(
-                    "Fallback to %s/%s: clearing primary credential pool "
-                    "(pool_provider=%s) to prevent cross-provider contamination",
-                    fb_provider, fb_model, _pool_provider,
-                )
-                agent._credential_pool = None
-                agent._credential_pool_entry_id = None
-        if getattr(agent, "_credential_pool", None) is None:
-            try:
-                from agent.credential_pool import load_pool
-
-                fallback_pool = load_pool(fb_provider)
-                if fallback_pool and fallback_pool.has_credentials():
-                    agent._credential_pool = fallback_pool
-                    logger.info(
-                        "Fallback to %s/%s: attached fallback credential pool",
-                        fb_provider, fb_model,
-                    )
-            except Exception as exc:
-                logger.debug(
-                    "Fallback to %s/%s: could not attach credential pool: %s",
-                    fb_provider, fb_model, exc,
-                )
-
-        # Honor per-provider / per-model request_timeout_seconds for the
-        # fallback target (same knob the primary client uses).  None = use
-        # SDK default.
-        _fb_timeout = get_provider_request_timeout(fb_provider, fb_model)
-
-        if fb_api_mode == "anthropic_messages":
-            # Build native Anthropic client instead of using OpenAI client
-            from agent.anthropic_adapter import build_anthropic_client, resolve_anthropic_token, _is_oauth_token
-            effective_key = (fb_client.api_key or resolve_anthropic_token() or "") if fb_provider == "anthropic" else (fb_client.api_key or "")
-            agent.api_key = effective_key
-            agent._anthropic_api_key = effective_key
-            agent._anthropic_base_url = fb_base_url
-            agent._anthropic_client = build_anthropic_client(
-                effective_key, agent._anthropic_base_url, timeout=_fb_timeout,
-            )
-            agent._is_anthropic_oauth = _is_oauth_token(effective_key) if fb_provider == "anthropic" else False
-            agent.client = None
-            agent._client_kwargs = {}
-        else:
-            # Swap OpenAI client and config in-place
-            agent.api_key = fb_client.api_key
-            agent.client = fb_client
-            # Preserve provider-specific headers that
-            # resolve_provider_client() may have baked into
-            # fb_client via the default_headers kwarg.  The OpenAI
-            # SDK stores these in _custom_headers.  Without this,
-            # subsequent request-client rebuilds (via
-            # _create_request_openai_client) drop the headers,
-            # causing 403s from providers like Kimi Coding that
-            # require a User-Agent sentinel.
-            fb_headers = getattr(fb_client, "_custom_headers", None)
-            if not fb_headers:
-                fb_headers = getattr(fb_client, "default_headers", None)
-            agent._client_kwargs = {
-                "api_key": fb_client.api_key,
-                "base_url": fb_base_url,
-                **({"default_headers": dict(fb_headers)} if fb_headers else {}),
-            }
-            if _fb_timeout is not None:
-                agent._client_kwargs["timeout"] = _fb_timeout
-                # Rebuild the shared OpenAI client so the configured
-                # timeout takes effect on the very next fallback request,
-                # not only after a later credential-rotation rebuild.
-                agent._replace_primary_openai_client(reason="fallback_timeout_apply")
-
-        from agent.agent_runtime_helpers import sync_credential_pool_entry_id
-        sync_credential_pool_entry_id(agent)
-
-        # Re-evaluate prompt caching for the new provider/model
-        agent._use_prompt_caching, agent._use_native_cache_layout = (
-            agent._anthropic_prompt_cache_policy(
-                provider=fb_provider,
-                base_url=fb_base_url,
-                api_mode=fb_api_mode,
-                model=fb_model,
-            )
+        _apply_cross_provider_backend(
+            agent,
+            provider=fb_provider,
+            model=fb_model,
+            client=fb_client,
+            base_url=fb_base_url,
+            api_mode=fb_api_mode,
         )
 
-        # LM Studio: preload before probing the fallback's context length.
-        agent._ensure_lmstudio_runtime_loaded()
-
-        # Update context compressor limits for the fallback model.
-        # Without this, compression decisions use the primary model's
-        # context window (e.g. 200K) instead of the fallback's (e.g. 32K),
-        # causing oversized sessions to overflow the fallback.
-        # Also pass _config_context_length so the explicit config override
-        # (model.context_length in config.yaml) is respected — without this,
-        # the fallback activation drops to 128K even when config says 204800.
-        if hasattr(agent, 'context_compressor') and agent.context_compressor:
-            from agent.model_metadata import get_model_context_length
-            # ``agent.api_key`` may be callable (Entra ID); the
-            # context-length resolver expects a string for live
-            # probes. Foundry typically resolves via config/static
-            # catalogs anyway, so coerce defensively.
-            _fb_ctx_api_key = agent.api_key if isinstance(agent.api_key, str) else ""
-            fb_context_length = get_model_context_length(
-                agent.model, base_url=agent.base_url,
-                api_key=_fb_ctx_api_key, provider=agent.provider,
-                config_context_length=getattr(agent, "_config_context_length", None),
-                custom_providers=getattr(agent, "_custom_providers", None),
-            )
-            agent.context_compressor.update_model(
-                model=agent.model,
-                context_length=fb_context_length,
-                base_url=agent.base_url,
-                api_key=getattr(agent, "api_key", ""),  # callable preserved → call_llm
-                provider=agent.provider,
-                api_mode=agent.api_mode,
-            )
-
-        # Re-resolve reasoning_config for the new fallback model (Closes #21256).
-        # Shared chokepoint: per-model override > global reasoning_effort
-        # (YAML boolean False = disabled). Wrapped in try/except because a
-        # config load failure must not kill the swap.
-        try:
-            from clover_cli.config import load_config
-            from clover_constants import resolve_reasoning_config
-
-            agent.reasoning_config = resolve_reasoning_config(
-                load_config() or {}, agent.model
-            )
-            logger.info(
-                "Fallback %s: reasoning_config resolved: %s",
-                agent.model, agent.reasoning_config,
-            )
-        except Exception as _reasoning_err:
-            logger.debug(
-                "Failed to resolve reasoning_config for fallback %s; keeping current: %s",
-                agent.model, _reasoning_err,
-            )
-            # Keep whatever reasoning_config was active — don't break the fallback swap.
-
-        # Re-resolve extra_body for the fallback provider (Closes #75091).
-        # The OLD provider's custom_providers-contributed extra_body (e.g. a
-        # vendor-specific reasoning toggle) must not ride along onto the
-        # fallback provider, which is a different API that may reject those
-        # fields.  Removal is KEY-SCOPED: only keys the old provider's
-        # custom_providers entry contributed (value unchanged since init)
-        # are dropped; the fallback provider's own extra_body is then merged
-        # back in.  Caller/profile-provided extra_body keys
-        # (request_overrides passed at init, which win over provider config
-        # per _merge_custom_provider_extra_body precedence) MUST survive the
-        # swap untouched.
-        try:
-            from agent.agent_init import (
-                _custom_provider_extra_body_for_agent,
-                _merge_custom_provider_extra_body,
-            )
-            _custom_providers = getattr(agent, "_custom_providers", None) or []
-            # What did the OLD provider's config contribute?
-            _old_provider_eb = _custom_provider_extra_body_for_agent(
-                provider=old_provider,
-                model=old_model,
-                base_url=old_base_url,
-                custom_providers=_custom_providers,
-            ) or {}
-            _overrides = dict(getattr(agent, "request_overrides", {}) or {})
-            _existing_eb = _overrides.get("extra_body")
-            if isinstance(_existing_eb, dict) and _old_provider_eb:
-                _scrubbed = dict(_existing_eb)
-                for _k, _v in _old_provider_eb.items():
-                    # Drop only keys the old provider contributed: the value
-                    # must still match what its config injected — a caller
-                    # override of the same key would have won at init and
-                    # differ, so it survives.  Keys the new provider
-                    # redefines are re-added with the NEW provider's value
-                    # by the merge below.
-                    if _k in _scrubbed and _scrubbed[_k] == _v:
-                        _scrubbed.pop(_k)
-                if _scrubbed:
-                    _overrides["extra_body"] = _scrubbed
-                else:
-                    _overrides.pop("extra_body", None)
-                agent.request_overrides = _overrides
-            # Merge in the fallback provider's own extra_body (existing
-            # caller-provided keys win on conflict inside the merge helper).
-            _merge_custom_provider_extra_body(agent, _custom_providers)
-            logger.info(
-                "Fallback %s: extra_body resolved: %s",
-                agent.model,
-                (getattr(agent, "request_overrides", {}) or {}).get("extra_body"),
-            )
-        except Exception as _eb_err:
-            logger.debug(
-                "Failed to resolve extra_body for fallback %s; keeping current: %s",
-                agent.model, _eb_err,
-            )
-
-        # Keep the prompt's self-identity in sync with the model actually
-        # answering, so "what model are you?" doesn't report the primary.
-        rewrite_prompt_model_identity(agent, fb_model, fb_provider)
 
         notice = (
             f"⚠️ Model fallback: {old_model} via {old_provider} unavailable "
@@ -2920,13 +2956,6 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
         # short-circuit the freshly activated fallback before it gets a
         # single stream attempt.
         _reset_stale_streak(agent)
-        from agent.native_compaction import resolve_native_compaction_capabilities
-        agent.runtime_capabilities = resolve_native_compaction_capabilities(
-            model=agent.model,
-            base_url=agent.base_url,
-            provider=fb_provider,
-            is_codex_backend=fb_provider == "openai-codex",
-        )
         return True
     except Exception as e:
         logger.error("Failed to activate fallback %s: %s", fb_model, e)
@@ -3008,15 +3037,14 @@ def try_substitute_unknown_model(agent, *, requested_model: str, provider: str):
             )
             return None
         client, resolved_model, resolved_base_url, resolved_api_mode, _, _ = _backend
-        agent.client = client
-        agent.api_key = client.api_key
-        agent.model = resolved_model or substitute.model
-        agent.provider = substitute.provider
-        agent.requested_provider = substitute.provider
-        agent.base_url = resolved_base_url
-        agent.api_mode = resolved_api_mode
-        if hasattr(agent, "_transport_cache"):
-            agent._transport_cache.clear()
+        _apply_cross_provider_backend(
+            agent,
+            provider=substitute.provider,
+            model=resolved_model or substitute.model,
+            client=client,
+            base_url=resolved_base_url,
+            api_mode=resolved_api_mode,
+        )
 
     # Clear the per-config context_length override so the substitute
     # model's actual context window is resolved instead of inheriting the

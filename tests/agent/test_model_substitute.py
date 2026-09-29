@@ -431,3 +431,92 @@ class TestConfiguredDefaultNotValidatedAgainstStaticList:
         assert result == ModelSubstitute(
             model="gpt-6-astra-900k", provider="openai-codex", source="configured_default",
         )
+
+
+class _FakeClient:
+    def __init__(self, base_url: str, api_key: str):
+        self.base_url = base_url
+        self.api_key = api_key
+        self._custom_headers = {}
+
+
+class _FakeSubstituteAgent:
+    """Just the attributes the backend swap touches."""
+
+    def __init__(self):
+        self.model = "totally-fake-xyz"
+        self.provider = "custom"
+        self.requested_provider = "gemini-oauth"
+        self.base_url = "http://127.0.0.1:8317/v1"
+        self.api_key = "sk-gemini"
+        self.api_mode = "chat_completions"
+        self.client = _FakeClient(self.base_url, "sk-gemini")
+        self._client_kwargs = {"api_key": "sk-gemini", "base_url": self.base_url}
+        self._credential_pool = None
+        self._transport_cache = {"stale": object()}
+        self.context_compressor = None
+        self._custom_providers = []
+        self.request_overrides = {}
+        self.reasoning_config = None
+
+    def _anthropic_prompt_cache_policy(self, **_kw):
+        return (False, False)
+
+    def _ensure_lmstudio_runtime_loaded(self):
+        return None
+
+    def _replace_primary_openai_client(self, reason=""):
+        return None
+
+
+class TestCrossProviderSubstituteRebuildsClient:
+    """A substitute onto a different provider must move the whole request
+    path (``_client_kwargs`` -> per-request clients), not only agent.client;
+    otherwise the substitute is sent to the previous provider's base_url.
+    """
+
+    def test_cross_provider_substitute_moves_request_base_url(self):
+        from agent import chat_completion_helpers as helpers
+
+        agent = _FakeSubstituteAgent()
+        new_client = _FakeClient("https://chatgpt.com/backend-api/codex/", "sk-codex")
+        backend = (
+            new_client, "gpt-6-astra-900k", "https://chatgpt.com/backend-api/codex/",
+            "codex_responses", False, False,
+        )
+        with patch.object(helpers, "_resolve_cross_provider_backend", return_value=backend), \
+             patch("agent.model_substitute.configured_default_model",
+                   return_value=("gpt-6-astra-900k", "openai-codex")), \
+             patch("agent.model_substitute.known_models_for_provider",
+                   return_value=([], False)):
+            substitute = helpers.try_substitute_unknown_model(
+                agent, requested_model="totally-fake-xyz", provider="custom",
+            )
+
+        assert substitute is not None and substitute.provider == "openai-codex"
+        assert agent.base_url == "https://chatgpt.com/backend-api/codex/"
+        assert agent.api_mode == "codex_responses"
+        assert agent.provider == agent.requested_provider == "openai-codex"
+        # The per-request client factory reads _client_kwargs.
+        assert agent._client_kwargs["base_url"] == agent.base_url
+        assert agent._client_kwargs["api_key"] == "sk-codex"
+        assert agent.client is new_client
+
+
+class TestRequestedModelIsNeverItsOwnSubstitute:
+    def test_requested_model_excluded_from_same_provider_match(self):
+        result = resolve_model_substitute(
+            "gpt-6-astra-900k",
+            "openai-codex",
+            known_models=["gpt-6-astra-900k"],
+            default_model="",
+        )
+        assert result is None
+
+    def test_other_known_models_still_match(self):
+        result = resolve_model_substitute(
+            "gpt-6-astra-typo",
+            "openai-codex",
+            known_models=["gpt-6-astra-typo", "gpt-6-astra"],
+        )
+        assert result is not None and result.model == "gpt-6-astra"
