@@ -5424,9 +5424,17 @@ def run_job(
     defer_agent_teardown: Optional[list] = None,
     extra_prompt: Optional[str] = None,
     cancel_event: Optional[_CancelEventLike] = None,
+    unreachable_result: Optional[dict] = None,
 ) -> tuple[bool, str, str, Optional[str]]:
     """
     Execute a single cron job.
+
+    ``unreachable_result``: when a caller passes a dict, a failure that never
+    reached the model (transient network/DNS error, zero API calls — see
+    cron/unreachable_retry.py) sets ``unreachable_result["model_unreachable"] =
+    True``. Out-parameter rather than a 5th return value so every existing
+    caller/test unpacking the 4-tuple stays unchanged (same pattern as
+    ``defer_agent_teardown``).
 
     ``defer_agent_teardown``: when a caller passes a list, ``run_job`` skips
     the agent's async-resource teardown (``agent.close()`` +
@@ -6713,6 +6721,9 @@ def run_job(
     except Exception as e:
         error_msg = f"{type(e).__name__}: {str(e)}"
         logger.exception("Job '%s' failed: %s", job_name, error_msg)
+        if unreachable_result is not None:
+            from cron.unreachable_retry import is_model_unreachable_failure
+            unreachable_result["model_unreachable"] = is_model_unreachable_failure(e, agent)
         # Best-effort audit write on failure path. _audit_fire_id
         # may be unset if the exception fired before submit() — guard
         # with a None check so the audit write itself never raises.
@@ -7206,12 +7217,14 @@ def _run_one_job_body(
         # below once delivery is done. Defense-in-depth alongside the
         # interpreter-shutdown guard in _deliver_result.
         _deferred_agents: list = []
+        _unreachable_result: dict = {}
         try:
             if fire_claim_lost is None:
                 success, output, final_response, error = run_job(
                     job,
                     defer_agent_teardown=_deferred_agents,
                     extra_prompt=extra_prompt,
+                    unreachable_result=_unreachable_result,
                 )
             else:
                 success, output, final_response, error = run_job(
@@ -7219,6 +7232,7 @@ def _run_one_job_body(
                     defer_agent_teardown=_deferred_agents,
                     extra_prompt=extra_prompt,
                     cancel_event=fire_claim_lost,
+                    unreachable_result=_unreachable_result,
                 )
         except BaseException:
             # run_job's finally still hands back the agent when it raises; tear
@@ -7231,6 +7245,18 @@ def _run_one_job_body(
             raise
         finally:
             reset_secret_scope(_scope_token)
+
+        # Unreachable-fire retry (cron/unreachable_retry.py): the run never
+        # reached the model (transient DNS/connect failure, zero API calls),
+        # so an automatic re-run at +5/15/30 min cannot double a side effect.
+        # will_retry mirrors what mark_job_run's plan_retry will do below, so
+        # the interim failure notice below can stay silent (Cowork-style)
+        # exactly when a retry is actually going to be scheduled. Computed
+        # before the delivery decision so a pending retry can suppress it.
+        _unreachable_will_retry = False
+        if not success and _unreachable_result.get("model_unreachable"):
+            from cron import unreachable_retry as _unreachable_retry
+            _unreachable_will_retry = _unreachable_retry.will_retry(job)
 
         if _fire_claim_ownership_lost():
             for _deferred_agent in _deferred_agents:
@@ -7375,6 +7401,11 @@ def _run_one_job_body(
             should_deliver = bool(deliver_content.strip())
             if blocked_config_silent or drift_skip_silent:
                 should_deliver = False
+            if _unreachable_will_retry:
+                # A bounded automatic re-run is about to be scheduled
+                # (cron/unreachable_retry.py) — stay silent like Cowork does,
+                # rather than alerting on every transient network blip.
+                should_deliver = False
             unresolved_origin = False
             # Cron silence suppression — see _is_cron_silence_response.  Replaces the
             # old `SILENT_MARKER in ...upper()` substring check, which both leaked
@@ -7487,6 +7518,8 @@ def _run_one_job_body(
             mark_kwargs["expected_fire_owner"] = fire_owner
         if blocked_config:
             mark_kwargs["status"] = "blocked_config"
+        if _unreachable_result.get("model_unreachable"):
+            mark_kwargs["model_unreachable"] = True
         marked = mark_job_run(job["id"], success, error, **mark_kwargs)
         if fire_owner is not None and not marked:
             finish_execution(

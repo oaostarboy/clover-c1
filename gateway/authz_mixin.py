@@ -18,14 +18,18 @@ import time -> no import cycle. The lazy import preserves the exact logger name
 from __future__ import annotations
 
 import os
+import threading
 from typing import Optional
 
+from gateway.bot_loop_guard import BotLoopGuard
 from gateway.config import Platform
 from gateway.session import SessionSource
 from gateway.whatsapp_identity import (
     expand_whatsapp_aliases as _expand_whatsapp_auth_aliases,
     normalize_whatsapp_identifier as _normalize_whatsapp_identifier,
 )
+
+_BOT_LOOP_GUARD_INIT_LOCK = threading.Lock()
 
 
 def _platform_gate_env(name: str, default: str = "") -> str:
@@ -380,15 +384,70 @@ class GatewayAuthorizationMixin:
             return per_profile[profile]
         return getattr(self, "pairing_store", None)
 
+    def _bot_loop_guard_instance(self) -> BotLoopGuard:
+        guard = getattr(self, "_bot_loop_guard", None)
+        if guard is None:
+            with _BOT_LOOP_GUARD_INIT_LOCK:
+                guard = getattr(self, "_bot_loop_guard", None)
+                if guard is None:
+                    guard = self._bot_loop_guard = BotLoopGuard()
+        return guard
+
+    def _bot_loop_guard_conversation(self, source: SessionSource) -> tuple:
+        # One budget per conversation, not per sender pair: a per-pair key would hand N bots N budgets.
+        platform = source.platform.value if source.platform else ""
+        return (self._adapter_profile_for_source(source) or "", platform, str(source.chat_id or ""))
+
+    def _admit_bot_message(self, source: SessionSource) -> bool:
+        """Count one authorized bot-authored inbound message. False when it trips the budget or the
+        conversation is cooling down. Call exactly once per freshly-admitted message (``_handle_message``'s
+        cold path) — ``_is_user_authorized`` only peeks (``blocked``) because it may be asked several times
+        for the same message.
+        """
+        from gateway.run import logger
+
+        if not getattr(source, "is_bot", False):
+            return True
+        allowed, state = self._bot_loop_guard_instance().admit(self._bot_loop_guard_conversation(source))
+        if state == "tripped":
+            logger.warning(
+                "Bot loop guard is dropping bot messages in %s chat %s: bot %s sent one message too many "
+                "for the window, cooling down (gateway.bot_loop_guard in config.yaml).",
+                source.platform.value if source.platform else "", source.chat_id, source.user_id,
+            )
+        return allowed
+
     def _is_user_authorized(
         self,
         source: SessionSource,
         *,
         allow_adapter_delegation: bool = True,
     ) -> bool:
+        """Whether a user (or bot) may talk to the bot.
+
+        ``_principal_authorized`` below owns the allowlist verdict; several of
+        its branches (the chat-scoped TELEGRAM_GROUP_ALLOWED_CHATS grant,
+        {PLATFORM}_ALLOW_BOTS, allow-all) can each independently admit a bot
+        message. The loop guard must therefore judge the FINAL verdict here,
+        once, after every allowlist path has had its say — gating only the
+        ALLOW_BOTS branch would miss a bot admitted via a chat allowlist (the
+        exact configuration that produces a ping-pong incident).
         """
-        Check if a user is authorized to use the bot.
-        
+        if not self._principal_authorized(source, allow_adapter_delegation=allow_adapter_delegation):
+            return False
+        if not getattr(source, "is_bot", False):
+            return True
+        return not self._bot_loop_guard_instance().blocked(self._bot_loop_guard_conversation(source))
+
+    def _principal_authorized(
+        self,
+        source: SessionSource,
+        *,
+        allow_adapter_delegation: bool = True,
+    ) -> bool:
+        """
+        The allowlist verdict alone, before the bot loop guard.
+
         Checks in order:
         1. Per-platform allow-all flag (e.g., DISCORD_ALLOW_ALL_USERS=true)
         2. Environment variable allowlists (TELEGRAM_ALLOWED_USERS, etc.)
@@ -895,3 +954,77 @@ class GatewayAuthorizationMixin:
             return "ignore"
 
         return "pair"
+
+    async def _send_unauthorized_dm_decline(self, source: SessionSource) -> None:
+        """``decline`` behavior: one short refusal per sender per
+        pairing.UNAUTHORIZED_DM_NOTICE_DEDUPE_SECONDS, then silence. The stamp is
+        written BEFORE the send so a delivery hiccup cannot become a decline
+        storm; without a pairing store there is no dedupe state, so stay silent
+        rather than risk repeating the decline on every message."""
+        from gateway.config import DEFAULT_UNAUTHORIZED_DM_DECLINE_MESSAGE
+
+        platform_name = source.platform.value if source.platform else "unknown"
+        pairing_store = self._pairing_store_for(source)
+        if pairing_store is None or pairing_store.has_recent_decline(platform_name, source.user_id):
+            return
+        pairing_store.record_decline(platform_name, source.user_id)
+        adapter = self._adapter_for_source(source)
+        if adapter is None:
+            return
+        try:
+            await adapter.send(source.chat_id, DEFAULT_UNAUTHORIZED_DM_DECLINE_MESSAGE)
+        except Exception:
+            from gateway.run import logger
+            logger.warning(
+                "Failed to deliver unauthorized-DM decline on %s", platform_name, exc_info=True
+            )
+
+    async def _notify_owner_of_unauthorized_sender(self, source: SessionSource) -> None:
+        """Owner-side signal for a dropped unauthorized DM (``ignore``/``decline``
+        behaviors): the WARNING log already carries the sender's ID (see the
+        caller), and this posts ONE line to the matching platform's home
+        channel, rate-limited to once per sender per
+        ``pairing.UNAUTHORIZED_DM_NOTICE_DEDUPE_SECONDS`` (24h) so a mistyped
+        allowlist is obvious without a stranger being able to spam the home
+        channel. Never forwards the stranger's message content — only the
+        platform and sender id/name."""
+        platform = source.platform
+        if platform is None or not source.user_id:
+            return
+        pairing_store = self._pairing_store_for(source)
+        if pairing_store is None:
+            return
+        platform_name = platform.value
+        if pairing_store.has_recent_unauthorized_notice(platform_name, source.user_id):
+            return
+
+        config = getattr(self, "config", None)
+        platforms = getattr(config, "platforms", None) or {}
+        platform_cfg = platforms.get(platform)
+        home = getattr(platform_cfg, "home_channel", None)
+        if not home or not home.chat_id:
+            return
+        if str(home.chat_id) == str(source.chat_id):
+            # The stranger's own DM IS the home channel (misconfiguration):
+            # posting there would answer the unauthorized user, defeating the
+            # point of ignoring/declining them.
+            return
+
+        pairing_store.record_unauthorized_notice(platform_name, source.user_id)
+
+        from gateway.delivery import resolve_delivery_transport
+        transport = resolve_delivery_transport(platform, config, getattr(self, "adapters", None))
+        if transport is None:
+            return
+        text = (
+            f"⚠️ Someone not on your allowlist messaged the bot on {platform_name} "
+            f"(id {source.user_id}). Ignored."
+        )
+        try:
+            await transport.adapter.send(str(home.chat_id), text)
+        except Exception:
+            from gateway.run import logger
+            logger.warning(
+                "Unauthorized-sender notice failed for %s:%s", platform_name, home.chat_id,
+                exc_info=True,
+            )

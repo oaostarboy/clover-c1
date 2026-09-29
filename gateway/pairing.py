@@ -51,6 +51,9 @@ CODE_LENGTH = 8
 CODE_TTL_SECONDS = 3600             # Codes expire after 1 hour
 RATE_LIMIT_SECONDS = 600            # 1 request per user per 10 minutes
 LOCKOUT_SECONDS = 3600              # Lockout duration after too many failures
+# One polite "decline" reply per (platform, sender), and one owner-side
+# home-channel notice per (platform, sender), inside this window.
+UNAUTHORIZED_DM_NOTICE_DEDUPE_SECONDS = 24 * 3600
 
 # Limits
 MAX_PENDING_PER_PLATFORM = 3        # Max pending codes per platform
@@ -861,6 +864,67 @@ class PairingStore:
             key = f"{platform}:{alias}"
             limits[key] = now
         self._save_json(self._rate_limit_path(), limits)
+
+    # ----- "decline" unauthorized-DM behavior + owner notice -----
+
+    def _decline_stamp_path(self) -> Path:
+        return self._dir / "_decline_stamps.json"
+
+    def has_recent_decline(self, platform: str, user_id: str) -> bool:
+        """Whether this sender (under any alias) was sent a polite decline within
+        UNAUTHORIZED_DM_NOTICE_DEDUPE_SECONDS."""
+        stamps = self._load_json(self._decline_stamp_path())
+        now = time.time()
+        return any(
+            isinstance(stamped := stamps.get(f"{platform}:{alias}"), (int, float))
+            and (now - stamped) < UNAUTHORIZED_DM_NOTICE_DEDUPE_SECONDS
+            for alias in self._user_id_aliases(platform, user_id)
+        )
+
+    def record_decline(self, platform: str, user_id: str) -> None:
+        """Stamp the sender (all aliases) and prune expired stamps. Callers stamp
+        BEFORE sending so a delivery failure cannot become a decline storm on the
+        sender's next message."""
+        with self._lock:
+            now = time.time()
+            stamps = {
+                key: value for key, value in self._load_json(self._decline_stamp_path()).items()
+                if isinstance(value, (int, float))
+                and (now - value) < UNAUTHORIZED_DM_NOTICE_DEDUPE_SECONDS
+            }
+            for alias in self._user_id_aliases(platform, user_id):
+                stamps[f"{platform}:{alias}"] = now
+            self._save_json(self._decline_stamp_path(), stamps)
+
+    def _unauthorized_notice_stamp_path(self) -> Path:
+        return self._dir / "_unauthorized_notice_stamps.json"
+
+    def has_recent_unauthorized_notice(self, platform: str, user_id: str) -> bool:
+        """Whether the owner was already notified about this sender within
+        UNAUTHORIZED_DM_NOTICE_DEDUPE_SECONDS (rate-limits the home-channel line)."""
+        stamps = self._load_json(self._unauthorized_notice_stamp_path())
+        now = time.time()
+        return any(
+            isinstance(stamped := stamps.get(f"{platform}:{alias}"), (int, float))
+            and (now - stamped) < UNAUTHORIZED_DM_NOTICE_DEDUPE_SECONDS
+            for alias in self._user_id_aliases(platform, user_id)
+        )
+
+    def record_unauthorized_notice(self, platform: str, user_id: str) -> None:
+        """Stamp the sender (all aliases) and prune expired stamps. Stamped BEFORE
+        sending so a delivery failure cannot repeat the notice on the sender's
+        next message."""
+        with self._lock:
+            now = time.time()
+            stamps = {
+                key: value
+                for key, value in self._load_json(self._unauthorized_notice_stamp_path()).items()
+                if isinstance(value, (int, float))
+                and (now - value) < UNAUTHORIZED_DM_NOTICE_DEDUPE_SECONDS
+            }
+            for alias in self._user_id_aliases(platform, user_id):
+                stamps[f"{platform}:{alias}"] = now
+            self._save_json(self._unauthorized_notice_stamp_path(), stamps)
 
     def _is_locked_out(self, platform: str) -> bool:
         """Check if a platform is in lockout due to failed approval attempts."""

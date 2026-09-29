@@ -2874,7 +2874,16 @@ def mark_job_run(
     status: Optional[str] = None,
     *,
     expected_fire_owner: Optional[str] = None,
+    model_unreachable: bool = False,
 ) -> bool:
+    """``model_unreachable``: this failed run never reached the model (transient
+    network/DNS error, zero API calls). A recurring job then gets a bounded
+    automatic re-run — ``next_run_at`` is pulled earlier per
+    ``cron.unreachable_retry.RETRY_DELAYS_SECONDS`` — instead of waiting a full
+    period (Cowork-style; see cron/unreachable_retry.py). Any other outcome
+    (success, or a failure that isn't this narrow transient case) resets the
+    re-run ladder.
+    """
     with _fire_job_lock(job_id) as acquired:
         if not acquired:
             return False
@@ -2885,6 +2894,7 @@ def mark_job_run(
             delivery_error,
             status=status,
             expected_fire_owner=expected_fire_owner,
+            model_unreachable=model_unreachable,
         )
 
 
@@ -2979,6 +2989,7 @@ def _mark_job_run_locked(
     *,
     status: Optional[str] = None,
     expected_fire_owner: Optional[str] = None,
+    model_unreachable: bool = False,
 ) -> bool:
     """
     Mark a job as having been run.
@@ -3117,6 +3128,19 @@ def _mark_job_run_locked(
                         job["state"] = "completed"
                 elif job.get("state") != "paused":
                     job["state"] = "scheduled"
+
+                # Unreachable-fire retry ladder (cron/unreachable_retry.py):
+                # a failed run that never reached the model gets next_run_at
+                # pulled earlier for a bounded automatic re-run. Any other
+                # outcome — success, or a failure that isn't this narrow
+                # transient case — resets the ladder. plan_retry()/clear_state()
+                # are no-ops for a non-recurring (one-shot) job, so the
+                # terminal-completion branch above is already safe here.
+                from cron import unreachable_retry as _unreachable_retry
+                if not success and model_unreachable:
+                    _unreachable_retry.plan_retry(job)
+                else:
+                    _unreachable_retry.clear_state(job)
 
                 save_jobs(jobs)
                 return True
@@ -3979,9 +4003,20 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                 # so re-anchor before either can fire. Recomputation uses the
                 # current expression, so this converges — it cannot defer
                 # forever.
-                if not manual_run and kind == "cron" and not _cron_next_run_matches_expr(
-                    schedule, next_run_dt
+                from cron.unreachable_retry import is_retry_fire
+                if (
+                    not manual_run
+                    and kind == "cron"
+                    and not _cron_next_run_matches_expr(schedule, next_run_dt)
+                    and not is_retry_fire(job, next_run)
                 ):
+                    # Off-lattice on purpose (not a stale expr edit): the
+                    # unreachable-model retry ladder (cron/unreachable_retry.py)
+                    # parks a rung between legal cron occurrences. Firing it
+                    # once is exactly what the ladder promises; the expression
+                    # fingerprint check inside is_retry_fire keeps a genuine
+                    # direct jobs.json schedule edit from inheriting this
+                    # exemption.
                     new_next = compute_next_run(schedule, now.isoformat())
                     logger.info(
                         "Job '%s' next_run_at %s does not match its current "

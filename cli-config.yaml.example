@@ -1201,6 +1201,40 @@ platform_toolsets:
   google_chat: [clover-google_chat]
 
 # =============================================================================
+# Gateway
+# =============================================================================
+# gateway:
+#   # Sliding-window brake on bot-authored inbound messages per conversation.
+#   # {PLATFORM}_ALLOW_BOTS only decides admission, so two fleet bots (or two
+#   # Clover profiles) replying to each other would otherwise ping-pong
+#   # forever. Never affects `clover peer dm` / api_server traffic — only
+#   # platform bot messages count against the budget.
+#   bot_loop_guard:
+#     enabled: true
+#     max_events: 20        # messages allowed inside window_seconds
+#     window_seconds: 300
+#     cooldown_seconds: 600  # how long a tripped conversation stays dropped
+#   # How to handle a DM from someone not on the allowlist: "pair" (default —
+#   # send a pairing code), "decline" (one polite refusal per sender, then
+#   # silent), or "ignore" (say nothing). Whichever you pick, the owner gets a
+#   # WARNING log plus one home-channel line per sender per 24h ("Someone not
+#   # on your allowlist messaged the bot on <platform> (id ...). Ignored."),
+#   # so a mistyped allowlist is never silently invisible. The stranger's
+#   # message content is never forwarded.
+#   unauthorized_dm_behavior: pair
+
+# =============================================================================
+# Cron
+# =============================================================================
+# cron:
+#   # A fire that never reached the model at all (transient DNS/connect
+#   # failure, zero API calls — e.g. right after the machine wakes behind a
+#   # VPN) re-arms at +5/15/30 minutes instead of waiting a full period, then
+#   # falls back to the normal schedule. Never re-runs if any API call was
+#   # made. On by default; set false to disable.
+#   retry_unreachable: true
+
+# =============================================================================
 # Gateway Platform Settings
 # =============================================================================
 # Optional per-platform messaging settings.
@@ -1214,6 +1248,7 @@ platform_toolsets:
 #     guest_mode: false
 #     # allowed_chats: ["-1001234567890"]
 #     extra:
+#       drop_pending_on_cold_boot: false  # Set true to discard messages queued while the gateway was offline on a cold boot (watcher reconnects always preserve them)
 #       disable_link_previews: false  # Set true to suppress Telegram URL previews in bot messages
 #       rich_messages: false          # Bot API 10.1 rich messages (tables/task lists/details/math); default false for copyable legacy MarkdownV2, set true to opt in
 #       rich_drafts: false            # Experimental rich draft previews during Telegram DM streaming; default false because Telegram Desktop/macOS can visually overlay draft frames

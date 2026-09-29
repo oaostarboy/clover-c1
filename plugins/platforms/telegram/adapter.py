@@ -679,6 +679,14 @@ class TelegramAdapter(BasePlatformAdapter):
         self._mention_patterns = self._compile_mention_patterns()
         self._reply_to_mode: str = getattr(config, 'reply_to_mode', 'first') or 'first'
         self._disable_link_previews: bool = self._coerce_bool_extra("disable_link_previews", False)
+        # Cold-boot queue: whether to tell Telegram to drop its server-side
+        # pending-update queue on a cold first boot (default False — friends
+        # message bots while Ant's box reboots or updates, and Clover would
+        # rather deliver a late message than silently drop it). Set
+        # extra.drop_pending_on_cold_boot: true for Hermes-style back-compat
+        # (always drop on cold boot). A watcher reconnect always preserves
+        # the queue regardless of this setting.
+        self._drop_pending_on_cold_boot: bool = self._coerce_bool_extra("drop_pending_on_cold_boot", False)
         # Bot API 10.1 Rich Messages: render constructs the legacy MarkdownV2
         # path degrades (tables → bullet lists, task lists, <details>, block
         # math) via sendRichMessage / editMessageText's rich_message param using
@@ -4391,6 +4399,24 @@ class TelegramAdapter(BasePlatformAdapter):
         # it observes alongside, never displaces, the core handlers.
         app.add_handler(TypeHandler(Update, self._on_platform_update), group=99)
 
+    def _cold_boot_drop_pending(self, *, is_reconnect: bool) -> bool:
+        """Whether to tell Telegram to drop its server-side pending-update queue.
+
+        A watcher reconnect always preserves the queue (#46621). A cold boot
+        follows ``platforms.telegram.extra.drop_pending_on_cold_boot``
+        (default False for Clover). Logged on every cold boot — a command
+        that never ran is otherwise invisible.
+        """
+        drop_pending = self._drop_pending_on_cold_boot if not is_reconnect else False
+        if not is_reconnect:
+            logger.info(
+                "[%s] Cold boot: %s Telegram updates queued while offline "
+                "(platforms.telegram.extra.drop_pending_on_cold_boot: %s)",
+                self.name, "dropping" if drop_pending else "preserving",
+                "true" if self._drop_pending_on_cold_boot else "false",
+            )
+        return drop_pending
+
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         """Connect to Telegram via polling or webhook.
 
@@ -4399,13 +4425,15 @@ class TelegramAdapter(BasePlatformAdapter):
         instead.  Webhook mode is useful for cloud deployments (Fly.io,
         Railway) where inbound HTTP can wake a suspended machine.
 
-        ``is_reconnect`` distinguishes a cold first boot (False — drop any
-        stale Bot API queue) from a watcher reconnect after a prolonged
-        outage (True — preserve the updates Telegram queued while the bot
-        was offline, otherwise every message sent during the outage is
-        silently lost). The in-process network-error ladder and the
-        409-conflict handler already pass ``drop_pending_updates=False``
-        for the same reason; bootstrap follows suit on the reconnect path.
+        ``is_reconnect`` distinguishes a cold first boot from a watcher
+        reconnect after a prolonged outage (True — preserve the updates
+        Telegram queued while the bot was offline, otherwise every message
+        sent during the outage is silently lost). The in-process
+        network-error ladder and the 409-conflict handler already pass
+        ``drop_pending_updates=False`` for the same reason; bootstrap follows
+        suit on the reconnect path. A cold boot follows
+        ``platforms.telegram.extra.drop_pending_on_cold_boot`` (default
+        False — see ``_cold_boot_drop_pending``).
 
         Env vars for webhook mode::
 
@@ -4834,7 +4862,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     # server-side getUpdates queue, so this flag is a no-op
                     # in practice. Mirror the polling path's reconnect
                     # semantics for consistency.
-                    drop_pending_updates=not is_reconnect,
+                    drop_pending_updates=self._cold_boot_drop_pending(is_reconnect=is_reconnect),
                 )
                 self._webhook_mode = True
                 self._polling_progress_accepting = False
@@ -4888,10 +4916,12 @@ class TelegramAdapter(BasePlatformAdapter):
                 self._polling_error_callback_ref = _polling_error_callback
 
                 polling_started = await self._start_polling_resilient(
-                    # On a cold first boot drop the stale Bot API queue; on a
-                    # watcher reconnect after an outage preserve it so messages
-                    # sent while the bot was offline are delivered (#46621).
-                    drop_pending_updates=not is_reconnect,
+                    # On a watcher reconnect after an outage always preserve
+                    # the queue so messages sent while the bot was offline
+                    # are delivered (#46621); on a cold first boot follow the
+                    # drop_pending_on_cold_boot knob (see
+                    # _cold_boot_drop_pending).
+                    drop_pending_updates=self._cold_boot_drop_pending(is_reconnect=is_reconnect),
                     error_callback=_polling_error_callback,
                     require_progress=not is_reconnect,
                 )

@@ -266,6 +266,183 @@ async def test_unauthorized_whatsapp_dm_can_be_ignored(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# "decline" behavior: one polite refusal per sender, then silence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_dm_can_be_declined(monkeypatch):
+    from gateway.config import DEFAULT_UNAUTHORIZED_DM_DECLINE_MESSAGE
+
+    _clear_auth_env(monkeypatch)
+    config = GatewayConfig(
+        platforms={
+            Platform.WHATSAPP: PlatformConfig(
+                enabled=True,
+                extra={"unauthorized_dm_behavior": "decline"},
+            ),
+        },
+    )
+    runner, adapter = _make_runner(Platform.WHATSAPP, config)
+    runner.pairing_store.has_recent_decline.return_value = False
+
+    result = await runner._handle_message(
+        _make_event(
+            Platform.WHATSAPP,
+            "15551234567@s.whatsapp.net",
+            "15551234567@s.whatsapp.net",
+        )
+    )
+
+    assert result is None
+    runner.pairing_store.generate_code.assert_not_called()
+    adapter.send.assert_awaited_once_with(
+        "15551234567@s.whatsapp.net", DEFAULT_UNAUTHORIZED_DM_DECLINE_MESSAGE,
+    )
+    runner.pairing_store.record_decline.assert_called_once_with(
+        "whatsapp", "15551234567@s.whatsapp.net",
+    )
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_dm_decline_is_rate_limited_per_sender(monkeypatch):
+    """A sender already declined within the dedupe window gets silence, not a
+    repeat decline — a redelivered/rapid-fire message must not decline-spam."""
+    _clear_auth_env(monkeypatch)
+    config = GatewayConfig(
+        platforms={
+            Platform.WHATSAPP: PlatformConfig(
+                enabled=True,
+                extra={"unauthorized_dm_behavior": "decline"},
+            ),
+        },
+    )
+    runner, adapter = _make_runner(Platform.WHATSAPP, config)
+    runner.pairing_store.has_recent_decline.return_value = True
+
+    result = await runner._handle_message(
+        _make_event(
+            Platform.WHATSAPP,
+            "15551234567@s.whatsapp.net",
+            "15551234567@s.whatsapp.net",
+        )
+    )
+
+    assert result is None
+    adapter.send.assert_not_awaited()
+    runner.pairing_store.record_decline.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Owner notice: WARNING log (asserted via caplog) + rate-limited home-channel
+# line for a dropped unauthorized DM. Never forwards the stranger's content.
+# ---------------------------------------------------------------------------
+
+
+def _configure_home_channel(config: GatewayConfig, platform: Platform, chat_id: str) -> None:
+    from gateway.config import HomeChannel
+
+    config.platforms[platform].home_channel = HomeChannel(
+        platform=platform, chat_id=chat_id, name="owner-home",
+    )
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_dm_owner_notice_sent_once_to_home_channel(monkeypatch):
+    _clear_auth_env(monkeypatch)
+    config = GatewayConfig(
+        platforms={
+            Platform.WHATSAPP: PlatformConfig(
+                enabled=True,
+                extra={"unauthorized_dm_behavior": "ignore"},
+            ),
+        },
+    )
+    _configure_home_channel(config, Platform.WHATSAPP, "owner-chat-id")
+    runner, adapter = _make_runner(Platform.WHATSAPP, config)
+    runner.pairing_store.has_recent_unauthorized_notice.return_value = False
+
+    result = await runner._handle_message(
+        _make_event(
+            Platform.WHATSAPP,
+            "15551234567@s.whatsapp.net",
+            "15551234567@s.whatsapp.net",
+        )
+    )
+
+    assert result is None
+    adapter.send.assert_awaited_once()
+    notice_chat_id, notice_text = adapter.send.await_args.args
+    assert notice_chat_id == "owner-chat-id"
+    assert "whatsapp" in notice_text
+    assert "15551234567@s.whatsapp.net" in notice_text
+    # Never forwards the stranger's message content.
+    assert "hello" not in notice_text
+    runner.pairing_store.record_unauthorized_notice.assert_called_once_with(
+        "whatsapp", "15551234567@s.whatsapp.net",
+    )
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_dm_owner_notice_is_rate_limited_per_sender(monkeypatch):
+    _clear_auth_env(monkeypatch)
+    config = GatewayConfig(
+        platforms={
+            Platform.WHATSAPP: PlatformConfig(
+                enabled=True,
+                extra={"unauthorized_dm_behavior": "ignore"},
+            ),
+        },
+    )
+    _configure_home_channel(config, Platform.WHATSAPP, "owner-chat-id")
+    runner, adapter = _make_runner(Platform.WHATSAPP, config)
+    runner.pairing_store.has_recent_unauthorized_notice.return_value = True
+
+    result = await runner._handle_message(
+        _make_event(
+            Platform.WHATSAPP,
+            "15551234567@s.whatsapp.net",
+            "15551234567@s.whatsapp.net",
+        )
+    )
+
+    assert result is None
+    adapter.send.assert_not_awaited()
+    runner.pairing_store.record_unauthorized_notice.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_dm_owner_notice_never_answers_the_stranger(monkeypatch):
+    """Safety: if the home channel IS the stranger's own DM (misconfiguration),
+    never post there — that would answer the unauthorized sender directly."""
+    _clear_auth_env(monkeypatch)
+    config = GatewayConfig(
+        platforms={
+            Platform.WHATSAPP: PlatformConfig(
+                enabled=True,
+                extra={"unauthorized_dm_behavior": "ignore"},
+            ),
+        },
+    )
+    _configure_home_channel(
+        config, Platform.WHATSAPP, "15551234567@s.whatsapp.net",
+    )
+    runner, adapter = _make_runner(Platform.WHATSAPP, config)
+    runner.pairing_store.has_recent_unauthorized_notice.return_value = False
+
+    result = await runner._handle_message(
+        _make_event(
+            Platform.WHATSAPP,
+            "15551234567@s.whatsapp.net",
+            "15551234567@s.whatsapp.net",
+        )
+    )
+
+    assert result is None
+    adapter.send.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # Allowlist-configured platforms default to "ignore" for unauthorized users
 # (#9337: Signal gateway sends pairing spam when allowlist is configured)
 # ---------------------------------------------------------------------------

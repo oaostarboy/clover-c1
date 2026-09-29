@@ -248,11 +248,19 @@ def _coerce_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+UNAUTHORIZED_DM_BEHAVIORS = {"pair", "ignore", "decline"}
+
+DEFAULT_UNAUTHORIZED_DM_DECLINE_MESSAGE = (
+    "Hi! I don't recognize you, so I can't reply. If you think this is a "
+    "mistake, ask the bot owner to add you."
+)
+
+
 def _normalize_unauthorized_dm_behavior(value: Any, default: str = "pair") -> str:
     """Normalize unauthorized DM behavior to a supported value."""
     if isinstance(value, str):
         normalized = value.strip().lower()
-        if normalized in {"pair", "ignore"}:
+        if normalized in UNAUTHORIZED_DM_BEHAVIORS:
             return normalized
     return default
 
@@ -1012,7 +1020,7 @@ class GatewayConfig:
     loop_watchdog_max_strikes: int = DEFAULT_LOOP_WATCHDOG_MAX_STRIKES
 
     # Unauthorized DM policy
-    unauthorized_dm_behavior: str = "pair"  # "pair" or "ignore"
+    unauthorized_dm_behavior: str = "pair"  # "pair", "ignore" or "decline"
 
     # Streaming configuration
     streaming: StreamingConfig = field(default_factory=StreamingConfig)
