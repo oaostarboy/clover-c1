@@ -2706,6 +2706,7 @@ os.environ["CLOVER_QUIET"] = "1"
 # mount-off vs docker mount-on).  MESSAGING_CWD is a backward-compat fallback.
 from gateway import clover_acks as _clover_acks
 from gateway.cwd_placeholder import CWD_PLACEHOLDERS, resolve_placeholder_terminal_cwd
+from gateway.stream_consumer import format_thought
 
 _configured_cwd = os.environ.get("TERMINAL_CWD", "")
 if not _configured_cwd or _configured_cwd in CWD_PLACEHOLDERS:
@@ -4574,8 +4575,15 @@ class TurnRunner:
         if event_type == "_thinking" or tool_name == "_thinking":
             if not ctx._thinking_enabled:
                 return
+            # Top-level agents (structured "reasoning.available" shape): when
+            # interim messages are on, the same note is delivered as its own
+            # 💭 bubble by the interim callback, so relaying it here too would
+            # show every thought twice.  Delegated children use the legacy
+            # ("_thinking", text) shape and keep relaying to the subagent card.
+            if event_type == "reasoning.available" and ctx.interim_assistant_messages_enabled:
+                return
             thinking_text = preview if tool_name == "_thinking" else tool_name
-            msg = f"💬 {thinking_text}" if thinking_text else None
+            msg = format_thought(thinking_text) if thinking_text else None
             if msg:
                 ctx.progress_queue.put(msg)
             return
@@ -5710,7 +5718,7 @@ class TurnRunner:
             display_text = text
             if _stream_consumer is not None:
                 if already_streamed:
-                    _stream_consumer.on_segment_break()
+                    _stream_consumer.on_segment_break(interim=True)
                 else:
                     _stream_consumer.on_commentary(display_text)
                 return
@@ -5719,7 +5727,7 @@ class TurnRunner:
             async def _send_interim_message() -> None:
                 result = await ctx._status_adapter.send(
                     ctx._status_chat_id,
-                    display_text,
+                    format_thought(display_text),
                     metadata=ctx._status_thread_metadata,
                 )
                 if (
@@ -30023,7 +30031,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Mattermost requires a per-platform opt-in: global scratch-text display
         # is too easy to leak into busy public threads.
         # Default ON (owner: "live thoughts on"): the model's own short notes
-        # between tool calls show as 💬 lines. An explicit false turns it off.
+        # between tool calls show as 💭 lines. An explicit false turns it off.
         _thinking_mode = _display_surface_mode(
             "thinking_progress",
             default=True,

@@ -804,6 +804,99 @@ class TestEditOverflowSplitAndDeliver:
         assert new_msg_count[0] == 1
 
 
+class TestInterimSegmentThoughtBubble:
+    """A pre-tool text segment is finalized as one "💭 *<note>*" message."""
+
+    @staticmethod
+    def _adapter():
+        adapter = MagicMock()
+        adapter.send = AsyncMock(side_effect=[
+            SimpleNamespace(success=True, message_id="msg_1"),
+            SimpleNamespace(success=True, message_id="msg_2"),
+            SimpleNamespace(success=True, message_id="msg_3"),
+        ])
+        adapter.edit_message = AsyncMock(return_value=SimpleNamespace(success=True))
+        adapter.MAX_MESSAGE_LENGTH = 4096
+        return adapter
+
+    @pytest.mark.asyncio
+    async def test_already_sent_segment_is_edited_into_bubble_not_resent(self):
+        adapter = self._adapter()
+        consumer = GatewayStreamConsumer(
+            adapter, "chat_123",
+            StreamConsumerConfig(edit_interval=0.01, buffer_threshold=5),
+        )
+        task = asyncio.create_task(consumer.run())
+        consumer.on_delta("I'll inspect the repository first.")
+        await asyncio.sleep(0.3)  # segment is on screen as msg_1
+        assert adapter.send.call_count == 1
+        consumer.on_segment_break(interim=True)
+        await asyncio.sleep(0.3)
+        consumer.on_delta("Done.")
+        consumer.finish()
+        await task
+
+        sent = [c[1]["content"] for c in adapter.send.call_args_list]
+        assert len(sent) == 2
+        assert sent[0].strip("▉ ") == "I'll inspect the repository first."
+        assert sent[1].strip("▉ ") == "Done."
+        edits = [
+            (c[1]["message_id"], c[1]["content"])
+            for c in adapter.edit_message.call_args_list
+        ]
+        assert edits[-1][0] == "msg_1"
+        assert edits[-1][1].strip() == "💭 *I'll inspect the repository first.*"
+        # The final answer never carries the bubble.
+        assert not any("💭" in c for c in sent[1:])
+        assert all("💭" not in c[1] for c in edits if c[0] != "msg_1")
+
+    @pytest.mark.asyncio
+    async def test_unsent_segment_is_sent_once_with_bubble(self):
+        adapter = self._adapter()
+        consumer = GatewayStreamConsumer(
+            adapter, "chat_123",
+            StreamConsumerConfig(edit_interval=0.01, buffer_threshold=5),
+        )
+        consumer.on_delta("Checking the config.")
+        consumer.on_segment_break(interim=True)
+        consumer.on_delta("Done.")
+        consumer.finish()
+        await consumer.run()
+
+        sent = [c[1]["content"] for c in adapter.send.call_args_list]
+        assert sent == ["💭 *Checking the config.*", "Done."]
+
+    @pytest.mark.asyncio
+    async def test_plain_segment_break_has_no_bubble(self):
+        adapter = self._adapter()
+        consumer = GatewayStreamConsumer(
+            adapter, "chat_123",
+            StreamConsumerConfig(edit_interval=0.01, buffer_threshold=5),
+        )
+        consumer.on_delta("Some text.")
+        consumer.on_segment_break()
+        consumer.on_delta("Done.")
+        consumer.finish()
+        await consumer.run()
+
+        sent = [c[1]["content"] for c in adapter.send.call_args_list]
+        assert sent == ["Some text.", "Done."]
+
+    @pytest.mark.asyncio
+    async def test_bubble_text_still_counts_as_delivered(self):
+        adapter = self._adapter()
+        consumer = GatewayStreamConsumer(
+            adapter, "chat_123",
+            StreamConsumerConfig(edit_interval=0.01, buffer_threshold=5),
+        )
+        consumer.on_delta("Checking the config.")
+        consumer.on_segment_break(interim=True)
+        consumer.finish()
+        await consumer.run()
+
+        assert consumer.has_delivered_text("Checking the config.") is True
+
+
 class TestInterimCommentaryMessages:
     @pytest.mark.asyncio
     async def test_commentary_message_stays_separate_from_final_stream(self):
@@ -828,7 +921,7 @@ class TestInterimCommentaryMessages:
         await consumer.run()
 
         sent_texts = [call[1]["content"] for call in adapter.send.call_args_list]
-        assert sent_texts == ["I'll inspect the repository first.", "Done."]
+        assert sent_texts == ["💭 *I'll inspect the repository first.*", "Done."]
         assert consumer.final_response_sent is True
 
     @pytest.mark.asyncio

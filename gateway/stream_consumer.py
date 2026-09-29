@@ -45,6 +45,29 @@ logger = logging.getLogger("gateway.stream_consumer")
 # Sentinel to signal the stream is complete
 _DONE = object()
 _NEW_SEGMENT = object()
+# Segment break whose text turned out to be interim commentary (a note the
+# model wrote before a tool call); the finalized message gets the bubble prefix.
+_NEW_SEGMENT_INTERIM = object()
+# Marks a model note between tool calls so it reads as a thought, not a question.
+THOUGHT_BUBBLE_PREFIX = "\U0001F4AD "
+
+
+def format_thought(text: str) -> str:
+    """Render a between-tools note as a thought: 💭 plus italic text.
+
+    Standard markdown ``*...*`` per line: the Telegram adapter converts it to
+    MarkdownV2 italics (``_..._``) and escapes underscores inside words, so
+    snake_case names stay intact. Already-formatted text is returned as-is so
+    an edit never double-wraps it.
+    """
+    body = (text or "").strip()
+    if not body:
+        return ""
+    if body.startswith(THOUGHT_BUBBLE_PREFIX.strip()):
+        return body
+    lines = [ln.strip().strip("*").strip() for ln in body.splitlines()]
+    italic = "\n".join(f"*{ln}*" if ln else "" for ln in lines)
+    return THOUGHT_BUBBLE_PREFIX + italic
 _COMMENTARY = object()
 # Sentinel for tool-progress lines injected into the native stream bubble.
 # Enqueued as ``(_TOOL_PROGRESS, line_text)`` by ``on_tool_progress()``.
@@ -782,6 +805,15 @@ class GatewayStreamConsumer:
             return True
         return False
 
+    @staticmethod
+    def _strip_thought_prefix(text: str) -> str:
+        text = (text or "").strip()
+        prefix = THOUGHT_BUBBLE_PREFIX.strip()
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+            text = "\n".join(ln.strip().strip("*") for ln in text.splitlines()).strip()
+        return text
+
     def has_delivered_text(self, text: str) -> bool:
         """Return True if *text* was already delivered as visible chat content."""
         target = self._clean_for_display(text or "").strip()
@@ -791,13 +823,18 @@ class GatewayStreamConsumer:
         if visible_prefix == target:
             return True
         return any(
-            sent.strip() == target
+            self._strip_thought_prefix(sent) == target
             for sent in (*self._delivered_commentary_texts, *self._delivered_segment_texts)
         )
 
-    def on_segment_break(self) -> None:
-        """Finalize the current stream segment and start a fresh message."""
-        self._queue.put(_NEW_SEGMENT)
+    def on_segment_break(self, *, interim: bool = False) -> None:
+        """Finalize the current stream segment and start a fresh message.
+
+        ``interim=True`` marks the segment as commentary the model wrote
+        before a tool call: it is finalized with the thought-bubble prefix
+        (one edit of the already-sent message, never a second message).
+        """
+        self._queue.put(_NEW_SEGMENT_INTERIM if interim else _NEW_SEGMENT)
 
     def close_for_approval_prompt(
         self,
@@ -1404,6 +1441,7 @@ class GatewayStreamConsumer:
                 # Drain all available items from the queue
                 got_done = False
                 got_segment_break = False
+                segment_is_interim = False
                 got_flush = False
                 flush_event = None
                 got_approval_boundary = False
@@ -1419,6 +1457,10 @@ class GatewayStreamConsumer:
                             break
                         if item is _NEW_SEGMENT:
                             got_segment_break = True
+                            break
+                        if item is _NEW_SEGMENT_INTERIM:
+                            got_segment_break = True
+                            segment_is_interim = True
                             break
                         if isinstance(item, tuple) and len(item) == 2 and item[0] is _FINAL_TEXT:
                             # Authoritative turn-final payload (see finish()).
@@ -1589,6 +1631,19 @@ class GatewayStreamConsumer:
                     ):
                         await self._suppress_silence_marker()
                         return
+
+                # Interim commentary: the segment streamed before we knew it
+                # was a note between tool calls.  Finalize it as a thought
+                # bubble.  Cumulative-stream transports keep one growing
+                # message for the whole turn, so they are left alone.
+                if (
+                    segment_is_interim
+                    and self._accumulated.strip()
+                    and not self._use_native_streaming
+                    and not (self._stream_is_message() and self._use_draft_streaming)
+                    and not self._accumulated.startswith(THOUGHT_BUBBLE_PREFIX)
+                ):
+                    self._accumulated = format_thought(self._accumulated)
 
                 # Decide whether to flush an edit
                 now = time.monotonic()
@@ -2834,7 +2889,7 @@ class GatewayStreamConsumer:
             _md["_interim_send"] = True
             result = await self.adapter.send(
                 chat_id=self.chat_id,
-                content=text,
+                content=format_thought(text),
                 metadata=_md,
             )
             # Note: do NOT set _already_sent = True here.
