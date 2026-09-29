@@ -574,6 +574,26 @@ def _isolate_clover_home(_hermetic_environment):
 
 
 @pytest.fixture(autouse=True)
+def _pin_classic_skin(request, monkeypatch):
+    """Run every test under the classic (pre-Clover) skin unless it opts in.
+
+    The shipped default skin is ``clover`` (Clo faces, 🍀/🥀 marks, themed tool
+    emojis). Most display/card tests assert the classic ✅/❌/💻 output and are
+    about layout, not theming, so pin the classic skin here. Tests about the
+    Clover skin itself set it explicitly (tests/agent/test_clover_skin.py,
+    tests/gateway/test_busy_session_ack.py) or use ``@pytest.mark.clover_skin``.
+    """
+    if request.node.get_closest_marker("clover_skin"):
+        return
+    try:
+        from clover_cli import skin_engine as _skin
+    except Exception:
+        return
+    monkeypatch.setattr(_skin, "_active_skin", None, raising=False)
+    monkeypatch.setattr(_skin, "_active_skin_name", "default", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _neutralize_kanban_memory_guard(request, monkeypatch):
     """Pin the kanban dispatcher's memory guard to "no data" for every test.
 
