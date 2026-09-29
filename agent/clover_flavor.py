@@ -251,3 +251,108 @@ def render_review_notice(
 def reset_review_notices() -> None:
     with _review_lock:
         _review_last_pick.clear()
+
+
+# --- chat status lines (retry / busy / rate limit / error / model substitute) --------
+# Agent-side copy of the pool machinery in gateway/clover_acks.py (agent/ never
+# imports gateway code).  Each line is "<face> <line>. <tail>"; the tail keeps
+# every functional detail (retry timing, model names, error summary).
+
+STATUS_POOLS = {
+    "busy": (
+        ("☘️(｡•́︿•̀｡)", "☘️(´･_･`)", "☘️(っ˘ω˘ς)"),
+        ("the model's busy", "a bit crowded right now", "the model needs a sec"),
+    ),
+    "rate_limited": (
+        ("☘️(￣ω￣;)", "☘️(´･_･`)"),
+        ("hit the usage limit", "slowing down a little"),
+    ),
+    "error": (
+        ("☘️(╥﹏╥)", "☘️(｡•́︿•̀｡)"),
+        ("that didn't work", "hit a snag"),
+    ),
+    "model_substitute": (
+        ("☘️(・・ )?", "☘️(°ー°〃)"),
+        ("couldn't find *{requested}*", "no *{requested}* on {provider}"),
+    ),
+}
+_MAX_REMEMBERED_STATUS_CHATS = 1024
+_status_last_pick: dict = {}
+_status_lock = threading.Lock()
+
+
+def skin_active() -> bool:
+    """True when the clover skin is active, the console can show it, and the language is English."""
+    try:
+        from agent.display import _get_skin
+        from agent.i18n import get_language
+
+        return skin_flavor_enabled(_get_skin()) and get_language() == "en"
+    except Exception:
+        return False
+
+
+def _pick_status(kind: str, chat_key: str, rng: Any) -> Tuple[str, str]:
+    faces, lines = STATUS_POOLS[kind]
+    key = f"{kind}:{chat_key}"
+    with _status_lock:
+        last = _status_last_pick.get(key)
+        face, line = rng.choice(faces), rng.choice(lines)
+        for _ in range(20):
+            if (face, line) != last:
+                break
+            face, line = rng.choice(faces), rng.choice(lines)
+        else:  # a stubborn RNG: force a different line
+            line = next(x for x in lines if (face, x) != last)
+        if len(_status_last_pick) >= _MAX_REMEMBERED_STATUS_CHATS and key not in _status_last_pick:
+            _status_last_pick.pop(next(iter(_status_last_pick)))
+        _status_last_pick[key] = (face, line)
+    turn = _turn
+    return _with_leaf(face, bool(turn is not None and turn.lucky)), line
+
+
+def status_line(
+    kind: str,
+    chat_key: str,
+    stock: str,
+    tail: str = "",
+    rng: Optional[Any] = None,
+    joiner: str = ". ",
+    **fields: Any,
+) -> str:
+    """Clo-style status ``"<face> <line><joiner><tail>"``; *stock* untouched off the clover skin.
+
+    *fields* fill ``{placeholders}`` in the line (e.g. ``requested``).  The same
+    face+line pair is never used twice in a row for one (kind, chat).
+    """
+    if kind not in STATUS_POOLS or not skin_active():
+        return stock
+    face, line = _pick_status(kind, str(chat_key or ""), rng if rng is not None else random)
+    try:
+        line = line.format(**fields)
+    except (KeyError, IndexError):
+        pass
+    return f"{face} {line}{joiner}{tail}" if tail else f"{face} {line}"
+
+
+def reset_status_lines() -> None:
+    with _status_lock:
+        _status_last_pick.clear()
+
+
+# --- cron result header ----------------------------------------------------------------
+
+def cron_header(name: str, failed: bool = False, rng: Optional[Any] = None) -> Optional[str]:
+    """Clo-style cron delivery header, or None off the clover skin (keep the stock header).
+
+    ``"☘️ <name>"`` (lucky 1/LUCKY_ODDS: ``"🍀 <name>"``); a failed job is
+    ``"🥀 <name> didn't finish"``.
+    """
+    if not skin_active():
+        return None
+    if failed:
+        return f"🥀 {name} didn't finish"
+    rng = rng if rng is not None else random
+    lucky = rng.randrange(LUCKY_ODDS) == 0
+    return f"{LUCKY_LEAF if lucky else NORMAL_LEAF} {name}"
+

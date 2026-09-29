@@ -21749,6 +21749,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 response = _sanitize_gateway_final_response(source.platform, response)
 
+            # Clover skin: one Clo hello on the first reply to a brand-new DM chat.
+            if not history and not agent_result.get("error") and not agent_result.get("already_sent"):
+                try:
+                    from gateway.clover_acks import with_first_hello
+
+                    response = with_first_hello(
+                        response,
+                        source.platform.value if source.platform else "",
+                        source.chat_type,
+                        str(source.chat_id or ""),
+                        _clover_home,
+                    )
+                except Exception:
+                    logger.debug("Clo first hello failed", exc_info=True)
+
             # Ordering contract: the agent thread already updated the contextvar
             # in conversation_compression.py; propagate to SessionEntry + _save().
             # If the agent's session_id changed during compression, update

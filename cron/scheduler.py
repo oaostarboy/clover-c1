@@ -3066,6 +3066,15 @@ def _is_channel_dm_topic(
     return is_channel
 
 
+# Set around failure deliveries so the Clo header can say "didn't finish"
+# without changing _deliver_result's signature (tests/plugins wrap it).
+import contextvars as _contextvars
+
+_DELIVERY_FAILED: "_contextvars.ContextVar[bool]" = _contextvars.ContextVar(
+    "cron_delivery_failed", default=False
+)
+
+
 def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Optional[str]:
     """
     Deliver job output to the configured target(s) (origin chat, specific platform, etc.).
@@ -3116,8 +3125,15 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
     if wrap_response:
         task_name = job.get("name", job["id"])
         job_id = job.get("id", "")
+        # Clover skin: "☘️ <job>" / "🥀 <job> didn't finish"; other skins keep the stock header.
+        try:
+            from agent import clover_flavor
+
+            _clo_header = clover_flavor.cron_header(str(task_name), failed=_DELIVERY_FAILED.get())
+        except Exception:
+            _clo_header = None
         delivery_content = (
-            f"Cronjob Response: {task_name}\n"
+            f"{_clo_header or 'Cronjob Response: ' + str(task_name)}\n"
             f"(job_id: {job_id})\n"
             f"-------------\n\n"
             f"{content}\n\n"
@@ -7434,12 +7450,16 @@ def _run_one_job_body(
                         if not owns_delivery:
                             raise _FireClaimLostDuringSideEffect
                         delivery_attempted = True
-                        delivery_error = _deliver_result(
-                            job,
-                            deliver_content,
-                            adapters=adapters,
-                            loop=loop,
-                        )
+                        _failed_tok = _DELIVERY_FAILED.set(not success)
+                        try:
+                            delivery_error = _deliver_result(
+                                job,
+                                deliver_content,
+                                adapters=adapters,
+                                loop=loop,
+                            )
+                        finally:
+                            _DELIVERY_FAILED.reset(_failed_tok)
                 except Exception as de:
                     if isinstance(de, _FireClaimLostDuringSideEffect):
                         raise
@@ -7594,19 +7614,23 @@ def _run_one_job_body(
             else:
                 try:
                     delivery_attempted = True
-                    delivery_error = _deliver_result(
-                        job,
-                        # Composed exactly like the normal failure delivery above.
-                        # mark_job_run below records THIS run in failure_streak
-                        # whichever layer failed, so a job that fails before the
-                        # run body every tick builds a streak nobody is ever told
-                        # about: its alerts only ever leave through here, and the
-                        # nudge only ever left through there (#88655).
-                        _summarize_cron_failure_for_delivery(job, _err_text)
-                        + _failure_streak_nudge(job),
-                        adapters=adapters,
-                        loop=loop,
-                    )
+                    _failed_tok = _DELIVERY_FAILED.set(True)
+                    try:
+                        delivery_error = _deliver_result(
+                            job,
+                            # Composed exactly like the normal failure delivery above.
+                            # mark_job_run below records THIS run in failure_streak
+                            # whichever layer failed, so a job that fails before the
+                            # run body every tick builds a streak nobody is ever told
+                            # about: its alerts only ever leave through here, and the
+                            # nudge only ever left through there (#88655).
+                            _summarize_cron_failure_for_delivery(job, _err_text)
+                            + _failure_streak_nudge(job),
+                            adapters=adapters,
+                            loop=loop,
+                        )
+                    finally:
+                        _DELIVERY_FAILED.reset(_failed_tok)
                 except Exception as delivery_exc:
                     delivery_error = str(delivery_exc)
                     logger.error(
