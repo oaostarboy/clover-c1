@@ -299,7 +299,6 @@ def _fake_windows(monkeypatch, *, running_pid):
     cold = []
     monkeypatch.setattr(main, "_cold_start_windows_gateway_after_update",
                         lambda: cold.append(1) or True)
-    monkeypatch.setattr(update_cmd.sys, "platform", "win32")
     return cold
 
 
@@ -308,7 +307,7 @@ def test_relaunch_that_never_comes_up_falls_back_to_a_verified_start(monkeypatch
     from clover_cli import update_cmd
 
     cold = _fake_windows(monkeypatch, running_pid=None)
-    assert update_cmd._verify_windows_gateway_relaunch(timeout=0) is True
+    assert update_cmd._verify_windows_gateway_relaunch(timeout=0, is_windows=True) is True
     assert cold == [1]
 
 
@@ -316,7 +315,7 @@ def test_relaunch_that_came_up_is_not_started_again(monkeypatch):
     from clover_cli import update_cmd
 
     cold = _fake_windows(monkeypatch, running_pid=34128)
-    assert update_cmd._verify_windows_gateway_relaunch(timeout=0) is True
+    assert update_cmd._verify_windows_gateway_relaunch(timeout=0, is_windows=True) is True
     assert cold == []
 
 

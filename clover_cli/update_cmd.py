@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -3180,9 +3181,15 @@ def _current_checkout_sha() -> str | None:
         return _capture_head_sha(["git"], _m().PROJECT_ROOT)
 
 
+_BOUNDARY_STOP_REASONS = re.compile(r"^(sys\.exit\(\s*0?\s*\)|completed at command boundary)$")
+
+
 def _receipt_looks_unfinished(receipt: dict) -> bool:
     """True when *receipt* is from an update that did not finish cleanly."""
-    if receipt.get("stop_reason"):
+    stop_reason = str(receipt.get("stop_reason") or "").strip()
+    # The command-boundary finalizer records ``sys.exit(<code>)`` on EVERY
+    # exit, success included; a clean ``sys.exit(0)`` is not an interruption.
+    if stop_reason and not _BOUNDARY_STOP_REASONS.match(stop_reason):
         return True
     exit_code = receipt.get("exit_code")
     if exit_code not in (0, None):
@@ -3214,9 +3221,23 @@ def _receipt_reports_stale_runtime(expected_sha: str | None = None) -> bool:
         receipt = None
     if not isinstance(receipt, dict):
         return False
+    # A run that never pulled cannot owe the fleet a restart: a refused run
+    # (preflight exit 2) or any run whose checkout SHA did not move. Emilio's
+    # machine kept the catch-up armed forever from a refused /update receipt
+    # (D2) and every no-op update then killed the gateway (D1).
+    if receipt.get("outcome") == "refused":
+        return False
+    _pre = (receipt.get("pre_update") or {}).get("sha") if isinstance(receipt.get("pre_update"), dict) else None
+    _post = (receipt.get("post_update") or {}).get("sha") if isinstance(receipt.get("post_update"), dict) else None
+    if _pre and _post and _pre == _post:
+        return False
     if not expected_sha:
         expected_sha = _current_checkout_sha()
     if not expected_sha:
+        return False
+    # The live gateway is the ground truth: when the running gateway already
+    # serves the checkout, no receipt can make it stale.
+    if _live_gateway_serves(expected_sha):
         return False
 
     def _sha_mismatch(code_sha) -> bool:
@@ -3242,6 +3263,20 @@ def _receipt_reports_stale_runtime(expected_sha: str | None = None) -> bool:
         if isinstance(runtime, dict) and _sha_mismatch(runtime.get("code_sha")):
             return True
     return False
+
+
+def _live_gateway_serves(expected_sha: str) -> bool:
+    """True when this profile's live gateway reports ``code_sha == expected_sha``."""
+    try:
+        from gateway.status import get_running_pid, read_runtime_status
+
+        pid = get_running_pid()
+        if pid is None:
+            return False
+        state = read_runtime_status() or {}
+        return int(state.get("pid") or 0) == int(pid) and str(state.get("code_sha") or "") == str(expected_sha)
+    except Exception:
+        return False
 
 
 def _pending_fleet_restart_needed() -> bool:
@@ -3409,10 +3444,17 @@ def _run_pending_fleet_restart() -> bool:
         if leftover:
             try:
                 keep = {pid for pid in live if pid not in set(leftover)}
+                logger.info("Pending fleet restart: stopping pre-restart survivor(s) %s", leftover)
                 kill_gateway_processes(all_profiles=True, exclude_pids=keep or None)
                 _wait_for_gateway_exit(timeout=5.0, force_after=None)
             except Exception as exc:
                 logger.debug("Pending fleet restart: PID stop failed: %s", exc)
+        if is_windows() and "windows-gateway" not in failed:
+            # Never report success on a process-table match: prove a gateway
+            # owns the PID file after the last kill step, else start one
+            # through the verified path (Windows 11 report, D1/D4).
+            if not _m()._verify_windows_gateway_relaunch(is_windows=True):
+                failed.append("windows-gateway")
         if failed:
             _warn_incomplete_gateway_fleet_restart(failed)
             return False
@@ -7618,7 +7660,10 @@ def _with_current_gateway_interpreter(argv: list[str]) -> list[str]:
 
 
 def _verify_windows_gateway_relaunch(
-    timeout: float | None = None, *, current_profile: bool = True
+    timeout: float | None = None,
+    *,
+    current_profile: bool = True,
+    is_windows: bool | None = None,
 ) -> bool:
     """Prove the post-update relaunch produced a gateway; start one if not.
 
@@ -7629,7 +7674,9 @@ def _verify_windows_gateway_relaunch(
     the same verified start ``clover gateway start`` uses; it re-checks
     liveness first, so a slow-but-alive relaunch is never doubled.
     """
-    if sys.platform != "win32":
+    if is_windows is None:
+        is_windows = sys.platform == "win32"
+    if not is_windows:
         return True
     try:
         from clover_cli.gateway import find_gateway_pids
