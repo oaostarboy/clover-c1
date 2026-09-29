@@ -308,7 +308,7 @@ jobs:
           import sqlite3
           conn = sqlite3.connect(r'$env:CLOVER_HOME\state.db')
           conn.execute('CREATE TABLE IF NOT EXISTS probe (id INTEGER PRIMARY KEY, val TEXT)')
-          conn.execute(\"INSERT INTO probe (val) VALUES ('seed-row')\")
+          conn.execute("INSERT INTO probe (val) VALUES ('seed-row')")
           conn.commit()
           conn.close()
           "@
@@ -360,11 +360,11 @@ jobs:
           import sys, yaml
           cfg = yaml.safe_load(open(r'$env:CLOVER_HOME\config.yaml')) or {}
           errs = []
-          if cfg.get('_config_version') != 40: errs.append(f'_config_version={cfg.get(\"_config_version\")!r}')
+          if cfg.get('_config_version') != 40: errs.append(f'_config_version={cfg.get('_config_version')!r}')
           if cfg.get('model', {}).get('provider') == 'clover': errs.append('model.provider still clover')
           web = cfg.get('web', {})
           if 'use_gateway' in web: errs.append('web.use_gateway not migrated')
-          if web.get('backend') != 'firecrawl': errs.append(f'web.backend={web.get(\"backend\")!r}')
+          if web.get('backend') != 'firecrawl': errs.append(f'web.backend={web.get('backend')!r}')
           if 'public_url' in cfg.get('dashboard', {}): errs.append('dashboard.public_url not cleared')
           if errs:
               print('CONFIG_FINDINGS: ' + '; '.join(errs))
