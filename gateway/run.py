@@ -16083,6 +16083,37 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _shutdown_gateway_health_export(self)
             logger.info("Gateway stopped (total teardown %.2fs)", _phase_elapsed())
 
+            # Cancel every in-flight background self-improvement review
+            # (agent/background_review.py) now that the gateway itself has
+            # torn down. Without this, a review replaying a large context
+            # (an auxiliary compression retry, a slow provider fallback,
+            # ...) kept the process alive for minutes after "Gateway
+            # stopped" was logged, with launchd/systemd only relaunching
+            # once it finally exited (issue: restart-stall, 2026-09-28).
+            # Reviews run on daemon threads (AIAgent._spawn_background_review)
+            # and this wait is itself bounded, so it can never become a new
+            # source of the same stall — a review that doesn't acknowledge
+            # just keeps running unsupervised while the process exits.
+            _mark_gateway_stopped_at(time.monotonic())
+            try:
+                from agent.background_review import cancel_all_background_reviews
+
+                _still_running = cancel_all_background_reviews()
+            except Exception:
+                _still_running = []
+                logger.debug(
+                    "cancel_all_background_reviews failed during shutdown",
+                    exc_info=True,
+                )
+            if _still_running:
+                logger.warning(
+                    "Gateway shutdown: %d background review(s) did not "
+                    "acknowledge cancellation and are still running: %s "
+                    "— exiting anyway",
+                    len(_still_running),
+                    ", ".join(_still_running),
+                )
+
         self._stop_task = asyncio.create_task(_stop_impl())
         await self._stop_task
 
@@ -33014,6 +33045,61 @@ def main():
     _exit_after_graceful_shutdown(exit_code)
 
 
+# Shutdown-timing guard (restart-stall, 2026-09-28): how long the process is
+# allowed to take between logging "Gateway stopped" and actually reaching
+# ``os._exit`` in ``_exit_after_graceful_shutdown`` below. Cancelling
+# background reviews is already bounded to a few seconds (see
+# ``cancel_all_background_reviews`` in ``_stop_impl_body``); this is a
+# generous backstop so ANY unexpectedly slow step in between produces a
+# named WARNING instead of the silent multi-minute stall this replaces —
+# ``_exit_after_graceful_shutdown`` hard-exits unconditionally regardless of
+# this check, so the guard only ever adds a diagnostic, never a delay.
+_GATEWAY_EXIT_TIMING_BOUND_SECONDS = 10.0
+_gateway_stopped_at_lock = threading.Lock()
+_gateway_stopped_at: Optional[float] = None
+
+
+def _mark_gateway_stopped_at(monotonic_time: float) -> None:
+    """Record when "Gateway stopped" was logged, for the exit-timing guard."""
+    global _gateway_stopped_at
+    with _gateway_stopped_at_lock:
+        _gateway_stopped_at = monotonic_time
+
+
+def _warn_if_gateway_exit_running_late() -> None:
+    """Log what's still running if exit is taking longer than expected.
+
+    Best-effort diagnostic only, called right before the unconditional
+    ``os._exit`` in :func:`_exit_after_graceful_shutdown` — a slow or
+    failing check here can never itself delay process exit.
+    """
+    with _gateway_stopped_at_lock:
+        started = _gateway_stopped_at
+    if started is None:
+        return
+    elapsed = time.monotonic() - started
+    if elapsed <= _GATEWAY_EXIT_TIMING_BOUND_SECONDS:
+        return
+    try:
+        from agent.background_review import live_background_review_count
+
+        still_running = live_background_review_count()
+    except Exception:
+        still_running = None
+    detail = (
+        f"{still_running} background review(s) still registered"
+        if still_running
+        else "no known background reviews still registered"
+    )
+    logger.warning(
+        "Gateway exit took %.1fs after 'Gateway stopped' (bound %.0fs): %s "
+        "— hard-exiting now",
+        elapsed,
+        _GATEWAY_EXIT_TIMING_BOUND_SECONDS,
+        detail,
+    )
+
+
 def _exit_after_graceful_shutdown(exit_code: int) -> None:
     """Flush stdio, release the PID file + runtime lock, then hard-exit.
 
@@ -33080,6 +33166,10 @@ def _exit_after_graceful_shutdown(exit_code: int) -> None:
     try:
         from clover_logging import drain_log_queue
         drain_log_queue(timeout=1.0)
+    except Exception:
+        pass
+    try:
+        _warn_if_gateway_exit_running_late()
     except Exception:
         pass
     os._exit(exit_code)

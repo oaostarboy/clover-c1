@@ -24,6 +24,7 @@ import logging
 import os
 from pathlib import Path
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from agent.thread_scoped_output import thread_scoped_silence
@@ -32,6 +33,25 @@ logger = logging.getLogger(__name__)
 
 
 _BACKGROUND_REVIEW_CANCEL_TIMEOUT_SECONDS = 2.0
+
+# Gateway-shutdown cancellation grace (#restart-stall): how long
+# ``cancel_all_background_reviews`` waits, in aggregate, for every
+# registered review to acknowledge cancellation before giving up and
+# letting the caller proceed with process exit. Deliberately short — the
+# review is non-critical self-improvement work and must never hold up a
+# restart the way it did when nothing cancelled it at all (5-minute stall,
+# 2026-09-28).
+_BACKGROUND_REVIEW_SHUTDOWN_GRACE_SECONDS = 3.0
+
+# Process-wide registry of in-flight ``_BackgroundReviewRun`` tokens,
+# populated by ``prepare_background_review_run`` and cleared by
+# ``finish_background_review_run``. This is the "registry the gateway can
+# walk" at shutdown: unlike ``agent._background_review_run``, which only the
+# owning agent instance can reach, this lets ``cancel_all_background_reviews``
+# find and cancel every live review across every session without the gateway
+# needing to track agent instances itself.
+_LIVE_REVIEW_RUNS_LOCK = threading.Lock()
+_LIVE_REVIEW_RUNS: Dict[int, "_BackgroundReviewRun"] = {}
 
 
 class _BackgroundReviewRun:
@@ -91,6 +111,8 @@ def prepare_background_review_run(agent: Any) -> Optional[_BackgroundReviewRun]:
             agent._background_review_run = run
     except (AttributeError, TypeError):
         return None
+    with _LIVE_REVIEW_RUNS_LOCK:
+        _LIVE_REVIEW_RUNS[id(run)] = run
     return run
 
 
@@ -99,7 +121,11 @@ def finish_background_review_run(
     run: Optional[_BackgroundReviewRun],
 ) -> None:
     """Publish one run's request exit without clearing a successor (ABA-safe)."""
-    if run is None or not run.mark_request_finished():
+    if run is None:
+        return
+    with _LIVE_REVIEW_RUNS_LOCK:
+        _LIVE_REVIEW_RUNS.pop(id(run), None)
+    if not run.mark_request_finished():
         return
 
     lock = getattr(agent, "_background_review_lock", None)
@@ -185,6 +211,59 @@ def cancel_background_review_for_live_turn(agent: Any) -> None:
             "proceeding with foreground live turn",
             _BACKGROUND_REVIEW_CANCEL_TIMEOUT_SECONDS,
         )
+
+
+def live_background_review_count() -> int:
+    """Number of background reviews currently registered as in-flight.
+
+    Read-only introspection for the shutdown path (and tests) — does not
+    cancel anything.
+    """
+    with _LIVE_REVIEW_RUNS_LOCK:
+        return len(_LIVE_REVIEW_RUNS)
+
+
+def cancel_all_background_reviews(
+    grace_seconds: float = _BACKGROUND_REVIEW_SHUTDOWN_GRACE_SECONDS,
+) -> List[str]:
+    """Cancel every in-flight background review (gateway shutdown path).
+
+    Walks the process-wide registry populated by
+    :func:`prepare_background_review_run` — every session's review, not just
+    one agent's — and requests an off-thread interrupt on each admitted
+    review fork (same mechanism as :func:`cancel_background_review_for_live_turn`).
+    Waits up to ``grace_seconds`` **in aggregate** (not per-review) for
+    acknowledgement, then returns regardless.
+
+    This must never itself become a new source of shutdown delay: the wait
+    is bounded, and every review continues running on its own daemon thread
+    if it doesn't acknowledge in time — it simply stops being tracked as
+    something the caller needs to wait for. Reviews live on daemon threads
+    started by ``AIAgent._spawn_background_review``, so a caller that
+    proceeds to hard-exit the process right after this call is safe.
+
+    Returns a short label per review still outstanding after the grace, for
+    the caller to log (so the shutdown log names what was still running,
+    instead of the ~5-minute silent stall this replaces — 2026-09-28).
+    """
+    with _LIVE_REVIEW_RUNS_LOCK:
+        runs = list(_LIVE_REVIEW_RUNS.values())
+    if not runs:
+        return []
+
+    for run in runs:
+        review_agent = run.cancel()
+        if review_agent is not None:
+            _interrupt_background_review(review_agent)
+
+    deadline = time.monotonic() + max(0.0, grace_seconds)
+    still_running: List[str] = []
+    for run in runs:
+        remaining = deadline - time.monotonic()
+        acknowledged = run.request_done.wait(timeout=max(0.0, remaining))
+        if not acknowledged:
+            still_running.append(f"bg-review-{id(run):x}")
+    return still_running
 
 
 # ---------------------------------------------------------------------------
@@ -1826,4 +1905,6 @@ __all__ = [
     "spawn_background_review_thread",
     "summarize_background_review_actions",
     "build_memory_write_metadata",
+    "cancel_all_background_reviews",
+    "live_background_review_count",
 ]
