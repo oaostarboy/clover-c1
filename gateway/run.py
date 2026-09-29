@@ -30019,7 +30019,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # as thinking_progress.
         _live_reasoning_mode = _display_surface_mode(
             "live_reasoning",
-            default=True,
+            default=False,
             require_platform_override_for={Platform.MATTERMOST},
         )
         _live_reasoning_enabled = _live_reasoning_mode != "off"

@@ -1706,8 +1706,8 @@ display:
   #   false: Only keep/send the final response
   interim_assistant_messages: true
 
-  # Live "🧠" progress lines from provider reasoning summaries (default on).
-  live_reasoning: true
+  # Live "🧠" progress lines from provider reasoning summaries (default off).
+  live_reasoning: false
 
   # Gateway-only long-running status heartbeats.
   # When false, the platform does not receive periodic "⏳ Working — N min"

@@ -460,12 +460,16 @@ class TestS3IdleChargedFromLastProgress:
     def test_silence_cannot_approach_double_idle_timeout(self):
         """Progress early in an interval must not extend silence to ~2x idle."""
         _drain_admission_slots()
-        idle = 0.4
+        # idle=1.0 (not 0.4) so CI scheduler jitter (~0.3s seen on loaded
+        # runners) can't cross the threshold, while ~2x idle still fails.
+        idle = 1.0
         release = threading.Event()
+        progress_at = []
 
         def worker(fence: CompressionCommitFence):
             time.sleep(0.05)
             fence.touch_progress()  # early progress, then total silence
+            progress_at.append(time.monotonic())
             assert release.wait(timeout=10)
             return ([], "late")
 
@@ -482,11 +486,13 @@ class TestS3IdleChargedFromLastProgress:
             elapsed = time.monotonic() - t0
             release.set()
         assert prompt == "fb"
-        # Old behavior waited a full interval from the CHECK (~2x idle ≈
-        # 0.85s+). New behavior times out ~idle after the last progress
-        # (~0.45s). Allow generous slack while still excluding ~2x.
-        assert elapsed < idle * 1.8, (
-            f"silence exceeded ~2x idle budget shape: {elapsed:.2f}s"
+        # Old behavior waited a full interval from the CHECK (~2x idle).
+        # New behavior times out ~idle after the last progress. Measure the
+        # silence from the progress touch itself (not from thread start) and
+        # allow slack for loaded runners while still excluding ~2x.
+        silence = t0 + elapsed - (progress_at[0] if progress_at else t0)
+        assert silence < idle * 1.6, (
+            f"silence exceeded ~2x idle budget shape: {silence:.2f}s"
         )
         _drain_admission_slots()
 

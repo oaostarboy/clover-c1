@@ -41,7 +41,7 @@ _GLOBAL_DEFAULTS: dict[str, Any] = {
     # show_reasoning (which pastes the full reasoning above the final reply
     # instead). Default on: without it, providers that never write interim
     # assistant text (GPT/Gemini) showed no live thought at all.
-    "live_reasoning": True,
+    "live_reasoning": False,
     # How a reasoning/thinking summary is rendered when show_reasoning is on.
     #   "code"      -> 💭 **Reasoning:** + fenced code block (legacy default)
     #   "blockquote"-> each line prefixed with "> "
@@ -98,7 +98,7 @@ _GLOBAL_DEFAULTS: dict[str, Any] = {
 _TIER_HIGH = {
     "tool_progress": "all",
     "show_reasoning": False,
-    "live_reasoning": True,
+    "live_reasoning": False,
     "tool_preview_length": 40,
     "streaming": None,  # follow global
     "interim_assistant_messages": True,
@@ -109,7 +109,7 @@ _TIER_HIGH = {
 _TIER_MEDIUM = {
     "tool_progress": "new",
     "show_reasoning": False,
-    "live_reasoning": True,
+    "live_reasoning": False,
     "tool_preview_length": 40,
     "streaming": None,
     "interim_assistant_messages": True,
@@ -120,7 +120,7 @@ _TIER_MEDIUM = {
 _TIER_LOW = {
     "tool_progress": "off",
     "show_reasoning": False,
-    "live_reasoning": True,
+    "live_reasoning": False,
     "tool_preview_length": 40,
     "streaming": False,
     "interim_assistant_messages": False,
@@ -131,7 +131,7 @@ _TIER_LOW = {
 _TIER_MINIMAL = {
     "tool_progress": "off",
     "show_reasoning": False,
-    "live_reasoning": True,
+    "live_reasoning": False,
     "tool_preview_length": 0,
     "streaming": False,
     "interim_assistant_messages": False,

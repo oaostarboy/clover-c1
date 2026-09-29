@@ -80,27 +80,27 @@ class TestBackwardCompat:
 # ---------------------------------------------------------------------------
 
 class TestLiveReasoningDefault:
-    """``live_reasoning`` defaults on everywhere and coerces like the other
-    boolean display surfaces."""
+    """``live_reasoning`` is opt-in (default off everywhere) and coerces like
+    the other boolean display surfaces."""
 
-    def test_defaults_true_with_no_config(self):
+    def test_defaults_false_with_no_config(self):
         from gateway.display_config import resolve_display_setting
 
         for plat in ("telegram", "discord", "slack", "mattermost", "signal", "whatsapp_cloud"):
-            assert resolve_display_setting({}, plat, "live_reasoning") is True, plat
+            assert resolve_display_setting({}, plat, "live_reasoning") is False, plat
 
-    def test_explicit_platform_override_disables(self):
+    def test_explicit_platform_override_enables(self):
         from gateway.display_config import resolve_display_setting
 
-        config = {"display": {"platforms": {"telegram": {"live_reasoning": False}}}}
-        assert resolve_display_setting(config, "telegram", "live_reasoning") is False
-        assert resolve_display_setting(config, "discord", "live_reasoning") is True
+        config = {"display": {"platforms": {"telegram": {"live_reasoning": True}}}}
+        assert resolve_display_setting(config, "telegram", "live_reasoning") is True
+        assert resolve_display_setting(config, "discord", "live_reasoning") is False
 
-    def test_string_false_coerced(self):
+    def test_string_true_coerced(self):
         from gateway.display_config import resolve_display_setting
 
-        config = {"display": {"live_reasoning": "false"}}
-        assert resolve_display_setting(config, "telegram", "live_reasoning") is False
+        config = {"display": {"live_reasoning": "true"}}
+        assert resolve_display_setting(config, "telegram", "live_reasoning") is True
 
 
 class TestYAMLNormalisation:

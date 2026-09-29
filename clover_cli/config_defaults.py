@@ -1521,8 +1521,9 @@ DEFAULT_CONFIG = {
         # "🧠 <line>" progress updates in messaging gateway chats. Independent
         # of interim_assistant_messages, which only covers the model's visible
         # assistant TEXT between tool calls (some providers never write that).
-        # Default on; see gateway.display_config for the Mattermost carve-out.
-        "live_reasoning": True,
+        # Default off (opt-in): the familiar look is tool lines + the model's
+        # own mid-turn messages.
+        "live_reasoning": False,
         # Codex Responses models narrate progress in a dedicated commentary
         # channel. When true (default), completed commentary messages are
         # delivered as visible mid-turn updates via the interim message path.
