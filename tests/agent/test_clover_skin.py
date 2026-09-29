@@ -247,9 +247,9 @@ def test_module_level_note_reaches_current_turn():
      ("search_files", "🔎"), ("web_search", "🕸️"), ("browser_click", "🧭"),
      ("browser_navigate", "🧭"), ("browser_snapshot", "📸"), ("browser_vision", "👁️"),
      ("web_extract", "📜"), ("execute_code", "⚗️"), ("delegate_task", "🌿"),
-     ("memory", "🌰"), ("session_search", "🍂"), ("skill_view", "🧺"),
+     ("memory", "🧬"), ("session_search", "🍂"), ("skill_view", "🧺"),
      ("skills_list", "🧺"), ("skill_manage", "🧺"), ("todo", "🌻"), ("cronjob", "⏳"),
-     ("clarify", "🌼"), ("process", "🫖"), ("vision_analyze", "🐞"),
+     ("clarify", "🌼"), ("process", "🖇️"), ("vision_analyze", "🐞"),
      ("text_to_speech", "🎶"), ("image_generate", "🌸")],
 )
 def test_clover_tool_emojis(tool, emoji):
