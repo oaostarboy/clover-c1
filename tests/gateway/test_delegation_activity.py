@@ -1339,7 +1339,7 @@ def test_plain_summary_review_cases(answer, expected):
 
 @pytest.mark.asyncio
 async def test_header_matches_the_main_agent_turn_card():
-    """Same shape as '🧠 N thoughts · 🛠 N tool calls · ⏱ Ns' so the two read
+    """Same shape as '💭 N thoughts · 🛠 N tool calls · ⏱ Ns' so the two read
     as one system: model · tool calls · time."""
     clock = FakeClock()
     adapter = FakeTelegramAdapter()

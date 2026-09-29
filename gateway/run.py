@@ -4521,8 +4521,18 @@ class TurnRunner:
         # the mode guards below so the tally reflects what the TURN did, not
         # what the chat happened to render (progress_mode "new" shows one line
         # for ten identical calls; the card must still say ten).
+        # A top-level note ("reasoning.available") is only a thought if a tool
+        # call follows it; the last one of the turn is the final answer and
+        # must not be counted. Hold it as pending and count it when the next
+        # tool starts. Delegated children's legacy "_thinking" relay counts
+        # immediately (their notes always precede tool work).
         if event_type == "tool.started" and tool_name and tool_name != "_thinking":
             ctx._summary_tools += 1
+            if ctx._pending_thought:
+                ctx._summary_thoughts += 1
+                ctx._pending_thought = False
+        elif event_type == "reasoning.available" and tool_name == "_thinking":
+            ctx._pending_thought = True
         elif event_type == "_thinking" or tool_name == "_thinking":
             ctx._summary_thoughts += 1
         # "log" mode: append tool.started lines to the log queue and stay
@@ -6367,7 +6377,7 @@ class TurnRunner:
         # opt-in so global scratch-text display does not leak into threads.
         agent.thinking_progress = ctx._thinking_enabled
         # Live reasoning: relay provider reasoning summaries (Codex/Responses
-        # summaries, Gemini thoughts, Anthropic thinking) as compact "🧠 <line>"
+        # summaries, Gemini thoughts, Anthropic thinking) as compact "💭 <line>"
         # progress updates — independent of thinking_progress above, which only
         # covers the model's visible assistant TEXT between tool calls. Never
         # runs for delegated children (_delegate_depth > 0): they already relay
@@ -6384,7 +6394,7 @@ class TurnRunner:
                 line = _reasoning_relay.feed(text)
                 if not line:
                     return
-                ctx.progress_queue.put(f"🧠 {line}")
+                ctx.progress_queue.put(f"💭 {line}")
                 ctx._summary_thoughts += 1
 
             agent.reasoning_callback = _reasoning_progress_callback
