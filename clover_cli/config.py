@@ -19,6 +19,7 @@ from decimal import Decimal, InvalidOperation
 from clover_cli.cli_output import line_input
 import json
 import logging
+import contextlib
 import os
 import platform
 import re
@@ -2402,7 +2403,105 @@ def _persist_migration(config: Dict[str, Any]) -> None:
     save_config(config, preserve_comments=True)
 
 
+_MIGRATION_LOCK_TIMEOUT_SECONDS = 60.0
+_MIGRATION_LOCK_POLL_SECONDS = 0.1
+_MIGRATION_LOCK_STATE = threading.local()
+
+
+def _acquire_migration_file_lock(handle, deadline: float) -> bool:
+    while True:
+        try:
+            handle.seek(0)
+            if _IS_WINDOWS:
+                import msvcrt
+
+                getattr(msvcrt, "locking")(handle.fileno(), getattr(msvcrt, "LK_NBLCK"), 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(_MIGRATION_LOCK_POLL_SECONDS)
+
+
+def _release_migration_file_lock(handle) -> None:
+    try:
+        handle.seek(0)
+        if _IS_WINDOWS:
+            import msvcrt
+
+            getattr(msvcrt, "locking")(handle.fileno(), getattr(msvcrt, "LK_UNLCK"), 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        pass
+
+
+@contextlib.contextmanager
+def _config_migration_lock():
+    """Run the migration ladder as the only writer of this config.yaml.
+
+    Every process that loads config runs the ladder on first load, so an
+    updater and the gateway it (re)starts can migrate the same file at once.
+    Each step is a read-modify-write of the whole file; interleaved, one
+    process's final ``_config_version`` stamp (read before the other's v41
+    step) overwrote that step, leaving v41 stamped but never applied
+    (Windows runner, 69a75bb recovery, 2026-09-29). Re-entrant per thread;
+    bounded like kanban's init lock: on timeout it proceeds unlocked rather
+    than hang a gateway start.
+    """
+    depth = getattr(_MIGRATION_LOCK_STATE, "depth", 0)
+    if depth:
+        _MIGRATION_LOCK_STATE.depth = depth + 1
+        try:
+            yield
+        finally:
+            _MIGRATION_LOCK_STATE.depth = depth
+        return
+    handle = None
+    acquired = False
+    try:
+        lock_path = get_config_path().with_name("config.yaml.migrate.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("a+b")
+        acquired = _acquire_migration_file_lock(
+            handle, time.monotonic() + _MIGRATION_LOCK_TIMEOUT_SECONDS
+        )
+        if not acquired:
+            logger.warning(
+                "Config migration lock busy for %.0fs; migrating without it",
+                _MIGRATION_LOCK_TIMEOUT_SECONDS,
+            )
+    except OSError as exc:
+        logger.debug("Config migration lock unavailable: %s", exc)
+    _MIGRATION_LOCK_STATE.depth = 1
+    try:
+        yield
+    finally:
+        _MIGRATION_LOCK_STATE.depth = 0
+        if handle is not None:
+            if acquired:
+                _release_migration_file_lock(handle)
+            handle.close()
+
+
 def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, Any]:
+    """Migrate config to the latest version under the cross-process lock.
+
+    The ladder re-reads the on-disk version once the lock is held, so a
+    process that waited behind another migrator finds the file current and
+    writes nothing.
+    """
+    with _config_migration_lock():
+        return _migrate_config_locked(interactive=interactive, quiet=quiet)
+
+
+def _migrate_config_locked(interactive: bool = True, quiet: bool = False) -> Dict[str, Any]:
     """
     Migrate config to latest version, prompting for new required fields.
     

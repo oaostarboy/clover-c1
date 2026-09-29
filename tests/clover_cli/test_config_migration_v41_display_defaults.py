@@ -96,3 +96,44 @@ def test_shipped_example_no_longer_shadows_platform_defaults():
         and any(key in d and d[key] != value for d in _PLATFORM_DEFAULTS.values())
     ]
     assert shadowing == []
+
+
+def test_concurrent_migrators_cannot_undo_v41(monkeypatch):
+    """Windows runner, 69a75bb recovery (2026-09-29): the old parent restarted
+    a gateway mid-update, so the gateway's startup probe and the updater ran
+    the ladder at the same time. One process's version stamp, read before the
+    other's v41 write, overwrote it: ``_config_version: 41`` with the global
+    ``cleanup_progress: false`` still in place. The second migrator must wait
+    for the first and then find nothing to do."""
+    import contextvars
+    import threading
+
+    from clover_cli import config as config_mod
+
+    _install_69a75bb_config()
+    real_persist = config_mod._persist_migration
+    second: dict = {}
+    runner: list = []
+
+    def persist_and_let_the_gateway_start(cfg):
+        if not runner:
+            ctx = contextvars.copy_context()
+            t = threading.Thread(
+                target=lambda: second.update(
+                    r=ctx.run(migrate_config, interactive=False, quiet=True)
+                )
+            )
+            runner.append(t)
+            t.start()
+            t.join(0.5)  # give it every chance to interleave
+        real_persist(cfg)
+
+    monkeypatch.setattr(config_mod, "_persist_migration", persist_and_let_the_gateway_start)
+    migrate_config(interactive=False, quiet=True)
+    runner[0].join(30)
+
+    cfg = read_raw_config()
+    assert cfg.get("_config_version") == 41
+    assert "cleanup_progress" not in (cfg.get("display") or {})
+    assert resolve_display_setting(cfg, "telegram", "cleanup_progress") is True
+    assert second["r"]["config_added"] == [], "the second migrator re-ran the ladder"
