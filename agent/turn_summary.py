@@ -239,7 +239,7 @@ def format_collapsed_turn_card(
     """
     segments = []
     if thoughts > 0:
-        segments.append(f"🧠 {thoughts} thought{'s' if thoughts != 1 else ''}")
+        segments.append(f"💭 {thoughts} thought{'s' if thoughts != 1 else ''}")
     if tools > 0:
         segments.append(f"🛠 {tools} tool call{'s' if tools != 1 else ''}")
     if workers > 0:

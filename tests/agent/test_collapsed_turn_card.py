@@ -2,7 +2,7 @@
 
 Ported from the sibling agent fork on 2026-08-30. When ``cleanup_progress`` is
 on, a turn's temporary progress bubbles are not all deleted: the FIRST one is
-edited into a single expandable Telegram card ("🧠 23 thoughts · 🛠 35 tool
+edited into a single expandable Telegram card ("💭 23 thoughts · 🛠 35 tool
 calls · ⏱ 33m53s") and the rest are removed.
 
 The card is Telegram expandable-blockquote markup, and its two syntax rules are
@@ -27,7 +27,7 @@ class TestCardContent:
         card = format_collapsed_turn_card(23, 35, 2033.0)
 
         # Past 10 minutes the seconds are dropped so the header stays one line.
-        assert card == "**> 🧠 23 thoughts · 🛠 35 tool calls · ⏱ 33m||"
+        assert card == "**> 💭 23 thoughts · 🛠 35 tool calls · ⏱ 33m||"
 
     def test_singular_wording(self):
         card = format_collapsed_turn_card(1, 1, 5.0)
@@ -55,7 +55,7 @@ class TestCardIsSkippedWhenThereIsNothingToSay:
 
     def test_thoughts_alone_still_render(self):
         card = format_collapsed_turn_card(3, 0, 8.0)
-        assert card.startswith("**> 🧠 3 thoughts")
+        assert card.startswith("**> 💭 3 thoughts")
         assert "tool call" not in card
 
     def test_tools_alone_still_render(self):
@@ -133,7 +133,7 @@ class TestCombinedTurnCard:
             workers=2,
         )
         head = card.split("\n")[0]
-        assert head == "**> 🧠 3 thoughts · 🛠 12 tool calls · 🍀 2 · ⏱ 2m05s"
+        assert head == "**> 💭 3 thoughts · 🛠 12 tool calls · 🍀 2 · ⏱ 2m05s"
         assert "🍀 **Audit**" in card and card.endswith("||")
 
     def test_worker_text_cannot_close_the_quote_early(self):

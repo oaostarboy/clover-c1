@@ -237,7 +237,7 @@ class TestLiveReasoningGatewayWiring:
                 drained.append(ctx.progress_queue.get_nowait())
             except queue_mod.Empty:
                 break
-        assert drained == ["🧠 Fetching remote updates"]
+        assert drained == ["💭 Fetching remote updates"]
         assert ctx._summary_thoughts == 1
 
     def test_live_reasoning_disabled_yields_nothing(self):

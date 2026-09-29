@@ -6377,7 +6377,7 @@ class TurnRunner:
         # opt-in so global scratch-text display does not leak into threads.
         agent.thinking_progress = ctx._thinking_enabled
         # Live reasoning: relay provider reasoning summaries (Codex/Responses
-        # summaries, Gemini thoughts, Anthropic thinking) as compact "🧠 <line>"
+        # summaries, Gemini thoughts, Anthropic thinking) as compact "💭 <line>"
         # progress updates — independent of thinking_progress above, which only
         # covers the model's visible assistant TEXT between tool calls. Never
         # runs for delegated children (_delegate_depth > 0): they already relay
@@ -6394,7 +6394,7 @@ class TurnRunner:
                 line = _reasoning_relay.feed(text)
                 if not line:
                     return
-                ctx.progress_queue.put(f"🧠 {line}")
+                ctx.progress_queue.put(f"💭 {line}")
                 ctx._summary_thoughts += 1
 
             agent.reasoning_callback = _reasoning_progress_callback

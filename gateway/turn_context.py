@@ -63,7 +63,7 @@ class TurnContext:
 
     # --- collapsed turn-summary card -------------------------------------
     # When cleanup_progress is on, the tracked bubbles are not simply deleted:
-    # the FIRST one is edited into a single collapsed card ("🧠 4 thoughts ·
+    # the FIRST one is edited into a single collapsed card ("💭 4 thoughts ·
     # 🛠 3 tool calls · ⏱ 47s") and the rest are removed. These counters feed
     # that card. Counting happens in the tool-progress callback, which already
     # sees every tool.started and _thinking event.
@@ -171,7 +171,7 @@ def turn_had_live_reasoning_relay(ctx: "TurnContext") -> bool:
     Two independent surfaces both show reasoning before the final reply:
     the live thinking_progress relay (raw thought text as ``💬`` progress
     lines, gated by ``ctx._thinking_enabled``) and the collapsed turn-summary
-    card (a bare ``🧠 N thought`` count, shown whenever ``cleanup_progress``
+    card (a bare ``💭 N thought`` count, shown whenever ``cleanup_progress``
     is on and at least one thought was counted — regardless of whether the
     relay itself was on, since ``_summary_thoughts`` is tallied unconditionally
     in ``progress_callback``). If either already told the user "the model
