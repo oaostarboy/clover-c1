@@ -2399,8 +2399,13 @@ def _persist_migration(config: Dict[str, Any]) -> None:
     deep-merging the on-disk file back in would resurrect keys the migration
     just deleted. Partial-save preservation for unrelated top-level sections
     belongs on ``save_config(..., merge_existing=True)``, not here.
+
+    The raw file carries no managed overlay, so a managed-scope key in it is
+    the user's own value. Stripping it here deleted that value from the file
+    on every version bump (``strip_managed=False``); the managed layer still
+    wins at load time.
     """
-    save_config(config, preserve_comments=True)
+    save_config(config, preserve_comments=True, strip_managed=False)
 
 
 _MIGRATION_LOCK_TIMEOUT_SECONDS = 60.0
@@ -4161,6 +4166,7 @@ def save_config(
     preserve_keys: Optional[Set[Tuple[str, ...]]] = None,
     merge_existing: bool = False,
     preserve_comments: bool = False,
+    strip_managed: bool = True,
 ):
     """Save configuration to ~/.clover/config.yaml.\n
 
@@ -4178,6 +4184,9 @@ def save_config(
     ``preserve_comments`` uses the YAML round-trip writer while retaining this
     function's normalization/default-stripping behavior; migrations use it so
     schema updates do not discard operator-authored comments.
+    ``strip_managed=False`` is only for writers whose *config* is the user's
+    raw file (``read_raw_config()``), where a managed-scope key is the user's
+    own value rather than a leaked overlay; see ``_persist_migration``.
     """
     with _CONFIG_LOCK:
         if is_managed():
@@ -4190,7 +4199,7 @@ def save_config(
         # for bulk writes so the unmanaged remainder still lands.
         from clover_cli import managed_scope
 
-        managed_keys = managed_scope.managed_config_keys()
+        managed_keys = managed_scope.managed_config_keys() if strip_managed else None
         if managed_keys:
             config, _stripped = _strip_dotted_keys(copy.deepcopy(config), managed_keys)
             if _stripped:
