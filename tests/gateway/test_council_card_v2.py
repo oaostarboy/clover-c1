@@ -337,6 +337,129 @@ async def test_adapter_that_cannot_delete_keeps_editing_in_place(tmp_path):
     assert ad.live[first].startswith("**> ✅ 🏛 Council")
     assert "**Answer**" in ad.live[first]
 
+@pytest.mark.asyncio
+async def test_no_delete_failed_edit_never_creates_second_live_card(tmp_path):
+    class GoneEdit(NoDeleteAdapter):
+        async def edit_message(self, chat_id, message_id, content, *, finalize=False, metadata=None):
+            self.edit_calls += 1
+            return SendResult(success=False, error="message not found")
+
+    ad = GoneEdit()
+    card = _card(ad, tmp_path)
+    await card.publish(_state())
+    first = card.message_id
+    await ad.send("chat-A", "parent reply")
+    await _settle()
+    await card.publish(_state(seat_done=1))
+    assert card.message_id == first
+    assert len(ad.council_messages()) == 1 and ad.n == 2
+
+@pytest.mark.asyncio
+async def test_in_place_final_is_not_swept_after_restart(tmp_path, monkeypatch):
+    monkeypatch.setattr(da, "_board_store_path", lambda: tmp_path / "boards.json")
+    ad = NoDeleteAdapter()
+    card = _card(ad, tmp_path)
+    await card.publish(_state())
+    final_id = card.message_id
+    await card.finish_done(_state(status="done"), SUMMARY)
+    key = cc._STORE_PREFIX + da._board_store_key(ad, "chat-A")
+    assert final_id not in da._board_store_load().get(key, [])
+    cc._CARD_IDS.clear()
+    cc._ORPHANS_SWEPT.clear()
+    next_card = cc.CouncilLiveCard(ad, "chat-A", "run-2", work=tmp_path, question="Next?", mode="full")
+    await next_card.publish(_state())
+    assert final_id in ad.live and "**Answer**" in ad.live[final_id]
+    assert sum("tap to watch" in text for text in ad.live.values()) == 1
+
+@pytest.mark.asyncio
+async def test_no_delete_restart_finishes_persisted_card_in_place(tmp_path, monkeypatch):
+    monkeypatch.setattr(da, "_board_store_path", lambda: tmp_path / "boards.json")
+    ad = NoDeleteAdapter()
+    old = _card(ad, tmp_path)
+    await old.publish(_state())
+    mid = old.message_id
+    assert mid is not None
+    old._unregister()
+    cc._CARD_IDS.clear()
+    cc._ORPHANS_SWEPT.clear()
+    recovered = _card(ad, tmp_path)
+    await recovered.finish_done(_state(status="done"), SUMMARY)
+    assert recovered.final_delivered
+    assert ad.n == 1 and list(ad.live) == [mid]
+    assert "**Answer**" in ad.live[mid]
+
+@pytest.mark.asyncio
+async def test_ambiguous_final_send_is_not_retried(tmp_path):
+    class TimedOut(LiveAdapter):
+        def __init__(self):
+            super().__init__()
+            self.final_attempts = 0
+
+        async def send(self, chat_id, content, reply_to=None, metadata=None):
+            result = await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
+            if "**Answer**" in content:
+                self.final_attempts += 1
+                raise TimeoutError("response lost after delivery")
+            return result
+
+    ad = TimedOut()
+    card = _card(ad, tmp_path)
+    await card.publish(_state())
+    await card.finish_done(_state(status="done"), SUMMARY)
+    assert ad.final_attempts == 1
+    assert len(ad.council_messages()) == 1
+    assert not card.final_delivered  # no successful send result, hence no ack
+    assert card.final_maybe_delivered  # do not ask /council to send it again
+
+@pytest.mark.asyncio
+async def test_no_delete_ambiguous_in_place_final_is_not_sweepable(tmp_path, monkeypatch):
+    monkeypatch.setattr(da, "_board_store_path", lambda: tmp_path / "boards.json")
+
+    class TimedOutEdit(NoDeleteAdapter):
+        async def edit_message(self, chat_id, message_id, content, *, finalize=False, metadata=None):
+            await super().edit_message(chat_id, message_id, content, finalize=finalize, metadata=metadata)
+            raise TimeoutError("edit landed, response lost")
+
+    ad = TimedOutEdit()
+    card = _card(ad, tmp_path)
+    await card.publish(_state())
+    mid = card.message_id
+    assert mid is not None
+    await card.finish_done(_state(status="done"), SUMMARY)
+    assert card.final_maybe_delivered and not card.final_delivered
+    assert "**Answer**" in ad.live[mid]
+    key = cc._STORE_PREFIX + da._board_store_key(ad, "chat-A")
+    assert mid not in da._board_store_load().get(key, [])
+
+@pytest.mark.asyncio
+async def test_uncertain_watcher_delivery_has_no_ack_and_no_replay(tmp_path, monkeypatch):
+    for key, value in SESSION_ENV.items():
+        monkeypatch.setenv(key, value)
+    runner = _load_runner()
+    work = tmp_path / "council" / "runs" / "uncertain-run"
+    work.mkdir(parents=True)
+    runner.write_origin(work)
+    _runner_progress(runner, work, "arguments", seats=1)
+
+    class TimedOut(LiveAdapter):
+        async def send(self, chat_id, content, reply_to=None, metadata=None):
+            result = await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
+            if "**Answer**" in content:
+                raise TimeoutError("response lost")
+            return result
+
+    ad = TimedOut()
+    (task,) = _watcher(tmp_path, ad).scan_once()
+    (work / "summary.json").write_text(json.dumps(SUMMARY), encoding="utf-8")
+    _runner_progress(runner, work, "chairman", status="done", seats=5)
+    await asyncio.wait_for(task, 5)
+    assert len([m for m in ad.sent if "**Answer**" in m]) == 1
+    assert not (work / "gateway-card.json").exists()
+    assert (work / "gateway-card-uncertain.json").exists()
+    assert _watcher(tmp_path, ad).scan_once() == []
+    agent_sees = "\n".join(runner.final_stdout_lines(0, work / "report.md", dict(SUMMARY, attack_severity="", ruling="")))
+    assert "VERDICT:" in agent_sees and "COUNCIL_DONE" not in agent_sees
+
 
 @pytest.mark.asyncio
 async def test_orphan_card_from_a_previous_gateway_process_is_swept(tmp_path, monkeypatch):
@@ -516,7 +639,7 @@ async def test_agent_launched_run_gets_one_card_and_one_final_message(tmp_path, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("final_fails", [False, True])
+@pytest.mark.parametrize("final_fails", [False, True, "uncertain"])
 async def test_slash_council_produces_one_card_and_one_final_message(tmp_path, final_fails):
     script = tmp_path / "skills" / "autonomous-ai-agents" / "council" / "scripts" / "council_run.py"
     script.parent.mkdir(parents=True)
@@ -539,6 +662,9 @@ async def test_slash_council_produces_one_card_and_one_final_message(tmp_path, f
     class FinalFailsOnce(LiveAdapter):
         async def send(self, chat_id, content, reply_to=None, metadata=None):
             if "**Answer**" in content and "✅ 🏛 Council" in content:
+                if final_fails == "uncertain":
+                    await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
+                    raise TimeoutError("delivered but response lost")
                 return SendResult(success=False, error="flood wait")
             return await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
 
@@ -569,7 +695,11 @@ async def test_slash_council_produces_one_card_and_one_final_message(tmp_path, f
     finally:
         watching.cancel()
 
-    if final_fails:
+    if final_fails == "uncertain":
+        assert reply is None
+        assert len(ad.council_messages()) == 1
+        assert "**Answer**\n• Ship it." in ad.council_messages()[0]
+    elif final_fails:
         assert reply and "**Answer**\n• Ship it." in reply
         assert not ad.council_messages()
         await ad.send("123", reply)  # normal gateway reply path

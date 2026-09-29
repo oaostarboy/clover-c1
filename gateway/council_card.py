@@ -449,6 +449,7 @@ class CouncilLiveCard:
         self._loop: Any = None
         self._closed = False
         self.final_delivered = False
+        self.final_maybe_delivered = False
         self._combined = False  # never part of the subagent board
         self._store_key = _STORE_PREFIX + da._board_store_key(adapter, chat_id)
 
@@ -574,6 +575,10 @@ class CouncilLiveCard:
             async with self._lock:
                 if self._closed:
                     return False
+                if self.message_id is None and not da._adapter_can_delete(self.adapter):
+                    self._adopt_orphans()
+                    if self._posted:
+                        self.message_id = self._posted[-1]
                 if self.message_id and len(self._posted) > 1:
                     await self._sweep_except(self.message_id)
                 snap = self._snapshot(self._state)
@@ -583,7 +588,7 @@ class CouncilLiveCard:
                 text = da._fit_to_limit(text, limit)
                 last_out = da._LAST_OUT.get(self.key)
                 behind = bool(self.message_id and last_out and da._is_newer(last_out, self.message_id))
-                if self.message_id is None or (move and behind):
+                if self.message_id is None or (move and behind and da._adapter_can_delete(self.adapter)):
                     return await self._post(text, struct)
                 if text == self.last_text:
                     return False
@@ -634,7 +639,7 @@ class CouncilLiveCard:
             self.last_text, self.last_struct = text, struct
             self.last_edit = self._clock()
             return True
-        if da._message_gone(res):
+        if da._message_gone(res) and da._adapter_can_delete(self.adapter):
             self.message_id = None
             self._schedule(0.0)
         return False
@@ -684,6 +689,8 @@ class CouncilLiveCard:
             self._closed = True
             self._unregister()
             self._adopt_orphans()
+            if self.message_id is None and not da._adapter_can_delete(self.adapter) and self._posted:
+                self.message_id = self._posted[-1]
             snap = self._snapshot(dict(state))
             text = render_final(
                 snap, summary, expandable=self.expandable,
@@ -691,18 +698,17 @@ class CouncilLiveCard:
             )
             can_delete = da._adapter_can_delete(self.adapter)
             delivered: Optional[str] = None
+            attempted_edit = False
             token = da._CARD_SEND.set(False)
             try:
                 if can_delete or not self.message_id:
                     res = await _maybe_await(self.adapter.send(self.chat_id, text, metadata=self.metadata))
                     if getattr(res, "success", False):
                         delivered = str(getattr(res, "message_id", "") or "sent")
-                elif not can_delete and self.message_id:
-                    # On immutable-message adapters preserve the sole live post.
-                    pass
                 if delivered is None and self.message_id:
                     editor = getattr(self.adapter, "edit_message", None)
                     if callable(editor):
+                        attempted_edit = True
                         res = await _maybe_await(editor(
                             self.chat_id, self.message_id, text, finalize=True, metadata=self.metadata,
                         ))
@@ -710,7 +716,13 @@ class CouncilLiveCard:
                             delivered = self.message_id
 
             except Exception:
-                logger.warning("Council final message for %s failed", self.run_id, exc_info=True)
+                # The adapter may have sent/edited the answer before losing its
+                # response. Never retry an ambiguous final delivery.
+                self.final_maybe_delivered = True
+                if attempted_edit and not can_delete and self.message_id in self._posted:
+                    # The in-place edit might have made this id the final.
+                    self._posted.remove(self.message_id)
+                logger.warning("Council final delivery for %s is uncertain", self.run_id, exc_info=True)
             finally:
                 da._CARD_SEND.reset(token)
             # Failed final sends must not leave an obsolete live card beside
@@ -719,3 +731,7 @@ class CouncilLiveCard:
             await self._sweep_except(keep)
             self.message_id = keep
             self.final_delivered = delivered is not None
+            if delivered and delivered == keep:
+                # The in-place final is not an orphanable live card anymore.
+                self._posted.remove(delivered)
+                self._persist()

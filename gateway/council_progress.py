@@ -210,6 +210,7 @@ class CouncilCard:
         self.metadata = metadata
         self._last_card = ""
         self.final_delivered = False
+        self.final_maybe_delivered = False
 
     async def publish(self, state: Mapping[str, Any]) -> None:
         if self.adapter is None:
@@ -333,6 +334,7 @@ def _pid_alive(pid: Any) -> bool:
 
 
 GATEWAY_ACK = "gateway-card.json"
+GATEWAY_UNCERTAIN = "gateway-card-uncertain.json"
 
 
 def _write_gateway_ack(work: Path) -> None:
@@ -411,7 +413,7 @@ class CouncilRunWatcher:
             age = time.time() - float(origin.get("created_at") or 0)
         except (TypeError, ValueError):
             age = self.MAX_RUN_AGE_S + 1
-        if age > self.MAX_RUN_AGE_S or (work / GATEWAY_ACK).exists():
+        if age > self.MAX_RUN_AGE_S or (work / GATEWAY_ACK).exists() or (work / GATEWAY_UNCERTAIN).exists():
             return None
         status = str(state.get("status") or "running")
         if status != "running" and not (status == "done" and _read_json(work / "summary.json")):
@@ -465,6 +467,13 @@ class CouncilRunWatcher:
                 await card.finish_done(last, summary)
                 if card.final_delivered:
                     _write_gateway_ack(work)
+                elif card.final_maybe_delivered:
+                    # A lost response is not an ack. Do not replay it after a
+                    # restart: it may already be visible in the chat.
+                    try:
+                        (work / GATEWAY_UNCERTAIN).write_text("{}", encoding="utf-8")
+                    except OSError:
+                        logger.warning("Could not record uncertain council delivery: %s", work)
             else:
                 await card.finish_failed(last)
         except Exception:

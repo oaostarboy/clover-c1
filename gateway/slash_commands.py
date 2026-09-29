@@ -257,7 +257,7 @@ class GatewaySlashCommandsMixin:
         if card.owns_final:
             # One message: the card and the answer travel together.
             await card.finish_done(done, summary)
-            if getattr(card, "final_delivered", False):
+            if card.final_delivered or card.final_maybe_delivered:
                 return None
             return format_council_result(summary)
         await publish(done)
