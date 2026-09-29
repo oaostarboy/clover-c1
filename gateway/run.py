@@ -2764,7 +2764,7 @@ from gateway.session_state import (
 from gateway.authz_mixin import GatewayAuthorizationMixin
 from gateway.kanban_watchers import GatewayKanbanWatchersMixin
 from gateway.slash_commands import GatewaySlashCommandsMixin
-from gateway.turn_context import TurnContext
+from gateway.turn_context import TurnContext, turn_had_live_reasoning_relay
 from gateway.platforms.base import (
     BasePlatformAdapter,
     EphemeralReply,
@@ -7000,6 +7000,7 @@ class TurnRunner:
         return {
             "final_response": final_response,
             "last_reasoning": result.get("last_reasoning"),
+            "reasoning_relayed_live": turn_had_live_reasoning_relay(ctx),
             "messages": ctx.result_holder[0].get("messages", []) if ctx.result_holder[0] else [],
             "api_calls": ctx.result_holder[0].get("api_calls", 0) if ctx.result_holder[0] else 0,
             "failed": ctx.result_holder[0].get("failed", False) if ctx.result_holder[0] else False,
@@ -21640,10 +21641,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if source.platform == Platform.MATTERMOST
                     else getattr(self, "_show_reasoning", True)
                 )
-            if _show_reasoning_effective and response and not _intentional_silence:
+            if (
+                _show_reasoning_effective
+                and response
+                and not _intentional_silence
+                and not agent_result.get("reasoning_relayed_live")
+            ):
                 last_reasoning = agent_result.get("last_reasoning")
                 if last_reasoning:
-                    from gateway.stream_consumer import escape_code_fences_for_display
+                    from gateway.stream_consumer import (
+                        escape_code_fences_for_display,
+                        strip_reasoning_heading_markers,
+                    )
                     # Collapse long reasoning to keep messages readable
                     lines = last_reasoning.strip().splitlines()
                     if len(lines) > 15:
@@ -21675,6 +21684,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         )
                         response = f"> 💭 **Reasoning:**\n{_quoted}\n\n{response}"
                     else:
+                        # The code fence doesn't interpret markdown, so a
+                        # provider's bold "**Heading**" reasoning lines would
+                        # otherwise show up as literal asterisks inside it.
+                        display_reasoning = strip_reasoning_heading_markers(display_reasoning)
                         # Escape ``` inside reasoning so inner fences don't
                         # break the outer code block used to render it.
                         display_reasoning = escape_code_fences_for_display(display_reasoning)

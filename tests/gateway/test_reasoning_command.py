@@ -4,15 +4,16 @@ import asyncio
 import inspect
 import sys
 import types
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import yaml
 
 import gateway.run as gateway_run
-from gateway.config import Platform
+from gateway.config import GatewayConfig, Platform
 from gateway.platforms.base import MessageEvent
-from gateway.session import SessionSource
+from gateway.session import SessionEntry, SessionSource
 
 
 def _make_event(text="/reasoning", platform=Platform.TELEGRAM, user_id="12345", chat_id="67890"):
@@ -270,4 +271,155 @@ class TestResolveGatewayDisplayBoolShowReasoningDefault:
         assert gateway_run._resolve_gateway_display_bool(
             cfg, "discord", "show_reasoning", default=True,
         ) is False
+
+
+def _reasoning_prepend_source():
+    return SessionSource(
+        platform=Platform.TELEGRAM,
+        chat_id="-2001",
+        chat_type="private",
+        user_id="55555",
+    )
+
+
+def _reasoning_prepend_event():
+    return MessageEvent(text="hi", source=_reasoning_prepend_source(), message_id="msg-1")
+
+
+def _reasoning_prepend_runner(monkeypatch, tmp_path):
+    """Runner harness for exercising the final-message reasoning prepend at
+    the end of ``_handle_message_with_agent`` (gateway/run.py ~L21595)."""
+    runner = gateway_run.GatewayRunner(GatewayConfig())
+    runner.adapters = {}
+    runner._running_agents = {}
+    runner._running_agents_ts = {}
+    runner._pending_messages = {}
+    runner._pending_approvals = {}
+    runner._is_user_authorized = lambda _source: True
+    runner._set_session_env = lambda _context: None
+    runner._handle_active_session_busy_message = AsyncMock(return_value=False)
+    runner._session_db = MagicMock()
+    runner._recover_telegram_topic_thread_id = lambda _source: None
+    runner._cache_session_source = lambda _key, _source: None
+    runner._is_session_run_current = lambda _key, _gen: True
+    runner._reply_anchor_for_event = lambda _event: None
+    runner._get_guild_id = lambda _event: None
+    runner._should_send_voice_reply = lambda *_a, **_kw: False
+    runner.hooks = MagicMock()
+    runner.hooks.emit = AsyncMock()
+
+    runner.session_store = MagicMock()
+    runner.session_store.get_or_create_session.return_value = SessionEntry(
+        session_key="agent:main:telegram:private:-2001:55555",
+        session_id="sess-reasoning",
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+        platform=Platform.TELEGRAM,
+        chat_type="private",
+    )
+    runner.session_store.load_transcript.return_value = []
+    runner.session_store.append_to_transcript = MagicMock()
+    runner.session_store.update_session = MagicMock()
+
+    monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
+    monkeypatch.setattr(
+        gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "fake"}
+    )
+    monkeypatch.setattr(
+        "agent.model_metadata.get_model_context_length",
+        lambda *_args, **_kwargs: 100_000,
+    )
+    return runner
+
+
+def _reasoning_agent_result(*, last_reasoning, reasoning_relayed_live):
+    return {
+        "final_response": "The answer is 42.",
+        "last_reasoning": last_reasoning,
+        "reasoning_relayed_live": reasoning_relayed_live,
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "The answer is 42."},
+        ],
+        "tools": [],
+        "history_offset": 0,
+        "last_prompt_tokens": 0,
+        "api_calls": 1,
+        "failed": False,
+    }
+
+
+class TestReasoningPrependDeduplication:
+    """Regression for the live-Telegram duplicate: when the turn already
+    surfaced the model's thinking (live thinking_progress relay, or a
+    collapsed turn-summary card counting thoughts), the final reply must
+    NOT prepend the same reasoning again. These tests reproduce the bug by
+    driving the real ``_handle_message_with_agent`` prepend site with a
+    mocked ``_run_agent`` result — they FAIL on a0255ac1."""
+
+    @pytest.mark.asyncio
+    async def test_relay_active_this_turn_suppresses_prepend(self, monkeypatch, tmp_path):
+        """thinking relay ON for the turn -> no duplicate 'Reasoning:' block."""
+        runner = _reasoning_prepend_runner(monkeypatch, tmp_path)
+        runner._run_agent = AsyncMock(return_value=_reasoning_agent_result(
+            last_reasoning="**Fetching remote updates**",
+            reasoning_relayed_live=True,
+        ))
+
+        response = await runner._handle_message_with_agent(
+            _reasoning_prepend_event(), _reasoning_prepend_source(),
+            "agent:main:telegram:private:-2001:55555", 1,
+        )
+
+        assert "💭 **Reasoning:**" not in response
+        assert response == "The answer is 42."
+
+    @pytest.mark.asyncio
+    async def test_relay_inactive_still_prepends_cleanly(self, monkeypatch, tmp_path):
+        """thinking relay OFF this turn, show_reasoning on -> still prepends,
+        but the code-fence style must not leak literal ** markers."""
+        runner = _reasoning_prepend_runner(monkeypatch, tmp_path)
+        runner._run_agent = AsyncMock(return_value=_reasoning_agent_result(
+            last_reasoning="**Fetching remote updates**\nchecking origin/main",
+            reasoning_relayed_live=False,
+        ))
+
+        response = await runner._handle_message_with_agent(
+            _reasoning_prepend_event(), _reasoning_prepend_source(),
+            "agent:main:telegram:private:-2001:55555", 1,
+        )
+
+        assert "💭 **Reasoning:**" in response
+        assert response.endswith("The answer is 42.")
+        # The heading line must be unwrapped, not left as literal asterisks
+        # inside the fenced code block.
+        fence_body = response.split("```\n", 1)[1].split("\n```", 1)[0]
+        assert "**" not in fence_body
+        assert "Fetching remote updates" in fence_body
+
+    @pytest.mark.asyncio
+    async def test_explicit_show_reasoning_false_hides_regardless_of_relay(
+        self, monkeypatch, tmp_path
+    ):
+        """An explicit display.show_reasoning: false always wins, whether or
+        not the relay was active this turn."""
+        clover_home = tmp_path / "clover"
+        clover_home.mkdir()
+        (clover_home / "config.yaml").write_text(
+            "display:\n  show_reasoning: false\n", encoding="utf-8",
+        )
+
+        runner = _reasoning_prepend_runner(monkeypatch, clover_home)
+        runner._run_agent = AsyncMock(return_value=_reasoning_agent_result(
+            last_reasoning="**Fetching remote updates**",
+            reasoning_relayed_live=False,
+        ))
+
+        response = await runner._handle_message_with_agent(
+            _reasoning_prepend_event(), _reasoning_prepend_source(),
+            "agent:main:telegram:private:-2001:55555", 1,
+        )
+
+        assert "💭" not in response
+        assert response == "The answer is 42."
 

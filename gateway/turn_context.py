@@ -160,3 +160,19 @@ class TurnContext:
     delegation_activity: Any = None
     native_tool_start_callback: Optional[Callable] = None
     native_tool_complete_callback: Optional[Callable] = None
+
+
+def turn_had_live_reasoning_relay(ctx: "TurnContext") -> bool:
+    """Did this turn already surface the model's thinking somewhere in chat?
+
+    Two independent surfaces both show reasoning before the final reply:
+    the live thinking_progress relay (raw thought text as ``💬`` progress
+    lines, gated by ``ctx._thinking_enabled``) and the collapsed turn-summary
+    card (a bare ``🧠 N thought`` count, shown whenever ``cleanup_progress``
+    is on and at least one thought was counted — regardless of whether the
+    relay itself was on, since ``_summary_thoughts`` is tallied unconditionally
+    in ``progress_callback``). If either already told the user "the model
+    thought", appending the full reasoning text again at the end of the final
+    message is a duplicate, not new information.
+    """
+    return bool(ctx._thinking_enabled or (ctx._cleanup_progress and ctx._summary_thoughts > 0))
