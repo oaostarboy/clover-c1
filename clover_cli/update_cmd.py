@@ -23,6 +23,7 @@ at import time (``_m()`` resolves lazily at call time, when main.py is fully
 loaded, so there is no import cycle).
 """
 
+import argparse
 import hashlib
 import json
 import logging
@@ -32,6 +33,7 @@ import shutil
 import subprocess
 import sys
 import time as _time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -2688,6 +2690,165 @@ def _get_origin_url(git_cmd: list[str], cwd: Path) -> Optional[str]:
         pass
     return None
 
+class AdoptError(RuntimeError):
+    """Adoption of a non-git install failed; ``str(exc)`` is user-facing plain words."""
+
+
+@dataclass
+class AdoptResult:
+    commit: str
+    differing_files: int
+
+
+# Above this many differing files the best match is still adopted (autostash
+# keeps every edit); it is just logged so a support ticket can see it.
+_ADOPT_LARGE_DIFF_FILES = 200
+
+
+def adopt_non_git_install(
+    project_root: Path,
+    branch: str = "main",
+    *,
+    pre_backup=None,
+) -> AdoptResult:
+    """Turn a copied/zipped install (no ``.git``) into a git checkout.
+
+    The install is matched to the commit of ``origin/<branch>`` whose tree
+    differs from the working tree in the fewest files, then the index is reset
+    there with ``--mixed`` so the normal update flow (autostash of real edits,
+    pull, reapply, deps, migrations, restart) runs unchanged and only the
+    user's actual edits show as modified.
+
+    Never deletes or overwrites a working-tree file: the only thing created is
+    ``.git`` (removed again if adoption fails part-way so a retry starts clean).
+    ``pre_backup`` (optional callable) runs before anything is touched.
+    Raises :class:`AdoptError` with an actionable message on failure.
+    """
+    import tempfile
+
+    root = Path(project_root)
+    if (root / ".git").exists():
+        raise AdoptError("This install is already a git checkout.")
+    if shutil.which("git") is None:
+        raise AdoptError(
+            "Clover can't update this copy because Git isn't installed. "
+            "Install Git (https://git-scm.com/downloads), then run the update again."
+        )
+
+    if pre_backup is not None:
+        try:
+            pre_backup()
+        except Exception as exc:  # a backup failure must not block adoption
+            logger.warning("pre-adopt backup failed: %s", exc)
+
+    git = ["git"]
+    if sys.platform == "win32":
+        git = ["git", "-c", "windows.appendAtomically=false"]
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+
+    def run(args, *, extra_env=None, timeout=900):
+        return subprocess.run(
+            git + args,
+            cwd=root,
+            env={**env, **(extra_env or {})},
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+
+    def must(args, what, **kw):
+        res = run(args, **kw)
+        if res.returncode != 0:
+            raise RuntimeError(f"{what}: {(res.stderr or res.stdout).strip()[:300]}")
+        return res
+
+    tmp_dir = None
+    try:
+        must(["init", "-q"], "git init")
+        must(["symbolic-ref", "HEAD", f"refs/heads/{branch}"], "set branch")
+        # Before hashing: autocrlf=true would normalize CRLF and skew the match.
+        must(["config", "core.autocrlf", "false"], "git config")
+        must(["remote", "add", "origin", OFFICIAL_REPO_URL], "git remote add")
+        try:
+            fetched = run(
+                ["fetch", "-q", "origin",
+                 f"+refs/heads/{branch}:refs/remotes/origin/{branch}"],
+                timeout=1800,
+            )
+        except subprocess.TimeoutExpired:
+            raise AdoptError(
+                "Clover couldn't download its update files in time. Check your "
+                "internet connection and try the update again."
+            )
+        if fetched.returncode != 0:
+            detail = ((fetched.stderr or "").strip().splitlines() or ["no details"])[-1]
+            raise AdoptError(
+                "Clover couldn't reach GitHub to update this copy. Check your "
+                f"internet connection and try again. ({detail})"
+            )
+
+        # Hash the working tree once (respects .gitignore) via a throwaway index.
+        tmp_dir = tempfile.mkdtemp(prefix="clover-adopt-")
+        idx = {"GIT_INDEX_FILE": os.path.join(tmp_dir, "index")}
+        must(["add", "-A"], "hashing the install", extra_env=idx)
+        tree = must(["write-tree"], "hashing the install", extra_env=idx).stdout.strip()
+
+        commits = must(
+            ["rev-list", "--first-parent", f"origin/{branch}"], "listing history"
+        ).stdout.split()
+        if not commits:
+            raise AdoptError("The Clover repository looks empty; try again later.")
+        best, best_n = None, None
+        for c in commits:
+            out = run(["diff", "--name-only", "-z", c, tree])
+            if out.returncode != 0:
+                continue
+            n = len([p for p in out.stdout.split("\0") if p])
+            if best_n is None or n < best_n:
+                best, best_n = c, n
+            if n == 0:
+                break
+        if best is None:
+            raise AdoptError("Couldn't work out which Clover version this copy is.")
+
+        must(["reset", "-q", "--mixed", best], "git reset")
+        must(["branch", "-q", f"--set-upstream-to=origin/{branch}", branch],
+             "set upstream")
+    except AdoptError:
+        _discard_partial_git_dir(root)
+        raise
+    except Exception as exc:
+        _discard_partial_git_dir(root)
+        raise AdoptError(
+            "Clover couldn't set this copy up for updates automatically "
+            f"({exc}). Reinstalling with the install command from the Clover "
+            "README keeps your data in ~/.clover."
+        ) from exc
+    finally:
+        if tmp_dir:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if best_n > _ADOPT_LARGE_DIFF_FILES:
+        logger.warning(
+            "adopted non-git install at %s with %d differing files; "
+            "local changes will be autostashed, not discarded", best[:8], best_n
+        )
+        print(f"  ⚠ This copy differs from {best[:8]} in {best_n} files; "
+              "your changes will be kept safely.")
+    return AdoptResult(commit=best, differing_files=best_n)
+
+
+def _discard_partial_git_dir(root: Path) -> None:
+    """Remove the ``.git`` that adoption itself created (never user files)."""
+    try:
+        shutil.rmtree(root / ".git", ignore_errors=True)
+    except Exception:
+        pass
+
+
 def _is_fork(origin_url: Optional[str]) -> bool:
     """Check if the origin remote points to a fork (not the official repo)."""
     if not origin_url:
@@ -4094,8 +4255,17 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
 
     git_dir = _m().PROJECT_ROOT / ".git"
     if not git_dir.exists():
-        print("✗ Not a git repository — cannot check for updates.")
-        sys.exit(1)
+        # A copied/zipped install: adopt it into git at the commit it matches
+        # rather than refusing (the pre-update backup runs first).
+        try:
+            adopted = adopt_non_git_install(
+                _m().PROJECT_ROOT,
+                pre_backup=lambda: _m()._run_pre_update_backup(argparse.Namespace()),
+            )
+            print(f"◆ Set this copy up for updates (matches {adopted.commit[:8]}).")
+        except AdoptError as exc:
+            print(f"✗ {exc}")
+            sys.exit(1)
 
     git_cmd = ["git"]
     if sys.platform == "win32":
@@ -7859,14 +8029,22 @@ def _cmd_update_impl(args, gateway_mode: bool):
     git_dir = _m().PROJECT_ROOT / ".git"
 
     if not git_dir.exists():
-        if sys.platform == "win32":
-            use_zip_update = True
-        else:
-            print("✗ Not a git repository. Please reinstall:")
+        # Copied/zipped install with no .git: adopt it into git at the commit
+        # it matches so the normal update flow below (autostash, pull, reapply)
+        # applies. The pre-update backup already ran above.
+        try:
+            adopted = adopt_non_git_install(_m().PROJECT_ROOT)
             print(
-                "  curl -fsSL  | bash"
+                f"◆ Set this copy up for updates (matches {adopted.commit[:8]}, "
+                f"{adopted.differing_files} file(s) differ)."
             )
-            sys.exit(1)
+            print()
+        except AdoptError as exc:
+            if sys.platform == "win32":
+                use_zip_update = True
+            else:
+                print(f"✗ {exc}")
+                sys.exit(1)
 
     # On Windows, git can fail with "unable to write loose object file: Invalid argument"
     # due to filesystem atomicity issues. Set the recommended workaround.

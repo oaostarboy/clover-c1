@@ -1400,6 +1400,46 @@ show_manual_install_hint() {
 # Installation
 # ============================================================================
 
+# Adopt a copied/zipped install (no .git) into git at the commit it matches, so
+# the normal update-in-place path below applies. Mirrors adopt_non_git_install()
+# in clover_cli/update_cmd.py. Never deletes or overwrites working-tree files;
+# on failure removes only the .git it created and returns non-zero.
+adopt_non_git_install() {
+    local dir="$1" branch="$2" tmpidx tree best="" bestn="" n c
+    command -v git >/dev/null 2>&1 || return 1
+    (
+        cd "$dir" || exit 1
+        export GIT_TERMINAL_PROMPT=0
+        git init -q && git symbolic-ref HEAD "refs/heads/$branch" || exit 1
+        git config core.autocrlf false
+        git remote add origin "$REPO_URL_HTTPS" || exit 1
+        git fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" || exit 1
+        tmpidx="$(mktemp -u)"
+        tree="$(GIT_INDEX_FILE="$tmpidx" sh -c 'git add -A >/dev/null 2>&1 && git write-tree')"
+        rm -f "$tmpidx"
+        [ -n "$tree" ] || exit 1
+        for c in $(git rev-list --first-parent "origin/$branch"); do
+            n="$(git diff --name-only "$c" "$tree" | wc -l | tr -d ' ')"
+            if [ -z "$bestn" ] || [ "$n" -lt "$bestn" ]; then best="$c"; bestn="$n"; fi
+            [ "$n" -eq 0 ] && break
+        done
+        [ -n "$best" ] || exit 1
+        git reset -q --mixed "$best" || exit 1
+        git branch -q --set-upstream-to="origin/$branch" "$branch" || exit 1
+        echo "$best $bestn"
+    ) > "${TMPDIR:-/tmp}/clover-adopt.$$" 2>/dev/null
+    local rc=$?
+    if [ $rc -ne 0 ]; then
+        rm -rf "$dir/.git"
+        rm -f "${TMPDIR:-/tmp}/clover-adopt.$$"
+        return 1
+    fi
+    read -r best bestn < "${TMPDIR:-/tmp}/clover-adopt.$$"
+    rm -f "${TMPDIR:-/tmp}/clover-adopt.$$"
+    log_success "Matched this copy to ${best:0:8} ($bestn file(s) differ); updating in place"
+    return 0
+}
+
 clone_repo() {
     log_info "Installing to $INSTALL_DIR..."
 
@@ -1413,6 +1453,17 @@ clone_repo() {
         log_warn "Existing checkout at $INSTALL_DIR has no commits (interrupted clone)."
         log_warn "Moving it aside to $backup_dir before re-cloning."
         mv "$INSTALL_DIR" "$backup_dir"
+    fi
+
+    # A copy/zip of an install has no .git: adopt it into git at the commit it
+    # matches instead of refusing, then fall into the normal update path.
+    if [ -d "$INSTALL_DIR" ] && [ ! -e "$INSTALL_DIR/.git" ]; then
+        log_info "Existing copy at $INSTALL_DIR is not a git checkout; setting it up for updates..."
+        if ! adopt_non_git_install "$INSTALL_DIR" "$BRANCH"; then
+            log_error "Could not set up $INSTALL_DIR for updates (is Git installed and are you online?)"
+            log_info "Nothing was changed. Fix that and re-run, or choose a different directory with --dir"
+            exit 1
+        fi
     fi
 
     if [ -d "$INSTALL_DIR" ]; then

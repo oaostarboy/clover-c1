@@ -2105,12 +2105,78 @@ function Install-SystemPackages {
 # Installation
 # ============================================================================
 
+# Adopt a copied/zipped install (no .git) into git at the commit it matches, so
+# the normal update-in-place path applies. Mirrors adopt_non_git_install() in
+# clover_cli/update_cmd.py. Never deletes or overwrites working-tree files; on
+# failure removes only the .git it created and returns $false (the caller then
+# falls back to moving the directory aside, as before).
+function Adopt-NonGitInstall {
+    param([string]$Repo, [string]$BranchName)
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return $false }
+    $gitArgs = @("-c", "windows.appendAtomically=false")
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $tmpIdx = Join-Path ([System.IO.Path]::GetTempPath()) ("clover-adopt-" + [guid]::NewGuid().ToString("N"))
+    $prevIdx = $env:GIT_INDEX_FILE
+    $prevPrompt = $env:GIT_TERMINAL_PROMPT
+    $ok = $false
+    Push-Location $Repo
+    try {
+        $env:GIT_TERMINAL_PROMPT = "0"
+        & git @gitArgs init -q 2>$null
+        if ($LASTEXITCODE -ne 0) { throw "init" }
+        & git @gitArgs symbolic-ref HEAD "refs/heads/$BranchName" 2>$null
+        # Before hashing: autocrlf=true would normalize CRLF and skew the match.
+        & git @gitArgs config core.autocrlf false 2>$null
+        & git @gitArgs remote add origin $RepoUrlHttps 2>$null
+        if ($LASTEXITCODE -ne 0) { throw "remote" }
+        & git @gitArgs fetch -q origin "+refs/heads/${BranchName}:refs/remotes/origin/${BranchName}" 2>$null
+        if ($LASTEXITCODE -ne 0) { throw "fetch" }
+        $env:GIT_INDEX_FILE = $tmpIdx
+        & git @gitArgs add -A 2>$null
+        $tree = (& git @gitArgs write-tree 2>$null | Select-Object -First 1)
+        $env:GIT_INDEX_FILE = $prevIdx
+        if (-not $tree) { throw "hash" }
+        $best = $null; $bestN = -1
+        foreach ($c in (& git @gitArgs rev-list --first-parent "origin/$BranchName" 2>$null)) {
+            $n = @(& git @gitArgs diff --name-only $c $tree 2>$null).Count
+            if ($bestN -lt 0 -or $n -lt $bestN) { $best = $c; $bestN = $n }
+            if ($n -eq 0) { break }
+        }
+        if (-not $best) { throw "match" }
+        & git @gitArgs reset -q --mixed $best 2>$null
+        if ($LASTEXITCODE -ne 0) { throw "reset" }
+        & git @gitArgs branch -q "--set-upstream-to=origin/$BranchName" $BranchName 2>$null
+        Write-Success "Matched this copy to $($best.Substring(0,8)) ($bestN file(s) differ); updating in place"
+        $ok = $true
+    } catch {
+        Write-Warn "Could not set this copy up for updates automatically ($_)."
+    } finally {
+        $env:GIT_INDEX_FILE = $prevIdx
+        $env:GIT_TERMINAL_PROMPT = $prevPrompt
+        Pop-Location
+        Remove-Item -LiteralPath $tmpIdx -Force -ErrorAction SilentlyContinue
+        $ErrorActionPreference = $prevEAP
+    }
+    if (-not $ok) {
+        Remove-Item -LiteralPath (Join-Path $Repo ".git") -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    return $ok
+}
+
 function Install-Repository {
     Write-Info "Installing to $InstallDir..."
 
     $didUpdate = $false
 
     if (Test-Path $InstallDir) {
+        # A copy/zip of an install has no .git: adopt it into git at the commit
+        # it matches (nothing is deleted); the validation below then sees a
+        # normal checkout. If adoption fails we fall back to move-aside + clone.
+        if (-not (Test-Path "$InstallDir\.git")) {
+            Write-Info "Existing copy is not a git checkout; setting it up for updates..."
+            $null = Adopt-NonGitInstall -Repo $InstallDir -BranchName $Branch
+        }
         # Test-Path "$InstallDir\.git" returns True when .git is a file OR a
         # directory OR a symlink OR a submodule-style gitfile -- and also when
         # it's a broken stub left over from a failed previous install (e.g.
