@@ -11243,6 +11243,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     continue
 
                 chat_id = str(target.get("chat_id"))
+                job_name = job.get("name") or job_id
+                cause = "restart" if self._restart_requested else "shutdown"
+                target_msg = _clover_acks.notice(
+                    "job_interrupted", f"{platform.value}:{chat_id}", msg,
+                    f"'{job_name}' got cut off by the {cause}, "
+                    "so there's no result this time.")
                 thread_id = target.get("thread_id")
                 dedup_key = (
                     job_id,
@@ -11256,7 +11262,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     metadata = self._thread_metadata_for_target(
                         platform, chat_id, thread_id, adapter=adapter
                     )
-                    result = await adapter.send(chat_id, msg, metadata=metadata)
+                    result = await adapter.send(chat_id, target_msg, metadata=metadata)
                     if result is not None and getattr(result, "success", True) is False:
                         logger.debug(
                             "Cron interrupt notice to %s:%s failed: %s",
@@ -11369,7 +11375,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     adapter=adapter,
                 )
 
-                result = await adapter.send(chat_id, msg, metadata=metadata)
+                chat_msg = _clover_acks.notice(
+                    "restarting" if self._restart_requested else "shutting_down",
+                    f"{platform_str}:{chat_id}", msg,
+                    "Your task got paused. Message me after and I'll pick up "
+                    "where we left off."
+                    if self._restart_requested else "Your task got stopped.")
+                result = await adapter.send(chat_id, chat_msg, metadata=metadata)
                 if result is not None and getattr(result, "success", True) is False:
                     logger.debug(
                         "Failed to send shutdown notification to %s:%s: %s",
@@ -25697,7 +25709,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             pass
 
         if verdict == "rolled-back":
-            text = "The update didn't start correctly, so I went back to the version you had before. Nothing was lost. You can try again later."
+            text = _clover_acks.notice(
+                "update_rolled_back", "update",
+                "The update didn't start correctly, so I went back to the version you had before. Nothing was lost. You can try again later.",
+                "The update didn't start right, so I went back to the version you had. "
+                "Nothing was lost. You can try again later.")
         elif verdict == "success":
             text = (
                 "✅ Clover update finished. (The updater exited during its "
@@ -25975,7 +25991,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """
         delivered: set[tuple[str, str, Optional[str]]] = set()
         skipped = skip_targets or set()
-        message = "♻️ Gateway online — Clover is back and ready."
+        stock_message = "♻️ Gateway online — Clover is back and ready."
 
         for platform, platform_cfg in self.config.platforms.items():
             home = platform_cfg.home_channel
@@ -25996,6 +26012,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             target = (platform.value, str(home.chat_id), str(home.thread_id) if home.thread_id else None)
             if target in skipped or target in delivered:
                 continue
+
+            message = _clover_acks.notice(
+                "back_online", f"{platform.value}:{home.chat_id}", stock_message)
 
             try:
                 metadata = self._thread_metadata_for_target(

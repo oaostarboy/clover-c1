@@ -33,6 +33,7 @@ from typing import Any, Optional, Union
 from agent.account_usage import fetch_account_usage, render_account_usage_lines
 from agent.i18n import t
 from agent.turn_context import extract_api_content_sidecar
+from gateway import clover_acks as _clover_acks
 from gateway.config import HomeChannel, Platform, PlatformConfig, persist_home_channel
 from gateway.platforms.base import EphemeralReply, MessageEvent, MessageType
 from gateway.session import (
@@ -47,6 +48,13 @@ from utils import (
     base_url_host_matches,
     is_truthy_value,
 )
+
+def _event_chat_key(event: Any) -> str:
+    """Stable per-chat key for Clo notice pick memory."""
+    source = getattr(event, "source", None)
+    platform = getattr(getattr(source, "platform", None), "value", "")
+    return f"{platform}:{getattr(source, 'chat_id', '')}"
+
 
 logger = logging.getLogger("gateway.run")
 
@@ -1758,8 +1766,13 @@ class GatewaySlashCommandsMixin:
         if self._restart_requested or self._draining:
             count = self._running_agent_count()
             if count:
-                return t("gateway.draining", count=count)
-            return EphemeralReply(t("gateway.restart.in_progress"))
+                return _clover_acks.notice(
+                    "draining", _event_chat_key(event),
+                    t("gateway.draining", count=count),
+                    f"Finishing {count} task(s) first.")
+            return EphemeralReply(_clover_acks.notice(
+                "restart_in_progress", _event_chat_key(event),
+                t("gateway.restart.in_progress")))
 
         # Save the requester's routing info so the new gateway process can
         # notify them once it comes back online.
@@ -1841,8 +1854,14 @@ class GatewaySlashCommandsMixin:
         else:
             self.request_restart(detached=True, via_service=False)
         if active_agents:
-            return t("gateway.draining", count=active_agents)
-        return EphemeralReply(t("gateway.restart.restarting"))
+            return _clover_acks.notice(
+                "draining", _event_chat_key(event),
+                t("gateway.draining", count=active_agents),
+                f"Finishing {active_agents} task(s) first.")
+        return EphemeralReply(_clover_acks.notice(
+            "restart_requested", _event_chat_key(event),
+            t("gateway.restart.restarting"),
+            "If I'm not back in a minute, run `clover gateway restart` on the computer."))
 
     async def _handle_version_command(self, event: MessageEvent) -> str:
         """Handle /version — show the running Clover Cognition version."""
