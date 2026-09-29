@@ -137,7 +137,50 @@ function Set-MainIsNext([string]$nextBranch) {
   Write-Host "local main at $(git -C $d rev-parse --short HEAD); main $env:MAIN_SHA now reads as $nextBranch $nextSha; tracked changes: $(@($dirty).Count)"
 }
 
+function Start-ConfigTrace([string]$label) {
+  # Evidence for config migrations: every write to config.yaml (size/mtime
+  # change) with the schema version, whether display.cleanup_progress is
+  # still set, and which Clover processes were alive at that moment.
+  $out = "$env:RUNNER_TEMP\config-trace.log"
+  "=== $label" | Add-Content $out
+  Start-Job -ArgumentList "$env:CLOVER_HOME\config.yaml", $out -ScriptBlock {
+    param($cfg, $out)
+    $last = ""
+    while ($true) {
+      $state = "missing"
+      try {
+        $item = Get-Item $cfg -ErrorAction Stop
+        $t = Get-Content $cfg -Raw -ErrorAction Stop
+        $ver = ([regex]::Match($t, '(?m)^_config_version:\s*(\d+)')).Groups[1].Value
+        $cp = [regex]::IsMatch($t, '(?m)^  cleanup_progress:')
+        $state = "size=$($item.Length) ver=$ver cleanup_key=$cp"
+      } catch { }
+      if ($state -ne $last) {
+        $procs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -match 'clover' -and $_.Name -match 'python|clover' } | ForEach-Object {
+          $c = ($_.CommandLine -replace '^.*?(clover_cli[.]\w+|clover\.exe"?|update_restart_watcher\S*)', '$1') -replace '\s+', ' '
+          "$($_.ProcessId)<$($_.ParentProcessId) $($c.Substring(0, [Math]::Min(70, $c.Length)))" }) -join ' | '
+        "$(Get-Date -Format HH:mm:ss.fff) $state :: $procs" | Add-Content $out
+        $last = $state
+      }
+      Start-Sleep -Milliseconds 300
+    }
+  }
+}
+
+function Stop-ConfigTrace($job) {
+  if ($job) { Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue }
+  Write-Host "--- config.yaml trace ---"
+  Get-Content "$env:RUNNER_TEMP\config-trace.log" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
+}
+
 function Invoke-PathUpdate([string]$label, [string[]]$cliArgs) {
+  # The trace keeps running through the hand-off child, the watcher and the
+  # first post-update gateway start; the assert step stops and prints it.
+  $global:ConfigTraceJob = Start-ConfigTrace $label
+  return (Invoke-PathUpdateInner $label $cliArgs)
+}
+
+function Invoke-PathUpdateInner([string]$label, [string[]]$cliArgs) {
   # Runs the user's exact update for $env:UPDATE_PATH (or the given CLI args)
   # and returns the update's exit code; output lands in update-output.txt.
   Remove-Item "$env:RUNNER_TEMP\update-output.txt" -ErrorAction SilentlyContinue
@@ -172,6 +215,7 @@ function Invoke-PathUpdate([string]$label, [string[]]$cliArgs) {
 function Assert-UpdatePass([string]$label, [int]$logStart, $exitCode, [string]$landedPath) {
   $bad = @()
   $bad += Measure-SingleGateway $label $logStart $true
+  Stop-ConfigTrace $global:ConfigTraceJob
   $out = (Get-Content "$env:RUNNER_TEMP\update-output.txt" -Raw -ErrorAction SilentlyContinue)
   $bad += Measure-UpdateOutcome $label $exitCode "$out" $landedPath
   git -C "$env:INSTALL_DIR" log --oneline -1 | Out-Host

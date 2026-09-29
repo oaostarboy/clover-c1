@@ -872,10 +872,12 @@ jobs:
             $bad = Measure-SingleGateway "$label refused" $logStart $true
             if ($bad.Count) { $bad | ForEach-Object { Write-Host "  $_" }; throw "[$label] refused update did not leave one healthy gateway" }
             Write-Host "PASS [$label refused]: the refused update left exactly one healthy gateway"
+            Stop-ConfigTrace $global:ConfigTraceJob
             "LEGACY_REFUSED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           } else {
             Assert-UpdatePass $label $logStart $exitCode ""
           }
+          exit 0
 
       - name: d2. (69a75bb only) one-time recovery from a terminal, then every criterion
         if: env.LEGACY_REFUSED == '1'
@@ -888,6 +890,7 @@ jobs:
           $exitCode = Invoke-PathUpdate $label @('update', '--yes', '--force-venv')
           Write-Host "[$label] update exit=$exitCode"
           Assert-UpdatePass $label $logStart $exitCode ""
+          exit 0
 
       - name: e. Next update on the fixed code (the path's exact command) + every criterion
         shell: pwsh
@@ -900,6 +903,7 @@ jobs:
           $exitCode = Invoke-PathUpdate $label
           Write-Host "[$label] update exit=$exitCode"
           Assert-UpdatePass $label $logStart $exitCode ".github\win-e2e\wdr.ps1"
+          exit 0
 
       - name: f. Stage logs
         if: always()
@@ -907,7 +911,7 @@ jobs:
         run: |
           $dst = "$env:RUNNER_TEMP\artifacts"
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
-          foreach ($p in @("$env:CLOVER_HOME\logs", "$env:CLOVER_HOME\gateway_state.json", "$env:CLOVER_HOME\.clover-last-update", "$env:CLOVER_HOME\config.yaml", "$env:RUNNER_TEMP\irc.log", "$env:RUNNER_TEMP\update-output.txt")) {
+          foreach ($p in @("$env:CLOVER_HOME\logs", "$env:CLOVER_HOME\gateway_state.json", "$env:CLOVER_HOME\.clover-last-update", "$env:CLOVER_HOME\config.yaml", "$env:RUNNER_TEMP\irc.log", "$env:RUNNER_TEMP\update-output.txt", "$env:RUNNER_TEMP\config-trace.log")) {
             if (Test-Path $p) { Copy-Item -Recurse -Force $p $dst -ErrorAction SilentlyContinue }
           }
 
