@@ -89,7 +89,7 @@ class LiveAdapter:
         self.live[str(message_id)] = content
         return SendResult(success=True, message_id=message_id)
 
-    async def delete_message(self, chat_id, message_id):
+    async def delete_message(self, chat_id, message_id) -> bool:
         self.live.pop(str(message_id), None)
         return True
 
@@ -98,7 +98,7 @@ class LiveAdapter:
 
 
 class NoDeleteAdapter(LiveAdapter):
-    delete_message = None
+    delete_message = None  # type: ignore[assignment]
 
 
 class Clock:
@@ -348,6 +348,35 @@ async def test_orphan_card_from_a_previous_gateway_process_is_swept(tmp_path, mo
     card = _card(ad, tmp_path)
     await card.publish(_state(seat_done=1, elapsed=2))
     assert "900" not in ad.live and len(ad.council_messages()) == 1
+
+@pytest.mark.asyncio
+async def test_false_delete_retains_id_until_next_sweep(tmp_path, monkeypatch):
+    monkeypatch.setattr(da, "_board_store_path", lambda: tmp_path / "boards.json")
+
+    class FlakyDelete(LiveAdapter):
+        def __init__(self):
+            super().__init__()
+            self.fail_once = True
+
+        async def delete_message(self, chat_id, message_id):
+            if self.fail_once:
+                self.fail_once = False
+                return False
+            return await super().delete_message(chat_id, message_id)
+
+    ad = FlakyDelete()
+    card = _card(ad, tmp_path)
+    await card.publish(_state())
+    first = card.message_id
+    await ad.send("chat-A", "reply")
+    await _settle()
+    assert first in ad.live
+    key = cc._STORE_PREFIX + da._board_store_key(ad, "chat-A")
+    assert first in da._board_store_load()[key]
+    _seat(tmp_path, "STEELMAN", "new take")
+    await card.publish(_state(seat_done=1))  # ordinary follow/edit retries the deletion
+    assert first not in ad.live
+    assert first not in da._board_store_load()[key]
 
 
 @pytest.mark.asyncio

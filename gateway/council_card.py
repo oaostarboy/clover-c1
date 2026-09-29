@@ -574,6 +574,8 @@ class CouncilLiveCard:
             async with self._lock:
                 if self._closed:
                     return False
+                if self.message_id and len(self._posted) > 1:
+                    await self._sweep_except(self.message_id)
                 snap = self._snapshot(self._state)
                 text = render_live(snap, expandable=self.expandable)
                 struct = render_live(snap, expandable=self.expandable, times=False)
