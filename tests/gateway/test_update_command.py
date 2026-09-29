@@ -625,3 +625,46 @@ def test_gateway_mode_update_writes_a_transcript(tmp_path, monkeypatch):
     assert "clover update --gateway (from chat) started" in log
     assert "→ Fetching updates..." in log
     assert sys.stdout is state["prev_stdout"]
+
+
+class TestChatUpdateIsAFreshRun:
+    """A gateway relaunched by an update's clover.exe hand-off child inherited
+    CLOVER_UPDATE_REEXEC=1. Its next chat /update then believed it was that
+    hand-off child: it skipped the pull and only "finished the dependency
+    install" (Windows runner, 2026-09-29)."""
+
+    @pytest.mark.asyncio
+    async def test_chat_update_spawn_drops_the_handoff_marker(self, tmp_path, monkeypatch):
+        runner = _make_runner()
+        event = _make_event(platform=Platform.TELEGRAM, chat_id="99999")
+        fake_root = tmp_path / "project"
+        (fake_root / ".git").mkdir(parents=True)
+        (fake_root / "gateway").mkdir()
+        (fake_root / "gateway" / "run.py").touch()
+        clover_home = tmp_path / "clover"
+        clover_home.mkdir()
+        monkeypatch.setenv("CLOVER_UPDATE_REEXEC", "1")
+
+        with patch("gateway.run._clover_home", clover_home), \
+             patch("gateway.run.__file__", str(fake_root / "gateway" / "run.py")), \
+             patch("shutil.which", side_effect=lambda x: "/usr/bin/clover" if x == "clover" else "/usr/bin/setsid"), \
+             patch("subprocess.Popen") as popen:
+            await runner._handle_update_command(event)
+
+        assert popen.called
+        env = popen.call_args.kwargs.get("env")
+        assert env is not None, "the updater inherited the gateway's whole environment"
+        assert "CLOVER_UPDATE_REEXEC" not in env
+        assert env.get("PATH") == __import__("os").environ.get("PATH")
+
+    def test_gateway_start_forgets_the_handoff_marker(self, monkeypatch):
+        from clover_cli.update_contract import drop_update_handoff_env
+
+        monkeypatch.setenv("CLOVER_UPDATE_REEXEC", "1")
+        drop_update_handoff_env()
+        assert "CLOVER_UPDATE_REEXEC" not in __import__("os").environ
+        import inspect
+
+        import gateway.run as gateway_run
+
+        assert "drop_update_handoff_env()" in inspect.getsource(gateway_run.start_gateway)

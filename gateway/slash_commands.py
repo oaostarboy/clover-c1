@@ -6506,6 +6506,11 @@ class GatewaySlashCommandsMixin:
         # we're already inside gateway/run.py's update path which is async,
         # so the simplest correct thing is: launch an inline Python helper
         # that runs the command and writes both outputs.
+        from clover_cli.update_contract import drop_update_handoff_env
+
+        # A gateway relaunched by an update's hand-off child inherits that
+        # child's CLOVER_UPDATE_REEXEC; this updater is a fresh run.
+        spawn_env = drop_update_handoff_env(dict(os.environ))
         try:
             if sys.platform == "win32":
                 import textwrap
@@ -6542,6 +6547,7 @@ class GatewaySlashCommandsMixin:
                         _update_argv,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        env=spawn_env,
                         **windows_detach_popen_kwargs(),
                     )
                 except OSError:
@@ -6556,6 +6562,7 @@ class GatewaySlashCommandsMixin:
                         _update_argv,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        env=spawn_env,
                         creationflags=windows_detach_flags_without_breakaway(),
                     )
             else:
@@ -6577,6 +6584,7 @@ class GatewaySlashCommandsMixin:
                         [setsid_bin, "bash", "-c", update_cmd],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        env=spawn_env,
                         start_new_session=True,
                     )
                 else:
@@ -6585,6 +6593,7 @@ class GatewaySlashCommandsMixin:
                         ["bash", "-c", update_cmd],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        env=spawn_env,
                         start_new_session=True,
                     )
         except Exception as e:

@@ -21,6 +21,7 @@ use <command>" instead of a silent non-update), and exits 2 on CLI surfaces.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -174,3 +175,23 @@ UPDATE_REFUSED_DETAIL = (
     "install is untouched and still running the previous version.\n\n"
     "To apply it, run `clover update` from a terminal outside the gateway."
 )
+
+
+#: Environment that only means something inside one update's clover.exe
+#: hand-off. A gateway relaunched by the hand-off child inherits it; left in
+#: place, the gateway's next chat /update believed it WAS that hand-off
+#: child, skipped the pull and only "finished the dependency install"
+#: (Windows runner, 2026-09-29).
+UPDATE_HANDOFF_ONLY_ENV = ("CLOVER_UPDATE_REEXEC",)
+
+
+def drop_update_handoff_env(env: Optional[dict] = None) -> dict:
+    """Remove hand-off-only variables from *env* (``os.environ`` by default).
+
+    Mutates and returns *env*, so a gateway can clean its own environment at
+    start and a spawn site can clean a copy.
+    """
+    target = os.environ if env is None else env
+    for key in UPDATE_HANDOFF_ONLY_ENV:
+        target.pop(key, None)
+    return target

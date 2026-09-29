@@ -32573,6 +32573,15 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # platforms. Set here (not at module import) so incidental imports of
     # gateway.run from CLI/tool code do not poison CLOVER_EXEC_ASK.
     os.environ["CLOVER_EXEC_ASK"] = "1"
+    # A gateway relaunched by an update's hand-off child inherits that
+    # child's CLOVER_UPDATE_REEXEC; nothing this gateway starts (a chat
+    # /update above all) may think it is that hand-off child.
+    try:
+        from clover_cli.update_contract import drop_update_handoff_env
+
+        drop_update_handoff_env()
+    except Exception:
+        os.environ.pop("CLOVER_UPDATE_REEXEC", None)
 
     from clover_cli.resource_limits import apply_nofile_soft_limit
 
