@@ -1,6 +1,7 @@
 """Minimal OpenAI-compatible model server for the Windows update e2e (D5).
 
-A chat request whose messages contain "LONG-TURN" is a slow agent turn: it
+A streaming chat request whose messages contain "LONG-TURN" is the slow
+agent turn: it
 streams a "." every 3 s for <slow_seconds>, then "LONG-TURN-DONE". Every
 other request (titles, auxiliary calls) answers "ok" at once. The runner
 starts the long turn, waits for "long turn started" in the log, then runs
@@ -79,8 +80,11 @@ class Handler(BaseHTTPRequestHandler):
             log(f"POST {self.path} -> 404")
             self._json(404, {"error": {"message": "not found"}})
             return
-        long_turn = "LONG-TURN" in json.dumps(req.get("messages") or [])
         stream = bool(req.get("stream"))
+        # The agent's turn is the streaming call. Auxiliary calls (titles,
+        # summaries) also carry the user text but are not the turn; they
+        # answer at once so a cancelled side call is not read as a cut turn.
+        long_turn = stream and "LONG-TURN" in json.dumps(req.get("messages") or [])
         log(f"POST {self.path} stream={stream} long={long_turn}")
         if long_turn:
             log("long turn started")
