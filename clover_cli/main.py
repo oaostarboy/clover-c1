@@ -9092,14 +9092,16 @@ def _windows_running_clover_launcher_locked() -> bool:
 _UPDATE_REEXEC_ENV = "CLOVER_UPDATE_REEXEC"
 
 
-def _reexec_dependency_sync_off_windows_shim() -> bool:
-    """Hand the dependency sync to the venv interpreter, off the console shim.
+def _reexec_dependency_sync_off_windows_shim(*, action: str = "update") -> bool:
+    """Hand update's sync or the entire repair to the shim-free venv interpreter.
 
     Returns True when a child was spawned and the caller must exit at once,
     releasing the shim before the child reaches ``pip install -e .``. Returns
     False to continue the sync in-process.
 
-    Called at the dependency-sync boundary, NOT at the top of the command —
+    For repair this is called before the snapshot, so the child performs every
+    step exactly once. For update this is called at the dependency-sync boundary,
+    NOT at the top of the command —
     the same placement rule as the native-module deferral beside it, and for
     the same reason (#86735): a hand-off that fires before the fetch detaches
     every run, including the ``Already up to date!`` no-op that never touches
@@ -9151,18 +9153,21 @@ def _reexec_dependency_sync_off_windows_shim() -> bool:
                 env={**os.environ, _UPDATE_REEXEC_ENV: "1"},
                 stdin=subprocess.DEVNULL,
             )
-            print(
-                f"→ Windows: {shim.name} cannot replace itself while it runs; "
-                "finishing the dependency install under the venv Python."
-            )
-            print(
-                "  The code update is already applied. The install continues "
-                "below and this shell returns right away."
-            )
+            if action == "repair":
+                print("Windows: finishing the repair under the venv Python…", flush=True)
+            else:
+                print(
+                    f"→ Windows: {shim.name} cannot replace itself while it runs; "
+                    "finishing the dependency install under the venv Python."
+                )
+                print(
+                    "  The code update is already applied. The install continues "
+                    "below and this shell returns right away."
+                )
             return True
         except OSError as exc:
             logger.debug("Dependency-sync hand-off via %s failed: %s", python_exe, exc)
-        print(f"  ⚠ Could not hand the dependency install off {shim.name}.")
+        print(f"  ⚠ Could not hand the {action} off {shim.name}.")
         print("    Continuing in-process; if it cannot replace the shim, run:")
         print(f"    {subprocess.list2cmdline(cmd)}")
     return False
@@ -9876,6 +9881,7 @@ def _install_python_dependencies_with_optional_fallback(
     *,
     env: dict[str, str] | None = None,
     group: str = "all",
+    reinstall_packages: list[str] | None = None,
 ) -> None:
     """Install base deps plus as many optional extras as the environment supports.
 
@@ -9926,6 +9932,9 @@ def _install_python_dependencies_with_optional_fallback(
             scripts_dir = _interpreter_scripts_dir()
 
     def _install(args: list[str]) -> None:
+        if reinstall_packages and _is_uv_command(install_cmd_prefix):
+            args = [args[0], *[flag for package in reinstall_packages
+                              for flag in ("--reinstall-package", package)], *args[1:]]
         if pin_python:
             args = _insert_python_pin(args)
         # strict_quarantine: this is the UPDATE dependency sync. A shim that
