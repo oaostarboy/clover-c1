@@ -478,23 +478,33 @@ class GatewaySlashCommandsMixin:
         # Resolve session config info to surface to the user, scoped to the
         # profile serving this source so a multiplexed /reset //new banner
         # reports the profile's model, not the base config's (#59003).
+        session_info = ""
         try:
-            session_info = await asyncio.to_thread(
-                self._reset_notice_session_info, source
-            )
-        except Exception:
-            session_info = ""
+            from agent import clover_flavor as _cf
 
+            _themed_reply = _cf.new_session_active()
+        except Exception:
+            _themed_reply = False
+        if not _themed_reply:  # the themed reply resolves its own fields
+            try:
+                session_info = await asyncio.to_thread(
+                    self._reset_notice_session_info, source
+                )
+            except Exception:
+                session_info = ""
+
+        _topic_header = await asyncio.to_thread(self._telegram_topic_new_header, source)
         if new_entry:
-            header = await asyncio.to_thread(self._telegram_topic_new_header, source) or t("gateway.reset.header_default")
+            header = _topic_header or t("gateway.reset.header_default")
         else:
             # No existing session, just create one
             new_entry = await self.async_session_store.get_or_create_session(source, force_new=True)
-            header = await asyncio.to_thread(self._telegram_topic_new_header, source) or t("gateway.reset.header_new")
+            header = _topic_header or t("gateway.reset.header_new")
 
         # Set session title if provided with /new <title>
         _title_arg = event.get_command_args().strip()
         _title_note = ""
+        _applied_title = ""
         if _title_arg and self._session_db and new_entry:
             from clover_state import SessionDB
             try:
@@ -506,6 +516,7 @@ class GatewaySlashCommandsMixin:
                 try:
                     await self._session_db.set_session_title(new_entry.session_id, sanitized)
                     header = t("gateway.reset.header_titled", title=sanitized)
+                    _applied_title = sanitized
                 except ValueError as e:
                     _title_note = t("gateway.reset.title_error_untitled", error=str(e))
                 except Exception:
@@ -541,16 +552,89 @@ class GatewaySlashCommandsMixin:
         except Exception:
             pass
 
+        _platform = source.platform.value if source.platform else ""
+
+        # Message-pack skins (Clo, or a user skin with ``new_session`` lines)
+        # re-skin the whole reply; every other skin keeps the stock text below.
+        try:
+            _themed = await asyncio.to_thread(
+                self._themed_new_session_reply,
+                source, _platform, _topic_header or "", _applied_title, _title_note,
+            )
+        except Exception:
+            logger.debug("Themed /new reply failed; using stock text", exc_info=True)
+            _themed = None
+        if _themed is not None:
+            return EphemeralReply(_themed)
+        if _themed_reply:  # themed render failed: fall back to the stock info block
+            try:
+                session_info = await asyncio.to_thread(
+                    self._reset_notice_session_info, source
+                )
+            except Exception:
+                session_info = ""
+
         # Append a random tip to the reset message
         try:
             from clover_cli.tips import get_random_tip
-            _tip_line = t("gateway.reset.tip", tip=get_random_tip())
+            _tip_line = t("gateway.reset.tip", tip=get_random_tip(platform=_platform))
         except Exception:
             _tip_line = ""
 
         if session_info:
             return EphemeralReply(f"{header}\n\n{session_info}{_tip_line}")
         return EphemeralReply(f"{header}{_tip_line}")
+
+    def _themed_new_session_reply(
+        self,
+        source: SessionSource,
+        platform: str,
+        topic_header: str,
+        title: str,
+        title_note: str,
+    ) -> Optional[str]:
+        """The /new reply in the active message pack's voice, or None (stock reply).
+
+        Layout: headline, blank line, quote-bar info (model · provider, context,
+        local endpoint), blank line, italic tip.  Title rejection warnings stay
+        right under the headline, exactly where the stock reply puts them.
+        """
+        from agent import clover_flavor
+
+        if not clover_flavor.new_session_active():
+            return None
+        try:
+            parts = self._reset_notice_session_parts(source)
+        except Exception:
+            parts = {}
+        endpoint = ""
+        if parts.get("base_url"):
+            from urllib.parse import urlparse
+
+            endpoint = urlparse(str(parts["base_url"])).netloc or str(parts["base_url"])
+        tip = ""
+        try:
+            from clover_cli.tips import get_random_tip
+
+            tip = get_random_tip(platform=platform)
+        except Exception:
+            pass
+        chat_key = f"{platform}:{source.chat_id or ''}:{source.thread_id or ''}"
+        rendered = clover_flavor.render_new_session(
+            chat_key=chat_key,
+            title=title,
+            topic_header=topic_header,
+            model=parts.get("model", ""),
+            provider=parts.get("provider", ""),
+            context=parts.get("context", ""),
+            context_guess=parts.get("context_source") == "default",
+            local_endpoint=endpoint,
+            tip=tip,
+        )
+        if rendered is None:
+            return None
+        headline, info, tip_line = rendered
+        return "\n\n".join(x for x in (headline + title_note, info, tip_line) if x)
 
     async def _handle_profile_command(self, event: MessageEvent) -> str:
         """Handle /profile — show the profile serving this source and its home.
