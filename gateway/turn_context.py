@@ -68,6 +68,8 @@ class TurnContext:
     # that card. Counting happens in the tool-progress callback, which already
     # sees every tool.started and _thinking event.
     _summary_thoughts: int = 0
+    # A note seen but not yet followed by a tool call (see run.py progress cb).
+    _pending_thought: bool = False
     _summary_tools: int = 0
     _summary_t0: float = 0.0
 

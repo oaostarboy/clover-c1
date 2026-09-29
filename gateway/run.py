@@ -4521,8 +4521,18 @@ class TurnRunner:
         # the mode guards below so the tally reflects what the TURN did, not
         # what the chat happened to render (progress_mode "new" shows one line
         # for ten identical calls; the card must still say ten).
+        # A top-level note ("reasoning.available") is only a thought if a tool
+        # call follows it; the last one of the turn is the final answer and
+        # must not be counted. Hold it as pending and count it when the next
+        # tool starts. Delegated children's legacy "_thinking" relay counts
+        # immediately (their notes always precede tool work).
         if event_type == "tool.started" and tool_name and tool_name != "_thinking":
             ctx._summary_tools += 1
+            if ctx._pending_thought:
+                ctx._summary_thoughts += 1
+                ctx._pending_thought = False
+        elif event_type == "reasoning.available" and tool_name == "_thinking":
+            ctx._pending_thought = True
         elif event_type == "_thinking" or tool_name == "_thinking":
             ctx._summary_thoughts += 1
         # "log" mode: append tool.started lines to the log queue and stay

@@ -2030,6 +2030,9 @@ def test_thinking_relay_skipped_but_counted_when_interim_on():
         while not ctx.progress_queue.empty():
             drained.append(ctx.progress_queue.get_nowait())
         assert drained == expected
+        # A note with no tool call after it is the final answer, not a thought.
+        assert ctx._summary_thoughts == 0
+        runner.progress_callback("tool.started", "terminal", "ls", {})
         assert ctx._summary_thoughts == 1
 
     # Delegated children (legacy shape) keep relaying to the subagent card.
@@ -2040,3 +2043,25 @@ def test_thinking_relay_skipped_but_counted_when_interim_on():
     )
     TurnRunner(_make_mocked_gateway_runner(), ctx).progress_callback("_thinking", "child note")
     assert ctx.progress_queue.get_nowait() == "💭 *child note*"
+
+
+def test_card_counts_only_notes_followed_by_a_tool_call():
+    """Three notes before three tool calls, then the final answer: 3, not 4."""
+    from tests.gateway.test_live_reasoning_progress import (
+        _base_turn_ctx,
+        _make_mocked_gateway_runner,
+    )
+    from gateway.run import TurnRunner
+
+    ctx = _base_turn_ctx(
+        _live_reasoning_enabled=False,
+        _thinking_enabled=True,
+        interim_assistant_messages_enabled=True,
+    )
+    runner = TurnRunner(_make_mocked_gateway_runner(), ctx)
+    for i in range(3):
+        runner.progress_callback("reasoning.available", "_thinking", f"note {i}", None)
+        runner.progress_callback("tool.started", "terminal", "ls", {})
+    runner.progress_callback("reasoning.available", "_thinking", "Here is the answer.", None)
+    assert ctx._summary_thoughts == 3
+    assert ctx._summary_tools == 3
