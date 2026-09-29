@@ -166,3 +166,42 @@ def test_handoff_parent_never_cold_starts_a_gateway(monkeypatch):
     assert update_cmd._hand_off_windows_gateway_resume(token) is True
     update_cmd._resume_windows_gateways_after_update(token)  # the parent's atexit resume
     assert started == []
+
+
+def test_update_pause_asks_the_socket_first_and_waits_for_the_turn(monkeypatch, tmp_path, capsys):
+    """D5: no racing planned-stop marker once the gateway ACKs, and the
+    updater waits the after-turn budget the gateway declared."""
+    from types import SimpleNamespace
+
+    import clover_cli.gateway as gateway_mod
+    import gateway.control_socket as control_socket
+    import gateway.status as status_mod
+
+    home = tmp_path / "profiles" / "default"
+    home.mkdir(parents=True)
+    monkeypatch.setattr(clover_main, "_is_windows", lambda: True)
+    monkeypatch.setattr(gateway_mod, "find_gateway_pids", lambda **_k: [101])
+    monkeypatch.setattr(gateway_mod, "find_windows_gateway_services", lambda **_k: [])
+    monkeypatch.setattr(gateway_mod, "find_profile_gateway_processes",
+                        lambda **_k: [SimpleNamespace(profile="default", path=home, pid=101)])
+    monkeypatch.setattr(gateway_mod, "_get_restart_drain_timeout", lambda: 0)
+    monkeypatch.setattr(control_socket, "pause_gateway_for_update",
+                        lambda *_a, **_k: {"pausing": True, "pid": 101, "active_work": 1,
+                                           "after_turn_timeout": 1800.0, "drain_timeout": 1800.0})
+    waited = []
+    monkeypatch.setattr(clover_main, "_wait_for_windows_update_gateway_exit",
+                        lambda pids, *, timeout: waited.append(timeout) or set())
+    monkeypatch.setattr(status_mod, "terminate_pid", lambda *a, **k: None)
+
+    clover_main._pause_windows_gateways_for_update()
+
+    assert not (home / ".gateway-planned-stop.json").exists()
+    assert waited and waited[0] >= 1800
+    assert "in-flight turn" in capsys.readouterr().out
+
+
+def test_update_marker_fallback_says_why(monkeypatch):
+    import gateway.status as status_mod
+
+    assert update_cmd._write_update_planned_stop_marker(get_clover_home(), 4242)
+    assert status_mod.planned_stop_marker_reason() == "update"

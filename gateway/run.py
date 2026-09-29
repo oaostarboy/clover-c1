@@ -12275,6 +12275,76 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         )
         return True
 
+    async def _fold_into_pending_restart(self) -> bool:
+        """Let a pending after-turn restart own a plain ``stop()``.
+
+        The updater's planned-stop marker and its socket pause reach the
+        gateway within a millisecond of each other. The pause defers the
+        restart until the active turn finishes (``request_restart``); the
+        marker's plain ``stop()`` used to run right after it with a 0 s
+        drain and amputate that turn anyway. While the deferred restart is
+        pending, wait for it instead of starting a second shutdown.
+
+        Returns True when the pending restart handled the shutdown.
+        """
+        task = getattr(self, "_restart_task", None)
+        if (
+            not getattr(self, "_restart_task_started", False)
+            or task is None
+            or task.done()
+            or task is asyncio.current_task()
+        ):
+            return False
+        logger.info(
+            "Stop requested while a restart is waiting for %d active work "
+            "unit(s); letting that restart finish the turn(s) first",
+            self._active_work_count(),
+        )
+        try:
+            await asyncio.shield(task)
+        except Exception:
+            pass
+        return True
+
+    def _handle_planned_stop(self, reason: Optional[str]) -> None:
+        """Planned-stop marker branch of the shutdown handler.
+
+        An update pause (marker ``reason == "update"``) with a turn still
+        running takes the same after-turn deferral as the socket
+        ``pause-for-update`` verb, so an updater that could not reach the
+        control socket still does not cut the turn off. Everything else
+        stops as before; ``stop()`` itself folds into a restart that is
+        already pending.
+        """
+        if (
+            reason == "update"
+            and not getattr(self, "_restart_task_started", False)
+            and self._awaitable_work_count() > 0
+        ):
+            self.request_restart(detached=False, via_service=True)
+            return
+        asyncio.create_task(self.stop())
+
+    def update_pause_budget(self, drain_timeout: float) -> dict:
+        """Seconds an updater should wait for this gateway to exit.
+
+        With a turn running, the pause defers ``stop()`` for up to
+        ``restart_after_turn_timeout``; reporting only the drain timeout
+        (0 by default) made the updater force-kill the gateway 10 s later.
+        """
+        try:
+            active = int(self._awaitable_work_count())
+        except Exception:
+            active = 0
+        after_turn = 0.0
+        if active > 0:
+            after_turn = float(getattr(self, "_restart_after_turn_timeout", 0.0) or 0.0)
+        return {
+            "active_work": active,
+            "after_turn_timeout": after_turn,
+            "drain_timeout": float(drain_timeout) + after_turn,
+        }
+
     def request_restart(self, *, detached: bool = False, via_service: bool = False) -> bool:
         if self._restart_task_started:
             return False
@@ -15639,6 +15709,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _stop_guards = getattr(self, "_stop_loop_liveness_guards", None)
         if callable(_stop_guards):
             _stop_guards()
+        if not restart and await self._fold_into_pending_restart():
+            return
         if restart:
             self._restart_requested = True
             self._restart_detached = detached_restart
@@ -32782,11 +32854,16 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         # external kill unless the CLI marks it first. SIGINT comes from an
         # interactive Ctrl+C and is likewise an intentional foreground stop.
         planned_stop = False
+        planned_stop_reason = None
         if received_signal == signal.SIGINT:
             planned_stop = True
         elif not planned_takeover:
             try:
-                from gateway.status import consume_planned_stop_marker_for_self
+                from gateway.status import (
+                    consume_planned_stop_marker_for_self,
+                    planned_stop_marker_reason,
+                )
+                planned_stop_reason = planned_stop_marker_reason()
                 planned_stop = consume_planned_stop_marker_for_self()
             except Exception as e:
                 logger.debug("Planned stop marker check failed: %s", e)
@@ -32854,7 +32931,10 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 )
             except Exception as _e:
                 logger.debug("spawn_async_diagnostic failed: %s", _e)
-        asyncio.create_task(runner.stop())
+        if planned_stop and received_signal != signal.SIGINT:
+            runner._handle_planned_stop(planned_stop_reason)
+        else:
+            asyncio.create_task(runner.stop())
 
     def restart_signal_handler():
         runner.request_restart(detached=False, via_service=True)
@@ -32980,6 +33060,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 finally:
                     _done.set()
 
+            _budget = runner.update_pause_budget(_drain)
             _main_loop.call_soon_threadsafe(_request)
             _done.wait(timeout=5.0)
             accepted = bool(accepted_box and accepted_box[0])
@@ -32987,7 +33068,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 "pausing": accepted,
                 "already_stopping": not accepted,
                 "pid": os.getpid(),
-                "drain_timeout": _drain,
+                **_budget,
             }
 
         _control_server = GatewayControlServer(

@@ -2468,6 +2468,19 @@ def consume_planned_stop_marker_for_self() -> bool:
     )
 
 
+def planned_stop_marker_reason() -> Optional[str]:
+    """Return the ``reason`` recorded in the planned-stop marker, if any.
+
+    The updater writes ``reason: "update"`` so the gateway can let an
+    active turn finish before stopping. Read-only; never raises.
+    """
+    record = _read_json_file(_get_planned_stop_marker_path())
+    if not isinstance(record, dict):
+        return None
+    reason = record.get("reason")
+    return str(reason) if reason else None
+
+
 def planned_stop_marker_targets_self() -> bool:
     """Return True only when a live planned-stop marker names the current process.
 

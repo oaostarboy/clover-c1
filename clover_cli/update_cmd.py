@@ -4922,6 +4922,8 @@ def _write_update_planned_stop_marker(profile_path: Path, pid: int) -> bool:
             "target_start_time": _get_process_start_time(pid),
             "stopper_pid": os.getpid(),
             "written_at": datetime.now(timezone.utc).isoformat(),
+            # Lets the gateway finish an active turn before stopping (D5).
+            "reason": "update",
         }
         atomic_json_write(
             Path(profile_path) / ".gateway-planned-stop.json",
@@ -6454,24 +6456,30 @@ def _pause_windows_gateways_for_update() -> dict | None:
             continue
         profiles[str(proc.profile)] = int(pid)
         mapped_pids.append(int(pid))
-        _write_update_planned_stop_marker(Path(proc.path), int(pid))
         # Socket-first pause (#92091 step 2): ask the gateway to drain and
         # exit itself instead of relying on the marker poll + force-kill
         # ladder. A positive ACK means the gateway is running its own
-        # graceful restart path (same drain as SIGUSR1/service restarts) and
-        # will release its venv handles on the way out. No answer (older
-        # gateway, no socket) → the marker watcher / force-kill fallback
-        # below behaves exactly as before this verb existed.
+        # graceful restart path (same after-turn deferral as SIGUSR1/service
+        # restarts) and will release its venv handles on the way out.
+        #
+        # The planned-stop marker is only the fallback for a gateway that
+        # did not ACK (older gateway, no socket). Writing it as well raced
+        # the pause: the marker's plain stop() ran with a 0 s drain and
+        # killed the turn the pause was deferring for (D5).
+        acked = False
         try:
             from gateway.control_socket import pause_gateway_for_update
 
             ack = pause_gateway_for_update(Path(proc.path))
             if ack and (ack.get("pausing") or ack.get("already_stopping")):
                 socket_acks.append(ack)
+                acked = True
         except Exception as exc:
             logger.debug(
                 "Socket pause unavailable for gateway %s: %s", pid, exc
             )
+        if not acked:
+            _write_update_planned_stop_marker(Path(proc.path), int(pid))
 
     # Resolve each mapped worker's venv-side launcher BEFORE draining: the
     # drain stops tracking a PID exactly when it dies, so a gracefully
@@ -6505,10 +6513,18 @@ def _pause_windows_gateways_for_update() -> dict | None:
             drain_timeout = max(drain_timeout, declared + 10.0)
         except Exception:
             pass
-        print(
-            f"  → {len(socket_acks)} gateway(s) ACKed socket pause; "
-            f"waiting up to {int(drain_timeout)}s for graceful exit"
-        )
+        busy = sum(int(a.get("active_work") or 0) for a in socket_acks)
+        if busy:
+            print(
+                f"  → Waiting for {busy} in-flight turn(s) to finish before "
+                f"updating (up to {int(drain_timeout)}s); the update continues "
+                "as soon as they are done"
+            )
+        else:
+            print(
+                f"  → {len(socket_acks)} gateway(s) ACKed socket pause; "
+                f"waiting up to {int(drain_timeout)}s for graceful exit"
+            )
     survivors = _m()._wait_for_windows_update_gateway_exit(
         mapped_pids,
         timeout=drain_timeout,
