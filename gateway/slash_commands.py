@@ -140,9 +140,10 @@ class GatewaySlashCommandsMixin:
     async def _handle_council_command(self, event: MessageEvent) -> str:
         """Run the installed council with one editable, council-specific card."""
         from gateway.council_progress import (
+            CouncilCard,
             format_council_result,
+            mark_council_run_managed,
             parse_council_args,
-            render_council_card,
         )
         from tools.environments.local import build_subprocess_env
 
@@ -171,28 +172,11 @@ class GatewaySlashCommandsMixin:
         status_key = f"council:{run_id}"
         metadata = self._thread_metadata_for_source(source)
         adapter = self._adapter_for_source(source)
-        last_card = ""
-
-        async def publish(state: dict) -> None:
-            nonlocal last_card
-            if adapter is None:
-                return
-            card = render_council_card(state)
-            if card == last_card:
-                return
-            first_card = not last_card
-            last_card = card
-            updater = getattr(adapter, "send_or_update_status", None)
-            if callable(updater):
-                result = updater(
-                    str(source.chat_id), status_key, card, metadata=metadata
-                )
-                if inspect.isawaitable(result):
-                    await result
-            elif first_card:
-                result = adapter.send(str(source.chat_id), card, metadata=metadata)
-                if inspect.isawaitable(result):
-                    await result
+        card = CouncilCard(adapter, str(source.chat_id), status_key, metadata)
+        publish = card.publish
+        # The watcher for agent-launched runs must skip this run: this handler
+        # owns its card.
+        mark_council_run_managed(run_id)
 
         initial_state = {
             "status": "running",
@@ -221,26 +205,13 @@ class GatewaySlashCommandsMixin:
             env=env,
         )
         communicate = asyncio.create_task(process.communicate())
-        last_state = initial_state
-        while not communicate.done():
-            try:
-                if progress_path.is_file():
-                    state = json.loads(progress_path.read_text(encoding="utf-8"))
-                    if isinstance(state, dict):
-                        last_state = state
-                        await publish(state)
-            except (OSError, ValueError):
-                logger.debug("Council progress read failed", exc_info=True)
-            await asyncio.wait({communicate}, timeout=1.0)
-
+        last_state = await card.follow(
+            progress_path,
+            communicate.done,
+            initial_state,
+            sleep=lambda timeout: asyncio.wait({communicate}, timeout=timeout),
+        )
         stdout, stderr = await communicate
-        try:
-            if progress_path.is_file():
-                state = json.loads(progress_path.read_text(encoding="utf-8"))
-                if isinstance(state, dict):
-                    last_state = state
-        except (OSError, ValueError):
-            pass
 
         if process.returncode != 0:
             failed = dict(last_state)
@@ -267,6 +238,58 @@ class GatewaySlashCommandsMixin:
         done["status"] = "done"
         await publish(done)
         return format_council_result(summary)
+
+    def _council_scan_homes(self) -> list[Path]:
+        """Profile homes whose ``council/runs`` the card watcher should scan."""
+        from clover_constants import get_clover_home
+
+        homes = [get_clover_home()]
+        if getattr(getattr(self, "config", None), "multiplex_profiles", False):
+            try:
+                from clover_cli.profiles import _get_profiles_root
+
+                homes.extend(
+                    Path(e.path) for e in os.scandir(_get_profiles_root()) if e.is_dir()
+                )
+            except OSError:
+                pass
+        return homes
+
+    def _council_run_target(self, origin: dict):
+        """Resolve ``(adapter, chat_id, metadata)`` for an agent-launched run.
+
+        Uses the launching session's own source when the session store still
+        knows it (same routing as a typed ``/council``), else rebuilds one
+        from the recorded platform/chat/thread.
+        """
+        source = None
+        entries = getattr(getattr(self, "session_store", None), "_entries", None) or {}
+        entry = entries.get(origin.get("session_key") or "")
+        candidate = getattr(entry, "origin", None)
+        if candidate is not None and str(candidate.chat_id) == str(origin.get("chat_id")):
+            source = candidate
+        if source is None:
+            try:
+                source = SessionSource(
+                    platform=Platform(str(origin.get("platform"))),
+                    chat_id=str(origin.get("chat_id")),
+                    thread_id=origin.get("thread_id") or None,
+                )
+            except ValueError:
+                return None
+        adapter = self._adapter_for_source(source)
+        if adapter is None:
+            return None
+        return adapter, str(source.chat_id), self._thread_metadata_for_source(source)
+
+    async def _council_card_watcher(self) -> None:
+        """Show the 🏛 card for councils the agent launches itself."""
+        from gateway.council_progress import CouncilRunWatcher
+
+        await CouncilRunWatcher(
+            homes=self._council_scan_homes,
+            resolve_target=self._council_run_target,
+        ).run()
 
     def _typed_command_prefix_for(self, platform) -> str:
         """Return the prefix users can always type to reach Clover commands.

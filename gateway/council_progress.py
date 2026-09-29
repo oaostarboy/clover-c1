@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import json
+import logging
+import os
+import socket
+import time
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Iterable, Mapping, Optional
 import re
-from typing import Any, Mapping
+
+logger = logging.getLogger(__name__)
 
 
 _MODES = {"quick", "full", "deep"}
@@ -156,3 +166,221 @@ def _compact_council_text(value: Any, *, max_chars: int, max_sentences: int) -> 
     if omitted:
         selected = selected.rstrip(" .!?;:") + "…"
     return selected
+
+
+# ---------------------------------------------------------------------------
+# Live card driver (shared by /council and agent-launched runs)
+# ---------------------------------------------------------------------------
+
+# Run ids whose card is owned by a /council handler in this process. The run
+# watcher must never open a second card for them.
+_MANAGED_RUN_IDS: set[str] = set()
+
+
+def mark_council_run_managed(run_id: str) -> None:
+    _MANAGED_RUN_IDS.add(run_id)
+
+
+def _read_json(path: Path) -> Optional[dict]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+class CouncilCard:
+    """One editable ``🏛 Council`` card in one chat; repeat renders are no-ops."""
+
+    def __init__(
+        self,
+        adapter: Any,
+        chat_id: str,
+        status_key: str,
+        metadata: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        self.adapter = adapter
+        self.chat_id = str(chat_id)
+        self.status_key = status_key
+        self.metadata = metadata
+        self._last_card = ""
+
+    async def publish(self, state: Mapping[str, Any]) -> None:
+        if self.adapter is None:
+            return
+        card = render_council_card(state)
+        if card == self._last_card:
+            return
+        first_card = not self._last_card
+        self._last_card = card
+        updater = getattr(self.adapter, "send_or_update_status", None)
+        if callable(updater):
+            result = updater(
+                self.chat_id, self.status_key, card, metadata=self.metadata
+            )
+        elif first_card:
+            result = self.adapter.send(self.chat_id, card, metadata=self.metadata)
+        else:
+            return
+        if inspect.isawaitable(result):
+            await result
+
+    async def follow(
+        self,
+        progress_path: Path,
+        finished: Callable[[], bool],
+        last_state: Mapping[str, Any],
+        *,
+        poll_s: float = 1.0,
+        sleep: Optional[Callable[[float], Awaitable[Any]]] = None,
+    ) -> dict:
+        """Mirror ``progress.json`` onto the card until ``finished()``.
+
+        Returns the last state seen (re-read once after ``finished``).
+        """
+        state = dict(last_state)
+        while True:
+            done = finished()
+            fresh = _read_json(progress_path)
+            if fresh is not None:
+                state = fresh
+                if not done:
+                    await self.publish(state)
+            if done:
+                return state
+            await (sleep or asyncio.sleep)(poll_s)
+
+
+def _pid_alive(pid: Any) -> bool:
+    # Never os.kill(pid, 0): on Windows it sends CTRL_C_EVENT to the target.
+    try:
+        from gateway.status import _pid_exists
+
+        return bool(_pid_exists(int(pid)))
+    except (ValueError, TypeError):
+        return True
+    except Exception:
+        return True
+
+
+class CouncilRunWatcher:
+    """Give agent-launched council runs the same live card as ``/council``.
+
+    The runner records ``origin.json`` (chat + session) in its run directory
+    when it is started from a gateway turn. Each ``scan_once`` picks up new
+    runs that are still running and have no card yet, and drives one card per
+    run in the originating chat, then posts the formatted result.
+    """
+
+    MAX_RUN_AGE_S = 6 * 3600
+    STALE_PROGRESS_S = 45 * 60
+
+    def __init__(
+        self,
+        *,
+        homes: Callable[[], Iterable[Path]],
+        resolve_target: Callable[[dict], Optional[tuple[Any, str, Optional[Mapping[str, Any]]]]],
+        poll_s: float = 1.0,
+        managed: Optional[set[str]] = None,
+    ) -> None:
+        self._homes = homes
+        self._resolve_target = resolve_target
+        self._poll_s = poll_s
+        self._managed = _MANAGED_RUN_IDS if managed is None else managed
+        self._seen: set[Path] = set()
+        self.tasks: set[asyncio.Task] = set()
+
+    def scan_once(self) -> list[asyncio.Task]:
+        started: list[asyncio.Task] = []
+        for home in self._homes():
+            runs = Path(home) / "council" / "runs"
+            try:
+                entries = [e for e in os.scandir(runs) if e.is_dir()]
+            except OSError:
+                continue
+            for entry in entries:
+                work = Path(entry.path)
+                if work in self._seen:
+                    continue
+                task = self._consider(work)
+                if task is not None:
+                    started.append(task)
+        return started
+
+    def _consider(self, work: Path) -> Optional[asyncio.Task]:
+        run_id = work.name
+        if run_id in self._managed:
+            self._seen.add(work)
+            return None
+        origin = _read_json(work / "origin.json")
+        if origin is None:
+            # Runner may not have written it yet; a CLI run never will.
+            try:
+                if time.time() - work.stat().st_mtime > 60:
+                    self._seen.add(work)
+            except OSError:
+                self._seen.add(work)
+            return None
+        self._seen.add(work)
+        state = _read_json(work / "progress.json") or {}
+        try:
+            age = time.time() - float(origin.get("created_at") or 0)
+        except (TypeError, ValueError):
+            age = self.MAX_RUN_AGE_S + 1
+        if age > self.MAX_RUN_AGE_S or str(state.get("status") or "running") != "running":
+            return None  # finished before we saw it (e.g. gateway restart)
+        target = self._resolve_target(origin)
+        if target is None:
+            return None
+        adapter, chat_id, metadata = target
+        card = CouncilCard(adapter, chat_id, f"council:{run_id}", metadata)
+        task = asyncio.ensure_future(self._drive(card, work, origin, state))
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return task
+
+    def _runner_gone(self, work: Path, origin: Mapping[str, Any]) -> bool:
+        if origin.get("host") == socket.gethostname() and origin.get("pid"):
+            if not _pid_alive(origin["pid"]):
+                return True
+        try:
+            return time.time() - (work / "progress.json").stat().st_mtime > self.STALE_PROGRESS_S
+        except OSError:
+            return False
+
+    async def _drive(
+        self, card: CouncilCard, work: Path, origin: dict, state: dict
+    ) -> None:
+        progress = work / "progress.json"
+
+        def finished() -> bool:
+            current = _read_json(progress) or {}
+            if str(current.get("status") or "running") != "running":
+                return True
+            return self._runner_gone(work, origin)
+
+        try:
+            await card.publish(state)
+            last = await card.follow(progress, finished, state, poll_s=self._poll_s)
+            status = str(last.get("status") or "running")
+            summary = _read_json(work / "summary.json")
+            if status == "done" and summary is not None:
+                await card.publish(last)
+                reply = format_council_result(summary)
+                sent = card.adapter.send(card.chat_id, reply, metadata=card.metadata)
+                if inspect.isawaitable(sent):
+                    await sent
+            else:
+                failed = dict(last)
+                failed["status"] = "failed"
+                await card.publish(failed)
+        except Exception:
+            logger.warning("Council card for %s failed", work.name, exc_info=True)
+
+    async def run(self, interval_s: float = 2.0) -> None:
+        while True:
+            try:
+                self.scan_once()
+            except Exception:
+                logger.debug("Council run scan failed", exc_info=True)
+            await asyncio.sleep(interval_s)
