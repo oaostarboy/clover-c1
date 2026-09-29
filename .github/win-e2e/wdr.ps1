@@ -338,7 +338,8 @@ function Start-LongTurn {
     $py = (Get-Command python).Source  # system Python, never the Clover venv
     Start-Process -FilePath $py -ArgumentList @("$env:E2E\fake_llm.py", $llmLog, $env:LLM_PORT, "75") -WindowStyle Hidden
     $deadline = (Get-Date).AddSeconds(30)
-    while ((Get-Date) -lt $deadline -and -not (Select-String -Path $llmLog -Pattern 'listening' -Quiet -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 1 }
+    while ((Get-Date) -lt $deadline -and -not ((Test-Path $llmLog) -and (Select-String -Path $llmLog -Pattern 'listening' -Quiet))) { Start-Sleep -Seconds 1 }
+    if (-not (Test-Path $llmLog)) { throw "fake model server did not start" }
   }
   foreach ($kv in @(@('model.provider', 'custom'), @('model.base_url', "http://127.0.0.1:$env:LLM_PORT/v1"), @('model.default', 'fake-slow'), @('model.api_key', 'fake-e2e-key'))) {
     & "$env:CLOVER_BIN" config set $kv[0] $kv[1] | Out-Host
