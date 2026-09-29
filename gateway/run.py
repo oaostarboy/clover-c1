@@ -4574,6 +4574,13 @@ class TurnRunner:
         if event_type == "_thinking" or tool_name == "_thinking":
             if not ctx._thinking_enabled:
                 return
+            # Top-level agents (structured "reasoning.available" shape): when
+            # interim messages are on, the same note is delivered as its own
+            # 💬 bubble by the interim callback, so relaying it here too would
+            # show every thought twice.  Delegated children use the legacy
+            # ("_thinking", text) shape and keep relaying to the subagent card.
+            if event_type == "reasoning.available" and ctx.interim_assistant_messages_enabled:
+                return
             thinking_text = preview if tool_name == "_thinking" else tool_name
             msg = f"💬 {thinking_text}" if thinking_text else None
             if msg:
@@ -5710,7 +5717,7 @@ class TurnRunner:
             display_text = text
             if _stream_consumer is not None:
                 if already_streamed:
-                    _stream_consumer.on_segment_break()
+                    _stream_consumer.on_segment_break(interim=True)
                 else:
                     _stream_consumer.on_commentary(display_text)
                 return
@@ -5719,7 +5726,7 @@ class TurnRunner:
             async def _send_interim_message() -> None:
                 result = await ctx._status_adapter.send(
                     ctx._status_chat_id,
-                    display_text,
+                    f"💬 {display_text.lstrip()}",
                     metadata=ctx._status_thread_metadata,
                 )
                 if (

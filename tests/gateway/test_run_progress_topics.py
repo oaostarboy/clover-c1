@@ -1180,7 +1180,7 @@ async def test_display_streaming_does_not_enable_gateway_streaming(monkeypatch, 
 
     assert result.get("already_sent") is not True
     assert adapter.edits == []
-    assert [call["content"] for call in adapter.sent] == ["I'll inspect the repo first."]
+    assert [call["content"] for call in adapter.sent] == ["💬 I'll inspect the repo first."]
 
 
 class TransformedStreamAgent:
@@ -1253,7 +1253,7 @@ async def test_run_agent_queued_message_does_not_treat_commentary_as_final(monke
 
     sent_texts = [call["content"] for call in adapter.sent]
     assert result["final_response"] == "final response 2"
-    assert "I'll inspect the repo first." in sent_texts
+    assert "💬 I'll inspect the repo first." in sent_texts
     assert "final response 1" in sent_texts
 
 
@@ -1596,7 +1596,7 @@ async def test_run_agent_drops_interim_commentary_after_generation_invalidation(
 
     async def send_and_invalidate(chat_id, content, reply_to=None, metadata=None):
         result = await original_send(chat_id, content, reply_to=reply_to, metadata=metadata)
-        if content == "first interim" and not invalidated["done"]:
+        if content == "💬 first interim" and not invalidated["done"]:
             invalidated["done"] = True
             runner._invalidate_session_run_generation(session_key, reason="test_stop")
         return result
@@ -1615,8 +1615,8 @@ async def test_run_agent_drops_interim_commentary_after_generation_invalidation(
 
     sent_texts = [call["content"] for call in adapter.sent]
     assert result["final_response"] == "done"
-    assert "first interim" in sent_texts
-    assert "second interim" not in sent_texts
+    assert "💬 first interim" in sent_texts
+    assert "💬 second interim" not in sent_texts
 
 
 @pytest.mark.asyncio
@@ -1925,3 +1925,116 @@ class TestSlackReplyInThreadProgressRouting:
             event_message_id="1700000000.000100",
             reply_in_thread=False,
         ) is None
+
+
+class ThoughtOnceAgent:
+    """Top-level agent: a note between tool calls fires BOTH the structured
+    ``reasoning.available`` thinking event and the interim-message callback,
+    exactly like agent/conversation_loop.py does."""
+
+    NOTE = "I'll inspect the repo first."
+
+    def __init__(self, **kwargs):
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+        self.interim_assistant_callback = kwargs.get("interim_assistant_callback")
+        self.tools = []
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        if self.tool_progress_callback:
+            self.tool_progress_callback("reasoning.available", "_thinking", self.NOTE, None)
+        if self.interim_assistant_callback:
+            self.interim_assistant_callback(self.NOTE, already_streamed=False)
+        time.sleep(0.4)
+        return {"final_response": "done", "messages": [], "api_calls": 1}
+
+
+def _texts_with(adapter, needle):
+    return [
+        call["content"]
+        for call in (*adapter.sent, *adapter.edits)
+        if needle in call["content"]
+    ]
+
+
+@pytest.mark.asyncio
+async def test_thought_shows_once_with_bubble_when_interim_on(monkeypatch, tmp_path):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        ThoughtOnceAgent,
+        session_id="sess-thought-once-interim-on",
+        config_data={
+            "display": {
+                "tool_progress": "off",
+                "thinking_progress": True,
+                "interim_assistant_messages": True,
+            },
+            "streaming": {"enabled": False},
+        },
+    )
+
+    assert result["final_response"] == "done"
+    assert _texts_with(adapter, ThoughtOnceAgent.NOTE) == [f"💬 {ThoughtOnceAgent.NOTE}"]
+    assert not any(
+        "💬" in call["content"] and ThoughtOnceAgent.NOTE not in call["content"]
+        for call in adapter.sent
+    )
+
+
+@pytest.mark.asyncio
+async def test_thought_relay_kept_when_interim_off(monkeypatch, tmp_path):
+    adapter, result = await _run_with_agent(
+        monkeypatch,
+        tmp_path,
+        ThoughtOnceAgent,
+        session_id="sess-thought-once-interim-off",
+        config_data={
+            "display": {
+                "tool_progress": "off",
+                "thinking_progress": True,
+                "interim_assistant_messages": False,
+            },
+            "streaming": {"enabled": False},
+        },
+    )
+
+    assert result["final_response"] == "done"
+    lines = [
+        line
+        for text in _texts_with(adapter, ThoughtOnceAgent.NOTE)
+        for line in text.splitlines()
+        if ThoughtOnceAgent.NOTE in line
+    ]
+    assert lines and set(lines) == {f"💬 {ThoughtOnceAgent.NOTE}"}
+    assert len(adapter.sent) == 1 or len(_texts_with(adapter, "💬")) >= 1
+
+
+def test_thinking_relay_skipped_but_counted_when_interim_on():
+    from tests.gateway.test_live_reasoning_progress import (
+        _base_turn_ctx,
+        _make_mocked_gateway_runner,
+    )
+    from gateway.run import TurnRunner
+
+    for interim, expected in ((True, []), (False, ["💬 a note"])):
+        ctx = _base_turn_ctx(
+            _live_reasoning_enabled=False,
+            _thinking_enabled=True,
+            interim_assistant_messages_enabled=interim,
+        )
+        runner = TurnRunner(_make_mocked_gateway_runner(), ctx)
+        runner.progress_callback("reasoning.available", "_thinking", "a note", None)
+        drained = []
+        while not ctx.progress_queue.empty():
+            drained.append(ctx.progress_queue.get_nowait())
+        assert drained == expected
+        assert ctx._summary_thoughts == 1
+
+    # Delegated children (legacy shape) keep relaying to the subagent card.
+    ctx = _base_turn_ctx(
+        _live_reasoning_enabled=False,
+        _thinking_enabled=True,
+        interim_assistant_messages_enabled=True,
+    )
+    TurnRunner(_make_mocked_gateway_runner(), ctx).progress_callback("_thinking", "child note")
+    assert ctx.progress_queue.get_nowait() == "💬 child note"
