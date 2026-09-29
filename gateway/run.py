@@ -30003,9 +30003,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # queue even when tool_progress is off (thinking relay uses same infra).
         # Mattermost requires a per-platform opt-in: global scratch-text display
         # is too easy to leak into busy public threads.
+        # Default ON (owner: "live thoughts on"): the model's own short notes
+        # between tool calls show as 💬 lines. An explicit false turns it off.
         _thinking_mode = _display_surface_mode(
             "thinking_progress",
-            default=False,
+            default=True,
             require_platform_override_for={Platform.MATTERMOST},
         )
         _thinking_enabled = _thinking_mode != "off"
