@@ -108,8 +108,14 @@ jobs:
           # branches in the single-branch clone's fetch scope (fixed in 9faa3826,
           # but that fix only helps once the updater itself is new). Real users
           # update to main, which is in scope; add the PR branch to mirror that.
+          # Dirty copy, like Suni: a hand edit to a tracked file must survive the update.
+          echo "# local hand edit (e2e)" >> "$INSTALL_DIR/README.md"
           git -C "$INSTALL_DIR" remote set-branches --add origin "${{ env.TO_BRANCH }}"
           "$CLOVER_BIN" update --branch "${{ env.TO_BRANCH }}" --yes
+          grep -q "local hand edit (e2e)" "$INSTALL_DIR/README.md" \
+            || git -C "$INSTALL_DIR" stash list | grep -q clover-update-autostash \
+            || { echo "FINDING: hand edit lost (not in tree, not parked in a stash)"; exit 1; }
+          echo "dirty-copy check: hand edit preserved"
 
       - name: (POSIX) d. Assert update outcome
         if: runner.os != 'Windows'
@@ -336,8 +342,20 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           # See the POSIX step: the old updater needs the branch in fetch scope.
+          # Dirty copy, like an older Windows install: autocrlf=true CRLF working tree + a hand edit.
+          git -C "$env:INSTALL_DIR" config core.autocrlf true
+          git -C "$env:INSTALL_DIR" rm -q -r --cached .
+          git -C "$env:INSTALL_DIR" reset -q --hard
+          Add-Content -Path "$env:INSTALL_DIR\README.md" -Value "# local hand edit (e2e)"
           git -C "$env:INSTALL_DIR" remote set-branches --add origin "${{ env.TO_BRANCH }}"
           & "$env:CLOVER_BIN" update --branch "${{ env.TO_BRANCH }}" --yes
+          if ($LASTEXITCODE -ne 0) { throw "update exited $LASTEXITCODE" }
+          $edit = Select-String -Path "$env:INSTALL_DIR\README.md" -Pattern "local hand edit \(e2e\)" -Quiet
+          $parked = (git -C "$env:INSTALL_DIR" stash list) -match "clover-update-autostash"
+          if (-not $edit -and -not $parked) { throw "FINDING: hand edit lost (not in tree, not parked)" }
+          $dirty = git -C "$env:INSTALL_DIR" status --porcelain -- uv.lock
+          if ($dirty) { throw "FINDING: uv.lock still dirty after update (EOL): $dirty" }
+          Write-Host "dirty-copy check: hand edit preserved, uv.lock clean"
           if ($LASTEXITCODE -ne 0) { throw "clover update exited $LASTEXITCODE" }
 
       - name: (Windows) d. Assert update outcome
