@@ -209,6 +209,7 @@ class CouncilCard:
         self.status_key = status_key
         self.metadata = metadata
         self._last_card = ""
+        self.final_delivered = False
 
     async def publish(self, state: Mapping[str, Any]) -> None:
         if self.adapter is None:
@@ -240,7 +241,8 @@ class CouncilCard:
             self.chat_id, format_council_result(summary), metadata=self.metadata
         )
         if inspect.isawaitable(sent):
-            await sent
+            sent = await sent
+        self.final_delivered = bool(getattr(sent, "success", False))
 
     async def finish_failed(self, state: Mapping[str, Any]) -> None:
         failed = dict(state)
@@ -409,8 +411,11 @@ class CouncilRunWatcher:
             age = time.time() - float(origin.get("created_at") or 0)
         except (TypeError, ValueError):
             age = self.MAX_RUN_AGE_S + 1
-        if age > self.MAX_RUN_AGE_S or str(state.get("status") or "running") != "running":
-            return None  # finished before we saw it (e.g. gateway restart)
+        if age > self.MAX_RUN_AGE_S or (work / GATEWAY_ACK).exists():
+            return None
+        status = str(state.get("status") or "running")
+        if status != "running" and not (status == "done" and _read_json(work / "summary.json")):
+            return None
         target = self._resolve_target(origin)
         if target is None:
             return None
@@ -426,9 +431,6 @@ class CouncilRunWatcher:
             expandable=str(origin.get("platform") or "") == "telegram",
             home=Path(work).parents[2],
         )
-        # Tell the runner the gateway owns delivery of this run's answer, so its
-        # stdout (which the launching agent reads) does not repeat the verdict.
-        _write_gateway_ack(work)
         task = asyncio.ensure_future(self._drive(card, work, origin, state))
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
@@ -461,6 +463,8 @@ class CouncilRunWatcher:
             summary = _read_json(work / "summary.json")
             if status == "done" and summary is not None:
                 await card.finish_done(last, summary)
+                if card.final_delivered:
+                    _write_gateway_ack(work)
             else:
                 await card.finish_failed(last)
         except Exception:

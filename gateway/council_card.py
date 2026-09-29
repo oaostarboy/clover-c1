@@ -448,6 +448,7 @@ class CouncilLiveCard:
         self._timer: Any = None
         self._loop: Any = None
         self._closed = False
+        self.final_delivered = False
         self._combined = False  # never part of the subagent board
         self._store_key = _STORE_PREFIX + da._board_store_key(adapter, chat_id)
 
@@ -502,19 +503,20 @@ class CouncilLiveCard:
         except Exception:
             pass
 
-    async def _delete(self, message_id: str) -> None:
+    async def _delete(self, message_id: str) -> bool:
         try:
             if da._adapter_can_delete(self.adapter):
-                await _maybe_await(self.adapter.delete_message(self.chat_id, message_id))
+                return bool(await _maybe_await(self.adapter.delete_message(self.chat_id, message_id)))
         except Exception:
             logger.debug("council card delete failed", exc_info=True)
+        return False
 
     async def _sweep_except(self, keep: Optional[str]) -> None:
         stale = [m for m in self._posted if m != keep]
-        self._posted = [keep] if keep else []
-        self._persist()
         for mid in stale:
-            await self._delete(mid)
+            if await self._delete(mid):
+                self._posted.remove(mid)
+        self._persist()
 
     # -- state -------------------------------------------------------------
 
@@ -679,6 +681,7 @@ class CouncilLiveCard:
                 return
             self._closed = True
             self._unregister()
+            self._adopt_orphans()
             snap = self._snapshot(dict(state))
             text = render_final(
                 snap, summary, expandable=self.expandable,
@@ -692,6 +695,9 @@ class CouncilLiveCard:
                     res = await _maybe_await(self.adapter.send(self.chat_id, text, metadata=self.metadata))
                     if getattr(res, "success", False):
                         delivered = str(getattr(res, "message_id", "") or "sent")
+                elif not can_delete and self.message_id:
+                    # On immutable-message adapters preserve the sole live post.
+                    pass
                 if delivered is None and self.message_id:
                     editor = getattr(self.adapter, "edit_message", None)
                     if callable(editor):
@@ -700,7 +706,7 @@ class CouncilLiveCard:
                         ))
                         if getattr(res, "success", False):
                             delivered = self.message_id
-                if delivered is None:
+                if delivered is None and (can_delete or not self.message_id):
                     res = await _maybe_await(self.adapter.send(self.chat_id, text, metadata=self.metadata))
                     if getattr(res, "success", False):
                         delivered = str(getattr(res, "message_id", "") or "sent")
@@ -710,5 +716,9 @@ class CouncilLiveCard:
                 da._CARD_SEND.reset(token)
             # Keep the live card only when it is the final message itself.
             keep = self.message_id if (delivered is None or delivered == self.message_id) else None
+            if delivered and delivered != self.message_id:
+                # Final post is not a live-card id and must never enter orphan sweeps.
+                pass
             await self._sweep_except(keep)
             self.message_id = keep
+            self.final_delivered = delivered is not None

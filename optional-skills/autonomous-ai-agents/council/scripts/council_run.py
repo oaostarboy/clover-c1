@@ -751,7 +751,7 @@ GATEWAY_ACK = "gateway-card.json"
 
 
 def gateway_delivers_answer(work: Path) -> bool:
-    """True once a gateway card has adopted this run.
+    """True only after the gateway has delivered the final answer.
 
     The gateway posts the live card and the one final answer message itself.
     The launching agent reads this process's stdout (the terminal completion

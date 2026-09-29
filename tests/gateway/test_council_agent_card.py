@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from gateway.council_progress import CouncilRunWatcher
+from gateway.platforms.base import SendResult
 from gateway.slash_commands import GatewaySlashCommandsMixin
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,6 +43,7 @@ class Adapter:
 
     async def send(self, chat_id, content, metadata=None):
         self.sends.append((chat_id, content, metadata))
+        return SendResult(success=True, message_id=str(len(self.sends)))
 
 
 def _watcher(home: Path, adapter: Adapter) -> CouncilRunWatcher:

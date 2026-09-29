@@ -454,7 +454,7 @@ async def test_agent_launched_run_gets_one_card_and_one_final_message(tmp_path, 
 
     ad = LiveAdapter()
     (task,) = _watcher(tmp_path, ad).scan_once()
-    assert (work / "gateway-card.json").exists()  # tells the runner the gateway delivers
+    assert not (work / "gateway-card.json").exists()  # a live card is not delivery
     await asyncio.sleep(0.1)
     assert len(ad.council_messages()) == 1 and "❓ **Did we misread_it?" in ad.council_messages()[0]
 
@@ -466,6 +466,7 @@ async def test_agent_launched_run_gets_one_card_and_one_final_message(tmp_path, 
     await asyncio.wait_for(task, 5)
 
     (final,) = ad.council_messages()
+    assert (work / "gateway-card.json").exists()
     assert "✅ 🏛 Council" in final and "**Answer**\n• Ship v9" in final
     assert len(ad.live) == 1 and not [m for m in ad.sent if m.startswith("🏛 **Council answer**")]
 
@@ -583,11 +584,48 @@ async def test_answer_text_reaches_the_chat_exactly_once_end_to_end(tmp_path, mo
     await asyncio.wait_for(task, 5)
 
     # what the launching agent would read from the runner's stdout
+    assert (work / "gateway-card.json").exists()
     agent_sees = "\n".join(runner.final_stdout_lines(0, work / "report.md", summary))
     channels = [m for m in ad.live.values() if "UNIQUE-VERDICT-TEXT" in m] + (
         [agent_sees] if "UNIQUE-VERDICT-TEXT" in agent_sees else []
     )
     assert len(channels) == 1
+
+@pytest.mark.asyncio
+async def test_gateway_restarts_mid_council_delivers_once_and_sweeps_live_card(tmp_path, monkeypatch):
+    for key, value in SESSION_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(da, "_board_store_path", lambda: tmp_path / "boards.json")
+    runner = _load_runner()
+    work = tmp_path / "council" / "runs" / "council-restart"
+    work.mkdir(parents=True)
+    runner.write_origin(work)
+    (work / "question.txt").write_text("Restart test?", encoding="utf-8")
+    _runner_progress(runner, work, "arguments", seats=1)
+    ad = LiveAdapter()
+    card = cc.CouncilLiveCard(ad, "123", work.name, work=work, question="Restart test?", mode="full")
+    await card.publish(_state())
+    live_id = card.message_id
+    card._unregister()  # old gateway is gone, persisted id survives
+    cc._CARD_IDS.clear()
+    cc._ORPHANS_SWEPT.clear()
+    assert live_id in ad.live and not (work / "gateway-card.json").exists()
+    summary = dict(SUMMARY, verdict="RESTART-VERDICT", attack_severity="", ruling="")
+    (work / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+    _runner_progress(runner, work, "chairman", status="done", seats=5)
+    watcher = _watcher(tmp_path, ad)
+    (task,) = watcher.scan_once()
+    await asyncio.wait_for(task, 5)
+    assert live_id not in ad.live
+    assert len(ad.council_messages()) == 1
+    assert "RESTART-VERDICT" in ad.council_messages()[0]
+    assert not any("tap to watch" in m for m in ad.live.values())
+    assert (work / "gateway-card.json").exists()
+    agent_sees = "\n".join(runner.final_stdout_lines(0, work / "report.md", summary))
+    assert "RESTART-VERDICT" not in agent_sees and "COUNCIL_DONE" in agent_sees
+    assert watcher.scan_once() == []
+    assert _watcher(tmp_path, ad).scan_once() == []  # next restart: ack blocks replay
+    assert len(ad.council_messages()) == 1
 
 
 # ── rollback + config ──────────────────────────────────────────────────────
