@@ -180,7 +180,17 @@ def _reply_anchor_for_event(event) -> str | None:
     topic lanes prefer replying to the triggering user message so the answer
     stays attached to the active lane; synthetic/resumed sends fall back to
     ``direct_messages_topic_id`` metadata when no message id is available.
+
+    A turn triggered by an internal event (background-process completion
+    notice, watch-pattern match, cron/delegation injection, etc.) is never a
+    reply to whatever message happened to trigger or be nearby it — that
+    message can be long stale by delivery time, and reply-quoting it visibly
+    misrepresents the send as an answer to that message. Topic/thread routing
+    is unaffected: it comes from ``source.thread_id`` via
+    ``_thread_metadata_for_source``, not from this anchor.
     """
+    if getattr(event, "internal", False):
+        return None
     source = getattr(event, "source", None)
     platform = _platform_name(getattr(source, "platform", None))
     thread_id = getattr(source, "thread_id", None)

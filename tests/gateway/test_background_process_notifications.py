@@ -613,3 +613,82 @@ def test_gateway_drain_retains_and_formats_overflow_events():
     out_released = _format_gateway_process_notification(released)
     assert "notifications resumed" in out_released
     assert "exit code" not in out_released
+
+
+# ---------------------------------------------------------------------------
+# Duplicate-message fixes: stale completion notices + internal-event replies
+# ---------------------------------------------------------------------------
+
+
+def _registry_with_exited_process(session_id="proc_done"):
+    from tools.process_registry import ProcessRegistry, ProcessSession
+
+    registry = ProcessRegistry()
+    registry._finished[session_id] = ProcessSession(
+        id=session_id, command="oauth login", exited=True, exit_code=0,
+        started_at=0.0,
+    )
+    return registry
+
+
+async def _synth_process_event(runner, session_id):
+    from gateway.session import SessionSource
+
+    runner.session_store._entries["agent:main:telegram:dm:123:24296"] = SimpleNamespace(
+        origin=SessionSource(
+            platform=Platform.TELEGRAM, chat_id="123", chat_type="dm",
+            thread_id="24296", user_id="1", user_name="Fabio",
+        )
+    )
+    evt = {
+        "type": "completion",
+        "session_id": session_id,
+        "session_key": "agent:main:telegram:dm:123:24296",
+        "message_id": "777",
+    }
+    await runner._inject_watch_notification("[SYSTEM: Background process done]", evt)
+    return runner.adapters[Platform.TELEGRAM].handle_message.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_queued_notice_dropped_when_exit_already_polled(monkeypatch, tmp_path):
+    """The agent polled the exited process in turn 1; the notice queued while
+    that turn was busy must not run as a second (duplicate) turn."""
+    import tools.process_registry as pr_module
+    from gateway.run import _stale_observed_process_notification
+
+    registry = _registry_with_exited_process()
+    monkeypatch.setattr(pr_module, "process_registry", registry)
+    runner = _build_runner(monkeypatch, tmp_path, "all")
+    synth_event = await _synth_process_event(runner, "proc_done")
+
+    registry.poll("proc_done")  # turn 1's tool result reports the exit
+
+    assert _stale_observed_process_notification(synth_event) == "proc_done"
+
+
+@pytest.mark.asyncio
+async def test_queued_notice_delivered_when_exit_unobserved(monkeypatch, tmp_path):
+    import tools.process_registry as pr_module
+    from gateway.run import _stale_observed_process_notification
+
+    registry = _registry_with_exited_process()
+    monkeypatch.setattr(pr_module, "process_registry", registry)
+    runner = _build_runner(monkeypatch, tmp_path, "all")
+    synth_event = await _synth_process_event(runner, "proc_done")
+
+    assert _stale_observed_process_notification(synth_event) == ""
+
+
+@pytest.mark.asyncio
+async def test_internal_event_reply_has_no_reply_anchor(monkeypatch, tmp_path):
+    """A turn triggered by an internal process notice must not quote the
+    (stale) message that armed the watch, even in a Telegram DM topic lane."""
+    from gateway.platforms.base import _reply_anchor_for_event
+
+    runner = _build_runner(monkeypatch, tmp_path, "all")
+    synth_event = await _synth_process_event(runner, "proc_done")
+
+    assert synth_event.internal is True
+    assert _reply_anchor_for_event(synth_event) is None
+    assert synth_event.source.thread_id == "24296"
