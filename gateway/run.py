@@ -6373,7 +6373,7 @@ class TurnRunner:
                 line = _reasoning_relay.feed(text)
                 if not line:
                     return
-                ctx.progress_queue.put(f"🧠 {line}")
+                ctx.progress_queue.put(f"💬 {line}")
                 ctx._summary_thoughts += 1
 
             agent.reasoning_callback = _reasoning_progress_callback
