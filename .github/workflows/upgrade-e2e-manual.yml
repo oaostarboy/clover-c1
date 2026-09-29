@@ -202,7 +202,7 @@ jobs:
 
           "$CLOVER_BIN" repair | tee /tmp/repair.log
           "$INSTALL_DIR/venv/bin/python" -c "import fastapi"
-          if ! grep -qiE "fastapi|packages|installed|fixed" /tmp/repair.log; then
+          if ! grep -qiE "Fixed [1-9]|reinstalled" /tmp/repair.log; then
             echo "FINDING: clover repair output did not describe what it fixed"; exit 1
           fi
           echo "repair: PASS"
@@ -485,29 +485,14 @@ jobs:
           $ErrorActionPreference = "Continue"
           & $venvPy -c "import fastapi" 2>$null
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "--- repair diagnostics: re-running the dependency repair directly ---"
-            $diagPy = "$env:TEMP\repair_diag.py"
-            @'
-          import traceback
-          from clover_cli.repair_cmd import _repair_dependencies
-          try:
-              print("_repair_dependencies ->", _repair_dependencies())
-          except Exception:
-              traceback.print_exc()
-          '@ | Set-Content -Path $diagPy -Encoding utf8
-            Push-Location "$env:INSTALL_DIR"
-            & $venvPy $diagPy 2>&1 | Write-Host
-            Pop-Location
-            foreach ($lf in "agent.log","errors.log") {
-              Write-Host "--- tail $lf ---"
-              Get-Content "$env:CLOVER_HOME\logs\$lf" -Tail 60 -ErrorAction SilentlyContinue | Write-Host
-            }
+            # Diagnostics only: must NOT re-run the repair (that would heal the install and mask the result).
+            Write-Host "FINDING: clover repair (run as venv clover.exe) left fastapi broken; repair errors follow"
+            Get-Content "$env:CLOVER_HOME\logs\errors.log" -Tail 40 -ErrorAction SilentlyContinue | Write-Host
+            exit 1
           }
-          $ErrorActionPreference = "Stop"
-          & $venvPy -c "import fastapi"
 
           $repairLog = Get-Content "$env:TEMP\repair.log" -Raw
-          if ($repairLog -notmatch "(?i)fastapi|packages|installed|fixed") {
+          if ($repairLog -notmatch "(?i)Fixed [1-9]|reinstalled") {
             Write-Host "FINDING: clover repair output did not describe what it fixed"
             exit 1
           }
