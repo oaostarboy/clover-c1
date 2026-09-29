@@ -122,7 +122,68 @@ function Assert-SingleGateway([string]$label, [int]$logStart, [bool]$strictLog) 
   Write-Host "PASS [$label]: exactly one gateway for 90s, api port bound, state running, no stale restart_requested"
 }
 
-function Measure-UpdateOutcome([string]$label, $exitCode, [string]$outputText) {
+function Set-MainIsNext([string]$nextBranch) {
+  # Second update on fixed code: move local main onto the real fix commit it
+  # already reads as (same tree, clean), then let main read as a NEWER commit
+  # so the path's exact command performs a real pull again.
+  $d = $env:INSTALL_DIR
+  git -C $d fetch -q origin "+refs/heads/${nextBranch}:refs/remotes/origin/${nextBranch}"
+  if ($LASTEXITCODE -ne 0) { throw "fetch $nextBranch failed" }
+  $fixSha = (git -C $d rev-parse "refs/remotes/origin/$env:FIX_BRANCH").Trim()
+  $nextSha = (git -C $d rev-parse "refs/remotes/origin/$nextBranch").Trim()
+  git -C $d update-ref refs/heads/main $fixSha
+  git -C $d replace -f $env:MAIN_SHA $nextSha
+  $dirty = git -C $d status --porcelain --untracked-files=no
+  Write-Host "local main at $(git -C $d rev-parse --short HEAD); main $env:MAIN_SHA now reads as $nextBranch $nextSha; tracked changes: $(@($dirty).Count)"
+}
+
+function Invoke-PathUpdate([string]$label, [string[]]$cliArgs) {
+  # Runs the user's exact update for $env:UPDATE_PATH (or the given CLI args)
+  # and returns the update's exit code; output lands in update-output.txt.
+  Remove-Item "$env:RUNNER_TEMP\update-output.txt" -ErrorAction SilentlyContinue
+  if ($cliArgs -or $env:UPDATE_PATH -eq 'cli') {
+    if (-not $cliArgs) { $cliArgs = @('update', '--yes') }
+    Write-Host "[$label] running: clover $($cliArgs -join ' ')"
+    & "$env:CLOVER_BIN" @cliArgs 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\update-output.txt" | Out-Host
+    return $LASTEXITCODE
+  }
+  Write-Host "[$label] sending /update to the gateway over IRC"
+  New-Item -ItemType File -Force -Path "$env:RUNNER_TEMP\irc.trigger" | Out-Null
+  $deadline = (Get-Date).AddSeconds(120)
+  while ((Get-Date) -lt $deadline -and (Get-UpdateProcesses).Count -eq 0) { Start-Sleep -Seconds 1 }
+  Write-Host "[$label] updater processes: $((Get-UpdateProcesses | ForEach-Object { "$($_.ProcessId)<-$($_.ParentProcessId)" }) -join ', ')"
+  Wait-UpdateChainDone 1800
+  # The restarted gateway reports the result back on the chat.
+  $deadline = (Get-Date).AddSeconds(300)
+  while ((Get-Date) -lt $deadline -and -not (Test-Path "$env:CLOVER_HOME\.update_exit_code") -and (Test-Path "$env:CLOVER_HOME\.update_pending.json")) { Start-Sleep -Seconds 3 }
+  $code = if (Test-Path "$env:CLOVER_HOME\.update_exit_code") { (Get-Content "$env:CLOVER_HOME\.update_exit_code" -Raw).Trim() } else { $null }
+  if ($null -eq $code) {
+    $side = try { Get-Content "$env:CLOVER_HOME\.clover-last-update" -Raw | ConvertFrom-Json } catch { $null }
+    $code = if ($side -and $side.outcome -eq 'success') { 0 } else { "unknown (outcome=$($side.outcome))" }
+  }
+  if (Test-Path "$env:CLOVER_HOME\.update_output.txt") { Copy-Item "$env:CLOVER_HOME\.update_output.txt" "$env:RUNNER_TEMP\update-output.txt" -Force }
+  Write-Host "--- [$label] updater output (.update_output.txt, tail) ---"
+  Get-Content "$env:RUNNER_TEMP\update-output.txt" -ErrorAction SilentlyContinue | Select-Object -Last 80 | Out-Host
+  Write-Host "--- [$label] IRC transcript (bot replies, tail) ---"
+  Get-Content "$env:RUNNER_TEMP\irc.log" | Select-String -Pattern '<< PRIVMSG ant|-> :ant' | Select-Object -Last 25 | ForEach-Object { $_.Line } | Out-Host
+  return $code
+}
+
+function Assert-UpdatePass([string]$label, [int]$logStart, $exitCode, [string]$landedPath) {
+  $bad = @()
+  $bad += Measure-SingleGateway $label $logStart $true
+  $out = (Get-Content "$env:RUNNER_TEMP\update-output.txt" -Raw -ErrorAction SilentlyContinue)
+  $bad += Measure-UpdateOutcome $label $exitCode "$out" $landedPath
+  git -C "$env:INSTALL_DIR" log --oneline -1 | Out-Host
+  if ($bad.Count) {
+    Write-Host "FAIL [$label]:"; $bad | Select-Object -First 30 | ForEach-Object { Write-Host "  $_" }
+    Write-Host "--- gateway.log tail ---"; Get-LogLines | Select-Object -Last 150 | Out-Host
+    throw "[$label] failed $($bad.Count) criteria"
+  }
+  Write-Host "PASS [$label]: exit 0, one gateway 90s, port bound, running, 1 start, no restart after it, no failed backup, outcome ok, telegram cleanup_progress True"
+}
+
+function Measure-UpdateOutcome([string]$label, $exitCode, [string]$outputText, [string]$landedPath) {
   # Everything except gateway liveness: exit code, receipt, outcome sidecar,
   # the Telegram summary-card setting, and that the fix code actually landed.
   $bad = @()
@@ -145,7 +206,8 @@ function Measure-UpdateOutcome([string]$label, $exitCode, [string]$outputText) {
   $cp = Test-CleanupProgress
   Write-Host "[$label] telegram cleanup_progress resolves to: $cp"
   if ("$cp" -ne "True") { $bad += "telegram cleanup_progress resolves to '$cp', not True" }
+  if (-not $landedPath) { $landedPath = "clover_cli\config_migrations.py" }
   $landed = Select-String -Path "$env:INSTALL_DIR\clover_cli\update_cmd.py" -Pattern '_hand_off_windows_gateway_resume' -Quiet
-  if (-not $landed) { $bad += "fix code did not land (main moved during the run?)" }
+  if (-not $landed -or -not (Test-Path "$env:INSTALL_DIR\$landedPath")) { $bad += "target code did not land ($landedPath; main moved during the run?)" }
   ,@($bad)
 }
