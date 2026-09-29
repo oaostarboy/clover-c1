@@ -60,7 +60,7 @@ DEFAULT_KEEP = 5
 # Entries under skills/ that should NEVER be rolled up into a snapshot.
 # .hub/ is managed by the skills hub; rolling it back would break lockfile
 # invariants. .curator_backups is the backup dir itself — recursion bomb.
-_EXCLUDE_TOP_LEVEL = {".curator_backups", ".hub"}
+_EXCLUDE_TOP_LEVEL = {".curator_backups", ".hub", ".restore-backups"}
 
 # Snapshot id regex: UTC ISO with colons replaced by dashes so the filename
 # is portable (Windows-safe). An optional ``-NN`` suffix handles two

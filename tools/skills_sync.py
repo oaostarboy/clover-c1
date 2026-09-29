@@ -311,6 +311,10 @@ def _dir_hash(directory: Path) -> str:
     return hasher.hexdigest()
 
 
+def _is_disposable_skill_file(rel: Path) -> bool:
+    return "__pycache__" in rel.parts or rel.name.endswith(".pyc") or rel.name == ".DS_Store"
+
+
 def _safe_rel_install_path(path: Path, base: Path) -> str:
     """Return a normalized relative POSIX path, rejecting traversal/absolute paths."""
     rel = path.relative_to(base)
@@ -333,7 +337,7 @@ def _skill_file_list(skill_dir: Path) -> List[str]:
         if not fpath.is_file():
             continue
         rel = fpath.relative_to(skill_dir)
-        if any(part in EXCLUDED_SKILL_DIRS for part in rel.parts):
+        if _is_disposable_skill_file(rel):
             continue
         files.append(rel.as_posix())
     return files
@@ -553,12 +557,12 @@ def _lock_style_hash(directory: Path) -> str:
         for fpath in directory.rglob("*")
         if fpath.is_file()
         for rel in [fpath.relative_to(directory)]
-        if not any(part in EXCLUDED_SKILL_DIRS for part in rel.parts)
+        if not _is_disposable_skill_file(rel)
     )
     h = hashlib.sha256()
     for rel, fpath in entries:
         h.update(rel.encode("utf-8") + b"\x00")
-        h.update(fpath.read_bytes())
+        h.update(fpath.read_bytes().replace(b"\r\n", b"\n"))
     return f"sha256:{h.hexdigest()[:16]}"
 
 
@@ -613,6 +617,12 @@ def _refresh_installed_optional_skills(quiet: bool = False) -> dict:
             logger.debug("optional skill refresh: cannot hash %s: %s", lock_name, e)
             continue
         recorded = entry.get("content_hash", "")
+        recorded_files = set(entry.get("files") or [])
+        installed_files = set(_skill_file_list(dest))
+        if installed_files - recorded_files:
+            result["user_modified"].append(lock_name)
+            logger.info("optional skill %r has local edits; not refreshing it from the repo", lock_name)
+            continue
         if dest_hash == src_hash:
             if recorded != dest_hash:
                 # Refreshed by hand (or by an older updater): repair the
@@ -652,12 +662,34 @@ def _refresh_installed_optional_skills(quiet: bool = False) -> dict:
         changed = True
         result["refreshed"].append(lock_name)
         result["backed_up"].append(backed_up)
+        _prune_optional_restore_backups(_skills_dir() / ".restore-backups", Path(backed_up))
         if not quiet:
             print(f"  ↑ {lock_name} (optional skill refreshed from repo)")
 
     if changed:
         _write_hub_lock(lock_path, data)
     return result
+
+
+def _prune_optional_restore_backups(backup_root: Path, skill_rel: Path) -> None:
+    """Keep the newest three refresh snapshots for this skill only."""
+    if not backup_root.exists():
+        return
+    snapshots = [snapshot for snapshot in backup_root.glob("official-optional-refresh-*")
+                 if snapshot.is_dir() and (snapshot / skill_rel).is_dir()]
+    for old in sorted(snapshots, key=lambda p: p.name, reverse=True)[3:]:
+        shutil.rmtree(old / skill_rel, ignore_errors=True)
+        for parent in reversed((old / skill_rel).parents):
+            if parent == old:
+                break
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+        try:
+            old.rmdir()
+        except OSError:
+            pass
 
 
 def _backfill_optional_provenance(quiet: bool = False) -> List[str]:
@@ -879,7 +911,7 @@ def bundled_skills_dir_is_unseeded() -> bool:
         return False
 
 
-def sync_skills(quiet: bool = False) -> dict:
+def sync_skills(quiet: bool = False, refresh_optional: bool = False) -> dict:
     """
     Sync bundled skills into ~/.clover/skills/ using the manifest.
 
@@ -1163,7 +1195,7 @@ def sync_skills(quiet: bool = False) -> dict:
 
     _write_manifest(manifest)
     optional_provenance_backfilled = _backfill_optional_provenance(quiet=quiet)
-    optional_refresh = _refresh_installed_optional_skills(quiet=quiet)
+    optional_refresh = _refresh_installed_optional_skills(quiet=quiet) if refresh_optional else {"refreshed": [], "user_modified": [], "backed_up": []}
 
     return {
         "optional_refreshed": optional_refresh["refreshed"],

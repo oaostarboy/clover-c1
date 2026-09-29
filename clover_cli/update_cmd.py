@@ -2199,7 +2199,7 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
         from tools.skills_sync import sync_skills
 
         print("→ Syncing bundled skills...")
-        result = sync_skills(quiet=True)
+        result = sync_skills(quiet=True, refresh_optional=True)
         if result["copied"]:
             print(f"  + {len(result['copied'])} new: {', '.join(result['copied'])}")
         if result.get("updated"):

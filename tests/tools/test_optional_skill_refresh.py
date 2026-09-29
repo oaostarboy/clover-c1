@@ -79,7 +79,7 @@ class Env:
             stack.enter_context(patch("tools.skills_sync._get_optional_dir", return_value=self.optional))
             stack.enter_context(patch("tools.skills_sync.SKILLS_DIR", self.skills))
             stack.enter_context(patch("tools.skills_sync.MANIFEST_FILE", self.manifest))
-            return sync_skills(quiet=True)
+            return sync_skills(quiet=True, refresh_optional=True)
 
     def tree(self, root=None):
         root = root or self.dest
@@ -171,6 +171,59 @@ def test_generated_bytecode_is_not_an_edit(env):
     env.ship(V2)
     assert env.sync()["optional_refreshed"] == ["council"]
     assert env.tree() == V2
+
+
+@pytest.mark.parametrize("extra", [".git/config", ".github/workflows/local.yml", ".archive/old.txt", "venv/local.txt"])
+def test_extra_files_in_previously_excluded_dirs_are_user_edits(env, extra):
+    env.install(V1)
+    path = env.dest / extra
+    path.parent.mkdir(parents=True)
+    path.write_text("keep me", encoding="utf-8")
+    env.ship(V2)
+    assert env.sync()["optional_user_modified"] == ["council"]
+    assert path.read_text(encoding="utf-8") == "keep me"
+
+
+def test_crlf_in_installed_copy_does_not_count_as_user_edit(env):
+    env.install(V1)
+    for path in env.dest.rglob("*"):
+        if path.is_file():
+            path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    env.ship(V2)
+    assert env.sync()["optional_refreshed"] == ["council"]
+
+
+def test_plain_gateway_sync_does_not_refresh_optional_skill(env):
+    env.install(V1)
+    env.ship(V2)
+    with ExitStack() as stack:
+        stack.enter_context(patch("tools.skills_sync._get_bundled_dir", return_value=env.bundled))
+        stack.enter_context(patch("tools.skills_sync._get_optional_dir", return_value=env.optional))
+        stack.enter_context(patch("tools.skills_sync.SKILLS_DIR", env.skills))
+        stack.enter_context(patch("tools.skills_sync.MANIFEST_FILE", env.manifest))
+        result = sync_skills(quiet=True)
+    assert result["optional_refreshed"] == []
+    assert env.tree() == V1
+
+
+def test_restore_backup_tree_is_excluded_from_skill_discovery(env):
+    from agent.skill_utils import is_excluded_skill_path
+    from tools.skills_sync import _index_installed_skill_dirs_by_name
+
+    old = env.skills / ".restore-backups" / "old" / INSTALL_PATH
+    _write_skill(old, V1)
+    assert is_excluded_skill_path(old / "SKILL.md")
+    assert "council" not in _index_installed_skill_dirs_by_name()
+
+
+def test_restore_backups_keep_three_per_skill(env):
+    from tools.skills_sync import _prune_optional_restore_backups
+
+    root = env.skills / ".restore-backups"
+    for n in range(5):
+        _write_skill(root / f"official-optional-refresh-2026010{n}" / INSTALL_PATH, V1)
+    _prune_optional_restore_backups(root, Path(INSTALL_PATH))
+    assert len(list(root.glob("official-optional-refresh-*/" + INSTALL_PATH))) == 3
 
 
 def test_skill_that_is_not_installed_is_not_installed_by_update(env):
