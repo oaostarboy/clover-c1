@@ -415,3 +415,71 @@ def test_turn_cap_is_unfinished_not_failed():
     obs.finish(1)
     done = [kw for ev, kw in seen if ev == "subagent.complete"]
     assert done and done[-1]["status"] == "incomplete"
+
+
+def _clocked_job(pub, clock, *, parser="claude-stream-json", title="Queued worker"):
+    group_id, index = pub.external_job_identity()
+    obs = AgentJobObserver(session_id="proc_q", sink=pub, group_id=group_id, index=index,
+                           title=title, parser=parser, clock=clock)
+    obs.start()
+    return obs
+
+
+@pytest.mark.asyncio
+async def test_queued_job_with_no_output_is_waiting_never_stuck():
+    clock = FakeClock()
+    adapter = FakeTelegramAdapter()
+    obs_box = {}
+    pub = _make_publisher(adapter, clock=clock, probe=lambda sid: obs_box["o"].liveness())
+    obs_box["o"] = _clocked_job(pub, clock)
+    assert obs_box["o"].liveness()["has_output"] is False
+    for _ in range(15):  # 15 minutes of queue silence
+        clock.advance(60)
+        await pub.heartbeat_tick()
+    snap = pub.tracker.snapshot(pub._jobs_group)[0]
+    assert snap["state"] == "waiting"
+    assert snap["reason"] == "queued (waiting to start)"
+    assert adapter.sends == []
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_job_that_produced_output_then_went_quiet_alerts_once_with_new_wording():
+    clock = FakeClock()
+    adapter = FakeTelegramAdapter()
+    obs_box = {}
+    pub = _make_publisher(adapter, clock=clock, probe=lambda sid: obs_box["o"].liveness())
+    obs_box["o"] = _clocked_job(pub, clock)
+    obs_box["o"].feed('{"type": "system", "subtype": "init"}\n')
+    clock.advance(660)  # 11 minutes of silence after real output
+    await pub.heartbeat_tick()
+    clock.advance(60)
+    await pub.heartbeat_tick()
+    assert pub.tracker.snapshot(pub._jobs_group)[0]["state"] == "blocked"
+    assert len(adapter.sends) == 1
+    text = adapter.sends[0]["content"]
+    assert "Queued worker has been quiet for 11m." in text
+    assert "still running; I'll keep watching" in text
+    assert "stuck" not in text
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_stream_heartbeat_lines_count_as_activity():
+    clock = FakeClock()
+    adapter = FakeTelegramAdapter()
+    obs_box = {}
+    pub = _make_publisher(adapter, clock=clock, probe=lambda sid: obs_box["o"].liveness())
+    obs = obs_box["o"] = _clocked_job(pub, clock)
+    obs.feed('{"type": "system", "subtype": "init"}\n')
+    line = ('{"type":"tool_progress","tool_use_id":"toolu_1","tool_name":"Bash",'
+            '"elapsed_time_seconds":30,"heartbeat":true,"session_id":"s"}\n')
+    for _ in range(20):  # a 20-minute tool that keeps emitting heartbeats
+        clock.advance(60)
+        obs.feed(line)
+        await pub.heartbeat_tick()
+    snap = pub.tracker.snapshot(pub._jobs_group)[0]
+    assert snap["state"] == "running"
+    assert obs.liveness()["seconds_since_activity"] < 1
+    assert adapter.sends == []
+    await pub.aclose()

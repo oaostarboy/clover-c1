@@ -108,6 +108,7 @@ class AgentJobObserver:
         self._finished = False
         self.started_at = clock()
         self.last_output_at = self.started_at
+        self.has_output = False
         self.malformed_lines = 0
         self.dropped_lines = 0
 
@@ -166,6 +167,7 @@ class AgentJobObserver:
             if self._finished:
                 return
             self.last_output_at = self._clock()
+            self.has_output = True
             if self.parser == "none":
                 return  # lifecycle only: output growth is the whole signal
             data = self._buf + chunk
@@ -337,6 +339,7 @@ class AgentJobObserver:
                 "registered": not self._finished,
                 "external": True,
                 "seconds_since_activity": round(self._clock() - self.last_output_at, 1),
+                "has_output": self.has_output,
                 "current_tool": None,
                 "activity": "producing output",
             }
