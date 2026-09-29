@@ -751,3 +751,161 @@ jobs:
             ${{ env.CLOVER_HOME }}\logs
             ${{ env.CLOVER_HOME }}\gateway_state.json
           if-no-files-found: ignore
+
+  # Owner gate (2026-09-29): both real Windows 11 user paths, from the last
+  # pre-release main AND from current main, to the fix. Gateway installed and
+  # started the Windows-user way (`clover gateway install` = Scheduled Task +
+  # hidden start), config.yaml exactly as the installer creates it (a copy of
+  # that commit's cli-config.yaml.example). Pass = update exit 0, exactly one
+  # gateway for 90 s, api port bound, state running (no restart_requested),
+  # one post-update start with no restart/takeover after it, no failed backup
+  # step, .clover-last-update not failed, Telegram cleanup_progress True.
+  #   cli:      `clover update --yes` in a terminal
+  #   telegram: /update sent to the running gateway over a local IRC server
+  #             (IRC is on the /update allow-list), so the gateway's own
+  #             handler spawns the updater child from its process tree.
+  win-update-paths:
+    if: github.ref_name == 'ci/win-double-restart'
+    strategy:
+      fail-fast: false
+      matrix:
+        from_ref: ['69a75bb87740dda7461825f864d678c72fce5eec', 'c7ec2d0e9a5c87b833542f1ddb5fe54a16e239c0']
+        path: [cli, telegram]
+    runs-on: windows-latest
+    timeout-minutes: 75
+    env:
+      FROM_REF: ${{ matrix.from_ref }}
+      UPDATE_PATH: ${{ matrix.path }}
+      FIX_BRANCH: fix/win-update-double-restart
+      API_PORT: "8791"
+      IRC_PORT: "6667"
+    steps:
+      - name: Checkout e2e helpers
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/win-e2e
+          path: e2e
+
+      - name: a. Install Clover at from_ref via scripts/install.ps1
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cloverHome = "$env:LOCALAPPDATA\clover"
+          $installDir = "$cloverHome\clover-c1"
+          # Same pre-clone workaround as the upgrade-e2e job (Finding 1).
+          git config --global core.autocrlf false
+          New-Item -ItemType Directory -Force -Path (Split-Path $installDir) | Out-Null
+          git clone --branch main https://github.com/oaostarboy/clover-c1.git $installDir
+          git -C $installDir checkout --detach "${{ env.FROM_REF }}"
+          if ($LASTEXITCODE -ne 0) { throw "pre-clone checkout of ${{ env.FROM_REF }} failed" }
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/${{ github.ref_name }}/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
+          & "$env:TEMP\install.ps1" -Branch main -Commit "${{ env.FROM_REF }}" -NonInteractive -SkipComputerUse -CloverHome $cloverHome -InstallDir $installDir
+          "CLOVER_HOME=$cloverHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALL_DIR=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CLOVER_BIN=$installDir\venv\Scripts\clover.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "E2E=$env:GITHUB_WORKSPACE\e2e\.github\win-e2e" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: b. Config as the installer made it + api_server (+ IRC for /update)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:E2E\wdr.ps1"
+          $cfg = "$env:CLOVER_HOME\config.yaml"
+          if (-not (Test-Path $cfg)) {
+            Write-Host "installer left no config.yaml; copying the example like install.ps1 does"
+            Copy-Item "$env:INSTALL_DIR\cli-config.yaml.example" $cfg
+          }
+          Select-String -Path $cfg -Pattern '^\s*cleanup_progress:|^\s*pre_update_backup:|^_config_version:' | ForEach-Object { Write-Host "config.yaml: $($_.Line.Trim())" }
+          $env_lines = @("API_SERVER_ENABLED=true", "API_SERVER_KEY=win-update-paths-key-0123456789", "API_SERVER_PORT=$env:API_PORT", "API_SERVER_HOST=127.0.0.1")
+          if ($env:UPDATE_PATH -eq 'telegram') {
+            $env_lines += @("IRC_SERVER=127.0.0.1", "IRC_PORT=$env:IRC_PORT", "IRC_USE_TLS=false", "IRC_CHANNEL=#clover", "IRC_NICKNAME=cloverbot", "IRC_ALLOWED_USERS=ant", "GATEWAY_ALLOW_ALL_USERS=true")
+          }
+          Add-Content -Path "$env:CLOVER_HOME\.env" -Value ($env_lines -join "`n")
+          $cp = Test-CleanupProgress
+          Write-Host "before update: telegram cleanup_progress resolves to $cp"
+
+      - name: c. Fake IRC server (telegram path) + gateway via Scheduled Task
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:E2E\wdr.ps1"
+          if ($env:UPDATE_PATH -eq 'telegram') {
+            # System Python, never the Clover venv (a venv process is a holder).
+            $py = (Get-Command python).Source
+            Start-Process -FilePath $py -ArgumentList @("$env:E2E\fake_ircd.py", "$env:RUNNER_TEMP\irc.log", "$env:RUNNER_TEMP\irc.trigger", $env:IRC_PORT) -WindowStyle Hidden
+          }
+          $env:CLOVER_GATEWAY_INSTALL_START_NOW = "1"
+          $env:CLOVER_GATEWAY_INSTALL_START_ON_LOGIN = "1"
+          & "$env:CLOVER_BIN" gateway install
+          if ($LASTEXITCODE -ne 0) { throw "gateway install exited $LASTEXITCODE" }
+          schtasks /Query /TN Clover_Gateway /FO LIST | Out-String | Write-Host
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Get-Date) -lt $deadline -and -not (Test-ApiPort)) { Start-Sleep -Seconds 2 }
+          if (-not (Test-ApiPort)) { Get-LogLines | Select-Object -Last 80; throw "gateway did not bind $env:API_PORT" }
+          $roots = Get-GatewayRoots
+          Write-Host "pre-update gateway roots: $(($roots | ForEach-Object { "$($_.ProcessId): $($_.CommandLine)" }) -join ' | ')"
+          if ($roots.Count -ne 1) { throw "expected one pre-update gateway, saw $($roots.Count)" }
+          if ($env:UPDATE_PATH -eq 'telegram') {
+            $deadline = (Get-Date).AddSeconds(90)
+            while ((Get-Date) -lt $deadline -and -not (Select-String -Path "$env:RUNNER_TEMP\irc.log" -Pattern '<< JOIN' -Quiet)) { Start-Sleep -Seconds 2 }
+            Get-Content "$env:RUNNER_TEMP\irc.log" | Write-Host
+            if (-not (Select-String -Path "$env:RUNNER_TEMP\irc.log" -Pattern '<< JOIN' -Quiet)) { Get-LogLines | Select-Object -Last 60; throw "gateway never joined the IRC server" }
+          }
+
+      - name: d. Update (the user's exact command) and check every pass criterion
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:E2E\wdr.ps1"
+          Set-MainIsFix "${{ env.FIX_BRANCH }}"
+          $logStart = (Get-LogLines).Count
+          $label = "$env:UPDATE_PATH from $($env:FROM_REF.Substring(0,7))"
+          if ($env:UPDATE_PATH -eq 'cli') {
+            & "$env:CLOVER_BIN" update --yes 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\update-output.txt"
+            $exitCode = $LASTEXITCODE
+          } else {
+            New-Item -ItemType File -Path "$env:RUNNER_TEMP\irc.trigger" | Out-Null
+            $deadline = (Get-Date).AddSeconds(120)
+            while ((Get-Date) -lt $deadline -and (Get-UpdateProcesses).Count -eq 0) { Start-Sleep -Seconds 1 }
+            Write-Host "updater processes: $((Get-UpdateProcesses | ForEach-Object { "$($_.ProcessId)<-$($_.ParentProcessId): $($_.CommandLine)" }) -join ' || ')"
+            Wait-UpdateChainDone 1800
+            # The restarted gateway reports the result back on the chat.
+            $deadline = (Get-Date).AddSeconds(300)
+            while ((Get-Date) -lt $deadline -and -not (Test-Path "$env:CLOVER_HOME\.update_exit_code") -and (Test-Path "$env:CLOVER_HOME\.update_pending.json")) { Start-Sleep -Seconds 3 }
+            $exitCode = if (Test-Path "$env:CLOVER_HOME\.update_exit_code") { (Get-Content "$env:CLOVER_HOME\.update_exit_code" -Raw).Trim() } else { $null }
+            if ($null -eq $exitCode) {
+              $side = try { Get-Content "$env:CLOVER_HOME\.clover-last-update" -Raw | ConvertFrom-Json } catch { $null }
+              $exitCode = if ($side -and $side.outcome -eq 'success') { 0 } else { "unknown (outcome=$($side.outcome))" }
+            }
+            if (Test-Path "$env:CLOVER_HOME\.update_output.txt") { Copy-Item "$env:CLOVER_HOME\.update_output.txt" "$env:RUNNER_TEMP\update-output.txt" }
+            Write-Host "--- updater output (.update_output.txt) ---"
+            Get-Content "$env:RUNNER_TEMP\update-output.txt" -ErrorAction SilentlyContinue | Select-Object -Last 120
+            Write-Host "--- IRC transcript ---"
+            Get-Content "$env:RUNNER_TEMP\irc.log" | Write-Host
+          }
+          Write-Host "[$label] update exit=$exitCode"
+          $bad = @()
+          $bad += Measure-SingleGateway $label $logStart $true
+          $out = (Get-Content "$env:RUNNER_TEMP\update-output.txt" -Raw -ErrorAction SilentlyContinue)
+          $bad += Measure-UpdateOutcome $label $exitCode "$out"
+          git -C "$env:INSTALL_DIR" log --oneline -1
+          if ($bad.Count) {
+            Write-Host "FAIL [$label]:"; $bad | Select-Object -First 30 | ForEach-Object { Write-Host "  $_" }
+            Write-Host "--- gateway.log tail ---"; Get-LogLines | Select-Object -Last 150
+            throw "[$label] failed $($bad.Count) criteria"
+          }
+          Write-Host "PASS [$label]: exit 0, one gateway 90s, port bound, running, 1 start, no restart after it, no failed backup, outcome ok, telegram cleanup_progress True"
+
+      - name: e. Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: win-update-paths-${{ matrix.path }}-${{ matrix.from_ref }}
+          path: |
+            ${{ env.CLOVER_HOME }}\logs
+            ${{ env.CLOVER_HOME }}\gateway_state.json
+            ${{ env.CLOVER_HOME }}\.clover-last-update
+            ${{ env.CLOVER_HOME }}\config.yaml
+            ${{ runner.temp }}\irc.log
+            ${{ runner.temp }}\update-output.txt
+          if-no-files-found: ignore
