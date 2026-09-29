@@ -6,7 +6,7 @@ on:
       from_ref:
         description: "Commit users are upgrading FROM (pre-release state)"
         required: false
-        default: "69a75bb8"
+        default: "69a75bb87740dda7461825f864d678c72fce5eec"
       to_branch:
         description: "Branch users are upgrading TO"
         required: false
@@ -18,7 +18,7 @@ on:
     branches: [ci/upgrade-e2e]
 
 env:
-  FROM_REF: ${{ github.event.inputs.from_ref || '69a75bb8' }}
+  FROM_REF: ${{ github.event.inputs.from_ref || '69a75bb87740dda7461825f864d678c72fce5eec' }}
   TO_BRANCH: ${{ github.event.inputs.to_branch || 'fix/restart-and-reasoning' }}
 
 jobs:
