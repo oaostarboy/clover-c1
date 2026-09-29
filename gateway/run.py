@@ -3377,6 +3377,28 @@ def _dequeue_pending_event(adapter, session_key: str) -> MessageEvent | None:
     return adapter.get_pending_message(session_key)
 
 
+def _stale_observed_process_notification(pending_event: "MessageEvent | None") -> str:
+    """Return the process session id if ``pending_event`` is a stale process notice.
+
+    A background-process completion/watch notification can arrive while a
+    turn is busy (base adapter's active-session guard) and only re-enter as
+    the NEXT turn once that busy turn finishes. If the busy turn itself
+    already polled/waited/logged the same process and told the user about
+    its exit, running the queued notice as a second turn double-messages the
+    same event. Returns "" when the event isn't a stale process notice.
+    """
+    if pending_event is None or not getattr(pending_event, "internal", False):
+        return ""
+    metadata = getattr(pending_event, "metadata", None) or {}
+    session_id = str(metadata.get("process_session_id") or "").strip()
+    if not session_id:
+        return ""
+    from tools.process_registry import process_registry
+    if process_registry.is_exit_observed(session_id):
+        return session_id
+    return ""
+
+
 _INTERRUPT_REASON_STOP = "Stop requested"
 _INTERRUPT_REASON_RESET = "Session reset requested"
 _INTERRUPT_REASON_TIMEOUT = "Execution timed out (inactivity)"
@@ -26747,6 +26769,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             parent_session_id = str(evt.get("parent_session_id") or "").strip()
             if parent_session_id:
                 metadata["gateway_session_id"] = parent_session_id
+            # Process/watch session id, so a follow-up turn queued while busy
+            # can be dropped later if the agent already observed this same
+            # process's exit inline (see _stale_observed_process_notification).
+            _proc_sid = str(evt.get("session_id") or "").strip()
+            if _proc_sid:
+                metadata["process_session_id"] = _proc_sid
             synth_event = MessageEvent(
                 text=synth_text,
                 message_type=MessageType.TEXT,
@@ -31112,6 +31140,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # order, and (b) causes any mid-chain /queue to correctly
                 # route to overflow rather than jumping the queue.
                 pending_event = self._promote_queued_event(session_key, adapter, pending_event)
+                _stale_proc_sid = _stale_observed_process_notification(pending_event)
+                if _stale_proc_sid:
+                    logger.info(
+                        "Dropped completion notice for %s: already observed in turn",
+                        _stale_proc_sid,
+                    )
+                    pending_event = None
                 if result.get("interrupted") and not pending_event and result.get("interrupt_message"):
                     interrupt_message = result.get("interrupt_message")
                     if _is_control_interrupt_message(interrupt_message):

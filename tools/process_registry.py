@@ -1737,6 +1737,18 @@ class ProcessRegistry:
         """Check if a completion notification was already consumed via wait/log."""
         return session_id in self._completion_consumed
 
+    def is_exit_observed(self, session_id: str) -> bool:
+        """Whether the agent has already seen this process report its exit.
+
+        True once any tool result has reported the exit to the agent this
+        session's lifetime: a read-only poll() (``_poll_observed``) or an
+        output-consuming wait()/read_log() (``_completion_consumed``). Used
+        by the gateway to drop a queued completion/watch notification whose
+        underlying exit the agent already surfaced to the user in an earlier
+        turn, instead of re-delivering it as a duplicate follow-up turn.
+        """
+        return session_id in self._completion_consumed or session_id in self._poll_observed
+
     def is_session_waiting(self, session_id: str) -> bool:
         """Whether a goal loop parked on this session should still be parked.
 
