@@ -85,6 +85,9 @@ _ALLOWED_DELETES = {
         "shutil.rmtree(dst, ignore_errors=True)",  # failed update staging destination
         "os.remove(dst)",  # failed update staging file
         "cache_file.unlink()",  # transient update cache
+        # adopt_non_git_install: removes ONLY the .git it just created (it
+        # refuses to run when .git already exists), never user files.
+        "shutil.rmtree(root / '.git', ignore_errors=True)",
     },
     "update_restart_watcher.py": {
         "path.unlink()",  # validated restart/health beacon in watcher cleanup
@@ -112,7 +115,9 @@ def test_update_and_repair_delete_calls_are_allowlisted():
         expected = Counter({expr: 1 for expr in allowed})
         if filename == "update_cmd.py":
             expected.update({"response_path.unlink(missing_ok=True)": 2,
-                             "prompt_path.unlink(missing_ok=True)": 1})
+                             "prompt_path.unlink(missing_ok=True)": 1,
+                             # 2nd: the adopt step's temp index dir
+                             "shutil.rmtree(tmp_dir, ignore_errors=True)": 1})
         elif filename == "update_restart_watcher.py":
             expected.update({"beacon.unlink(missing_ok=True)": 2})
         assert seen == expected, f"Deletion count changed in {filename}: {seen - expected}"
