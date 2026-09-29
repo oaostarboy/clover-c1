@@ -706,19 +706,14 @@ class CouncilLiveCard:
                         ))
                         if getattr(res, "success", False):
                             delivered = self.message_id
-                if delivered is None and (can_delete or not self.message_id):
-                    res = await _maybe_await(self.adapter.send(self.chat_id, text, metadata=self.metadata))
-                    if getattr(res, "success", False):
-                        delivered = str(getattr(res, "message_id", "") or "sent")
+
             except Exception:
                 logger.warning("Council final message for %s failed", self.run_id, exc_info=True)
             finally:
                 da._CARD_SEND.reset(token)
-            # Keep the live card only when it is the final message itself.
-            keep = self.message_id if (delivered is None or delivered == self.message_id) else None
-            if delivered and delivered != self.message_id:
-                # Final post is not a live-card id and must never enter orphan sweeps.
-                pass
+            # Failed final sends must not leave an obsolete live card beside
+            # the /council handler's normal reply.
+            keep = self.message_id if delivered == self.message_id else None
             await self._sweep_except(keep)
             self.message_id = keep
             self.final_delivered = delivered is not None

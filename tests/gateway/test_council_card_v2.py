@@ -423,6 +423,21 @@ async def test_failed_run_ends_with_one_failure_message(tmp_path):
     assert "**Answer**" not in msg
     assert len(ad.live) == 1
 
+@pytest.mark.asyncio
+async def test_failed_final_send_sweeps_live_card(tmp_path):
+    class FailedFinal(LiveAdapter):
+        async def send(self, chat_id, content, reply_to=None, metadata=None):
+            if "**Answer**" in content:
+                return SendResult(success=False, error="flood wait")
+            return await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
+
+    ad = FailedFinal(edit_fails=True)
+    card = _card(ad, tmp_path)
+    await card.publish(_state())
+    await card.finish_done(_state(status="done"), SUMMARY)
+    assert not card.final_delivered
+    assert not ad.council_messages()  # failure must not leave a stale live card
+
 
 # ── same card for both entry points ────────────────────────────────────────
 
@@ -472,7 +487,8 @@ async def test_agent_launched_run_gets_one_card_and_one_final_message(tmp_path, 
 
 
 @pytest.mark.asyncio
-async def test_slash_council_produces_one_card_and_one_final_message(tmp_path):
+@pytest.mark.parametrize("final_fails", [False, True])
+async def test_slash_council_produces_one_card_and_one_final_message(tmp_path, final_fails):
     script = tmp_path / "skills" / "autonomous-ai-agents" / "council" / "scripts" / "council_run.py"
     script.parent.mkdir(parents=True)
     script.write_text(
@@ -491,7 +507,13 @@ async def test_slash_council_produces_one_card_and_one_final_message(tmp_path):
         "put('chairman','done',3)\n",
         encoding="utf-8",
     )
-    ad = LiveAdapter()
+    class FinalFailsOnce(LiveAdapter):
+        async def send(self, chat_id, content, reply_to=None, metadata=None):
+            if "**Answer**" in content and "✅ 🏛 Council" in content:
+                return SendResult(success=False, error="flood wait")
+            return await super().send(chat_id, content, reply_to=reply_to, metadata=metadata)
+
+    ad = FinalFailsOnce(edit_fails=True) if final_fails else LiveAdapter()
 
     class Runner(GatewaySlashCommandsMixin):
         def _council_card_style(self, platform):
@@ -518,10 +540,16 @@ async def test_slash_council_produces_one_card_and_one_final_message(tmp_path):
     finally:
         watching.cancel()
 
-    assert reply is None  # the card already delivered the answer; nothing else is sent
-    (final,) = ad.council_messages()
-    assert "✅ 🏛 Council · Quick" in final and "Is this clean?" in final
-    assert "**Answer**\n• Ship it." in final and "> *Ship it*" in final
+    if final_fails:
+        assert reply and "**Answer**\n• Ship it." in reply
+        assert not ad.council_messages()
+        await ad.send("123", reply)  # normal gateway reply path
+        assert list(ad.live.values()) == [reply]
+    else:
+        assert reply is None  # the card already delivered the answer; nothing else is sent
+        (final,) = ad.council_messages()
+        assert "✅ 🏛 Council · Quick" in final and "Is this clean?" in final
+        assert "**Answer**\n• Ship it." in final and "> *Ship it*" in final
     assert len(ad.live) == 1 and not watcher.tasks  # watcher stayed out
 
 
