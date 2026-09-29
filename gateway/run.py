@@ -22429,6 +22429,39 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 return self._format_session_info()
         return self._format_session_info()
 
+    def _reset_notice_session_parts(self, source: SessionSource) -> dict:
+        """Same profile scoping as ``_reset_notice_session_info``, but the raw
+        fields (model, provider, context, endpoint) for a re-skinned /new reply."""
+        if getattr(getattr(self, "config", None), "multiplex_profiles", False):
+            with _profile_runtime_scope(self._resolve_profile_home_for_source(source)):
+                return self._session_info_parts()
+        return self._session_info_parts()
+
+    def _session_info_parts(self) -> dict:
+        """Resolve the current model config into display fields.
+
+        ``context_source`` is ``config`` / ``default`` / ``detected``;
+        ``context`` is ``500K`` / ``1.0M`` / ``8192``; ``local_endpoint`` is
+        the base URL for localhost setups, else ``""``.
+        """
+        resolved = _resolve_gateway_model_context()
+        context_length = resolved.context_length
+        if context_length >= 1_000_000:
+            ctx_display = f"{context_length / 1_000_000:.1f}M"
+        elif context_length >= 1_000:
+            ctx_display = f"{context_length // 1_000}K"
+        else:
+            ctx_display = str(context_length)
+        base_url = resolved.base_url
+        local = bool(base_url and base_url_hostname(base_url) in ("localhost", "127.0.0.1", "0.0.0.0"))
+        return {
+            "model": resolved.model,
+            "provider": resolved.provider,
+            "context": ctx_display,
+            "context_source": resolved.context_source,
+            "base_url": base_url if local else "",
+        }
+
     def _format_session_info(self) -> str:
         """Resolve current model config and return a formatted info block.
 
@@ -22436,27 +22469,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         users can immediately see if context detection went wrong (e.g.
         local models falling to the 128K default).
         """
-        resolved = _resolve_gateway_model_context()
-        model = resolved.model
-        provider = resolved.provider
-        base_url = resolved.base_url
-        context_length = resolved.context_length
+        parts = self._session_info_parts()
+        model = parts["model"]
+        provider = parts["provider"]
+        base_url = parts["base_url"]
+        ctx_display = parts["context"]
 
         # Format context source hint
-        if resolved.context_source == "config":
+        if parts["context_source"] == "config":
             ctx_source = "config"
-        elif resolved.context_source == "default":
+        elif parts["context_source"] == "default":
             ctx_source = "default — set model.context_length in config to override"
         else:
             ctx_source = "detected"
-
-        # Format context length for display
-        if context_length >= 1_000_000:
-            ctx_display = f"{context_length / 1_000_000:.1f}M"
-        elif context_length >= 1_000:
-            ctx_display = f"{context_length // 1_000}K"
-        else:
-            ctx_display = str(context_length)
 
         lines = [
             f"◆ Model: `{model}`",
@@ -22465,7 +22490,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         ]
 
         # Show endpoint for local/custom setups
-        if base_url and base_url_hostname(base_url) in ("localhost", "127.0.0.1", "0.0.0.0"):
+        if base_url:
             lines.append(f"◆ Endpoint: {base_url}")
 
         return "\n".join(lines)
