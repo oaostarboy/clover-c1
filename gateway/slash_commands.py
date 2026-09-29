@@ -2141,6 +2141,13 @@ class GatewaySlashCommandsMixin:
                         _self._session_model_overrides[_session_key] = {
                             "model": result.new_model,
                             "provider": result.target_provider,
+                            # target_provider is already the pre-canonicalization
+                            # identity (pdef.id — e.g. a named custom provider
+                            # keeps its config name, never "custom"). Recording
+                            # it here too keeps _apply_session_model_override's
+                            # requested_provider in sync with provider instead
+                            # of leaving a stale value from before the switch.
+                            "requested_provider": result.target_provider,
                             "api_key": result.api_key,
                             "base_url": result.base_url,
                             "api_mode": result.api_mode,
@@ -2456,6 +2463,10 @@ class GatewaySlashCommandsMixin:
             self._session_model_overrides[session_key] = {
                 "model": result.new_model,
                 "provider": result.target_provider,
+                # See the matching comment in the picker-switch branch above:
+                # target_provider is already the pre-canonicalization identity,
+                # so it doubles as requested_provider here.
+                "requested_provider": result.target_provider,
                 "api_key": result.api_key,
                 "base_url": result.base_url,
                 "api_mode": result.api_mode,

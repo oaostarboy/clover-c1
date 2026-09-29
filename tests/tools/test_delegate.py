@@ -57,6 +57,34 @@ def _make_mock_parent(depth=0):
     return parent
 
 
+class TestChildKeepsNamedProviderIdentity(unittest.TestCase):
+    """A pure-inherit child of a parent on a named custom provider
+    (provider="custom", requested_provider="<name>") must keep the name."""
+
+    def _child_kwargs(self, **overrides):
+        parent = _make_mock_parent()
+        parent.provider = "custom"
+        parent.requested_provider = "gemini-oauth"
+        with patch("run_agent.AIAgent") as MockAgent:
+            MockAgent.return_value = MagicMock()
+            _build_child_agent(
+                task_index=0, goal="g", context=None, toolsets=None, model=None,
+                max_iterations=10, parent_agent=parent, task_count=1, role="leaf",
+                **overrides,
+            )
+        return MockAgent.call_args[1]
+
+    def test_inherit_keeps_parent_requested_provider(self):
+        kwargs = self._child_kwargs()
+        self.assertEqual(kwargs["provider"], "custom")
+        self.assertEqual(kwargs["requested_provider"], "gemini-oauth")
+
+    def test_provider_override_does_not_inherit_parent_identity(self):
+        kwargs = self._child_kwargs(override_provider="openrouter")
+        self.assertEqual(kwargs["provider"], "openrouter")
+        self.assertEqual(kwargs["requested_provider"], "openrouter")
+
+
 class TestDelegateRequirements(unittest.TestCase):
 
     def test_schema_valid(self):

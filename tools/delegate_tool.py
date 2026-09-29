@@ -1931,6 +1931,19 @@ def _build_child_agent(
         effective_api_mode = None  # force re-derivation from provider's defaults
     else:
         effective_api_mode = getattr(parent_agent, "api_mode", None)
+    # Mirror the api_mode inherit-only-when-same-provider rule for the
+    # child's requested-provider identity. agent_init() falls back to
+    # agent.provider when requested_provider is omitted, so a pure-inherit
+    # child of a parent on a named custom provider (provider="custom",
+    # requested_provider="gemini-oauth") would otherwise get
+    # requested_provider="custom" -- losing the named identity for any
+    # later credential re-resolution against that provider.
+    if effective_provider != _parent_provider:
+        effective_requested_provider = effective_provider
+    else:
+        effective_requested_provider = (
+            getattr(parent_agent, "requested_provider", None) or effective_provider
+        )
     # Defensive: validate trusted delegation.command exists on PATH before
     # honoring it. An explicitly pinned transport that cannot run must fail
     # the spawn loudly (#80450) — silently falling back to the default
@@ -1967,6 +1980,7 @@ def _build_child_agent(
         # If explicitly forcing an ACP transport override, the provider MUST be copilot-acp
         # so run_agent.py initializes the CopilotACPClient.
         effective_provider = "copilot-acp"
+        effective_requested_provider = "copilot-acp"
         effective_api_mode = "chat_completions"
 
     # Resolve reasoning config: delegation override > parent inherit
@@ -2090,6 +2104,7 @@ def _build_child_agent(
                 model=effective_model,
                 model_pinned=model_pinned,
                 provider=effective_provider,
+                requested_provider=effective_requested_provider,
                 capabilities=child_capabilities,
                 api_mode=effective_api_mode,
                 acp_command=effective_acp_command,

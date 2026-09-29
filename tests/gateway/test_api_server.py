@@ -2583,6 +2583,92 @@ class TestModelRoutesAgentCreation:
         assert captured["api_key"] == "sk-session"
 
 
+class TestCustomNamedProviderKeepsIdentity:
+    """A user-defined ``providers.<name>`` entry resolves to provider="custom"
+    with requested_provider="<name>".  Re-resolving from "custom" alone loses
+    that entry's base_url/api_key, so every override branch must re-resolve
+    from requested_provider.
+    """
+
+    NAMED_URL = "http://127.0.0.1:8317/v1"
+
+    def _run(self, monkeypatch, *, session_override=None, session_model=None,
+             request_model=None):
+        captured = {}
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+        _patch_create_agent_runtime(monkeypatch, captured, FakeAgent)
+        monkeypatch.setattr(
+            "gateway.run._resolve_runtime_agent_kwargs",
+            lambda: {
+                "provider": "custom",
+                "requested_provider": "gemini-oauth",
+                "api_key": "sk-gemini",
+                "base_url": self.NAMED_URL,
+                "api_mode": "chat_completions",
+            },
+        )
+        resolved_for = []
+
+        def _resolve(provider, target_model=None):
+            resolved_for.append(provider)
+            if provider == "gemini-oauth":
+                return {
+                    "provider": "custom",
+                    "requested_provider": "gemini-oauth",
+                    "api_key": "sk-gemini",
+                    "base_url": self.NAMED_URL,
+                    "api_mode": "chat_completions",
+                }
+            # "custom" alone has no named entry -> the wrong endpoint.
+            return {
+                "provider": "custom",
+                "requested_provider": "custom",
+                "api_key": "sk-wrong",
+                "base_url": "https://wrong.example/v1",
+                "api_mode": "chat_completions",
+            }
+
+        monkeypatch.setattr(
+            "gateway.platforms.api_server._resolve_request_runtime_agent_kwargs",
+            _resolve,
+        )
+        adapter = _make_routing_adapter({})
+        monkeypatch.setattr(adapter, "_ensure_session_db", lambda: None)
+        monkeypatch.setattr(
+            adapter, "_session_model_override_for", lambda *_: session_override
+        )
+        adapter._create_agent(
+            session_id="s1",
+            session_model=session_model,
+            requested_model=request_model,
+        )
+        return captured, resolved_for
+
+    def test_session_override_without_provider_keeps_named_base_url(self, monkeypatch):
+        captured, resolved_for = self._run(
+            monkeypatch, session_override={"model": "gemini-3.8-pro"}
+        )
+        assert resolved_for == ["gemini-oauth"]
+        assert captured["base_url"] == self.NAMED_URL
+        assert captured["api_key"] == "sk-gemini"
+
+    def test_session_persisted_model_keeps_named_base_url(self, monkeypatch):
+        captured, resolved_for = self._run(
+            monkeypatch, session_model="gemini-3.8-pro"
+        )
+        assert resolved_for == ["gemini-oauth"]
+        assert captured["base_url"] == self.NAMED_URL
+
+    def test_request_model_switch_keeps_named_base_url(self, monkeypatch):
+        captured, resolved_for = self._run(monkeypatch, request_model="gemini-3.8-pro")
+        assert resolved_for == ["gemini-oauth"]
+        assert captured["base_url"] == self.NAMED_URL
+
+
 class TestStoredSessionModelFilter:
     """A session row that persisted the advertised virtual model must read as
     "no stored model" — replaying "clover-c1" upstream 400s. Found live
