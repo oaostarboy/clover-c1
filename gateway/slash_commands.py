@@ -6348,12 +6348,8 @@ class GatewaySlashCommandsMixin:
         if action == "update" and is_managed():
             return f"✗ {format_managed_message('update Clover Cognition')}"
 
-        project_root = Path(__file__).parent.parent.resolve()
-        git_dir = project_root / '.git'
-
-        if action == "update" and not git_dir.exists():
-            return t("gateway.update.not_git_repo")
-
+        # No .git guard: the spawned `clover update` adopts a copied/zipped
+        # (non-git) install into git before updating.
         clover_cmd = _resolve_clover_bin()
         if not clover_cmd:
             return t("gateway.update.clover_cmd_not_found")
