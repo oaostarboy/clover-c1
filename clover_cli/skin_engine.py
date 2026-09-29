@@ -326,7 +326,7 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
             "browser_snapshot": "📸",
             "browser_vision": "👁️",
             "web_extract": "📜",
-            "execute_code": "⚗️",
+            "execute_code": "🧪",
             "delegate_task": "🌿",
             "memory": "🧬",
             "session_search": "🍂",

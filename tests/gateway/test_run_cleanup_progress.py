@@ -244,7 +244,7 @@ async def test_cleanup_removes_interim_commentary_after_final_delivery(monkeypat
     assert result["final_response"] == "done"
     commentary = next(
         item for item in adapter.sent
-        if item["content"] == "💬 Checking the live configuration."
+        if item["content"] == "💭 *Checking the live configuration.*"
     )
 
     cb = adapter.pop_post_delivery_callback(session_key)

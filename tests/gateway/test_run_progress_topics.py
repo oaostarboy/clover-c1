@@ -9,6 +9,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from gateway.stream_consumer import format_thought
+
 import gateway.platforms.base as base_platform
 from gateway.config import Platform, PlatformConfig, StreamingConfig
 from gateway.platforms.base import BasePlatformAdapter, MessageEvent, MessageType, SendResult
@@ -1180,7 +1182,7 @@ async def test_display_streaming_does_not_enable_gateway_streaming(monkeypatch, 
 
     assert result.get("already_sent") is not True
     assert adapter.edits == []
-    assert [call["content"] for call in adapter.sent] == ["💬 I'll inspect the repo first."]
+    assert [call["content"] for call in adapter.sent] == ["💭 *I'll inspect the repo first.*"]
 
 
 class TransformedStreamAgent:
@@ -1253,7 +1255,7 @@ async def test_run_agent_queued_message_does_not_treat_commentary_as_final(monke
 
     sent_texts = [call["content"] for call in adapter.sent]
     assert result["final_response"] == "final response 2"
-    assert "💬 I'll inspect the repo first." in sent_texts
+    assert "💭 *I'll inspect the repo first.*" in sent_texts
     assert "final response 1" in sent_texts
 
 
@@ -1596,7 +1598,7 @@ async def test_run_agent_drops_interim_commentary_after_generation_invalidation(
 
     async def send_and_invalidate(chat_id, content, reply_to=None, metadata=None):
         result = await original_send(chat_id, content, reply_to=reply_to, metadata=metadata)
-        if content == "💬 first interim" and not invalidated["done"]:
+        if content == "💭 *first interim*" and not invalidated["done"]:
             invalidated["done"] = True
             runner._invalidate_session_run_generation(session_key, reason="test_stop")
         return result
@@ -1615,8 +1617,8 @@ async def test_run_agent_drops_interim_commentary_after_generation_invalidation(
 
     sent_texts = [call["content"] for call in adapter.sent]
     assert result["final_response"] == "done"
-    assert "💬 first interim" in sent_texts
-    assert "💬 second interim" not in sent_texts
+    assert "💭 *first interim*" in sent_texts
+    assert "💭 *second interim*" not in sent_texts
 
 
 @pytest.mark.asyncio
@@ -1974,9 +1976,9 @@ async def test_thought_shows_once_with_bubble_when_interim_on(monkeypatch, tmp_p
     )
 
     assert result["final_response"] == "done"
-    assert _texts_with(adapter, ThoughtOnceAgent.NOTE) == [f"💬 {ThoughtOnceAgent.NOTE}"]
+    assert _texts_with(adapter, ThoughtOnceAgent.NOTE) == [format_thought(ThoughtOnceAgent.NOTE)]
     assert not any(
-        "💬" in call["content"] and ThoughtOnceAgent.NOTE not in call["content"]
+        "💭" in call["content"] and ThoughtOnceAgent.NOTE not in call["content"]
         for call in adapter.sent
     )
 
@@ -2005,8 +2007,8 @@ async def test_thought_relay_kept_when_interim_off(monkeypatch, tmp_path):
         for line in text.splitlines()
         if ThoughtOnceAgent.NOTE in line
     ]
-    assert lines and set(lines) == {f"💬 {ThoughtOnceAgent.NOTE}"}
-    assert len(adapter.sent) == 1 or len(_texts_with(adapter, "💬")) >= 1
+    assert lines and set(lines) == {format_thought(ThoughtOnceAgent.NOTE)}
+    assert len(adapter.sent) == 1 or len(_texts_with(adapter, "💭")) >= 1
 
 
 def test_thinking_relay_skipped_but_counted_when_interim_on():
@@ -2016,7 +2018,7 @@ def test_thinking_relay_skipped_but_counted_when_interim_on():
     )
     from gateway.run import TurnRunner
 
-    for interim, expected in ((True, []), (False, ["💬 a note"])):
+    for interim, expected in ((True, []), (False, ["💭 *a note*"])):
         ctx = _base_turn_ctx(
             _live_reasoning_enabled=False,
             _thinking_enabled=True,
@@ -2037,4 +2039,4 @@ def test_thinking_relay_skipped_but_counted_when_interim_on():
         interim_assistant_messages_enabled=True,
     )
     TurnRunner(_make_mocked_gateway_runner(), ctx).progress_callback("_thinking", "child note")
-    assert ctx.progress_queue.get_nowait() == "💬 child note"
+    assert ctx.progress_queue.get_nowait() == "💭 *child note*"

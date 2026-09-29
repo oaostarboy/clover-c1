@@ -805,7 +805,7 @@ class TestEditOverflowSplitAndDeliver:
 
 
 class TestInterimSegmentThoughtBubble:
-    """A pre-tool text segment is finalized as one "💬 <note>" message."""
+    """A pre-tool text segment is finalized as one "💭 *<note>*" message."""
 
     @staticmethod
     def _adapter():
@@ -845,10 +845,10 @@ class TestInterimSegmentThoughtBubble:
             for c in adapter.edit_message.call_args_list
         ]
         assert edits[-1][0] == "msg_1"
-        assert edits[-1][1].strip() == "💬 I'll inspect the repository first."
+        assert edits[-1][1].strip() == "💭 *I'll inspect the repository first.*"
         # The final answer never carries the bubble.
-        assert not any("💬" in c for c in sent[1:])
-        assert all("💬" not in c[1] for c in edits if c[0] != "msg_1")
+        assert not any("💭" in c for c in sent[1:])
+        assert all("💭" not in c[1] for c in edits if c[0] != "msg_1")
 
     @pytest.mark.asyncio
     async def test_unsent_segment_is_sent_once_with_bubble(self):
@@ -864,7 +864,7 @@ class TestInterimSegmentThoughtBubble:
         await consumer.run()
 
         sent = [c[1]["content"] for c in adapter.send.call_args_list]
-        assert sent == ["💬 Checking the config.", "Done."]
+        assert sent == ["💭 *Checking the config.*", "Done."]
 
     @pytest.mark.asyncio
     async def test_plain_segment_break_has_no_bubble(self):
@@ -921,7 +921,7 @@ class TestInterimCommentaryMessages:
         await consumer.run()
 
         sent_texts = [call[1]["content"] for call in adapter.send.call_args_list]
-        assert sent_texts == ["💬 I'll inspect the repository first.", "Done."]
+        assert sent_texts == ["💭 *I'll inspect the repository first.*", "Done."]
         assert consumer.final_response_sent is True
 
     @pytest.mark.asyncio

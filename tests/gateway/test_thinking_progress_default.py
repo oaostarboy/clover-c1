@@ -1,6 +1,6 @@
 """thinking_progress is on by default in gateway chats.
 
-The owner wants the model's own short notes between tool calls ("💬 …") to
+The owner wants the model's own short notes between tool calls ("💭 *…*") to
 show live on every agent without per-agent config. The resolver lives inside
 the gateway turn setup, so assert on the source contract: the default passed
 for ``thinking_progress`` is True, while Mattermost keeps its per-platform

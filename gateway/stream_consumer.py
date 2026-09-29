@@ -49,7 +49,25 @@ _NEW_SEGMENT = object()
 # model wrote before a tool call); the finalized message gets the bubble prefix.
 _NEW_SEGMENT_INTERIM = object()
 # Marks a model note between tool calls so it reads as a thought, not a question.
-THOUGHT_BUBBLE_PREFIX = "\U0001F4AC "
+THOUGHT_BUBBLE_PREFIX = "\U0001F4AD "
+
+
+def format_thought(text: str) -> str:
+    """Render a between-tools note as a thought: 💭 plus italic text.
+
+    Standard markdown ``*...*`` per line: the Telegram adapter converts it to
+    MarkdownV2 italics (``_..._``) and escapes underscores inside words, so
+    snake_case names stay intact. Already-formatted text is returned as-is so
+    an edit never double-wraps it.
+    """
+    body = (text or "").strip()
+    if not body:
+        return ""
+    if body.startswith(THOUGHT_BUBBLE_PREFIX.strip()):
+        return body
+    lines = [ln.strip().strip("*").strip() for ln in body.splitlines()]
+    italic = "\n".join(f"*{ln}*" if ln else "" for ln in lines)
+    return THOUGHT_BUBBLE_PREFIX + italic
 _COMMENTARY = object()
 # Sentinel for tool-progress lines injected into the native stream bubble.
 # Enqueued as ``(_TOOL_PROGRESS, line_text)`` by ``on_tool_progress()``.
@@ -793,6 +811,7 @@ class GatewayStreamConsumer:
         prefix = THOUGHT_BUBBLE_PREFIX.strip()
         if text.startswith(prefix):
             text = text[len(prefix):].strip()
+            text = "\n".join(ln.strip().strip("*") for ln in text.splitlines()).strip()
         return text
 
     def has_delivered_text(self, text: str) -> bool:
@@ -1624,7 +1643,7 @@ class GatewayStreamConsumer:
                     and not (self._stream_is_message() and self._use_draft_streaming)
                     and not self._accumulated.startswith(THOUGHT_BUBBLE_PREFIX)
                 ):
-                    self._accumulated = THOUGHT_BUBBLE_PREFIX + self._accumulated.lstrip()
+                    self._accumulated = format_thought(self._accumulated)
 
                 # Decide whether to flush an edit
                 now = time.monotonic()
@@ -2870,7 +2889,7 @@ class GatewayStreamConsumer:
             _md["_interim_send"] = True
             result = await self.adapter.send(
                 chat_id=self.chat_id,
-                content=THOUGHT_BUBBLE_PREFIX + text.lstrip(),
+                content=format_thought(text),
                 metadata=_md,
             )
             # Note: do NOT set _already_sent = True here.

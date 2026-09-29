@@ -246,7 +246,7 @@ def test_module_level_note_reaches_current_turn():
     [("terminal", "⌨️"), ("read_file", "👁️"), ("write_file", "✏️"), ("patch", "✂️"),
      ("search_files", "🔎"), ("web_search", "🕸️"), ("browser_click", "🧭"),
      ("browser_navigate", "🧭"), ("browser_snapshot", "📸"), ("browser_vision", "👁️"),
-     ("web_extract", "📜"), ("execute_code", "⚗️"), ("delegate_task", "🌿"),
+     ("web_extract", "📜"), ("execute_code", "🧪"), ("delegate_task", "🌿"),
      ("memory", "🧬"), ("session_search", "🍂"), ("skill_view", "🧺"),
      ("skills_list", "🧺"), ("skill_manage", "🧺"), ("todo", "🌻"), ("cronjob", "⏳"),
      ("clarify", "🌼"), ("process", "🖇️"), ("vision_analyze", "🐞"),
