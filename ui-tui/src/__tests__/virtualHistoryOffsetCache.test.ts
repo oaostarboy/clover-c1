@@ -539,6 +539,8 @@ describe('useVirtualHistory offset cache reuse', () => {
 
       staleHeights.set(items[0]!.key, 1)
       instance.rerender(React.createElement(Harness, { expose, initialHeights: staleHeights, items }))
+      // Wait for the correction instead of a fixed 40ms (flaked on a slow CI runner).
+      await vi.waitFor(() => expect(adjustScrollTop).toHaveBeenCalled(), { interval: 10, timeout: 2000 })
       await delay(40)
 
       expect(adjustScrollTop).toHaveBeenCalledOnce()
