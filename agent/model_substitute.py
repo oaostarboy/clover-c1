@@ -83,6 +83,9 @@ def resolve_model_substitute(
     default_provider: Optional[str] = None,
 ) -> Optional[ModelSubstitute]:
     """Return the substitute to use, or ``None`` when nothing qualifies."""
+    # The requested model itself is never its own substitute (a widened
+    # catalog can list a slug the provider then rejects).
+    known_models = [m for m in (known_models or []) if m != requested_model]
     if known_models:
         match = _closest_same_provider_match(requested_model, list(known_models))
         if match:
@@ -287,3 +290,22 @@ def configured_default_model(config: Optional[dict]) -> tuple:
 
     default_provider = embedded_provider or str(model_cfg.get("provider") or "").strip()
     return default_model, default_provider
+
+
+def pinned_model_unavailable_message(model: str, provider: str, substitution: Optional[dict] = None) -> str:
+    """Stop-with-error text for a pinned model the provider rejected.
+
+    When ``substitution`` (``agent._model_substitution``) is set, the failing
+    model is itself a substitute: say so, so the caller knows both the
+    requested and the substituted model were unavailable.
+    """
+    if substitution:
+        return (
+            f"Substitute model '{model}' (for '{substitution.get('requested_model')}') "
+            f"isn't available on provider '{provider}' either. "
+            "Nothing was run on another model."
+        )
+    return (
+        f"Model '{model}' isn't available on provider "
+        f"'{provider}'. Nothing was run on another model."
+    )

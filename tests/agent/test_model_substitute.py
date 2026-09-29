@@ -501,3 +501,22 @@ class TestCrossProviderSubstituteRebuildsClient:
         assert agent._client_kwargs["base_url"] == agent.base_url
         assert agent._client_kwargs["api_key"] == "sk-codex"
         assert agent.client is new_client
+
+
+class TestRequestedModelIsNeverItsOwnSubstitute:
+    def test_requested_model_excluded_from_same_provider_match(self):
+        result = resolve_model_substitute(
+            "gpt-6-astra-900k",
+            "openai-codex",
+            known_models=["gpt-6-astra-900k"],
+            default_model="",
+        )
+        assert result is None
+
+    def test_other_known_models_still_match(self):
+        result = resolve_model_substitute(
+            "gpt-6-astra-typo",
+            "openai-codex",
+            known_models=["gpt-6-astra-typo", "gpt-6-astra"],
+        )
+        assert result is not None and result.model == "gpt-6-astra"

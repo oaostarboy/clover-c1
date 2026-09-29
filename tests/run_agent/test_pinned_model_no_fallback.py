@@ -295,3 +295,77 @@ class TestSubstituteUnknownModel:
         # The chain is still fully intact and unwalked.
         assert agent._fallback_index == 0
         assert agent._fallback_activated is False
+
+
+class _CodexAccountRejection(Exception):
+    """Simulates the OpenAI SDK 400 the Codex backend returns for a slug the
+    ChatGPT account cannot use."""
+
+    def __init__(self, model):
+        msg = (
+            f"HTTP 400: {{\"detail\":\"The '{model}' model is not supported "
+            "when using Codex with a ChatGPT account.\"}"
+        )
+        super().__init__(msg)
+        self.status_code = 400
+        self.body = {"detail": f"The '{model}' model is not supported when using Codex with a ChatGPT account."}
+        self.response = MagicMock(headers={})
+
+
+class TestSubstituteFailureNeverWalksFallbackChain:
+    """After a cross-provider substitute, a model-unavailable rejection of the
+    substitute must stop the turn instead of walking fallback_providers
+    (never spend another plan silently). Outage-type errors still fall back.
+    """
+
+    def _substituted_agent(self):
+        agent = _make_agent(
+            fallback_model=[
+                {"provider": "anthropic", "model": "claude-opus-5-5"},
+                {"provider": "openai-codex", "model": "gpt-5.6-sol-900k"},
+            ],
+            model_pinned=True,
+        )
+        agent.model = "gpt-6-astra-900k"
+        agent.provider = "openai-codex"
+        agent._model_substitution = {
+            "requested_model": "totally-fake-xyz",
+            "requested_provider": "custom",
+            "actual_model": "gpt-6-astra-900k",
+            "actual_provider": "openai-codex",
+        }
+        return agent
+
+    def test_codex_account_rejection_classifies_as_model_not_found(self):
+        from agent.error_classifier import classify_api_error
+
+        classified = classify_api_error(
+            _CodexAccountRejection("gpt-6-astra-900k"),
+            provider="openai-codex", model="gpt-6-astra-900k",
+        )
+        assert classified.reason == FailoverReason.model_not_found
+
+    def test_substitute_rejection_hits_the_pinned_stop_gate(self):
+        from agent.error_classifier import classify_api_error
+
+        agent = self._substituted_agent()
+        classified = classify_api_error(
+            _CodexAccountRejection(agent.model), provider=agent.provider, model=agent.model,
+        )
+        assert _blocks_pinned_fallback(agent, classified.reason) is True
+        assert agent._fallback_index == 0
+
+    def test_stop_message_names_both_models(self):
+        from agent.model_substitute import pinned_model_unavailable_message
+
+        agent = self._substituted_agent()
+        msg = pinned_model_unavailable_message(
+            agent.model, agent.provider, agent._model_substitution,
+        )
+        assert "gpt-6-astra-900k" in msg and "totally-fake-xyz" in msg
+        assert "Nothing was run on another model" in msg
+
+    def test_outage_errors_on_a_substituted_agent_still_use_the_chain(self):
+        agent = self._substituted_agent()
+        for reason in (FailoverReason.rate_limit, FailoverReason.overloaded, FailoverReason.timeout):
+            assert _blocks_pinned_fallback(agent, reason) is False
