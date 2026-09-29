@@ -863,6 +863,7 @@ class TelegramAdapter(BasePlatformAdapter):
         # Interactive model picker state per chat
         self._model_picker_state: Dict[str, dict] = {}
         self._choice_picker_state: Dict[str, dict] = {}
+        self._skin_picker_state: Dict[str, dict] = {}
         # Approval button state: message_id → session_key
         self._approval_state: Dict[int, str] = {}
         # Slash-confirm button state: confirm_id → session_key (for /reload-mcp
@@ -6789,6 +6790,135 @@ class TelegramAdapter(BasePlatformAdapter):
         await query.answer()
         self._choice_picker_state.pop(chat_id, None)
 
+    async def send_skin_picker(
+        self,
+        chat_id: str,
+        skins: list,
+        current: str,
+        session_key: str,
+        preview,
+        on_apply,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SendResult:
+        """Send the /skin picker: tap a skin -> preview with Apply / Cancel.
+
+        ``preview(name)`` returns the preview text; ``on_apply(chat_id, name)``
+        applies the skin and returns the reply. Callbacks: ``sk:<i>`` (preview),
+        ``sk:a:<i>`` (apply), ``sk:x`` (cancel).
+        """
+        if not self._bot:
+            return SendResult(success=False, error="Not connected")
+        try:
+            names = [str(s["name"]) for s in skins]
+            keyboard = self._build_skin_keyboard(names, current)
+            thread_id = metadata.get("thread_id") if metadata else None
+            reply_to_id = self._reply_to_message_id_for_send(None, metadata, reply_to_mode=self._reply_to_mode)
+            msg = await self._send_message_with_thread_fallback(
+                chat_id=normalize_telegram_chat_id(chat_id),
+                text=self.format_message(f"🎨 *Choose a skin*\n\nCurrent: `{current}`"),
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=keyboard,
+                reply_to_message_id=reply_to_id,
+                **self._thread_kwargs_for_send(
+                    chat_id,
+                    thread_id,
+                    metadata,
+                    reply_to_message_id=reply_to_id,
+                    reply_to_mode=self._reply_to_mode
+                ),
+                **self._link_preview_kwargs(),
+            )
+            self._skin_picker_state[str(chat_id)] = {
+                "msg_id": msg.message_id,
+                "names": names,
+                "current": current,
+                "session_key": session_key,
+                "preview": preview,
+                "on_apply": on_apply,
+            }
+            return SendResult(success=True, message_id=str(msg.message_id))
+        except Exception as e:
+            logger.warning("[%s] send_skin_picker failed: %s", self.name, _redact_telegram_error_text(e))
+            return SendResult(success=False, error=_redact_telegram_error_text(e))
+
+    @staticmethod
+    def _build_skin_keyboard(names: list, current: str):
+        buttons = [
+            InlineKeyboardButton(
+                f"{'✓ ' if n == current else ''}{n}", callback_data=f"sk:{i}"
+            )
+            for i, n in enumerate(names)
+        ]
+        return InlineKeyboardMarkup([buttons[i:i + 2] for i in range(0, len(buttons), 2)])
+
+    async def _handle_skin_picker_callback(self, query, data: str, chat_id: str) -> None:
+        """Handle /skin picker taps (sk:<i> preview, sk:a:<i> apply, sk:x cancel)."""
+        state = self._skin_picker_state.get(chat_id)
+        if not state:
+            await query.answer(text="Picker expired — send /skin again.")
+            return
+
+        # Same authorization gate as the choice picker: nobody else in a shared
+        # group may change the skin through someone else's picker message.
+        query_message = getattr(query, "message", None)
+        query_chat = getattr(query_message, "chat", None)
+        if not self._is_callback_user_authorized(
+            str(getattr(query.from_user, "id", "")),
+            chat_id=getattr(query_message, "chat_id", None),
+            chat_type=str(getattr(query_chat, "type", None)) if getattr(query_chat, "type", None) is not None else None,
+            thread_id=str(getattr(query_message, "message_thread_id", None)) if getattr(query_message, "message_thread_id", None) is not None else None,
+            user_name=getattr(query.from_user, "first_name", None),
+        ):
+            await query.answer(text="⛔ You are not authorized to change this setting.")
+            return
+
+        async def _edit(text: str, markup=None) -> None:
+            try:
+                await query.edit_message_text(
+                    text=self.format_message(text), parse_mode=ParseMode.MARKDOWN_V2, reply_markup=markup,
+                )
+            except Exception:
+                try:
+                    await query.edit_message_text(text=text, parse_mode=None, reply_markup=markup)
+                except Exception:
+                    pass
+
+        if data == "sk:x":
+            await _edit("Skin unchanged.")
+            await query.answer()
+            self._skin_picker_state.pop(chat_id, None)
+            return
+
+        apply_now = data.startswith("sk:a:")
+        try:
+            name = state["names"][int(data.rsplit(":", 1)[1])]
+        except (ValueError, IndexError):
+            await query.answer(text="Invalid selection.")
+            return
+
+        if apply_now:
+            try:
+                result_text = await state["on_apply"](chat_id, name)
+            except Exception as exc:
+                logger.error("Skin apply failed: %s", exc)
+                result_text = f"Error applying skin: {exc}"
+            await _edit(result_text)
+            await query.answer()
+            self._skin_picker_state.pop(chat_id, None)
+            return
+
+        try:
+            text = state["preview"](name)
+        except Exception as exc:
+            logger.error("Skin preview failed: %s", exc)
+            text = f"Couldn't preview {name}."
+        markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Apply", callback_data=f"sk:a:{state['names'].index(name)}"),
+            InlineKeyboardButton("✖ Cancel", callback_data="sk:x"),
+        ]])
+        await _edit(text, markup)
+        await query.answer()
+
     _MODEL_PAGE_SIZE = 8
 
     def _build_provider_keyboard(self, providers: list, page: int = 0) -> tuple:
@@ -7363,6 +7493,13 @@ class TelegramAdapter(BasePlatformAdapter):
             chat_id = str(query.message.chat_id) if query.message else None
             if chat_id:
                 await self._handle_model_picker_callback(query, data, chat_id)
+            return
+
+        # --- /skin picker callbacks ---
+        if data.startswith("sk:"):
+            chat_id = str(query.message.chat_id) if query.message else None
+            if chat_id:
+                await self._handle_skin_picker_callback(query, data, chat_id)
             return
 
         # --- Generic choice picker callbacks (/reasoning, /fast) ---

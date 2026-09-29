@@ -96,6 +96,60 @@ def _skin_list() -> int:
     return 0
 
 
+_PREVIEW_KINDS = (
+    ("restarting", "restarting"),
+    ("back_online", "back online"),
+    ("busy", "busy"),
+    ("stop", "stop"),
+    ("memory", "learned something"),
+)
+
+
+def skin_preview(name: str) -> str:
+    """Five sample lines (restarting, back online, busy, stop, learned-something) as *name* words them."""
+    import random
+    import threading
+
+    from agent import clover_flavor
+    from clover_cli.skin_engine import load_skin
+
+    pack = clover_flavor.pack_for_skin(load_skin(name))
+    rows = [f"Preview: {name}"]
+    for kind, label in _PREVIEW_KINDS:
+        if clover_flavor.has_lines(pack, kind):
+            done = kind in ("back_online", "memory")
+            face, line = clover_flavor.pick_pair(
+                pack, kind, {}, threading.Lock(), "preview", random.Random(0),
+                mark=pack["done_mark"] if done else None,
+            )
+            rows.append(f"• {label}: {clover_flavor._join(face, line)}")
+        else:
+            rows.append(f"• {label}: (stock wording)")
+    return "\n".join(rows)
+
+
+def apply_skin(name: str, save) -> str:
+    """Switch to skin *name* now and persist it with *save(key, value) -> bool*; returns the reply."""
+    from clover_cli.skin_engine import set_active_skin
+
+    set_active_skin(name)
+    if save("display.skin", name):
+        return f"Skin set to {name}."
+    return f"Skin set to {name} for now, but I couldn't save it to config.yaml."
+
+
+def resolve_skin_arg(arg: str):
+    """The skin a ``/skin <arg>`` names (a name, or a 1-based number from the list); None if unknown."""
+    from clover_cli.skin_engine import list_skins
+
+    names = [s["name"] for s in list_skins()]
+    arg = arg.strip()
+    if arg.isdigit() and 1 <= int(arg) <= len(names):
+        return names[int(arg) - 1]
+    lowered = {n.lower(): n for n in names}
+    return lowered.get(arg.lower())
+
+
 def skin_command(args) -> None:
     """Dispatch ``clover skin <verb>``."""
     verb = getattr(args, "skin_command", None)

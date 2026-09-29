@@ -4337,6 +4337,55 @@ class GatewaySlashCommandsMixin:
 
         return _apply_fast_selection(args, persist=persist_global)
 
+    async def _handle_skin_command(self, event: MessageEvent) -> Optional[str]:
+        """Handle /skin — list skins (tap to preview, then Apply) or ``/skin <name|number>`` to apply."""
+        from clover_cli.skin_cmd import apply_skin, resolve_skin_arg, skin_preview
+        from clover_cli.skin_engine import get_active_skin_name, list_skins
+
+        skins = list_skins()
+        current = get_active_skin_name()
+        arg = event.get_command_args().strip()
+
+        def _apply(name: str) -> str:
+            return apply_skin(name, self._save_gateway_config_key)
+
+        if arg:
+            name = resolve_skin_arg(arg)
+            if name is None:
+                return f"I don't know a skin called '{arg}'. Send /skin to see the list."
+            return _apply(name)
+
+        session_key = self._session_key_for_source(event.source)
+
+        async def _on_apply(_chat_id: str, name: str) -> str:
+            return _apply(name)
+
+        adapter = getattr(self, "_adapter_for_source")(event.source)
+        if adapter is not None and getattr(type(adapter), "send_skin_picker", None) is not None:
+            try:
+                result = await adapter.send_skin_picker(
+                    chat_id=event.source.chat_id,
+                    skins=skins,
+                    current=current,
+                    session_key=session_key,
+                    preview=skin_preview,
+                    on_apply=_on_apply,
+                    metadata=self._thread_metadata_for_source(
+                        event.source, self._reply_anchor_for_event(event)
+                    ),
+                )
+                if getattr(result, "success", False):
+                    return None  # Picker sent — adapter handles the rest
+            except Exception as e:
+                logger.warning("send_skin_picker failed, falling back to text: %s", e)
+
+        rows = [f"Skins (current: {current})"]
+        for i, s in enumerate(skins, 1):
+            mark = " ●" if s["name"] == current else ""
+            rows.append(f"{i}. {s['name']}{mark}: {s.get('description', '')}")
+        rows.append("Send /skin <number or name> to switch.")
+        return "\n".join(rows)
+
     async def _handle_approvals_command(self, event: MessageEvent) -> str:
         """Show or persist the profile-wide dangerous-command approval mode."""
         from gateway.slash_access import policy_for_source
