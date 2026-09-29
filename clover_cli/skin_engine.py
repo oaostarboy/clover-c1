@@ -283,6 +283,65 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         },
         "tool_prefix": "┊",
     },
+    "clover": {
+        "name": "clover",
+        "description": "Clo the clover sprite - lucky leaves, growing seedlings (default)",
+        # Colors, prompt and banner inherit from the default skin.
+        "spinner": {
+            "flavor": "clover",  # opt in to agent/clover_flavor.py per-turn behavior
+            "spinner_mode": "clover_growth",  # 🫘 -> 🌱 -> 🌿 -> ☘️ by turn time
+            "done_mark": "🍀",
+            "fail_mark": "🥀",
+            "fallback_tool_emoji": "☘️",
+            "thinking_faces": [
+                "☘️(◕ᴗ◕✿)", "☘️(｡•̀ᴗ-)✧", "☘️(⊙_⊙)", "☘️(￣ω￣;)",
+                "☘️(ง •̀_•́)ง", "☘️(っ˘ω˘ς)", "☘️( ˘▽˘)っ☕", "☘️(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧",
+            ],
+            "waiting_faces": [
+                "☘️(◕ᴗ◕✿)", "☘️(｡◕‿◕｡)", "☘️(っ˘ω˘ς)", "☘️( ˘▽˘)っ☕", "☘️(≧◡≦)",
+            ],
+            "thinking_verbs": [
+                "watering the clovers", "asking the ladybug",
+                "checking under the mushroom", "following the rainbow",
+                "polishing the lucky penny", "wishing on a dandelion",
+                "whispering to the bees", "counting leaves (1, 2, 3... 4?!)",
+                "tying a lucky ribbon", "doing a tiny luck dance",
+                "finding four-leaf clovers", "crossing fingers",
+                "knocking on wood", "rolling the dice",
+                "looking for the pot of gold",
+            ],
+        },
+        "branding": {
+            "goodbye": "Goodbye! 🍀",
+        },
+        "tool_prefix": "┊",
+        "tool_emojis": {
+            "terminal": "🪵",
+            "read_file": "🍃",
+            "write_file": "🌱",
+            "patch": "✂️",
+            "search_files": "🍄",
+            "web_search": "🔭",
+            "browser_*": "🧭",
+            "browser_snapshot": "📸",
+            "browser_vision": "👁️",
+            "web_extract": "📜",
+            "execute_code": "⚗️",
+            "delegate_task": "🌿",
+            "memory": "🌰",
+            "session_search": "🍂",
+            "skill_view": "🧺",
+            "skills_list": "🧺",
+            "skill_manage": "🧺",
+            "todo": "🌻",
+            "cronjob": "⏳",
+            "clarify": "🌼",
+            "process": "🫖",
+            "vision_analyze": "🐞",
+            "text_to_speech": "🎶",
+            "image_generate": "🌸",
+        },
+    },
     "ares": {
         "name": "ares",
         "description": "War-god theme — crimson and bronze",
@@ -777,12 +836,18 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
 }
 
 
+# Clo wears Clover's own palette: share the default skin's (dark + light) blocks.
+_BUILTIN_SKINS["clover"]["colors"] = _BUILTIN_SKINS["default"]["colors"]
+_BUILTIN_SKINS["clover"]["light_colors"] = _BUILTIN_SKINS["default"]["light_colors"]
+
+
 # =============================================================================
 # Skin loading and management
 # =============================================================================
 
 _active_skin: Optional[SkinConfig] = None
-_active_skin_name: str = "default"
+DEFAULT_SKIN_NAME = "clover"
+_active_skin_name: str = DEFAULT_SKIN_NAME
 
 
 def _skins_dir() -> Path:
@@ -937,11 +1002,11 @@ def init_skin_from_config(config: dict) -> None:
     display = config.get("display") or {}
     if not isinstance(display, dict):
         display = {}
-    skin_name = display.get("skin", "default")
+    skin_name = display.get("skin", DEFAULT_SKIN_NAME)
     if isinstance(skin_name, str) and skin_name.strip():
         set_active_skin(skin_name.strip())
     else:
-        set_active_skin("default")
+        set_active_skin(DEFAULT_SKIN_NAME)
 
 
 # =============================================================================

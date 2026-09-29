@@ -722,7 +722,8 @@ clover_cli/skin_engine.py    # SkinConfig dataclass, built-in skins, YAML loader
 
 ### Built-in skins
 
-- `default` — Classic Clover gold/kawaii (the current look)
+- `clover` — Clo the clover sprite (the default look)
+- `default` — Classic Clover gold/kawaii (the previous look; `display.skin: default`)
 - `ares` — Crimson/bronze war-god theme with custom spinner wings
 - `mono` — Clean grayscale monochrome
 - `slate` — Cool blue developer-focused theme

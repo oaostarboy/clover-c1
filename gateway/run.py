@@ -4053,7 +4053,9 @@ def _format_concise_process_notification(
     output always remains available to the agent via process(log/wait).
     """
     ok = exit_code in {0, None}
-    icon = "✅" if ok else "❌"
+    from agent.display import get_done_mark, get_fail_mark
+
+    icon = get_done_mark() if ok else get_fail_mark()
     verb = "finished" if ok else f"failed (exit {exit_code})"
     parts = [f"{icon} Background task {verb}"]
     short_cmd = _shorten_command_for_display(command)

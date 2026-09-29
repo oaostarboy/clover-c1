@@ -214,7 +214,7 @@ def _(rid, params: dict) -> dict:
         return _ok(rid, {"prompt": _load_cfg().get("custom_prompt", "")})
     if key == "skin":
         return _ok(
-            rid, {"value": (_load_cfg().get("display") or {}).get("skin", "default")}
+            rid, {"value": (_load_cfg().get("display") or {}).get("skin", "clover")}
         )
     if key == "indicator":
         # Normalize so a hand-edited config.yaml with stray casing or

@@ -6,6 +6,7 @@ Used by AIAgent._execute_tool_calls for CLI feedback.
 
 import logging
 import os
+import random
 import re
 import sys
 import threading
@@ -17,6 +18,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from utils import safe_json_loads
+from agent import clover_flavor
 from agent.redact import redact_sensitive_text
 from agent.tool_result_classification import file_mutation_result_landed
 
@@ -145,18 +147,70 @@ def get_skin_tool_prefix() -> str:
     return "┊"
 
 
+def _skin_flavor_usable(skin) -> bool:
+    """True when *skin* is the clover skin and the console can encode its emoji.
+
+    Legacy consoles that cannot encode ☘️/🫘 fall back to the classic look
+    rather than crashing or printing garbage.
+    """
+    try:
+        from agent.clover_flavor import skin_flavor_enabled
+        return skin_flavor_enabled(skin)
+    except Exception:
+        return False
+
+
+def _skin_emoji_usable(skin) -> bool:
+    """A skin that opts into the clover flavor is only shown on emoji-safe consoles."""
+    if skin is None:
+        return False
+    if (skin.spinner or {}).get("flavor") == "clover":
+        return _skin_flavor_usable(skin)
+    return True
+
+
+def _skin_tool_emoji(skin, tool_name: str) -> str:
+    """Exact-name override first, then ``prefix*`` glob keys."""
+    emojis = skin.tool_emojis or {}
+    override = emojis.get(tool_name)
+    if override:
+        return override
+    for key, value in emojis.items():
+        if key.endswith("*") and value and tool_name.startswith(key[:-1]):
+            return value
+    return ""
+
+
+def get_done_mark(default: str = "✅") -> str:
+    """Done mark for turn/subagent cards (the clover skin uses 🍀)."""
+    skin = _get_skin()
+    if _skin_emoji_usable(skin):
+        return (skin.spinner or {}).get("done_mark") or default
+    return default
+
+
+def get_fail_mark(default: str = "❌") -> str:
+    """Failed mark for turn/subagent cards (the clover skin uses 🥀)."""
+    skin = _get_skin()
+    if _skin_emoji_usable(skin):
+        return (skin.spinner or {}).get("fail_mark") or default
+    return default
+
+
 def get_tool_emoji(tool_name: str, default: str = "⚡") -> str:
     """Get the display emoji for a tool.
 
     Resolution order:
     1. Active skin's ``tool_emojis`` overrides (if a skin is loaded)
     2. Tool registry's per-tool ``emoji`` field
-    3. *default* fallback
+    3. *default* fallback (the gateway's generic ``⚙️`` is skinnable via the
+       skin's ``spinner.fallback_tool_emoji``)
     """
     # 1. Skin override
     skin = _get_skin()
-    if skin and skin.tool_emojis:
-        override = skin.tool_emojis.get(tool_name)
+    usable = _skin_emoji_usable(skin)
+    if usable and skin.tool_emojis:
+        override = _skin_tool_emoji(skin, tool_name)
         if override:
             return override
     # 2. Registry default
@@ -167,7 +221,9 @@ def get_tool_emoji(tool_name: str, default: str = "⚡") -> str:
             return emoji
     except Exception:
         pass
-    # 3. Hardcoded fallback
+    # 3. Hardcoded fallback (skins may re-skin the gateway's generic ⚙️)
+    if usable and default == "⚙️":
+        return (skin.spinner or {}).get("fallback_tool_emoji") or default
     return default
 
 
@@ -1093,7 +1149,10 @@ class KawaiiSpinner:
         'pulse': ['◜', '◠', '◝', '◞', '◡', '◟'],
         'brain': ['🧠', '💭', '💡', '✨', '💫', '🌟', '💡', '💭'],
         'sparkle': ['⁺', '˚', '*', '✧', '✦', '✧', '*', '˚'],
+        # Growth mode: the frame follows elapsed *turn* time, not the tick.
+        'clover_growth': list(clover_flavor.GROWTH_FRAMES),
     }
+    ELAPSED_SPINNERS = frozenset({'clover_growth'})
 
     KAWAII_WAITING = [
         "(｡◕‿◕｡)", "(◕‿◕✿)", "٩(◕‿◕｡)۶", "(✿◠‿◠)", "( ˘▽˘)っ",
@@ -1117,7 +1176,7 @@ class KawaiiSpinner:
         """Return waiting faces from the active skin, falling back to KAWAII_WAITING."""
         try:
             skin = _get_skin()
-            if skin:
+            if _skin_emoji_usable(skin):
                 faces = skin.spinner.get("waiting_faces", [])
                 if faces:
                     return faces
@@ -1130,7 +1189,7 @@ class KawaiiSpinner:
         """Return thinking faces from the active skin, falling back to KAWAII_THINKING."""
         try:
             skin = _get_skin()
-            if skin:
+            if _skin_emoji_usable(skin):
                 faces = skin.spinner.get("thinking_faces", [])
                 if faces:
                     return faces
@@ -1143,7 +1202,7 @@ class KawaiiSpinner:
         """Return thinking verbs from the active skin, falling back to THINKING_VERBS."""
         try:
             skin = _get_skin()
-            if skin:
+            if _skin_emoji_usable(skin):
                 verbs = skin.spinner.get("thinking_verbs", [])
                 if verbs:
                     return verbs
@@ -1151,8 +1210,45 @@ class KawaiiSpinner:
             pass
         return cls.THINKING_VERBS
 
+    @classmethod
+    def pick_thinking(cls) -> tuple:
+        """Return ``(face, verb)`` for a thinking status line.
+
+        The clover skin routes through the per-turn flavor (lucky turn,
+        time of day, bad luck); every other skin picks at random as before.
+        """
+        faces, verbs = cls.get_thinking_faces(), cls.get_thinking_verbs()
+        turn = clover_flavor.current_turn()
+        if turn is not None and _skin_flavor_usable(_get_skin()):
+            return turn.status(faces, verbs)
+        return random.choice(faces), random.choice(verbs)
+
+    @classmethod
+    def pick_waiting_face(cls) -> str:
+        """Return a waiting face (tool-execution spinners)."""
+        faces = cls.get_waiting_faces()
+        turn = clover_flavor.current_turn()
+        if turn is not None and _skin_flavor_usable(_get_skin()):
+            return turn.face(faces)
+        return random.choice(faces)
+
+    @classmethod
+    def resolve_spinner_type(cls, spinner_type: str) -> str:
+        """Let the active skin force a spinner mode (e.g. ``clover_growth``)."""
+        try:
+            skin = _get_skin()
+            if _skin_emoji_usable(skin):
+                mode = (skin.spinner or {}).get("spinner_mode")
+                if mode in cls.SPINNERS:
+                    return mode
+        except Exception:
+            pass
+        return spinner_type
+
     def __init__(self, message: str = "", spinner_type: str = 'dots', print_fn=None):
         self.message = message
+        spinner_type = self.resolve_spinner_type(spinner_type)
+        self.spinner_type = spinner_type
         self.spinner_frames = self.SPINNERS.get(spinner_type, self.SPINNERS['dots'])
         self.running = False
         self.thread = None
@@ -1238,8 +1334,12 @@ class KawaiiSpinner:
             if os.getenv("CLOVER_SPINNER_PAUSE"):
                 time.sleep(0.1)
                 continue
-            frame = self.spinner_frames[self.frame_idx % len(self.spinner_frames)]
             elapsed = time.time() - self.start_time
+            if self.spinner_type in self.ELAPSED_SPINNERS:
+                turn = clover_flavor.current_turn()
+                frame = clover_flavor.growth_frame(turn.elapsed() if turn else elapsed)
+            else:
+                frame = self.spinner_frames[self.frame_idx % len(self.spinner_frames)]
             if wings:
                 left, right = wings[self.frame_idx % len(wings)]
                 line = f"  {left} {frame} {self.message} {right} ({elapsed:.1f}s)"
@@ -1411,8 +1511,14 @@ def _get_cute_tool_message(
         limit = _tool_preview_max_len
         return ("..." + p[-(limit-3):]) if len(p) > limit else p
 
+    _skin = _get_skin()
+    _skin_emoji = _skin_tool_emoji(_skin, tool_name) if _skin_emoji_usable(_skin) else ""
+
     def _wrap(line: str) -> str:
-        """Apply skin tool prefix and failure suffix."""
+        """Apply skin tool prefix, skin tool emoji and failure suffix."""
+        if _skin_emoji:
+            # "┊ {emoji} verb ..." — swap the hardcoded emoji for the skin's.
+            line = re.sub(r"^(┊ )\S+", lambda m: m.group(1) + _skin_emoji, line, count=1)
         if skin_prefix != "┊":
             line = line.replace("┊", skin_prefix, 1)
         if not is_failure:
