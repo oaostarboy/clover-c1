@@ -11,6 +11,15 @@ on:
         description: "Branch users are upgrading TO"
         required: false
         default: "fix/restart-and-reasoning"
+  # workflow_dispatch can only be triggered via API/gh once this file exists
+  # on the default branch, which this repo's rules forbid pushing to. Trigger
+  # via push to this branch instead; defaults below match the dispatch inputs.
+  push:
+    branches: [ci/upgrade-e2e]
+
+env:
+  FROM_REF: ${{ github.event.inputs.from_ref || '69a75bb8' }}
+  TO_BRANCH: ${{ github.event.inputs.to_branch || 'fix/restart-and-reasoning' }}
 
 jobs:
   upgrade-e2e:
@@ -31,7 +40,7 @@ jobs:
           set -euo pipefail
           curl -fsSL "https://raw.githubusercontent.com/oaostarboy/clover-c1/${{ github.ref_name }}/scripts/install.sh" -o /tmp/install.sh
           chmod +x /tmp/install.sh
-          bash /tmp/install.sh --branch main --commit "${{ inputs.from_ref }}" --non-interactive --skip-setup --skip-browser --skip-computer-use
+          bash /tmp/install.sh --branch main --commit "${{ env.FROM_REF }}" --non-interactive --skip-setup --skip-browser --skip-computer-use
           echo "CLOVER_HOME=$HOME/.clover" >> "$GITHUB_ENV"
           echo "INSTALL_DIR=$HOME/.clover/clover-c1" >> "$GITHUB_ENV"
           if [ "$RUNNER_OS" = "macOS" ]; then
@@ -95,7 +104,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$CLOVER_BIN" update --branch "${{ inputs.to_branch }}" --yes
+          "$CLOVER_BIN" update --branch "${{ env.TO_BRANCH }}" --yes
 
       - name: (POSIX) d. Assert update outcome
         if: runner.os != 'Windows'
@@ -104,7 +113,7 @@ jobs:
           set -euo pipefail
           FAIL=0
 
-          REMOTE_TIP="$(git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ inputs.to_branch }}" | cut -f1)"
+          REMOTE_TIP="$(git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}" | cut -f1)"
           LOCAL_HEAD="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
           echo "remote_tip=$REMOTE_TIP local_head=$LOCAL_HEAD"
           if [ "$REMOTE_TIP" != "$LOCAL_HEAD" ]; then
@@ -239,7 +248,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/${{ github.ref_name }}/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
-          & "$env:TEMP\install.ps1" -Branch main -Commit "${{ inputs.from_ref }}" -NonInteractive -SkipComputerUse
+          & "$env:TEMP\install.ps1" -Branch main -Commit "${{ env.FROM_REF }}" -NonInteractive -SkipComputerUse
           $cloverHome = "$env:LOCALAPPDATA\clover"
           $installDir = "$cloverHome\clover-c1"
           "CLOVER_HOME=$cloverHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -301,7 +310,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          & "$env:CLOVER_BIN" update --branch "${{ inputs.to_branch }}" --yes
+          & "$env:CLOVER_BIN" update --branch "${{ env.TO_BRANCH }}" --yes
           if ($LASTEXITCODE -ne 0) { throw "clover update exited $LASTEXITCODE" }
 
       - name: (Windows) d. Assert update outcome
@@ -311,7 +320,7 @@ jobs:
           $ErrorActionPreference = "Continue"
           $fail = 0
 
-          $remoteTip = (git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ inputs.to_branch }}") -split "`t" | Select-Object -First 1
+          $remoteTip = (git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}") -split "`t" | Select-Object -First 1
           $localHead = (git -C "$env:INSTALL_DIR" rev-parse HEAD).Trim()
           Write-Host "remote_tip=$remoteTip local_head=$localHead"
           if ($remoteTip -ne $localHead) {
