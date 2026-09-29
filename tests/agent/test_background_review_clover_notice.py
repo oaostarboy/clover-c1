@@ -25,13 +25,13 @@ def _clover_skin(monkeypatch):
     clover_flavor.reset_review_notices()
 
 
-def _box(message):
-    """The chat notice is a fenced code box; return its lines."""
-    assert message.startswith(FENCE + "\n") and message.endswith("\n" + FENCE), message
-    return message[len(FENCE) + 1:-len(FENCE) - 1].split("\n")
 
-
-FENCE = "`" * 3
+def test_chat_notice_is_a_quote_block_with_italics():
+    msg = clover_flavor.render_review_notice([("memory", "add", "uses snake_case")], "q")[1]
+    lines = msg.split("\n")
+    assert all(ln.startswith("> ") for ln in lines)
+    assert lines[1] == "> 🧠 *uses snake_case*"
+    assert "```" not in msg
 
 
 _ids = iter(range(10_000))
@@ -67,9 +67,9 @@ def test_add_only_header_has_clover_and_items_use_brain_and_dna():
     msgs = _mem("add", content="Likes tea") + _mem("add", "user", content="Name is Ant") \
         + _skill("create", "tea-brewing", "Skill created.", change={"description": "d"})
     cli, message = _notice(msgs)
-    header, *items = _box(message)
+    header, *items = message.replace("> ", "").split("\n")
     assert header.startswith("☘️(") and "🍀" in header and "🧹" not in header
-    assert items == ["🧠 Likes tea", "🫶 about you: Name is Ant", "🧬 new skill: tea-brewing"]
+    assert items == ["🧠 *Likes tea*", "🫶 about you: *Name is Ant*", "🧬 new skill: *tea-brewing*"]
     assert cli[1:] == ["🧠 Likes tea", "🫶 about you: Name is Ant", "🧬 new skill: tea-brewing"]
 
 
@@ -77,9 +77,9 @@ def test_remove_only_header_uses_broom():
     msgs = _mem("remove", old_text="Old note", message="Entry removed.") \
         + _mem("remove", "user", old_text="Old fact", message="Entry removed.")
     _, message = _notice(msgs)
-    header, *items = _box(message)
+    header, *items = message.replace("> ", "").split("\n")
     assert "🧹" in header and "🍀" not in header
-    assert items == ["🧹 Old note", "🧹 Old fact"]
+    assert items == ["🧹 *Old note*", "🧹 *Old fact*"]
 
 
 def test_mixed_replace_skill_improved_and_removed():
@@ -88,29 +88,29 @@ def test_mixed_replace_skill_improved_and_removed():
         + _skill("delete", "stale", "Skill 'stale' deleted.") \
         + _mem("remove", old_text="Junk", message="Entry removed.")
     _, message = _notice(msgs)
-    header, *items = _box(message)
+    header, *items = message.replace("> ", "").split("\n")
     assert "🍀" in header  # something was saved, so saved wins over tidy
-    assert items == ["🧠 updated: Prefers mate", "🧬 improved: demo",
-                     "🧹 removed skill: stale", "🧹 Junk"]
+    assert items == ["🧠 updated: *Prefers mate*", "🧬 improved: *demo*",
+                     "🧹 removed skill: *stale*", "🧹 *Junk*"]
 
 
 def test_skill_rewritten_counts_as_improved():
     msgs = _skill("edit", "demo", "Skill updated.", change={"description": "new body"})
     _, message = _notice(msgs)
-    assert _box(message)[1] == "🧬 improved: demo"
+    assert message.replace("> ", "").split("\n")[1] == "🧬 improved: *demo*"
 
 
 def test_previews_lose_stray_asterisks_and_newlines():
     msgs = _mem("add", content="**bold** note\nsecond line*")
     _, message = _notice(msgs)
-    assert _box(message)[1] == "🧠 bold** note second line"
-    assert _box(_notice(_mem("add", content="**wrapped**"))[1])[1] == "🧠 wrapped"
+    assert message.replace("> ", "").split("\n")[1] == "🧠 *bold** note second line*"
+    assert _notice(_mem("add", content="**wrapped**"))[1].replace("> ", "").split("\n")[1] == "🧠 *wrapped*"
 
 
 def test_default_mode_falls_back_to_generic_lines():
     msgs = _mem("add") + _skill("create", "s1", "Skill 's1' created.")
     _, message = _notice(msgs, mode="on")
-    assert _box(message)[1:] == ["🧠 a note for later", "🧬 new skill: s1"]
+    assert message.replace("> ", "").split("\n")[1:] == ["🧠 *a note for later*", "🧬 new skill: *s1*"]
 
 
 def test_off_mode_produces_nothing_to_render():
@@ -123,10 +123,10 @@ def test_off_mode_produces_nothing_to_render():
 def test_no_back_to_back_header_repeat_per_chat():
     rng = random.Random(7)
     heads = [clover_flavor.render_review_notice([("memory", "add", "x")], "chat-a", rng)[1]
-             .split("\n")[1] for _ in range(60)]
+             .replace("> ", "").split("\n")[0] for _ in range(60)]
     assert all(a != b for a, b in zip(heads, heads[1:]))
     tidy = [clover_flavor.render_review_notice([("memory", "remove", "x")], "chat-b", rng)[1]
-            .split("\n")[1] for _ in range(60)]
+            .replace("> ", "").split("\n")[0] for _ in range(60)]
     assert all(a != b for a, b in zip(tidy, tidy[1:]))
 
 
@@ -136,7 +136,7 @@ def test_no_repeat_even_with_a_stuck_rng():
             return seq[0]
 
     heads = [clover_flavor.render_review_notice([("memory", "add", "x")], "c", Stuck())[1]
-             .split("\n")[1] for _ in range(5)]
+             .replace("> ", "").split("\n")[0] for _ in range(5)]
     assert all(a != b for a, b in zip(heads, heads[1:]))
 
 
@@ -165,17 +165,17 @@ def test_structured_collection_does_not_change_returned_actions():
 # --- each kind of change reads differently -------------------------------------------
 
 def _header(msgs, mode="on"):
-    return _box(_notice(msgs, mode=mode)[1])[0]
+    return _notice(msgs, mode=mode)[1].replace("> ", "").split("\n")[0]
 
 
 def test_profile_only_reads_as_about_you_and_differs_from_a_note():
     pools = clover_flavor.REVIEW_POOLS
     user_hdr = _header(_mem("add", "user"))
     assert any(user_hdr.endswith(line) for line in pools["user"][1])
-    assert _box(_notice(_mem("add", "user"), mode="on")[1])[1] == "🫶 something about you"
+    assert _notice(_mem("add", "user"), mode="on")[1].replace("> ", "").split("\n")[1] == "🫶 *something about you*"
     mem_hdr = _header(_mem("add"))
     assert any(mem_hdr.endswith(line) for line in pools["memory"][1])
-    assert _box(_notice(_mem("add"), mode="on")[1])[1] == "🧠 a note for later"
+    assert _notice(_mem("add"), mode="on")[1].replace("> ", "").split("\n")[1] == "🧠 *a note for later*"
 
 
 def test_skill_only_and_mixed_headers():
@@ -189,10 +189,3 @@ def test_skill_only_and_mixed_headers():
 def test_header_pools_do_not_share_lines():
     seen = [line for _, lines in clover_flavor.REVIEW_POOLS.values() for line in lines]
     assert len(seen) == len(set(seen))
-
-
-def test_chat_notice_is_a_code_box_that_backticks_cannot_break():
-    msg = clover_flavor.render_review_notice([("memory", "add", "uses ``` fences")], "box")[1]
-    lines = _box(msg)
-    assert msg.count(FENCE) == 2
-    assert lines[1] == "🧠 uses \'\'\' fences"
