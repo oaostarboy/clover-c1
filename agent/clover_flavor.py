@@ -278,7 +278,10 @@ def render_review_notice(
     def _lines(markdown: bool) -> list:
         return list(dict.fromkeys(_review_item_line(g, o, t, markdown) for g, o, t in items))
 
-    return [header] + _lines(False), "\n".join([header] + _lines(True))
+    # Chat surfaces get a code box so the notice can't be mistaken for a real
+    # reply. Italics don't render inside one, so the box holds plain text.
+    body = "\n".join([header] + _lines(False)).replace("`", "'")
+    return [header] + _lines(False), "```\n" + body + "\n```"
 
 
 def reset_review_notices() -> None:
