@@ -189,7 +189,9 @@ jobs:
           PKG_DIR="$("$VPY" -c "import fastapi,os;print(os.path.dirname(fastapi.__file__))")"
           echo "fastapi package dir: $PKG_DIR"
           case "$PKG_DIR" in */fastapi) ;; *) echo "unexpected fastapi dir: $PKG_DIR"; exit 1 ;; esac
-          rm -rf "$PKG_DIR"
+          # Remove the package dir AND its dist-info, i.e. a genuinely uninstalled package.
+          # (Leaving dist-info makes uv believe it is still installed.)
+          rm -rf "$PKG_DIR" "$(dirname "$PKG_DIR")"/fastapi-*.dist-info
           set +e
           "$VPY" -c "import fastapi" 2>/tmp/broken-import.log
           BROKEN_EXIT=$?
@@ -465,7 +467,10 @@ jobs:
           $pkgDir = (& $venvPy -c "import fastapi,os;print(os.path.dirname(fastapi.__file__))").Trim()
           Write-Host "fastapi package dir: $pkgDir"
           if ((Split-Path $pkgDir -Leaf) -ne "fastapi") { throw "unexpected fastapi dir: $pkgDir" }
+          # Remove the package dir AND its dist-info, i.e. a genuinely uninstalled package.
+          # (Leaving dist-info makes uv believe it is still installed.)
           Remove-Item -Recurse -Force $pkgDir
+          Get-ChildItem -Path (Split-Path $pkgDir -Parent) -Directory -Filter "fastapi-*.dist-info" | Remove-Item -Recurse -Force
 
           $ErrorActionPreference = "Continue"
           & $venvPy -c "import fastapi" 2> "$env:TEMP\broken-import.log"
