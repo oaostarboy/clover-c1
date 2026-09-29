@@ -43,6 +43,9 @@ jobs:
           curl -fsSL "https://raw.githubusercontent.com/oaostarboy/clover-c1/${{ github.ref_name }}/scripts/install.sh" -o /tmp/install.sh
           chmod +x /tmp/install.sh
           bash /tmp/install.sh --branch main --commit "${{ env.FROM_REF }}" --non-interactive --skip-setup --skip-browser --skip-computer-use
+          # Resolve the to_branch tip ONCE; main can move mid-run (other PRs merging).
+          TO_SHA="$(git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}" | cut -f1)"
+          echo "TO_SHA=$TO_SHA" >> "$GITHUB_ENV"
           echo "CLOVER_HOME=$HOME/.clover" >> "$GITHUB_ENV"
           echo "INSTALL_DIR=$HOME/.clover/clover-c1" >> "$GITHUB_ENV"
           if [ "$RUNNER_OS" = "macOS" ]; then
@@ -126,11 +129,11 @@ jobs:
           set -euo pipefail
           FAIL=0
 
-          REMOTE_TIP="$(git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}" | cut -f1)"
+          CURRENT_TIP="$(git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}" | cut -f1)"
           LOCAL_HEAD="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
-          echo "remote_tip=$REMOTE_TIP local_head=$LOCAL_HEAD"
-          if [ "$REMOTE_TIP" != "$LOCAL_HEAD" ]; then
-            echo "FINDING: HEAD ($LOCAL_HEAD) is not to_branch tip ($REMOTE_TIP)"; FAIL=1
+          echo "to_sha=$TO_SHA current_tip=$CURRENT_TIP local_head=$LOCAL_HEAD"
+          if [ "$LOCAL_HEAD" != "$TO_SHA" ] && [ "$LOCAL_HEAD" != "$CURRENT_TIP" ]; then
+            echo "FINDING: HEAD ($LOCAL_HEAD) is neither the tip at job start ($TO_SHA) nor the current tip ($CURRENT_TIP)"; FAIL=1
           fi
 
           "$CLOVER_BIN" --version | tee /tmp/version-after.txt
@@ -138,7 +141,12 @@ jobs:
             echo "FINDING: version output did not change after update"; FAIL=1
           fi
 
-          python3 - "$CLOVER_HOME/config.yaml" <<'PY' || FAIL=1
+          # The OLD updater process (from_ref) does not know config v40; the NEW code
+          # migrates on first config load (a restarted gateway does this after /update).
+          # Do one load with the new code before asserting. Expected, not a bug.
+          (cd "$INSTALL_DIR" && "$INSTALL_DIR/venv/bin/python" -c "from clover_cli.config import load_config; load_config()")
+
+          "$INSTALL_DIR/venv/bin/python" - "$CLOVER_HOME/config.yaml" <<'PY' || FAIL=1
           import sys, yaml
           cfg = yaml.safe_load(open(sys.argv[1])) or {}
           assert cfg.get("_config_version") == 40, f"_config_version={cfg.get('_config_version')!r}, want 40"
@@ -177,13 +185,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          "$INSTALL_DIR/venv/bin/python" -m pip uninstall -y fastapi
+          VPY="$INSTALL_DIR/venv/bin/python"
+          PKG_DIR="$("$VPY" -c "import fastapi,os;print(os.path.dirname(fastapi.__file__))")"
+          echo "fastapi package dir: $PKG_DIR"
+          case "$PKG_DIR" in */fastapi) ;; *) echo "unexpected fastapi dir: $PKG_DIR"; exit 1 ;; esac
+          rm -rf "$PKG_DIR"
           set +e
-          "$INSTALL_DIR/venv/bin/python" -c "import fastapi" 2>/tmp/broken-import.log
+          "$VPY" -c "import fastapi" 2>/tmp/broken-import.log
           BROKEN_EXIT=$?
           set -e
           if [ "$BROKEN_EXIT" -eq 0 ]; then
-            echo "FINDING: fastapi uninstall did not actually break the import"; exit 1
+            echo "FINDING: deleting the fastapi package dir did not break the import"; exit 1
           fi
 
           "$CLOVER_BIN" repair | tee /tmp/repair.log
@@ -284,6 +296,9 @@ jobs:
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/${{ github.ref_name }}/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
           & "$env:TEMP\install.ps1" -Branch main -Commit "${{ env.FROM_REF }}" -NonInteractive -SkipComputerUse -CloverHome $cloverHome -InstallDir $installDir
 
+          # Resolve the to_branch tip ONCE; main can move mid-run (other PRs merging).
+          $toSha = ((git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}") -split "`t" | Select-Object -First 1).Trim()
+          "TO_SHA=$toSha" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "CLOVER_HOME=$cloverHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "INSTALL_DIR=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "CLOVER_BIN=$installDir\venv\Scripts\clover.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -367,11 +382,11 @@ jobs:
           $ErrorActionPreference = "Continue"
           $fail = 0
 
-          $remoteTip = (git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}") -split "`t" | Select-Object -First 1
+          $currentTip = ((git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/${{ env.TO_BRANCH }}") -split "`t" | Select-Object -First 1).Trim()
           $localHead = (git -C "$env:INSTALL_DIR" rev-parse HEAD).Trim()
-          Write-Host "remote_tip=$remoteTip local_head=$localHead"
-          if ($remoteTip -ne $localHead) {
-            Write-Host "FINDING: HEAD ($localHead) is not to_branch tip ($remoteTip)"
+          Write-Host "to_sha=$env:TO_SHA current_tip=$currentTip local_head=$localHead"
+          if (($localHead -ne $env:TO_SHA) -and ($localHead -ne $currentTip)) {
+            Write-Host "FINDING: HEAD ($localHead) is neither the tip at job start ($env:TO_SHA) nor the current tip ($currentTip)"
             $fail = 1
           }
 
@@ -383,23 +398,42 @@ jobs:
             $fail = 1
           }
 
-          $cfgCheck = & "$env:INSTALL_DIR\venv\Scripts\python.exe" -c @"
+          $venvPy = "$env:INSTALL_DIR\venv\Scripts\python.exe"
+
+          # The OLD updater process (from_ref) does not know config v40; the NEW code
+          # migrates on first config load (a restarted gateway does this after /update).
+          # Do one load with the new code before asserting. Expected, not a bug.
+          Push-Location "$env:INSTALL_DIR"
+          & $venvPy -c "from clover_cli.config import load_config; load_config()"
+          $loadExit = $LASTEXITCODE
+          Pop-Location
+          if ($loadExit -ne 0) { Write-Host "FINDING: load_config() exited $loadExit"; $fail = 1 }
+
+          $cfgPy = "$env:TEMP\check_config.py"
+          @'
           import sys, yaml
-          cfg = yaml.safe_load(open(r'$env:CLOVER_HOME\config.yaml')) or {}
+          cfg = yaml.safe_load(open(sys.argv[1])) or {}
           errs = []
-          if cfg.get('_config_version') != 40: errs.append(f'_config_version={cfg.get('_config_version')!r}')
-          if cfg.get('model', {}).get('provider') == 'clover': errs.append('model.provider still clover')
-          web = cfg.get('web', {})
-          if 'use_gateway' in web: errs.append('web.use_gateway not migrated')
-          if web.get('backend') != 'firecrawl': errs.append(f'web.backend={web.get('backend')!r}')
-          if 'public_url' in cfg.get('dashboard', {}): errs.append('dashboard.public_url not cleared')
+          ver = cfg.get("_config_version")
+          if ver != 40:
+              errs.append("_config_version=%r" % (ver,))
+          if cfg.get("model", {}).get("provider") == "clover":
+              errs.append("model.provider still clover")
+          web = cfg.get("web", {})
+          if "use_gateway" in web:
+              errs.append("web.use_gateway not migrated")
+          if web.get("backend") != "firecrawl":
+              errs.append("web.backend=%r" % (web.get("backend"),))
+          if "public_url" in cfg.get("dashboard", {}):
+              errs.append("dashboard.public_url not cleared")
           if errs:
-              print('CONFIG_FINDINGS: ' + '; '.join(errs))
+              print("CONFIG_FINDINGS: " + "; ".join(errs))
           else:
-              print('config migration assertions: PASS')
-          "@
+              print("config migration assertions: PASS")
+          '@ | Set-Content -Path $cfgPy -Encoding utf8
+          $cfgCheck = (& $venvPy $cfgPy "$env:CLOVER_HOME\config.yaml") -join "`n"
           Write-Host $cfgCheck
-          if ($cfgCheck -match "CONFIG_FINDINGS") { $fail = 1 }
+          if ($cfgCheck -notmatch "config migration assertions: PASS") { $fail = 1 }
 
           $files = @("$env:CLOVER_HOME\memories\MEMORY.md","$env:CLOVER_HOME\sessions\x.jsonl","$env:CLOVER_HOME\state.db","$env:CLOVER_HOME\skills\my\SKILL.md")
           $hashesAfter = foreach ($f in $files) { "$((Get-FileHash -Algorithm SHA256 -Path $f).Hash)  $f" }
@@ -427,19 +461,23 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          & "$env:INSTALL_DIR\venv\Scripts\python.exe" -m pip uninstall -y fastapi
+          $venvPy = "$env:INSTALL_DIR\venv\Scripts\python.exe"
+          $pkgDir = (& $venvPy -c "import fastapi,os;print(os.path.dirname(fastapi.__file__))").Trim()
+          Write-Host "fastapi package dir: $pkgDir"
+          if ((Split-Path $pkgDir -Leaf) -ne "fastapi") { throw "unexpected fastapi dir: $pkgDir" }
+          Remove-Item -Recurse -Force $pkgDir
 
           $ErrorActionPreference = "Continue"
-          & "$env:INSTALL_DIR\venv\Scripts\python.exe" -c "import fastapi" 2> "$env:TEMP\broken-import.log"
+          & $venvPy -c "import fastapi" 2> "$env:TEMP\broken-import.log"
           $brokenExit = $LASTEXITCODE
           if ($brokenExit -eq 0) {
-            Write-Host "FINDING: fastapi uninstall did not actually break the import"
+            Write-Host "FINDING: deleting the fastapi package dir did not break the import"
             exit 1
           }
 
           & "$env:CLOVER_BIN" repair | Tee-Object -FilePath "$env:TEMP\repair.log"
           $ErrorActionPreference = "Stop"
-          & "$env:INSTALL_DIR\venv\Scripts\python.exe" -c "import fastapi"
+          & $venvPy -c "import fastapi"
 
           $repairLog = Get-Content "$env:TEMP\repair.log" -Raw
           if ($repairLog -notmatch "(?i)fastapi|packages|installed|fixed") {
