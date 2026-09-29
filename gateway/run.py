@@ -33031,8 +33031,20 @@ def main():
     # all of which complete teardown first. Routing those codes through the
     # same os._exit backstop means EVERY exit path is wedge-proof, not just the
     # boolean-return ones.
+    # A bare ``asyncio.run(start_gateway(config))`` would hand teardown to
+    # ``asyncio.Runner.close()``, which awaits
+    # ``loop.shutdown_default_executor(constants.THREAD_JOIN_TIMEOUT)`` —
+    # ``THREAD_JOIN_TIMEOUT`` is 300s on Python 3.12+. A single default-
+    # executor thread still busy at shutdown (e.g. a context-compression LLM
+    # call that hadn't timed out yet) then blocks *this* call for up to five
+    # minutes, even though ``start_gateway``'s own graceful teardown already
+    # completed and logged "Gateway stopped" (the restart-stall incident,
+    # 2026-09-28: exactly a 300s gap between that log line and process exit).
+    # We drive the loop ourselves so teardown is bounded instead.
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        success = asyncio.run(start_gateway(config))
+        success = loop.run_until_complete(start_gateway(config))
         exit_code = 0 if success else 1
     except SystemExit as e:
         # e.code may be None (→ 0), an int, or a str (→ 1, like CPython).
@@ -33042,7 +33054,61 @@ def main():
             exit_code = e.code
         else:
             exit_code = 1
+    finally:
+        _teardown_gateway_loop(loop)
     _exit_after_graceful_shutdown(exit_code)
+
+
+_LOOP_TEARDOWN_STEP_TIMEOUT_SECONDS = 2.0
+
+
+def _teardown_gateway_loop(loop: "asyncio.AbstractEventLoop") -> None:
+    """Close ``loop`` without ever blocking on a default-executor thread join.
+
+    Mirrors what ``asyncio.run``/``asyncio.Runner.close()`` do — cancel any
+    remaining tasks, close async generators, shut down the default executor —
+    but with every step bounded to a couple of seconds, and the executor
+    shutdown made fire-and-forget (``wait=False``) instead of awaited with
+    Python 3.12+'s 300s ``THREAD_JOIN_TIMEOUT``. Each step is independently
+    best-effort: a failure or timeout in one must never block the next, since
+    the only thing that matters here is reaching ``_exit_after_graceful_
+    shutdown``'s unconditional ``os._exit`` quickly.
+    """
+    try:
+        to_cancel = asyncio.all_tasks(loop)
+    except Exception:
+        to_cancel = set()
+    if to_cancel:
+        for task in to_cancel:
+            task.cancel()
+        try:
+            loop.run_until_complete(
+                asyncio.wait_for(
+                    asyncio.gather(*to_cancel, return_exceptions=True),
+                    timeout=_LOOP_TEARDOWN_STEP_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception:
+            pass
+    try:
+        loop.run_until_complete(
+            asyncio.wait_for(
+                loop.shutdown_asyncgens(),
+                timeout=_LOOP_TEARDOWN_STEP_TIMEOUT_SECONDS,
+            )
+        )
+    except Exception:
+        pass
+    try:
+        executor = loop._default_executor  # noqa: SLF001 - no public getter
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
+    except Exception:
+        pass
+    try:
+        loop.close()
+    except Exception:
+        pass
 
 
 # Shutdown-timing guard (restart-stall, 2026-09-28): how long the process is
