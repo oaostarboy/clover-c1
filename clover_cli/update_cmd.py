@@ -4943,6 +4943,19 @@ def _venv_core_imports_healthy() -> tuple[bool, str]:
         return False, "; ".join(missing[:4])
     return True, ""
 
+def _is_update_restart_watcher_cmdline(cmdline_low: str) -> bool:
+    """True for the updater's own restart watcher (module or copied script).
+
+    Launched as ``python -m clover_cli.update_restart_watcher <beacon>`` or as
+    ``python <home>/logs/update_restart_watcher.py <beacon>``. It imports only
+    the stdlib, so it never maps a venv ``.pyd`` and cannot block the sync.
+    """
+    return (
+        "clover_cli.update_restart_watcher" in cmdline_low
+        or "update_restart_watcher.py" in cmdline_low
+    )
+
+
 def _detect_venv_python_processes(
     *, exclude_pids: set[int] | None = None
 ) -> list[tuple[int, str, str]]:
@@ -5027,6 +5040,13 @@ def _detect_venv_python_processes(
             exe_norm = str(exe).lower()
         cmdline_raw = " ".join(info.get("cmdline") or [])
         cmdline_low = cmdline_raw.lower()
+        # The updater's own restart watcher (armed by THIS update just before
+        # the gateway pause) runs from the venv python but imports only the
+        # stdlib; it spawns children and holds no .pyd. Counting it as a
+        # holder made every Windows /update refuse itself ("Other Clover
+        # processes are running ... update_restart_watcher").
+        if _is_update_restart_watcher_cmdline(cmdline_low):
+            continue
         cwd_low = str(info.get("cwd") or "").lower().rstrip(os.sep) + os.sep
 
         # Primary match: the executable itself lives under this venv
