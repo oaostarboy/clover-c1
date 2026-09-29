@@ -875,7 +875,8 @@ jobs:
             Stop-ConfigTrace $global:ConfigTraceJob
             "LEGACY_REFUSED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           } else {
-            Assert-UpdatePass $label $logStart $exitCode ""
+            # This update is executed by the from_ref's own updater code.
+            Assert-UpdatePass $label $logStart $exitCode "" $true
           }
           exit 0
 
@@ -889,7 +890,8 @@ jobs:
           $label = "recovery from $($env:FROM_REF.Substring(0,7))"
           $exitCode = Invoke-PathUpdate $label @('update', '--yes', '--force-venv')
           Write-Host "[$label] update exit=$exitCode"
-          Assert-UpdatePass $label $logStart $exitCode ""
+          # Parent is still 69a75bb's updater (hand-off child is fixed code).
+          Assert-UpdatePass $label $logStart $exitCode "" $true
           exit 0
 
       - name: e. Next update on the fixed code (the path's exact command) + every criterion

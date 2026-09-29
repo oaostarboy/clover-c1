@@ -107,8 +107,8 @@ function Measure-SingleGateway([string]$label, [int]$logStart, [bool]$strictLog)
   Write-Host "[$label] post-update gateway starts=$starts; restart/takeover lines after first post-update start=$($after.Count)"
   $after | ForEach-Object { Write-Host "  $_" }
   if ($first -lt 0) { $bad += "no post-update 'Starting Clover Gateway' in gateway.log" }
-  if ($strictLog -and $after.Count -gt 0) { $bad += "restart/takeover after the post-update start" }
-  if ($strictLog -and $starts -ne 1) { $bad += "expected exactly 1 post-update gateway start, saw $starts" }
+  if ($strictLog -and $after.Count -gt 0) { $bad += "[old-updater] restart/takeover after the post-update start" }
+  if ($strictLog -and $starts -ne 1) { $bad += "[old-updater] expected exactly 1 post-update gateway start, saw $starts" }
   ,@($bad)
 }
 
@@ -158,7 +158,7 @@ function Start-ConfigTrace([string]$label) {
       if ($state -ne $last) {
         $procs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -match 'clover' -and $_.Name -match 'python|clover' } | ForEach-Object {
           $c = ($_.CommandLine -replace '^.*?(clover_cli[.]\w+|clover\.exe"?|update_restart_watcher\S*)', '$1') -replace '\s+', ' '
-          "$($_.ProcessId)<$($_.ParentProcessId) $($c.Substring(0, [Math]::Min(70, $c.Length)))" }) -join ' | '
+          "$($_.ProcessId)<$($_.ParentProcessId) $($c.Substring(0, [Math]::Min(110, $c.Length)))" }) -join "`n      "
         "$(Get-Date -Format HH:mm:ss.fff) $state :: $procs" | Add-Content $out
         $last = $state
       }
@@ -170,7 +170,7 @@ function Start-ConfigTrace([string]$label) {
 function Stop-ConfigTrace($job) {
   if ($job) { Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue }
   Write-Host "--- config.yaml trace ---"
-  Get-Content "$env:RUNNER_TEMP\config-trace.log" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
+  Get-Content "$env:RUNNER_TEMP\config-trace.log" -ErrorAction SilentlyContinue | Select-Object -Last 120 | Out-Host
 }
 
 function Invoke-PathUpdate([string]$label, [string[]]$cliArgs) {
@@ -212,12 +212,21 @@ function Invoke-PathUpdateInner([string]$label, [string[]]$cliArgs) {
   return $code
 }
 
-function Assert-UpdatePass([string]$label, [int]$logStart, $exitCode, [string]$landedPath) {
+function Assert-UpdatePass([string]$label, [int]$logStart, $exitCode, [string]$landedPath, [bool]$oldUpdater = $false) {
+  # $oldUpdater: the update was executed by the from_ref's OWN (unfixed)
+  # updater code. Criteria only that code decides are reported, not failed;
+  # everything the fix can influence is still required. Updates run by the
+  # fixed code ($oldUpdater = $false) are held to every criterion.
   $bad = @()
   $bad += Measure-SingleGateway $label $logStart $true
   Stop-ConfigTrace $global:ConfigTraceJob
   $out = (Get-Content "$env:RUNNER_TEMP\update-output.txt" -Raw -ErrorAction SilentlyContinue)
   $bad += Measure-UpdateOutcome $label $exitCode "$out" $landedPath
+  if ($oldUpdater) {
+    $old = @($bad | Where-Object { $_ -like '*`[old-updater`]*' })
+    $old | ForEach-Object { Write-Host "OLD-UPDATER FINDING [$label]: $_" }
+    $bad = @($bad | Where-Object { $_ -notlike '*`[old-updater`]*' })
+  }
   git -C "$env:INSTALL_DIR" log --oneline -1 | Out-Host
   if ($bad.Count) {
     Write-Host "FAIL [$label]:"; $bad | Select-Object -First 30 | ForEach-Object { Write-Host "  $_" }
@@ -238,18 +247,38 @@ function Measure-UpdateOutcome([string]$label, $exitCode, [string]$outputText, [
   if ($receipt) {
     Write-Host "[$label] receipt outcome=$($receipt.outcome) exit_code=$($receipt.exit_code)"
     $failedBackup = @($receipt.steps | Where-Object { $_.name -eq 'pre_update_backup' -and -not $_.ok })
-    if ($failedBackup.Count) { $bad += "receipt: pre-update backup step failed ($($failedBackup[0].detail))" }
+    if ($failedBackup.Count) { $bad += "[old-updater] receipt: pre-update backup step failed ($($failedBackup[0].detail))" }
+    if ($receipt.outcome -eq 'running') { $bad += "[old-updater] receipt never finalized (outcome=running)" }
     $failedSteps = @($receipt.steps | Where-Object { -not $_.ok } | ForEach-Object { $_.name })
     if ($failedSteps.Count) { Write-Host "[$label] receipt failed steps: $($failedSteps -join ', ')" }
   } else { Write-Host "[$label] no update receipt" }
-  if ($outputText -match '(?i)backup step failed|backup failed') { $bad += "update output mentions a failed backup" }
+  if ($outputText -match '(?i)backup step failed|backup failed') { $bad += "[old-updater] update output mentions a failed backup" }
   $sidecar = $null
   try { $sidecar = Get-Content "$env:CLOVER_HOME\.clover-last-update" -Raw | ConvertFrom-Json } catch { }
   Write-Host "[$label] .clover-last-update: $($sidecar | ConvertTo-Json -Compress)"
-  if ($sidecar -and $sidecar.outcome -eq 'failed') { $bad += ".clover-last-update outcome=failed ($($sidecar.detail))" }
+  if ($sidecar -and $sidecar.outcome -eq 'failed') { $bad += "[old-updater] .clover-last-update outcome=failed ($($sidecar.detail))" }
+  if (-not $sidecar) { $bad += "[old-updater] no .clover-last-update written" }
   $cp = Test-CleanupProgress
   Write-Host "[$label] telegram cleanup_progress resolves to: $cp"
-  if ("$cp" -ne "True") { $bad += "telegram cleanup_progress resolves to '$cp', not True" }
+  if ("$cp" -ne "True") {
+    $bad += "telegram cleanup_progress resolves to '$cp', not True"
+    # Why: registry, raw display value types, and a dry run of the v41 rewrite.
+    $py = "$env:INSTALL_DIR\venv\Scripts\python.exe"
+    $diag = @'
+import copy, json
+from clover_cli import config as c, config_migrations as m
+raw = c.read_raw_config()
+d = raw.get("display") or {}
+print("registry:", [v for v, _ in m.MIGRATIONS][-4:])
+print("version:", c.check_config_version(), "raw _config_version:", repr(raw.get("_config_version")))
+print("display keys:", {k: (repr(v), type(v).__name__) for k, v in d.items() if not isinstance(v, dict)})
+print("display.platforms:", repr(d.get("platforms")))
+fn = getattr(m, "_v41_rewrite_config", None)
+print("v41 dry run:", fn(copy.deepcopy(raw)) if fn else "NO _v41_rewrite_config")
+'@
+    Push-Location $env:INSTALL_DIR
+    try { & $py -c $diag 2>&1 | ForEach-Object { Write-Host "  [cleanup-diag] $_" } } finally { Pop-Location }
+  }
   if (-not $landedPath) { $landedPath = "clover_cli\config_migrations.py" }
   $landed = Select-String -Path "$env:INSTALL_DIR\clover_cli\update_cmd.py" -Pattern '_hand_off_windows_gateway_resume' -Quiet
   if (-not $landed -or -not (Test-Path "$env:INSTALL_DIR\$landedPath")) { $bad += "target code did not land ($landedPath; main moved during the run?)" }
