@@ -17,9 +17,6 @@ on:
   push:
     branches: [ci/upgrade-e2e]
 
-env:
-  FROM_REF: ${{ github.event.inputs.from_ref || '69a75bb87740dda7461825f864d678c72fce5eec' }}
-  TO_BRANCH: ${{ github.event.inputs.to_branch || 'fix/restart-and-reasoning' }}
 
 jobs:
   upgrade-e2e:
@@ -27,7 +24,12 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest, ubuntu-latest]
+        # day 1 (Clover Cognition 1.0, 2026-08-23) and the last pre-release main
+        from_ref: ['3c5326ee0663eaa8adb11e24ab8108a9c468bc25', '69a75bb87740dda7461825f864d678c72fce5eec']
     runs-on: ${{ matrix.os }}
+    env:
+      FROM_REF: ${{ matrix.from_ref }}
+      TO_BRANCH: ${{ github.event.inputs.to_branch || 'main' }}
     timeout-minutes: 45
     steps:
       # ----------------------------------------------------------------
