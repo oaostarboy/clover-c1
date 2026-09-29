@@ -252,13 +252,15 @@ class CouncilCard:
 
 
 def _pid_alive(pid: Any) -> bool:
+    # Never os.kill(pid, 0): on Windows it sends CTRL_C_EVENT to the target.
     try:
-        os.kill(int(pid), 0)
-    except ProcessLookupError:
-        return False
-    except (PermissionError, ValueError, TypeError, OSError):
+        from gateway.status import _pid_exists
+
+        return bool(_pid_exists(int(pid)))
+    except (ValueError, TypeError):
         return True
-    return True
+    except Exception:
+        return True
 
 
 class CouncilRunWatcher:
