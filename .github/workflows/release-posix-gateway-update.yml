@@ -42,13 +42,21 @@ jobs:
             sleep 2
           done
           test "$ready" = 1 || { cat "$RUNNER_TEMP/gateway.log"; exit 1; }
-          echo "gateway pre-update pid=$(cat "$RUNNER_TEMP/gateway.pid") API port=$API_PORT bound"
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, os
+          state=json.load(open(os.path.join(os.environ['CLOVER_HOME'],'gateway_state.json')))
+          print('PRE_UPDATE_GATEWAY_PID='+str(state['pid']))
+          print('PRE_UPDATE_GATEWAY_SHA='+str(state.get('code_sha','')))
+          PY
+          echo "gateway pre-update pid=$PRE_UPDATE_GATEWAY_PID sha=$PRE_UPDATE_GATEWAY_SHA API port=$API_PORT bound"
       - name: Update from old SHA while gateway runs
         shell: bash
         run: |
           set -euo pipefail
           "$CLOVER_BIN" update --branch "$TO_BRANCH" --yes --gateway
-          test "$(git -C "$INSTALL_DIR" rev-parse HEAD)" = "$(git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/$TO_BRANCH" | cut -f1)"
+          TARGET_SHA="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+          echo "TARGET_SHA=$TARGET_SHA" >> "$GITHUB_ENV"
+          echo "update landed at $TARGET_SHA"
       - name: Assert post-update gateway health for 90 seconds
         shell: bash
         run: |
@@ -56,7 +64,9 @@ jobs:
           python3 - <<'PY'
           import json, os, socket, subprocess, time
           home=os.environ['CLOVER_HOME']; port=int(os.environ['API_PORT'])
-          log=os.path.join(os.environ['RUNNER_TEMP'],'gateway.log')
+          target=os.environ['TARGET_SHA']
+          pre_pid=int(os.environ['PRE_UPDATE_GATEWAY_PID'])
+          pre_sha=os.environ.get('PRE_UPDATE_GATEWAY_SHA','')
           deadline=time.time()+180
           while time.time()<deadline:
               try:
@@ -69,11 +79,10 @@ jobs:
               except Exception as e: raise SystemExit(f'gateway state unreadable: {e}')
               assert state.get('gateway_state')=='running', state
               assert state.get('restart_requested') is not True, state
+              assert int(state.get('pid',-1)) != pre_pid, f'gateway PID did not change across update: {state}'
+              assert state.get('code_sha') == target, f'gateway code_sha={state.get("code_sha")}, wanted {target}; old={pre_sha}'
               time.sleep(3)
-          text=open(log,errors='replace').read()
-          assert text.count('Starting Clover Gateway') >= 2, 'gateway startup/restart marker not observed'
-          print('PASS: API bound and gateway state running, no stale restart request, 90-second continuous health')
-          print('gateway starts:',text.count('Starting Clover Gateway'))
+          print('PASS: restarted gateway PID and target code SHA verified; API bound, running, no stale restart request, continuous health for 90 seconds')
           PY
       - name: Gateway log on failure
         if: failure()
