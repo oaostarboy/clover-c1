@@ -14,8 +14,8 @@ jobs:
     timeout-minutes: 45
     env:
       FROM_SHA: c200294b5ed85a9b21410c85b2b76191b6a2e29a
-      TO_BRANCH: fix/release-harness-20260929
-      EXPECTED_TARGET_SHA: fe801ad8bb0c3127094ee88927beaf5477f849f5
+      TO_BRANCH: fix/pr63-first-update-isolation
+      EXPECTED_TARGET_SHA: 8a893c8f8c9aaf5308f22548671da553351c3e3b
       API_PORT: 18791
     steps:
       - name: Install old candidate
