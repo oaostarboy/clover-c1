@@ -2,6 +2,8 @@
 import queue
 import threading
 
+import pytest
+
 from tools import async_delegation as async_d
 from tools.process_registry import process_registry, format_process_notification
 
@@ -143,6 +145,16 @@ def test_child_delivered_while_sibling_runs_and_recovered_once(tmp_path, monkeyp
         gate.set()
         process_registry.completion_queue = original_queue
         async_d._reset_for_tests()
+
+
+@pytest.mark.macos_only
+def test_child_delivery_and_recovery_on_macos(tmp_path, monkeypatch):
+    test_child_delivered_while_sibling_runs_and_recovered_once(tmp_path, monkeypatch)
+
+
+@pytest.mark.windows_only
+def test_child_delivery_and_recovery_on_windows(tmp_path, monkeypatch):
+    test_child_delivered_while_sibling_runs_and_recovered_once(tmp_path, monkeypatch)
 
 
 def test_delivered_child_prompt_names_silence_marker_and_keeps_failure():

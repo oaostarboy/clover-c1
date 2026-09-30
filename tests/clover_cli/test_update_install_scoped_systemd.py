@@ -8,8 +8,8 @@ import pytest
 from clover_cli import update_cmd
 
 
-CLOVER = "/home/starboy/agents/clover-c1/venv/bin/python"
-OCTAVIA = "/home/starboy/agents/tentacle-one/venv/bin/python"
+CLOVER = "/home/example/agents/clover-c1/venv/bin/python"
+OCTAVIA = "/home/example/agents/tentacle-one/venv/bin/python"
 
 
 def properties(unit, python, home, *, marker="gateway run", include_environment=True):
@@ -22,10 +22,10 @@ def properties(unit, python, home, *, marker="gateway run", include_environment=
 @pytest.mark.parametrize("interpreter,expected", [(CLOVER, {"clover-gateway", "clover-gateway-work"}), (OCTAVIA, {"tentacle-one-gateway"})])
 def test_discovery_only_selects_same_install_including_custom_name_and_profile(monkeypatch, interpreter, expected):
     units = {
-        "clover-gateway.service": properties("clover-gateway.service", CLOVER, "/home/starboy/.clover", include_environment=False),
-        "clover-gateway-work.service": properties("clover-gateway-work.service", CLOVER, "/home/starboy/.clover/profiles/work"),
-        "tentacle-one-gateway.service": properties("tentacle-one-gateway.service", OCTAVIA, "/home/starboy/.clover-tentacle"),
-        "clover-gateway-other.service": properties("clover-gateway-other.service", "/opt/other/venv/bin/python", "/home/starboy/.other"),
+        "clover-gateway.service": properties("clover-gateway.service", CLOVER, "/home/example/.clover", include_environment=False),
+        "clover-gateway-work.service": properties("clover-gateway-work.service", CLOVER, "/home/example/.clover/profiles/work"),
+        "tentacle-one-gateway.service": properties("tentacle-one-gateway.service", OCTAVIA, "/home/example/.clover-tentacle"),
+        "clover-gateway-other.service": properties("clover-gateway-other.service", "/opt/other/venv/bin/python", "/home/example/.other"),
         "unrelated.service": properties("unrelated.service", CLOVER, "/tmp/other", marker="maintenance run"),
         "unknown.service": "Id=unknown.service\nWorkingDirectory=/tmp\nExecStart=\n",
     }
@@ -55,7 +55,7 @@ def test_discovery_only_selects_same_install_including_custom_name_and_profile(m
 def test_discovery_rejects_missing_or_conflicting_metadata(monkeypatch):
     units = {
         "missing.service": "Id=missing.service\nExecStart=\n",
-        "conflict.service": properties("conflict.service", CLOVER, "/tmp/home").replace("VIRTUAL_ENV=/home/starboy/agents/clover-c1/venv", "VIRTUAL_ENV=/other/venv"),
+        "conflict.service": properties("conflict.service", CLOVER, "/tmp/home").replace("VIRTUAL_ENV=/home/example/agents/clover-c1/venv", "VIRTUAL_ENV=/other/venv"),
     }
     monkeypatch.setattr(update_cmd.subprocess, "run", lambda cmd, **kw: SimpleNamespace(returncode=0, stdout=units[cmd[cmd.index("show") + 1]]))
     found = []
@@ -69,8 +69,8 @@ def test_discovery_rejects_missing_or_conflicting_metadata(monkeypatch):
 
 def test_pending_restart_uses_owned_custom_unit(monkeypatch):
     units = {
-        "clover-gateway.service": properties("clover-gateway.service", CLOVER, "/home/starboy/.clover"),
-        "tentacle-one-gateway.service": properties("tentacle-one-gateway.service", OCTAVIA, "/home/starboy/.clover-tentacle"),
+        "clover-gateway.service": properties("clover-gateway.service", CLOVER, "/home/example/.clover"),
+        "tentacle-one-gateway.service": properties("tentacle-one-gateway.service", OCTAVIA, "/home/example/.clover-tentacle"),
     }
     calls = []
     def run(cmd, **kw):
@@ -104,7 +104,7 @@ def test_custom_service_pid_is_protected_from_manual_sweep(monkeypatch):
             return SimpleNamespace(returncode=0, stdout="tentacle-one-gateway.service loaded active running\n" if "--user" in cmd else "")
         if "--property=MainPID" in cmd:
             return SimpleNamespace(returncode=0, stdout="1234\n")
-        return SimpleNamespace(returncode=0, stdout=properties("tentacle-one-gateway.service", OCTAVIA, "/home/starboy/.clover-tentacle"))
+        return SimpleNamespace(returncode=0, stdout=properties("tentacle-one-gateway.service", OCTAVIA, "/home/example/.clover-tentacle"))
     monkeypatch.setattr(update_cmd.subprocess, "run", run)
     monkeypatch.setattr(update_cmd.sys, "executable", OCTAVIA)
     assert update_cmd._owned_systemd_service_pids() == {1234}
