@@ -1,0 +1,84 @@
+name: Release POSIX gateway-running updater acceptance
+on:
+  push:
+    branches: [ci/release-posix-acceptance]
+permissions:
+  contents: read
+jobs:
+  gateway-update:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      FROM_SHA: c200294b5ed85a9b21410c85b2b76191b6a2e29a
+      TO_BRANCH: ci/release-posix-acceptance
+      API_PORT: 18791
+    steps:
+      - name: Install old candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/oaostarboy/clover-c1/ci/release-posix-acceptance/scripts/install.sh -o /tmp/install.sh
+          bash /tmp/install.sh --branch main --commit "$FROM_SHA" --non-interactive --skip-setup --skip-browser --skip-computer-use
+          echo "CLOVER_HOME=$HOME/.clover" >> "$GITHUB_ENV"
+          echo "INSTALL_DIR=$HOME/.clover/clover-c1" >> "$GITHUB_ENV"
+          echo "CLOVER_BIN=$HOME/.clover/clover-c1/venv/bin/clover" >> "$GITHUB_ENV"
+          "$HOME/.clover/clover-c1/venv/bin/clover" --version
+          test "$(git -C "$HOME/.clover/clover-c1" rev-parse HEAD)" = "$FROM_SHA"
+      - name: Start real gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CLOVER_HOME"
+          printf '\nAPI_SERVER_ENABLED=true\nAPI_SERVER_KEY=acceptance-test-key-123456789\nAPI_SERVER_PORT=%s\nAPI_SERVER_HOST=127.0.0.1\n' "$API_PORT" >> "$CLOVER_HOME/.env"
+          "$CLOVER_BIN" gateway run --replace > "$RUNNER_TEMP/gateway.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/gateway.pid"
+          ready=0
+          for _ in $(seq 1 90); do
+            if python3 -c "import socket,sys;s=socket.create_connection(('127.0.0.1',${API_PORT}),1);s.close()"; then ready=1; break; fi
+            sleep 2
+          done
+          test "$ready" = 1 || { cat "$RUNNER_TEMP/gateway.log"; exit 1; }
+          echo "gateway pre-update pid=$(cat "$RUNNER_TEMP/gateway.pid") API port=$API_PORT bound"
+      - name: Update from old SHA while gateway runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CLOVER_BIN" update --branch "$TO_BRANCH" --yes --gateway
+          test "$(git -C "$INSTALL_DIR" rev-parse HEAD)" = "$(git ls-remote https://github.com/oaostarboy/clover-c1.git "refs/heads/$TO_BRANCH" | cut -f1)"
+      - name: Assert post-update gateway health for 90 seconds
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, socket, subprocess, time
+          home=os.environ['CLOVER_HOME']; port=int(os.environ['API_PORT'])
+          log=os.path.join(os.environ['RUNNER_TEMP'],'gateway.log')
+          deadline=time.time()+180
+          while time.time()<deadline:
+              try:
+                  with socket.create_connection(('127.0.0.1',port),1): break
+              except OSError: time.sleep(2)
+          else: raise SystemExit('gateway did not recover within 180 seconds')
+          for n in range(30):
+              with socket.create_connection(('127.0.0.1',port),2): pass
+              try: state=json.load(open(os.path.join(home,'gateway_state.json')))
+              except Exception as e: raise SystemExit(f'gateway state unreadable: {e}')
+              assert state.get('gateway_state')=='running', state
+              assert state.get('restart_requested') is not True, state
+              time.sleep(3)
+          text=open(log,errors='replace').read()
+          assert text.count('Starting Clover Gateway') >= 2, 'gateway startup/restart marker not observed'
+          print('PASS: API bound and gateway state running, no stale restart request, 90-second continuous health')
+          print('gateway starts:',text.count('Starting Clover Gateway'))
+          PY
+      - name: Gateway log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-logs-${{ matrix.os }}
+          path: ${{ runner.temp }}/gateway.log
+          if-no-files-found: ignore
