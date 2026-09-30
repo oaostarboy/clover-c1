@@ -15,7 +15,7 @@ jobs:
     env:
       FROM_SHA: c200294b5ed85a9b21410c85b2b76191b6a2e29a
       TO_BRANCH: fix/release-harness-20260929
-      EXPECTED_TARGET_SHA: 43b568d91ed72e6814639ee8187f34de804baaf3
+      EXPECTED_TARGET_SHA: 042d2212a7f9607cd3bfd43a59f1c6ba0b139f44
       API_PORT: 18791
     steps:
       - name: Install old candidate
