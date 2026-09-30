@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 45
     env:
       FROM_SHA: c200294b5ed85a9b21410c85b2b76191b6a2e29a
-      TO_BRANCH: ci/release-posix-acceptance
+      TO_BRANCH: fix/release-harness-20260929
       API_PORT: 18791
     steps:
       - name: Install old candidate
