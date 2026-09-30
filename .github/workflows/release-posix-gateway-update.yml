@@ -106,22 +106,23 @@ jobs:
           pre_pid=int(os.environ['PRE_UPDATE_GATEWAY_PID'])
           pre_sha=os.environ.get('PRE_UPDATE_GATEWAY_SHA','')
           deadline=time.time()+180
+          state={}
           while time.time()<deadline:
-              try:
-                  with socket.create_connection(('127.0.0.1',port),1): break
-              except OSError: time.sleep(2)
-          else: raise SystemExit('gateway did not recover within 180 seconds')
+              try: state=json.load(open(os.path.join(home,'gateway_state.json')))
+              except Exception: state={}
+              if int(state.get('pid',-1)) != pre_pid and state.get('code_sha') == target:
+                  break
+              time.sleep(2)
+          else:
+              restart_log=os.path.join(os.environ['RUNNER_TEMP'],'gateway-post-update.log')
+              if os.path.exists(restart_log): print('post-update gateway launch output:',open(restart_log,errors='replace').read())
+              raise SystemExit(f'gateway did not restart onto target code within 180 seconds; old pid={pre_pid}, old sha={pre_sha}, state={state}')
           for n in range(30):
               with socket.create_connection(('127.0.0.1',port),2): pass
-              try: state=json.load(open(os.path.join(home,'gateway_state.json')))
-              except Exception as e: raise SystemExit(f'gateway state unreadable: {e}')
+              state=json.load(open(os.path.join(home,'gateway_state.json')))
               assert state.get('gateway_state')=='running', state
               assert state.get('restart_requested') is not True, state
-              if int(state.get('pid',-1)) == pre_pid:
-                  restart_log=os.path.join(os.environ['RUNNER_TEMP'],'gateway-post-update.log')
-                  if os.path.exists(restart_log):
-                      print('post-update gateway launch output:',open(restart_log,errors='replace').read())
-              assert int(state.get('pid',-1)) != pre_pid, f'gateway PID did not change across update: {state}'
+              assert int(state.get('pid',-1)) != pre_pid, f'gateway PID reverted across update: {state}'
               assert state.get('code_sha') == target, f'gateway code_sha={state.get("code_sha")}, wanted {target}; old={pre_sha}'
               time.sleep(3)
           print('PASS: restarted gateway PID and target code SHA verified; API bound, running, no stale restart request, continuous health for 90 seconds')
