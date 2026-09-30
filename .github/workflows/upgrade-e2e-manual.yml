@@ -908,7 +908,7 @@ jobs:
           $exitCode = Invoke-PathUpdate $label
           Write-Host "[$label] update exit=$exitCode"
           Assert-LongTurnSurvived $turn $logStart $label
-          Assert-UpdatePass $label $logStart $exitCode ".github\win-e2e\wdr.ps1"
+          Assert-UpdatePass $label $logStart $exitCode "clover_cli\update_cmd.py"
           exit 0
 
       - name: e2. D1/D2 - Emilio's refused receipt, then a no-pull update (the path's exact command)
