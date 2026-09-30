@@ -55,18 +55,32 @@ THOUGHT_BUBBLE_PREFIX = "\U0001F4AD "
 def format_thought(text: str) -> str:
     """Render a between-tools note as a thought: 💭 plus italic text.
 
-    Standard markdown ``*...*`` per line: the Telegram adapter converts it to
-    MarkdownV2 italics (``_..._``) and escapes underscores inside words, so
-    snake_case names stay intact. Already-formatted text is returned as-is so
-    an edit never double-wraps it.
+    Markdown italics per line: the Telegram adapter converts them to
+    MarkdownV2 and escapes underscores inside words, so snake_case names
+    stay intact. Existing emphasis is preserved; already-prefixed text is
+    returned as-is so an edit never double-wraps it.
     """
     body = (text or "").strip()
     if not body:
         return ""
     if body.startswith(THOUGHT_BUBBLE_PREFIX.strip()):
         return body
-    lines = [ln.strip().strip("*").strip() for ln in body.splitlines()]
-    italic = "\n".join(f"*{ln}*" if ln else "" for ln in lines)
+    lines = [ln.strip() for ln in body.splitlines()]
+    # Do not strip the model's emphasis: **bold** at the start of a line
+    # otherwise loses its opening delimiter. Use the other Markdown italic
+    # delimiter when asterisks are present, avoiding ambiguous *** nesting.
+    italic_lines = []
+    for ln in lines:
+        if not ln:
+            italic_lines.append("")
+        elif (
+            (ln.startswith("*") and not ln.startswith("**") and ln.endswith("*"))
+            or (ln.startswith("_") and not ln.startswith("__") and ln.endswith("_"))
+        ):
+            italic_lines.append(ln)
+        else:
+            italic_lines.append(f"_{ln}_" if "*" in ln else f"*{ln}*")
+    italic = "\n".join(italic_lines)
     return THOUGHT_BUBBLE_PREFIX + italic
 _COMMENTARY = object()
 # Sentinel for tool-progress lines injected into the native stream bubble.
