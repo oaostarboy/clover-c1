@@ -156,7 +156,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os, socket, subprocess, time
+          import json, os, socket, subprocess, time, urllib.request
           home=os.environ['CLOVER_HOME']; port=int(os.environ['API_PORT'])
           target=os.environ['TARGET_SHA']
           pre_pid=int(os.environ['PRE_UPDATE_GATEWAY_PID'])
@@ -178,15 +178,23 @@ jobs:
           while time.time()<deadline:
               try: state=json.load(open(os.path.join(home,'gateway_state.json')))
               except Exception: state={}
-              if (int(state.get('pid',-1)) != pre_pid and state.get('code_sha') == target
-                      and state.get('gateway_state')=='running'):
+              reasons=[]
+              if int(state.get('pid',-1)) == pre_pid: reasons.append(f'pid still old ({pre_pid})')
+              if state.get('code_sha') != target: reasons.append(f'code_sha={state.get("code_sha")!r}, wanted {target!r}')
+              if state.get('gateway_state') != 'running': reasons.append(f'gateway_state={state.get("gateway_state")!r}, wanted \'running\'')
+              if reasons:
+                  print('Convergence candidate rejected: ' + '; '.join(reasons), flush=True)
+              else:
                   try:
                       with urllib.request.urlopen(f'http://127.0.0.1:{port}/health',timeout=2) as response:
-                          assert response.status==200 and json.load(response).get('status')=='ok'
+                          body=json.load(response)
+                          assert response.status==200, f'HTTP status {response.status}, wanted 200'
+                          assert body.get('status')=='ok', f'health body status={body.get("status")!r}, wanted \'ok\''
                       stable_pid=int(state['pid']); stable_start=str(state.get('start_time'))
                       assert_live_start(stable_pid,stable_start)
                       break
-                  except Exception:
+                  except Exception as exc:
+                      print(f'Convergence candidate rejected for pid={state.get("pid")}: {type(exc).__name__}: {exc}', flush=True)
                       stable_pid=None
               time.sleep(2)
           else:
