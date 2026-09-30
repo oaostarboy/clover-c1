@@ -13,19 +13,18 @@
     "existing systemd pending-restart test proves only units whose ExecStart interpreter/entrypoint ownership matches the invoking install are restarted; custom unit and sibling profile cases are covered by fixtures"
   ],
   "pending_restart_boundary": {
-    "executed_path": "_restart_systemd_gateway_units_best_effort, invoked from _run_pending_fleet_restart after fresh gateway import and nonempty gateway PID discovery",
-    "safe_boundary": "systemd unit restart helper passes the invoking sys.executable into keyed systemctl property inspection and requires matching ExecStart path/argv module and gateway run/serve; explicit VIRTUAL_ENV must agree; unknown/conflicting metadata is rejected",
-    "unresolved_boundary": "When two different installs intentionally use the exact same system Python executable and module entrypoint, with no distinguishing VIRTUAL_ENV and indistinguishable systemd metadata except CLOVER_HOME/WorkingDirectory, _systemd_unit_owned_by_install does not compare home values. It can classify both as owned. This test shape has not yet been exercised end-to-end through _run_pending_fleet_restart; no live systemd unit or gateway was touched.",
-    "outcome": "Do not claim universal shared-Python install isolation for pending restart. Existing tested venv-separated installs are isolated; exact shared-system-Python ownership remains ambiguous unless home identity is incorporated."
+    "executed_path": "_restart_systemd_gateway_units_best_effort invoked by _run_pending_fleet_restart; exercised with intercepted subprocess calls and two same-/usr/bin/python3 units",
+    "safe_boundary": "Requires keyed ExecStart path/argv and explicit WorkingDirectory or CLOVER_HOME matching the active installation (or a profile beneath it); mismatched or absent home metadata is rejected. VIRTUAL_ENV, when present, must also match.",
+    "unresolved_boundary": null,
+    "outcome": "Shared-system-Python homes are isolated in an end-to-end pending-restart fake-subprocess test. No live service was touched."
   },
   "modified_files": [
     "clover_cli/gateway.py",
-    "tests/clover_cli/test_gateway_install_scoped_discovery.py"
+    "clover_cli/update_cmd.py",
+    "tests/clover_cli/test_gateway_install_scoped_discovery.py",
+    "tests/clover_cli/test_update_install_scoped_systemd.py"
   ],
   "not_done": [
-    "No commit or push",
-    "No hosted Linux/macOS workflow rerun for modified candidate",
-    "No end-to-end pending restart call-path fixture for the shared-system-Python ambiguity",
-    "No live restart, merge, or deployment"
+    "No live restart, merge, or deployment; PR remains open for review"
   ]
 }
