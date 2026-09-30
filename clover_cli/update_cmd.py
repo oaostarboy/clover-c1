@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -85,6 +86,12 @@ _STALE_PURGE_PROTECTED = frozenset(
         "clover_cli.main",
         "clover_cli.update_cmd",
         "clover_cli.clover_logging",
+        # Holds the OPEN update receipt in a module global. Evicting it made
+        # the command-boundary finalizer import a fresh module with no open
+        # receipt, so successful runs wrote no receipt and no
+        # .clover-last-update, and a stale refused receipt kept re-arming the
+        # fleet-restart catch-up (Windows 11 report, D3).
+        "clover_cli.update_receipt",
     }
 )
 
@@ -3190,9 +3197,15 @@ def _current_checkout_sha() -> str | None:
         return _capture_head_sha(["git"], _m().PROJECT_ROOT)
 
 
+_BOUNDARY_STOP_REASONS = re.compile(r"^(sys\.exit\(\s*0?\s*\)|completed at command boundary)$")
+
+
 def _receipt_looks_unfinished(receipt: dict) -> bool:
     """True when *receipt* is from an update that did not finish cleanly."""
-    if receipt.get("stop_reason"):
+    stop_reason = str(receipt.get("stop_reason") or "").strip()
+    # The command-boundary finalizer records ``sys.exit(<code>)`` on EVERY
+    # exit, success included; a clean ``sys.exit(0)`` is not an interruption.
+    if stop_reason and not _BOUNDARY_STOP_REASONS.match(stop_reason):
         return True
     exit_code = receipt.get("exit_code")
     if exit_code not in (0, None):
@@ -3224,9 +3237,23 @@ def _receipt_reports_stale_runtime(expected_sha: str | None = None) -> bool:
         receipt = None
     if not isinstance(receipt, dict):
         return False
+    # A run that never pulled cannot owe the fleet a restart: a refused run
+    # (preflight exit 2) or any run whose checkout SHA did not move. Emilio's
+    # machine kept the catch-up armed forever from a refused /update receipt
+    # (D2) and every no-op update then killed the gateway (D1).
+    if receipt.get("outcome") == "refused":
+        return False
+    _pre = (receipt.get("pre_update") or {}).get("sha") if isinstance(receipt.get("pre_update"), dict) else None
+    _post = (receipt.get("post_update") or {}).get("sha") if isinstance(receipt.get("post_update"), dict) else None
+    if _pre and _post and _pre == _post:
+        return False
     if not expected_sha:
         expected_sha = _current_checkout_sha()
     if not expected_sha:
+        return False
+    # The live gateway is the ground truth: when the running gateway already
+    # serves the checkout, no receipt can make it stale.
+    if _live_gateway_serves(expected_sha):
         return False
 
     def _sha_mismatch(code_sha) -> bool:
@@ -3252,6 +3279,20 @@ def _receipt_reports_stale_runtime(expected_sha: str | None = None) -> bool:
         if isinstance(runtime, dict) and _sha_mismatch(runtime.get("code_sha")):
             return True
     return False
+
+
+def _live_gateway_serves(expected_sha: str) -> bool:
+    """True when this profile's live gateway reports ``code_sha == expected_sha``."""
+    try:
+        from gateway.status import get_running_pid, read_runtime_status
+
+        pid = get_running_pid()
+        if pid is None:
+            return False
+        state = read_runtime_status() or {}
+        return int(state.get("pid") or 0) == int(pid) and str(state.get("code_sha") or "") == str(expected_sha)
+    except Exception:
+        return False
 
 
 def _pending_fleet_restart_needed() -> bool:
@@ -3404,15 +3445,32 @@ def _run_pending_fleet_restart() -> bool:
                 failed.append("windows-gateway")
         leftover: list = []
         try:
-            leftover = list(find_gateway_pids(all_profiles=True))
+            live = list(find_gateway_pids(all_profiles=True))
         except Exception:
-            leftover = list(pids or [])
+            live = list(pids or [])
+        # Leftovers are gateways that were ALREADY running before the
+        # restarts above and survived them. A gateway those restarts just
+        # started is the result, not a leftover: sweeping every live PID
+        # killed the gateway gateway_windows.restart() had just spawned and
+        # left Windows with none (2026-09-29).
+        if pids is None:
+            leftover = live
+        else:
+            leftover = [pid for pid in live if pid in set(pids)]
         if leftover:
             try:
-                kill_gateway_processes(all_profiles=True)
+                keep = {pid for pid in live if pid not in set(leftover)}
+                logger.info("Pending fleet restart: stopping pre-restart survivor(s) %s", leftover)
+                kill_gateway_processes(all_profiles=True, exclude_pids=keep or None)
                 _wait_for_gateway_exit(timeout=5.0, force_after=None)
             except Exception as exc:
                 logger.debug("Pending fleet restart: PID stop failed: %s", exc)
+        if is_windows() and "windows-gateway" not in failed:
+            # Never report success on a process-table match: prove a gateway
+            # owns the PID file after the last kill step, else start one
+            # through the verified path (Windows 11 report, D1/D4).
+            if not _m()._verify_windows_gateway_relaunch(is_windows=True):
+                failed.append("windows-gateway")
         if failed:
             _warn_incomplete_gateway_fleet_restart(failed)
             return False
@@ -3426,6 +3484,36 @@ def _run_pending_fleet_restart() -> bool:
             surviving = pids
         _warn_gateway_restart_phase_aborted(exc, surviving)
         return False
+
+
+def _drop_profiles_already_relaunched(token: dict | None, relaunched) -> None:
+    """Remove profiles another restart path already relaunched from ``token``."""
+    if not isinstance(token, dict) or not token.get("resume_needed"):
+        return
+    done = {str(p) for p in (relaunched or [])}
+    profiles = token.get("profiles") or {}
+    if not done or not isinstance(profiles, dict):
+        return
+    kept = {k: v for k, v in profiles.items() if str(k) not in done}
+    if len(kept) == len(profiles):
+        return
+    token["profiles"] = kept
+    token.setdefault("already_relaunched_profiles", sorted(done & set(map(str, profiles))))
+    if not kept and not any((u or {}).get("argv") for u in token.get("unmapped") or []) \
+            and not token.get("services") and not token.get("cold_start_if_installed"):
+        token["resume_needed"] = False
+
+
+def _windows_gateways_relaunched_now(token: dict | None) -> bool:
+    """True when this run's Windows resume just relaunched paused gateways."""
+    if not isinstance(token, dict) or token.get("resume_needed"):
+        return False
+    return bool(
+        token.get("relaunched_profiles")
+        or token.get("restarted_services")
+        or token.get("unmapped_pids")
+        or token.get("cold_start_if_installed") is False
+    )
 
 
 def _apply_pending_fleet_restart_catchup() -> None:
@@ -4844,6 +4932,8 @@ def _write_update_planned_stop_marker(profile_path: Path, pid: int) -> bool:
             "target_start_time": _get_process_start_time(pid),
             "stopper_pid": os.getpid(),
             "written_at": datetime.now(timezone.utc).isoformat(),
+            # Lets the gateway finish an active turn before stopping (D5).
+            "reason": "update",
         }
         atomic_json_write(
             Path(profile_path) / ".gateway-planned-stop.json",
@@ -5238,8 +5328,82 @@ def _abort_dependency_sync_if_self_locked(gateway_resume=None) -> None:
 
     if _m()._reexec_dependency_sync_off_windows_shim():
         if gateway_resume is not None:
-            _m()._resume_windows_gateways_after_update(gateway_resume)
+            # The child finishes the install and relaunches the gateways. It
+            # must be the ONLY relauncher: a gateway started here would hold
+            # the .pyd files the child is about to replace, and the child's
+            # own pause would then stop it seconds after startup (Windows,
+            # 2026-09-29: "Gateway restart requested" 8 s after the fresh
+            # gateway connected, then nothing came back).
+            if not _m()._hand_off_windows_gateway_resume(gateway_resume):
+                _m()._resume_windows_gateways_after_update(gateway_resume)
         sys.exit(0)
+
+
+_HANDOFF_RESUME_NAME = ".clover-update-handoff-resume.json"
+
+
+def _handoff_resume_path() -> Path:
+    from clover_cli import update_restart_watcher as _urw
+
+    return _urw.beacon_path().parent / _HANDOFF_RESUME_NAME
+
+
+def _hand_off_windows_gateway_resume(token: dict | None) -> bool:
+    """Pass the paused-gateway resume token to the Windows hand-off child.
+
+    Returns True when the child now owns the relaunch; the token is marked
+    done so this process's atexit resume cannot fire a second relaunch.
+    False (nothing to hand off, or the write failed) leaves the caller on the
+    old path of resuming in-process.
+    """
+    if not token or not token.get("resume_needed"):
+        return False
+    try:
+        path = _handoff_resume_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(token), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception as exc:
+        logger.debug("Could not hand off the Windows gateway resume: %s", exc)
+        return False
+    token["resume_needed"] = False
+    token["handed_off"] = True
+    return True
+
+
+def _adopt_handed_off_gateway_resume(token: dict | None) -> tuple[dict | None, bool]:
+    """In the hand-off child, take over the parent's paused-gateway resume.
+
+    Returns ``(token, adopted)``. The parent paused the gateways and handed
+    their relaunch here; this process's own pause found them already down and
+    at most planned a cold start, which the parent's richer token replaces.
+    """
+    if os.environ.get(_m()._UPDATE_REEXEC_ENV) != "1":
+        return token, False
+    try:
+        handed = json.loads(_handoff_resume_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return token, False
+    try:
+        _handoff_resume_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+    if not isinstance(handed, dict) or not handed.get("resume_needed"):
+        return token, False
+    if token and token.get("resume_needed"):
+        # Anything this process paused itself (e.g. a gateway the login task
+        # started meanwhile) is resumed alongside the handed-off set.
+        for key in ("profiles",):
+            merged = dict(handed.get(key) or {})
+            merged.update(token.get(key) or {})
+            handed[key] = merged
+        for key in ("unmapped", "unmapped_pids", "services"):
+            handed[key] = list(handed.get(key) or []) + [
+                item for item in (token.get(key) or []) if item not in (handed.get(key) or [])
+            ]
+    handed.pop("handed_off", None)
+    return handed, True
 
 
 def _defer_update_for_self_lock(loaded: list[str]) -> None:
@@ -5350,6 +5514,31 @@ def _clover_holder_subcommand(cmdline: str) -> str | None:
             continue
         return token.lower()
     return None
+
+
+UPDATE_REFUSAL_NAME = ".update_refusal.json"
+
+
+def _record_update_refusal_holders(matches: list[tuple[int, str, str]]) -> None:
+    """Leave the exact holders behind for the chat notice. Never raises.
+
+    The /update notice used to blame "the running gateway" even when the
+    holder was the updater's own restart watcher (Windows 11 report, D8).
+    """
+    try:
+        payload = {
+            "holders": [
+                {"pid": int(pid), "name": str(name), "cmdline": str(cmdline)[:300]}
+                for pid, name, cmdline in matches[:6]
+            ],
+            "more": max(len(matches) - 6, 0),
+        }
+        path = get_clover_home() / UPDATE_REFUSAL_NAME
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception as exc:
+        logger.debug("Could not record update refusal holders: %s", exc)
 
 
 def _format_venv_python_holders_message(matches: list[tuple[int, str, str]]) -> str:
@@ -6138,6 +6327,30 @@ def _restore_windows_gateway_service(name: str, *, timeout: float = 60.0) -> Non
     )
 
 
+def _own_ancestor_pids() -> set[int]:
+    """PIDs of this process's live ancestors (empty without psutil)."""
+    try:
+        import psutil
+
+        return {int(p.pid) for p in psutil.Process().parents()}
+    except Exception:
+        return set()
+
+
+def _force_stop_single_process(pid: int) -> None:
+    """Force-stop ONE process, never its descendants (unlike taskkill /T)."""
+    try:
+        import psutil
+    except Exception as exc:
+        raise OSError(f"psutil unavailable: {exc}") from exc
+    try:
+        psutil.Process(int(pid)).kill()
+    except psutil.NoSuchProcess as exc:
+        raise ProcessLookupError(pid) from exc
+    except psutil.AccessDenied as exc:
+        raise PermissionError(pid) from exc
+
+
 def _pause_windows_gateways_for_update() -> dict | None:
     """Stop running Windows gateways before mutating the checkout or venv.
 
@@ -6252,24 +6465,30 @@ def _pause_windows_gateways_for_update() -> dict | None:
             continue
         profiles[str(proc.profile)] = int(pid)
         mapped_pids.append(int(pid))
-        _write_update_planned_stop_marker(Path(proc.path), int(pid))
         # Socket-first pause (#92091 step 2): ask the gateway to drain and
         # exit itself instead of relying on the marker poll + force-kill
         # ladder. A positive ACK means the gateway is running its own
-        # graceful restart path (same drain as SIGUSR1/service restarts) and
-        # will release its venv handles on the way out. No answer (older
-        # gateway, no socket) → the marker watcher / force-kill fallback
-        # below behaves exactly as before this verb existed.
+        # graceful restart path (same after-turn deferral as SIGUSR1/service
+        # restarts) and will release its venv handles on the way out.
+        #
+        # The planned-stop marker is only the fallback for a gateway that
+        # did not ACK (older gateway, no socket). Writing it as well raced
+        # the pause: the marker's plain stop() ran with a 0 s drain and
+        # killed the turn the pause was deferring for (D5).
+        acked = False
         try:
             from gateway.control_socket import pause_gateway_for_update
 
             ack = pause_gateway_for_update(Path(proc.path))
             if ack and (ack.get("pausing") or ack.get("already_stopping")):
                 socket_acks.append(ack)
+                acked = True
         except Exception as exc:
             logger.debug(
                 "Socket pause unavailable for gateway %s: %s", pid, exc
             )
+        if not acked:
+            _write_update_planned_stop_marker(Path(proc.path), int(pid))
 
     # Resolve each mapped worker's venv-side launcher BEFORE draining: the
     # drain stops tracking a PID exactly when it dies, so a gracefully
@@ -6303,10 +6522,18 @@ def _pause_windows_gateways_for_update() -> dict | None:
             drain_timeout = max(drain_timeout, declared + 10.0)
         except Exception:
             pass
-        print(
-            f"  → {len(socket_acks)} gateway(s) ACKed socket pause; "
-            f"waiting up to {int(drain_timeout)}s for graceful exit"
-        )
+        busy = sum(int(a.get("active_work") or 0) for a in socket_acks)
+        if busy:
+            print(
+                f"  → Waiting for {busy} in-flight turn(s) to finish before "
+                f"updating (up to {int(drain_timeout)}s); the update continues "
+                "as soon as they are done"
+            )
+        else:
+            print(
+                f"  → {len(socket_acks)} gateway(s) ACKed socket pause; "
+                f"waiting up to {int(drain_timeout)}s for graceful exit"
+            )
     survivors = _m()._wait_for_windows_update_gateway_exit(
         mapped_pids,
         timeout=drain_timeout,
@@ -6338,9 +6565,16 @@ def _pause_windows_gateways_for_update() -> dict | None:
     # already exited with its drained worker raises ProcessLookupError below
     # and is skipped.
     force_killed = []
+    own_ancestry = _m()._own_ancestor_pids()
     for pid in sorted(set(survivors).union(unmapped_pids).union(launcher_pids)):
         try:
-            terminate_pid(int(pid), force=True)
+            if int(pid) in own_ancestry:
+                # /update from a chat runs this updater INSIDE the gateway's
+                # process tree; ``terminate_pid(force=True)`` is taskkill /T
+                # and would take the updater down with the gateway.
+                _m()._force_stop_single_process(int(pid))
+            else:
+                terminate_pid(int(pid), force=True)
             force_killed.append(int(pid))
         except (ProcessLookupError, PermissionError, OSError):
             pass
@@ -7181,6 +7415,38 @@ def _refresh_bootstrap_cache_scripts(branch: str = "main") -> None:
     except Exception as exc:
         logger.debug("Could not refresh bootstrap-cache scripts after update: %s", exc)
 
+def _clear_restart_beacon_if_gateway_up() -> bool:
+    """Stand the restart watcher down only once a gateway is confirmed up.
+
+    Registered at exit on every Windows path that paused or stopped a
+    gateway, including updates that pulled nothing. Clearing the beacon
+    unconditionally stood the watcher down while no gateway ran; Emilio's
+    no-op update left Telegram offline for 21 minutes with no watcher and no
+    supervisor (Windows 11 report, D4). A gateway that owns the PID file has
+    passed its imports; anything less keeps the watcher armed, and it starts
+    one after this process exits. Never raises.
+    """
+    try:
+        from clover_cli import update_restart_watcher as _urw
+
+        try:
+            from gateway.status import get_running_pid
+
+            confirmed = get_running_pid() is not None
+        except Exception:
+            confirmed = False
+        if confirmed:
+            _urw.clear_beacon()
+            return True
+        logger.warning(
+            "No gateway confirmed running as the updater exits; leaving the "
+            "restart watcher armed to bring one back"
+        )
+        return False
+    except Exception:
+        return False
+
+
 def _arm_restart_watcher_before_pause() -> bool:
     """Arm the out-of-process restart watcher BEFORE stopping any gateway.
 
@@ -7236,7 +7502,7 @@ def _arm_restart_watcher_before_pause() -> bool:
 
         import atexit as _atexit
 
-        _atexit.register(_urw.clear_beacon)
+        _atexit.register(_m()._clear_restart_beacon_if_gateway_up)
         return True
     except Exception as exc:
         logger.debug("Could not pre-arm the update restart watcher: %s", exc)
@@ -7315,6 +7581,16 @@ def _resume_windows_gateways_after_update(token: dict | None) -> None:
     # so a legacy pythonw-era Scheduled Task / Startup entry comes back on
     # current hidden-console design at the next login too.
     _m()._refresh_windows_gateway_launchers()
+
+    # Claim the relaunch: this process is its one owner. The restart watcher
+    # and any automatic ``gateway run --replace`` stand down while the claim
+    # is fresh instead of starting (or taking over) a second gateway.
+    try:
+        from clover_cli import update_restart_watcher as _urw
+
+        _urw.write_relaunch_marker(sorted((token.get("profiles") or {}).keys()))
+    except Exception as exc:
+        logger.debug("Could not write the gateway relaunch claim: %s", exc)
 
     services = list(token.get("services") or [])
     token.setdefault("expected_services", list(services))
@@ -7414,7 +7690,9 @@ def _resume_windows_gateways_after_update(token: dict | None) -> None:
             failed_unmapped.append(entry)
             continue
         try:
-            if launch_detached_gateway_restart_by_cmdline(int(old_pid), list(argv)):
+            if launch_detached_gateway_restart_by_cmdline(
+                int(old_pid), _with_current_gateway_interpreter(list(argv))
+            ):
                 unmapped_relaunched += 1
             else:
                 failed_unmapped.append(entry)
@@ -7441,6 +7719,75 @@ def _resume_windows_gateways_after_update(token: dict | None) -> None:
         print(
             f"  ✓ Restarting {unmapped_relaunched} unmapped Windows gateway process(es)"
         )
+    if relaunched or unmapped_relaunched:
+        _m()._verify_windows_gateway_relaunch(
+            current_profile="default" in relaunched or bool(unmapped_relaunched)
+        )
+
+
+# How long a fire-and-forget relaunch gets to prove itself before the resume
+# starts the gateway through the canonical verified path instead.
+_WINDOWS_RELAUNCH_VERIFY_SECONDS = 90.0
+
+
+def _with_current_gateway_interpreter(argv: list[str]) -> list[str]:
+    """Replay a captured ``-m clover_cli.main ... gateway run`` on THIS install's python.
+
+    The captured interpreter can be gone after the update: the dependency sync
+    may rebuild the managed runtime, and a gateway captured mid-startup may
+    carry a helper's interpreter. The command after it is kept verbatim.
+    """
+    if len(argv) >= 3 and argv[1] == "-m" and argv[2] == "clover_cli.main":
+        try:
+            from clover_cli.gateway import get_python_path
+
+            return [get_python_path(), *argv[1:]]
+        except Exception:
+            return argv
+    return argv
+
+
+def _verify_windows_gateway_relaunch(
+    timeout: float | None = None,
+    *,
+    current_profile: bool = True,
+    is_windows: bool | None = None,
+) -> bool:
+    """Prove the post-update relaunch produced a gateway; start one if not.
+
+    Relaunch helpers are fire-and-forget: a respawn that dies on import (or
+    whose interpreter vanished) used to leave Windows with no gateway and
+    nobody noticing (2026-09-29). A gateway that owns the PID file has passed
+    its imports and the duplicate guard. If none does in time, fall back to
+    the same verified start ``clover gateway start`` uses; it re-checks
+    liveness first, so a slow-but-alive relaunch is never doubled.
+    """
+    if is_windows is None:
+        is_windows = sys.platform == "win32"
+    if not is_windows:
+        return True
+    try:
+        from clover_cli.gateway import find_gateway_pids
+        from gateway.status import get_running_pid
+    except Exception:
+        return True
+    deadline = _time.monotonic() + (
+        _WINDOWS_RELAUNCH_VERIFY_SECONDS if timeout is None else timeout
+    )
+    while True:
+        try:
+            if current_profile:
+                if get_running_pid() is not None:
+                    return True
+            elif list(find_gateway_pids(all_profiles=True)):
+                return True
+        except Exception:
+            pass
+        if _time.monotonic() >= deadline:
+            break
+        _time.sleep(1.0)
+    print("  ⚠ The relaunched gateway did not come up; starting it directly")
+    return bool(_m()._cold_start_windows_gateway_after_update())
 
 def _discard_lockfile_churn(git_cmd, repo_root):
     """Restore tracked ``package-lock.json`` files that npm dirtied locally.
@@ -7734,6 +8081,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
             logger.debug("Could not read updates.non_interactive_local_changes: %s", exc)
             discard_local_changes = False
 
+    try:
+        (get_clover_home() / UPDATE_REFUSAL_NAME).unlink(missing_ok=True)
+    except OSError:
+        pass
     print("☘ Updating Clover Cognition...")
     print()
 
@@ -7807,13 +8158,27 @@ def _cmd_update_impl(args, gateway_mode: bool):
     # post-update cron-jobs safety net uses it to detect job loss.
     pre_update_snapshot_id = _m()._run_pre_update_backup(args)
     try:
-        from clover_cli.update_receipt import record_step
+        from clover_cli.update_receipt import record_skip, record_step
 
-        record_step(
-            "pre_update_backup",
-            pre_update_snapshot_id is not None,
-            f"snapshot={pre_update_snapshot_id}" if pre_update_snapshot_id else "disabled or failed",
-        )
+        if pre_update_snapshot_id is not None:
+            record_step("pre_update_backup", True, f"snapshot={pre_update_snapshot_id}")
+        else:
+            # Never a failed STEP: the backup is best-effort and never stops
+            # the update (a locked or in-use file is skipped per file). The
+            # shipped example config even turns it off. Recording it as a
+            # failure made every such update read "pre-update backup step
+            # failed" (Windows 11 report, 2026-09-29) even when the real stop
+            # was elsewhere.
+            try:
+                _backup_mode = _m()._resolve_pre_update_backup_mode(args)
+            except Exception:
+                _backup_mode = "unknown"
+            record_skip(
+                "pre_update_backup",
+                "disabled (updates.pre_update_backup / --no-backup)"
+                if _backup_mode == "off"
+                else "no snapshot captured (non-fatal; update continued)",
+            )
     except Exception:
         pass
 
@@ -7825,6 +8190,11 @@ def _cmd_update_impl(args, gateway_mode: bool):
     _pre_armed_watcher = _m()._arm_restart_watcher_before_pause()
 
     _windows_gateway_resume = _m()._pause_windows_gateways_for_update()
+    # Windows hand-off child: the parent paused the gateways and passed their
+    # relaunch (and its restart watcher's beacon) to this process.
+    _windows_gateway_resume, _handoff_adopted = (
+        _m()._adopt_handed_off_gateway_resume(_windows_gateway_resume)
+    )
     if _windows_gateway_resume:
         import atexit as _atexit
 
@@ -7850,14 +8220,20 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _restart_argv = _m()._gateway_restart_argv_for_resume(
                 _windows_gateway_resume
             )
-            if _restart_argv:
+            if _handoff_adopted:
+                # The parent's watcher already polls the beacon, which the
+                # parent re-pointed at this process. Rewriting it would drop
+                # the parent's rollback data; a second watcher would double
+                # the restart attempts.
+                _atexit.register(_m()._clear_restart_beacon_if_gateway_up)
+            elif _restart_argv:
                 _beacon = _urw.write_beacon(_restart_argv)
                 if _pre_armed_watcher:
                     # A watcher is already running from the pre-pause arming
                     # and polls this same beacon; refreshing the argv above is
                     # all it needs. Spawning a second one would double the
                     # restart attempts.
-                    _atexit.register(_urw.clear_beacon)
+                    _atexit.register(_m()._clear_restart_beacon_if_gateway_up)
                 else:
                     _watcher_kwargs = {"close_fds": True}
                     if _m()._is_windows():
@@ -7874,7 +8250,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         stderr=subprocess.DEVNULL,
                         **_watcher_kwargs,
                     )
-                    _atexit.register(_urw.clear_beacon)
+                    _atexit.register(_m()._clear_restart_beacon_if_gateway_up)
         except Exception as _watch_err:
             # The watcher is a safety net. Failing to arm it must never stop
             # an update that would otherwise succeed.
@@ -7907,9 +8283,15 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     f"  ⚠ {len(_gateway_holders)} gateway process(es) still "
                     "hold the venv after the pause; stopping them"
                 )
+                _own_ancestry = _m()._own_ancestor_pids()
                 for _pid in _gateway_holders:
                     try:
-                        terminate_pid(int(_pid), force=True)
+                        if int(_pid) in _own_ancestry:
+                            # Never tree-kill our own ancestry (/update
+                            # from a chat runs inside the gateway tree).
+                            _m()._force_stop_single_process(int(_pid))
+                        else:
+                            terminate_pid(int(_pid), force=True)
                     except Exception as exc:
                         logger.debug(
                             "Could not stop leftover gateway %s: %s", _pid, exc
@@ -8033,6 +8415,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     _venv_holders = _m()._detect_venv_python_processes()
         if _venv_holders:
             print(_format_venv_python_holders_message(_venv_holders))
+            _record_update_refusal_holders(_venv_holders)
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
             sys.exit(2)
 
@@ -8556,6 +8939,15 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 )
                 print("  Restart each of them to pick up the repaired runtime.")
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
+            if _windows_gateways_relaunched_now(_windows_gateway_resume):
+                # This run paused the Windows gateways and just relaunched
+                # them on the current checkout, which IS the restart a prior
+                # pull owed. Running the catch-up too made it a second
+                # relauncher: it stopped the fresh gateway seconds after
+                # startup, spawned another, then swept both (2026-09-29,
+                # Windows: no gateway left, state stuck at restart_requested).
+                _clear_fleet_restart_pending_marker()
+                return
             # Git is current, but a prior pull may still owe the fleet a
             # restart (#95294). Catch up even on the "Already up to date"
             # path — that early return is what left the gateway on stale
@@ -10290,6 +10682,12 @@ def _cmd_update_impl(args, gateway_mode: bool):
             except Exception:
                 pass
 
+        # One relaunch per profile: a profile the restart phase above already
+        # relaunched (a gateway was up again by then) must not be relaunched
+        # a second time by the Windows resume -- the pair fired back to back
+        # and killed each other's fresh gateway (Windows runner, /update
+        # from chat, 2026-09-29).
+        _drop_profiles_already_relaunched(_windows_gateway_resume, relaunched_profiles)
         try:
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
         except Exception as _windows_resume_exc:

@@ -422,3 +422,97 @@ def test_startup_warn_silent_when_nothing_pending(capsys):
     captured = capsys.readouterr()
     assert captured.err == ""
     assert captured.out == ""
+
+
+# ---------------------------------------------------------------------------
+# Windows: the resume relaunch IS the owed restart (2026-09-29)
+# ---------------------------------------------------------------------------
+
+
+def test_already_up_to_date_windows_resume_relaunch_satisfies_pending_restart(
+    monkeypatch, tmp_path, capsys
+):
+    """One relauncher: the catch-up must not stop the gateway resume just started.
+
+    Windows 11 report: the "Already up to date" path relaunched the paused
+    gateway, then the catch-up stopped it 8 s after startup, spawned another,
+    and swept both. No gateway, state stuck at restart_requested.
+    """
+    args = _update_args()
+    _patch_update_deps(monkeypatch, tmp_path, _make_up_to_date_side_effect())
+    update_cmd._write_fleet_restart_pending_marker(expected_sha="def456")
+
+    token = {"resume_needed": True, "profiles": {"default": 34128},
+             "unmapped_pids": [], "unmapped": []}
+    starts = []
+
+    def _resume(t):
+        if t and t.get("resume_needed"):
+            starts.append("resume")
+            t["resume_needed"] = False
+            t["relaunched_profiles"] = ["default"]
+
+    monkeypatch.setattr(clover_main, "_pause_windows_gateways_for_update", lambda: token)
+    monkeypatch.setattr(clover_main, "_resume_windows_gateways_after_update", _resume)
+    seen = {"ran": False}
+    monkeypatch.setattr(
+        update_cmd, "_run_pending_fleet_restart",
+        lambda: seen.__setitem__("ran", True) or True,
+    )
+
+    clover_main.cmd_update(args)
+
+    assert starts == ["resume"]
+    assert seen["ran"] is False, "catch-up must not relaunch a second time"
+    assert not update_cmd._fleet_restart_pending_marker_path().exists()
+
+
+def test_pending_restart_on_windows_keeps_the_gateway_it_just_started(monkeypatch):
+    """The leftover sweep kills only pre-restart survivors, never the new gateway."""
+    import clover_cli.gateway as clover_gateway
+    from clover_cli import gateway_windows
+
+    live = {"pids": [100]}
+    killed = []
+    monkeypatch.setattr(clover_main, "_purge_stale_clover_modules", lambda: None)
+    monkeypatch.setattr(clover_gateway, "find_gateway_pids",
+                        lambda **k: [p for p in live["pids"] if p not in (k.get("exclude_pids") or set())])
+    monkeypatch.setattr(clover_gateway, "supports_systemd_services", lambda: False)
+    monkeypatch.setattr(clover_gateway, "is_macos", lambda: False)
+    monkeypatch.setattr(clover_gateway, "is_windows", lambda: True)
+    monkeypatch.setattr(clover_gateway, "_wait_for_gateway_exit", lambda **k: None)
+    monkeypatch.setattr(gateway_windows, "is_installed", lambda: True)
+    monkeypatch.setattr(gateway_windows, "restart", lambda: live.__setitem__("pids", [200]))
+
+    def _kill(**k):
+        victims = clover_gateway.find_gateway_pids(**k)
+        killed.extend(victims)
+        return len(victims)
+
+    monkeypatch.setattr(clover_gateway, "kill_gateway_processes", _kill)
+    verified = []
+    monkeypatch.setattr(clover_main, "_verify_windows_gateway_relaunch",
+                        lambda **k: verified.append(k) or True)
+
+    assert update_cmd._run_pending_fleet_restart() is True
+    assert 200 not in killed, "the freshly restarted gateway was swept"
+    assert verified == [{"is_windows": True}], "success needs a verified-alive gateway"
+
+
+def test_pending_restart_on_windows_fails_when_no_gateway_comes_up(monkeypatch):
+    """D1: never print "Pending fleet restart completed" over a dead gateway."""
+    import clover_cli.gateway as clover_gateway
+    from clover_cli import gateway_windows
+
+    monkeypatch.setattr(clover_main, "_purge_stale_clover_modules", lambda: None)
+    monkeypatch.setattr(clover_gateway, "find_gateway_pids", lambda **k: [100])
+    monkeypatch.setattr(clover_gateway, "supports_systemd_services", lambda: False)
+    monkeypatch.setattr(clover_gateway, "is_macos", lambda: False)
+    monkeypatch.setattr(clover_gateway, "is_windows", lambda: True)
+    monkeypatch.setattr(clover_gateway, "_wait_for_gateway_exit", lambda **k: None)
+    monkeypatch.setattr(clover_gateway, "kill_gateway_processes", lambda **k: 0)
+    monkeypatch.setattr(gateway_windows, "is_installed", lambda: True)
+    monkeypatch.setattr(gateway_windows, "restart", lambda: None)
+    monkeypatch.setattr(clover_main, "_verify_windows_gateway_relaunch", lambda **k: False)
+
+    assert update_cmd._run_pending_fleet_restart() is False

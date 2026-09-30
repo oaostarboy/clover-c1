@@ -21,6 +21,7 @@ use <command>" instead of a silent non-update), and exits 2 on CLI surfaces.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -149,9 +150,48 @@ UPDATE_EXIT_REFUSED = 2
 
 UPDATE_REFUSED_HEADLINE = "\u26a0\ufe0f Update skipped \u2014 nothing was changed."
 
+def update_refused_detail(refusal: dict | None) -> str:
+    """The refusal detail for chat: the ACTUAL holders when the updater recorded them."""
+    holders = (refusal or {}).get("holders") if isinstance(refusal, dict) else None
+    if not holders:
+        return UPDATE_REFUSED_DETAIL
+    lines = ["These processes still hold the Python environment the update needs to replace:"]
+    for h in holders:
+        try:
+            lines.append(f"• PID {int(h.get('pid'))} {h.get('name', '')}: {str(h.get('cmdline', ''))[:160]}")
+        except Exception:
+            continue
+    more = int((refusal or {}).get("more") or 0)
+    if more:
+        lines.append(f"• …and {more} more")
+    lines.append("")
+    lines.append("Nothing was changed. Stop them (or run `clover update` from a terminal) and try again.")
+    return "\n".join(lines)
+
+
 UPDATE_REFUSED_DETAIL = (
     "The running gateway still holds the Python environment the update needs "
     "to replace, so the updater declined rather than force-stopping it. Your "
     "install is untouched and still running the previous version.\n\n"
     "To apply it, run `clover update` from a terminal outside the gateway."
 )
+
+
+#: Environment that only means something inside one update's clover.exe
+#: hand-off. A gateway relaunched by the hand-off child inherits it; left in
+#: place, the gateway's next chat /update believed it WAS that hand-off
+#: child, skipped the pull and only "finished the dependency install"
+#: (Windows runner, 2026-09-29).
+UPDATE_HANDOFF_ONLY_ENV = ("CLOVER_UPDATE_REEXEC",)
+
+
+def drop_update_handoff_env(env: Optional[dict] = None) -> dict:
+    """Remove hand-off-only variables from *env* (``os.environ`` by default).
+
+    Mutates and returns *env*, so a gateway can clean its own environment at
+    start and a spawn site can clean a copy.
+    """
+    target = os.environ if env is None else env
+    for key in UPDATE_HANDOFF_ONLY_ENV:
+        target.pop(key, None)
+    return target

@@ -5052,6 +5052,12 @@ _LAZY_COMMAND_EXPORTS = {
     ),
     "clover_cli.update_cmd": (
         "_abort_dependency_sync_if_self_locked",
+        "_adopt_handed_off_gateway_resume",
+        "_hand_off_windows_gateway_resume",
+        "_verify_windows_gateway_relaunch",
+        "_own_ancestor_pids",
+        "_clear_restart_beacon_if_gateway_up",
+        "_force_stop_single_process",
         "_add_upstream_remote",
         "_apply_pending_fleet_restart_catchup",
         "_atomic_replace_dir",
@@ -9091,6 +9097,11 @@ def _windows_running_clover_launcher_locked() -> bool:
 # Set on the re-exec'd child so it can never spawn another one.
 _UPDATE_REEXEC_ENV = "CLOVER_UPDATE_REEXEC"
 
+# Pid of the hand-off child once this process has passed the update to it.
+# The child then owns everything after the code swap -- the dependency sync,
+# the ONE post-update gateway relaunch, and the restart watcher's beacon.
+_UPDATE_HANDED_OFF_TO: int | None = None
+
 
 def _reexec_dependency_sync_off_windows_shim(*, action: str = "update") -> bool:
     """Hand update's sync or the entire repair to the shim-free venv interpreter.
@@ -9148,11 +9159,23 @@ def _reexec_dependency_sync_off_windows_shim(*, action: str = "update") -> bool:
     cmd = [str(python_exe), "-m", "clover_cli.main", *sys.argv[1:]]
     if python_exe.is_file():
         try:
-            subprocess.Popen(
+            child = subprocess.Popen(
                 cmd,
                 env={**os.environ, _UPDATE_REEXEC_ENV: "1"},
                 stdin=subprocess.DEVNULL,
             )
+            global _UPDATE_HANDED_OFF_TO
+            _UPDATE_HANDED_OFF_TO = int(getattr(child, "pid", 0) or 0) or None
+            if _UPDATE_HANDED_OFF_TO:
+                # The restart watcher must follow the child: tracking this
+                # exiting parent would make it probe/relaunch mid-install.
+                try:
+                    from clover_cli.update_restart_watcher import hand_off_beacon
+
+                    hand_off_beacon(_UPDATE_HANDED_OFF_TO)
+                except Exception as exc:
+                    logger.debug("Could not hand the restart beacon to %s: %s",
+                                 _UPDATE_HANDED_OFF_TO, exc)
             if action == "repair":
                 print("Windows: finishing the repair under the venv Python…", flush=True)
             else:
@@ -10449,7 +10472,11 @@ def _install_hangup_protection(gateway_mode: bool = False):
     signals the user or OS sent on purpose.
 
     In gateway mode (``clover update --gateway``) the update is already
-    spawned detached from a terminal, so this function is a no-op.
+    spawned detached from a terminal, so SIGHUP is left alone -- but the
+    output is still mirrored to ``update.log`` with a run header. The chat
+    path's only other copy, ``.update_output.txt``, is consumed by the
+    gateway, and /update from Telegram used to leave no transcript at all
+    (Windows 11 report, D8).
 
     Returns a dict that ``cmd_update`` can pass to
     ``_finalize_update_output`` on exit.  Returning a dict rather than a
@@ -10462,13 +10489,10 @@ def _install_hangup_protection(gateway_mode: bool = False):
         "installed": False,
     }
 
-    if gateway_mode:
-        return state
-
     import signal as _signal
 
     # (1) Ignore SIGHUP for the remainder of this process.
-    if hasattr(_signal, "SIGHUP"):
+    if not gateway_mode and hasattr(_signal, "SIGHUP"):
         try:
             _signal.signal(_signal.SIGHUP, _signal.SIG_IGN)
         except (ValueError, OSError):
@@ -10491,8 +10515,8 @@ def _install_hangup_protection(gateway_mode: bool = False):
         import datetime as _dt
 
         log_file.write(
-            f"\n=== clover update started "
-            f"{_dt.datetime.now().isoformat(timespec='seconds')} ===\n"
+            f"\n=== clover update{' --gateway (from chat)' if gateway_mode else ''} started "
+            f"{_dt.datetime.now().isoformat(timespec='seconds')} pid={os.getpid()} ===\n"
         )
 
         state["log_file"] = log_file
@@ -10614,6 +10638,8 @@ def cmd_update(args):
         return
 
     gateway_mode = getattr(args, "gateway", False)
+    global _UPDATE_HANDED_OFF_TO
+    _UPDATE_HANDED_OFF_TO = None
 
     # Protect against mid-update terminal disconnects (SIGHUP) and tolerate
     # writes to a closed stdout.  No-op in gateway mode.  See
@@ -10680,12 +10706,21 @@ def cmd_update(args):
             pass
         _update_handoff_exit_code = 0
     finally:
+        try:
+            from clover_cli.update_receipt import warn_if_receipt_lost
+
+            warn_if_receipt_lost()
+        except Exception:
+            pass
         _update_lock.release()
         _finalize_update_output(_update_io_state)
         # The detached watcher owns post-restart verification. In direct CLI
         # mode keep this terminal open until it reports its verdict; otherwise
         # a rollback after the updater exits would only reach a log file.
-        if not gateway_mode and os.environ.get(_UPDATE_REEXEC_ENV) != "1":
+        # A hand-off parent must not wait either: marking the beacon ready
+        # would make the watcher probe while the child is still installing.
+        if (not gateway_mode and os.environ.get(_UPDATE_REEXEC_ENV) != "1"
+                and _UPDATE_HANDED_OFF_TO is None):
             from clover_cli.update_restart_watcher import wait_for_cli_verdict
 
             _verified = wait_for_cli_verdict()

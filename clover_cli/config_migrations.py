@@ -1070,6 +1070,68 @@ def _migrate_to_40(results: Dict[str, Any], quiet: bool) -> None:
             print("    Run `clover model` to pick a provider.")
 
 
+#: Global ``display`` keys the shipped cli-config.yaml.example used to set,
+#: with the exact value it shipped. Each equals the built-in global default, so
+#: removing it changes nothing on platforms without their own default -- but
+#: at the global level it overrode EVERY per-platform default (resolve order:
+#: platform override > global > platform default). Nearly every install got
+#: them by copying the example, not by choice.
+_V41_SHADOWING_DISPLAY_DEFAULTS: Dict[str, Any] = {
+    "cleanup_progress": False,
+    "tool_progress": "all",
+    "interim_assistant_messages": True,
+    "long_running_notifications": True,
+    "busy_ack_detail": True,
+}
+
+
+def _v41_rewrite_config(config: Dict[str, Any]) -> List[str]:
+    """Drop example-shipped global display keys that shadow platform defaults."""
+    display = config.get("display")
+    if not isinstance(display, dict):
+        return []
+    platforms = display.get("platforms")
+    telegram = platforms.get("telegram") if isinstance(platforms, dict) else None
+    notes: List[str] = []
+    for key, shipped in _V41_SHADOWING_DISPLAY_DEFAULTS.items():
+        if key not in display:
+            continue
+        value = display[key]
+        # Exact type + value: a user's own spelling ("off", 0, "new") is kept.
+        if type(value) is not type(shipped) or value != shipped:
+            continue
+        if (
+            key == "cleanup_progress"
+            and isinstance(telegram, dict)
+            and "cleanup_progress" in telegram
+        ):
+            # An explicit Telegram choice means the global value was
+            # considered; leave the whole setup alone.
+            continue
+        del display[key]
+        notes.append(f"display.{key} (per-platform default restored)")
+    return notes
+
+
+def _migrate_to_41(results: Dict[str, Any], quiet: bool) -> None:
+    # ── Version 40 → 41: per-platform display defaults apply again ──
+    # Windows 11 report (2026-09-29): the per-turn "🛠 N tool calls" summary
+    # card never appeared on Telegram. Telegram defaults cleanup_progress ON,
+    # but the example config's global ``display.cleanup_progress: false``
+    # overrode it for every install created from that example.
+    _c = _cfg()
+    config = _c.read_raw_config()
+    notes = _v41_rewrite_config(config)
+    if not notes:
+        return
+    _c._persist_migration(config)
+    results["config_added"].extend(notes)
+    if not quiet:
+        print("  ✓ Per-platform display defaults restored (Telegram summary card):")
+        for note in notes:
+            print(f"    • {note}")
+
+
 #: Registry of (target_version, migration_fn), strictly ascending. The driver
 #: applies every entry whose target version is greater than the on-disk
 #: observe earlier steps' writes via read_raw_config() (filesystem state).
@@ -1098,6 +1160,7 @@ MIGRATIONS: Tuple[Tuple[int, Callable[[Dict[str, Any], bool], None]], ...] = (
     (38, _migrate_to_38),
     (39, _migrate_to_39),
     (40, _migrate_to_40),
+    (41, _migrate_to_41),
 )
 
 

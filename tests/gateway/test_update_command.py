@@ -107,7 +107,7 @@ class TestHandleUpdateCommand:
 
         pending_path = clover_home / ".update_pending.json"
         assert pending_path.exists()
-        data = json.loads(pending_path.read_text())
+        data = json.loads(pending_path.read_text(encoding="utf-8"))
         assert data["platform"] == "telegram"
         assert data["chat_id"] == "99999"
         assert data["chat_type"] == "dm"
@@ -256,7 +256,7 @@ class TestSendUpdateNotification:
         pending_path.write_text(json.dumps({
             "platform": "telegram", "chat_id": "67890", "user_id": "12345",
         }))
-        (clover_home / ".update_output.txt").write_text("still running")
+        (clover_home / ".update_output.txt").write_text("still running", encoding="utf-8")
 
         mock_adapter = AsyncMock()
         runner.adapters = {Platform.TELEGRAM: mock_adapter}
@@ -279,8 +279,8 @@ class TestSendUpdateNotification:
         claimed_path.write_text(json.dumps({
             "platform": "telegram", "chat_id": "67890", "user_id": "12345",
         }))
-        (clover_home / ".update_output.txt").write_text("done")
-        (clover_home / ".update_exit_code").write_text("0")
+        (clover_home / ".update_output.txt").write_text("done", encoding="utf-8")
+        (clover_home / ".update_exit_code").write_text("0", encoding="utf-8")
 
         mock_adapter = AsyncMock()
         runner.adapters = {Platform.TELEGRAM: mock_adapter}
@@ -306,11 +306,11 @@ class TestSendUpdateNotification:
             "user_id": "12345",
             "timestamp": "2026-03-04T21:00:00",
         }
-        (clover_home / ".update_pending.json").write_text(json.dumps(pending))
+        (clover_home / ".update_pending.json").write_text(json.dumps(pending), encoding="utf-8")
         (clover_home / ".update_output.txt").write_text(
             "→ Found 3 new commit(s)\n✓ Code updated!\n✓ Update complete!"
         )
-        (clover_home / ".update_exit_code").write_text("0")
+        (clover_home / ".update_exit_code").write_text("0", encoding="utf-8")
 
         # Mock the adapter
         mock_adapter = AsyncMock()
@@ -339,8 +339,8 @@ class TestSendUpdateNotification:
         pending_path.write_text(json.dumps({
             "platform": "telegram", "chat_id": "111", "user_id": "222",
         }))
-        output_path.write_text("✓ Done")
-        exit_code_path.write_text("0")
+        output_path.write_text("✓ Done", encoding="utf-8")
+        exit_code_path.write_text("0", encoding="utf-8")
 
         # Adapter send raises
         mock_adapter = AsyncMock()
@@ -373,9 +373,9 @@ class TestSendUpdateNotification:
         pending_path = clover_home / ".update_pending.json"
         output_path = clover_home / ".update_output.txt"
         exit_code_path = clover_home / ".update_exit_code"
-        pending_path.write_text(json.dumps(pending))
-        output_path.write_text("Done")
-        exit_code_path.write_text("0")
+        pending_path.write_text(json.dumps(pending), encoding="utf-8")
+        output_path.write_text("Done", encoding="utf-8")
+        exit_code_path.write_text("0", encoding="utf-8")
 
         # Only telegram adapter available, but pending says discord
         mock_adapter = AsyncMock()
@@ -411,9 +411,9 @@ class TestSendUpdateNotification:
         pending_path = clover_home / ".update_pending.json"
         output_path = clover_home / ".update_output.txt"
         exit_code_path = clover_home / ".update_exit_code"
-        pending_path.write_text(json.dumps(pending))
-        output_path.write_text("✓ Update complete!")
-        exit_code_path.write_text("0")
+        pending_path.write_text(json.dumps(pending), encoding="utf-8")
+        output_path.write_text("✓ Update complete!", encoding="utf-8")
+        exit_code_path.write_text("0", encoding="utf-8")
 
         # First pass: target platform (discord) is still offline → defer.
         with patch("gateway.run._clover_home", clover_home):
@@ -450,9 +450,9 @@ class TestSendUpdateNotification:
         pending_path = clover_home / ".update_pending.json"
         output_path = clover_home / ".update_output.txt"
         exit_code_path = clover_home / ".update_exit_code"
-        pending_path.write_text(json.dumps(pending))
+        pending_path.write_text(json.dumps(pending), encoding="utf-8")
         output_path.write_bytes(b"ok before\ninvalid byte: \x96\ncontinued after\n")
-        exit_code_path.write_text("0")
+        exit_code_path.write_text("0", encoding="utf-8")
 
         mock_adapter = AsyncMock()
         runner.adapters = {Platform.DISCORD: mock_adapter}
@@ -510,7 +510,7 @@ class TestWatchUpdateProgress:
         (clover_home / ".update_output.txt").write_bytes(
             b"ok before\n\xe2\x9c invalid-continuation: \x96\ncontinued after\n"
         )
-        (clover_home / ".update_exit_code").write_text("0")
+        (clover_home / ".update_exit_code").write_text("0", encoding="utf-8")
 
         mock_adapter = AsyncMock()
         runner.adapters = {Platform.TELEGRAM: mock_adapter}
@@ -523,3 +523,148 @@ class TestWatchUpdateProgress:
         assert "continued after" in sent
         assert "Clover update finished" in sent
         assert not (clover_home / ".update_pending.json").exists()
+
+
+class TestOfflineReplayedLifecycleCommands:
+    """D7 (Windows 11 report): a /update queued while the bot was offline was
+    replayed at boot and re-ran the update, taking the gateway down again."""
+
+    def _event(self, text, age_seconds):
+        from datetime import datetime, timedelta, timezone
+        event = _make_event(text)
+        event.timestamp = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+        return event
+
+    @pytest.mark.asyncio
+    async def test_old_update_from_before_boot_is_skipped(self, tmp_path):
+        import time
+        runner = _make_runner()
+        runner._startup_time = time.time() - 5  # booted 5 s ago
+        clover_home = tmp_path / "clover"
+        clover_home.mkdir()
+        with patch("gateway.run._clover_home", clover_home), patch("subprocess.Popen") as popen:
+            result = await runner._handle_update_command(self._event("/update", 300))
+        assert "skipped an old /update" in result
+        assert not (clover_home / ".update_pending.json").exists()
+        popen.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_old_restart_from_before_boot_is_skipped(self, tmp_path):
+        import time
+        runner = _make_runner()
+        runner._startup_time = time.time() - 5
+        with patch("gateway.run._clover_home", tmp_path):
+            result = await runner._handle_restart_command(self._event("/restart", 300))
+        assert "skipped an old /restart" in result
+
+    def test_fresh_or_post_boot_commands_still_run(self):
+        import time
+        runner = _make_runner()
+        runner._startup_time = time.time() - 600  # up for 10 minutes
+        assert runner._is_stale_offline_command(self._event("/update", 300)) is False  # sent after boot
+        runner._startup_time = time.time() - 5
+        assert runner._is_stale_offline_command(self._event("/update", 30)) is False  # recent
+        assert runner._is_stale_offline_command(_make_event("/update")) is False  # no platform date
+
+
+class TestChatUpdateTranscriptAndRefusal:
+    """D8 (Windows 11 report): /update from chat left no transcript, and the
+    refusal notice blamed "the running gateway" whatever the holder was."""
+
+    async def _notify(self, clover_home, *, output, exit_code, refusal=None):
+        runner = _make_runner()
+        (clover_home / ".update_pending.json").write_text(json.dumps(
+            {"platform": "telegram", "chat_id": "67890", "user_id": "12345",
+             "timestamp": "2026-03-04T21:00:00"}))
+        (clover_home / ".update_output.txt").write_text(output, encoding="utf-8")
+        (clover_home / ".update_exit_code").write_text(str(exit_code), encoding="utf-8")
+        if refusal is not None:
+            (clover_home / ".update_refusal.json").write_text(json.dumps(refusal), encoding="utf-8")
+        adapter = AsyncMock()
+        adapter.send = AsyncMock()
+        runner.adapters = {Platform.TELEGRAM: adapter}
+        with patch("gateway.run._clover_home", clover_home):
+            await runner._send_update_notification()
+        return adapter.send.call_args[0][1]
+
+    @pytest.mark.asyncio
+    async def test_transcript_is_kept_after_the_notification(self, tmp_path):
+        home = tmp_path / "clover"
+        home.mkdir()
+        await self._notify(home, output="→ Found 3 new commit(s)\n✓ Update complete!", exit_code=0)
+        kept = home / "logs" / "update-output.last.txt"
+        assert kept.exists() and "Found 3 new commit" in kept.read_text(encoding="utf-8")
+        await self._notify(home, output="second run", exit_code=0)
+        assert (home / "logs" / "update-output.last.txt").read_text(encoding="utf-8") == "second run"
+        assert "Found 3 new commit" in (home / "logs" / "update-output.last.1.txt").read_text(encoding="utf-8")
+
+    @pytest.mark.asyncio
+    async def test_refusal_names_the_real_holder(self, tmp_path):
+        home = tmp_path / "clover"
+        home.mkdir()
+        msg = await self._notify(home, output="", exit_code=2, refusal={"holders": [
+            {"pid": 7704, "name": "python.exe",
+             "cmdline": "venv\\\\Scripts\\\\python.exe -m clover_cli.update_restart_watcher beacon"}]})
+        assert "7704" in msg and "update_restart_watcher" in msg
+        assert "The running gateway still holds" not in msg
+        assert not (home / ".update_refusal.json").exists()
+
+
+def test_gateway_mode_update_writes_a_transcript(tmp_path, monkeypatch):
+    import sys
+    from clover_cli import main as cli_main
+    import clover_cli.config as config
+
+    monkeypatch.setattr(config, "get_clover_home", lambda: tmp_path)
+    state = cli_main._install_hangup_protection(gateway_mode=True)
+    try:
+        print("→ Fetching updates...")
+    finally:
+        cli_main._finalize_update_output(state)
+    log = (tmp_path / "logs" / "update.log").read_text(encoding="utf-8")
+    assert "clover update --gateway (from chat) started" in log
+    assert "→ Fetching updates..." in log
+    assert sys.stdout is state["prev_stdout"]
+
+
+class TestChatUpdateIsAFreshRun:
+    """A gateway relaunched by an update's clover.exe hand-off child inherited
+    CLOVER_UPDATE_REEXEC=1. Its next chat /update then believed it was that
+    hand-off child: it skipped the pull and only "finished the dependency
+    install" (Windows runner, 2026-09-29)."""
+
+    @pytest.mark.asyncio
+    async def test_chat_update_spawn_drops_the_handoff_marker(self, tmp_path, monkeypatch):
+        runner = _make_runner()
+        event = _make_event(platform=Platform.TELEGRAM, chat_id="99999")
+        fake_root = tmp_path / "project"
+        (fake_root / ".git").mkdir(parents=True)
+        (fake_root / "gateway").mkdir()
+        (fake_root / "gateway" / "run.py").touch()
+        clover_home = tmp_path / "clover"
+        clover_home.mkdir()
+        monkeypatch.setenv("CLOVER_UPDATE_REEXEC", "1")
+
+        with patch("gateway.run._clover_home", clover_home), \
+             patch("gateway.run.__file__", str(fake_root / "gateway" / "run.py")), \
+             patch("shutil.which", side_effect=lambda x: "/usr/bin/clover" if x == "clover" else "/usr/bin/setsid"), \
+             patch("subprocess.Popen") as popen:
+            await runner._handle_update_command(event)
+
+        assert popen.called
+        env = popen.call_args.kwargs.get("env")
+        assert env is not None, "the updater inherited the gateway's whole environment"
+        assert "CLOVER_UPDATE_REEXEC" not in env
+        assert env.get("PATH") == __import__("os").environ.get("PATH")
+
+    def test_gateway_start_forgets_the_handoff_marker(self, monkeypatch):
+        from clover_cli.update_contract import drop_update_handoff_env
+
+        monkeypatch.setenv("CLOVER_UPDATE_REEXEC", "1")
+        drop_update_handoff_env()
+        assert "CLOVER_UPDATE_REEXEC" not in __import__("os").environ
+        import inspect
+
+        import gateway.run as gateway_run
+
+        assert "drop_update_handoff_env()" in inspect.getsource(gateway_run.start_gateway)

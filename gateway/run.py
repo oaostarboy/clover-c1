@@ -3984,6 +3984,33 @@ def _get_channel_override(
     return None
 
 
+def _retire_update_output(output_path: Path, keep: int = 3) -> None:
+    """Keep a chat-run update's transcript instead of deleting it.
+
+    ``.update_output.txt`` is the only full record of a /update started from
+    chat; deleting it after the notification erased the exact refusal text
+    of every failed Telegram /update (Windows 11 report, D8). Rotated into
+    ``logs/update-output.last.txt`` (+ ``.1``..). Never raises.
+    """
+    try:
+        if not output_path.exists():
+            return
+        logs = output_path.parent / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        base = logs / "update-output.last.txt"
+        for i in range(keep - 1, 0, -1):
+            older = logs / f"update-output.last.{i}.txt"
+            newer = base if i == 1 else logs / f"update-output.last.{i - 1}.txt"
+            if newer.exists():
+                os.replace(newer, older)
+        os.replace(output_path, base)
+    except Exception:
+        try:
+            output_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
 def _resolve_clover_bin() -> Optional[list[str]]:
     """Resolve the Clover update command as argv parts.
 
@@ -12252,6 +12279,76 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         )
         return True
 
+    async def _fold_into_pending_restart(self) -> bool:
+        """Let a pending after-turn restart own a plain ``stop()``.
+
+        The updater's planned-stop marker and its socket pause reach the
+        gateway within a millisecond of each other. The pause defers the
+        restart until the active turn finishes (``request_restart``); the
+        marker's plain ``stop()`` used to run right after it with a 0 s
+        drain and amputate that turn anyway. While the deferred restart is
+        pending, wait for it instead of starting a second shutdown.
+
+        Returns True when the pending restart handled the shutdown.
+        """
+        task = getattr(self, "_restart_task", None)
+        if (
+            not getattr(self, "_restart_task_started", False)
+            or task is None
+            or task.done()
+            or task is asyncio.current_task()
+        ):
+            return False
+        logger.info(
+            "Stop requested while a restart is waiting for %d active work "
+            "unit(s); letting that restart finish the turn(s) first",
+            self._active_work_count(),
+        )
+        try:
+            await asyncio.shield(task)
+        except Exception:
+            pass
+        return True
+
+    def _handle_planned_stop(self, reason: Optional[str]) -> None:
+        """Planned-stop marker branch of the shutdown handler.
+
+        An update pause (marker ``reason == "update"``) with a turn still
+        running takes the same after-turn deferral as the socket
+        ``pause-for-update`` verb, so an updater that could not reach the
+        control socket still does not cut the turn off. Everything else
+        stops as before; ``stop()`` itself folds into a restart that is
+        already pending.
+        """
+        if (
+            reason == "update"
+            and not getattr(self, "_restart_task_started", False)
+            and self._awaitable_work_count() > 0
+        ):
+            self.request_restart(detached=False, via_service=True)
+            return
+        asyncio.create_task(self.stop())
+
+    def update_pause_budget(self, drain_timeout: float) -> dict:
+        """Seconds an updater should wait for this gateway to exit.
+
+        With a turn running, the pause defers ``stop()`` for up to
+        ``restart_after_turn_timeout``; reporting only the drain timeout
+        (0 by default) made the updater force-kill the gateway 10 s later.
+        """
+        try:
+            active = int(self._awaitable_work_count())
+        except Exception:
+            active = 0
+        after_turn = 0.0
+        if active > 0:
+            after_turn = float(getattr(self, "_restart_after_turn_timeout", 0.0) or 0.0)
+        return {
+            "active_work": active,
+            "after_turn_timeout": after_turn,
+            "drain_timeout": float(drain_timeout) + after_turn,
+        }
+
     def request_restart(self, *, detached: bool = False, via_service: bool = False) -> bool:
         if self._restart_task_started:
             return False
@@ -13256,12 +13353,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         except Exception:
             pass
         try:
-            from gateway.status import write_runtime_status
-            write_runtime_status(
-                gateway_state="starting",
-                exit_reason=None,
-                clear_profile_platforms=True,
-            )
+            from gateway.status import record_gateway_starting
+            record_gateway_starting()
         except Exception:
             pass
         try:
@@ -15623,6 +15716,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _stop_guards = getattr(self, "_stop_loop_liveness_guards", None)
         if callable(_stop_guards):
             _stop_guards()
+        # Called through the class: shutdown-path tests drive this method on
+        # duck-typed runners, and the fold only reads state via getattr.
+        if not restart and await GatewayRunner._fold_into_pending_restart(self):
+            return
         if restart:
             self._restart_requested = True
             self._restart_detached = detached_restart
@@ -25575,7 +25672,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     logger.warning("Update final notification failed: %s", e)
 
                 # Cleanup
-                for p in (pending_path, claimed_path, output_path,
+                _retire_update_output(output_path)
+                for p in (pending_path, claimed_path,
                           exit_code_path, prompt_path):
                     p.unlink(missing_ok=True)
                 (_clover_home / ".update_response").unlink(missing_ok=True)
@@ -25700,7 +25798,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
             except Exception:
                 pass
-            for p in (pending_path, claimed_path, output_path,
+            _retire_update_output(output_path)
+            for p in (pending_path, claimed_path,
                       exit_code_path, prompt_path):
                 p.unlink(missing_ok=True)
             (_clover_home / ".update_response").unlink(missing_ok=True)
@@ -25832,7 +25931,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             verdict, detail,
         )
 
-        for p in (pending_path, claimed_path, output_path,
+        _retire_update_output(output_path)
+        for p in (pending_path, claimed_path,
                   exit_code_path, prompt_path):
             p.unlink(missing_ok=True)
         (_clover_home / ".update_response").unlink(missing_ok=True)
@@ -25955,8 +26055,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 elif exit_code == UPDATE_EXIT_REFUSED:
                     # A refusal is a safe no-op, not a breakage. Saying
                     # "failed" here sends the user hunting for damage that
-                    # does not exist -- reported 2026-09-04.
-                    msg = f"{UPDATE_REFUSED_HEADLINE}\n\n{UPDATE_REFUSED_DETAIL}"
+                    # does not exist -- reported 2026-09-04. Name the real
+                    # holders when the updater recorded them (D8).
+                    from clover_cli.update_contract import update_refused_detail
+
+                    try:
+                        _refusal = json.loads((_clover_home / ".update_refusal.json").read_text(encoding="utf-8"))
+                    except (OSError, ValueError):
+                        _refusal = None
+                    msg = f"{UPDATE_REFUSED_HEADLINE}\n\n{update_refused_detail(_refusal)}"
                 else:
                     msg = "❌ Clover update failed. Check the gateway logs or run `clover update` manually for details."
                 await adapter.send(
@@ -25976,8 +26083,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if cleanup:
                 active_pending_path.unlink(missing_ok=True)
                 claimed_path.unlink(missing_ok=True)
-                output_path.unlink(missing_ok=True)
+                _retire_update_output(output_path)
                 exit_code_path.unlink(missing_ok=True)
+                (_clover_home / ".update_refusal.json").unlink(missing_ok=True)
 
         return True
 
@@ -32471,6 +32579,32 @@ def _looks_like_profile_conflict_from_cmdline(command: str, our_home) -> bool:
 
 
 
+def _is_fresh_post_update_gateway(pid: int) -> bool:
+    """True when ``pid`` is a healthy gateway the updater relaunched moments ago.
+
+    A gateway that is already stopping (restart requested, draining) is not
+    protected: its replacement must still be allowed to take over.
+    """
+    try:
+        from clover_cli.update_restart_watcher import is_fresh_post_update_gateway
+        from clover_constants import get_clover_home, get_default_clover_root
+        from gateway.status import read_runtime_status
+
+        homes = list(dict.fromkeys([get_default_clover_root(), get_clover_home()]))
+        if not any(is_fresh_post_update_gateway(pid, clover_home=home) for home in homes):
+            return False
+        status = read_runtime_status(reconcile=False) or {}
+        if status.get("pid") not in (None, pid):
+            return True  # status not yet written by the new life; still fresh
+        if status.get("restart_requested") or status.get("gateway_state") in {
+            "draining", "stopping", "stopped", "restarting",
+        }:
+            return False
+        return True
+    except Exception:
+        return False
+
+
 async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = False, verbosity: Optional[int] = 0) -> bool:
     """
     Start the gateway and run until interrupted.
@@ -32489,6 +32623,15 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # platforms. Set here (not at module import) so incidental imports of
     # gateway.run from CLI/tool code do not poison CLOVER_EXEC_ASK.
     os.environ["CLOVER_EXEC_ASK"] = "1"
+    # A gateway relaunched by an update's hand-off child inherits that
+    # child's CLOVER_UPDATE_REEXEC; nothing this gateway starts (a chat
+    # /update above all) may think it is that hand-off child.
+    try:
+        from clover_cli.update_contract import drop_update_handoff_env
+
+        drop_update_handoff_env()
+    except Exception:
+        os.environ.pop("CLOVER_UPDATE_REEXEC", None)
 
     from clover_cli.resource_limits import apply_nofile_soft_limit
 
@@ -32514,8 +32657,20 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         remove_pid_file,
         terminate_pid,
     )
+    # Automatic post-update respawns mark themselves; a human's --replace
+    # does not. Pop it so nothing this gateway spawns inherits the mark.
+    _auto_relaunch = os.environ.pop("CLOVER_GATEWAY_AUTORELAUNCH", "") == "1"
     existing_pid = get_running_pid()
     if existing_pid is not None and existing_pid != os.getpid():
+        if replace and _auto_relaunch and _is_fresh_post_update_gateway(existing_pid):
+            # One owner per post-update relaunch: the gateway the updater
+            # just started is the result, not a stale process to take over.
+            logger.info(
+                "Not replacing PID %d: it is the gateway the update just "
+                "relaunched. Standing down.",
+                existing_pid,
+            )
+            return True
         if replace:
             # Cross-profile ownership gate (#89315): never signal a live
             # process we cannot prove belongs to this CLOVER_HOME. A poisoned
@@ -32762,11 +32917,16 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         # external kill unless the CLI marks it first. SIGINT comes from an
         # interactive Ctrl+C and is likewise an intentional foreground stop.
         planned_stop = False
+        planned_stop_reason = None
         if received_signal == signal.SIGINT:
             planned_stop = True
         elif not planned_takeover:
             try:
-                from gateway.status import consume_planned_stop_marker_for_self
+                from gateway.status import (
+                    consume_planned_stop_marker_for_self,
+                    planned_stop_marker_reason,
+                )
+                planned_stop_reason = planned_stop_marker_reason()
                 planned_stop = consume_planned_stop_marker_for_self()
             except Exception as e:
                 logger.debug("Planned stop marker check failed: %s", e)
@@ -32834,7 +32994,10 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 )
             except Exception as _e:
                 logger.debug("spawn_async_diagnostic failed: %s", _e)
-        asyncio.create_task(runner.stop())
+        if planned_stop and received_signal != signal.SIGINT:
+            runner._handle_planned_stop(planned_stop_reason)
+        else:
+            asyncio.create_task(runner.stop())
 
     def restart_signal_handler():
         runner.request_restart(detached=False, via_service=True)
@@ -32960,6 +33123,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 finally:
                     _done.set()
 
+            _budget = runner.update_pause_budget(_drain)
             _main_loop.call_soon_threadsafe(_request)
             _done.wait(timeout=5.0)
             accepted = bool(accepted_box and accepted_box[0])
@@ -32967,7 +33131,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 "pausing": accepted,
                 "already_stopping": not accepted,
                 "pid": os.getpid(),
-                "drain_timeout": _drain,
+                **_budget,
             }
 
         _control_server = GatewayControlServer(

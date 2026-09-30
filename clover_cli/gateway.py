@@ -1325,6 +1325,12 @@ def _spawn_gateway_restart_watcher(old_pid: int, run_argv: list[str]) -> bool:
             respawn_cwd = ""
             respawn_env_overlay = {}
 
+    # Mark the respawn as automatic: ``gateway run --replace`` then stands
+    # down instead of taking over a gateway the updater relaunched moments
+    # ago (one owner per post-update relaunch; a human's --replace is
+    # unaffected).
+    respawn_env_overlay = {**respawn_env_overlay, "CLOVER_GATEWAY_AUTORELAUNCH": "1"}
+
     # Serialized as JSON literals embedded in the watcher source so the
     # inner respawn can apply cwd= / env= without extra argv plumbing.
     respawn_cwd_literal = json.dumps(respawn_cwd)

@@ -58,11 +58,35 @@ POLL_SECONDS = 5.0
 # for a while, and a false positive would start a second gateway.
 BEACON_STALE_SECONDS = 90.0
 
+# An updater PROVEN alive (pid + create_time match) is only treated as hung
+# after this long. Nothing refreshes the beacon mid-update, so the 90 s rule
+# above applied to a live updater relaunched the gateway in the middle of a
+# slow update (Windows runner, /update from chat, 2026-09-29): the gateway
+# then held the venv during the dependency sync and was relaunched twice more.
+HUNG_UPDATER_SECONDS = 2700.0
+
 # The watcher gives up after this long no matter what, so a forgotten watcher
 # cannot linger for days.
 WATCHER_MAX_LIFETIME_SECONDS = 3600.0
 
 BEACON_NAME = ".clover-update-heartbeat.json"
+
+# Written by whoever relaunches gateways after an update (the one owner).
+# Every other automatic relauncher -- this watcher, a respawn helper's
+# ``gateway run --replace`` -- stands down while it is fresh, so a gateway the
+# updater just started is never started twice or taken over (Windows,
+# 2026-09-29: a second relaunch paused the fresh gateway 8 s after startup and
+# nothing came back).
+RELAUNCH_MARKER_NAME = ".clover-update-relaunch.json"
+
+# How long a relaunch owns the gateway before other relaunchers may act.
+# Covers a slow Windows cold start (imports + adapter connect); past this the
+# watcher's real job resumes: nothing up means start one.
+RELAUNCH_GRACE_SECONDS = 180.0
+
+# Set on every automatic post-update respawn so ``gateway run --replace`` can
+# tell a relaunch helper from a human asking for a takeover.
+AUTORELAUNCH_ENV = "CLOVER_GATEWAY_AUTORELAUNCH"
 ROLLBACK_MESSAGE = ("The update didn't start correctly, so I went back to the version "
                     "you had before. Nothing was lost. You can try again later.")
 
@@ -78,6 +102,37 @@ def _core_imports_healthy(root: Path, python: Path | None = None) -> bool:
         ).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
+
+
+def _process_create_time(pid: int) -> float | None:
+    try:
+        import psutil  # type: ignore
+        return float(psutil.Process(int(pid)).create_time())
+    except Exception:
+        return None
+
+
+def _updater_identity_alive(data: dict[str, Any]) -> bool | None:
+    """Is the exact updater process recorded in the beacon still running?
+
+    True/False when the beacon recorded the updater's create_time and psutil
+    can check it (a recycled PID reads as gone); None when that is unknown,
+    so callers fall back to the legacy pid + staleness rule.
+    """
+    recorded = data.get("updater_create_time")
+    pid = int(data.get("updater_pid") or 0)
+    if not recorded or pid <= 0:
+        return None
+    try:
+        import psutil  # type: ignore
+    except Exception:
+        return None
+    try:
+        return abs(float(psutil.Process(pid).create_time()) - float(recorded)) < 1.0
+    except psutil.NoSuchProcess:
+        return False
+    except Exception:
+        return None
 
 
 def _gateway_identity() -> tuple[int, float] | None:
@@ -178,6 +233,7 @@ def _restart_from_beacon(data: dict[str, Any]) -> None:
                                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
     else:
         kwargs["start_new_session"] = True
+    kwargs["env"] = {**os.environ, AUTORELAUNCH_ENV: "1"}
     subprocess.Popen(argv, **kwargs)
 
 
@@ -344,6 +400,7 @@ def write_beacon(argv: list[str], *, clover_home: Optional[Path] = None,
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "updater_pid": os.getpid(),
+        "updater_create_time": _process_create_time(os.getpid()),
         "refreshed_at": time.time(),
         "gateway_argv": list(argv),
         "cwd": os.getcwd(),
@@ -424,9 +481,97 @@ def clear_beacon(*, clover_home: Optional[Path] = None) -> None:
             # The separate watcher must survive normal updater exit as well:
             # the freshly restarted gateway can still crash after atexit.
             return
+        owner = int(data.get("updater_pid") or 0)
+        if owner and owner != os.getpid():
+            # Handed off (Windows shim -> venv child): the child owns the
+            # update now and clears the beacon when IT finishes.
+            return
         path.unlink()
     except Exception:
         pass
+
+
+def hand_off_beacon(child_pid: int, *, clover_home: Optional[Path] = None) -> bool:
+    """Make ``child_pid`` the updater the watcher tracks. Never raises.
+
+    The Windows shim hand-off finishes the update in a child process. The
+    watcher must follow the child: tracking the exiting parent would make it
+    act (probe, roll back, relaunch) while the child is still mid-install.
+    """
+    path = beacon_path(clover_home)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["updater_pid"] = int(child_pid)
+        data["updater_create_time"] = _process_create_time(int(child_pid))
+        data["refreshed_at"] = time.time()
+        data.pop("ready_for_probe", None)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(path)
+        return True
+    except Exception:
+        return False
+
+
+def relaunch_marker_path(clover_home: Optional[Path] = None) -> Path:
+    return beacon_path(clover_home).parent / RELAUNCH_MARKER_NAME
+
+
+def write_relaunch_marker(profiles: list[str] | None = None, *,
+                          clover_home: Optional[Path] = None) -> None:
+    """Claim the post-update relaunch for this process. Never raises."""
+    try:
+        created = None
+        try:
+            import psutil  # type: ignore
+            created = float(psutil.Process(os.getpid()).create_time())
+        except Exception:
+            pass
+        path = relaunch_marker_path(clover_home)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({
+            "pid": os.getpid(), "create_time": created, "at": time.time(),
+            "profiles": list(profiles or []),
+        }), encoding="utf-8")
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
+def recent_relaunch(*, clover_home: Optional[Path] = None,
+                    grace: float = RELAUNCH_GRACE_SECONDS) -> Optional[dict[str, Any]]:
+    """Return the relaunch marker while it still owns the relaunch, else None."""
+    try:
+        data = json.loads(relaunch_marker_path(clover_home).read_text(encoding="utf-8"))
+        at = float(data.get("at") or 0.0)
+    except Exception:
+        return None
+    age = time.time() - at
+    if age < -5 or age > grace:  # a clock jump must not pin the claim forever
+        return None
+    return data
+
+
+def is_fresh_post_update_gateway(pid: int, *, clover_home: Optional[Path] = None,
+                                 grace: float = RELAUNCH_GRACE_SECONDS) -> bool:
+    """True when ``pid`` is the gateway the updater's relaunch just started."""
+    marker = recent_relaunch(clover_home=clover_home, grace=grace)
+    if marker is None or pid <= 0:
+        return False
+    try:
+        import psutil  # type: ignore
+        created = float(psutil.Process(int(pid)).create_time())
+    except Exception:
+        return False
+    # Slack for create_time rounding; a gateway older than the claim is the
+    # pre-update process and stays fair game for a takeover.
+    return created >= float(marker.get("at") or 0.0) - 2.0
+
+
+def _relaunch_owned_elsewhere(beacon: Path) -> bool:
+    """Another relauncher claimed this update's relaunch and may still be starting."""
+    return recent_relaunch(clover_home=beacon.parent) is not None
 
 
 def _pid_alive(pid: int) -> bool:
@@ -520,7 +665,16 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
         age = time.time() - refreshed_at
 
         updater_gone = not _pid_alive(updater_pid)
-        beacon_stale = age > BEACON_STALE_SECONDS
+        identity = None if updater_gone else _updater_identity_alive(data)
+        if identity is None:
+            # Legacy beacon / no psutil: pid liveness, with staleness as the
+            # guard against a recycled PID.
+            beacon_stale = age > BEACON_STALE_SECONDS
+        else:
+            # The pid is live: its create_time says whether it is still OUR
+            # updater (a recycled pid reads as gone).
+            updater_gone = not identity
+            beacon_stale = age > HUNG_UPDATER_SECONDS
 
         if updater_gone or data.get("ready_for_probe") or (beacon_stale and not data.get("pre_pull_sha")):
             if data.get("pre_pull_sha") and data.get("repo"):
@@ -530,6 +684,10 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
                     )
                     if head.returncode == 0 and head.stdout.strip() == data["pre_pull_sha"]:
+                        if not _gateway_running() and _relaunch_owned_elsewhere(beacon):
+                            # The updater's own relaunch is still starting.
+                            time.sleep(poll)
+                            continue
                         if not _gateway_running() and (data.get("gateway_argv") or data.get("windows_services") or data.get("supervisor")):
                             _restart_from_beacon(data)
                         beacon.unlink(missing_ok=True)
@@ -558,6 +716,11 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
             time.sleep(poll)
             if _gateway_running():
                 return "gateway-healthy"
+            if _relaunch_owned_elsewhere(beacon):
+                # One owner per relaunch: the updater already relaunched and
+                # that gateway may still be importing. Wait it out; once the
+                # claim expires with nothing up, fall through and restart.
+                continue
 
             argv = list(data.get("gateway_argv") or [])
             if not argv:
@@ -572,6 +735,7 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
                 )
             else:
                 kwargs["start_new_session"] = True
+            kwargs["env"] = {**os.environ, AUTORELAUNCH_ENV: "1"}
             subprocess.Popen(argv, **kwargs)
             try:
                 beacon.unlink()

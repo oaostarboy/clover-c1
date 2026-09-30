@@ -48,6 +48,8 @@ model:
   # Inference provider selection:
   #   "auto"         - Auto-detect from credentials (default)
   #   "openrouter"   - OpenRouter (requires: OPENROUTER_API_KEY or OPENAI_API_KEY)
+  #   "clover"         - Clover Portal OAuth (requires: clover auth add clover)
+  #   "clover-api"     - Clover Portal API key (requires: CLOVER_API_KEY)
   #   "anthropic"    - Direct Anthropic API (requires: ANTHROPIC_API_KEY)
   #   "openai-codex" - OpenAI Codex (requires: clover auth)
   #   "copilot"      - GitHub Copilot / GitHub Models (requires: GITHUB_TOKEN)
@@ -747,11 +749,11 @@ prompt_caching:
 # browser screenshot analysis, web page summarization, TTS audio-tag insertion,
 # and context compression.
 #
-# By default these use Gemini Flash via OpenRouter and are auto-detected
-# from your credentials.  You do NOT need to change anything here for
-# normal usage.
+# By default these use Gemini Flash via OpenRouter or Clover Portal and are
+# auto-detected from your credentials.  You do NOT need to change anything
+# here for normal usage.
 #
-# WARNING: Overriding these with providers other than OpenRouter
+# WARNING: Overriding these with providers other than OpenRouter or Clover Portal
 # is EXPERIMENTAL and may not work.  Not all models/providers support vision,
 # produce usable summaries, or accept the same API format.  Change at your own
 # risk — if things break, reset to "auto" / empty values.
@@ -761,8 +763,9 @@ prompt_caching:
 # local endpoint for compression (just needs text).
 #
 # Provider options:
-#   "auto"       - Best available: OpenRouter → main endpoint (default)
+#   "auto"       - Best available: OpenRouter → Clover Portal → main endpoint (default)
 #   "openrouter" - Force OpenRouter (requires OPENROUTER_API_KEY)
+#   "clover"       - Force Clover Portal (requires: clover auth add clover)
 #   "gemini"      - Force Google AI Studio direct (requires: GOOGLE_API_KEY or GEMINI_API_KEY)
 #   "ollama-cloud" - Ollama Cloud (requires: OLLAMA_API_KEY)
 #   "codex"       - Force Codex OAuth (requires: clover model → Codex).
@@ -772,8 +775,8 @@ prompt_caching:
 #                  endpoint.  Also falls back to Codex OAuth and API-key providers.
 #
 # Model: leave empty to use the provider's default.  When empty, OpenRouter
-# uses "google/gemini-3-flash-preview".  Other providers pick a sensible
-# default automatically.
+# uses "google/gemini-3-flash-preview" and Clover uses "gemini-3-flash".
+# Other providers pick a sensible default automatically.
 #
 # auxiliary:
 #   # Image analysis: vision_analyze tool + browser screenshots
@@ -1106,7 +1109,7 @@ agent:
   # Enable verbose logging
   verbose: false
   
-  # Reasoning effort level (OpenRouter)
+  # Reasoning effort level (OpenRouter and Clover Portal)
   # Controls how much "thinking" the model does before responding.
   # Options: "xhigh" (max), "high", "medium", "low", "minimal", "none" (disable)
   reasoning_effort: "medium"
@@ -1201,40 +1204,6 @@ platform_toolsets:
   google_chat: [clover-google_chat]
 
 # =============================================================================
-# Gateway
-# =============================================================================
-# gateway:
-#   # Sliding-window brake on bot-authored inbound messages per conversation.
-#   # {PLATFORM}_ALLOW_BOTS only decides admission, so two fleet bots (or two
-#   # Clover profiles) replying to each other would otherwise ping-pong
-#   # forever. Never affects `clover peer dm` / api_server traffic — only
-#   # platform bot messages count against the budget.
-#   bot_loop_guard:
-#     enabled: true
-#     max_events: 20        # messages allowed inside window_seconds
-#     window_seconds: 300
-#     cooldown_seconds: 600  # how long a tripped conversation stays dropped
-#   # How to handle a DM from someone not on the allowlist: "pair" (default —
-#   # send a pairing code), "decline" (one polite refusal per sender, then
-#   # silent), or "ignore" (say nothing). Whichever you pick, the owner gets a
-#   # WARNING log plus one home-channel line per sender per 24h ("Someone not
-#   # on your allowlist messaged the bot on <platform> (id ...). Ignored."),
-#   # so a mistyped allowlist is never silently invisible. The stranger's
-#   # message content is never forwarded.
-#   unauthorized_dm_behavior: pair
-
-# =============================================================================
-# Cron
-# =============================================================================
-# cron:
-#   # A fire that never reached the model at all (transient DNS/connect
-#   # failure, zero API calls — e.g. right after the machine wakes behind a
-#   # VPN) re-arms at +5/15/30 minutes instead of waiting a full period, then
-#   # falls back to the normal schedule. Never re-runs if any API call was
-#   # made. On by default; set false to disable.
-#   retry_unreachable: true
-
-# =============================================================================
 # Gateway Platform Settings
 # =============================================================================
 # Optional per-platform messaging settings.
@@ -1248,7 +1217,6 @@ platform_toolsets:
 #     guest_mode: false
 #     # allowed_chats: ["-1001234567890"]
 #     extra:
-#       drop_pending_on_cold_boot: false  # Set true to discard messages queued while the gateway was offline on a cold boot (watcher reconnects always preserve them)
 #       disable_link_previews: false  # Set true to suppress Telegram URL previews in bot messages
 #       rich_messages: false          # Bot API 10.1 rich messages (tables/task lists/details/math); default false for copyable legacy MarkdownV2, set true to opt in
 #       rich_drafts: false            # Experimental rich draft previews during Telegram DM streaming; default false because Telegram Desktop/macOS can visually overlay draft frames
@@ -1601,22 +1569,6 @@ delegation:
   #                                           # delegation.model to an inexpensive one — children carry the
   #                                           # vast majority of tokens, so this is where spend is cut while
   #                                           # planning quality stays with the frontier parent.
-  #
-  # Value-routed model tiers (on by default): the parent can pass a per-task
-  # `tier` to delegate_task instead of a fixed model. Each tier is an ordered
-  # list of "provider/model" candidates; the first one the user is actually
-  # signed in to wins. task.tier beats delegation.provider/model above, which
-  # in turn beats plain parent inheritance. Only tiers that resolve to an
-  # authenticated candidate are advertised to the model.
-  # tiers:
-  #   deep:  ["anthropic/claude-opus-5-5", "openai-codex/gpt-6-sol"]        # hard design, tricky bugs, tiebreaks
-  #   code:  ["anthropic/claude-sonnet-5", "openai-codex/gpt-6-luna"]       # write/fix code, tests
-  #   read:  ["gemini/gemini-3.8-pro", "anthropic/claude-sonnet-5"]         # big diffs, long docs, research reading
-  #   check: ["xai/grok-4.7", "xai-oauth/grok-4.7", "gemini/gemini-3.8-pro"] # adversarial review, find holes
-  #   fast:  ["gemini/gemini-3.8-flash-high", "openai-codex/gpt-6-luna"]    # quick lookups, visual checks, cheap chores
-  #                                           # Setting a tier name here REPLACES the built-in list of the same
-  #                                           # name (lists don't merge); add your own tier names freely.
-  #                                           # Set `tiers: {}` to disable tiering entirely.
 
 # =============================================================================
 # Honcho Integration (Cross-Session User Modeling)
@@ -1648,11 +1600,7 @@ display:
   #   verbose: Full args, results, and debug logs (same as /verbose)
   #   log:     Silent in chat; append every tool call to ~/.clover/logs/tool_calls.log (gateway only)
   # Toggle at runtime with /verbose in the CLI
-  # Unset by default: the CLI uses "all" and each messaging platform keeps its
-  # own default (e.g. "off" where progress bubbles can't be edited). Setting
-  # it here overrides EVERY platform's default; prefer
-  # display.platforms.<platform>.tool_progress.
-  # tool_progress: all
+  tool_progress: all
 
   # Per-platform defaults can be quieter than the global setting. Telegram
   # tunes for mobile: tool_progress and busy_ack_detail default off (no
@@ -1668,45 +1616,16 @@ display:
   # removes the tool-progress bubble, "⏳ Still working..." notices, and
   # context-pressure status messages once the final reply has been delivered —
   # keeping long-running turns visible live, then tidy afterward. Failed runs
-  # leave the bubbles in place as breadcrumbs. The default is per platform:
-  # ON for Telegram, Discord and Slack (the per-turn "🛠 N tool calls" summary
-  # card), off elsewhere. A value set HERE overrides every platform's default,
-  # so leave it unset and use the per-platform override instead:
+  # leave the bubbles in place as breadcrumbs. Off by default.
+  # Per-platform override: display.platforms.telegram.cleanup_progress
   #   true:  Delete tracked progress/status bubbles on successful turn
-  #   false: Leave everything in place
+  #   false: Leave everything in place (default)
   # Example:
   #   display:
   #     platforms:
   #       telegram:
-  #         cleanup_progress: false
-  # cleanup_progress: false
-
-  # Live delegation activity (gateway only). When the agent delegates work
-  # (delegate_task, or agent CLIs registered with terminal(agent_job=...)),
-  # the chat gets ONE editable card per delegation: a counts-only header, what
-  # each ACTIVE worker is doing now (title, model, current tool with a
-  # redacted one-line summary, or what it is waiting on), and the latest
-  # attributed tool results and public progress notes. Finished workers leave
-  # the card; each result arrives once as a short message ("reported done …
-  # awaiting parent review", failed, cancelled, stalled). The card ends as one
-  # final summary. Private reasoning and raw tool output are never shown.
-  # See docs/delegation-activity.md.
-  #   auto: shown wherever tool_progress is shown in chat; silent where
-  #         tool_progress is off or log (default — existing opt-outs stay quiet)
-  #   on:   always show (even with tool_progress off)
-  #   off:  never show
-  # Per-platform override: display.platforms.<platform>.delegation_activity
-  delegation_activity: auto
-  # Quiet-period refresh of delegation cards, in seconds (edits only, never new
-  # messages). Keeps elapsed time and waiting/stalled status truthful.
-  # 0 disables the heartbeat.
-  delegation_heartbeat_seconds: 60
-
-  # Live 🏛 council card (/council and council runs the agent starts).
-  #   v2:      one collapsible card with the question, each seat and its model;
-  #            follows the latest message and ends as ONE message (card + answer)
-  #   classic: the compact stage-only card, answer as a separate message
-  council_card: v2
+  #         cleanup_progress: true
+  cleanup_progress: false
 
   # Natural mid-turn assistant updates.
   # On gateway platforms, when true, completed assistant status messages are
@@ -1716,12 +1635,7 @@ display:
   # Independent of tool_progress and gateway streaming.
   #   true:  Keep/send mid-turn assistant updates (default)
   #   false: Only keep/send the final response
-  # Default per platform (on for editable chats, off where messages are
-  # permanent). Setting it here overrides every platform's default.
-  # interim_assistant_messages: true
-
-  # Live "🧠" progress lines from provider reasoning summaries (default off).
-  live_reasoning: false
+  interim_assistant_messages: true
 
   # Gateway-only long-running status heartbeats.
   # When false, the platform does not receive periodic "⏳ Working — N min"
@@ -1729,17 +1643,15 @@ display:
   # heartbeat edits a single message in place (where the adapter supports
   # editing) instead of posting a new bubble each interval.
   # Default: true everywhere, including Telegram (silent agents are worse
-  # than a single edit-in-place heartbeat). Default per platform; setting it
-  # here overrides every platform's default.
-  # long_running_notifications: true
+  # than a single edit-in-place heartbeat).
+  long_running_notifications: true
 
   # Include detailed iteration/tool/status context in busy acknowledgments
   # and long-running heartbeats. When true, busy acks show "iteration 21/60,
   # terminal, 10 min" and the heartbeat shows "⏳ Working — 12 min,
   # iteration 21/60, terminal". When false (Telegram default), both stay
   # terse: "Interrupting current task" and "⏳ Working — 12 min, terminal".
-  # Default per platform; setting it here overrides every platform's default.
-  # busy_ack_detail: true
+  busy_ack_detail: true
 
   # What Enter does when Clover is already busy (CLI and gateway platforms).
   #   interrupt: Interrupt the current run and redirect Clover (default)
@@ -1944,11 +1856,11 @@ updates:
 # Web Dashboard
 # =============================================================================
 # OAuth gate configuration for `clover dashboard --host <non-loopback>`.
-# A configured dashboard_auth OAuth provider plugin reads these on startup;
-# settings here are the canonical surface. Each can be overridden by an
-# environment variable:
+# The bundled Clover Portal plugin reads these on startup; settings here are
+# the canonical surface. Each can be overridden by an environment variable:
 #
 #   dashboard.oauth.client_id   <-  CLOVER_DASHBOARD_OAUTH_CLIENT_ID
+#   dashboard.oauth.portal_url  <-  CLOVER_DASHBOARD_PORTAL_URL
 #   dashboard.public_url        <-  CLOVER_DASHBOARD_PUBLIC_URL
 #
 # Env wins when set to a non-empty value. This is what Fly.io's platform-
@@ -1961,7 +1873,8 @@ updates:
 #
 # dashboard:
 #   oauth:
-#     client_id: ""    # agent:{instance_id}; set by your OAuth provider plugin
+#     client_id: ""    # agent:{instance_id}; Portal provisions this at deploy
+#     portal_url: ""   # blank → default 
 #
 #   # Force the absolute base URL the OAuth callback (and any other public
 #   # URL the dashboard hands to external systems) is built from. Set this

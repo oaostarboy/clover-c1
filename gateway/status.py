@@ -1200,6 +1200,22 @@ def write_runtime_status(
         pass
 
 
+def record_gateway_starting() -> None:
+    """Persist a fresh process's "starting" state.
+
+    A fresh process has no restart pending. The previous life's planned stop
+    must not leave the file reading ``restart_requested`` forever: after a
+    Windows update the state stayed "stopped / restart_requested" with no
+    restart coming, which read as a gateway stuck mid-restart.
+    """
+    write_runtime_status(
+        gateway_state="starting",
+        exit_reason=None,
+        restart_requested=False,
+        clear_profile_platforms=True,
+    )
+
+
 def read_runtime_status(
     path: Optional[Path] = None,
     *,
@@ -2450,6 +2466,19 @@ def consume_planned_stop_marker_for_self() -> bool:
         start_time_field="target_start_time",
         ttl_s=_PLANNED_STOP_MARKER_TTL_S,
     )
+
+
+def planned_stop_marker_reason() -> Optional[str]:
+    """Return the ``reason`` recorded in the planned-stop marker, if any.
+
+    The updater writes ``reason: "update"`` so the gateway can let an
+    active turn finish before stopping. Read-only; never raises.
+    """
+    record = _read_json_file(_get_planned_stop_marker_path())
+    if not isinstance(record, dict):
+        return None
+    reason = record.get("reason")
+    return str(reason) if reason else None
 
 
 def planned_stop_marker_targets_self() -> bool:

@@ -1175,21 +1175,31 @@ def install(
     raise RuntimeError(f"Windows gateway install failed: {detail}")
 
 
-def _wait_for_gateway_ready(timeout_s: float = 6.0, interval_s: float = 0.4) -> list[int]:
-    """Poll for a live gateway process for up to ``timeout_s`` seconds.
+def _wait_for_gateway_ready(timeout_s: float = 45.0, interval_s: float = 0.5) -> list[int]:
+    """Wait up to ``timeout_s`` seconds for a gateway that is really running.
 
-    Returns the list of PIDs found. Empty list means nothing came up in
-    time — the caller should surface that to the user as a failed start.
+    "Really running" means a live process owns this profile's gateway PID
+    file: it got through its imports and the duplicate-instance guard. A
+    process-table match is NOT enough: on Windows the update's own kill sweep
+    ended freshly spawned gateways before they wrote a single log line, and
+    "✓ Gateway started" was still printed for them (Windows 11 report, D4/D9).
+
+    Returns ``[pid]`` of the claimed gateway, or an empty list when nothing
+    claimed in time -- the caller should report a failed start.
     """
-    from clover_cli.gateway import find_gateway_pids
+    from gateway.status import get_running_pid
 
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        pids = list(find_gateway_pids())
-        if pids:
-            return pids
+    deadline = time.time() + max(float(timeout_s), 0.0)
+    while True:
+        try:
+            pid = get_running_pid()
+        except Exception:
+            pid = None
+        if pid is not None:
+            return [int(pid)]
+        if time.time() >= deadline:
+            return []
         time.sleep(interval_s)
-    return []
 
 
 def _report_gateway_start(via: str) -> None:
@@ -1197,7 +1207,7 @@ def _report_gateway_start(via: str) -> None:
     if pids:
         print(f"✓ Gateway started via {via} (PID: {', '.join(map(str, pids))})")
     else:
-        print(f"⚠ Launched gateway via {via}, but no process detected after 6s.")
+        print(f"⚠ Launched gateway via {via}, but it did not come up (no running gateway claimed it).")
         print("  Check the log for startup errors:")
         from clover_cli.config import get_clover_home
         print(f"    type {Path(get_clover_home())}\\logs\\gateway.log")
@@ -1703,7 +1713,7 @@ def restart() -> None:
     time.sleep(1.0)
     start()
 
-    if not _wait_for_gateway_ready(timeout_s=15.0):
+    if not _wait_for_gateway_ready():
         raise RuntimeError(
             "Gateway restart did not produce a running gateway process. "
             "Check logs/gateway.log and run `clover gateway status`."

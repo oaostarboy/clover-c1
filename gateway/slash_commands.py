@@ -1886,9 +1886,43 @@ class GatewaySlashCommandsMixin:
             "  /platform resume <name> — re-queue a paused platform"
         )
 
+    # A lifecycle command (/update, /restart) sent while the gateway was down
+    # is replayed at the next boot (Telegram keeps updates queued across a
+    # cold boot). Running it then is a surprise restart the user did not ask
+    # for NOW: Emilio's offline /update re-ran at boot and took the bot down
+    # again (Windows 11 report, D7). Older than this, and sent before this
+    # process started, it is skipped with a note instead.
+    _STALE_OFFLINE_COMMAND_SECONDS = 120.0
+
+    def _is_stale_offline_command(self, event: MessageEvent) -> bool:
+        """True for a command sent before this gateway started and > 2 minutes ago."""
+        import time as _time
+        from datetime import datetime as _dt
+
+        ts = getattr(event, "timestamp", None)
+        if not isinstance(ts, _dt):
+            return False
+        try:
+            sent_at = ts.timestamp()  # tz-aware as UTC; naive as local time
+        except (OverflowError, OSError, ValueError):
+            return False
+        started_at = float(getattr(self, "_startup_time", 0.0) or 0.0)
+        if not started_at or sent_at >= started_at:
+            return False
+        return _time.time() - sent_at > self._STALE_OFFLINE_COMMAND_SECONDS
+
+    def _stale_offline_command_reply(self, command: str) -> str:
+        logger.info("Skipping /%s sent while the gateway was offline (replayed at boot)", command)
+        return (
+            f"I skipped an old /{command} from while I was offline; "
+            "send it again if you still want it."
+        )
+
     async def _handle_restart_command(self, event: MessageEvent) -> Union[str, EphemeralReply]:
         """Handle /restart command - drain active work, then restart the gateway."""
         from gateway.run import _clover_home
+        if self._is_stale_offline_command(event):
+            return self._stale_offline_command_reply("restart")
         # Defensive idempotency check: if the previous gateway process
         # recorded this same /restart (same platform + update_id) and the new
         # process is seeing it *again*, this is a re-delivery caused by PTB's
@@ -6544,6 +6578,9 @@ class GatewaySlashCommandsMixin:
         import json
         import shutil
         import subprocess
+
+        if self._is_stale_offline_command(event):
+            return self._stale_offline_command_reply(action)
         from datetime import datetime
         from clover_cli.config import is_managed, format_managed_message
 
@@ -6615,6 +6652,11 @@ class GatewaySlashCommandsMixin:
         # we're already inside gateway/run.py's update path which is async,
         # so the simplest correct thing is: launch an inline Python helper
         # that runs the command and writes both outputs.
+        from clover_cli.update_contract import drop_update_handoff_env
+
+        # A gateway relaunched by an update's hand-off child inherits that
+        # child's CLOVER_UPDATE_REEXEC; this updater is a fresh run.
+        spawn_env = drop_update_handoff_env(dict(os.environ))
         try:
             if sys.platform == "win32":
                 import textwrap
@@ -6640,17 +6682,35 @@ class GatewaySlashCommandsMixin:
                         f.write(str(rc))
                     """
                 ).strip()
-                subprocess.Popen(
-                    [
-                        sys.executable, "-c", helper,
-                        str(output_path), str(exit_code_path),
-                        sys.executable, "-m", "clover_cli.main",
-                        action, *( ["--gateway"] if action == "update" else [] ),
-                    ],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    **windows_detach_popen_kwargs(),
-                )
+                _update_argv = [
+                    sys.executable, "-c", helper,
+                    str(output_path), str(exit_code_path),
+                    sys.executable, "-m", "clover_cli.main",
+                    action, *( ["--gateway"] if action == "update" else [] ),
+                ]
+                try:
+                    subprocess.Popen(
+                        _update_argv,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        env=spawn_env,
+                        **windows_detach_popen_kwargs(),
+                    )
+                except OSError:
+                    # A job that refuses CREATE_BREAKAWAY_FROM_JOB fails the
+                    # spawn with access denied; the rest of the detach
+                    # still keeps the updater alive across the gateway stop.
+                    from clover_cli._subprocess_compat import (
+                        windows_detach_flags_without_breakaway,
+                    )
+
+                    subprocess.Popen(
+                        _update_argv,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        env=spawn_env,
+                        creationflags=windows_detach_flags_without_breakaway(),
+                    )
             else:
                 clover_cmd_str = " ".join(shlex.quote(part) for part in clover_cmd)
                 update_cmd = (
@@ -6670,6 +6730,7 @@ class GatewaySlashCommandsMixin:
                         [setsid_bin, "bash", "-c", update_cmd],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        env=spawn_env,
                         start_new_session=True,
                     )
                 else:
@@ -6678,6 +6739,7 @@ class GatewaySlashCommandsMixin:
                         ["bash", "-c", update_cmd],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        env=spawn_env,
                         start_new_session=True,
                     )
         except Exception as e:

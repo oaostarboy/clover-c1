@@ -85,6 +85,13 @@ _ALLOWED_DELETES = {
         "shutil.rmtree(dst, ignore_errors=True)",  # failed update staging destination
         "os.remove(dst)",  # failed update staging file
         "cache_file.unlink()",  # transient update cache
+        # Windows clover.exe hand-off: the parent's gateway-resume token
+        # (CLOVER_HOME/.clover-update-handoff-resume.json), consumed once by
+        # the venv child. Fixed name, written only by the updater.
+        "_handoff_resume_path().unlink(missing_ok=True)",
+        # Venv-holder refusal details (CLOVER_HOME/.update_refusal.json),
+        # written by the updater for the chat notice; cleared at run start.
+        "(get_clover_home() / UPDATE_REFUSAL_NAME).unlink(missing_ok=True)",
         # adopt_non_git_install: removes ONLY the .git it just created (it
         # refuses to run when .git already exists), never user files.
         "shutil.rmtree(root / '.git', ignore_errors=True)",
