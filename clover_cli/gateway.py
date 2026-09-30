@@ -951,6 +951,38 @@ def _filter_venv_launcher_stubs(pids: list[int]) -> list[int]:
     return [p for p in pids if p not in drop]
 
 
+def _gateway_pid_belongs_to_install(pid: int) -> bool:
+    """Conservative Linux ownership check, including for pre-fix updaters.
+
+    The old updater imports this module afresh after pulling but retains its
+    own unscoped kill loop. Filter discovery here, before that loop sees PIDs.
+    Never resolve venv interpreter symlinks: two installs can share base Python.
+    """
+    try:
+        args = [os.fsdecode(arg) for arg in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if arg]
+        if not args or not os.path.isabs(args[0]):
+            return False
+        executable = Path(os.path.abspath(args[0]))
+        expected = Path(os.path.abspath(sys.executable))
+        if sys.prefix != sys.base_prefix:
+            return executable.parent == expected.parent and (
+                executable == expected
+                or executable.name in {"python", "python3", "clover"}
+                or executable.name.startswith("python3.")
+            )
+        # Shared/system Python does not establish installation ownership.
+        # Require the actual source entrypoint or module search directory.
+        entries = {str(PROJECT_ROOT / "clover_cli" / "main.py"), str(PROJECT_ROOT / "gateway" / "run.py")}
+        if len(args) > 1 and args[1] in entries:
+            return True
+        return (
+            len(args) > 2 and args[1:3] == ["-m", "clover_cli.main"]
+            and Path(f"/proc/{pid}/cwd").resolve() == PROJECT_ROOT
+        )
+    except (OSError, ValueError):
+        return False
+
+
 def find_gateway_pids(
     exclude_pids: set | None = None, all_profiles: bool = False
 ) -> list:
@@ -959,9 +991,11 @@ def find_gateway_pids(
     Args:
         exclude_pids: PIDs to exclude from the result (e.g. service-managed
             PIDs that should not be killed during a stale-process sweep).
-        all_profiles: When ``True``, return gateway PIDs across **all**
-            profiles (the pre-7923 global behaviour).  ``clover update``
-            needs this because a code update affects every profile.
+        all_profiles: When ``True``, return gateway PIDs across all profiles
+            of this installation (Linux), not unrelated installs on the host.
+            ``clover update`` needs this because code updates affect every
+            profile sharing the installation. On other platforms the existing
+            process-discovery behavior is unchanged.
             When ``False`` (default), only PIDs belonging to the current
             Clover profile are returned.
     """
@@ -986,6 +1020,8 @@ def find_gateway_pids(
         include_restart_managers=include_restart_managers,
     ):
         _append_unique_pid(pids, pid, _exclude)
+    if all_profiles and sys.platform.startswith("linux") and not is_windows() and not is_macos():
+        pids = [pid for pid in pids if _gateway_pid_belongs_to_install(pid)]
     return pids
 
 
