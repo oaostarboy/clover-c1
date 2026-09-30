@@ -644,8 +644,8 @@ def test_completion_notification_trims_subagent_output_wall():
         _unregister_subagent("sa-2-attr0004")
 
 
-def test_parent_owned_process_notification_unchanged():
-    """Processes NOT started by a subagent keep the exact legacy shape."""
+def test_parent_owned_process_notification_keeps_payload_and_silence_guidance():
+    """Parent-owned completions preserve payload and name the silence marker."""
     from tools.process_registry import format_process_notification
 
     text = format_process_notification(
@@ -661,7 +661,9 @@ def test_parent_owned_process_notification_unchanged():
     assert text is not None
     assert "Started by subagent" not in text
     assert text.startswith("[IMPORTANT: Background process proc_parentowned")
-    assert "Command: make build\nOutput:\nok]" in text
+    assert "Command: make build\nOutput:\nok\n" in text
+    assert "[SILENT]" in text
+    assert "must still be reported" in text
 
 
 # ---------------------------------------------------------------------------

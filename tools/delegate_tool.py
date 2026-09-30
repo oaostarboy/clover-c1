@@ -5287,7 +5287,7 @@ def _build_top_level_description(
         "several run in parallel (limit in the tasks description).\n\n"
         "Runs in the background: dispatch returns immediately with live "
         "transcript paths. One subagent's result re-enters on its own. "
-        "Several each re-enter as that child finishes, not as one combined "
+        "Each returns when finished, not as one combined "
         "message at the end. Do NOT wait or poll; continue other work. "
         "While children run, `action` "
         "(list/steer/stop) controls them live — steer when a transcript shows "
