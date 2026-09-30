@@ -4224,15 +4224,16 @@ def delegate_task(
             except Exception as e:
                 logger.debug("Progress callback queued relay failed: %s", e)
 
-    def _execute_and_aggregate(*, honor_parent_interrupt: bool = True) -> dict:
+    def _execute_and_aggregate(
+        *, honor_parent_interrupt: bool = True, on_child_complete=None
+    ) -> dict:
         """Run all built children (1 or N), join on them, aggregate results,
         fire subagent_stop hooks + cost rollup, and return the combined result
         dict. Used by BOTH the synchronous path and the background runner. In
         the background case this whole function runs on the daemon executor, so
-        the parent turn isn't blocked — but the batch still JOINS on itself
-        here (all children must finish) before producing ONE consolidated
-        results block. That is the contract: fan-out runs in the background,
-        waits on each other, and returns together.
+        the parent turn isn't blocked. Background fan-outs publish each
+        completed child before the join; synchronous callers still receive
+        the combined results after all children finish.
         """
         if n_tasks == 1:
             # Single task -- run directly (no thread pool overhead)
@@ -4321,6 +4322,11 @@ def delegate_task(
                                     ),
                                 }
                             results.append(entry)
+                            if on_child_complete is not None:
+                                try:
+                                    on_child_complete(entry)
+                                except Exception:
+                                    logger.exception("Could not publish child completion; batch will retain result")
                             completed_count += 1
                         break
 
@@ -4346,6 +4352,11 @@ def delegate_task(
                                 ),
                             }
                         results.append(entry)
+                        if on_child_complete is not None:
+                            try:
+                                on_child_complete(entry)
+                            except Exception:
+                                logger.exception("Could not publish child completion; batch will retain result")
                         completed_count += 1
 
                         # Print per-task completion line above the spinner
@@ -4382,7 +4393,8 @@ def delegate_task(
         # headroom (split across the batch) before they enter the parent's
         # conversation. Full text is spilled to disk so nothing is lost.
         # Covers both the single-task and batch paths. See PR #9126.
-        _finalize_child_results(results, task_list, children, parent_agent)
+        if on_child_complete is None:
+            _finalize_child_results(results, task_list, children, parent_agent)
 
         total_duration = round(time.monotonic() - overall_start, 2)
 
@@ -4414,13 +4426,8 @@ def delegate_task(
             combined["live_transcripts"] = list(live_paths)
         return combined
 
-    # ----- Background dispatch: run the WHOLE batch as one async unit -----
-    # When background is true, the entire fan-out runs on the daemon executor
-    # via a single async delegation. _execute_and_aggregate() joins on every
-    # child and produces ONE consolidated results block, which re-enters the
-    # conversation as a single message when ALL children finish. The chat is
-    # not blocked in the meantime. This is the contract: dispatch N subagents,
-    # keep chatting, get the combined summaries back together at the end.
+    # Background dispatch owns the batch lifecycle in one async slot while
+    # publishing each terminal child independently before siblings finish.
     if background:
         from tools.async_delegation import dispatch_async_delegation_batch
         from tools.approval import get_current_session_key
@@ -4534,7 +4541,31 @@ def delegate_task(
         def _batch_runner():
             # This batch is detached from the foreground turn. Its lifecycle is
             # owned by the async registry and cancelled only via _batch_interrupt.
-            return _execute_and_aggregate(honor_parent_interrupt=False)
+            if n_tasks == 1:
+                return _execute_and_aggregate(honor_parent_interrupt=False)
+
+            from tools.async_delegation import publish_batch_child_completion
+
+            def _publish_child(entry):
+                idx = entry["task_index"]
+                _finalize_child_results(
+                    [entry], task_list, [children[idx]], parent_agent
+                )
+                writer = live_writers[idx] if idx < len(live_writers) else None
+                if writer is not None:
+                    try:
+                        writer.finalize(entry)
+                    except Exception:
+                        logger.debug("Live transcript finalize failed", exc_info=True)
+                    if idx < len(live_paths):
+                        entry["live_transcript"] = live_paths[idx]
+                publish_batch_child_completion(
+                    entry, delegation_id=_batch_delegation_id
+                )
+
+            return _execute_and_aggregate(
+                honor_parent_interrupt=False, on_child_complete=_publish_child
+            )
 
         def _batch_interrupt():
             for _c in _child_agents:
@@ -4578,6 +4609,8 @@ def delegate_task(
             return tuple(parts), in_tool
 
         _goals = [t["goal"] for t in task_list]
+        from tools.async_delegation import _new_delegation_id
+        _batch_delegation_id = live_deleg_id or _new_delegation_id()
         dispatch = dispatch_async_delegation_batch(
             goals=_goals,
             context=context,
@@ -4595,7 +4628,7 @@ def delegate_task(
             max_async_children=_get_max_async_children(),
             # Reuse the live-transcript directory's id (when created) so the
             # returned delegation_id matches cache/delegation/live/<id>/.
-            delegation_id=live_deleg_id,
+            delegation_id=_batch_delegation_id,
             progress_fn=_batch_progress,
         )
 

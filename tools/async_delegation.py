@@ -291,16 +291,15 @@ def _prune_durable_records() -> None:
             (cutoff,),
         )
         terminal_count = conn.execute(
-            "SELECT COUNT(*) FROM async_delegations WHERE state NOT IN ('running','finalizing')"
+            "SELECT COUNT(*) FROM async_delegations WHERE delivery_state='delivered'"
         ).fetchone()[0]
         excess = max(0, terminal_count - _MAX_RETAINED_COMPLETED)
         if excess:
             conn.execute(
                 """DELETE FROM async_delegations WHERE delegation_id IN (
                      SELECT delegation_id FROM async_delegations
-                     WHERE state NOT IN ('running','finalizing')
-                     ORDER BY CASE delivery_state WHEN 'delivered' THEN 0 ELSE 1 END,
-                              updated_at ASC LIMIT ?
+                     WHERE delivery_state='delivered'
+                     ORDER BY updated_at ASC LIMIT ?
                    )""",
                 (excess,),
             )
@@ -1020,6 +1019,59 @@ def _push_completion_event(
         )
 
 
+def publish_batch_child_completion(
+    result: Dict[str, Any], *, delegation_id: str
+) -> None:
+    """Commit an independent child terminal outcome before publishing its wake.
+
+    Each child has its own claimable ledger row. A dead owner cannot replace a
+    completed sibling with the batch's generic unknown-outcome error.
+    """
+    index = result["task_index"]
+    with _records_lock:
+        parent = dict(_records[delegation_id])
+    goals = parent["goals"]
+    if not isinstance(index, int) or not 0 <= index < len(goals):
+        raise ValueError("Invalid batch child index")
+    child_id = f"{delegation_id}:child:{index}"
+    now = time.time()
+    status = result.get("status") or "error"
+    evt = {
+        "type": "async_delegation", "delegation_id": child_id,
+        "batch_delegation_id": delegation_id, "task_index": index,
+        "session_key": parent.get("session_key", ""),
+        "origin_ui_session_id": parent.get("origin_ui_session_id", ""),
+        "origin_session_id": parent.get("origin_session_id", ""),
+        "parent_session_id": parent.get("parent_session_id"),
+        "goal": goals[index], "context": parent.get("context"),
+        "toolsets": parent.get("toolsets"), "role": parent.get("role"),
+        "model": result.get("model") or parent.get("model"),
+        "status": status, "summary": result.get("summary"),
+        "error": result.get("error"), "api_calls": result.get("api_calls", 0),
+        "duration_seconds": result.get("duration_seconds"),
+        "exit_reason": result.get("exit_reason"),
+        "dispatched_at": parent["dispatched_at"], "completed_at": now,
+    }
+    for key in ("scope_id", "user_id", "user_name"):
+        if parent.get(key):
+            evt[key] = parent[key]
+    with _DB_LOCK, _transaction() as conn:
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO async_delegations
+               (delegation_id, origin_session, origin_ui_session_id,
+                parent_session_id, state, dispatched_at, completed_at, updated_at,
+                event_json, result_json, delivery_state, origin_session_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
+            (child_id, parent.get("session_key", ""),
+             parent.get("origin_ui_session_id", ""), parent.get("parent_session_id"),
+             status, parent["dispatched_at"], now, now, json.dumps(evt),
+             json.dumps(result), parent.get("origin_session_id", "")),
+        )
+    if cursor.rowcount:
+        from tools.process_registry import process_registry
+        process_registry.completion_queue.put(evt)
+
+
 def dispatch_async_delegation_batch(
     *,
     goals: List[str],
@@ -1037,25 +1089,13 @@ def dispatch_async_delegation_batch(
     delegation_id: Optional[str] = None,
     progress_fn: Optional[Callable[[], tuple]] = None,
 ) -> Dict[str, Any]:
-    """Dispatch a WHOLE fan-out batch as ONE background unit.
+    """Dispatch a fan-out batch as one background execution unit.
 
-    Unlike ``dispatch_async_delegation`` (which backs a single subagent),
-    ``runner`` here runs the entire batch — it builds and joins on every child
-    in parallel and returns the combined ``{"results": [...],
-    "total_duration_seconds": N}`` dict that the synchronous path would have
-    returned. We occupy ONE async slot for the whole batch (the in-batch
-    parallelism is bounded separately by ``max_concurrent_children``), so a
-    single ``delegate_task`` fan-out never exhausts the async pool by itself.
-
-    When the batch finishes, a SINGLE completion event is pushed onto the
-    shared ``process_registry.completion_queue`` carrying the full per-task
-    ``results`` list, so the consolidated summaries re-enter the conversation
-    as one message once every child is done — the chat is never blocked while
-    they run.
-
-    Returns ``{"status": "dispatched", "delegation_id": ...}`` on success or
-    ``{"status": "rejected", "error": ...}`` when the async pool is at
-    capacity.
+    Child terminal results may be published independently by the runner while
+    siblings are still running. The final batch event carries only results
+    that were not already published; an empty successful join is acknowledged
+    without a second notification. Legacy runners without child publication
+    still receive the consolidated batch event.
     """
     delegation_id = delegation_id or _new_delegation_id()
     dispatched_at = time.time()
@@ -1223,6 +1263,35 @@ def _push_batch_completion_event(
     ):
         if _k in combined:
             evt[_k] = combined[_k]
+    # A batch launched through delegate_tool publishes each terminal child
+    # independently. Never replay those results again at join time. Preserve
+    # the legacy consolidated block for callers without child publishing and
+    # rescue any result whose child publish failed before the batch joined.
+    with _DB_LOCK, _transaction() as conn:
+        child_ids = {
+            row[0] for row in conn.execute(
+                "SELECT delegation_id FROM async_delegations WHERE delegation_id LIKE ?",
+                (str(event_record.get("delegation_id")) + ":child:%",),
+            )
+        }
+    evt["results"] = [
+        entry for entry in evt["results"]
+        if f"{event_record['delegation_id']}:child:{entry.get('task_index')}" not in child_ids
+    ]
+    if not evt["results"] and not evt.get("error"):
+        # Atomic terminal ack: no empty join event can replay after owner loss.
+        now = time.time()
+        with _DB_LOCK, _transaction() as conn:
+            conn.execute(
+                """UPDATE async_delegations SET state=?, completed_at=?, updated_at=?,
+                   result_json=?, delivery_state='delivered', delivered_at=?
+                   WHERE delegation_id=?""",
+                (status, completed_at, now, json.dumps(combined), now,
+                 event_record["delegation_id"]),
+            )
+        return
+    if len(evt["results"]) != len(combined.get("results") or []):
+        evt["partial_child_delivery"] = True
     _persist_completion(evt, combined)
     try:
         process_registry.completion_queue.put(evt)
