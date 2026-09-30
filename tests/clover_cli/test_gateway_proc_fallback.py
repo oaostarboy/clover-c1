@@ -85,6 +85,28 @@ class TestProcFallback:
         assert 99999 not in pids
         mock_ps.assert_not_called()  # ps must NOT be called when /proc worked
 
+    def test_shared_python_gateway_uses_matching_live_pid_record(self, tmp_path, monkeypatch):
+        """A shared system Python is accepted using its exact live PID record."""
+        import json
+
+        home = tmp_path / "home"
+        home.mkdir()
+        record = {
+            "pid": 12345, "kind": "clover-gateway", "argv": [
+                "/usr/bin/python", "-u", "-m", str(tmp_path / "clover_cli/main.py"), "gateway", "run"
+            ], "start_time": 456, "clover_home": str(home),
+        }
+        (home / "gateway.pid").write_text(json.dumps(record))
+        monkeypatch.setenv("CLOVER_HOME", str(home))
+        monkeypatch.setattr(gateway_mod.os, "getpid", lambda: 999)
+        monkeypatch.setattr(gateway_mod, "_get_ancestor_pids", lambda: set())
+        monkeypatch.setattr(gateway_mod, "_test_start_time_reader", lambda pid: 456, raising=False)
+        assert gateway_mod._persisted_gateway_identity_matches(12345, home, record, lambda pid: 456)
+        assert not gateway_mod._persisted_gateway_identity_matches(12345, home, record, lambda pid: 457)
+        foreign = dict(record, clover_home=str(tmp_path / "foreign"))
+        (home / "gateway.pid").write_text(json.dumps(foreign))
+        assert not gateway_mod._persisted_gateway_identity_matches(12345, home, foreign, lambda pid: 456)
+
 
 
 
