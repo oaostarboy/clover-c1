@@ -496,6 +496,20 @@ TASK_COMPLETION_GUIDANCE = (
 # Ported from cline/cline#11514 ("encourage parallel tool calls"), adapted
 # from Cline's TypeScript tool-surface guidance to clover-c1's Python
 # prompt-assembly architecture.
+PLAN_FIRST_DELEGATION_GUIDANCE = (
+    "# Plan-first delegation\n"
+    "For substantial work, first make a brief plan, then delegate independent "
+    "execution or research with delegate_task when that tool is available. You "
+    "remain responsible for planning, integrating the results, and verifying "
+    "the final outcome; your selected model stays the orchestrator. Handle "
+    "quick answers and genuinely small, single-step tasks directly without "
+    "delegation overhead. Do not delegate merely to satisfy a quota, do not "
+    "delegate work that depends on your own next step, and as a leaf worker do "
+    "not recursively delegate. Respect the user's explicit instructions and "
+    "configured tool availability; never assume another provider or worker "
+    "model is configured."
+)
+
 PARALLEL_TOOL_CALL_GUIDANCE = (
     "# Parallel tool calls\n"
     "When you need several pieces of information that don't depend on each "
