@@ -65,7 +65,21 @@ def test_system_python_requires_matching_source_or_module_directory(monkeypatch,
     }
     monkeypatch.setattr(Path, "read_bytes", lambda p: commands[str(p)])
     original_resolve = Path.resolve
-    monkeypatch.setattr(Path, "resolve", lambda p, *a, **kw: tmp_path if str(p) == "/proc/33/cwd" else (tmp_path / "foreign" if str(p) == "/proc/44/cwd" else original_resolve(p, *a, **kw)))
+    # All PIDs are synthetic: never consult the host's real /proc entries.
+    # Absolute entrypoints must be recognized independently of their cwd.
+    working_directories = {
+        "/proc/11/cwd": tmp_path / "unrelated",
+        "/proc/22/cwd": tmp_path / "unrelated",
+        "/proc/33/cwd": tmp_path,
+        "/proc/44/cwd": tmp_path / "foreign",
+    }
+
+    def resolve(path, *args, **kwargs):
+        if str(path) in working_directories:
+            return working_directories[str(path)]
+        return original_resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
     assert gateway._gateway_pid_belongs_to_install(11)
     assert not gateway._gateway_pid_belongs_to_install(22)
     assert gateway._gateway_pid_belongs_to_install(33)
