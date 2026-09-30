@@ -15,6 +15,7 @@ jobs:
     env:
       FROM_SHA: c200294b5ed85a9b21410c85b2b76191b6a2e29a
       TO_BRANCH: fix/release-harness-20260929
+      EXPECTED_TARGET_SHA: fe801ad8bb0c3127094ee88927beaf5477f849f5
       API_PORT: 18791
     steps:
       - name: Install old candidate
@@ -28,6 +29,10 @@ jobs:
           echo "CLOVER_BIN=$HOME/.clover/clover-c1/venv/bin/clover" >> "$GITHUB_ENV"
           "$HOME/.clover/clover-c1/venv/bin/clover" --version
           test "$(git -C "$HOME/.clover/clover-c1" rev-parse HEAD)" = "$FROM_SHA"
+          git -C "$HOME/.clover/clover-c1" checkout -b "$TO_BRANCH" "$FROM_SHA"
+          git -C "$HOME/.clover/clover-c1" branch --set-upstream-to="origin/$TO_BRANCH" "$TO_BRANCH"
+          test "$(git -C "$HOME/.clover/clover-c1" rev-parse HEAD)" = "$FROM_SHA"
+          test "$(git -C "$HOME/.clover/clover-c1" rev-parse --abbrev-ref --symbolic-full-name '@{u}')" = "origin/$TO_BRANCH"
       - name: Start real gateway
         shell: bash
         run: |
@@ -80,21 +85,41 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            cat > "$RUNNER_TEMP/watch-unrelated.py" <<'PY'
+          import json, os, socket, subprocess, sys, time
+          home=os.environ['OTHER_HOME']; unit=os.environ['OTHER_UNIT']; expected=os.environ['OTHER_PID']; sha=os.environ['FROM_SHA']
+          sentinel=os.path.join(os.environ['RUNNER_TEMP'],'unrelated-gateway-monitor.failed')
+          while os.path.exists(os.path.join(os.environ['RUNNER_TEMP'],'unrelated-gateway-monitor.running')):
+              try:
+                  pid=subprocess.check_output(['systemctl','--user','show',unit,'--property=MainPID','--value'],text=True).strip()
+                  assert pid==expected and pid!='0', f'MainPID changed: {pid}'
+                  subprocess.run(['systemctl','--user','is-active','--quiet',unit],check=True)
+                  with socket.create_connection(('127.0.0.1',18792),2): pass
+                  assert subprocess.check_output(['git','-C',os.environ['OTHER_INSTALL'],'rev-parse','HEAD'],text=True).strip()==sha
+                  state=json.load(open(os.path.join(home,'gateway_state.json')))
+                  assert int(state.get('pid',-1))==int(expected) and state.get('gateway_state')=='running', state
+                  rows=subprocess.check_output(['ps','-axo','pid=,command='],text=True).splitlines()
+                  own=[r for r in rows if os.environ['OTHER_INSTALL'] in r and 'gateway' in r and ' run' in r and ' update ' not in r]
+                  assert len(own)==1, f'expected one unrelated gateway process: {own}'
+              except Exception as e:
+                  open(sentinel,'w').write(str(e)); sys.exit(1)
+              time.sleep(1)
+          PY
+            touch "$RUNNER_TEMP/unrelated-gateway-monitor.running"
+            python3 "$RUNNER_TEMP/watch-unrelated.py" > "$RUNNER_TEMP/unrelated-gateway-monitor.log" 2>&1 &
+            echo "$!" > "$RUNNER_TEMP/unrelated-gateway-monitor.pid"
+            sleep 2
+            test ! -e "$RUNNER_TEMP/unrelated-gateway-monitor.failed"
+          fi
           "$CLOVER_BIN" update --branch "$TO_BRANCH" --yes --gateway
           TARGET_SHA="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+          test "$TARGET_SHA" = "$EXPECTED_TARGET_SHA"
           echo "TARGET_SHA=$TARGET_SHA" >> "$GITHUB_ENV"
-          echo "update landed at $TARGET_SHA"
+          echo "update landed at pinned target $TARGET_SHA"
           if [ "$RUNNER_OS" = "Linux" ]; then
-            AFTER_PID="$(systemctl --user show "$OTHER_UNIT" --property=MainPID --value)"
-            test "$AFTER_PID" = "$OTHER_PID" || { echo "unrelated gateway PID changed: $OTHER_PID -> $AFTER_PID"; exit 1; }
-            systemctl --user is-active --quiet "$OTHER_UNIT"
-            python3 -c "import socket;s=socket.create_connection(('127.0.0.1',18792),2);s.close()"
-            test "$(git -C "$OTHER_INSTALL" rev-parse HEAD)" = "$FROM_SHA"
-            echo "PASS: unrelated custom unit $OTHER_UNIT kept PID $OTHER_PID, API port, and old install SHA"
+            echo "Linux unrelated-unit checks are performed throughout the final health window"
           fi
-          "$CLOVER_BIN" gateway run --replace > "$RUNNER_TEMP/gateway-post-update.log" 2>&1 &
-          echo "$!" > "$RUNNER_TEMP/gateway-post-update.pid"
-          echo "started post-update gateway in --replace mode from $TARGET_SHA"
       - name: Assert post-update gateway health for 90 seconds
         shell: bash
         run: |
@@ -124,9 +149,24 @@ jobs:
               assert state.get('restart_requested') is not True, state
               assert int(state.get('pid',-1)) != pre_pid, f'gateway PID reverted across update: {state}'
               assert state.get('code_sha') == target, f'gateway code_sha={state.get("code_sha")}, wanted {target}; old={pre_sha}'
+              rows=subprocess.check_output(['ps','-axo','pid=,command='],text=True).splitlines()
+              own=[r for r in rows if os.environ['INSTALL_DIR'] in r and 'gateway' in r and ' run' in r and ' update ' not in r]
+              assert len(own)==1, f'expected exactly one gateway process for primary install; found {own}'
+              if os.environ['RUNNER_OS']=='Linux':
+                  other_pid=subprocess.check_output(['systemctl','--user','show',os.environ['OTHER_UNIT'],'--property=MainPID','--value'],text=True).strip()
+                  assert other_pid==os.environ['OTHER_PID'] and other_pid!='0', f'unrelated unit PID changed: {other_pid}'
+                  subprocess.run(['systemctl','--user','is-active','--quiet',os.environ['OTHER_UNIT']],check=True)
+                  with socket.create_connection(('127.0.0.1',18792),2): pass
+                  assert subprocess.check_output(['git','-C',os.environ['OTHER_INSTALL'],'rev-parse','HEAD'],text=True).strip()==os.environ['FROM_SHA']
               time.sleep(3)
-          print('PASS: restarted gateway PID and target code SHA verified; API bound, running, no stale restart request, continuous health for 90 seconds')
+          print('PASS: restarted gateway PID and target code SHA verified; exactly one primary process, API bound, running, no stale restart request; Linux unrelated unit preserved; continuous health for 90 seconds')
           PY
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            rm -f "$RUNNER_TEMP/unrelated-gateway-monitor.running"
+            wait "$(cat "$RUNNER_TEMP/unrelated-gateway-monitor.pid")"
+            test ! -e "$RUNNER_TEMP/unrelated-gateway-monitor.failed"
+            echo "PASS: unrelated custom systemd gateway identity, process count, API, state, and code SHA continuously monitored across updater and health window"
+          fi
       - name: Gateway log on failure
         if: failure()
         uses: actions/upload-artifact@v4
