@@ -15,7 +15,7 @@ jobs:
     env:
       FROM_SHA: c200294b5ed85a9b21410c85b2b76191b6a2e29a
       TO_BRANCH: fix/pr63-first-update-isolation
-      EXPECTED_TARGET_SHA: 8a893c8f8c9aaf5308f22548671da553351c3e3b
+      EXPECTED_TARGET_SHA: 9a6537a65c951f966f90d866b401759c7dc063d1
       API_PORT: 18791
     steps:
       - name: Install old candidate
