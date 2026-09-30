@@ -70,3 +70,75 @@ def test_system_python_requires_matching_source_or_module_directory(monkeypatch,
     assert not gateway._gateway_pid_belongs_to_install(22)
     assert gateway._gateway_pid_belongs_to_install(33)
     assert not gateway._gateway_pid_belongs_to_install(44)
+
+
+def test_renamed_setproctitle_argv_is_owned_when_module_cwd_matches(monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway.sys, "prefix", "/usr")
+    monkeypatch.setattr(gateway.sys, "base_prefix", "/usr")
+    monkeypatch.setattr(gateway.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(Path, "read_bytes", lambda p: b"clover\0gateway\0run\0")
+    original_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda p, *a, **kw: tmp_path if str(p) in {"/proc/11/cwd", "/proc/22/cwd"} else original_resolve(p, *a, **kw))
+    assert gateway._gateway_pid_belongs_to_install(11)
+
+
+def test_system_python_service_module_launch_in_install_working_directory(monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway.sys, "prefix", "/usr")
+    monkeypatch.setattr(gateway.sys, "base_prefix", "/usr")
+    monkeypatch.setattr(gateway.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(Path, "read_bytes", lambda p: b"/usr/bin/python3\0-u\0-m\0clover_cli.main\0gateway\0run\0")
+    original_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda p, *a, **kw: tmp_path if str(p) in {"/proc/11/cwd", "/proc/22/cwd"} else original_resolve(p, *a, **kw))
+    assert gateway._gateway_pid_belongs_to_install(11)
+
+
+def test_relative_gateway_script_owned_in_install_working_directory(monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway.sys, "prefix", "/usr")
+    monkeypatch.setattr(gateway.sys, "base_prefix", "/usr")
+    monkeypatch.setattr(gateway.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(Path, "read_bytes", lambda p: b"/usr/bin/python3\0clover_cli/main.py\0gateway\0run\0")
+    original_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda p, *a, **kw: tmp_path if str(p) in {"/proc/11/cwd", "/proc/22/cwd"} else original_resolve(p, *a, **kw))
+    assert gateway._gateway_pid_belongs_to_install(11)
+
+
+def test_virtualenv_service_launch_with_python_options_and_sibling_profile(monkeypatch, tmp_path):
+    executable = tmp_path / "venv/bin/python"
+    monkeypatch.setattr(gateway.sys, "prefix", str(tmp_path / "venv"))
+    monkeypatch.setattr(gateway.sys, "base_prefix", str(tmp_path / "base"))
+    monkeypatch.setattr(gateway.sys, "executable", str(executable))
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", tmp_path)
+    commands = {
+        11: str(executable).encode() + b"\0-u\0-m\0clover_cli.main\0--profile\0sibling\0gateway\0run\0",
+        22: str(executable.parent / "python3.11").encode() + b"\0clover_cli/main.py\0--profile\0sibling\0gateway\0run\0",
+    }
+    monkeypatch.setattr(Path, "read_bytes", lambda p: commands[int(str(p).split("/")[-2])])
+    original_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda p, *a, **kw: tmp_path if str(p) in {"/proc/11/cwd", "/proc/22/cwd"} else original_resolve(p, *a, **kw))
+    assert gateway._gateway_pid_belongs_to_install(11)
+    assert gateway._gateway_pid_belongs_to_install(22)
+
+
+def test_system_python_foreign_script_data_argument_is_not_owned(monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway.sys, "prefix", "/usr")
+    monkeypatch.setattr(gateway.sys, "base_prefix", "/usr")
+    monkeypatch.setattr(gateway.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(Path, "read_bytes", lambda p: b"/usr/bin/python3\0foreign.py\0clover_cli/main.py\0")
+    original_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda p, *a, **kw: tmp_path if str(p) == "/proc/11/cwd" else original_resolve(p, *a, **kw))
+    assert not gateway._gateway_pid_belongs_to_install(11)
+
+
+def test_system_python_command_string_trailing_args_are_not_owned(monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway.sys, "prefix", "/usr")
+    monkeypatch.setattr(gateway.sys, "base_prefix", "/usr")
+    monkeypatch.setattr(gateway.sys, "executable", "/usr/bin/python3")
+    monkeypatch.setattr(gateway, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(Path, "read_bytes", lambda p: b"/usr/bin/python3\0-c\0print('ok')\0clover_cli.main\0")
+    original_resolve = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda p, *a, **kw: tmp_path if str(p) == "/proc/11/cwd" else original_resolve(p, *a, **kw))
+    assert not gateway._gateway_pid_belongs_to_install(11)

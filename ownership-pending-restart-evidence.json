@@ -1,0 +1,31 @@
+{
+  "candidate_base": "9a6537a65c951f966f90d866b401759c7dc063d1",
+  "verification": {
+    "command": "/home/starboy/agents/clover-c1/venv/bin/python -m pytest tests/clover_cli/test_gateway_install_scoped_discovery.py tests/clover_cli/test_update_install_scoped_systemd.py tests/clover_cli/test_update_fleet_restart_pending.py -q",
+    "result": "29 passed in 4.01s",
+    "diff_check": "git diff --check passed"
+  },
+  "ownership_regressions": [
+    "Linux setproctitle short argv title clover accepted only with matching checkout cwd",
+    "shared/system python -u -m clover_cli.main recognized from working directory",
+    "relative clover_cli/main.py recognized from working directory",
+    "venv Python launch with -u and sibling profile accepted; alternate Python executable name in same venv accepted",
+    "existing systemd pending-restart test proves only units whose ExecStart interpreter/entrypoint ownership matches the invoking install are restarted; custom unit and sibling profile cases are covered by fixtures"
+  ],
+  "pending_restart_boundary": {
+    "executed_path": "_restart_systemd_gateway_units_best_effort, invoked from _run_pending_fleet_restart after fresh gateway import and nonempty gateway PID discovery",
+    "safe_boundary": "systemd unit restart helper passes the invoking sys.executable into keyed systemctl property inspection and requires matching ExecStart path/argv module and gateway run/serve; explicit VIRTUAL_ENV must agree; unknown/conflicting metadata is rejected",
+    "unresolved_boundary": "When two different installs intentionally use the exact same system Python executable and module entrypoint, with no distinguishing VIRTUAL_ENV and indistinguishable systemd metadata except CLOVER_HOME/WorkingDirectory, _systemd_unit_owned_by_install does not compare home values. It can classify both as owned. This test shape has not yet been exercised end-to-end through _run_pending_fleet_restart; no live systemd unit or gateway was touched.",
+    "outcome": "Do not claim universal shared-Python install isolation for pending restart. Existing tested venv-separated installs are isolated; exact shared-system-Python ownership remains ambiguous unless home identity is incorporated."
+  },
+  "modified_files": [
+    "clover_cli/gateway.py",
+    "tests/clover_cli/test_gateway_install_scoped_discovery.py"
+  ],
+  "not_done": [
+    "No commit or push",
+    "No hosted Linux/macOS workflow rerun for modified candidate",
+    "No end-to-end pending restart call-path fixture for the shared-system-Python ambiguity",
+    "No live restart, merge, or deployment"
+  ]
+}

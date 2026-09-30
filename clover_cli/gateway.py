@@ -989,8 +989,11 @@ def _gateway_pid_belongs_to_install(pid: int) -> bool:
     """
     try:
         args = [os.fsdecode(arg) for arg in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if arg]
-        if not args or not os.path.isabs(args[0]):
+        if not args:
             return False
+        if not os.path.isabs(args[0]):
+            cwd = Path(f"/proc/{pid}/cwd").resolve()
+            return args[0] == "clover" and cwd == Path(PROJECT_ROOT).resolve()
         executable = Path(os.path.abspath(args[0]))
         expected = Path(os.path.abspath(sys.executable))
         if sys.prefix != sys.base_prefix:
@@ -1000,14 +1003,35 @@ def _gateway_pid_belongs_to_install(pid: int) -> bool:
                 or executable.name.startswith("python3.")
             )
         # Shared/system Python does not establish installation ownership.
-        # Require the actual source entrypoint or module search directory.
-        entries = {str(PROJECT_ROOT / "clover_cli" / "main.py"), str(PROJECT_ROOT / "gateway" / "run.py")}
-        if len(args) > 1 and args[1] in entries:
-            return True
-        return (
-            len(args) > 2 and args[1:3] == ["-m", "clover_cli.main"]
-            and Path(f"/proc/{pid}/cwd").resolve() == PROJECT_ROOT
-        )
+        # Require a source entrypoint or module launched from this checkout.
+        cwd = Path(f"/proc/{pid}/cwd").resolve()
+        project_root = Path(PROJECT_ROOT).resolve()
+        arguments = args[1:]
+        i = 0
+        while i < len(arguments):
+            arg = arguments[i]
+            if arg in {"-W", "-X"}:
+                i += 2
+                continue
+            if arg in {"-c", "-m"}:
+                if i + 1 >= len(arguments):
+                    return False
+                return arg == "-m" and arguments[i + 1] == "clover_cli.main" and cwd == project_root
+            if arg == "--":
+                i += 1
+                if i >= len(arguments):
+                    return False
+                arg = arguments[i]
+            elif arg.startswith("-"):
+                i += 1
+                continue
+            candidate = Path(arg)
+            if arg in {"clover_cli/main.py", "gateway/run.py"}:
+                return cwd == project_root
+            if candidate.is_absolute() and candidate in {project_root / "clover_cli/main.py", project_root / "gateway/run.py"}:
+                return True
+            return False
+        return False
     except (OSError, ValueError):
         return False
 
