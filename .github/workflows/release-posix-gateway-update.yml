@@ -48,7 +48,7 @@ jobs:
           print('PRE_UPDATE_GATEWAY_PID='+str(state['pid']))
           print('PRE_UPDATE_GATEWAY_SHA='+str(state.get('code_sha','')))
           PY
-          echo "gateway pre-update pid=$PRE_UPDATE_GATEWAY_PID sha=$PRE_UPDATE_GATEWAY_SHA API port=$API_PORT bound"
+          echo "Pre-update gateway identity captured; API port $API_PORT is bound"
       - name: Update from old SHA while gateway runs
         shell: bash
         run: |
