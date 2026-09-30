@@ -49,6 +49,33 @@ jobs:
           print('PRE_UPDATE_GATEWAY_SHA='+str(state.get('code_sha','')))
           PY
           echo "Pre-update gateway identity captured; API port $API_PORT is bound"
+      - name: Linux second interpreter and custom systemd gateway
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          OTHER_HOME="$HOME/.clover-other"
+          OTHER_INSTALL="$OTHER_HOME/clover-c1"
+          export CLOVER_HOME="$OTHER_HOME" CLOVER_INSTALL_DIR="$OTHER_INSTALL"
+          bash /tmp/install.sh --branch main --commit "$FROM_SHA" --non-interactive --skip-setup --skip-browser --skip-computer-use
+          mkdir -p "$OTHER_HOME"
+          printf '\nAPI_SERVER_ENABLED=true\nAPI_SERVER_KEY=acceptance-test-other-123456789\nAPI_SERVER_PORT=18792\nAPI_SERVER_HOST=127.0.0.1\n' >> "$OTHER_HOME/.env"
+          UNIT="clover-acceptance-other-$GITHUB_RUN_ID"
+          echo "OTHER_HOME=$OTHER_HOME" >> "$GITHUB_ENV"
+          echo "OTHER_INSTALL=$OTHER_INSTALL" >> "$GITHUB_ENV"
+          echo "OTHER_UNIT=$UNIT" >> "$GITHUB_ENV"
+          systemd-run --user --unit="$UNIT" --collect --setenv="CLOVER_HOME=$OTHER_HOME" --working-directory="$OTHER_INSTALL" "$OTHER_INSTALL/venv/bin/clover" gateway run
+          ready=0
+          for _ in $(seq 1 90); do
+            if python3 -c "import socket;s=socket.create_connection(('127.0.0.1',18792),1);s.close()" 2>/dev/null; then ready=1; break; fi
+            sleep 2
+          done
+          test "$ready" = 1 || { systemctl --user status "$UNIT" --no-pager; exit 1; }
+          OTHER_PID="$(systemctl --user show "$UNIT" --property=MainPID --value)"
+          test "$OTHER_PID" != 0
+          echo "OTHER_PID=$OTHER_PID" >> "$GITHUB_ENV"
+          test "$(git -C "$OTHER_INSTALL" rev-parse HEAD)" = "$FROM_SHA"
+          echo "unrelated install started: custom unit=$UNIT pid=$OTHER_PID second interpreter=$OTHER_INSTALL"
       - name: Update from old SHA while gateway runs
         shell: bash
         run: |
@@ -57,6 +84,14 @@ jobs:
           TARGET_SHA="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
           echo "TARGET_SHA=$TARGET_SHA" >> "$GITHUB_ENV"
           echo "update landed at $TARGET_SHA"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            AFTER_PID="$(systemctl --user show "$OTHER_UNIT" --property=MainPID --value)"
+            test "$AFTER_PID" = "$OTHER_PID" || { echo "unrelated gateway PID changed: $OTHER_PID -> $AFTER_PID"; exit 1; }
+            systemctl --user is-active --quiet "$OTHER_UNIT"
+            python3 -c "import socket;s=socket.create_connection(('127.0.0.1',18792),2);s.close()"
+            test "$(git -C "$OTHER_INSTALL" rev-parse HEAD)" = "$FROM_SHA"
+            echo "PASS: unrelated custom unit $OTHER_UNIT kept PID $OTHER_PID, API port, and old install SHA"
+          fi
       - name: Assert post-update gateway health for 90 seconds
         shell: bash
         run: |
