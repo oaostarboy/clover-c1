@@ -29,6 +29,8 @@ jobs:
           echo "CLOVER_BIN=$HOME/.clover/clover-c1/venv/bin/clover" >> "$GITHUB_ENV"
           "$HOME/.clover/clover-c1/venv/bin/clover" --version
           test "$(git -C "$HOME/.clover/clover-c1" rev-parse HEAD)" = "$FROM_SHA"
+          git -C "$HOME/.clover/clover-c1" fetch origin "$TO_BRANCH:refs/remotes/origin/$TO_BRANCH"
+          test "$(git -C "$HOME/.clover/clover-c1" rev-parse refs/remotes/origin/$TO_BRANCH)" = "$EXPECTED_TARGET_SHA"
           git -C "$HOME/.clover/clover-c1" checkout -b "$TO_BRANCH" "$FROM_SHA"
           git -C "$HOME/.clover/clover-c1" branch --set-upstream-to="origin/$TO_BRANCH" "$TO_BRANCH"
           test "$(git -C "$HOME/.clover/clover-c1" rev-parse HEAD)" = "$FROM_SHA"
@@ -96,15 +98,19 @@ jobs:
                   assert pid==expected and pid!='0', f'MainPID changed: {pid}'
                   subprocess.run(['systemctl','--user','is-active','--quiet',unit],check=True)
                   with socket.create_connection(('127.0.0.1',18792),2): pass
+                  import urllib.request
+                  with urllib.request.urlopen('http://127.0.0.1:18792/health',timeout=2) as response:
+                      assert response.status==200 and json.load(response).get('status')=='ok'
                   assert subprocess.check_output(['git','-C',os.environ['OTHER_INSTALL'],'rev-parse','HEAD'],text=True).strip()==sha
                   state=json.load(open(os.path.join(home,'gateway_state.json')))
                   assert int(state.get('pid',-1))==int(expected) and state.get('gateway_state')=='running', state
-                  rows=subprocess.check_output(['ps','-axo','pid=,command='],text=True).splitlines()
-                  own=[r for r in rows if os.environ['OTHER_INSTALL'] in r and 'gateway' in r and ' run' in r and ' update ' not in r]
-                  assert len(own)==1, f'expected one unrelated gateway process: {own}'
+                  proc_check = "import os,psutil,sys; root=os.path.realpath(sys.argv[1]); out=[]\nfor p in psutil.process_iter(['cmdline','cwd']):\n try:\n  a=p.info['cmdline'] or []; c=os.path.realpath(p.info['cwd'] or '')\n  if ('gateway' in a and 'run' in a and 'update' not in a and (root in ' '.join(a) or c==root)): out.append(p.pid)\n except (psutil.NoSuchProcess,psutil.AccessDenied): pass\nprint(','.join(map(str,out)))"
+                  own=subprocess.check_output([os.path.join(os.environ['OTHER_INSTALL'],'venv','bin','python'),'-c',proc_check,os.environ['OTHER_INSTALL']],text=True).strip().splitlines()[-1]
+                  assert [p for p in own.split(',') if p]==[expected], f'unrelated gateway process set changed: {own}'
               except Exception as e:
                   open(sentinel,'w').write(str(e)); sys.exit(1)
               time.sleep(1)
+          open(os.path.join(os.environ['RUNNER_TEMP'],'unrelated-gateway-monitor.done'),'w').write('ok')
           PY
             touch "$RUNNER_TEMP/unrelated-gateway-monitor.running"
             python3 "$RUNNER_TEMP/watch-unrelated.py" > "$RUNNER_TEMP/unrelated-gateway-monitor.log" 2>&1 &
@@ -144,14 +150,18 @@ jobs:
               raise SystemExit(f'gateway did not restart onto target code within 180 seconds; old pid={pre_pid}, old sha={pre_sha}, state={state}')
           for n in range(30):
               with socket.create_connection(('127.0.0.1',port),2): pass
+              import urllib.request
+              with urllib.request.urlopen(f'http://127.0.0.1:{port}/health',timeout=2) as response:
+                  assert response.status==200 and json.load(response).get('status')=='ok'
               state=json.load(open(os.path.join(home,'gateway_state.json')))
               assert state.get('gateway_state')=='running', state
               assert state.get('restart_requested') is not True, state
               assert int(state.get('pid',-1)) != pre_pid, f'gateway PID reverted across update: {state}'
               assert state.get('code_sha') == target, f'gateway code_sha={state.get("code_sha")}, wanted {target}; old={pre_sha}'
-              rows=subprocess.check_output(['ps','-axo','pid=,command='],text=True).splitlines()
-              own=[r for r in rows if os.environ['INSTALL_DIR'] in r and 'gateway' in r and ' run' in r and ' update ' not in r]
-              assert len(own)==1, f'expected exactly one gateway process for primary install; found {own}'
+              proc_check = "import os,psutil,sys; root=os.path.realpath(sys.argv[1]); out=[]\nfor p in psutil.process_iter(['cmdline','cwd']):\n try:\n  a=p.info['cmdline'] or []; c=os.path.realpath(p.info['cwd'] or '')\n  if ('gateway' in a and 'run' in a and 'update' not in a and (root in ' '.join(a) or c==root)): out.append(p.pid)\n except (psutil.NoSuchProcess,psutil.AccessDenied): pass\nprint(','.join(map(str,out)))"
+              own=subprocess.check_output([os.path.join(home,'clover-c1','venv','bin','python'),'-c',proc_check,os.environ['INSTALL_DIR']],text=True).strip().splitlines()[-1]
+              own_pids=[p for p in own.split(',') if p]
+              assert len(own_pids)==1, f'expected exactly one gateway process for primary install; found {own_pids}'
               if os.environ['RUNNER_OS']=='Linux':
                   other_pid=subprocess.check_output(['systemctl','--user','show',os.environ['OTHER_UNIT'],'--property=MainPID','--value'],text=True).strip()
                   assert other_pid==os.environ['OTHER_PID'] and other_pid!='0', f'unrelated unit PID changed: {other_pid}'
@@ -162,8 +172,15 @@ jobs:
           print('PASS: restarted gateway PID and target code SHA verified; exactly one primary process, API bound, running, no stale restart request; Linux unrelated unit preserved; continuous health for 90 seconds')
           PY
           if [ "$RUNNER_OS" = "Linux" ]; then
+            MONITOR_PID="$(cat "$RUNNER_TEMP/unrelated-gateway-monitor.pid")"
+            kill -0 "$MONITOR_PID"
             rm -f "$RUNNER_TEMP/unrelated-gateway-monitor.running"
-            wait "$(cat "$RUNNER_TEMP/unrelated-gateway-monitor.pid")"
+            for _ in $(seq 1 10); do
+              [ -e "$RUNNER_TEMP/unrelated-gateway-monitor.done" ] && break
+              kill -0 "$MONITOR_PID" || { echo "unrelated monitor exited before clean completion"; exit 1; }
+              sleep 1
+            done
+            test -e "$RUNNER_TEMP/unrelated-gateway-monitor.done"
             test ! -e "$RUNNER_TEMP/unrelated-gateway-monitor.failed"
             echo "PASS: unrelated custom systemd gateway identity, process count, API, state, and code SHA continuously monitored across updater and health window"
           fi
