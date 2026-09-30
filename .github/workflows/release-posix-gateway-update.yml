@@ -170,7 +170,7 @@ jobs:
               if os.path.exists('/proc'):
                   assert live==str(recorded), f'live Linux process start ticks {live} != state {recorded}'
               else:
-                  assert abs(float(live.strip("'"))-float(recorded))<1.0, f'live process start time {live} != state {recorded}'
+                  assert abs(float(live.strip("'"))*100-float(recorded))<1.0, f'live process start time {live} (seconds) != state {recorded} (centiseconds)'
               return live
           deadline=time.time()+180
           state={}
