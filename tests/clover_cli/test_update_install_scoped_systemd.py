@@ -100,6 +100,36 @@ def test_pending_restart_uses_owned_custom_unit(monkeypatch):
     assert [c[-1] for c in calls if "restart" in c] == ["tentacle-one-gateway"]
 
 
+def test_pending_restart_excludes_shared_python_foreign_home_end_to_end(monkeypatch):
+    own_home = "/home/example/.clover"
+    foreign_home = "/home/example/.clover-tentacle"
+    monkeypatch.setattr(update_cmd, "get_clover_home", lambda: Path(own_home))
+    monkeypatch.setattr(update_cmd.sys, "executable", "/usr/bin/python3")
+    units = {
+        "own-custom.service": properties("own-custom.service", "/usr/bin/python3", own_home, include_environment=False),
+        "foreign-custom.service": properties("foreign-custom.service", "/usr/bin/python3", foreign_home, include_environment=False),
+    }
+    calls = []
+    def run(cmd, **kw):
+        calls.append(cmd)
+        if "list-units" in cmd:
+            return SimpleNamespace(returncode=0, stdout="".join(f"{unit} loaded active running\n" for unit in units))
+        if "show" in cmd:
+            return SimpleNamespace(returncode=0, stdout=units[cmd[cmd.index("show") + 1]])
+        return SimpleNamespace(returncode=0, stdout="")
+    monkeypatch.setattr(update_cmd.subprocess, "run", run)
+    monkeypatch.setattr(update_cmd, "_m", lambda: SimpleNamespace(_purge_stale_clover_modules=lambda: None))
+    monkeypatch.setattr(update_cmd, "_own_install_gateway_pids", lambda pids: list(pids))
+    from clover_cli import gateway
+    monkeypatch.setattr(gateway, "_wait_for_gateway_exit", lambda **kw: None)
+    monkeypatch.setattr(gateway, "find_gateway_pids", lambda **kw: [101] if not any("restart" in c for c in calls) else [202])
+    monkeypatch.setattr(gateway, "supports_systemd_services", lambda: True)
+    monkeypatch.setattr(gateway, "is_windows", lambda: False)
+    monkeypatch.setattr(gateway, "is_macos", lambda: False)
+    assert update_cmd._run_pending_fleet_restart() is True
+    assert [cmd[-1] for cmd in calls if "restart" in cmd] == ["own-custom", "own-custom"]
+
+
 def test_linux_pid_sweep_rejects_another_install(monkeypatch, tmp_path):
     monkeypatch.setattr(update_cmd.sys, "executable", OCTAVIA)
     own = tmp_path / "own"
