@@ -117,6 +117,10 @@ jobs:
               except Exception as e: raise SystemExit(f'gateway state unreadable: {e}')
               assert state.get('gateway_state')=='running', state
               assert state.get('restart_requested') is not True, state
+              if int(state.get('pid',-1)) == pre_pid:
+                  restart_log=os.path.join(os.environ['RUNNER_TEMP'],'gateway-post-update.log')
+                  if os.path.exists(restart_log):
+                      print('post-update gateway launch output:',open(restart_log,errors='replace').read())
               assert int(state.get('pid',-1)) != pre_pid, f'gateway PID did not change across update: {state}'
               assert state.get('code_sha') == target, f'gateway code_sha={state.get("code_sha")}, wanted {target}; old={pre_sha}'
               time.sleep(3)
@@ -127,5 +131,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gateway-logs-${{ matrix.os }}
-          path: ${{ runner.temp }}/gateway.log
+          path: |
+            ${{ runner.temp }}/gateway.log
+            ${{ runner.temp }}/gateway-post-update.log
           if-no-files-found: ignore
