@@ -694,6 +694,31 @@ def _append_unique_pid(
     pids.append(pid)
 
 
+def _persisted_gateway_identity_matches(pid, home, record=None, start_time_reader=None):
+    """Validate the current profile's persisted gateway record against the live PID."""
+    import json
+    from pathlib import Path
+    from gateway.status import _canonical_clover_home, _record_looks_like_gateway
+    record_path = Path(home) / "gateway.pid"
+    try:
+        persisted = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    if not isinstance(persisted, dict) or persisted.get("pid") != pid:
+        return False
+    if persisted.get("kind") != "clover-gateway" or not _record_looks_like_gateway(persisted):
+        return False
+    recorded_home = persisted.get("clover_home")
+    if not isinstance(recorded_home, str) or _canonical_clover_home(recorded_home) != _canonical_clover_home(home):
+        return False
+    if start_time_reader is None:
+        from gateway.status import get_process_start_time as start_time_reader
+    recorded_start = persisted.get("start_time")
+    if not isinstance(recorded_start, int) or start_time_reader(pid) != recorded_start:
+        return False
+    return True
+
+
 def _scan_gateway_pids(
     exclude_pids: set[int],
     all_profiles: bool = False,
@@ -848,8 +873,12 @@ def _scan_gateway_pids(
                             with open(f"/proc/{pid}/cmdline", "rb") as _f:
                                 cmdline = _f.read().decode("utf-8", errors="replace")
                             cmdline = cmdline.replace("\x00", " ")
-                            if _matches_gateway_runtime(cmdline) and (
+                            matches_runtime = _matches_gateway_runtime(cmdline)
+                            if not matches_runtime:
+                                matches_runtime = _persisted_gateway_identity_matches(pid, current_home)
+                            if matches_runtime and (
                                 all_profiles or _matches_current_profile(cmdline)
+                                or _persisted_gateway_identity_matches(pid, current_home)
                             ):
                                 _append_unique_pid(pids, pid, exclude_pids)
                         except (OSError, PermissionError):
