@@ -48,6 +48,11 @@ def test_identifiers_and_code_keep_literal_underscores():
     assert TelegramAdapter.format_message(None, "cleanup_progress") == "cleanup\\_progress"
 
 
+@pytest.mark.parametrize("text", ["__that__", "___that___", "____that____"])
+def test_repeated_underscore_markers_remain_literal(text):
+    assert TelegramAdapter.format_message(None, text) == _escape_mdv2(text)
+
+
 @pytest.mark.asyncio
 async def test_split_commentary_payloads_keep_emphasis():
     adapter = TelegramAdapter(PlatformConfig(enabled=True, token="fake-token"))
