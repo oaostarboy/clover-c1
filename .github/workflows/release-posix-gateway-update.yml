@@ -92,6 +92,9 @@ jobs:
             test "$(git -C "$OTHER_INSTALL" rev-parse HEAD)" = "$FROM_SHA"
             echo "PASS: unrelated custom unit $OTHER_UNIT kept PID $OTHER_PID, API port, and old install SHA"
           fi
+          "$CLOVER_BIN" gateway run --replace > "$RUNNER_TEMP/gateway-post-update.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/gateway-post-update.pid"
+          echo "started post-update gateway in --replace mode from $TARGET_SHA"
       - name: Assert post-update gateway health for 90 seconds
         shell: bash
         run: |
