@@ -365,6 +365,31 @@ def recover_abandoned_delegations() -> int:
             if live:
                 continue
             task = json.loads(task_json or "{}")
+            goals = task.get("goals") or []
+            committed = (
+                _committed_child_ids(conn, delegation_id)
+                if task.get("is_batch") else set()
+            )
+            expected = {f"{delegation_id}:child:{i}" for i in range(len(goals))}
+            if goals and expected <= committed:
+                # Every child already has its own claimable row. Do not wake
+                # the session with a generic unknown outcome for work that
+                # was recorded before the owner died.
+                conn.execute(
+                    """UPDATE async_delegations SET state='completed', completed_at=?,
+                       updated_at=?, delivery_state='delivered', delivered_at=?,
+                       result_json=?
+                       WHERE delegation_id=? AND state IN ('running','finalizing')""",
+                    (now, now, now, json.dumps({
+                        "status": "completed",
+                        "children_already_published": len(expected),
+                    }), delegation_id),
+                )
+                recovered += 1
+                continue
+            published_indexes = sorted(
+                int(child_id.rsplit(":", 1)[-1]) for child_id in committed
+            )
             event = {
                 "type": "async_delegation", "delegation_id": delegation_id,
                 "session_key": session_key, "origin_ui_session_id": origin_ui,
@@ -379,6 +404,12 @@ def recover_abandoned_delegations() -> int:
                 "error": "Delegation owner exited before recording a terminal result; outcome unknown.",
                 "dispatched_at": dispatched_at, "completed_at": now,
             }
+            if published_indexes:
+                event["already_published_task_indexes"] = published_indexes
+                event["error"] += (
+                    f" {len(published_indexes)} of {len(goals)} children already "
+                    "recorded their own results and are not unknown."
+                )
             # Routing origin persisted at dispatch (see _capture_routing_origin):
             # restores scope_id/user_id for the reconstructed SessionSource so
             # relay egress priming works after a restart.
@@ -1019,6 +1050,27 @@ def _push_completion_event(
         )
 
 
+def _committed_child_ids(conn, delegation_id: str) -> set:
+    """Return exact ``{id}:child:{index}`` rows.
+
+    Do not use ``LIKE``. Delegation ids contain ``_``, which ``LIKE`` treats
+    as a single-character wildcard.
+    """
+    prefix = f"{delegation_id}:child:"
+    rows = conn.execute(
+        "SELECT delegation_id FROM async_delegations "
+        "WHERE instr(delegation_id, ?) = 1",
+        (prefix,),
+    ).fetchall()
+    found = set()
+    for (child_id,) in rows:
+        if not isinstance(child_id, str) or not child_id.startswith(prefix):
+            continue
+        if child_id[len(prefix):].isdigit():
+            found.add(child_id)
+    return found
+
+
 def publish_batch_child_completion(
     result: Dict[str, Any], *, delegation_id: str
 ) -> None:
@@ -1268,16 +1320,26 @@ def _push_batch_completion_event(
     # the legacy consolidated block for callers without child publishing and
     # rescue any result whose child publish failed before the batch joined.
     with _DB_LOCK, _transaction() as conn:
-        child_ids = {
-            row[0] for row in conn.execute(
-                "SELECT delegation_id FROM async_delegations WHERE delegation_id LIKE ?",
-                (str(event_record.get("delegation_id")) + ":child:%",),
-            )
-        }
+        child_ids = _committed_child_ids(
+            conn, str(event_record.get("delegation_id") or "")
+        )
     evt["results"] = [
         entry for entry in evt["results"]
         if f"{event_record['delegation_id']}:child:{entry.get('task_index')}" not in child_ids
     ]
+    if child_ids and not evt["results"] and evt.get("error"):
+        evt["already_published_children"] = len(child_ids)
+        err = str(evt.get("error") or "")
+        err = err.replace(
+            "and never produced a completion event.",
+            f"and {len(child_ids)} child result(s) were already published separately.",
+        )
+        if "already published separately" not in err:
+            err += (
+                f" {len(child_ids)} child result(s) were already published "
+                "separately and are not unknown."
+            )
+        evt["error"] = err
     if not evt["results"] and not evt.get("error"):
         # Atomic terminal ack: no empty join event can replay after owner loss.
         now = time.time()
