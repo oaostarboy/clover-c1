@@ -21,6 +21,7 @@ def properties(unit, python, home, *, marker="gateway run", include_environment=
 
 @pytest.mark.parametrize("interpreter,expected", [(CLOVER, {"clover-gateway", "clover-gateway-work"}), (OCTAVIA, {"tentacle-one-gateway"})])
 def test_discovery_only_selects_same_install_including_custom_name_and_profile(monkeypatch, interpreter, expected):
+    monkeypatch.setattr(update_cmd, "get_clover_home", lambda: Path("/home/example/.clover" if interpreter == CLOVER else "/home/example/.clover-tentacle"))
     units = {
         "clover-gateway.service": properties("clover-gateway.service", CLOVER, "/home/example/.clover", include_environment=False),
         "clover-gateway-work.service": properties("clover-gateway-work.service", CLOVER, "/home/example/.clover/profiles/work"),
@@ -67,7 +68,18 @@ def test_discovery_rejects_missing_or_conflicting_metadata(monkeypatch):
     assert found == []
 
 
+def test_shared_interpreter_requires_matching_clover_home(monkeypatch):
+    monkeypatch.setattr(update_cmd, "get_clover_home", lambda: Path("/home/example/.clover"))
+    foreign = properties("foreign.service", "/usr/bin/python3", "/home/example/.clover-tentacle", include_environment=False)
+    own = properties("own.service", "/usr/bin/python3", "/home/example/.clover/profiles/work", include_environment=False)
+    units = {"foreign.service": foreign, "own.service": own}
+    monkeypatch.setattr(update_cmd.subprocess, "run", lambda cmd, **kw: SimpleNamespace(returncode=0, stdout=units[cmd[cmd.index("show") + 1]]))
+    assert update_cmd._systemd_unit_owned_by_install(["systemctl"], "foreign.service", "/usr/bin/python3") is False
+    assert update_cmd._systemd_unit_owned_by_install(["systemctl"], "own.service", "/usr/bin/python3") is True
+
+
 def test_pending_restart_uses_owned_custom_unit(monkeypatch):
+    monkeypatch.setattr(update_cmd, "get_clover_home", lambda: Path("/home/example/.clover-tentacle"))
     units = {
         "clover-gateway.service": properties("clover-gateway.service", CLOVER, "/home/example/.clover"),
         "tentacle-one-gateway.service": properties("tentacle-one-gateway.service", OCTAVIA, "/home/example/.clover-tentacle"),
@@ -99,6 +111,7 @@ def test_linux_pid_sweep_rejects_another_install(monkeypatch, tmp_path):
 
 
 def test_custom_service_pid_is_protected_from_manual_sweep(monkeypatch):
+    monkeypatch.setattr(update_cmd, "get_clover_home", lambda: Path("/home/example/.clover-tentacle"))
     def run(cmd, **kw):
         if "list-units" in cmd:
             return SimpleNamespace(returncode=0, stdout="tentacle-one-gateway.service loaded active running\n" if "--user" in cmd else "")

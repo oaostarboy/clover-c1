@@ -6843,10 +6843,27 @@ def _systemd_unit_owned_by_install(
         return False
     if not (args[-2:] == ["gateway", "run"] or args[-1:] == ["serve"]):
         return False
-    # CLOVER_HOME can differ across sibling profiles/custom homes, but an
-    # explicitly configured VIRTUAL_ENV must match the executable's venv.
-    venv = re.search(r"(?:^|\s)VIRTUAL_ENV=([^\s]+)", fields.get("Environment", ""))
-    if venv and os.path.abspath(venv.group(1)) != os.path.dirname(os.path.dirname(expected)):
+    # Shared system Python cannot identify an installation. Require explicit
+    # home metadata, and allow only this home or its named profiles.
+    home_value = fields.get("WorkingDirectory", "")
+    env_home = next((item.split("=", 1)[1] for item in fields.get("Environment", "").split() if item.startswith("CLOVER_HOME=")), "")
+    if env_home:
+        configured_home = os.path.abspath(env_home)
+        if home_value and os.path.abspath(home_value) != configured_home:
+            return False
+        home_value = configured_home
+    if not home_value:
+        return False
+    try:
+        own_home = os.path.abspath(str(get_clover_home()))
+    except Exception:
+        return False
+    actual_home = os.path.abspath(home_value)
+    if actual_home != own_home and not actual_home.startswith(own_home + os.sep + "profiles" + os.sep):
+        return False
+    # Explicit VIRTUAL_ENV must match the executable's venv.
+    venv = next((item.split("=", 1)[1] for item in fields.get("Environment", "").split() if item.startswith("VIRTUAL_ENV=")), "")
+    if venv and os.path.abspath(venv) != os.path.dirname(os.path.dirname(expected)):
         return False
     return True
 
