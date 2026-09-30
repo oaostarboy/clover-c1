@@ -900,7 +900,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           . "$env:E2E\wdr.ps1"
-          Set-MainIsNext "${{ github.ref_name }}"
+          Set-MainIsNext "ci/win-pr63-042d2212-candidate"
           $logStart = (Get-LogLines).Count
           $label = "$env:UPDATE_PATH next update"
           # D5: a long agent turn is running when this update pauses the gateway.
