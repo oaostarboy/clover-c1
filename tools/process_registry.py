@@ -3051,6 +3051,19 @@ def _format_age(seconds: float) -> str:
     return f"{h}h" if m == 0 else f"{h}h{m}m"
 
 
+# Named in the delivered completion prompt, not only in docs. The gateway
+# suppresses a reply that is exactly this marker. A distinct completion
+# event after the parent already read a log is not the same event id, so
+# the marker is what stops a second announcement. New failures stay in the
+# prompt and must still be reported.
+_REDUNDANT_NOTICE_SILENCE = (
+    "If this does not change what you already told the user, reply with "
+    "exactly [SILENT] and nothing else — nothing is sent to the user. "
+    "A new failure, a changed conclusion, or a result the user has not "
+    "heard must still be reported."
+)
+
+
 def _format_async_delegation(evt: dict) -> str:
     """Format an async-delegation completion into a self-contained re-injection.
 
@@ -3088,12 +3101,23 @@ def _format_async_delegation(evt: dict) -> str:
         goals = evt.get("goals") or []
         n = len(results) if results else len(goals)
         total_dur = evt.get("total_duration_seconds", duration)
+        if evt.get("partial_child_delivery"):
+            intro = (
+                "Some children in this fan-out already re-entered on their own. "
+                "The results below are only the ones that were not published "
+                "separately. Do not treat this block as the full set, and do not "
+                "repeat a child you already reported."
+            )
+        else:
+            intro = (
+                f"A background fan-out of {n} subagent(s) you dispatched earlier "
+                "has finished. All ran in parallel and waited on each other; their "
+                "consolidated results are below. You may have moved on since "
+                "dispatching — act on these or re-dispatch if things have changed."
+            )
         lines = [
             f"[ASYNC DELEGATION BATCH COMPLETE — {deleg_id}]",
-            f"A background fan-out of {n} subagent(s) you dispatched earlier "
-            "has finished. All ran in parallel and waited on each other; their "
-            "consolidated results are below. You may have moved on since "
-            "dispatching — act on these or re-dispatch if things have changed.",
+            intro,
             "",
         ]
         if isinstance(dispatched_at, (int, float)):
@@ -3108,6 +3132,13 @@ def _format_async_delegation(evt: dict) -> str:
         if error and not results:
             lines.append("--- ERROR ---")
             lines.append(f"The batch did not complete successfully: {error}")
+            published = evt.get("already_published_children")
+            if published:
+                lines.append(
+                    f"{published} child result(s) were already published "
+                    "separately and are not unknown. Do not repeat them."
+                )
+            lines.append(_REDUNDANT_NOTICE_SILENCE)
             return "\n".join(lines)
         for r in sorted(results, key=lambda x: x.get("task_index", 0)):
             idx = r.get("task_index", 0)
@@ -3154,6 +3185,7 @@ def _format_async_delegation(evt: dict) -> str:
                 lines.append(
                     f"Full live transcript (complete tool/assistant trace): {r_live}"
                 )
+        lines.append(_REDUNDANT_NOTICE_SILENCE)
         return "\n".join(lines)
 
     age = ""
@@ -3204,6 +3236,7 @@ def _format_async_delegation(evt: dict) -> str:
         if summary:
             lines.append("Partial output:")
             lines.append(summary)
+    lines.append(_REDUNDANT_NOTICE_SILENCE)
     return "\n".join(lines)
 
 
@@ -3322,7 +3355,8 @@ def format_process_notification(evt: dict) -> "str | None":
             )
     text += (
         f"Command: {_cmd}\n"
-        f"Output:\n{_out}]"
+        f"Output:\n{_out}\n"
+        f"{_REDUNDANT_NOTICE_SILENCE}]"
     )
     return text
 

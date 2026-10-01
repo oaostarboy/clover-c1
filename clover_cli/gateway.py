@@ -694,6 +694,31 @@ def _append_unique_pid(
     pids.append(pid)
 
 
+def _persisted_gateway_identity_matches(pid, home, record=None, start_time_reader=None):
+    """Validate the current profile's persisted gateway record against the live PID."""
+    import json
+    from pathlib import Path
+    from gateway.status import _canonical_clover_home, _record_looks_like_gateway
+    record_path = Path(home) / "gateway.pid"
+    try:
+        persisted = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    if not isinstance(persisted, dict) or persisted.get("pid") != pid:
+        return False
+    if persisted.get("kind") != "clover-gateway" or not _record_looks_like_gateway(persisted):
+        return False
+    recorded_home = persisted.get("clover_home")
+    if not isinstance(recorded_home, str) or _canonical_clover_home(recorded_home) != _canonical_clover_home(home):
+        return False
+    if start_time_reader is None:
+        from gateway.status import get_process_start_time as start_time_reader
+    recorded_start = persisted.get("start_time")
+    if not isinstance(recorded_start, int) or start_time_reader(pid) != recorded_start:
+        return False
+    return True
+
+
 def _scan_gateway_pids(
     exclude_pids: set[int],
     all_profiles: bool = False,
@@ -848,8 +873,12 @@ def _scan_gateway_pids(
                             with open(f"/proc/{pid}/cmdline", "rb") as _f:
                                 cmdline = _f.read().decode("utf-8", errors="replace")
                             cmdline = cmdline.replace("\x00", " ")
-                            if _matches_gateway_runtime(cmdline) and (
+                            matches_runtime = _matches_gateway_runtime(cmdline)
+                            if not matches_runtime:
+                                matches_runtime = _persisted_gateway_identity_matches(pid, current_home)
+                            if matches_runtime and (
                                 all_profiles or _matches_current_profile(cmdline)
+                                or _persisted_gateway_identity_matches(pid, current_home)
                             ):
                                 _append_unique_pid(pids, pid, exclude_pids)
                         except (OSError, PermissionError):
@@ -951,6 +980,62 @@ def _filter_venv_launcher_stubs(pids: list[int]) -> list[int]:
     return [p for p in pids if p not in drop]
 
 
+def _gateway_pid_belongs_to_install(pid: int) -> bool:
+    """Conservative Linux ownership check, including for pre-fix updaters.
+
+    The old updater imports this module afresh after pulling but retains its
+    own unscoped kill loop. Filter discovery here, before that loop sees PIDs.
+    Never resolve venv interpreter symlinks: two installs can share base Python.
+    """
+    try:
+        args = [os.fsdecode(arg) for arg in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0") if arg]
+        if not args:
+            return False
+        if not os.path.isabs(args[0]):
+            cwd = Path(f"/proc/{pid}/cwd").resolve()
+            return args[0] == "clover" and cwd == Path(PROJECT_ROOT).resolve()
+        executable = Path(os.path.abspath(args[0]))
+        expected = Path(os.path.abspath(sys.executable))
+        if sys.prefix != sys.base_prefix:
+            return executable.parent == expected.parent and (
+                executable == expected
+                or executable.name in {"python", "python3", "clover"}
+                or executable.name.startswith("python3.")
+            )
+        # Shared/system Python does not establish installation ownership.
+        # Require a source entrypoint or module launched from this checkout.
+        cwd = Path(f"/proc/{pid}/cwd").resolve()
+        project_root = Path(PROJECT_ROOT).resolve()
+        arguments = args[1:]
+        i = 0
+        while i < len(arguments):
+            arg = arguments[i]
+            if arg in {"-W", "-X"}:
+                i += 2
+                continue
+            if arg in {"-c", "-m"}:
+                if i + 1 >= len(arguments):
+                    return False
+                return arg == "-m" and arguments[i + 1] == "clover_cli.main" and cwd == project_root
+            if arg == "--":
+                i += 1
+                if i >= len(arguments):
+                    return False
+                arg = arguments[i]
+            elif arg.startswith("-"):
+                i += 1
+                continue
+            candidate = Path(arg)
+            if arg in {"clover_cli/main.py", "gateway/run.py"}:
+                return cwd == project_root
+            if candidate.is_absolute() and candidate in {project_root / "clover_cli/main.py", project_root / "gateway/run.py"}:
+                return True
+            return False
+        return False
+    except (OSError, ValueError):
+        return False
+
+
 def find_gateway_pids(
     exclude_pids: set | None = None, all_profiles: bool = False
 ) -> list:
@@ -959,9 +1044,11 @@ def find_gateway_pids(
     Args:
         exclude_pids: PIDs to exclude from the result (e.g. service-managed
             PIDs that should not be killed during a stale-process sweep).
-        all_profiles: When ``True``, return gateway PIDs across **all**
-            profiles (the pre-7923 global behaviour).  ``clover update``
-            needs this because a code update affects every profile.
+        all_profiles: When ``True``, return gateway PIDs across all profiles
+            of this installation (Linux), not unrelated installs on the host.
+            ``clover update`` needs this because code updates affect every
+            profile sharing the installation. On other platforms the existing
+            process-discovery behavior is unchanged.
             When ``False`` (default), only PIDs belonging to the current
             Clover profile are returned.
     """
@@ -986,6 +1073,8 @@ def find_gateway_pids(
         include_restart_managers=include_restart_managers,
     ):
         _append_unique_pid(pids, pid, _exclude)
+    if all_profiles and sys.platform.startswith("linux") and not is_windows() and not is_macos():
+        pids = [pid for pid in pids if _gateway_pid_belongs_to_install(pid)]
     return pids
 
 

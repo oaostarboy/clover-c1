@@ -3335,7 +3335,7 @@ def _warn_pending_fleet_restart_on_startup() -> None:
 
 
 def _restart_systemd_gateway_units_best_effort(failed: list) -> None:
-    """Best-effort ``systemctl restart`` of every clover-gateway/serve unit."""
+    """Best-effort restart of gateway/serve units owned by this install."""
     for scope, scope_cmd in (
         ("user", ["systemctl", "--user"]),
         ("system", ["systemctl"]),
@@ -3345,8 +3345,7 @@ def _restart_systemd_gateway_units_best_effort(failed: list) -> None:
                 scope_cmd
                 + [
                     "list-units",
-                    "clover-gateway*",
-                    "clover-serve*",
+                    "*.service",
                     "--plain",
                     "--no-legend",
                     "--no-pager",
@@ -3386,7 +3385,67 @@ def _restart_systemd_gateway_units_best_effort(failed: list) -> None:
             result.stdout,
             process_unit=process_unit,
             on_unit_timeout=on_timeout,
+            scope_cmd=scope_cmd,
         )
+
+
+def _gateway_pid_cmdline_path(pid: int) -> Path:
+    return Path(f"/proc/{pid}/cmdline")
+
+
+def _owned_systemd_service_pids() -> set[int]:
+    """Include custom-named units in the manual sweep's protected PID set."""
+    if not sys.platform.startswith("linux"):
+        return set()
+    pids: set[int] = set()
+    for scope in (["systemctl", "--user"], ["systemctl"]):
+        try:
+            listed = subprocess.run(
+                scope + ["list-units", "*.service", "--plain", "--no-legend", "--no-pager"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+            )
+            if listed.returncode != 0:
+                continue
+
+            def collect(name):
+                try:
+                    shown = subprocess.run(
+                        scope + ["show", name, "--property=MainPID", "--value"],
+                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+                    )
+                    pid = int(shown.stdout.strip()) if shown.returncode == 0 else 0
+                    if pid > 0:
+                        pids.add(pid)
+                except (ValueError, OSError, subprocess.TimeoutExpired):
+                    pass
+
+            _for_each_systemd_gateway_unit(
+                listed.stdout, process_unit=collect, on_unit_timeout=lambda *_: None,
+                scope_cmd=scope,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+    return pids
+
+
+def _own_install_gateway_pids(pids):
+    """Limit Linux update sweeps to this venv; unknown processes are spared."""
+    if not sys.platform.startswith("linux"):
+        return list(pids)
+    from clover_cli.gateway import is_windows, is_macos
+    if is_windows() or is_macos():
+        return list(pids)
+    selected = []
+    expected = os.path.abspath(sys.executable)
+    for pid in pids:
+        try:
+            args = _gateway_pid_cmdline_path(pid).read_bytes().split(b"\0")
+            executable = os.fsdecode(args[0])
+            if os.path.abspath(executable) == expected:
+                selected.append(pid)
+        except (OSError, IndexError, ValueError):
+            continue
+    return selected
 
 
 def _run_pending_fleet_restart() -> bool:
@@ -3414,7 +3473,7 @@ def _run_pending_fleet_restart() -> bool:
         return False
 
     try:
-        pids = list(find_gateway_pids(all_profiles=True))
+        pids = _own_install_gateway_pids(find_gateway_pids(all_profiles=True))
     except Exception as exc:
         logger.debug("Pending fleet restart: gateway probe failed: %s", exc)
         pids = None
@@ -3445,7 +3504,7 @@ def _run_pending_fleet_restart() -> bool:
                 failed.append("windows-gateway")
         leftover: list = []
         try:
-            live = list(find_gateway_pids(all_profiles=True))
+            live = _own_install_gateway_pids(find_gateway_pids(all_profiles=True))
         except Exception:
             live = list(pids or [])
         # Leftovers are gateways that were ALREADY running before the
@@ -3459,9 +3518,19 @@ def _run_pending_fleet_restart() -> bool:
             leftover = [pid for pid in live if pid in set(pids)]
         if leftover:
             try:
-                keep = {pid for pid in live if pid not in set(leftover)}
                 logger.info("Pending fleet restart: stopping pre-restart survivor(s) %s", leftover)
-                kill_gateway_processes(all_profiles=True, exclude_pids=keep or None)
+                if sys.platform.startswith("linux") and not is_windows() and not is_macos():
+                    # Do not re-scan inside kill_gateway_processes: a new PID
+                    # from another installation might appear between scans.
+                    from gateway.status import terminate_pid
+                    for pid in leftover:
+                        if pid in _own_install_gateway_pids([pid]):
+                            terminate_pid(pid)
+                else:
+                    scanned = set(find_gateway_pids(all_profiles=True))
+                    kill_gateway_processes(
+                        all_profiles=True, exclude_pids=scanned - set(leftover)
+                    )
                 _wait_for_gateway_exit(timeout=5.0, force_after=None)
             except Exception as exc:
                 logger.debug("Pending fleet restart: PID stop failed: %s", exc)
@@ -3479,7 +3548,7 @@ def _run_pending_fleet_restart() -> bool:
     except Exception as exc:
         surviving = None
         try:
-            surviving = list(find_gateway_pids(all_profiles=True))
+            surviving = _own_install_gateway_pids(find_gateway_pids(all_profiles=True))
         except Exception:
             surviving = pids
         _warn_gateway_restart_phase_aborted(exc, surviving)
@@ -6327,14 +6396,26 @@ def _restore_windows_gateway_service(name: str, *, timeout: float = 60.0) -> Non
     )
 
 
-def _own_ancestor_pids() -> set[int]:
-    """PIDs of this process's live ancestors (empty without psutil)."""
+def _own_ancestor_pids() -> set[int] | None:
+    """PIDs of this process's live ancestors, or ``None`` when unreadable.
+
+    ``None`` is NOT "no ancestors". ``parents()`` raises AccessDenied when the
+    walk reaches a SYSTEM/elevated parent, or when a parent exits mid-walk.
+    Callers must then treat every PID as a possible ancestor and never tree
+    kill it: a chat ``/update`` runs inside the gateway's process tree.
+    """
     try:
         import psutil
 
         return {int(p.pid) for p in psutil.Process().parents()}
-    except Exception:
-        return set()
+    except Exception as exc:
+        logger.warning("Could not read this process's ancestry: %s", exc)
+        return None
+
+
+def _may_be_own_ancestor(pid: int, own_ancestry: set[int] | None) -> bool:
+    """True when ``pid`` is, or cannot be ruled out as, one of our ancestors."""
+    return own_ancestry is None or int(pid) in own_ancestry
 
 
 def _force_stop_single_process(pid: int) -> None:
@@ -6568,16 +6649,19 @@ def _pause_windows_gateways_for_update() -> dict | None:
     own_ancestry = _m()._own_ancestor_pids()
     for pid in sorted(set(survivors).union(unmapped_pids).union(launcher_pids)):
         try:
-            if int(pid) in own_ancestry:
+            if _may_be_own_ancestor(pid, own_ancestry):
                 # /update from a chat runs this updater INSIDE the gateway's
                 # process tree; ``terminate_pid(force=True)`` is taskkill /T
-                # and would take the updater down with the gateway.
+                # and would take the updater down with the gateway. Unknown
+                # ancestry is treated the same way.
                 _m()._force_stop_single_process(int(pid))
             else:
                 terminate_pid(int(pid), force=True)
             force_killed.append(int(pid))
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+        except ProcessLookupError:
+            pass  # already gone, e.g. a launcher that exited with its worker
+        except (PermissionError, OSError) as exc:
+            logger.warning("Could not force-stop gateway process %s: %s", pid, exc)
 
     if profiles:
         print(f"  ✓ Paused gateway profile(s): {', '.join(sorted(profiles))}")
@@ -6738,11 +6822,74 @@ def _cold_start_windows_gateway_after_update() -> bool:
     return True
 
 
+def _systemd_unit_owned_by_install(
+    scope_cmd: list[str], unit: str, interpreter: str | None = None
+) -> bool:
+    """Check the gateway entrypoint and its venv, not a globally shared unit name.
+
+    Do not resolve interpreter symlinks: distinct venvs may share base Python.
+    Unknown or contradictory metadata is not permission to restart a unit.
+    """
+    expected = os.path.abspath(interpreter or sys.executable)
+    try:
+        show = subprocess.run(
+            scope_cmd + ["show", unit, "--property=Id,ExecStart,Environment,WorkingDirectory,FragmentPath", "--no-pager"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+    if show.returncode != 0:
+        return False
+    fields = dict(line.split("=", 1) for line in show.stdout.splitlines() if "=" in line)
+    if fields.get("Id") != unit:
+        return False
+    exec_start = fields.get("ExecStart", "")
+    path = re.search(r"(?:^|[;{])\s*path=([^;\s}]+)", exec_start)
+    argv = re.search(r"(?:^|[;{])\s*argv\[\]=([^;}]*)", exec_start)
+    if not path or not argv or os.path.abspath(path.group(1)) != expected:
+        return False
+    try:
+        args = shlex.split(argv.group(1).strip())
+    except ValueError:
+        return False
+    if not args or os.path.abspath(args[0]) != expected:
+        return False
+    if len(args) < 4 or args[1:3] != ["-m", "clover_cli.main"]:
+        return False
+    if not (args[-2:] == ["gateway", "run"] or args[-1:] == ["serve"]):
+        return False
+    # Shared system Python cannot identify an installation. Require explicit
+    # home metadata, and allow only this home or its named profiles.
+    home_value = fields.get("WorkingDirectory", "")
+    env_home = next((item.split("=", 1)[1] for item in fields.get("Environment", "").split() if item.startswith("CLOVER_HOME=")), "")
+    if env_home:
+        configured_home = os.path.abspath(env_home)
+        if home_value and os.path.abspath(home_value) != configured_home:
+            return False
+        home_value = configured_home
+    if not home_value:
+        return False
+    try:
+        own_home = os.path.abspath(str(get_clover_home()))
+    except Exception:
+        return False
+    actual_home = os.path.abspath(home_value)
+    if actual_home != own_home and not actual_home.startswith(own_home + os.sep + "profiles" + os.sep):
+        return False
+    # Explicit VIRTUAL_ENV must match the executable's venv.
+    venv = next((item.split("=", 1)[1] for item in fields.get("Environment", "").split() if item.startswith("VIRTUAL_ENV=")), "")
+    if venv and os.path.abspath(venv) != os.path.dirname(os.path.dirname(expected)):
+        return False
+    return True
+
+
 def _for_each_systemd_gateway_unit(
     list_units_stdout: str,
     *,
     process_unit,
     on_unit_timeout,
+    scope_cmd: list[str] | None = None,
+    interpreter: str | None = None,
 ) -> None:
     """Process each ``clover-gateway*.service``/``clover-serve*.service`` unit
     from ``systemctl list-units``.
@@ -6763,11 +6910,15 @@ def _for_each_systemd_gateway_unit(
         # ``unit.startswith("clover-serve")`` alone would also accept the
         # unrelated ``clover-server.service`` — require the exact base unit
         # or the hyphenated profile family instead (review on #83595).
-        if not (
+        if scope_cmd is None and not (
             unit == "clover-gateway.service"
             or unit.startswith("clover-gateway-")
             or unit == "clover-serve.service"
             or unit.startswith("clover-serve-")
+        ):
+            continue
+        if scope_cmd is not None and not _systemd_unit_owned_by_install(
+            scope_cmd, unit, interpreter
         ):
             continue
         svc_name = unit.removesuffix(".service")
@@ -8286,9 +8437,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 _own_ancestry = _m()._own_ancestor_pids()
                 for _pid in _gateway_holders:
                     try:
-                        if int(_pid) in _own_ancestry:
+                        if _may_be_own_ancestor(_pid, _own_ancestry):
                             # Never tree-kill our own ancestry (/update
-                            # from a chat runs inside the gateway tree).
+                            # from a chat runs inside the gateway tree),
+                            # nor any PID when the ancestry is unreadable.
                             _m()._force_stop_single_process(int(_pid))
                         else:
                             terminate_pid(int(_pid), force=True)
@@ -10033,7 +10185,9 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # if the probe itself raises, leave the snapshot as-is (the
             # survivor probe's own None result already fails closed).
             try:
-                _pre_restart_gateway_pids = list(find_gateway_pids(all_profiles=True))
+                _pre_restart_gateway_pids = _own_install_gateway_pids(
+                    find_gateway_pids(all_profiles=True)
+                )
             except Exception:
                 _pre_restart_gateway_pids = None
 
@@ -10055,8 +10209,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                             scope_cmd
                             + [
                                 "list-units",
-                                "clover-gateway*",
-                                "clover-serve*",
+                                "*.service",
                                 "--plain",
                                 "--no-legend",
                                 "--no-pager",
@@ -10370,6 +10523,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         result.stdout,
                         process_unit=_restart_one_systemd_gateway_unit,
                         on_unit_timeout=_on_unit_timeout,
+                        scope_cmd=scope_cmd,
                     )
 
             # --- Launchd services (macOS) ---
@@ -10390,10 +10544,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # Kill any remaining gateway processes not managed by a service.
             # Exclude PIDs that belong to just-restarted services so we don't
             # immediately kill the process that systemd/launchd just spawned.
-            service_pids = _get_service_pids(all_profiles=True)
-            manual_pids = find_gateway_pids(
+            service_pids = _get_service_pids(all_profiles=True) | _owned_systemd_service_pids()
+            manual_pids = _own_install_gateway_pids(find_gateway_pids(
                 exclude_pids=service_pids, all_profiles=True
-            )
+            ))
             profile_processes = {
                 proc.pid: proc
                 for proc in find_profile_gateway_processes(exclude_pids=service_pids)
@@ -10560,7 +10714,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # manager can relaunch with fresh code.
             try:
                 _time.sleep(3.0)
-                _service_pids_after = _get_service_pids(all_profiles=True)
+                _service_pids_after = _get_service_pids(all_profiles=True) | _owned_systemd_service_pids()
                 _surviving = find_gateway_pids(
                     exclude_pids=_service_pids_after,
                     all_profiles=True,

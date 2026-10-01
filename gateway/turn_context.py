@@ -70,6 +70,9 @@ class TurnContext:
     _summary_thoughts: int = 0
     # A note seen but not yet followed by a tool call (see run.py progress cb).
     _pending_thought: bool = False
+    # Provider summary lines already counted since the last real tool. A
+    # mirrored commentary note in that interval is not another thought.
+    _live_reasoning_since_tool: bool = False
     _summary_tools: int = 0
     _summary_t0: float = 0.0
 

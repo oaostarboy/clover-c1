@@ -3869,6 +3869,27 @@ def _validate_batch_tasks(task_list: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
+def _background_dispatch_note(n: int) -> str:
+    """Model-facing note returned when a background delegation is accepted."""
+    if n == 1:
+        return (
+            "Subagent is running in the background. You and the user can "
+            "keep working; its full result re-enters the conversation as a "
+            "new message when it finishes. Do not wait or poll — just "
+            "continue. If you already told the user the result from its "
+            "live transcript, do not announce that same result again."
+        )
+    return (
+        f"{n} subagents are running in parallel in the background. You "
+        f"and the user can keep working. Each child's result re-enters "
+        f"the conversation on its own as soon as that child finishes — "
+        f"do not wait for the others, and do not expect a second combined "
+        f"message after the last one. Do not wait or poll — just continue. "
+        f"If you already told the user a result from a live transcript, "
+        f"do not announce that same result again when its completion arrives."
+    )
+
+
 def delegate_task(
     goal: Optional[str] = None,
     context: Optional[str] = None,
@@ -3932,13 +3953,10 @@ def delegate_task(
     # Normalise the top-level role once; per-task overrides re-normalise.
     top_role = _normalize_role(role)
 
-    # Background (async) delegation now applies to BOTH single tasks and
-    # batches. A batch is dispatched as ONE async unit: the whole fan-out runs
-    # on the daemon executor, joins on every child (see _execute_and_aggregate
-    # / dispatch_async_delegation_batch), and pushes a SINGLE completion event
-    # carrying the consolidated per-task results. It re-enters the conversation
-    # as one message once ALL children finish — the chat is not blocked while
-    # they run.
+    # Background (async) delegation applies to both single tasks and batches.
+    # A batch occupies one async slot. Each terminal child is published on its
+    # own before siblings finish. The join does not send a second message when
+    # every child was already published.
     background = is_truthy_value(background, default=False) if background is not None else False
 
     # Depth limit — configurable via delegation.max_spawn_depth,
@@ -4224,15 +4242,16 @@ def delegate_task(
             except Exception as e:
                 logger.debug("Progress callback queued relay failed: %s", e)
 
-    def _execute_and_aggregate(*, honor_parent_interrupt: bool = True) -> dict:
+    def _execute_and_aggregate(
+        *, honor_parent_interrupt: bool = True, on_child_complete=None
+    ) -> dict:
         """Run all built children (1 or N), join on them, aggregate results,
         fire subagent_stop hooks + cost rollup, and return the combined result
         dict. Used by BOTH the synchronous path and the background runner. In
         the background case this whole function runs on the daemon executor, so
-        the parent turn isn't blocked — but the batch still JOINS on itself
-        here (all children must finish) before producing ONE consolidated
-        results block. That is the contract: fan-out runs in the background,
-        waits on each other, and returns together.
+        the parent turn isn't blocked. Background fan-outs publish each
+        completed child before the join; synchronous callers still receive
+        the combined results after all children finish.
         """
         if n_tasks == 1:
             # Single task -- run directly (no thread pool overhead)
@@ -4321,6 +4340,11 @@ def delegate_task(
                                     ),
                                 }
                             results.append(entry)
+                            if on_child_complete is not None:
+                                try:
+                                    on_child_complete(entry)
+                                except Exception:
+                                    logger.exception("Could not publish child completion; batch will retain result")
                             completed_count += 1
                         break
 
@@ -4346,6 +4370,11 @@ def delegate_task(
                                 ),
                             }
                         results.append(entry)
+                        if on_child_complete is not None:
+                            try:
+                                on_child_complete(entry)
+                            except Exception:
+                                logger.exception("Could not publish child completion; batch will retain result")
                         completed_count += 1
 
                         # Print per-task completion line above the spinner
@@ -4382,7 +4411,8 @@ def delegate_task(
         # headroom (split across the batch) before they enter the parent's
         # conversation. Full text is spilled to disk so nothing is lost.
         # Covers both the single-task and batch paths. See PR #9126.
-        _finalize_child_results(results, task_list, children, parent_agent)
+        if on_child_complete is None:
+            _finalize_child_results(results, task_list, children, parent_agent)
 
         total_duration = round(time.monotonic() - overall_start, 2)
 
@@ -4397,7 +4427,7 @@ def delegate_task(
                 if isinstance(_idx, int) and 0 <= _idx < len(live_writers)
                 else None
             )
-            if _w is not None:
+            if _w is not None and not entry.pop("_transcript_finalized", False):
                 try:
                     _w.finalize(entry)
                 except Exception:
@@ -4414,13 +4444,8 @@ def delegate_task(
             combined["live_transcripts"] = list(live_paths)
         return combined
 
-    # ----- Background dispatch: run the WHOLE batch as one async unit -----
-    # When background is true, the entire fan-out runs on the daemon executor
-    # via a single async delegation. _execute_and_aggregate() joins on every
-    # child and produces ONE consolidated results block, which re-enters the
-    # conversation as a single message when ALL children finish. The chat is
-    # not blocked in the meantime. This is the contract: dispatch N subagents,
-    # keep chatting, get the combined summaries back together at the end.
+    # Background dispatch owns the batch lifecycle in one async slot while
+    # publishing each terminal child independently before siblings finish.
     if background:
         from tools.async_delegation import dispatch_async_delegation_batch
         from tools.approval import get_current_session_key
@@ -4534,7 +4559,32 @@ def delegate_task(
         def _batch_runner():
             # This batch is detached from the foreground turn. Its lifecycle is
             # owned by the async registry and cancelled only via _batch_interrupt.
-            return _execute_and_aggregate(honor_parent_interrupt=False)
+            if n_tasks == 1:
+                return _execute_and_aggregate(honor_parent_interrupt=False)
+
+            from tools.async_delegation import publish_batch_child_completion
+
+            def _publish_child(entry):
+                idx = entry["task_index"]
+                _finalize_child_results(
+                    [entry], task_list, [children[idx]], parent_agent
+                )
+                writer = live_writers[idx] if idx < len(live_writers) else None
+                if writer is not None:
+                    try:
+                        writer.finalize(entry)
+                        entry["_transcript_finalized"] = True
+                    except Exception:
+                        logger.debug("Live transcript finalize failed", exc_info=True)
+                    if idx < len(live_paths):
+                        entry["live_transcript"] = live_paths[idx]
+                publish_batch_child_completion(
+                    entry, delegation_id=_batch_delegation_id
+                )
+
+            return _execute_and_aggregate(
+                honor_parent_interrupt=False, on_child_complete=_publish_child
+            )
 
         def _batch_interrupt():
             for _c in _child_agents:
@@ -4578,6 +4628,8 @@ def delegate_task(
             return tuple(parts), in_tool
 
         _goals = [t["goal"] for t in task_list]
+        from tools.async_delegation import _new_delegation_id
+        _batch_delegation_id = live_deleg_id or _new_delegation_id()
         dispatch = dispatch_async_delegation_batch(
             goals=_goals,
             context=context,
@@ -4595,24 +4647,13 @@ def delegate_task(
             max_async_children=_get_max_async_children(),
             # Reuse the live-transcript directory's id (when created) so the
             # returned delegation_id matches cache/delegation/live/<id>/.
-            delegation_id=live_deleg_id,
+            delegation_id=_batch_delegation_id,
             progress_fn=_batch_progress,
         )
 
         if dispatch.get("status") == "dispatched":
             n = len(_goals)
-            note = (
-                "Subagent is running in the background. You and the user can "
-                "keep working; its full result re-enters the conversation as a "
-                "new message when it finishes. Do not wait or poll — just "
-                "continue."
-                if n == 1 else
-                f"{n} subagents are running in parallel in the background. You "
-                f"and the user can keep working; they wait on each other and "
-                f"their consolidated results re-enter the conversation as a "
-                f"single message once ALL of them finish. Do not wait or poll "
-                f"— just continue."
-            )
+            note = _background_dispatch_note(n)
             payload = {
                 "status": "dispatched",
                 "mode": "background",
@@ -5245,9 +5286,10 @@ def _build_top_level_description(
         "you. Pass every task in `tasks` — one entry spawns one subagent, "
         "several run in parallel (limit in the tasks description).\n\n"
         "Runs in the background: dispatch returns immediately with live "
-        "transcript paths, and the completed result (one consolidated message, "
-        "results in task order) re-enters the conversation on its own. Do NOT "
-        "wait or poll; continue other work. While children run, `action` "
+        "transcript paths. One subagent's result re-enters on its own. "
+        "Each returns when finished, not as one combined "
+        "message at the end. Do NOT wait or poll; continue other work. "
+        "While children run, `action` "
         "(list/steer/stop) controls them live — steer when a transcript shows "
         "a child drifting.\n\n"
         "USE FOR: reasoning-heavy subtasks, work that would flood your context "
@@ -5492,9 +5534,9 @@ def _model_background_value(args: dict, parent_agent=None) -> bool:
     """Background flag for the MODEL-facing dispatch path (registry fallback).
 
     Delegations from the top-level agent always run in the background — the
-    model does not choose. This applies to both a single task and a fan-out
-    batch (the whole batch is one async unit that joins on all children and
-    returns one consolidated result). The one
+    model does not choose. A single task re-enters as one result. A fan-out
+    publishes each child as it finishes and does not send a second combined
+    message when every child was already published. The one
     exception is a delegation from an orchestrator subagent (depth > 0), which
     needs its workers' results within its own turn. The live path is
     ``run_agent._dispatch_delegate_task``; this lambda mirrors it for the rare

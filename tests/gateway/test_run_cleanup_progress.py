@@ -157,6 +157,92 @@ class InterimAgent:
         return {"final_response": "done", "messages": [], "api_calls": 1}
 
 
+class CodexCommentaryToolAgent(InterimAgent):
+    """Sanitized second smoke-test shape: commentary + opaque reasoning + tool.
+
+    Codex sends phase=commentary through the interim callback, not through
+    reasoning.available; the assistant's top-level content is empty.
+    """
+    mirror_reasoning = False
+    trailing_commentary = False
+    provider_summary = False
+    summary_first = False
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.tool_progress_callback = kwargs.get("tool_progress_callback")
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        assert self.tool_progress_callback is not None
+        if self.summary_first:
+            self.reasoning_callback("Inspecting the request.\n")
+        self.interim_assistant_callback("Checking one item.", already_streamed=False)
+        if self.provider_summary and not self.summary_first:
+            self.reasoning_callback("Inspecting the request.\n")
+        if self.mirror_reasoning:
+            self.tool_progress_callback("reasoning.available", "_thinking", "Checking one item.", None)
+        self.tool_progress_callback("tool.started", "terminal", "pwd", {})
+        if self.trailing_commentary:
+            self.interim_assistant_callback("Closing note.", already_streamed=False)
+        time.sleep(0.2)
+        return {"final_response": "done", "messages": [], "api_calls": 2}
+
+
+class MirroredCommentaryToolAgent(CodexCommentaryToolAgent):
+    mirror_reasoning = True
+    trailing_commentary = True
+
+
+class ProviderSummaryCommentaryToolAgent(CodexCommentaryToolAgent):
+    provider_summary = True
+
+
+class SummaryFirstCommentaryToolAgent(ProviderSummaryCommentaryToolAgent):
+    summary_first = True
+
+
+class SummaryThenAvailableAgent(CodexCommentaryToolAgent):
+    """Live summary, then reasoning.available, then one tool."""
+
+    order = "summary-first"
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        assert self.reasoning_callback is not None
+        if self.order == "summary-first":
+            self.reasoning_callback("Inspecting the request.\n")
+            self.interim_assistant_callback("Checking one item.", already_streamed=False)
+            self.tool_progress_callback(
+                "reasoning.available", "_thinking", "Checking one item.", None,
+            )
+        else:
+            self.tool_progress_callback(
+                "reasoning.available", "_thinking", "Checking one item.", None,
+            )
+            self.reasoning_callback("Inspecting the request.\n")
+            self.interim_assistant_callback("Checking one item.", already_streamed=False)
+        self.tool_progress_callback("tool.started", "terminal", "pwd", {})
+        time.sleep(0.2)
+        return {"final_response": "done", "messages": [], "api_calls": 2}
+
+
+class AvailableThenSummaryAgent(SummaryThenAvailableAgent):
+    order = "available-first"
+
+
+class DisplayOffAvailableAgent(CodexCommentaryToolAgent):
+    """Display off: no provider callback, so only the pending marker counts."""
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        assert self.reasoning_callback is None
+        self.tool_progress_callback(
+            "reasoning.available", "_thinking", "Checking one item.", None,
+        )
+        self.interim_assistant_callback("Checking one item.", already_streamed=False)
+        self.tool_progress_callback("tool.started", "terminal", "pwd", {})
+        time.sleep(0.2)
+        return {"final_response": "done", "messages": [], "api_calls": 2}
+
+
 def _make_runner(adapter):
     gateway_run = importlib.import_module("gateway.run")
     GatewayRunner = gateway_run.GatewayRunner
@@ -220,6 +306,124 @@ def _install_fakes(
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_cls", [
+    CodexCommentaryToolAgent, MirroredCommentaryToolAgent,
+    ProviderSummaryCommentaryToolAgent, SummaryFirstCommentaryToolAgent,
+])
+async def test_codex_commentary_before_tool_is_counted_in_collapsed_card(monkeypatch, tmp_path, agent_cls):
+    adapter = FinalizingCleanupAdapter()
+    runner = _make_runner(adapter)
+    gateway_run = _install_fakes(
+        monkeypatch, agent_cls, cleanup_on=True, interim_on=True,
+    )
+    monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_load_gateway_config", lambda: {
+        "display": {
+            "tool_progress": "all", "thinking_progress": True,
+            "live_reasoning": issubclass(agent_cls, ProviderSummaryCommentaryToolAgent),
+            "platforms": {"telegram": {
+                "cleanup_progress": True, "interim_assistant_messages": True,
+            }},
+        },
+    })
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="-1001")
+    session_key = "agent:main:telegram:group:-1001"
+
+    result = await runner._run_agent(
+        message="hello", context_prompt="", history=[], source=source,
+        session_id="sess-codex-commentary-tool", session_key=session_key,
+    )
+    assert result["final_response"] == "done"
+    assert any("Checking one item." in item["content"] for item in adapter.sent)
+    cb = adapter.pop_post_delivery_callback(session_key)
+    assert callable(cb)
+    await _fire_post_delivery_cb(cb)
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if adapter.edits:
+            break
+    assert adapter.edits
+    card = adapter.edits[-1]["content"]
+    assert "1 thought" in card and "1 tool call" in card
+    assert "2 thought" not in card
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("agent_cls", [
+    SummaryThenAvailableAgent, AvailableThenSummaryAgent,
+])
+async def test_live_summary_and_reasoning_available_count_once(
+    monkeypatch, tmp_path, agent_cls,
+):
+    adapter = FinalizingCleanupAdapter()
+    runner = _make_runner(adapter)
+    gateway_run = _install_fakes(
+        monkeypatch, agent_cls, cleanup_on=True, interim_on=True,
+    )
+    monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_load_gateway_config", lambda: {
+        "display": {
+            "tool_progress": "all", "thinking_progress": True,
+            "live_reasoning": True,
+            "platforms": {"telegram": {
+                "cleanup_progress": True, "interim_assistant_messages": True,
+            }},
+        },
+    })
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="-1001")
+    session_key = "agent:main:telegram:group:-1001"
+    result = await runner._run_agent(
+        message="hello", context_prompt="", history=[], source=source,
+        session_id="sess-summary-available-order", session_key=session_key,
+    )
+    assert result["final_response"] == "done"
+    cb = adapter.pop_post_delivery_callback(session_key)
+    await _fire_post_delivery_cb(cb)
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if adapter.edits:
+            break
+    card = adapter.edits[-1]["content"]
+    assert "1 thought" in card and "1 tool call" in card
+    assert "2 thought" not in card
+
+
+@pytest.mark.asyncio
+async def test_display_off_does_not_install_callback_count(monkeypatch, tmp_path):
+    adapter = FinalizingCleanupAdapter()
+    runner = _make_runner(adapter)
+    gateway_run = _install_fakes(
+        monkeypatch, DisplayOffAvailableAgent, cleanup_on=True, interim_on=True,
+    )
+    monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_load_gateway_config", lambda: {
+        "display": {
+            "tool_progress": "all", "thinking_progress": True,
+            "live_reasoning": False,
+            "platforms": {"telegram": {
+                "cleanup_progress": True, "interim_assistant_messages": True,
+            }},
+        },
+    })
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="-1001")
+    session_key = "agent:main:telegram:group:-1001"
+    result = await runner._run_agent(
+        message="hello", context_prompt="", history=[], source=source,
+        session_id="sess-display-off-available", session_key=session_key,
+    )
+    assert result["final_response"] == "done"
+    cb = adapter.pop_post_delivery_callback(session_key)
+    await _fire_post_delivery_cb(cb)
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if adapter.edits:
+            break
+    card = adapter.edits[-1]["content"]
+    assert "1 thought" in card and "1 tool call" in card
+    assert "2 thought" not in card
 
 
 @pytest.mark.asyncio

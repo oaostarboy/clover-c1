@@ -577,7 +577,13 @@ def _fake_psutil_tree(tree, venv_exe, worker_exe, dead=None):
     dead_set = dead if dead is not None else set()
 
     class FakeProc:
-        def __init__(self, pid):
+        def __init__(self, pid=None):
+            # ``psutil.Process()`` with no pid is the CURRENT process (the
+            # updater). It is not in ``tree``, and its ancestry is readable:
+            # ``parents()`` below says none of the fake gateways is ours.
+            if pid is None:
+                self.pid = os.getpid()
+                return
             self.pid = pid
             if pid in dead_set:
                 raise ValueError(f"process {pid} has exited")

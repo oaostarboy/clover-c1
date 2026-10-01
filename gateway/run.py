@@ -4562,8 +4562,12 @@ class TurnRunner:
             if ctx._pending_thought:
                 ctx._summary_thoughts += 1
                 ctx._pending_thought = False
+            ctx._live_reasoning_since_tool = False
         elif event_type == "reasoning.available" and tool_name == "_thinking":
-            ctx._pending_thought = True
+            # A provider summary in this interval already counted. Do not arm
+            # a second pending thought the way an unseen note would.
+            if not ctx._live_reasoning_since_tool:
+                ctx._pending_thought = True
         elif event_type == "_thinking" or tool_name == "_thinking":
             ctx._summary_thoughts += 1
         # "log" mode: append tool.started lines to the log queue and stay
@@ -5757,6 +5761,15 @@ class TurnRunner:
             if not ctx._run_still_current():
                 return
             display_text = text
+            # Codex phase=commentary is delivered here (including the live
+            # streamed path), while its tool-call assistant.content is empty.
+            # It never emits reasoning.available for that message. Use the
+            # same pending marker as visible assistant notes: the next real
+            # tool confirms a thought, and final-only commentary stays out.
+            # The marker is boolean, so a mirrored reasoning.available event
+            # cannot count this commentary twice.
+            if str(display_text or "").strip() and not ctx._live_reasoning_since_tool:
+                ctx._pending_thought = True
             if _stream_consumer is not None:
                 if already_streamed:
                     _stream_consumer.on_segment_break(interim=True)
@@ -6427,6 +6440,8 @@ class TurnRunner:
                     return
                 ctx.progress_queue.put(f"💭 {line}")
                 ctx._summary_thoughts += 1
+                ctx._live_reasoning_since_tool = True
+                ctx._pending_thought = False
 
             agent.reasoning_callback = _reasoning_progress_callback
         else:
@@ -25867,10 +25882,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             import datetime as _dt
 
             recent = False
-            if started_at:
+            # No readable marker means no proof the receipt belongs to this
+            # run; a success receipt from an earlier update must not be
+            # reported as this run's result.
+            if started_at and pending_mtime > 0.0:
                 try:
                     ts = _dt.datetime.fromisoformat(started_at).timestamp()
-                    recent = pending_mtime == 0.0 or ts >= (pending_mtime - 120)
+                    recent = ts >= (pending_mtime - 120)
                 except ValueError:
                     recent = False
             if recent:
@@ -25878,7 +25896,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 post = receipt.get("post_update") or {}
                 if outcome == "rolled-back":
                     verdict = "rolled-back"
-                elif outcome == "success" or post.get("sha"):
+                elif outcome == "success":
                     verdict = "success"
                     detail = str(
                         post.get("short_sha") or post.get("sha") or ""

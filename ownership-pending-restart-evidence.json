@@ -1,0 +1,30 @@
+{
+  "candidate_base": "9a6537a65c951f966f90d866b401759c7dc063d1",
+  "verification": {
+    "command": "/home/starboy/agents/clover-c1/venv/bin/python -m pytest tests/clover_cli/test_gateway_install_scoped_discovery.py tests/clover_cli/test_update_install_scoped_systemd.py tests/clover_cli/test_update_fleet_restart_pending.py -q",
+    "result": "29 passed in 4.01s",
+    "diff_check": "git diff --check passed"
+  },
+  "ownership_regressions": [
+    "Linux setproctitle short argv title clover accepted only with matching checkout cwd",
+    "shared/system python -u -m clover_cli.main recognized from working directory",
+    "relative clover_cli/main.py recognized from working directory",
+    "venv Python launch with -u and sibling profile accepted; alternate Python executable name in same venv accepted",
+    "existing systemd pending-restart test proves only units whose ExecStart interpreter/entrypoint ownership matches the invoking install are restarted; custom unit and sibling profile cases are covered by fixtures"
+  ],
+  "pending_restart_boundary": {
+    "executed_path": "_restart_systemd_gateway_units_best_effort invoked by _run_pending_fleet_restart; exercised with intercepted subprocess calls and two same-/usr/bin/python3 units",
+    "safe_boundary": "Requires keyed ExecStart path/argv and explicit WorkingDirectory or CLOVER_HOME matching the active installation (or a profile beneath it); mismatched or absent home metadata is rejected. VIRTUAL_ENV, when present, must also match.",
+    "unresolved_boundary": null,
+    "outcome": "Shared-system-Python homes are isolated in an end-to-end pending-restart fake-subprocess test. No live service was touched."
+  },
+  "modified_files": [
+    "clover_cli/gateway.py",
+    "clover_cli/update_cmd.py",
+    "tests/clover_cli/test_gateway_install_scoped_discovery.py",
+    "tests/clover_cli/test_update_install_scoped_systemd.py"
+  ],
+  "not_done": [
+    "No live restart, merge, or deployment; PR remains open for review"
+  ]
+}

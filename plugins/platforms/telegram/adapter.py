@@ -8893,6 +8893,15 @@ class TelegramAdapter(BasePlatformAdapter):
             text,
         )
 
+        # Accept underscore-delimited Markdown italics as well. Word-boundary
+        # guards keep snake_case identifiers literal. Run after asterisk
+        # emphasis so nested bold/code placeholders survive the outer wrapper.
+        text = re.sub(
+            r'(?<![\w\\])_(?!_)([^\n]+?)(?<!_)_(?![\w_])',
+            lambda m: _ph(f'_{_escape_mdv2(m.group(1))}_'),
+            text,
+        )
+
         # 7) Convert strikethrough: ~~text~~ → ~text~ (MarkdownV2)
         text = re.sub(
             r'~~(.+?)~~',
