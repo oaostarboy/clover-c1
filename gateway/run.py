@@ -25893,7 +25893,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 post = receipt.get("post_update") or {}
                 if outcome == "rolled-back":
                     verdict = "rolled-back"
-                elif outcome == "success" or post.get("sha"):
+                elif outcome == "success":
                     verdict = "success"
                     detail = str(
                         post.get("short_sha") or post.get("sha") or ""

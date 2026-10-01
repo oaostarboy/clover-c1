@@ -288,6 +288,27 @@ async def test_restart_already_in_progress_and_draining(monkeypatch, tmp_path, s
 
 
 @pytest.mark.asyncio
+async def test_failed_receipt_with_post_update_sha_is_not_reported_as_success(monkeypatch, tmp_path):
+    monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
+    receipts = tmp_path / "logs" / "update_receipts"
+    receipts.mkdir(parents=True)
+    (receipts / "latest.json").write_text(json.dumps({
+        "outcome": "failed", "started_at": "2999-01-01T00:00:00+00:00",
+        "post_update": {"sha": "a" * 40},
+    }), encoding="utf-8")
+    runner, adapter = make_restart_runner()
+    paths = [tmp_path / n for n in ("p", "c", "o", "e", "q")]
+
+    await runner._conclude_update_after_updater_death(
+        *paths, adapter=adapter, chat_id="42", session_key=None,
+        metadata=None, platform=Platform.TELEGRAM,
+    )
+
+    assert "did not complete" in adapter.sent[0]
+    assert "finished" not in adapter.sent[0]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("skin,clo", [("clover", True), ("default", False)])
 async def test_update_rolled_back_notice(monkeypatch, tmp_path, skin, clo):
     _set_skin(monkeypatch, skin)
