@@ -6396,14 +6396,26 @@ def _restore_windows_gateway_service(name: str, *, timeout: float = 60.0) -> Non
     )
 
 
-def _own_ancestor_pids() -> set[int]:
-    """PIDs of this process's live ancestors (empty without psutil)."""
+def _own_ancestor_pids() -> set[int] | None:
+    """PIDs of this process's live ancestors, or ``None`` when unreadable.
+
+    ``None`` is NOT "no ancestors". ``parents()`` raises AccessDenied when the
+    walk reaches a SYSTEM/elevated parent, or when a parent exits mid-walk.
+    Callers must then treat every PID as a possible ancestor and never tree
+    kill it: a chat ``/update`` runs inside the gateway's process tree.
+    """
     try:
         import psutil
 
         return {int(p.pid) for p in psutil.Process().parents()}
-    except Exception:
-        return set()
+    except Exception as exc:
+        logger.warning("Could not read this process's ancestry: %s", exc)
+        return None
+
+
+def _may_be_own_ancestor(pid: int, own_ancestry: set[int] | None) -> bool:
+    """True when ``pid`` is, or cannot be ruled out as, one of our ancestors."""
+    return own_ancestry is None or int(pid) in own_ancestry
 
 
 def _force_stop_single_process(pid: int) -> None:
@@ -6637,16 +6649,19 @@ def _pause_windows_gateways_for_update() -> dict | None:
     own_ancestry = _m()._own_ancestor_pids()
     for pid in sorted(set(survivors).union(unmapped_pids).union(launcher_pids)):
         try:
-            if int(pid) in own_ancestry:
+            if _may_be_own_ancestor(pid, own_ancestry):
                 # /update from a chat runs this updater INSIDE the gateway's
                 # process tree; ``terminate_pid(force=True)`` is taskkill /T
-                # and would take the updater down with the gateway.
+                # and would take the updater down with the gateway. Unknown
+                # ancestry is treated the same way.
                 _m()._force_stop_single_process(int(pid))
             else:
                 terminate_pid(int(pid), force=True)
             force_killed.append(int(pid))
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+        except ProcessLookupError:
+            pass  # already gone, e.g. a launcher that exited with its worker
+        except (PermissionError, OSError) as exc:
+            logger.warning("Could not force-stop gateway process %s: %s", pid, exc)
 
     if profiles:
         print(f"  ✓ Paused gateway profile(s): {', '.join(sorted(profiles))}")
@@ -8422,9 +8437,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 _own_ancestry = _m()._own_ancestor_pids()
                 for _pid in _gateway_holders:
                     try:
-                        if int(_pid) in _own_ancestry:
+                        if _may_be_own_ancestor(_pid, _own_ancestry):
                             # Never tree-kill our own ancestry (/update
-                            # from a chat runs inside the gateway tree).
+                            # from a chat runs inside the gateway tree),
+                            # nor any PID when the ancestry is unreadable.
                             _m()._force_stop_single_process(int(_pid))
                         else:
                             terminate_pid(int(_pid), force=True)

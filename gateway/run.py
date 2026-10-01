@@ -25882,10 +25882,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             import datetime as _dt
 
             recent = False
-            if started_at:
+            # No readable marker means no proof the receipt belongs to this
+            # run; a success receipt from an earlier update must not be
+            # reported as this run's result.
+            if started_at and pending_mtime > 0.0:
                 try:
                     ts = _dt.datetime.fromisoformat(started_at).timestamp()
-                    recent = pending_mtime == 0.0 or ts >= (pending_mtime - 120)
+                    recent = ts >= (pending_mtime - 120)
                 except ValueError:
                     recent = False
             if recent:

@@ -298,6 +298,9 @@ async def test_failed_receipt_with_post_update_sha_is_not_reported_as_success(mo
     }), encoding="utf-8")
     runner, adapter = make_restart_runner()
     paths = [tmp_path / n for n in ("p", "c", "o", "e", "q")]
+    # This run's pending marker, so the receipt above counts as THIS run's
+    # (a receipt with no readable marker is treated as stale).
+    paths[0].write_text("{}", encoding="utf-8")
 
     await runner._conclude_update_after_updater_death(
         *paths, adapter=adapter, chat_id="42", session_key=None,
@@ -320,6 +323,8 @@ async def test_update_rolled_back_notice(monkeypatch, tmp_path, skin, clo):
     }), encoding="utf-8")
     runner, adapter = make_restart_runner()
     paths = [tmp_path / n for n in ("p", "c", "o", "e", "q")]
+    # This run's pending marker, so the receipt above counts as THIS run's.
+    paths[0].write_text("{}", encoding="utf-8")
 
     await runner._conclude_update_after_updater_death(
         *paths, adapter=adapter, chat_id="42", session_key=None,
