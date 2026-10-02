@@ -6822,12 +6822,38 @@ def _cold_start_windows_gateway_after_update() -> bool:
     return True
 
 
+def _systemd_interpreter_path_matches(candidate: str, expected: str) -> bool:
+    """Match the exact interpreter path or a verified alias in the same venv."""
+    candidate_abs = os.path.abspath(candidate)
+    expected_abs = os.path.abspath(expected)
+    if candidate_abs == expected_abs:
+        return True
+
+    candidate_path = Path(candidate_abs)
+    expected_path = Path(expected_abs)
+    python_alias = re.compile(r"python(?:3(?:\.[0-9]+)?)?\Z")
+    if (
+        candidate_path.parent != expected_path.parent
+        or not python_alias.fullmatch(candidate_path.name)
+        or not python_alias.fullmatch(expected_path.name)
+    ):
+        return False
+    try:
+        if not (candidate_path.parent.parent / "pyvenv.cfg").is_file():
+            return False
+        return os.path.samefile(candidate_abs, expected_abs)
+    except OSError:
+        return False
+
+
 def _systemd_unit_owned_by_install(
     scope_cmd: list[str], unit: str, interpreter: str | None = None
 ) -> bool:
     """Check the gateway entrypoint and its venv, not a globally shared unit name.
 
-    Do not resolve interpreter symlinks: distinct venvs may share base Python.
+    Do not identify an install by a globally resolved interpreter: distinct
+    venvs may share base Python. Only verified aliases in one lexical venv
+    directory are interchangeable.
     Unknown or contradictory metadata is not permission to restart a unit.
     """
     expected = os.path.abspath(interpreter or sys.executable)
@@ -6846,13 +6872,18 @@ def _systemd_unit_owned_by_install(
     exec_start = fields.get("ExecStart", "")
     path = re.search(r"(?:^|[;{])\s*path=([^;\s}]+)", exec_start)
     argv = re.search(r"(?:^|[;{])\s*argv\[\]=([^;}]*)", exec_start)
-    if not path or not argv or os.path.abspath(path.group(1)) != expected:
+    if not path or not argv:
         return False
     try:
         args = shlex.split(argv.group(1).strip())
     except ValueError:
         return False
-    if not args or os.path.abspath(args[0]) != expected:
+    if (
+        not args
+        or os.path.abspath(path.group(1)) != os.path.abspath(args[0])
+        or not _systemd_interpreter_path_matches(path.group(1), expected)
+        or not _systemd_interpreter_path_matches(args[0], expected)
+    ):
         return False
     if len(args) < 4 or args[1:3] != ["-m", "clover_cli.main"]:
         return False
