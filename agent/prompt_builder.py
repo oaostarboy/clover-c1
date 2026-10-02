@@ -510,6 +510,13 @@ PLAN_FIRST_DELEGATION_GUIDANCE = (
     "model is configured."
 )
 
+TODO_DELEGATION_DECISION_GUIDANCE = (
+    "For a substantial plan, record todo delegation mode 'delegate' or "
+    "'direct' with a brief operational reason. Quick tasks stay direct; "
+    "respect explicit no-subagent instructions. This records intent only: "
+    "it does not require spawning a worker or prove one ran."
+)
+
 PARALLEL_TOOL_CALL_GUIDANCE = (
     "# Parallel tool calls\n"
     "When you need several pieces of information that don't depend on each "

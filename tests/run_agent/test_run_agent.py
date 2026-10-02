@@ -954,6 +954,29 @@ class TestHydrateTodoStore:
         assert agent._todo_store.snapshot()["revision"] == 2
         assert agent._todo_store.read()[0]["id"] == "new"
 
+    def test_history_resume_restores_delegation_decision(self, agent):
+        history = [
+            self._assistant_todo_call(),
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": json.dumps({
+                    "todos": [{"id": "new", "content": "Recovered", "status": "pending"}],
+                    "revision": 2,
+                    "delegation": {"mode": "direct", "reason": "Small scope"},
+                    "delegation_reminded": True,
+                }),
+            },
+        ]
+
+        with patch("run_agent._set_interrupt"):
+            agent._hydrate_todo_store(history)
+
+        assert agent._todo_store.snapshot()["delegation"] == {
+            "mode": "direct", "reason": "Small scope"
+        }
+        assert agent._todo_store.snapshot()["delegation_reminded"] is True
+
 
 
 

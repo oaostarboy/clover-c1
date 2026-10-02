@@ -4649,6 +4649,8 @@ class AIAgent:
         # Walk history backwards to find the most recent todo tool response
         last_todo_response = None
         last_todo_revision = 0
+        last_todo_delegation = None
+        last_todo_delegation_reminded = False
         for idx in range(len(history) - 1, -1, -1):
             msg = history[idx]
             if msg.get("role") != "tool":
@@ -4675,6 +4677,8 @@ class AIAgent:
                 if "todos" in data and isinstance(data["todos"], list):
                     last_todo_response = data["todos"]
                     last_todo_revision = data.get("revision", 1)
+                    last_todo_delegation = data.get("delegation")
+                    last_todo_delegation_reminded = data.get("delegation_reminded", False) is True
                     break
             except (json.JSONDecodeError, TypeError):
                 continue
@@ -4697,6 +4701,8 @@ class AIAgent:
                 self._todo_store.restore(
                     last_todo_response,
                     revision=history_revision,
+                    delegation=last_todo_delegation,
+                    delegation_reminded=last_todo_delegation_reminded,
                 )
                 if not self.quiet_mode:
                     self._vprint(f"{self.log_prefix}📋 Restored {len(last_todo_response)} todo item(s) from history")

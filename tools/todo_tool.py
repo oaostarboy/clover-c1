@@ -36,6 +36,7 @@ MAX_TODO_ITEMS = 256
 # history to rebuild the store, so an oversized forged result is dropped
 # before it is parsed and re-injected (see AIAgent._hydrate_todo_store).
 MAX_TODO_RESULT_CHARS = 512_000
+MAX_DELEGATION_REASON_CHARS = 500
 _TRUNCATION_MARKER = "… [truncated]"
 # Persisted as ordinary message content. ContextCompressor uses this stable
 # header to distinguish the synthetic post-compaction row from a real user.
@@ -58,6 +59,8 @@ class TodoStore:
     def __init__(self):
         self._items: List[Dict[str, str]] = []
         self._revision = 0
+        self._delegation: Optional[Dict[str, str]] = None
+        self._delegation_reminded = False
 
     def write(self, todos: List[Dict[str, Any]], merge: bool = False) -> List[Dict[str, str]]:
         """
@@ -69,6 +72,9 @@ class TodoStore:
                    existing items by id and append new ones.
         """
         before = self.read()
+        before_delegation = dict(self._delegation) if self._delegation else None
+        before_reminded = self._delegation_reminded
+        previous_roots = {item["id"] for item in before if not item.get("parent")}
         if not merge:
             # Replace mode: new list entirely
             self._items = self._normalize_order(
@@ -116,7 +122,27 @@ class TodoStore:
         if len(self._items) > MAX_TODO_ITEMS:
             self._items = self._items[:MAX_TODO_ITEMS]
         self._sanitize_parents(self._items)
-        if self._items != before:
+        current_roots = {item["id"] for item in self._items if not item.get("parent")}
+        was_active = any(
+            item["status"] in {"pending", "in_progress"} for item in before
+        )
+        is_active = any(
+            item["status"] in {"pending", "in_progress"} for item in self._items
+        )
+        if not merge and previous_roots and current_roots != previous_roots:
+            self._delegation = None
+            self._delegation_reminded = False
+        elif is_active and not was_active:
+            self._delegation = None
+            self._delegation_reminded = False
+        elif not is_active:
+            self._delegation = None
+            self._delegation_reminded = False
+        metadata_changed = (
+            self._delegation != before_delegation
+            or self._delegation_reminded != before_reminded
+        )
+        if self._items != before or metadata_changed:
             self._revision += 1
         return self.read()
 
@@ -130,13 +156,19 @@ class TodoStore:
 
     def snapshot(self) -> Dict[str, Any]:
         """Return the full state clients can reconcile atomically."""
-        return {"todos": self.read(), "revision": self._revision}
+        return {
+            "todos": self.read(), "revision": self._revision,
+            "delegation": dict(self._delegation) if self._delegation else None,
+            "delegation_reminded": self._delegation_reminded,
+        }
 
     def restore(
         self,
         todos: List[Dict[str, Any]],
         *,
         revision: Any = 0,
+        delegation: Optional[Dict[str, Any]] = None,
+        delegation_reminded: bool = False,
     ) -> List[Dict[str, str]]:
         """Restore a trusted snapshot without manufacturing a new revision."""
         self._items = self._normalize_order(
@@ -146,7 +178,25 @@ class TodoStore:
             self._revision = max(0, int(revision or 0))
         except (TypeError, ValueError):
             self._revision = 0
+        self._delegation = _normalize_delegation(delegation) if delegation is not None else None
+        self._delegation_reminded = delegation_reminded is True
         return self.read()
+
+    def set_delegation(self, decision: Dict[str, str]) -> None:
+        if self._delegation != decision:
+            self._delegation = dict(decision)
+            self._revision += 1
+        self._delegation_reminded = True
+
+    def should_remind_delegation(self) -> bool:
+        has_active_plan = any(
+            item["status"] in {"pending", "in_progress"} for item in self._items
+        )
+        if self._delegation is not None or self._delegation_reminded or not has_active_plan:
+            return False
+        self._delegation_reminded = True
+        self._revision += 1
+        return True
 
     def format_for_injection(self) -> Optional[str]:
         """
@@ -200,6 +250,13 @@ class TodoStore:
             render(item, 0, lines)
         if len(lines) == 1:
             return None
+
+        if self._delegation is not None:
+            decision = self._delegation
+            lines.insert(
+                1,
+                f"Delegation decision: mode={decision['mode']}; reason={decision['reason']}",
+            )
 
         return "\n".join(lines)
 
@@ -317,6 +374,8 @@ def todo_tool(
     todos: Optional[List[Dict[str, Any]]] = None,
     merge: bool = False,
     store: Optional[TodoStore] = None,
+    delegation: Optional[Dict[str, Any]] = None,
+    delegation_check: bool = False,
 ) -> str:
     """
     Single entry point for the todo tool. Reads or writes depending on params.
@@ -332,6 +391,12 @@ def todo_tool(
     if store is None:
         return tool_error("TodoStore not initialized")
 
+    normalized_delegation = None
+    if delegation is not None:
+        normalized_delegation = _normalize_delegation(delegation)
+        if normalized_delegation is None:
+            return tool_error("delegation must contain mode 'delegate' or 'direct' and a non-empty reason")
+
     if todos is not None:
         # Guard: LLM sometimes sends todos as a JSON string instead of a list
         if isinstance(todos, str):
@@ -344,7 +409,11 @@ def todo_tool(
                 f"todos must be a list, got {type(todos).__name__}"
             )
         items = store.write(todos, merge)
+        if normalized_delegation is not None:
+            store.set_delegation(normalized_delegation)
     else:
+        if normalized_delegation is not None:
+            store.set_delegation(normalized_delegation)
         items = store.read()
 
     # Build summary counts
@@ -352,10 +421,18 @@ def todo_tool(
     in_progress = sum(1 for i in items if i["status"] == "in_progress")
     completed = sum(1 for i in items if i["status"] == "completed")
     cancelled = sum(1 for i in items if i["status"] == "cancelled")
+    reminder = (
+        todos is not None and delegation_check and store.should_remind_delegation()
+    )
+    snapshot = store.snapshot()
 
     return json.dumps({
         "todos": items,
-        "revision": store.snapshot()["revision"],
+        "revision": snapshot["revision"],
+        "delegation_reminded": snapshot["delegation_reminded"],
+        **({"delegation": dict(store._delegation)} if store._delegation else {}),
+        **({"reminder": "Record delegation: {mode: 'delegate' or 'direct', reason: '<brief operational rationale>'} in this plan's todo write."}
+           if reminder else {}),
         "summary": {
             "total": len(items),
             "pending": pending,
@@ -364,6 +441,38 @@ def todo_tool(
             "cancelled": cancelled,
         },
     }, ensure_ascii=False)
+
+
+def _normalize_delegation(value: Any) -> Optional[Dict[str, str]]:
+    if not isinstance(value, dict) or set(value) != {"mode", "reason"}:
+        return None
+    mode = value.get("mode")
+    reason = value.get("reason")
+    if not isinstance(mode, str) or mode not in {"delegate", "direct"}:
+        return None
+    if not isinstance(reason, str) or not reason.strip():
+        return None
+    reason = " ".join(reason.split())[:MAX_DELEGATION_REASON_CHARS]
+    return {"mode": mode, "reason": reason}
+
+
+def delegation_check_for_agent(agent: Any) -> bool:
+    """Enable the reminder only for a root with both required tools."""
+    names = getattr(agent, "valid_tool_names", None) or set()
+    if "todo" not in names or "delegate_task" not in names:
+        return False
+    if (
+        getattr(agent, "_delegate_depth", 0)
+        or getattr(agent, "_subagent_id", None)
+        or getattr(agent, "platform", None) == "subagent"
+    ):
+        return False
+    try:
+        from agent.delegation_context import is_delegated_child_context
+
+        return not is_delegated_child_context()
+    except Exception:
+        return False
 
 
 def check_todo_requirements() -> bool:
@@ -429,6 +538,16 @@ TODO_SCHEMA = {
                     "false (default): replace the entire list with a fresh plan."
                 ),
                 "default": False
+            },
+            "delegation": {
+                "type": "object",
+                "description": "Optional plan-level delegation decision. Give a brief operational rationale, not private reasoning.",
+                "properties": {
+                    "mode": {"type": "string", "enum": ["delegate", "direct"]},
+                    "reason": {"type": "string", "maxLength": MAX_DELEGATION_REASON_CHARS}
+                },
+                "required": ["mode", "reason"],
+                "additionalProperties": False
             }
         },
         "required": []
@@ -444,7 +563,8 @@ registry.register(
     toolset="todo",
     schema=TODO_SCHEMA,
     handler=lambda args, **kw: todo_tool(
-        todos=args.get("todos"), merge=args.get("merge", False), store=kw.get("store")),
+        todos=args.get("todos"), merge=args.get("merge", False), store=kw.get("store"),
+        delegation=args.get("delegation"), delegation_check=kw.get("delegation_check", False)),
     check_fn=check_todo_requirements,
     emoji="📋",
 )

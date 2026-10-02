@@ -513,6 +513,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         if not is_delegated_child_context():
             stable_parts.append(PLAN_FIRST_DELEGATION_GUIDANCE)
 
+    from tools.todo_tool import delegation_check_for_agent
+
+    if delegation_check_for_agent(agent):
+        from agent.prompt_builder import TODO_DELEGATION_DECISION_GUIDANCE
+
+        stable_parts.append(TODO_DELEGATION_DECISION_GUIDANCE)
+
     # Universal parallel-tool-call guidance.  Tells the model to batch
     # independent tool calls into one assistant turn rather than emitting one
     # call per turn — the runtime already runs independent calls concurrently

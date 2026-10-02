@@ -76,6 +76,27 @@ def _stable_prompt(agent):
         return build_system_prompt_parts(agent)["stable"]
 
 
+def test_delegation_decision_guidance_requires_todo_and_delegation_tools():
+    prompt = _stable_prompt(_make_agent(valid_tool_names={"todo", "delegate_task"}))
+
+    assert "record todo delegation mode" in prompt
+
+
+def test_delegation_decision_guidance_is_absent_without_todo():
+    prompt = _stable_prompt(_make_agent(valid_tool_names={"delegate_task"}))
+
+    assert "record todo delegation mode" not in prompt
+
+
+def test_delegation_decision_guidance_is_absent_for_child_identity():
+    prompt = _stable_prompt(_make_agent(
+        valid_tool_names={"todo", "delegate_task"},
+        _delegate_depth=1,
+    ))
+
+    assert "record todo delegation mode" not in prompt
+
+
 def _prompt_parts(agent):
     with (
         patch("run_agent.load_soul_md", return_value=""),
