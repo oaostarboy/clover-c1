@@ -1,0 +1,35 @@
+name: Linux catch-up Windows isolation proof
+on:
+  push:
+    branches: ["proof/linux-catchup-windows"]
+permissions:
+  contents: read
+jobs:
+  windows-isolation:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.9.28"
+          enable-cache: true
+      - name: Install test dependencies
+        run: uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web
+      - name: Baseline Windows regressions
+        shell: pwsh
+        run: |
+          git worktree add --detach baseline fb4e4f0a
+          $python = (Resolve-Path .venv/Scripts/python.exe).Path
+          Push-Location baseline
+          & $python -m pytest -o addopts= -p no:randomly -p no:cacheprovider --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py tests/gateway/test_update_command.py tests/gateway/test_update_streaming.py
+          $result = $LASTEXITCODE
+          Pop-Location
+          if ($result -ne 0) { exit $result }
+      - name: Candidate Windows regressions and Linux guard traps
+        shell: pwsh
+        run: |
+          .venv/Scripts/python.exe -m pytest -o addopts= -p no:randomly -p no:cacheprovider --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py tests/gateway/test_update_command.py tests/gateway/test_update_streaming.py 
+          exit $LASTEXITCODE
