@@ -3597,6 +3597,11 @@ def _windows_gateways_relaunched_now(token: dict | None) -> bool:
     )
 
 
+# Bounded wait for restarted gateways to publish their new PID + code_sha.
+_LINUX_CATCHUP_VERIFY_TIMEOUT = 90.0
+_LINUX_CATCHUP_VERIFY_INTERVAL = 2.0
+
+
 def _apply_linux_systemd_catchup(pre_restart_pids: set[int]) -> None:
     """Persist proof, restart owned Linux systemd services, verify successors."""
     from clover_cli import linux_catchup_handoff as handoff
@@ -3616,10 +3621,23 @@ def _apply_linux_systemd_catchup(pre_restart_pids: set[int]) -> None:
         print("  ⚠ Fleet restart incomplete. Recover with: clover gateway restart")
         sys.exit(1)
     latest = home / "logs" / "update_receipts" / "latest.json"
-    fleet = receipt.collect_fleet_versions()
-    if not handoff.verify_and_finalize_receipt(latest, clover_home=home, fleet=fleet):
-        print("  ⚠ Linux systemd catch-up restart could not be verified; leaving it pending.")
-        sys.exit(1)
+    # ``systemctl restart`` returns before the successor has rewritten
+    # gateway_state.json with its new PID/code_sha, so the first probe can
+    # still show the old PID. Poll a bounded window; the verification itself
+    # (new PID, expected sha, receipt ownership) is unchanged.
+    deadline = _time.monotonic() + _LINUX_CATCHUP_VERIFY_TIMEOUT
+    announced = False
+    while True:
+        fleet = receipt.collect_fleet_versions()
+        if handoff.verify_and_finalize_receipt(latest, clover_home=home, fleet=fleet):
+            break
+        if _time.monotonic() + _LINUX_CATCHUP_VERIFY_INTERVAL > deadline:
+            print("  ⚠ Linux systemd catch-up restart could not be verified; leaving it pending.")
+            sys.exit(1)
+        if not announced:
+            print("  Waiting for the restarted gateway to publish its new identity...")
+            announced = True
+        _time.sleep(_LINUX_CATCHUP_VERIFY_INTERVAL)
     if receipt._current is not None:
         receipt._current.data["linux_systemd_catchup"]["verified"] = True
 
