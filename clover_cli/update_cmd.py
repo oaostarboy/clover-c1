@@ -3451,7 +3451,9 @@ def _own_install_gateway_pids(pids):
         try:
             args = _gateway_pid_cmdline_path(pid).read_bytes().split(b"\0")
             executable = os.fsdecode(args[0])
-            if os.path.abspath(executable) == expected:
+            # Same rule as the systemd unit check: ``venv/bin/python`` and
+            # ``venv/bin/python3`` are one install; another venv is not.
+            if _systemd_interpreter_path_matches(executable, expected):
                 selected.append(pid)
         except (OSError, IndexError, ValueError):
             continue
