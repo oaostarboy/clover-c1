@@ -23245,7 +23245,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # intentionally held back (see the `not already_sent` gate above).
                 # Send it now as a small trailing message so Telegram/Discord/etc.
                 # still surface the runtime metadata on the final reply.
-                if _footer_line:
+                if _footer_line and not _intentional_silence:
                     try:
                         _foot_adapter = self._adapter_for_source(source)
                         if _foot_adapter:
@@ -32093,6 +32093,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if _cleanup_registered:
                 return
             _cleanup_registered = True
+            try:
+                from gateway.response_filters import is_intentional_silence_agent_result
+                _silent_cleanup = is_intentional_silence_agent_result(
+                    response, response.get("final_response") if isinstance(response, dict) else None,
+                )
+            except Exception:
+                _silent_cleanup = False
             _pub_end = getattr(turn_ctx, "delegation_activity", None)
             if _pub_end is not None and hasattr(_pub_end, "end_turn"):
                 # Runs after this function registers the card below, so
@@ -32138,7 +32145,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _absorbed_ids: list = []
                 _pub = getattr(turn_ctx, "delegation_activity", None)
                 _card_edit = getattr(type(_adapter_snapshot), "edit_message", None)
-                if _pub is not None and getattr(_pub, "combined", False) and _card_edit is not None:
+                if (
+                    not _silent_cleanup
+                    and _pub is not None
+                    and getattr(_pub, "combined", False)
+                    and _card_edit is not None
+                ):
                     try:
                         from agent.delegation_activity import turn_card_body
                         _workers, _absorbed_ids = _pub.absorb_finished()
@@ -32149,7 +32161,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _worker_rows, _worker_count, _absorbed_ids = [], 0, []
                 try:
                     from agent.turn_summary import format_collapsed_turn_card
-                    _card_text = format_collapsed_turn_card(
+                    _card_text = "" if _silent_cleanup else format_collapsed_turn_card(
                         turn_ctx._summary_thoughts,
                         turn_ctx._summary_tools,
                         time.monotonic() - turn_ctx._summary_t0,
