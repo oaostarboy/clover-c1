@@ -95,6 +95,11 @@ _TELEGRAM_CONNECT_TIMEOUT_SECS_DEFAULT = 180.0
 # 180s budget (is_reconnect=True preserves the offline update queue, #46621).
 _TELEGRAM_INITIAL_CONNECT_TIMEOUT_SECS_DEFAULT = 45.0
 _ADAPTER_DISCONNECT_TIMEOUT_SECS_DEFAULT = 5.0
+from gateway.completion_ownership import (  # noqa: E402
+    USER_BOUNDARY_END_REASONS,
+    canonical_profile,
+)
+
 # End reasons that mean the USER deliberately closed this thread of work
 # (/new -> session_reset / new_session, an explicit exit, or a /switch).
 # Shared by _classify_completion_target (pre-flight verdict) and
@@ -103,12 +108,9 @@ _ADAPTER_DISCONNECT_TIMEOUT_SECS_DEFAULT = 5.0
 # the resolver actually delivers, otherwise the durable row is acked at
 # adapter acceptance and then silently dropped inside the pipeline —
 # a falsely-acknowledged permanent loss.
-_USER_BOUNDARY_END_REASONS = (
-    "session_reset",
-    "user_exit",
-    "session_switch",
-    "new_session",
-)
+_USER_BOUNDARY_END_REASONS = USER_BOUNDARY_END_REASONS
+# resolve_owner verdict -> the pre-flight class _classify_completion_target returns.
+_COMPLETION_VERDICT_CLASS = {"deliver": "deliver", "unowned": "terminal", "retry": "retry"}
 # Round-2 #2: upper bound on a single stall-notify adapter.send so a wedged
 # transport cannot block the session-stall watcher pass (notify-only path;
 # on timeout the latch stays clear and the next tick retries).
@@ -2753,6 +2755,7 @@ from gateway.session import (
 )
 from gateway.delivery import (
     DeliveryRouter,
+    DeliveryTransport,
     looks_like_telegram_private_chat_id,
     resolve_delivery_transport,
 )
@@ -14120,6 +14123,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # to /new (does not kill the turn; see agent.session_stall_timeout).
         self._spawn_supervised(self._session_stall_watcher, "session_stall_watcher")
 
+        # One short notice per background result that was dropped before the
+        # assistant saw it (session_inbox notice_state='pending').
+        self._spawn_supervised(self._inbox_notice_watcher, "inbox_notice_watcher")
+
         # Start background kanban notifier — each gateway delivers events for
         # subscriptions owned by the profiles whose adapters it hosts, even
         # when another gateway owns the single dispatcher.
@@ -14161,6 +14168,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # destination platform's home channel, then forges a synthetic user
         # turn so the agent kicks off the new chat.
         self._spawn_supervised(self._handoff_watcher, "handoff_watcher")
+
+        # A drop commits before its inbox record is written; a crash in between
+        # leaves a dropped delegation nobody was told about. Mirror them now.
+        await self._repair_dropped_delegations()
 
         # Start background async-delegation watcher — drains completion events
         # from delegate_task(background=true) subagents and injects each
@@ -15251,6 +15262,209 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # Interruptible sleep
             steps = max(1, int(float(interval)))
             for _ in range(steps):
+                if not self._running:
+                    break
+                await asyncio.sleep(1)
+
+    async def _send_inbox_notice(self, record: Dict[str, Any], text: str) -> None:
+        """Deliver *text* to the inbox record's OWN route (never the caller's).
+
+        ``NoticeNotSent`` is raised only BEFORE the transport is called (no
+        usable route / adapter, adapter not connected). Once ``send`` has been
+        attempted every outcome — exception, timeout, or ``success=False``
+        (adapters fold post-send errors into that result) — is ambiguous, so it
+        propagates as an ordinary failure and the notice stays ``uncertain``.
+        """
+        from gateway.inbox_notices import NoticeNotSent
+
+        if not record.get("platform") or not record.get("chat_id"):
+            # A record written without a route: recover it from the owner
+            # session's persisted origin (sessions table), never from the key.
+            from gateway.completion_ownership import route_from_session_row
+
+            recovered = None
+            for sid in (record.get("owner_root_id"),):
+                if sid:
+                    try:
+                        recovered = route_from_session_row(await self._session_db.get_session(sid))
+                    except Exception:
+                        logger.debug("Notice route recovery failed for %s", sid, exc_info=True)
+                if recovered:
+                    break
+            if not recovered:
+                raise NoticeNotSent("record has no route and its owner has no persisted origin")
+            record = {**record, **{k: v for k, v in recovered.items() if v is not None}}
+        try:
+            platform = Platform(str(record.get("platform") or ""))
+        except ValueError:
+            raise NoticeNotSent(f"unknown platform {record.get('platform')!r}")
+        chat_id = str(record.get("chat_id") or "")
+        if not chat_id:
+            raise NoticeNotSent("record has no chat")
+        session_key = str(record.get("session_key") or "")
+        thread_id = record.get("thread_id") or None
+        parsed = _parse_session_key(session_key) or {}
+        # Prefer the persisted origin of the route (carries relay provenance,
+        # scope and user ids the transport needs); it is keyed by session_key,
+        # so it is the record's own route. Verify before trusting it.
+        source = None
+        try:
+            source = self._build_process_event_source({
+                "session_key": session_key,
+                "platform": platform.value,
+                "chat_type": parsed.get("chat_type") or "dm",
+                "chat_id": chat_id,
+                "thread_id": thread_id,
+            })
+        except Exception:
+            logger.debug("Notice route origin lookup failed", exc_info=True)
+        if (
+            source is None
+            or str(source.chat_id or "") != chat_id
+            or (str(source.thread_id) if source.thread_id else None) != (str(thread_id) if thread_id else None)
+        ):
+            source = SessionSource(
+                platform=platform,
+                chat_id=chat_id,
+                chat_type=parsed.get("chat_type") or "dm",
+                thread_id=thread_id,
+            )
+        profile = record.get("profile") or None
+        if profile and getattr(source, "profile", None) != profile:
+            source = dataclasses.replace(source, profile=profile)
+        adapter = self._adapter_for_source(source)
+        if adapter is None and (
+            not profile or profile == "default" or profile == self._active_profile_name()
+        ):
+            # Relay-only deployments: one RelayAdapter fronts the logical
+            # platform. Same alias-aware resolution normal outbound delivery
+            # uses; never for a stamped secondary profile (wrong bot).
+            try:
+                transport = resolve_delivery_transport(platform, self.config, self.adapters)
+            except Exception:
+                transport = None
+            if transport is not None:
+                adapter = transport.adapter
+        if adapter is None:
+            raise NoticeNotSent("no live adapter for route")
+        metadata = self._thread_metadata_for_source(source)
+        if getattr(adapter, "platform", None) == Platform.RELAY:
+            # A relay route is delivered exactly like any other outbound reply
+            # on it (DeliveryTransport.send): ready when the authenticated
+            # transport fronts the logical platform (the handshake identity
+            # set) — RelayAdapter never sets the inherited ``is_connected``
+            # flag — and sent through ``send_for_platform`` with the logical
+            # platform stamped on the frame. The tenant discriminators the
+            # connector's egress guard needs come from the route's persisted
+            # origin, because a notice has no fresh inbound turn to prime the
+            # adapter's per-chat caches.
+            if getattr(adapter, "_transport", None) is None or not adapter.fronts_platform(platform):
+                raise NoticeNotSent(f"relay does not front {platform.value} (not connected)")
+            metadata = dict(metadata or {})
+            for meta_key, source_attr in (("scope_id", "scope_id"), ("user_id", "user_id")):
+                value = getattr(source, source_attr, None)
+                if value and not metadata.get(meta_key):
+                    metadata[meta_key] = str(value)
+            # A notice is never the turn-final: without the interim marker an
+            # open native stream in this chat would be sealed with the notice
+            # text and the real answer's remaining frames swallowed.
+            send_coro = DeliveryTransport(
+                adapter=adapter,
+                config=self.config.platforms.get(Platform.RELAY),
+                transport_platform=Platform.RELAY,
+            ).send(platform, chat_id, text, _interim_metadata(metadata))
+        else:
+            connected = getattr(adapter, "is_connected", True)
+            if callable(connected):
+                connected = connected()
+            if connected is False:
+                raise NoticeNotSent("adapter not connected")
+            send_coro = adapter.send(chat_id, text, metadata=metadata)
+        result = await asyncio.wait_for(send_coro, timeout=_STALL_NOTIFY_SEND_TIMEOUT_SECONDS)
+        if result is not None and getattr(result, "success", True) is False:
+            raise RuntimeError(
+                "notice send reported failure (may still have been delivered): "
+                f"{getattr(result, 'error', None) or 'success=False'}"
+            )
+
+    async def _repair_dropped_delegations(self, states: Optional[dict] = None) -> None:
+        """Mirror ``dropped`` delegations that have no inbox record, per profile scope.
+
+        Runs at startup and on every notice sweep. Eligibility is the rollout
+        marker in each profile's ``state.db`` (not a rolling age); the
+        per-scope high-water mark only advances after a fully clean pass.
+        """
+        from gateway.inbox_notices import NoticeSweepState
+        from tools.async_delegation import repair_dropped_without_inbox_scan
+
+        states = states if states is not None else self.__dict__.setdefault("_inbox_notice_states", {})
+        for profile_name, profile_home in _handoff_watch_scopes(self):
+            state = states.setdefault(profile_name or "", NoticeSweepState())
+            try:
+                if profile_home is None:
+                    found, repaired, scanned_at = await asyncio.to_thread(
+                        repair_dropped_without_inbox_scan, state.repair_hwm,
+                    )
+                else:
+                    with _profile_runtime_scope(profile_home):
+                        found, repaired, scanned_at = await asyncio.to_thread(
+                            repair_dropped_without_inbox_scan, state.repair_hwm,
+                        )
+                if found == repaired:
+                    # Overlap covers rows whose drop committed while we scanned.
+                    state.repair_hwm = max(state.repair_hwm, scanned_at - 300.0)
+            except Exception:
+                logger.warning(
+                    "Dropped-delegation repair failed for %s", profile_name or "root",
+                    exc_info=True,
+                )
+
+    async def _inbox_notice_sweep_all(self) -> None:
+        """One notice pass over every hosted profile's database.
+
+        The unscoped pass is the root/default store; a multiplexed gateway also
+        sweeps each secondary profile inside its own runtime scope, where
+        ``_session_db`` resolves that profile's ``state.db`` (the same scopes
+        the handoff watcher polls).
+        """
+        from gateway.inbox_notices import NoticeSweepState, sweep_inbox_notices
+
+        states = self.__dict__.setdefault("_inbox_notice_states", {})
+        # Mirror any drop that never reached the inbox (runtime write failure,
+        # crash in the commit gap) BEFORE sweeping, so its notice goes out now.
+        await self._repair_dropped_delegations(states)
+        for profile_name, profile_home in _handoff_watch_scopes(self):
+            try:
+                state = states.setdefault(profile_name or "", NoticeSweepState())
+                if profile_home is None:
+                    db = getattr(self, "_session_db", None)
+                    if db is not None:
+                        await sweep_inbox_notices(
+                            db, self._send_inbox_notice,
+                            redact=_redact_gateway_user_facing_secrets, state=state,
+                        )
+                else:
+                    with _profile_runtime_scope(profile_home):
+                        db = getattr(self, "_session_db", None)
+                        if db is not None:
+                            await sweep_inbox_notices(
+                                db, self._send_inbox_notice,
+                                redact=_redact_gateway_user_facing_secrets, state=state,
+                            )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.debug("Inbox notice sweep failed for %s: %s", profile_name or "root", exc)
+
+    async def _inbox_notice_watcher(self, interval: float = 15.0):
+        """Periodic sweeper for owed ``session_inbox`` notices."""
+        await asyncio.sleep(min(5.0, max(1.0, float(interval))))
+        while self._running:
+            try:
+                await self._inbox_notice_sweep_all()
+            except Exception as exc:
+                logger.debug("Inbox notice watcher error: %s", exc)
+            for _ in range(max(1, int(float(interval)))):
                 if not self._running:
                     break
                 await asyncio.sleep(1)
@@ -17379,175 +17593,172 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         await adapter.send(source.chat_id, content, metadata=metadata)
 
+    def _inbox_profile_for_source(self, source: Optional[SessionSource]) -> str:
+        """Profile name stamped on inbox records and used to look them up."""
+        return canonical_profile(getattr(source, "profile", None) if source is not None else None)
+
+    async def _topic_lane_binding(self, source: Optional[SessionSource]) -> tuple:
+        """Read-only (tip-walked binding session id | None, lookup_failed).
+
+        ``(None, False)`` when the route is not a Telegram topic lane or has no
+        binding. Never switches a route.
+        """
+        session_db = getattr(self, "_session_db", None)
+        if source is None or session_db is None:
+            return None, False
+        try:
+            if not await asyncio.to_thread(self._is_telegram_topic_lane, source):
+                return None, False
+            binding = await session_db.get_telegram_topic_binding(
+                chat_id=str(source.chat_id), thread_id=str(source.thread_id),
+            )
+            bound = str((binding or {}).get("session_id") or "")
+            if not bound:
+                return None, False
+            return (await session_db.get_compression_tip(bound)) or bound, False
+        except Exception:
+            logger.debug("Topic binding read failed", exc_info=True)
+            return None, True
+
+    async def _build_completion_route(
+        self,
+        source: Optional[SessionSource],
+        session_key: str,
+        index_session_id: str,
+        *,
+        entry: Optional[SessionEntry] = None,
+    ):
+        """Route a result is delivered to. On a topic lane the tip-walked
+        binding is the current session and the index session rides along so a
+        disagreement resolves to ``retry`` (Fable N4). *source* may be ``None``
+        for a bare entry; the route is then derived from the entry and key."""
+        from gateway.completion_ownership import BINDING_UNAVAILABLE, Route
+
+        current, index, topic_lane = index_session_id, None, False
+        bound, failed = await self._topic_lane_binding(source)
+        if failed:
+            index = BINDING_UNAVAILABLE
+        elif bound:
+            current, index, topic_lane = bound, index_session_id, True
+        if source is not None:
+            platform = source.platform.value if hasattr(source.platform, "value") else str(source.platform)
+            chat_id = str(source.chat_id or "")
+            thread_id = str(source.thread_id) if source.thread_id else None
+        else:
+            _platform = getattr(entry, "platform", None)
+            parsed = _parse_session_key(session_key) or {}
+            platform = str(getattr(_platform, "value", _platform) or parsed.get("platform") or "")
+            chat_id = str(parsed.get("chat_id") or "")
+            thread_id = parsed.get("thread_id") or None
+        return Route(
+            self._inbox_profile_for_source(source),
+            session_key,
+            current or "",
+            platform,
+            chat_id,
+            thread_id,
+            index,
+            topic_lane,
+        )
+
+    async def _completion_route(self, evt: dict):
+        """Route for a completion event, or ``None`` when it has no gateway route."""
+        session_key = str(evt.get("session_key") or "").strip()
+        if not session_key:
+            return None
+        source = self._build_process_event_source(evt)
+        if source is None:
+            return None
+        entry = await self.async_session_store.lookup_by_session_key(session_key)
+        return await self._build_completion_route(
+            source, session_key, entry.session_id if entry else "",
+        )
+
+    async def _resolve_completion_owner(self, pin_session_id: str, route):
+        from gateway.completion_ownership import RETRY, Resolution, resolve_owner
+
+        session_db = getattr(self, "_session_db", None)
+        if session_db is None:
+            return Resolution(None, None, RETRY, "no_session_db")
+        return await resolve_owner(pin_session_id, route, db=session_db)
+
     async def _resolve_async_delegation_session(
         self,
         session_entry: SessionEntry,
         pinned_session_id: str,
+        *,
+        source: Optional[SessionSource] = None,
     ) -> Optional[SessionEntry]:
         """Resolve an async completion to its verified owning gateway session.
 
-        A compression rotation ends the physical parent row while continuing
-        the same logical conversation in a child.  Follow that lineage, but
-        never let a late completion override an unrelated /new or restored
-        route.  Unknown ownership remains fail-closed; the result is still
-        available in the delegation records.
+        See :meth:`_resolve_pinned_session`; this returns only the entry
+        (``None`` = fail closed).
         """
-        session_db = cast(Any, self._session_db)
-        if session_db is None:
+        entry, _route, _resolution = await self._resolve_pinned_session(
+            session_entry, pinned_session_id, source=source,
+        )
+        return entry
+
+    async def _resolve_pinned_session(
+        self,
+        session_entry: SessionEntry,
+        pinned_session_id: str,
+        *,
+        source: Optional[SessionSource] = None,
+    ):
+        """``(entry | None, route, resolution)`` for a pinned completion.
+
+        Ownership is decided by :func:`gateway.completion_ownership.resolve_owner`
+        (typed edges; the pin may be a delegated child's id). This never calls
+        ``switch_session``: an internal event cannot move a route. The only
+        route change is following a verified compression continuation of the
+        route's own lineage. Anything else fails closed (``entry is None``) and
+        the caller records the result in the inbox. *route* and *resolution*
+        are ``None`` when no session database is available.
+        """
+        if getattr(self, "_session_db", None) is None:
             logger.warning(
                 "Async-delegation completion has no session database; "
                 "dropping injection (#55578 fail-closed)."
             )
-            return None
-
-        pinned_row = None
-        try:
-            pinned_row = await session_db.get_session(pinned_session_id)
-        except Exception:
-            logger.debug(
-                "Async-delegation parent lookup failed for %s",
-                pinned_session_id,
-                exc_info=True,
-            )
-
-        if pinned_row is None:
+            return None, None, None
+        route = await self._build_completion_route(
+            source or getattr(session_entry, "origin", None),
+            session_entry.session_key,
+            session_entry.session_id,
+            entry=session_entry,
+        )
+        resolution = await self._resolve_completion_owner(pinned_session_id, route)
+        if resolution.verdict != "deliver":
             logger.warning(
-                "Async-delegation completion has unknown spawning session %s; "
-                "dropping injection (#55578 fail-closed).",
-                pinned_session_id,
+                "Async-delegation completion pinned to %s is %s for route %s "
+                "(%s); dropping injection (#55578 fail-closed).",
+                pinned_session_id, resolution.verdict, session_entry.session_key,
+                resolution.reason,
             )
-            return None
-
-        target_session_id = pinned_session_id
-        follows_compression = False
-        if pinned_row.get("ended_at"):
-            _end_reason = str(pinned_row.get("end_reason") or "")
-            if _end_reason in _USER_BOUNDARY_END_REASONS:
-                logger.warning(
-                    "Async-delegation completion pinned to user-closed session %s "
-                    "(end_reason=%r); dropping injection instead of resurrecting it "
-                    "(#55578 fail-closed).",
-                    pinned_session_id,
-                    _end_reason,
-                )
-                return None
-            if _end_reason != "compression":
-                # Idle/timeout/lifecycle end (scale-to-zero norm): the chat
-                # route remains valid and ``session_entry`` IS the routing
-                # key's current session for this same chat, so deliver the
-                # finished work there instead of dropping it. This is the
-                # delivery leg _classify_completion_target promises when it
-                # returns "deliver" for non-boundary ends — without it the
-                # pre-flight verdict and this resolver disagree, and the
-                # durable row is acked at adapter acceptance then silently
-                # dropped here (falsely-acknowledged permanent loss;
-                # staging incident 2026-08-09 defect #2).
-                logger.info(
-                    "Async-delegation completion pinned to %s-ended session %s; "
-                    "retargeting to the chat's current session %s.",
-                    _end_reason or "idle",
-                    pinned_session_id,
-                    session_entry.session_id,
-                )
-                return session_entry
-
-            follows_compression = True
-            try:
-                target_session_id = await session_db.get_compression_tip(
-                    pinned_session_id
-                )
-            except Exception:
-                logger.debug(
-                    "Async-delegation compression-tip lookup failed for %s",
-                    pinned_session_id,
-                    exc_info=True,
-                )
-                target_session_id = None
-
-            if not target_session_id or target_session_id == pinned_session_id:
-                logger.warning(
-                    "Async-delegation completion pinned to compressed session %s "
-                    "without a continuation; dropping injection.",
-                    pinned_session_id,
-                )
-                return None
-
-            try:
-                tip_row = await session_db.get_session(target_session_id)
-            except Exception:
-                tip_row = None
-            if tip_row is None or tip_row.get("ended_at"):
-                logger.warning(
-                    "Async-delegation compression continuation %s is %s; "
-                    "dropping injection.",
-                    target_session_id,
-                    "unknown" if tip_row is None else "ended",
-                )
-                return None
-
-            route_owns_lineage = session_entry.session_id in {
-                pinned_session_id,
-                target_session_id,
-            }
-            if not route_owns_lineage:
-                # A long-running delegation may survive multiple compression
-                # rotations.  Accept an intermediate stale route only when its
-                # own verified compression tip is the same live target.
-                try:
-                    route_row = await session_db.get_session(session_entry.session_id)
-                    route_tip = (
-                        await session_db.get_compression_tip(session_entry.session_id)
-                        if route_row is not None
-                        and route_row.get("ended_at")
-                        and route_row.get("end_reason") == "compression"
-                        else None
-                    )
-                except Exception:
-                    route_tip = None
-                route_owns_lineage = route_tip == target_session_id
-
-            if not route_owns_lineage:
-                logger.warning(
-                    "Async-delegation completion for compression lineage %s -> %s "
-                    "does not own current route %s; dropping injection.",
-                    pinned_session_id,
-                    target_session_id,
-                    session_entry.session_id,
-                )
-                return None
-
+            return None, route, resolution
+        target_session_id = resolution.owner_tip_id
         if target_session_id == session_entry.session_id:
-            return session_entry
-
-        prior_session_id = session_entry.session_id
-        if follows_compression:
-            switched = await self.async_session_store.advance_compression_session(
-                session_entry.session_key,
-                prior_session_id,
-                target_session_id,
-            )
-        else:
-            switched = await self.async_session_store.switch_session(
-                session_entry.session_key,
-                target_session_id,
-            )
+            return session_entry, route, resolution
+        switched = await self.async_session_store.advance_compression_session(
+            session_entry.session_key,
+            session_entry.session_id,
+            target_session_id,
+        )
         if switched is None:
             logger.warning(
-                "Async-delegation completion could not bind routing key %s to "
-                "owning session %s; dropping injection.",
+                "Async-delegation completion could not advance routing key %s to "
+                "compression tip %s; dropping injection.",
                 session_entry.session_key,
                 target_session_id,
             )
-            return None
-
+            return None, route, resolution
         logger.info(
-            "Pinned async-delegation completion to owning session %s "
-            "(was %s) for routing key %s (#57498)",
-            target_session_id,
-            prior_session_id,
-            session_entry.session_key,
+            "Followed compression lineage for async-delegation completion: "
+            "%s -> %s for routing key %s (#57498)",
+            session_entry.session_id, target_session_id, session_entry.session_key,
         )
-        return switched
+        return switched, route, resolution
 
     # ------------------------------------------------------------------
     # Mid-run (busy-session) slash command dispatch — "Guard 2".
@@ -17594,6 +17805,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "update": self._handle_update_command,
             "repair": self._handle_repair_command,
             "version": self._handle_version_command,
+            "results": self._handle_results_command,
         }
 
     async def _dispatch_busy_slash_command(
@@ -19018,6 +19230,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "sessions":
             return await self._handle_sessions_command(event)
 
+        if canonical == "results":
+            return await self._handle_results_command(event)
+
         if canonical == "branch":
             return await self._handle_branch_command(event)
 
@@ -20198,6 +20413,185 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 pass
         return source
 
+    async def _route_event_session(self, event, source) -> Optional[SessionEntry]:
+        """Resolve the session an inbound event runs in; ``None`` = dropped.
+
+        Human events get or create the route's session. Pinned internal events
+        (async-delegation / background-process completions) are resolved against
+        their owner and never move a route; see ``completion_ownership``.
+        """
+        event_metadata = getattr(event, "metadata", None) or {}
+        expected_session_key = str(
+            event_metadata.get("gateway_session_key") or ""
+        ).strip()
+        strict_session = bool(event_metadata.get("gateway_session_strict"))
+        pinned_session_id = str(event_metadata.get("gateway_session_id") or "").strip()
+        if strict_session:
+            session_entry = await self.async_session_store.lookup_by_session_key(
+                expected_session_key
+            )
+            if (
+                session_entry is None
+                or not pinned_session_id
+                or session_entry.session_id != pinned_session_id
+            ):
+                logger.warning(
+                    "Internally routed event: expected session id=%s is no "
+                    "longer current for key=%s; recording it in the session inbox.",
+                    pinned_session_id or "missing",
+                    expected_session_key or "missing",
+                )
+                await self._record_pipeline_drop(
+                    event, source, session_entry,
+                    pinned_session_id=pinned_session_id,
+                    owner_root_id=None,
+                    reason="undeliverable:strict_session_mismatch",
+                    session_key=expected_session_key,
+                )
+                return None
+        else:
+            # Internal wakes must observe reset policy without becoming user
+            # activity themselves. Otherwise periodic Kanban/process
+            # notifications keep the stable routing key alive across every
+            # daily/idle boundary.
+            _internal = bool(getattr(event, "internal", False))
+            _create_kwargs: Dict[str, Any] = {"touch_activity": not _internal}
+            if _internal:
+                # A topic lane's binding decides where a human lands; an
+                # internal event must not auto-reset the lane's session behind
+                # a successor nobody is bound to.
+                _bound, _failed = await self._topic_lane_binding(source)
+                if _bound or _failed:
+                    _create_kwargs["allow_auto_reset"] = False
+            session_entry = await self.async_session_store.get_or_create_session(
+                source, **_create_kwargs,
+            )
+        session_key = session_entry.session_key
+        if not strict_session and pinned_session_id:
+            resolved_entry, _route, _resolution = await self._resolve_pinned_session(
+                session_entry,
+                pinned_session_id,
+                source=source,
+            )
+            if resolved_entry is None:
+                if _resolution is not None:
+                    await self._record_pipeline_drop(
+                        event, source, session_entry,
+                        pinned_session_id=pinned_session_id,
+                        owner_root_id=_resolution.owner_root_id,
+                        reason=(
+                            f"unowned:{_resolution.reason}"
+                            if _resolution.verdict == "unowned"
+                            else f"undeliverable:{_resolution.reason}"
+                        ),
+                    )
+                return None
+            session_entry = resolved_entry
+        self._cache_session_source(session_key, source)
+        if await asyncio.to_thread(self._is_telegram_topic_lane, source):
+            try:
+                binding = (await self._session_db.get_telegram_topic_binding(
+                    chat_id=str(source.chat_id),
+                    thread_id=str(source.thread_id),
+                )) if self._session_db else None
+            except Exception:
+                logger.debug("Failed to read Telegram topic binding", exc_info=True)
+                binding = None
+            if binding:
+                bound_session_id = str(binding.get("session_id") or "")
+                # Heal bindings that point at a pre-compression parent: walk
+                # the compression-continuation chain forward to its tip so the
+                # next message resumes the compressed child instead of
+                # reloading the oversized parent transcript (#20470/#29712/
+                # #33414). Returns the input unchanged when the session isn't
+                # a compression parent, so this is cheap and safe.
+                if bound_session_id and self._session_db is not None:
+                    try:
+                        canonical_session_id = await self._session_db.get_compression_tip(
+                            bound_session_id,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "compression-tip lookup failed for %s",
+                            bound_session_id, exc_info=True,
+                        )
+                        canonical_session_id = bound_session_id
+                    if (
+                        canonical_session_id
+                        and canonical_session_id != bound_session_id
+                    ):
+                        bound_session_id = canonical_session_id
+                if (
+                    bound_session_id
+                    and bound_session_id != session_entry.session_id
+                    and getattr(event, "internal", False)
+                ):
+                    # I1: nothing internal moves a route. The binding is where
+                    # the human lands, so running the internal turn on the
+                    # index session would strand its result in a session the
+                    # user never sees (Fable N4). The pre-flight already
+                    # answers ``retry`` for this disagreement; if it surfaces
+                    # here it is a race — drop the turn rather than guess.
+                    logger.warning(
+                        "Internal event for topic lane %s: binding %s disagrees "
+                        "with session index %s; internal events never switch a "
+                        "route. Recording it in the session inbox.",
+                        session_key, bound_session_id, session_entry.session_id,
+                    )
+                    await self._record_pipeline_drop(
+                        event, source, session_entry,
+                        pinned_session_id=pinned_session_id,
+                        owner_root_id=None,
+                        reason="undeliverable:binding_index_disagree",
+                    )
+                    return None
+                if (
+                    bound_session_id
+                    and bound_session_id == session_entry.session_id
+                    and getattr(event, "internal", False)
+                ):
+                    # The lane's session may have been finalized idle/daily while
+                    # its binding still points at it. Humans reach it again
+                    # through the binding switch below (which reopens it); an
+                    # internal event delivered there must reopen it the same way.
+                    try:
+                        _row = await self._session_db.get_session(bound_session_id)
+                        if _row and _row.get("ended_at") and (
+                            _row.get("end_reason") in ("idle", "daily")
+                            or (
+                                _row.get("end_reason") == "session_reset"
+                                and _row.get("expiry_finalized")
+                            )
+                        ):
+                            await self._session_db.reopen_session(bound_session_id)
+                    except Exception:
+                        logger.debug("Could not reopen topic-lane session", exc_info=True)
+                if bound_session_id and bound_session_id != session_entry.session_id:
+                    # Route the override through SessionStore so the session_key
+                    # → session_id mapping is persisted to disk and the previous
+                    # lane session is ended cleanly. Mutating session_entry in
+                    # place here created a split-brain state where the JSON
+                    # index pointed at one id but code downstream used another.
+                    switched = await self.async_session_store.switch_session(session_key, bound_session_id)
+                    if switched is not None:
+                        session_entry = switched
+                # If the stored binding pointed at a parent, rewrite it to the
+                # canonical descendant now that we've followed the chain.
+                if (
+                    bound_session_id
+                    and bound_session_id != str(binding.get("session_id") or "")
+                ):
+                    await asyncio.to_thread(
+                        self._sync_telegram_topic_binding,
+                        source, session_entry, reason="compression-tip-walk",
+                    )
+            else:
+                try:
+                    await asyncio.to_thread(self._record_telegram_topic_binding, source, session_entry)
+                except Exception:
+                    logger.debug("Failed to record Telegram topic binding", exc_info=True)
+        return session_entry
+
     async def _handle_message_with_agent(self, event, source, _quick_key: str, run_generation: int):
         """Inner handler that runs under the _running_agents sentinel guard."""
         _msg_start_time = time.time()
@@ -20242,100 +20636,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 return
 
-        strict_session = bool(event_metadata.get("gateway_session_strict"))
-        pinned_session_id = str(event_metadata.get("gateway_session_id") or "").strip()
-        if strict_session:
-            session_entry = await self.async_session_store.lookup_by_session_key(
-                expected_session_key
-            )
-            if (
-                session_entry is None
-                or not pinned_session_id
-                or session_entry.session_id != pinned_session_id
-            ):
-                logger.warning(
-                    "Dropping internally routed event: expected session id=%s is no "
-                    "longer current for key=%s",
-                    pinned_session_id or "missing",
-                    expected_session_key or "missing",
-                )
-                return
-        else:
-            # Internal wakes must observe reset policy without becoming user
-            # activity themselves. Otherwise periodic Kanban/process
-            # notifications keep the stable routing key alive across every
-            # daily/idle boundary.
-            session_entry = await self.async_session_store.get_or_create_session(
-                source,
-                touch_activity=not bool(getattr(event, "internal", False)),
-            )
+        session_entry = await self._route_event_session(event, source)
+        if session_entry is None:
+            return
         session_key = session_entry.session_key
-        if not strict_session and pinned_session_id:
-            resolved_entry = await self._resolve_async_delegation_session(
-                session_entry,
-                pinned_session_id,
-            )
-            if resolved_entry is None:
-                return
-            session_entry = resolved_entry
-        self._cache_session_source(session_key, source)
-        if await asyncio.to_thread(self._is_telegram_topic_lane, source):
-            try:
-                binding = (await self._session_db.get_telegram_topic_binding(
-                    chat_id=str(source.chat_id),
-                    thread_id=str(source.thread_id),
-                )) if self._session_db else None
-            except Exception:
-                logger.debug("Failed to read Telegram topic binding", exc_info=True)
-                binding = None
-            if binding:
-                bound_session_id = str(binding.get("session_id") or "")
-                # Heal bindings that point at a pre-compression parent: walk
-                # the compression-continuation chain forward to its tip so the
-                # next message resumes the compressed child instead of
-                # reloading the oversized parent transcript (#20470/#29712/
-                # #33414). Returns the input unchanged when the session isn't
-                # a compression parent, so this is cheap and safe.
-                if bound_session_id and self._session_db is not None:
-                    try:
-                        canonical_session_id = await self._session_db.get_compression_tip(
-                            bound_session_id,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "compression-tip lookup failed for %s",
-                            bound_session_id, exc_info=True,
-                        )
-                        canonical_session_id = bound_session_id
-                    if (
-                        canonical_session_id
-                        and canonical_session_id != bound_session_id
-                    ):
-                        bound_session_id = canonical_session_id
-                if bound_session_id and bound_session_id != session_entry.session_id:
-                    # Route the override through SessionStore so the session_key
-                    # → session_id mapping is persisted to disk and the previous
-                    # lane session is ended cleanly. Mutating session_entry in
-                    # place here created a split-brain state where the JSON
-                    # index pointed at one id but code downstream used another.
-                    switched = await self.async_session_store.switch_session(session_key, bound_session_id)
-                    if switched is not None:
-                        session_entry = switched
-                # If the stored binding pointed at a parent, rewrite it to the
-                # canonical descendant now that we've followed the chain.
-                if (
-                    bound_session_id
-                    and bound_session_id != str(binding.get("session_id") or "")
-                ):
-                    await asyncio.to_thread(
-                        self._sync_telegram_topic_binding,
-                        source, session_entry, reason="compression-tip-walk",
-                    )
-            else:
-                try:
-                    await asyncio.to_thread(self._record_telegram_topic_binding, source, session_entry)
-                except Exception:
-                    logger.debug("Failed to record Telegram topic binding", exc_info=True)
         # Capture and immediately consume was_auto_reset so it does not
         # re-fire on subsequent messages — preventing the cleanup from
         # wiping model/reasoning overrides set between turns (Closes #48031).
@@ -26189,7 +26493,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "back_online", f"{platform}:{chat_id}",
                     "♻ Gateway restarted successfully. Your session continues.",
                     "Your chat picks up right where it was."),
-                metadata=_non_conversational_metadata(metadata, platform=platform),
+                metadata=(
+                    _interim_metadata(_non_conversational_metadata(metadata, platform=platform))
+                    if transport.is_relay
+                    else _non_conversational_metadata(metadata, platform=platform)
+                ),
             )
             # adapter.send() catches provider errors (e.g. "Chat not found")
             # and returns SendResult(success=False) rather than raising, so
@@ -26268,6 +26576,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if home.scope_id:
                         metadata["scope_id"] = home.scope_id
                 send_metadata = _non_conversational_metadata(metadata, platform=platform)
+                if transport.is_relay:
+                    # Restart/lifecycle notices are never the turn-final: do not
+                    # let them seal a live native stream (relay Slack).
+                    send_metadata = _interim_metadata(send_metadata)
                 if send_metadata is not None or transport.is_relay:
                     result = await transport.send(
                         platform,
@@ -26361,6 +26673,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if home.scope_id:
                         metadata["scope_id"] = home.scope_id
                 send_metadata = _non_conversational_metadata(metadata, platform=platform)
+                if transport.is_relay:
+                    # Restart/lifecycle notices are never the turn-final: do not
+                    # let them seal a live native stream (relay Slack).
+                    send_metadata = _interim_metadata(send_metadata)
                 if send_metadata is not None or transport.is_relay:
                     result = await transport.send(
                         platform,
@@ -27126,6 +27442,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _proc_sid = str(evt.get("session_id") or "").strip()
             if _proc_sid:
                 metadata["process_session_id"] = _proc_sid
+            # Identity the pipeline needs to record this result in the session
+            # inbox if it has to drop the event after adapter acceptance.
+            _identity = self._completion_inbox_identity(evt)
+            if _identity is not None:
+                (
+                    metadata["completion_inbox_key"],
+                    metadata["completion_kind"],
+                    metadata["completion_title"],
+                ) = _identity
+            if evt.get("_coalesced_siblings"):
+                metadata["completion_inbox_siblings"] = [
+                    list(sib) for sib in evt["_coalesced_siblings"]
+                ]
             synth_event = MessageEvent(
                 text=synth_text,
                 message_type=MessageType.TEXT,
@@ -27176,72 +27505,176 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 return (evt_type, producer_id, started_at)
         return None
 
-    async def _classify_completion_target(self, parent_session_id: str) -> str:
+    async def _classify_completion_target(self, parent_session_id: str, route) -> str:
         """Classify an async-completion delivery target before adapter acceptance.
 
-        Returns one of:
+        Thin mapping over :func:`gateway.completion_ownership.resolve_owner`
+        (the same call the in-pipeline resolver makes, so the two cannot
+        drift). ``parent_session_id`` is the spawn-time stamp, which may be a
+        delegated child's id; *route* is the route it would be delivered to.
 
-        - ``"deliver"`` — the spawning session is live, or ended by a
-          compression rotation with a verified live continuation. The inner
-          #55578 resolver (:meth:`_resolve_async_delegation_session`) still
-          owns the actual route retarget; this pre-flight only proves the
-          completion is deliverable so the durable ack stays honest.
-        - ``"terminal"`` — the spawning session is gone for good (unknown, or
-          ended at an explicit user boundary such as /new). Delivery can never
-          succeed; the durable row should be terminally dropped rather than
-          falsely acknowledged as delivered or replayed forever as pending.
-        - ``"retry"`` — transient uncertainty (session DB unavailable, lookup
-          error, or a compression rotation caught mid-flight before its
-          continuation exists). The claim should be released so a later
-          consumer can retry; the attempt cap bounds the churn.
+        - ``"deliver"`` — the pin's owning conversation is, or is the verified
+          predecessor of, the route's current session.
+        - ``"terminal"`` — unowned: the owner was closed by a user boundary
+          (``/new``), is open on another route, or has no verified path to this
+          route. Delivery can never succeed.
+        - ``"retry"`` — transient uncertainty (missing row, lookup error, a
+          compression rotation caught mid-flight, a topic binding that
+          disagrees with the session index).
         """
-        session_db = getattr(self, "_session_db", None)
-        if session_db is None:
-            return "retry"
+        resolution = await self._resolve_completion_owner(parent_session_id, route)
+        return _COMPLETION_VERDICT_CLASS[resolution.verdict]
+
+    async def _preflight_completion(self, evt: dict, parent_session_id: str):
+        """``(route, resolution)`` for a pinned completion, or ``None`` when the
+        event has no gateway route (nothing can be delivered or recorded)."""
         try:
-            parent = await session_db.get_session(parent_session_id)
+            route = await self._completion_route(evt)
         except Exception:
-            logger.debug(
-                "Async-completion pre-flight parent lookup failed for %s",
-                parent_session_id, exc_info=True,
-            )
-            return "retry"
-        if parent is None:
-            return "terminal"
-        if not parent.get("ended_at"):
-            return "deliver"
-        end_reason = str(parent.get("end_reason") or "")
-        if end_reason != "compression":
-            # An ended parent is only unreachable when the USER closed the
-            # thread of work (explicit boundary: /new -> session_reset /
-            # new_session, user_exit, session_switch). Idle/timeout ends are
-            # the norm on scale-to-zero relay deployments — the platform chat
-            # remains routable, and the #55578 resolver retargets the
-            # completion to the chat's current session. Dropping those loses
-            # finished work (staging incident 2026-08-09: completed
-            # delegation batch never delivered because the parent had
-            # idle-ended). The boundary set is shared with the resolver
-            # (_USER_BOUNDARY_END_REASONS) so this verdict and the pipeline's
-            # routing decision cannot drift apart.
-            if end_reason in _USER_BOUNDARY_END_REASONS:
-                return "terminal"
-            return "deliver"
+            logger.debug("Completion route lookup failed", exc_info=True)
+            from gateway.completion_ownership import RETRY, Resolution
+
+            return None, Resolution(None, None, RETRY, "route_lookup_failed")
+        if route is None:
+            return None
+        return route, await self._resolve_completion_owner(parent_session_id, route)
+
+    @staticmethod
+    def _completion_inbox_identity(evt: dict):
+        """``(key, kind, title)`` for a durable completion event, else ``None``."""
+        if evt.get("type") == "async_delegation":
+            raw_id, prefix, kind, title_src = evt.get("delegation_id"), "deleg", "delegation", evt.get("goal")
+        elif evt.get("type") == "completion":
+            raw_id, prefix, kind, title_src = evt.get("session_id"), "proc", "process", evt.get("command")
+        else:
+            return None
+        raw_id = str(raw_id or "").strip()
+        if not raw_id:
+            return None
+        title = _redact_gateway_user_facing_secrets(
+            " ".join(str(title_src or "").split())
+        )[:120]
+        return f"{prefix}:{raw_id}", kind, title
+
+    async def _inbox_record_drop(
+        self,
+        route,
+        *,
+        key: str,
+        kind: str,
+        title: str,
+        payload: dict,
+        owner_root_id: Optional[str],
+        reason: str,
+        notify: bool = True,
+    ) -> bool:
+        """Persist an undeliverable result as a ``dropped`` inbox record (+ notice).
+
+        Idempotent on *key*. Returns ``False`` when the write failed so callers
+        that can still retry do not acknowledge a result nothing recorded.
+        """
+        record = {
+            "key": key,
+            "profile": route.profile,
+            "platform": route.platform,
+            "chat_id": route.chat_id,
+            "thread_id": route.thread_id,
+            "session_key": route.session_key,
+            "owner_root_id": owner_root_id,
+            "kind": kind,
+            "wake": 0,
+            "title": title,
+            "payload_json": json.dumps(payload, default=str),
+            "shown_to_user": 0,
+        }
         try:
-            tip_session_id = await session_db.get_compression_tip(parent_session_id)
-            if not tip_session_id or tip_session_id == parent_session_id:
-                # Rotation caught mid-flight: parent is compression-ended but
-                # its continuation isn't visible yet. Retry, don't drop.
-                return "retry"
-            tip = await session_db.get_session(tip_session_id)
+            await self._session_db.inbox_put(record)
+            if notify:
+                await self._session_db.inbox_drop(key, reason)
+            else:
+                await self._session_db.inbox_drop_covered(key, reason)
         except Exception:
-            logger.debug(
-                "Async-completion pre-flight tip lookup failed for %s",
-                parent_session_id, exc_info=True,
+            logger.warning("Could not record dropped result %s", key, exc_info=True)
+            return False
+        return True
+
+    async def _record_unowned_completion(self, evt: dict, route, resolution) -> bool:
+        """Record an undeliverable durable completion (delegation / process).
+
+        Returns ``False`` when the inbox write failed, so the caller retries
+        instead of acknowledging a result nothing recorded.
+        """
+        identity = self._completion_inbox_identity(evt)
+        if identity is None:
+            logger.warning("Unowned completion has no producer id; cannot record it")
+            return True
+        key, kind, title = identity
+        payload = {
+            k: _redact_gateway_user_facing_secrets(v) if isinstance(v, str) else v
+            for k, v in evt.items()
+            if k not in ("interrupt_fn",) and not str(k).startswith("_")
+            and isinstance(v, (str, int, float, bool, type(None), list, dict))
+        }
+        return await self._inbox_record_drop(
+            route, key=key, kind=kind, title=title, payload=payload,
+            owner_root_id=resolution.owner_root_id,
+            reason=f"unowned:{resolution.reason}",
+        )
+
+    async def _record_pipeline_drop(
+        self, event, source, session_entry, *, pinned_session_id: str,
+        owner_root_id: Optional[str], reason: str, session_key: str = "",
+    ) -> None:
+        """Never drop an internal event silently at the pipeline's guards.
+
+        The durable row (if any) was already acknowledged at adapter
+        acceptance, so a bare ``return`` here is a silent loss. Record the
+        event's text in the inbox as ``dropped`` (notice pending); the key is
+        the one the producer's pre-flight uses, so a second write is a no-op.
+        Unpinned watch events have no durable row and get a fresh watch key.
+        """
+        if getattr(self, "_session_db", None) is None:
+            logger.warning("Dropped internal event (%s) with no session DB to record it", reason)
+            return
+        meta = getattr(event, "metadata", None) or {}
+        text = _redact_gateway_user_facing_secrets(str(getattr(event, "text", "") or ""))
+        key = str(meta.get("completion_inbox_key") or "")
+        kind = str(meta.get("completion_kind") or "") or "process"
+        title = str(meta.get("completion_title") or "")
+        if not key:
+            proc = str(meta.get("process_session_id") or "-")
+            key, kind = f"proc-watch:{proc}:{time.time_ns()}", "process"
+        if not title:
+            title = " ".join(text.split())[:120]
+        try:
+            route = await self._build_completion_route(
+                source,
+                session_entry.session_key if session_entry is not None else session_key,
+                session_entry.session_id if session_entry is not None else "",
+                entry=session_entry,
             )
-            return "retry"
-        if tip is None or tip.get("ended_at"):
-            return "retry"
-        return "deliver"
+        except Exception:
+            logger.warning("Could not build route to record dropped event %s", key, exc_info=True)
+            return
+        if not owner_root_id and pinned_session_id:
+            from gateway.completion_ownership import resolve_root
+
+            owner_root_id = await resolve_root(pinned_session_id, db=self._session_db)
+        # A consolidated turn also carries its siblings' results (their durable
+        # rows were acked with it): every sibling key gets the same record.
+        entries = [(key, kind, title)] + [
+            tuple(sib) for sib in (meta.get("completion_inbox_siblings") or [])
+        ]
+        for index, (rec_key, rec_kind, rec_title) in enumerate(entries):
+            await self._inbox_record_drop(
+                route, key=rec_key, kind=rec_kind, title=rec_title,
+                payload={"text": text, "pinned_session_id": pinned_session_id or None},
+                owner_root_id=owner_root_id or pinned_session_id or None,
+                reason=reason,
+                # One dropped turn is announced once: the primary's notice covers
+                # its siblings, which stay listable in /results.
+                notify=index == 0,
+            )
 
     async def _deliver_completion_notification(
         self, synth_text: str, evt: dict,
@@ -27282,28 +27715,41 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # would falsely acknowledge the durable row as delivered.
                 # Verify the target here, before acceptance, and give drops an
                 # honest durable disposition.
-                verdict = await self._classify_completion_target(parent_session_id)
-                if verdict == "terminal":
+                preflight = await self._preflight_completion(evt, parent_session_id)
+                route, resolution = preflight if preflight else (None, None)
+                if resolution is not None and resolution.verdict == "unowned":
                     logger.warning(
-                        "Async delegation %s targets permanently-gone session %s; "
-                        "terminally dropping delivery (result remains in the "
-                        "delegation records).",
+                        "Async delegation %s targets session %s which this route "
+                        "does not own (%s); dropping delivery (result recorded "
+                        "in the session inbox).",
                         durable_delegation_id or "<legacy>", parent_session_id,
+                        resolution.reason,
+                    )
+                    recorded = (
+                        await self._record_unowned_completion(evt, route, resolution)
+                        if route is not None else True
                     )
                     if durable_claim_id:
                         try:
-                            from tools.async_delegation import drop_completion_delivery
+                            if recorded:
+                                from tools.async_delegation import drop_completion_delivery
 
-                            drop_completion_delivery(
-                                durable_delegation_id, durable_claim_id,
-                            )
+                                drop_completion_delivery(
+                                    durable_delegation_id, durable_claim_id,
+                                )
+                            else:
+                                from tools.async_delegation import release_completion_delivery
+
+                                release_completion_delivery(
+                                    durable_delegation_id, durable_claim_id,
+                                )
                         except Exception:
                             logger.debug(
-                                "Could not drop durable completion claim",
+                                "Could not settle durable completion claim",
                                 exc_info=True,
                             )
-                    return None
-                if verdict == "retry":
+                    return None if recorded else False
+                if resolution is not None and resolution.verdict == "retry":
                     if durable_claim_id:
                         try:
                             from tools.async_delegation import release_completion_delivery
@@ -27327,17 +27773,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # Legacy/unstamped events keep today's behavior and deliver.
             parent_session_id = str(evt.get("parent_session_id") or "").strip()
             if parent_session_id:
-                verdict = await self._classify_completion_target(parent_session_id)
-                if verdict == "terminal":
+                preflight = await self._preflight_completion(evt, parent_session_id)
+                route, resolution = preflight if preflight else (None, None)
+                if resolution is not None and resolution.verdict == "unowned":
                     logger.warning(
-                        "Background process %s completion targets "
-                        "permanently-gone session %s (user boundary such as "
-                        "/new); dropping notification (output remains "
-                        "available via process(action='log')).",
+                        "Background process %s completion targets session %s "
+                        "which this route does not own (%s); dropping "
+                        "notification (recorded in the session inbox; output "
+                        "remains available via process(action='log')).",
                         evt.get("session_id") or "<unknown>", parent_session_id,
+                        resolution.reason,
                     )
+                    if route is not None and not await self._record_unowned_completion(
+                        evt, route, resolution,
+                    ):
+                        return False
                     return None
-                if verdict == "retry":
+                if resolution is not None and resolution.verdict == "retry":
                     # Transient uncertainty (session DB unavailable or a
                     # compression rotation mid-flight): signal the watcher to
                     # re-poll and try again rather than dropping or
@@ -27491,9 +27943,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # fresh sibling is never discarded with that duplicate.
             delivered = None
             for _text, candidate_evt, _future in entries:
-                delivered = await self._deliver_completion_notification(
-                    synth_text, candidate_evt,
-                )
+                # Siblings share this turn's fate: if the pipeline drops it
+                # after acceptance, every process key is recorded.
+                if len(entries) > 1:
+                    candidate_evt["_coalesced_siblings"] = [
+                        identity
+                        for _t, sib_evt, _f in entries
+                        if sib_evt is not candidate_evt
+                        and (identity := self._completion_inbox_identity(sib_evt)) is not None
+                    ]
+                try:
+                    delivered = await self._deliver_completion_notification(
+                        synth_text, candidate_evt,
+                    )
+                finally:
+                    candidate_evt.pop("_coalesced_siblings", None)
                 if delivered is not None:
                     break
             if delivered is True and len(entries) > 1:
@@ -27603,6 +28067,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """
         if evt.get("platform"):
             return  # already enriched
+        if evt.get("origin_platform") and evt.get("origin_chat_id"):
+            # Durable origin captured at dispatch: authoritative over any
+            # guess from the positional layout of the session key.
+            evt["platform"] = evt["origin_platform"]
+            evt["chat_type"] = evt.get("origin_chat_type") or ""
+            evt["chat_id"] = evt["origin_chat_id"]
+            if evt.get("origin_thread_id"):
+                evt["thread_id"] = evt["origin_thread_id"]
+            return
         parsed = _parse_session_key(evt.get("session_key", "") or "")
         if not parsed:
             return
@@ -27712,11 +28185,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         consolidated = self._format_coalesced_async_delegations(blocks)
         delivered: Optional[bool] = False
+        # The consolidated turn carries every sibling's result, so if the
+        # pipeline drops it AFTER acceptance (where the siblings are acked with
+        # the primary) every sibling key must be recorded too.
+        primary_evt["_coalesced_siblings"] = [
+            identity
+            for sib_evt, _claim in siblings
+            if (identity := self._completion_inbox_identity(sib_evt)) is not None
+        ]
         try:
             delivered = await self._deliver_completion_notification(
                 consolidated, primary_evt,
             )
         finally:
+            primary_evt.pop("_coalesced_siblings", None)
             if delivered is True:
                 for evt, claim_id in siblings:
                     try:

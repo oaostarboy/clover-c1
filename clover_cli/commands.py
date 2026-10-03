@@ -255,6 +255,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
 
     # Configuration
     CommandDef("sessions", "Browse and resume previous sessions", "Session"),
+    CommandDef("results", "List background results that did not reach the assistant", "Session",
+               args_hint="[key]", gateway_only=True, busy_policy="dispatch"),
 
     # Configuration
     CommandDef("config", "Show current configuration", "Configuration",
@@ -1478,7 +1480,11 @@ _SLACK_PRIORITY_ALIASES: tuple[str, ...] = ()
 #     (session export is an interactive surface; platform is a rare
 #     informational lookup) — without this entry /save tips the registry
 #     past the 50-cap and silently clamps /platform, breaking parity.
-_SLACK_VIA_CLOVER_ONLY = frozenset({"moa", "council", "debug", "egress", "init", "version", "diff", "update", "repair", "heartbeat", "refine", "review", "pause", "whoami", "platform", "insights", "skin"})
+#   - results: read-only lookup of background results that never reached the
+#     assistant; reached via /clover results on Slack. Rare (only after a
+#     dropped-result notice) — without this entry /results tips the registry
+#     past the 50-cap and silently clamps /usage, breaking parity.
+_SLACK_VIA_CLOVER_ONLY = frozenset({"moa", "council", "debug", "egress", "init", "version", "diff", "update", "repair", "heartbeat", "refine", "review", "pause", "whoami", "platform", "insights", "skin", "results"})
 
 
 def _sanitize_slack_name(raw: str) -> str:

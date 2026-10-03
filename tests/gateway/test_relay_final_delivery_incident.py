@@ -102,31 +102,46 @@ async def test_finalize_edit_success_still_reconciles_true():
 # ---------------------------------------------------------------------------
 
 class _SessionDB:
-    def __init__(self, row):
-        self._row = row
+    def __init__(self, rows):
+        self._rows = rows
 
     async def get_session(self, session_id):
-        return self._row
+        return self._rows.get(session_id)
+
+    async def get_child_sessions(self, parent_id):
+        return [r for r in self._rows.values() if r.get("parent_session_id") == parent_id]
 
     async def get_compression_tip(self, session_id):
         return None
 
 
-def _classify_runner(row):
+def _classify_runner(pin_id, end_reason):
+    """A pin that ended for ``end_reason`` and the route's reset successor."""
     runner = object.__new__(GatewayRunner)
-    runner._session_db = _SessionDB(row)
+    runner._session_db = _SessionDB(
+        {
+            pin_id: {"id": pin_id, "ended_at": 1786288000.0, "end_reason": end_reason},
+            "sess-now": {
+                "id": "sess-now",
+                "ended_at": None,
+                "parent_session_id": pin_id,
+                "model_config": {"_reset_from": pin_id},
+            },
+        }
+    )
     return runner
 
 
+_ROUTE = ("default", "agent:main:slack:dm:U1", "sess-now", "slack", "U1", None)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("end_reason", ["idle_timeout", "timeout", None, ""])
+@pytest.mark.parametrize("end_reason", ["idle", "daily", "agent_close"])
 async def test_idle_ended_parent_classifies_deliver(end_reason):
     """Relay-plane norm: session ended on idle, chat still routable ->
     the completion must be deliverable, not terminally dropped."""
-    runner = _classify_runner(
-        {"ended_at": 1786288000.0, "end_reason": end_reason}
-    )
-    verdict = await runner._classify_completion_target("sess-idle")
+    runner = _classify_runner("sess-idle", end_reason)
+    verdict = await runner._classify_completion_target("sess-idle", _ROUTE)
     assert verdict == "deliver", (
         f"end_reason={end_reason!r} must classify 'deliver' "
         f"(got {verdict!r}); completed delegation work was dropped in "
@@ -139,14 +154,14 @@ async def test_idle_ended_parent_classifies_deliver(end_reason):
 async def test_user_boundary_still_terminal(end_reason):
     """Explicit user boundaries remain terminal — /new means the user
     closed the thread of work on purpose."""
-    runner = _classify_runner(
-        {"ended_at": 1786288000.0, "end_reason": end_reason}
-    )
-    verdict = await runner._classify_completion_target("sess-reset")
+    runner = _classify_runner("sess-reset", end_reason)
+    verdict = await runner._classify_completion_target("sess-reset", _ROUTE)
     assert verdict == "terminal"
 
 
 @pytest.mark.asyncio
-async def test_unknown_session_still_terminal():
-    runner = _classify_runner(None)
-    assert await runner._classify_completion_target("gone") == "terminal"
+async def test_unknown_session_is_retry_not_terminal():
+    """A pin whose row cannot be found is transient uncertainty (a lookup
+    race or a not-yet-written row), not proof the owner is gone."""
+    runner = _classify_runner("sess-known", "idle")
+    assert await runner._classify_completion_target("gone", _ROUTE) == "retry"

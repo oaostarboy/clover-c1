@@ -2378,15 +2378,7 @@ class SessionStore:
                 entry.model_override = None
             self._save()
         if self._db:
-            setter = getattr(self._db, "set_expiry_finalized", None)
-            if callable(setter):
-                try:
-                    setter(entry.session_id, True)
-                except Exception as exc:
-                    logger.debug(
-                        "Session DB expiry_finalized write failed for %s: %s",
-                        entry.session_id, exc,
-                    )
+            promoted = False
             try:
                 # Expiry finalization is a real conversation boundary. Without
                 # a durable ``session_reset`` end_reason, later agent cleanup can
@@ -2396,14 +2388,39 @@ class SessionStore:
                 # promote_to_session_reset is conditional: it only promotes
                 # live rows or rows ended with ``agent_close``.  Explicit
                 # boundaries (compression, session_reset, new_command, etc.)
-                # are preserved — the first writer wins.
-                self._db.promote_to_session_reset(entry.session_id)
+                # are preserved — the first writer wins. This IS the expiry
+                # finalization, so it must not clear ``expiry_finalized``.
+                promoted = bool(
+                    self._db.promote_to_session_reset(
+                        entry.session_id, clear_expiry_finalized=False,
+                    )
+                )
+            except TypeError:
+                try:  # SessionDB stand-ins without the keyword
+                    promoted = bool(self._db.promote_to_session_reset(entry.session_id))
+                except Exception as exc:
+                    logger.debug(
+                        "Session DB promote_to_session_reset failed for %s: %s",
+                        entry.session_id, exc,
+                    )
             except Exception as exc:
                 logger.debug(
                     "Session DB promote_to_session_reset failed for %s: %s",
                     entry.session_id, exc,
                 )
-    
+            # The durable flag says the LATEST end was this expiry: set it only
+            # when this call ended the row (a row some other path had already
+            # closed keeps whatever that path recorded).
+            setter = getattr(self._db, "set_expiry_finalized", None)
+            if callable(setter) and promoted:
+                try:
+                    setter(entry.session_id, True)
+                except Exception as exc:
+                    logger.debug(
+                        "Session DB expiry_finalized write failed for %s: %s",
+                        entry.session_id, exc,
+                    )
+
     def _is_session_expired(self, entry: SessionEntry) -> bool:
         """Check if a session has expired based on its reset policy.
         
@@ -2618,6 +2635,7 @@ class SessionStore:
         source: SessionSource,
         force_new: bool = False,
         touch_activity: bool = True,
+        allow_auto_reset: bool = True,
     ) -> SessionEntry:
         """Single-flight session lookup/create per routing key.
 
@@ -2626,6 +2644,11 @@ class SessionStore:
         deliveries, so only one routing transition and SQLite row is created.
         ``touch_activity=False`` still evaluates reset policy but preserves the
         prior user-activity clock when an internal/system event reuses a session.
+        ``allow_auto_reset=False`` returns the indexed session as-is: no
+        idle/daily/suspended reset and no stale-entry recreation. Internal events
+        on a Telegram topic lane use it, because the lane's binding (not the
+        index) decides where a human lands and an internal event must not
+        strand the lane's session behind a successor nobody is bound to.
         """
         session_key = self._generate_session_key(source)
         inflight_lock = getattr(self, "_inflight_lock", None)
@@ -2657,6 +2680,7 @@ class SessionStore:
                 source,
                 force_new=force_new,
                 touch_activity=touch_activity,
+                allow_auto_reset=allow_auto_reset,
             )
             slot.result = result
             return result
@@ -2673,6 +2697,7 @@ class SessionStore:
         source: SessionSource,
         force_new: bool = False,
         touch_activity: bool = True,
+        allow_auto_reset: bool = True,
     ) -> SessionEntry:
         """Perform one session routing transition for the single-flight owner.
 
@@ -2790,6 +2815,9 @@ class SessionStore:
                             _reset_reason = "resume_pending_expired"
             else:
                 _reset_reason = self._should_reset(_entry_for_checks, source)
+            if not allow_auto_reset:
+                _is_stale = False
+                _reset_reason = None
 
         # ---- Phase 2: lock write -- apply decisions to _entries ----
         _needs_save = False

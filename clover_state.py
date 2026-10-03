@@ -6883,7 +6883,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             # again on the next restart.
             conn.execute(
                 "UPDATE sessions SET ended_at = COALESCE(ended_at, ?), "
-                "end_reason = 'superseded_by_repair' WHERE id = ?",
+                "end_reason = 'superseded_by_repair', expiry_finalized = 0 WHERE id = ?",
                 (time.time(), donor_id),
             )
             return True
@@ -7017,7 +7017,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     return False
 
             updated = conn.execute(
-                "UPDATE sessions SET ended_at = NULL, end_reason = NULL "
+                "UPDATE sessions SET ended_at = NULL, end_reason = NULL, "
+                "expiry_finalized = 0 "
                 "WHERE id = ? AND ended_at IS NOT NULL "
                 "AND end_reason = 'compression'",
                 (session_id,),
@@ -7180,8 +7181,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 (total_messages, total_tool_calls, child_session_id),
             )
             updated = conn.execute(
-                "UPDATE sessions SET ended_at = ?, end_reason = 'compression' "
-                "WHERE id = ? AND ended_at IS NULL",
+                "UPDATE sessions SET ended_at = ?, end_reason = 'compression', "
+                "expiry_finalized = 0 WHERE id = ? AND ended_at IS NULL",
                 (time.time(), parent_session_id),
             )
             if updated.rowcount != 1:
@@ -7202,9 +7203,11 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         intentionally need to re-end a closed session with a new reason.
         """
         def _do(conn):
+            # ``expiry_finalized`` records that the LATEST end of this row was an
+            # expiry finalization; every other end clears it in the same write.
             conn.execute(
-                "UPDATE sessions SET ended_at = ?, end_reason = ? "
-                "WHERE id = ? AND ended_at IS NULL",
+                "UPDATE sessions SET ended_at = ?, end_reason = ?, "
+                "expiry_finalized = 0 WHERE id = ? AND ended_at IS NULL",
                 (time.time(), end_reason, session_id),
             )
         self._execute_write(_do)
@@ -7231,13 +7234,18 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 (session_id, *_RESET_END_REASONS),
             )
             conn.execute(
-                "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?",
+                "UPDATE sessions SET ended_at = NULL, end_reason = NULL, "
+                "expiry_finalized = 0 WHERE id = ?",
                 (session_id,),
             )
         self._execute_write(_do)
 
     def promote_to_session_reset(
-        self, session_id: str, reason: str = "session_reset"
+        self,
+        session_id: str,
+        reason: str = "session_reset",
+        *,
+        clear_expiry_finalized: bool = True,
     ) -> bool:
         """Durably mark a session as ended by an intentional reset boundary.
 
@@ -7263,6 +7271,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         ``reason`` lets reset paths keep their auditable specific reasons
         (``idle``, ``daily``, ``suspended``, ``resume_pending_expired``).
 
+        ``expiry_finalized`` is cleared in the same write unless the caller IS
+        the expiry finalization (``clear_expiry_finalized=False``): the flag
+        means "the latest end of this row was an expiry finalization".
+
         Returns ``True`` when the row was promoted, ``False`` when skipped
         (already has a different explicit end_reason, or row not found).
         """
@@ -7272,8 +7284,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         def _do(conn):
             cursor = conn.execute(
-                "UPDATE sessions SET ended_at = ?, end_reason = ? "
-                "WHERE id = ? AND (ended_at IS NULL "
+                "UPDATE sessions SET ended_at = ?, end_reason = ?"
+                + (", expiry_finalized = 0" if clear_expiry_finalized else "")
+                + " WHERE id = ? AND (ended_at IS NULL "
                 f"OR end_reason IN ({_RECOVERABLE_END_REASONS_SQL}))",
                 (now, reason, session_id),
             )
@@ -9259,7 +9272,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 """
                 UPDATE sessions
                 SET ended_at = ?,
-                    end_reason = 'orphaned_compression'
+                    end_reason = 'orphaned_compression',
+                    expiry_finalized = 0
                 WHERE api_call_count = 0
                   AND end_reason IS NULL
                   AND ended_at IS NULL
@@ -9396,7 +9410,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             # spared (and so a freshly registered heartbeat from a sibling
             # that started during this transaction can still save the row).
             conn.execute(
-                f"UPDATE sessions SET ended_at = ?, end_reason = 'startup_orphan_reap'"
+                f"UPDATE sessions SET ended_at = ?, end_reason = 'startup_orphan_reap',"
+                f" expiry_finalized = 0"
                 f" WHERE id IN ({marks}) AND ended_at IS NULL"
                 f" AND {orphan_predicate}",
                 (now, *victims, cutoff, cutoff, hb_cutoff, hb_grace),
@@ -9523,6 +9538,28 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
             row = cursor.fetchone()
         return self._session_row_dict(row) if row else None
+
+    def get_child_sessions(self, parent_session_id: str) -> List[Dict[str, Any]]:
+        """Direct children of *parent_session_id*, oldest first, routing columns only.
+
+        Read-only and edge-type agnostic: every child that names this parent in
+        ``parent_session_id`` comes back (compression continuations, resets,
+        branches, delegates alike) with ``model_config`` so the caller can type
+        the edge. Ownership resolution needs this because
+        :meth:`get_compression_tip` refuses any child carrying a
+        ``_delegate_from`` marker, including a delegate's own compression
+        continuation (which inherits it).
+        """
+        if not parent_session_id:
+            return []
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                "SELECT id, parent_session_id, source, started_at, ended_at, "
+                "end_reason, model_config FROM sessions "
+                "WHERE parent_session_id = ? ORDER BY started_at ASC, id ASC",
+                (parent_session_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_dominant_session_model_route(
         self, session_id: str
@@ -10018,7 +10055,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         # on the next lookup — permanently overriding user intent.
         def _clear_end(conn):
             conn.execute(
-                "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?",
+                "UPDATE sessions SET ended_at = NULL, end_reason = NULL, "
+                "expiry_finalized = 0 WHERE id = ?",
                 (tip["id"],),
             )
             return 1
@@ -11660,6 +11698,27 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         return self._execute_write(_do)
 
+    def inbox_drop_covered(self, key: str, reason: str) -> bool:
+        """Like :meth:`inbox_drop`, but no user notice is owed (``notice_state`` NULL).
+
+        For a record whose content is already announced by a sibling record's
+        notice (one consolidated turn, several keys): it stays listable in
+        ``/results`` without a second message.
+        """
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("inbox_drop_covered requires a non-empty reason")
+
+        def _do(conn):
+            cur = conn.execute(
+                """UPDATE session_inbox
+                   SET state = 'dropped', drop_reason = ?, notice_state = NULL
+                   WHERE key = ? AND state = 'pending'""",
+                (reason, key),
+            )
+            return cur.rowcount == 1
+
+        return self._execute_write(_do)
+
     @staticmethod
     def _inbox_ingest_keys(
         conn, keys: List[str], session_id: str, message_id: int
@@ -11771,6 +11830,83 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             where += " AND state = ?"
             params.append(state)
         return self._inbox_query(where, tuple(params))
+
+    _INBOX_NOTICE_STATES = frozenset({"pending", "sent", "uncertain"})
+
+    def inbox_pending_notices(
+        self, limit: int = 50, after_seq: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Records whose user notice is still owed (``notice_state='pending'``).
+
+        Oldest first, at most *limit*, only those with ``seq > after_seq`` so a
+        sweeper can page past records it cannot deliver right now instead of
+        re-reading the same head of the queue forever.
+        """
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                "SELECT * FROM session_inbox WHERE notice_state = 'pending' "
+                "AND seq > ? ORDER BY seq LIMIT ?",
+                (int(after_seq), max(1, int(limit))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def inbox_set_notice_state(
+        self, key: str, new_state: str, expected_state: Optional[str] = None
+    ) -> bool:
+        """Compare-and-set ``notice_state``; returns whether this call moved it.
+
+        ``expected_state`` guards the transition (``'pending'`` -> claim,
+        ``'uncertain'`` -> ``'sent'``/back to ``'pending'``), so two sweepers
+        cannot both own the same notice. ``None`` means "any non-NULL state".
+        """
+        if new_state not in self._INBOX_NOTICE_STATES:
+            raise ValueError(f"invalid notice_state: {new_state!r}")
+        if expected_state is not None and expected_state not in self._INBOX_NOTICE_STATES:
+            raise ValueError(f"invalid expected notice_state: {expected_state!r}")
+
+        def _do(conn):
+            if expected_state is None:
+                cur = conn.execute(
+                    "UPDATE session_inbox SET notice_state = ? "
+                    "WHERE key = ? AND notice_state IS NOT NULL",
+                    (new_state, key),
+                )
+            else:
+                cur = conn.execute(
+                    "UPDATE session_inbox SET notice_state = ? "
+                    "WHERE key = ? AND notice_state = ?",
+                    (new_state, key, expected_state),
+                )
+            return cur.rowcount == 1
+
+        return self._execute_write(_do)
+
+    def inbox_for_owners(self, owner_root_ids: List[str]) -> List[Dict[str, Any]]:
+        """Records with NO route (platform and chat NULL) owned by any of *owner_root_ids*.
+
+        Used by ``/results`` to find a result whose route could not be
+        recorded, from inside the owner's conversation.
+        """
+        ids = [i for i in dict.fromkeys(owner_root_ids) if i]
+        out: List[Dict[str, Any]] = []
+        for start in range(0, len(ids), self._INBOX_IN_CHUNK):
+            chunk = ids[start:start + self._INBOX_IN_CHUNK]
+            out.extend(self._inbox_query(
+                "platform IS NULL AND chat_id IS NULL AND owner_root_id IN ("
+                + ",".join("?" * len(chunk)) + ")",
+                tuple(chunk),
+            ))
+        return sorted(out, key=lambda r: r["seq"])
+
+    def inbox_routeless(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Newest records that carry no route (platform and chat NULL), oldest first."""
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                "SELECT * FROM (SELECT * FROM session_inbox WHERE platform IS NULL "
+                "AND chat_id IS NULL ORDER BY seq DESC LIMIT ?) ORDER BY seq",
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def inbox_prune_payloads(self, older_than_s: float) -> int:
         """Clear ``payload_json`` of old ``ingested``/``dropped`` records.
