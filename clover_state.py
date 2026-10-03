@@ -11178,6 +11178,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 ),
             )
             msg_id = cursor.lastrowid
+            inbox_keys = self._inbox_keys_in_display_metadata(display_metadata_json)
+            if inbox_keys:
+                self._inbox_ingest_keys(conn, inbox_keys, session_id, msg_id)
 
             # Update counters
             if num_tool_calls > 0:
@@ -11870,6 +11873,12 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
             if isinstance(msg, dict) and cur.lastrowid is not None:
                 msg["_row_id"] = cur.lastrowid
+            # Same transaction as the row: a pending inbox key rendered by this
+            # row is ingested atomically with it. Already-ingested keys (copies
+            # from compaction/rotation) are a no-op.
+            inbox_keys = self._inbox_keys_in_display_metadata(msg.get("display_metadata"))
+            if inbox_keys and cur.lastrowid is not None:
+                self._inbox_ingest_keys(conn, inbox_keys, session_id, cur.lastrowid)
             inserted += 1
             if tool_calls is not None:
                 tool_calls_total += (
