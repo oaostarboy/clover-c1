@@ -361,6 +361,31 @@ async def _off_path_reason(walker: _Walker, tip_id: str) -> str:
     return "owned_elsewhere" if not tip.get("ended_at") else "not_on_path"
 
 
+# Child statuses that mean the helper was stopped, not that it produced a result.
+_CANCELLED_STATUSES = frozenset({"interrupted", "cancelled", "canceled"})
+
+
+def completion_cancelled_by_user(evt: Dict[str, Any], resolution_reason: str) -> bool:
+    """Whether a dropped delegation result is a helper the USER ended.
+
+    True only when the owning conversation ended at a user boundary (``/new``,
+    ``/reset``, ``/stop`` ...: the verdict reasons ``route_session_closed`` and
+    ``user_boundary:*``) AND every child in the event was interrupted. A child
+    that finished with a result, a mixed batch, or an owner that ended for any
+    other reason still owes the user a notice.
+    """
+    if evt.get("type") != "async_delegation":
+        return False
+    reason = str(resolution_reason or "")
+    if reason != "route_session_closed" and not reason.startswith("user_boundary:"):
+        return False
+    results = evt.get("results")
+    if evt.get("is_batch") and isinstance(results, list):
+        statuses = [str((r or {}).get("status") or "").lower() for r in results]
+        return bool(statuses) and all(s in _CANCELLED_STATUSES for s in statuses)
+    return str(evt.get("status") or "").lower() in _CANCELLED_STATUSES
+
+
 def canonical_profile(profile: Optional[str]) -> str:
     """Profile label stamped on inbox records: ``None``/``""``/``"default"`` -> ``"default"``.
 

@@ -28175,10 +28175,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if k not in ("interrupt_fn",) and not str(k).startswith("_")
             and isinstance(v, (str, int, float, bool, type(None), list, dict))
         }
+        from gateway.completion_ownership import completion_cancelled_by_user
+
         return await self._inbox_record_drop(
             route, key=key, kind=kind, title=title, payload=payload,
             owner_root_id=resolution.owner_root_id,
             reason=f"unowned:{resolution.reason}",
+            # A helper the user ended (/new, /reset, /stop ...) is still
+            # recorded for /results but owes no "not delivered" notice.
+            notify=not completion_cancelled_by_user(evt, resolution.reason),
         )
 
     async def _record_pipeline_drop(
