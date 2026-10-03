@@ -600,6 +600,8 @@ CREATE INDEX IF NOT EXISTS idx_session_inbox_route
     ON session_inbox(profile, platform, chat_id, thread_id, state);
 CREATE INDEX IF NOT EXISTS idx_session_inbox_owner
     ON session_inbox(owner_root_id, state);
+CREATE INDEX IF NOT EXISTS idx_session_inbox_seq
+    ON session_inbox(seq);
 """
 
 

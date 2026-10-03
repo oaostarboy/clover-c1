@@ -463,6 +463,7 @@ def test_migration_adds_inbox_to_existing_db_and_keeps_data(tmp_path):
             }
             assert ("profile", "platform", "chat_id", "thread_id", "state") in indexes
             assert ("owner_root_id", "state") in indexes
+            assert ("seq",) in indexes
             assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == SCHEMA_VERSION
         finally:
             conn.close()
@@ -621,3 +622,19 @@ def test_compaction_tail_clone_of_ingested_row_keeps_original_ingestion_ids(db):
     assert _ingested_snapshot(db, "deleg:k1") == original
     live = db.get_messages("s1")
     assert any(m["role"] == "user" and m["content"] == "[background result]" for m in live)
+
+
+# 14 ---------------------------------------------------------------------
+def test_seq_allocation_and_ordering_are_index_backed(db, tmp_path):
+    conn = _raw(tmp_path / "state.db")
+    try:
+        for sql in (
+            "SELECT COALESCE(MAX(seq), 0) + 1 FROM session_inbox",
+            "SELECT * FROM session_inbox ORDER BY seq",
+        ):
+            plan = " ".join(
+                row["detail"] for row in conn.execute("EXPLAIN QUERY PLAN " + sql)
+            )
+            assert "idx_session_inbox_seq" in plan, plan
+    finally:
+        conn.close()
