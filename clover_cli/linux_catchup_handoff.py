@@ -143,3 +143,35 @@ def verify_and_finalize_receipt(receipt_path: Path, *, clover_home: Path, fleet:
                 pass
     except Exception:
         return False
+
+
+def pending_receipt_requires_catchup(receipt_path: Path, *, clover_home: Path) -> bool:
+    """The durable intent stays pending until its success receipt is committed.
+
+    The marker is a convenience breadcrumb, not the sole restart obligation.
+    A crash after marker clear, or failed restoration, cannot erase this record.
+    """
+    try:
+        if not _supported():
+            return False
+        record = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if record.get("outcome") not in {"running", "failed", "partial"}:
+            return False
+        tag = record.get(_TAG)
+        if not isinstance(tag, dict) or tag.get("version") != 1:
+            return False
+        if tag.get("clover_home") != str(clover_home.resolve()):
+            return False
+        sha, targets = tag.get("expected_sha"), tag.get("targets")
+        if not isinstance(sha, str) or not _SHA.fullmatch(sha):
+            return False
+        if not isinstance(targets, list) or not targets:
+            return False
+        return all(
+            isinstance(item, dict) and isinstance(item.get("profile"), str)
+            and bool(item["profile"]) and type(item.get("pid")) is int
+            and item["pid"] > 0
+            for item in targets
+        )
+    except Exception:
+        return False
