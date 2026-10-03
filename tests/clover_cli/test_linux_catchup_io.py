@@ -232,6 +232,8 @@ def test_non_linux_pending_lookup_skips_new_intent_reader(monkeypatch, tmp_path,
 def test_command_receipt_boundary_preserves_stopped_target(monkeypatch, tmp_path, marker_present):
     from clover_cli import config, update_cmd, update_receipt
 
+    monkeypatch.setattr(update_receipt.sys, "platform", "linux")
+
     latest, marker = _durable_pending(tmp_path)
     if not marker_present:
         marker.unlink()
@@ -257,6 +259,8 @@ def test_command_receipt_boundary_preserves_stopped_target(monkeypatch, tmp_path
 def test_pending_receipt_cannot_forget_down_profile_during_prepare(monkeypatch, tmp_path):
     from clover_cli import build_info, config, update_receipt
 
+    monkeypatch.setattr(update_receipt.sys, "platform", "linux")
+
     latest, _ = _durable_pending(tmp_path)
     record = json.loads(latest.read_text())
     record["linux_systemd_catchup"]["targets"].append({"profile": "other", "pid": 102})
@@ -277,6 +281,8 @@ def test_pending_receipt_cannot_forget_down_profile_during_prepare(monkeypatch, 
 def test_generic_success_cannot_retire_inherited_unverified_intent(monkeypatch, tmp_path):
     from clover_cli import config, update_receipt
 
+    monkeypatch.setattr(update_receipt.sys, "platform", "linux")
+
     latest, marker = _durable_pending(tmp_path)
     marker.unlink()
     monkeypatch.setattr(config, "get_clover_home", lambda: tmp_path)
@@ -290,6 +296,8 @@ def test_generic_success_cannot_retire_inherited_unverified_intent(monkeypatch, 
 
 def test_verified_catchup_stays_success_at_command_boundary(monkeypatch, tmp_path):
     from clover_cli import build_info, config, update_cmd, update_receipt
+
+    monkeypatch.setattr(update_receipt.sys, "platform", "linux")
 
     latest, marker = _durable_pending(tmp_path)
     monkeypatch.setattr(config, "get_clover_home", lambda: tmp_path)
