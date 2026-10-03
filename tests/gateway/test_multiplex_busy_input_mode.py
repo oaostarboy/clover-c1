@@ -283,7 +283,7 @@ async def test_secondary_profile_busy_mode_controls_priority_restart_drain(
     response = await runner._handle_message(event)
 
     assert isinstance(response, str)
-    assert "queued" in response
+    assert "send it again" in response
     assert adapter._pending_messages[session_key] is event
     agent.interrupt.assert_not_called()
 

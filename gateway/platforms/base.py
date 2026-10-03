@@ -3357,6 +3357,7 @@ class BasePlatformAdapter(ABC):
         # its FIFO here; with no runner (standalone adapters, tests) the event
         # waits in a per-session local FIFO that is drained behind the slot.
         self._overflow_enqueuer: Optional[Callable[..., Any]] = None
+        self._admission_recorder: Optional[Callable[[MessageEvent], Any]] = None
         # Class-priority selection over the runner's overflow, used by the
         # adapter's own post-response drains.  ``(session_key, head) -> event``.
         self._pending_promoter: Optional[
@@ -4039,6 +4040,27 @@ class BasePlatformAdapter(ABC):
         then synthetic), staging the following one in the slot.
         """
         self._pending_promoter = promoter
+
+    def set_admission_recorder(
+        self, recorder: Optional[Callable[[MessageEvent], Any]]
+    ) -> None:
+        """Set the hook that sees every event this adapter queues or discards.
+
+        The runner uses it while shutting down to record queued human messages
+        at the moment they are admitted, and just before the adapter drops its
+        queues, so nothing queued during teardown is lost without a record.
+        The hook must not raise and must be cheap when nothing is shutting down.
+        """
+        self._admission_recorder = recorder
+
+    def _note_admission(self, event: MessageEvent) -> None:
+        recorder = getattr(self, "_admission_recorder", None)
+        if recorder is None:
+            return
+        try:
+            recorder(event)
+        except Exception:
+            logger.warning("[%s] Admission recorder failed", self.name, exc_info=True)
 
     def set_reaction_handler(
         self, handler: Optional[Callable[[Dict[str, Any]], Awaitable[None]]]
@@ -6001,6 +6023,8 @@ class BasePlatformAdapter(ABC):
         )
         if result is MergeResult.REFUSED:
             self._enqueue_overflow(session_key, event)
+        else:
+            self._note_admission(event)
         return result
 
     def _local_overflow_store(self) -> Dict[str, List[MessageEvent]]:
@@ -6131,6 +6155,9 @@ class BasePlatformAdapter(ABC):
         """Buffer normal queue-mode busy text and schedule a bounded flush."""
         store = self._text_debounce_store()
         state = store.get(session_key)
+        # Later texts are folded into the first buffered event, so each one is
+        # noted on its own as it is admitted.
+        self._note_admission(event)
 
         if state is not None and not self._can_merge_text_debounce_events(state.event, event):
             # Preserve sender attribution in shared sessions. The current
@@ -7553,6 +7580,15 @@ class BasePlatformAdapter(ABC):
         self._background_tasks.clear()
         self._expected_cancelled_tasks.clear()
         self._session_tasks.clear()
+        # Last look at what is about to be discarded: a shutdown in progress
+        # records every queued human message here before it is dropped.
+        for queued in list(self._pending_messages.values()):
+            self._note_admission(queued)
+        for queued_events in list(self._local_overflow_store().values()):
+            for queued in list(queued_events):
+                self._note_admission(queued)
+        for debounced in list(self._text_debounce_store().values()):
+            self._note_admission(debounced.event)
         # Flush pending messages to disk before clearing (#72680).
         try:
             from gateway.shutdown_flush import flush_pending_to_file

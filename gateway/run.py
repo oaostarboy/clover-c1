@@ -114,6 +114,9 @@ _COMPLETION_VERDICT_CLASS = {"deliver": "deliver", "unowned": "terminal", "retry
 # Sent to a human whose busy-session follow-up was refused because the per-session
 # human queue is full.  Never a silent drop (I3).
 _QUEUE_FULL_REPLY = "I'm backed up — please resend that in a moment."
+# Sent to a human whose follow-up arrived while the gateway is restarting.  A
+# restart replays nothing, so this never promises the message will be handled.
+_DRAIN_RESEND_REPLY = "I'm restarting and won't be able to handle that — please send it again in a minute."
 # Round-2 #2: upper bound on a single stall-notify adapter.send so a wedged
 # transport cannot block the session-stall watcher pass (notify-only path;
 # on timeout the latch stays clear and the next tick retries).
@@ -2223,6 +2226,18 @@ class HygieneTurnHoldExceeded(Exception):
     AGENT_COMPRESSION_TIMEOUT, sends a "no output" message, and advances
     the failure cooldown ladder).
     """
+
+
+def _canonical_profile_name(profile: Optional[str]) -> str:
+    """The serving profile's identity: ``None``, ``""`` and ``"default"`` are one.
+
+    Reuses the session-key namespace rule (``gateway.session``), which is what
+    decides whether two sources share a route, so queue grouping can never
+    disagree with the routing key.
+    """
+    from gateway.session import _session_key_namespace
+
+    return "default" if _session_key_namespace(profile) == "agent:main" else str(profile)
 
 
 def _multiplex_profile_homes(config: object) -> list[tuple[str, "Path"]]:
@@ -7195,6 +7210,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     _cron_drain_timeout: float = DEFAULT_GATEWAY_CRON_DRAIN_TIMEOUT
     _exit_code: Optional[int] = None
     _draining: bool = False
+    # Set at the very start of stop(): from then on every queued human message
+    # is recorded as a restart notice as it is admitted (see
+    # _record_if_shutting_down), not only by the snapshots.
+    _shutdown_recording: bool = False
     _external_drain_active: bool = False
     _restart_requested: bool = False
     _restart_task_started: bool = False
@@ -9520,6 +9539,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         pending_slot = getattr(adapter, "_pending_messages", None)
         if pending_slot is None:
             return
+        self._record_if_shutting_down(queued_event)
         if session_key in pending_slot:
             self._session_state(session_key).conversation.queued_events.append(
                 queued_event
@@ -9537,6 +9557,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             self._enqueue_fifo_for_adapter(session_key, event, adapter=adapter, front=front)
 
         setter(_enqueue)
+        set_recorder = getattr(adapter, "set_admission_recorder", None)
+        if callable(set_recorder):
+            set_recorder(self._record_if_shutting_down)
         set_promoter = getattr(adapter, "set_pending_promoter", None)
         if callable(set_promoter):
             set_promoter(
@@ -9572,6 +9595,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         self, session_key: str, event: "MessageEvent", adapter: Any
     ) -> None:
         """Queue an event the pending slot refused; never overwrites the slot."""
+        self._record_if_shutting_down(event)
         if self._merge_into_overflow_tail(session_key, event):
             return
         self._enqueue_fifo(session_key, event, adapter)
@@ -9618,6 +9642,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         )
         if result is MergeResult.REFUSED:
             self._enqueue_behind_slot(session_key, event, adapter)
+        else:
+            self._record_if_shutting_down(event)
         return result
 
     def _promote_queued_event(
@@ -9717,6 +9743,254 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return pending_event, None
         self._requeue_front(session_key, adapter, pending_event)
         return None, interrupt_message
+
+    # -------- queued human messages a restart did not handle --------
+    # A human message waiting behind a running turn lives only in memory.  An
+    # orderly shutdown records each one (gateway.unhandled_on_restart); the next
+    # startup tells that chat once so the person can resend.  Nothing is replayed.
+
+    def _unhandled_restart_home(self, profile: str) -> Path:
+        """The profile home whose file records this profile's unhandled messages."""
+        root = Path(get_clover_home())
+        if (
+            profile == "default"
+            or not getattr(self.config, "multiplex_profiles", False)
+            or profile == self._active_profile_name()
+        ):
+            return root
+        try:
+            for name, home in _multiplex_profile_homes(self.config):
+                if name == profile and home is not None:
+                    return Path(home)
+        except Exception:
+            logger.warning("Could not resolve the home of profile %s", profile, exc_info=True)
+        return root
+
+    def _unhandled_restart_homes(self) -> list:
+        """Every home to scan at startup: the root plus each served profile."""
+        homes = [Path(get_clover_home())]
+        if getattr(self.config, "multiplex_profiles", False):
+            try:
+                for _name, home in _multiplex_profile_homes(self.config):
+                    if home is not None and Path(home).resolve() not in {h.resolve() for h in homes}:
+                        homes.append(Path(home))
+            except Exception:
+                logger.warning("Could not enumerate served profiles for restart notices", exc_info=True)
+        return homes
+
+    def _collect_unhandled_human_events(self) -> list:
+        """Every queued event not yet started: adapter slot, overflow, debounce buffer, runner FIFO."""
+        collected: list = []
+        for adapter in self._iter_gateway_adapters():
+            slot = getattr(adapter, "_pending_messages", None)
+            if isinstance(slot, dict):
+                collected.extend(event for event in list(slot.values()) if event is not None)
+            local = getattr(adapter, "_local_overflow", None)
+            if isinstance(local, dict):
+                for events in list(local.values()):
+                    collected.extend(events)
+            debounce = getattr(adapter, "_text_debounce", None)
+            if isinstance(debounce, dict):
+                collected.extend(
+                    state.event for state in list(debounce.values()) if state.event is not None
+                )
+        try:
+            for events in list((self._queued_events or {}).values()):
+                collected.extend(events)
+        except Exception:
+            logger.debug("Could not read the runner overflow queue at shutdown", exc_info=True)
+        return collected
+
+    def _record_unhandled_human_events(self, events: list) -> int:
+        """Append one row per human event that has not been recorded yet."""
+        from gateway import unhandled_on_restart as _unhandled
+
+        recorded = getattr(self, "_unhandled_recorded_events", None)
+        if recorded is None:
+            recorded = self._unhandled_recorded_events = []
+        by_home: Dict[Path, tuple] = {}
+        for event in events:
+            if message_event_class(event) != EVENT_CLASS_HUMAN or any(event is r for r in recorded):
+                continue
+            profile = _canonical_profile_name(getattr(event.source, "profile", None))
+            row = _unhandled.row_for(event, profile)
+            if row is None:
+                continue
+            rows, queued = by_home.setdefault(self._unhandled_restart_home(profile), ([], []))
+            rows.append(row)
+            queued.append(event)
+        written = 0
+        for home, (rows, queued) in by_home.items():
+            try:
+                written += _unhandled.append_rows(home, rows)
+            except OSError:
+                logger.warning(
+                    "Could not record %d unhandled message(s) in %s", len(rows), home, exc_info=True,
+                )
+                continue
+            recorded.extend(queued)
+        return written
+
+    def _record_queued_humans_at_shutdown(self) -> int:
+        """Record every queued human message before the adapters drop their queues."""
+        written = self._record_unhandled_human_events(self._collect_unhandled_human_events())
+        if written:
+            logger.info("Recorded %d queued human message(s) not handled before shutdown", written)
+        return written
+
+    def _record_if_shutting_down(self, event: Any) -> None:
+        """Record a human event at the moment it is admitted to a queue.
+
+        No-op until ``stop()`` has begun.  Called in the same synchronous step
+        that queues the event, so a message acknowledged during teardown is on
+        disk before anything can tear its queue down.  Identity dedup makes the
+        later snapshots and discard-site records safe.
+        """
+        if not self._shutdown_recording:
+            return
+        try:
+            self._record_unhandled_human_events([event])
+        except Exception:
+            logger.warning("Could not record a message admitted during shutdown", exc_info=True)
+
+    def _snapshot_unhandled_at_shutdown(self) -> None:
+        """Snapshot the queues; repeated at every point where one is about to go away."""
+        try:
+            self._record_queued_humans_at_shutdown()
+        except Exception:
+            logger.warning("Could not record queued human messages at shutdown", exc_info=True)
+
+    def _record_unhandled_follow_up(
+        self,
+        pending_event: Optional["MessageEvent"],
+        pending: Optional[str],
+        source: Any,
+    ) -> int:
+        """Record a human follow-up the shutdown drain is about to discard."""
+        event = pending_event
+        if event is None and pending:
+            event = MessageEvent(text=pending, message_type=MessageType.TEXT, source=source)
+        if event is None:
+            return 0
+        try:
+            return self._record_unhandled_human_events([event])
+        except Exception:
+            logger.warning("Could not record a follow-up discarded at shutdown", exc_info=True)
+            return 0
+
+    def _adapters_for_profile(self, profile: str) -> Optional[Dict[Any, Any]]:
+        """The live adapter map serving a profile; ``None`` when it has none."""
+        if profile == "default" or profile == self._active_profile_name():
+            return self.adapters
+        return (getattr(self, "_profile_adapters", None) or {}).get(profile)
+
+    async def _unhandled_notice_target(self, row: dict, home: Path):
+        """``(transport, metadata)`` to reach a row's chat, or ``None`` when it cannot be reached now."""
+        try:
+            platform = Platform(row["platform"])
+        except ValueError:
+            return None
+        profile = _canonical_profile_name(row.get("profile"))
+        adapters = self._adapters_for_profile(profile)
+        if not adapters:
+            return None
+        config = self.config
+        if profile != "default" and profile != self._active_profile_name():
+            try:
+                with _profile_runtime_scope(home):
+                    config = load_gateway_config()
+            except Exception:
+                logger.warning(
+                    "Restart notice: could not load config for profile %s; using the primary's",
+                    profile, exc_info=True,
+                )
+        transport = resolve_delivery_transport(platform, config, adapters)
+        if transport is None:
+            return None
+        metadata = self._thread_metadata_for_target(
+            platform,
+            row["chat_id"],
+            row.get("thread_id"),
+            chat_type=row.get("chat_type"),
+            adapter=transport.adapter,
+        )
+        if row.get("delivered_via_upstream_relay") is True:
+            metadata = dict(metadata or {})
+            if row.get("user_id"):
+                metadata["user_id"] = str(row["user_id"])
+            if row.get("scope_id"):
+                metadata["scope_id"] = str(row["scope_id"])
+        return transport, _non_conversational_metadata(metadata, platform=platform)
+
+    async def _deliver_unhandled_on_restart_notices(self) -> int:
+        """Tell each chat once that its queued message(s) were not handled; returns notices sent."""
+        sent = 0
+        for home in self._unhandled_restart_homes():
+            try:
+                sent += await self._deliver_unhandled_notices_from(home)
+            except Exception:
+                logger.warning("Restart notices from %s failed", home, exc_info=True)
+        return sent
+
+    async def _deliver_unhandled_notices_from(self, home: Path) -> int:
+        from gateway import unhandled_on_restart as _unhandled
+
+        rows = sorted(_unhandled.read_rows(home), key=lambda r: r.get("queued_at") or 0.0)
+        groups: Dict[tuple, list] = {}
+        for row in rows:
+            key = (
+                row["platform"],
+                _canonical_profile_name(row.get("profile")),
+                str(row["chat_id"]),
+                row.get("thread_id"),
+            )
+            groups.setdefault(key, []).append(row)
+
+        sent = 0
+        waiting: set = set()
+        for key, group in groups.items():
+            ids = {row["id"] for row in group}
+            try:
+                target = await self._unhandled_notice_target(group[0], home)
+            except Exception:
+                logger.warning("Restart notice target for %s could not be built", key[:3], exc_info=True)
+                target = None
+            if target is None:
+                waiting |= ids
+                continue
+            transport, metadata = target
+            # Claimed (removed under the cross-process lock) before the send:
+            # only the claiming process sends, and a crash or a failed send
+            # can never lead to a second notice.
+            try:
+                group = _unhandled.claim_rows(home, ids)
+            except OSError:
+                logger.warning("Could not claim restart-notice rows in %s; not sending", home, exc_info=True)
+                waiting |= ids
+                continue
+            if not group:
+                continue
+            previews = [row["preview"] for row in group]
+            try:
+                result = await transport.send(
+                    Platform(key[0]), key[2], _unhandled.notice_text(group), metadata=metadata,
+                )
+            except Exception:
+                logger.warning(
+                    "Restart notice to %s:%s raised; not retried (message %r)",
+                    key[0], key[2], previews, exc_info=True,
+                )
+                continue
+            if result is not None and getattr(result, "success", True) is False:
+                logger.warning(
+                    "Restart notice to %s:%s was not delivered: %s; not retried (message %r)",
+                    key[0], key[2], getattr(result, "error", "send returned success=False"), previews,
+                )
+                continue
+            sent += 1
+        if waiting:
+            _unhandled.count_missed_startup(home, waiting)
+        return sent
 
     def _queue_depth(self, session_key: str, *, adapter: Any = None) -> int:
         """Total pending /queue items for a session — slot + overflow."""
@@ -10890,6 +11164,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 merge_text=event.message_type == MessageType.TEXT,
             )
             if merge_result is not MergeResult.REFUSED:
+                self._record_if_shutting_down(event)
                 return True
 
         if not self._admit_to_queue(session_key, event, adapter):
@@ -10975,10 +11250,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             thread_meta = self._thread_metadata_for_source(event.source, reply_anchor)
             if self._queue_during_drain_enabled(effective_mode):
                 if self._queue_or_replace_pending_event(session_key, event):
-                    message = f"⏳ Gateway {self._status_action_gerund()} — queued for the next turn after it comes back."
-                    message = _clover_acks.notice(
-                        "draining", f"{event.source.platform.value}:{event.source.chat_id}", message,
-                        "I saved your message for when I'm back.")
+                    message = _DRAIN_RESEND_REPLY
                 else:
                     message = _QUEUE_FULL_REPLY
             else:
@@ -12874,6 +13146,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         async def _boot_sends() -> None:
             await self._send_restart_notification()
+            try:
+                await self._deliver_unhandled_on_restart_notices()
+            except Exception:
+                logger.warning("Restart notices for unhandled messages failed", exc_info=True)
             if planned_restart_notification_pending:
                 try:
                     await self._send_home_channel_startup_notifications(
@@ -16218,6 +16494,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # duck-typed runners, and the fold only reads state via getattr.
         if not restart and await GatewayRunner._fold_into_pending_restart(self):
             return
+        # From here every queued human message is recorded as it is admitted.
+        self._shutdown_recording = True
         if restart:
             self._restart_requested = True
             self._restart_detached = detached_restart
@@ -16438,6 +16716,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 self._active_api_run_count(),
             )
 
+            # First snapshot: before anything after the drain can fail or exit.
+            # Called through the class: shutdown-path tests drive stop() on
+            # duck-typed runners without the recording helpers.
+            GatewayRunner._snapshot_unhandled_at_shutdown(self)
+
             if not timed_out:
                 # Drain completed gracefully — all running sessions finished.
                 # Clear the pre-drain resume_pending markers so sessions that
@@ -16587,6 +16870,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _agent, context="shutdown idle-cache"
                     )
 
+            # Record human messages still queued behind a turn BEFORE the
+            # adapters are torn down (disconnect clears their queues): the next
+            # start tells each chat its message was not handled.
+            GatewayRunner._snapshot_unhandled_at_shutdown(self)
+
             # Completion flush tasks can be sleeping in their fan-in window or
             # blocked in adapter delivery.  Cancel and await them while adapters
             # are still alive so every watcher receives a retryable result
@@ -16598,11 +16886,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 await cancel_completion_batches()
 
             for platform, adapter in list(self.adapters.items()):
+                GatewayRunner._snapshot_unhandled_at_shutdown(self)
                 await self._bounded_adapter_teardown(adapter, platform)
 
             # Disconnect secondary-profile adapters (multiplex mode).
             for _prof, _amap in list(getattr(self, "_profile_adapters", {}).items()):
                 for platform, adapter in list(_amap.items()):
+                    GatewayRunner._snapshot_unhandled_at_shutdown(self)
                     await self._bounded_adapter_teardown(
                         adapter, platform, profile=_prof
                     )
@@ -16629,6 +16919,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             self.adapters.clear()
             for _session_key in list(self._running_agents):
                 self._release_running_agent_state(_session_key)
+            # Last look before the runner's own queues are cleared.
+            GatewayRunner._snapshot_unhandled_at_shutdown(self)
             # Flush pending messages to disk before clearing (#72680).
             # When FTS5 corruption prevents message persistence, the
             # in-memory pending text is the only surviving copy.  Clearing
@@ -19006,15 +19298,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if queue_during_drain:
                     if not self._queue_or_replace_pending_event(_quick_key, event):
                         return _QUEUE_FULL_REPLY
-                _drain_stock = (
-                    f"⏳ Gateway {self._status_action_gerund()} — queued for the next turn after it comes back."
-                    if queue_during_drain
-                    else f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now."
-                )
+                if queue_during_drain:
+                    return _DRAIN_RESEND_REPLY
                 return _clover_acks.notice(
-                    "draining", f"{event.source.platform.value}:{event.source.chat_id}", _drain_stock,
-                    "I saved your message for when I'm back." if queue_during_drain
-                    else "Send it again once I'm back.")
+                    "draining", f"{event.source.platform.value}:{event.source.chat_id}",
+                    f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now.",
+                    "Send it again once I'm back.")
             if effective_busy_input_mode == "queue":
                 logger.debug("PRIORITY queue follow-up for session %s", _quick_key)
                 if not self._queue_or_replace_pending_event(_quick_key, event):
@@ -32367,6 +32656,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     session_key or "?",
                     self._status_action_label(),
                 )
+                self._record_unhandled_follow_up(pending_event, pending, source)
                 pending_event = None
                 pending = None
 
