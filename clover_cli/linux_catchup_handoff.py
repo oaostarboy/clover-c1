@@ -58,6 +58,13 @@ def prepare_pending_receipt(
             targets.append({"profile": profile, "pid": pid})
         if not targets or joined_pids != set(pre_restart_pids):
             return False
+        prior = receipt_api._current.data.get(_TAG)
+        if isinstance(prior, dict):
+            # A retry may see only a subset of the original services. A down
+            # profile remains owed a restart; never narrow the durable intent.
+            prior_profiles = {item["profile"] for item in prior.get("targets", [])}
+            if not prior_profiles.issubset(seen):
+                return False
         # Preserve explicit current-home identity; never substitute a profile
         # home or adopt a receipt written for another installation.
         receipt_api._current.data[_TAG] = {
@@ -105,6 +112,7 @@ def verify_and_finalize_receipt(receipt_path: Path, *, clover_home: Path, fleet:
                     row["pid"] <= 0 or row["pid"] == old_pid):
                 return False
         record["outcome"] = "success"
+        record[_TAG] = dict(tag, verified=True)
         record["finished_at"] = datetime.now(timezone.utc).isoformat()
         record.setdefault("post_update", {})["sha"] = sha
         record["post_update"]["short_sha"] = sha[:12]
@@ -145,33 +153,45 @@ def verify_and_finalize_receipt(receipt_path: Path, *, clover_home: Path, fleet:
         return False
 
 
-def pending_receipt_requires_catchup(receipt_path: Path, *, clover_home: Path) -> bool:
-    """The durable intent stays pending until its success receipt is committed.
-
-    The marker is a convenience breadcrumb, not the sole restart obligation.
-    A crash after marker clear, or failed restoration, cannot erase this record.
-    """
+def _read_pending_tag(receipt_path: Path, *, clover_home: Path) -> dict | None:
+    """Read a validated unresolved intent belonging to this installation."""
     try:
         if not _supported():
-            return False
+            return None
         record = json.loads(receipt_path.read_text(encoding="utf-8"))
-        if record.get("outcome") not in {"running", "failed", "partial"}:
-            return False
+        if record.get("outcome") not in {"running", "failed", "partial", "refused"}:
+            return None
         tag = record.get(_TAG)
         if not isinstance(tag, dict) or tag.get("version") != 1:
-            return False
+            return None
         if tag.get("clover_home") != str(clover_home.resolve()):
-            return False
+            return None
         sha, targets = tag.get("expected_sha"), tag.get("targets")
         if not isinstance(sha, str) or not _SHA.fullmatch(sha):
-            return False
+            return None
         if not isinstance(targets, list) or not targets:
-            return False
-        return all(
+            return None
+        if not all(
             isinstance(item, dict) and isinstance(item.get("profile"), str)
             and bool(item["profile"]) and type(item.get("pid")) is int
             and item["pid"] > 0
             for item in targets
-        )
+        ):
+            return None
+        return tag
     except Exception:
-        return False
+        return None
+
+
+def inherit_pending_receipt(data: dict, *, clover_home: Path) -> None:
+    """Carry unresolved targets into the new command's eventual receipt."""
+    tag = _read_pending_tag(
+        clover_home / "logs" / "update_receipts" / "latest.json", clover_home=clover_home,
+    )
+    if tag is not None:
+        data[_TAG] = tag
+
+
+def pending_receipt_requires_catchup(receipt_path: Path, *, clover_home: Path) -> bool:
+    """The intent survives marker loss and failed command-boundary writes."""
+    return _read_pending_tag(receipt_path, clover_home=clover_home) is not None

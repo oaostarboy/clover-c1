@@ -162,6 +162,12 @@ def begin_update_receipt() -> None:
     global _current, _began_in_process
     try:
         _current = UpdateReceipt()
+        if sys.platform.startswith("linux"):
+            from clover_cli import linux_catchup_handoff
+            from clover_cli.config import get_clover_home
+            linux_catchup_handoff.inherit_pending_receipt(
+                _current.data, clover_home=get_clover_home(),
+            )
         _began_in_process = True
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Could not start update receipt: %s", exc)
@@ -224,6 +230,12 @@ def finalize_update_receipt(
     _current = None
     if receipt is None:
         return None
+
+    if sys.platform.startswith("linux"):
+        tag = receipt.data.get("linux_systemd_catchup")
+        if isinstance(tag, dict) and tag.get("verified") is not True and outcome == "success":
+            outcome = "partial"
+            stop_reason = stop_reason or "Linux systemd catch-up targets remain unverified"
 
     # Mirror the outcome into the durable sidecar next to
     # ``.clover-update-in-progress`` BEFORE writing the (larger, prunable)

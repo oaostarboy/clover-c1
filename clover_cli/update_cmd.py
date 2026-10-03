@@ -3618,6 +3618,8 @@ def _apply_linux_systemd_catchup(pre_restart_pids: set[int]) -> None:
     if not handoff.verify_and_finalize_receipt(latest, clover_home=home, fleet=fleet):
         print("  ⚠ Linux systemd catch-up restart could not be verified; leaving it pending.")
         sys.exit(1)
+    if receipt._current is not None:
+        receipt._current.data["linux_systemd_catchup"]["verified"] = True
 
 
 def _apply_pending_fleet_restart_catchup() -> None:

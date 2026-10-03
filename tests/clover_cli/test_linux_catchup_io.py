@@ -226,3 +226,102 @@ def test_non_linux_pending_lookup_skips_new_intent_reader(monkeypatch, tmp_path,
     monkeypatch.setattr(handoff, "pending_receipt_requires_catchup",
                         lambda *args, **kwargs: pytest.fail("non-Linux intent reader"))
     assert not update_cmd._pending_fleet_restart_needed()
+
+
+@pytest.mark.parametrize("marker_present", [True, False])
+def test_command_receipt_boundary_preserves_stopped_target(monkeypatch, tmp_path, marker_present):
+    from clover_cli import config, update_cmd, update_receipt
+
+    latest, marker = _durable_pending(tmp_path)
+    if not marker_present:
+        marker.unlink()
+    original_tag = json.loads(latest.read_text())["linux_systemd_catchup"]
+    monkeypatch.setattr(config, "get_clover_home", lambda: tmp_path)
+    monkeypatch.setattr(update_cmd, "get_clover_home", lambda: tmp_path)
+    monkeypatch.setattr(update_cmd, "_receipt_reports_stale_runtime", lambda: False)
+    monkeypatch.setattr(update_cmd, "_owned_systemd_service_pids", lambda: set())
+    monkeypatch.setattr("clover_cli.gateway.supports_systemd_services", lambda: True)
+    monkeypatch.setattr(handoff, "_supported", lambda: True)
+    monkeypatch.setattr(update_receipt, "_current", None)
+    update_receipt.begin_update_receipt()
+    with pytest.raises(SystemExit) as failure:
+        update_cmd._apply_pending_fleet_restart_catchup()
+    assert failure.value.code == 1
+    update_receipt.finalize_pending_update_receipt(failure.value.code)
+    saved = json.loads(latest.read_text())
+    assert saved["outcome"] != "success"
+    assert saved.get("linux_systemd_catchup") == original_tag
+    assert handoff.pending_receipt_requires_catchup(latest, clover_home=tmp_path)
+
+
+def test_pending_receipt_cannot_forget_down_profile_during_prepare(monkeypatch, tmp_path):
+    from clover_cli import build_info, config, update_receipt
+
+    latest, _ = _durable_pending(tmp_path)
+    record = json.loads(latest.read_text())
+    record["linux_systemd_catchup"]["targets"].append({"profile": "other", "pid": 102})
+    latest.write_text(json.dumps(record))
+    monkeypatch.setattr(config, "get_clover_home", lambda: tmp_path)
+    monkeypatch.setattr(handoff, "_supported", lambda: True)
+    monkeypatch.setattr(build_info, "get_code_identity", lambda **kwargs: {"sha": _SHA})
+    monkeypatch.setattr(update_receipt, "collect_fleet_versions", lambda **kwargs: [
+        {"profile": "default", "pid": 101, "state": "current", "code_sha": _SHA}
+    ])
+    monkeypatch.setattr(update_receipt, "_current", None)
+    update_receipt.begin_update_receipt()
+    assert not handoff.prepare_pending_receipt(update_receipt, clover_home=tmp_path, pre_restart_pids={101})
+    update_receipt.finalize_pending_update_receipt(1)
+    assert json.loads(latest.read_text())["linux_systemd_catchup"]["targets"] == record["linux_systemd_catchup"]["targets"]
+
+
+def test_generic_success_cannot_retire_inherited_unverified_intent(monkeypatch, tmp_path):
+    from clover_cli import config, update_receipt
+
+    latest, marker = _durable_pending(tmp_path)
+    marker.unlink()
+    monkeypatch.setattr(config, "get_clover_home", lambda: tmp_path)
+    monkeypatch.setattr(handoff, "_supported", lambda: True)
+    monkeypatch.setattr(update_receipt, "_current", None)
+    update_receipt.begin_update_receipt()
+    update_receipt.finalize_pending_update_receipt(0)
+    assert json.loads(latest.read_text())["outcome"] != "success"
+    assert handoff.pending_receipt_requires_catchup(latest, clover_home=tmp_path)
+
+
+def test_verified_catchup_stays_success_at_command_boundary(monkeypatch, tmp_path):
+    from clover_cli import build_info, config, update_cmd, update_receipt
+
+    latest, marker = _durable_pending(tmp_path)
+    monkeypatch.setattr(config, "get_clover_home", lambda: tmp_path)
+    monkeypatch.setattr(handoff, "_supported", lambda: True)
+    monkeypatch.setattr(build_info, "get_code_identity", lambda **kwargs: {"sha": _SHA})
+    monkeypatch.setattr(update_receipt, "_current", None)
+    monkeypatch.setattr(update_cmd, "_run_pending_fleet_restart", lambda: True)
+    monkeypatch.setattr(update_receipt, "collect_fleet_versions", lambda **kwargs: (
+        [{"profile": "default", "pid": 101, "state": "current", "code_sha": _SHA}]
+        if kwargs.get("pre_restart_pids") else _FLEET
+    ))
+    update_receipt.begin_update_receipt()
+    update_cmd._apply_linux_systemd_catchup({101})
+    update_receipt.finalize_pending_update_receipt(0)
+    saved = json.loads(latest.read_text())
+    assert saved["outcome"] == "success"
+    assert saved["linux_systemd_catchup"]["verified"] is True
+    assert not marker.exists()
+    assert not handoff.pending_receipt_requires_catchup(latest, clover_home=tmp_path)
+
+
+@pytest.mark.parametrize("platform", ["win32", "darwin"])
+def test_non_linux_receipt_boundary_skips_linux_intent(monkeypatch, tmp_path, platform):
+    from clover_cli import config, update_receipt
+
+    monkeypatch.setattr(config, "get_clover_home", lambda: tmp_path)
+    monkeypatch.setattr(update_receipt.sys, "platform", platform)
+    monkeypatch.setattr(handoff, "inherit_pending_receipt", lambda *args, **kwargs: pytest.fail("non-Linux inheritance"))
+    monkeypatch.setattr(update_receipt, "_current", None)
+    update_receipt.begin_update_receipt()
+    assert update_receipt._current is not None
+    update_receipt._current.data["linux_systemd_catchup"] = {"verified": False}
+    path = update_receipt.finalize_pending_update_receipt(0)
+    assert path is not None
+    assert json.loads(path.read_text())["outcome"] == "success"
