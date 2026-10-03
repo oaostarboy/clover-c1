@@ -3585,6 +3585,31 @@ def _windows_gateways_relaunched_now(token: dict | None) -> bool:
     )
 
 
+def _apply_linux_systemd_catchup(pre_restart_pids: set[int]) -> None:
+    """Persist proof, restart owned Linux systemd services, verify successors."""
+    from clover_cli import linux_catchup_handoff as handoff
+    from clover_cli import update_receipt as receipt
+    from clover_cli.config import get_clover_home
+
+    home = get_clover_home()
+    if not handoff.prepare_pending_receipt(
+        receipt, clover_home=home, pre_restart_pids=pre_restart_pids
+    ):
+        print("  ⚠ Could not persist proof for the Linux systemd catch-up restart; leaving it pending.")
+        sys.exit(1)
+    print()
+    _warn_pending_fleet_restart()
+    print("→ Running the pending fleet restart...")
+    if not _run_pending_fleet_restart():
+        print("  ⚠ Fleet restart incomplete. Recover with: clover gateway restart")
+        sys.exit(1)
+    latest = home / "logs" / "update_receipts" / "latest.json"
+    fleet = receipt.collect_fleet_versions()
+    if not handoff.verify_and_finalize_receipt(latest, clover_home=home, fleet=fleet):
+        print("  ⚠ Linux systemd catch-up restart could not be verified; leaving it pending.")
+        sys.exit(1)
+
+
 def _apply_pending_fleet_restart_catchup() -> None:
     """On an already-up-to-date ``clover update``, finish a skipped restart.
 
@@ -3593,6 +3618,17 @@ def _apply_pending_fleet_restart_catchup() -> None:
     """
     if not _pending_fleet_restart_needed():
         return
+    # Linux catch-up handoff is wholly behind this platform short-circuit.
+    # Only positively owned, running systemd MainPIDs enter the new path;
+    # no-service Linux and all other platforms retain the original behavior.
+    if sys.platform.startswith("linux"):
+        from clover_cli.gateway import supports_systemd_services
+
+        if supports_systemd_services():
+            _owned_targets = _owned_systemd_service_pids()
+            if _owned_targets:
+                _apply_linux_systemd_catchup(_owned_targets)
+                return
     print()
     _warn_pending_fleet_restart()
     print("→ Running the pending fleet restart...")

@@ -31,5 +31,5 @@ jobs:
       - name: Candidate Windows regressions and Linux guard traps
         shell: pwsh
         run: |
-          .venv/Scripts/python.exe -m pytest -o addopts= -p no:randomly -p no:cacheprovider --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py tests/gateway/test_update_command.py tests/gateway/test_update_streaming.py 
+          .venv/Scripts/python.exe -m pytest -o addopts= -p no:randomly -p no:cacheprovider --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py tests/gateway/test_update_command.py tests/gateway/test_update_streaming.py tests/gateway/test_linux_catchup_handoff.py
           exit $LASTEXITCODE

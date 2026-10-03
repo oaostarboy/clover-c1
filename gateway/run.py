@@ -25892,18 +25892,43 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 except ValueError:
                     recent = False
             if recent:
-                outcome = str(receipt.get("outcome") or "")
-                post = receipt.get("post_update") or {}
-                if outcome == "rolled-back":
-                    verdict = "rolled-back"
-                elif outcome == "success":
-                    verdict = "success"
-                    detail = str(
-                        post.get("short_sha") or post.get("sha") or ""
-                    )[:12]
-                elif outcome:
+                if (
+                    sys.platform.startswith("linux")
+                    and isinstance(receipt.get("linux_systemd_catchup"), dict)
+                    and str(receipt.get("outcome") or "") in {"running", "success"}
+                ):
+                    catchup = receipt["linux_systemd_catchup"]
+                    # Tagged catch-up receipts are a separate proof contract:
+                    # never let their provisional "running" or generic success
+                    # outcome bypass live fleet/PID verification.
                     verdict = "failed"
-                    detail = outcome
+                    detail = "Linux systemd catch-up restart not verified"
+                    try:
+                        from clover_cli import linux_catchup_handoff
+                        from clover_cli import update_receipt as _receipt_api
+                        _fleet = _receipt_api.collect_fleet_versions()
+                        if linux_catchup_handoff.verify_and_finalize_receipt(
+                            receipt_path,
+                            clover_home=_clover_home,
+                            fleet=_fleet,
+                        ):
+                            verdict = "success"
+                            detail = str(catchup.get("expected_sha") or "")[:12]
+                    except Exception:
+                        pass
+                else:
+                    outcome = str(receipt.get("outcome") or "")
+                    post = receipt.get("post_update") or {}
+                    if outcome == "rolled-back":
+                        verdict = "rolled-back"
+                    elif outcome == "success":
+                        verdict = "success"
+                        detail = str(
+                            post.get("short_sha") or post.get("sha") or ""
+                        )[:12]
+                    elif outcome:
+                        verdict = "failed"
+                        detail = outcome
         except (OSError, ValueError, json.JSONDecodeError):
             pass
 
