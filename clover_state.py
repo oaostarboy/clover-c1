@@ -11679,11 +11679,17 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
 
     @staticmethod
-    def _inbox_keys_in_display_metadata(raw: Any) -> List[str]:
-        """``display_metadata.inbox_keys`` from a dict or JSON-string value."""
+    def _inbox_keys_in_display_metadata(raw: Optional[str]) -> List[str]:
+        """``display_metadata.inbox_keys`` from the serialized column value.
+
+        *raw* must be the exact value bound to the ``display_metadata`` column
+        (the output of ``_encode_display_metadata``), so ingestion can never
+        disagree with what was persisted.
+        """
         # Cheap precheck: this runs once per inserted row, including large
-        # branch/compaction copies where almost no row carries keys.
-        if not raw or not isinstance(raw, (str, dict)) or "inbox_keys" not in raw:
+        # branch/compaction copies where almost no row carries keys. Safe on
+        # the serialized value because ``json.dumps`` normalises escapes.
+        if not isinstance(raw, str) or "inbox_keys" not in raw:
             return []
         meta = SessionDB._decode_display_metadata(raw)
         keys = (meta or {}).get("inbox_keys")
@@ -11839,6 +11845,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
 
             api_content = msg.get("api_content")
+            display_metadata_json = self._encode_display_metadata(msg.get("display_metadata"))
 
             cur = conn.execute(
                 """INSERT INTO messages (session_id, role, content, tool_call_id,
@@ -11868,15 +11875,16 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     1,
                     _scrub_surrogates(api_content) if isinstance(api_content, str) else None,
                     _scrub_surrogates(msg.get("display_kind")) if isinstance(msg.get("display_kind"), str) else None,
-                    self._encode_display_metadata(msg.get("display_metadata")),
+                    display_metadata_json,
                 ),
             )
             if isinstance(msg, dict) and cur.lastrowid is not None:
                 msg["_row_id"] = cur.lastrowid
             # Same transaction as the row: a pending inbox key rendered by this
-            # row is ingested atomically with it. Already-ingested keys (copies
-            # from compaction/rotation) are a no-op.
-            inbox_keys = self._inbox_keys_in_display_metadata(msg.get("display_metadata"))
+            # row is ingested atomically with it. Keys come from the value that
+            # was just stored. Already-ingested keys (copies from
+            # compaction/rotation) are a no-op.
+            inbox_keys = self._inbox_keys_in_display_metadata(display_metadata_json)
             if inbox_keys and cur.lastrowid is not None:
                 self._inbox_ingest_keys(conn, inbox_keys, session_id, cur.lastrowid)
             inserted += 1

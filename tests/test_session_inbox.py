@@ -485,3 +485,54 @@ def test_schema_rejects_bad_enum_values_at_the_database(db, tmp_path):
             )
     finally:
         conn.close()
+
+
+# 11 ---------------------------------------------------------------------
+# Ingestion must read the keys from the value that is actually stored in the
+# row, not from the caller's original metadata.
+_ESCAPED_NAME_META = '{"\\u0069nbox_keys": ["deleg:escaped"]}'
+_DOUBLE_ENCODED_META = json.dumps(json.dumps({"inbox_keys": ["deleg:double"]}))
+
+
+def _stored_metadata(db_path, session_id):
+    conn = _raw(db_path)
+    try:
+        return [r["display_metadata"] for r in conn.execute(
+            "SELECT display_metadata FROM messages WHERE session_id = ? ORDER BY id",
+            (session_id,),
+        )]
+    finally:
+        conn.close()
+
+
+def _append(db, how, metadata):
+    if how == "batch":
+        msg = _user_msg([])
+        msg["display_metadata"] = metadata
+        assert db.append_messages_batch("s1", [msg]) == 1
+    else:
+        db.append_message(
+            "s1", "user", "[background result]",
+            display_kind="internal_notification", display_metadata=metadata,
+        )
+
+
+@pytest.mark.parametrize("how", ["batch", "single"])
+def test_escaped_inbox_keys_property_name_is_ingested(db, tmp_path, how):
+    db.create_session("s1", "telegram")
+    db.inbox_put(_record("deleg:escaped"))
+    _append(db, how, _ESCAPED_NAME_META)
+
+    stored = _stored_metadata(tmp_path / "state.db", "s1")[0]
+    assert json.loads(stored) == {"inbox_keys": ["deleg:escaped"]}
+    assert db.inbox_get("deleg:escaped")["state"] == "ingested"
+
+
+@pytest.mark.parametrize("how", ["batch", "single"])
+def test_rejected_double_encoded_metadata_leaves_key_pending(db, tmp_path, how):
+    db.create_session("s1", "telegram")
+    db.inbox_put(_record("deleg:double"))
+    _append(db, how, _DOUBLE_ENCODED_META)
+
+    assert _stored_metadata(tmp_path / "state.db", "s1") == [None]
+    assert db.inbox_get("deleg:double")["state"] == "pending"
