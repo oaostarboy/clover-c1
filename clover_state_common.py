@@ -573,7 +573,7 @@ CREATE TABLE IF NOT EXISTS session_inbox (
     ingested_message_id INTEGER,
     drop_reason TEXT,
     payload_pruned_at REAL,
-    notice_state TEXT CHECK(notice_state IN (NULL,'pending','sent','uncertain'))
+    notice_state TEXT CHECK(notice_state IS NULL OR notice_state IN ('pending','sent','uncertain'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);

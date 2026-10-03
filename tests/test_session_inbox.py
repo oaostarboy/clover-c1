@@ -483,6 +483,18 @@ def test_schema_rejects_bad_enum_values_at_the_database(db, tmp_path):
             conn.execute(
                 "INSERT INTO session_inbox (key, kind, state, seq, created_at) VALUES ('y', 'nope', 'pending', 2, 0)"
             )
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                "INSERT INTO session_inbox (key, kind, state, seq, created_at, notice_state) "
+                "VALUES ('z', 'delegation', 'pending', 3, 0, 'bogus')"
+            )
+        # NULL and each documented value remain storable.
+        for i, notice in enumerate((None, "pending", "sent", "uncertain")):
+            conn.execute(
+                "INSERT INTO session_inbox (key, kind, state, seq, created_at, notice_state) "
+                "VALUES (?, 'delegation', 'pending', ?, 0, ?)",
+                (f"ok{i}", 10 + i, notice),
+            )
     finally:
         conn.close()
 
