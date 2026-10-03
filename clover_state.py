@@ -11558,7 +11558,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
     @staticmethod
     def _inbox_text(value: Any) -> Optional[str]:
-        return None if value is None else str(value)
+        """Text column value; ``None`` and ``""`` both store/match as NULL."""
+        if value is None:
+            return None
+        return str(value) or None
 
     @staticmethod
     def _inbox_insert(conn, record: Dict[str, Any]) -> str:

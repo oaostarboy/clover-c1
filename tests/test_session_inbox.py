@@ -548,3 +548,13 @@ def test_rejected_double_encoded_metadata_leaves_key_pending(db, tmp_path, how):
 
     assert _stored_metadata(tmp_path / "state.db", "s1") == [None]
     assert db.inbox_get("deleg:double")["state"] == "pending"
+
+
+# 12 ---------------------------------------------------------------------
+@pytest.mark.parametrize("written,read", [("", None), (None, "")])
+def test_empty_and_missing_route_parts_match_either_spelling(db, written, read):
+    db.inbox_put(_record("deleg:a", thread_id=written))
+    route = ("default", "telegram", "100", read)
+    assert [r["key"] for r in db.inbox_pending_for_route(*route)] == ["deleg:a"]
+    assert [r["key"] for r in db.inbox_for_route(*route)] == ["deleg:a"]
+    assert db.inbox_get("deleg:a")["thread_id"] is None
