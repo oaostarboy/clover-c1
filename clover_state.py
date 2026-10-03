@@ -6883,7 +6883,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             # again on the next restart.
             conn.execute(
                 "UPDATE sessions SET ended_at = COALESCE(ended_at, ?), "
-                "end_reason = 'superseded_by_repair' WHERE id = ?",
+                "end_reason = 'superseded_by_repair', expiry_finalized = 0 WHERE id = ?",
                 (time.time(), donor_id),
             )
             return True
@@ -7017,7 +7017,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     return False
 
             updated = conn.execute(
-                "UPDATE sessions SET ended_at = NULL, end_reason = NULL "
+                "UPDATE sessions SET ended_at = NULL, end_reason = NULL, "
+                "expiry_finalized = 0 "
                 "WHERE id = ? AND ended_at IS NOT NULL "
                 "AND end_reason = 'compression'",
                 (session_id,),
@@ -7180,8 +7181,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 (total_messages, total_tool_calls, child_session_id),
             )
             updated = conn.execute(
-                "UPDATE sessions SET ended_at = ?, end_reason = 'compression' "
-                "WHERE id = ? AND ended_at IS NULL",
+                "UPDATE sessions SET ended_at = ?, end_reason = 'compression', "
+                "expiry_finalized = 0 WHERE id = ? AND ended_at IS NULL",
                 (time.time(), parent_session_id),
             )
             if updated.rowcount != 1:
@@ -7202,9 +7203,11 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         intentionally need to re-end a closed session with a new reason.
         """
         def _do(conn):
+            # ``expiry_finalized`` records that the LATEST end of this row was an
+            # expiry finalization; every other end clears it in the same write.
             conn.execute(
-                "UPDATE sessions SET ended_at = ?, end_reason = ? "
-                "WHERE id = ? AND ended_at IS NULL",
+                "UPDATE sessions SET ended_at = ?, end_reason = ?, "
+                "expiry_finalized = 0 WHERE id = ? AND ended_at IS NULL",
                 (time.time(), end_reason, session_id),
             )
         self._execute_write(_do)
@@ -7231,13 +7234,18 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 (session_id, *_RESET_END_REASONS),
             )
             conn.execute(
-                "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?",
+                "UPDATE sessions SET ended_at = NULL, end_reason = NULL, "
+                "expiry_finalized = 0 WHERE id = ?",
                 (session_id,),
             )
         self._execute_write(_do)
 
     def promote_to_session_reset(
-        self, session_id: str, reason: str = "session_reset"
+        self,
+        session_id: str,
+        reason: str = "session_reset",
+        *,
+        clear_expiry_finalized: bool = True,
     ) -> bool:
         """Durably mark a session as ended by an intentional reset boundary.
 
@@ -7263,6 +7271,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         ``reason`` lets reset paths keep their auditable specific reasons
         (``idle``, ``daily``, ``suspended``, ``resume_pending_expired``).
 
+        ``expiry_finalized`` is cleared in the same write unless the caller IS
+        the expiry finalization (``clear_expiry_finalized=False``): the flag
+        means "the latest end of this row was an expiry finalization".
+
         Returns ``True`` when the row was promoted, ``False`` when skipped
         (already has a different explicit end_reason, or row not found).
         """
@@ -7272,8 +7284,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         def _do(conn):
             cursor = conn.execute(
-                "UPDATE sessions SET ended_at = ?, end_reason = ? "
-                "WHERE id = ? AND (ended_at IS NULL "
+                "UPDATE sessions SET ended_at = ?, end_reason = ?"
+                + (", expiry_finalized = 0" if clear_expiry_finalized else "")
+                + " WHERE id = ? AND (ended_at IS NULL "
                 f"OR end_reason IN ({_RECOVERABLE_END_REASONS_SQL}))",
                 (now, reason, session_id),
             )
@@ -9259,7 +9272,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 """
                 UPDATE sessions
                 SET ended_at = ?,
-                    end_reason = 'orphaned_compression'
+                    end_reason = 'orphaned_compression',
+                    expiry_finalized = 0
                 WHERE api_call_count = 0
                   AND end_reason IS NULL
                   AND ended_at IS NULL
@@ -9396,7 +9410,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             # spared (and so a freshly registered heartbeat from a sibling
             # that started during this transaction can still save the row).
             conn.execute(
-                f"UPDATE sessions SET ended_at = ?, end_reason = 'startup_orphan_reap'"
+                f"UPDATE sessions SET ended_at = ?, end_reason = 'startup_orphan_reap',"
+                f" expiry_finalized = 0"
                 f" WHERE id IN ({marks}) AND ended_at IS NULL"
                 f" AND {orphan_predicate}",
                 (now, *victims, cutoff, cutoff, hb_cutoff, hb_grace),
@@ -9523,6 +9538,28 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
             row = cursor.fetchone()
         return self._session_row_dict(row) if row else None
+
+    def get_child_sessions(self, parent_session_id: str) -> List[Dict[str, Any]]:
+        """Direct children of *parent_session_id*, oldest first, routing columns only.
+
+        Read-only and edge-type agnostic: every child that names this parent in
+        ``parent_session_id`` comes back (compression continuations, resets,
+        branches, delegates alike) with ``model_config`` so the caller can type
+        the edge. Ownership resolution needs this because
+        :meth:`get_compression_tip` refuses any child carrying a
+        ``_delegate_from`` marker, including a delegate's own compression
+        continuation (which inherits it).
+        """
+        if not parent_session_id:
+            return []
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                "SELECT id, parent_session_id, source, started_at, ended_at, "
+                "end_reason, model_config FROM sessions "
+                "WHERE parent_session_id = ? ORDER BY started_at ASC, id ASC",
+                (parent_session_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_dominant_session_model_route(
         self, session_id: str
@@ -10018,7 +10055,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         # on the next lookup — permanently overriding user intent.
         def _clear_end(conn):
             conn.execute(
-                "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?",
+                "UPDATE sessions SET ended_at = NULL, end_reason = NULL, "
+                "expiry_finalized = 0 WHERE id = ?",
                 (tip["id"],),
             )
             return 1
@@ -11178,6 +11216,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 ),
             )
             msg_id = cursor.lastrowid
+            inbox_keys = self._inbox_keys_in_display_metadata(display_metadata_json)
+            if inbox_keys:
+                self._inbox_ingest_keys(conn, inbox_keys, session_id, msg_id)
 
             # Update counters
             if num_tool_calls > 0:
@@ -11538,6 +11579,359 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         return row[0] if row else None
 
+    # ── Session inbox (durable background results) ──
+    #
+    # ``session_inbox`` holds every background result (delegation / process /
+    # council) until a user row that renders it is committed. Keys are global
+    # (never per-session) and permanent: rows are never deleted, only their
+    # payload is pruned, so the PRIMARY KEY doubles as the "already seen"
+    # tombstone for every recovery scanner. A record leaves ``pending`` in
+    # exactly two ways: insert-time ingestion (``_inbox_ingest_keys``, run by
+    # the message writers in the same transaction as the row) or
+    # ``inbox_drop``.
+
+    _INBOX_KINDS = frozenset({"delegation", "process", "council"})
+    _INBOX_STATES = frozenset({"pending", "ingested", "dropped"})
+    _INBOX_IN_CHUNK = 500
+
+    @staticmethod
+    def _inbox_text(value: Any) -> Optional[str]:
+        """Text column value; ``None`` and ``""`` both store/match as NULL."""
+        if value is None:
+            return None
+        return str(value) or None
+
+    @staticmethod
+    def _inbox_insert(conn, record: Dict[str, Any]) -> str:
+        """Insert one inbox record on *conn*; never commits.
+
+        ``ON CONFLICT(key) DO NOTHING`` rather than ``INSERT OR IGNORE``: the
+        latter would also swallow a CHECK violation and report ``exists`` for a
+        malformed record.
+        """
+        key = record.get("key")
+        if not isinstance(key, str) or not key:
+            raise ValueError("inbox record requires a non-empty string key")
+        kind = record.get("kind")
+        if kind not in SessionDB._INBOX_KINDS:
+            raise ValueError(f"invalid inbox kind: {kind!r}")
+        payload = record.get("payload_json")
+        if payload is None:
+            payload = record.get("payload")
+        if payload is not None and not isinstance(payload, str):
+            payload = json.dumps(payload, default=str)
+        text = SessionDB._inbox_text
+        cur = conn.execute(
+            """INSERT INTO session_inbox
+               (key, profile, platform, chat_id, thread_id, session_key,
+                owner_root_id, kind, wake, title, payload_json, shown_to_user,
+                state, seq, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending',
+                       (SELECT COALESCE(MAX(seq), 0) + 1 FROM session_inbox), ?)
+               ON CONFLICT(key) DO NOTHING""",
+            (
+                key,
+                text(record.get("profile")),
+                text(record.get("platform")),
+                text(record.get("chat_id")),
+                text(record.get("thread_id")),
+                text(record.get("session_key")),
+                text(record.get("owner_root_id")),
+                kind,
+                1 if record.get("wake") else 0,
+                text(record.get("title")),
+                payload,
+                1 if record.get("shown_to_user") else 0,
+                float(record.get("created_at") or time.time()),
+            ),
+        )
+        return "inserted" if cur.rowcount == 1 else "exists"
+
+    def inbox_put(self, record: Dict[str, Any]) -> str:
+        """Durably record a background result. Returns ``'inserted'`` or ``'exists'``.
+
+        Idempotent on ``record['key']``. Accepts ``payload`` (any JSON-able
+        value) or a pre-serialised ``payload_json``. New records are always
+        ``pending`` with the next ``seq``.
+        """
+        return self._execute_write(lambda conn: self._inbox_insert(conn, record))
+
+    @staticmethod
+    def inbox_put_and_mark(
+        conn, record: Dict[str, Any], delegation_id: Optional[str] = None
+    ) -> str:
+        """Insert the inbox record and mark its delegation ``inboxed`` on *conn*.
+
+        Connection-level: the caller owns the transaction (commit/rollback), so
+        both statements land or neither does. ``async_delegations`` is touched
+        only while still ``pending`` — a re-delivery whose key already exists
+        still flips it, but a ``delivered``/``dropped`` row is never moved.
+        """
+        result = SessionDB._inbox_insert(conn, record)
+        if delegation_id:
+            conn.execute(
+                "UPDATE async_delegations SET delivery_state = 'inboxed', "
+                "updated_at = ? WHERE delegation_id = ? AND delivery_state = 'pending'",
+                (time.time(), delegation_id),
+            )
+        return result
+
+    def inbox_drop(self, key: str, reason: str) -> bool:
+        """Move a ``pending`` record to ``dropped``. The only path to that state.
+
+        Queues a user notice (``notice_state='pending'``) unless the user has
+        already seen the content (``shown_to_user=1``). Ingested/dropped/missing
+        records are untouched. Returns whether a record was dropped.
+        """
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("inbox_drop requires a non-empty reason")
+
+        def _do(conn):
+            cur = conn.execute(
+                """UPDATE session_inbox
+                   SET state = 'dropped', drop_reason = ?,
+                       notice_state = CASE WHEN shown_to_user = 1 THEN NULL ELSE 'pending' END
+                   WHERE key = ? AND state = 'pending'""",
+                (reason, key),
+            )
+            return cur.rowcount == 1
+
+        return self._execute_write(_do)
+
+    def inbox_drop_covered(self, key: str, reason: str) -> bool:
+        """Like :meth:`inbox_drop`, but no user notice is owed (``notice_state`` NULL).
+
+        For a record whose content is already announced by a sibling record's
+        notice (one consolidated turn, several keys): it stays listable in
+        ``/results`` without a second message.
+        """
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("inbox_drop_covered requires a non-empty reason")
+
+        def _do(conn):
+            cur = conn.execute(
+                """UPDATE session_inbox
+                   SET state = 'dropped', drop_reason = ?, notice_state = NULL
+                   WHERE key = ? AND state = 'pending'""",
+                (reason, key),
+            )
+            return cur.rowcount == 1
+
+        return self._execute_write(_do)
+
+    @staticmethod
+    def _inbox_ingest_keys(
+        conn, keys: List[str], session_id: str, message_id: int
+    ) -> None:
+        """Mark ``pending`` *keys* ingested by *message_id* on the caller's txn.
+
+        Non-pending keys (already ingested by the original row, dropped, or
+        unknown) are a no-op, so rotation/compaction copies that carry the key
+        again neither error nor move the original ingestion ids.
+        """
+        now = time.time()
+        for start in range(0, len(keys), SessionDB._INBOX_IN_CHUNK):
+            chunk = keys[start:start + SessionDB._INBOX_IN_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(
+                "UPDATE session_inbox SET state = 'ingested', "
+                "ingested_session_id = ?, ingested_message_id = ?, ingested_at = ? "
+                f"WHERE state = 'pending' AND key IN ({placeholders})",
+                (session_id, message_id, now, *chunk),
+            )
+
+    @staticmethod
+    def _inbox_keys_in_display_metadata(raw: Optional[str]) -> List[str]:
+        """``display_metadata.inbox_keys`` from the serialized column value.
+
+        *raw* must be the exact value bound to the ``display_metadata`` column
+        (the output of ``_encode_display_metadata``), so ingestion can never
+        disagree with what was persisted.
+        """
+        # Cheap precheck: this runs once per inserted row, including large
+        # branch/compaction copies where almost no row carries keys. Safe on
+        # the serialized value because ``json.dumps`` normalises escapes.
+        if not isinstance(raw, str) or "inbox_keys" not in raw:
+            return []
+        meta = SessionDB._decode_display_metadata(raw)
+        keys = (meta or {}).get("inbox_keys")
+        if not isinstance(keys, (list, tuple)):
+            return []
+        return [k for k in keys if isinstance(k, str) and k]
+
+    def _inbox_query(self, where: str, params: tuple) -> List[Dict[str, Any]]:
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM session_inbox WHERE {where} ORDER BY seq", params
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def inbox_get(self, key: str) -> Optional[Dict[str, Any]]:
+        rows = self._inbox_query("key = ?", (key,))
+        return rows[0] if rows else None
+
+    def inbox_pending_for(
+        self, owner_root_id: str, include_wake: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Pending records for an owner, by ``seq``. ``include_wake=False`` → wake=0 only."""
+        where = "owner_root_id = ? AND state = 'pending'"
+        if not include_wake:
+            where += " AND wake = 0"
+        return self._inbox_query(where, (owner_root_id,))
+
+    def inbox_pending_for_owner(self, owner_root_id: str) -> List[Dict[str, Any]]:
+        return self.inbox_pending_for(owner_root_id, include_wake=True)
+
+    def inbox_pending_for_route(
+        self,
+        profile: Optional[str],
+        platform: Optional[str],
+        chat_id: Optional[str],
+        thread_id: Optional[str],
+        session_key: Optional[str] = None,
+        wake: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
+        """Pending records for a route, by ``seq``, regardless of owner.
+
+        Matched on the route (NULL-safe, so a missing ``thread_id`` matches
+        only records without one) so a successor session on the same route —
+        e.g. after an idle reset — sees them. ``session_key=None`` skips that
+        filter; ``wake=True/False`` restricts to wake=1/wake=0.
+        """
+        text = self._inbox_text
+        where = (
+            "profile IS ? AND platform IS ? AND chat_id IS ? AND thread_id IS ? "
+            "AND state = 'pending'"
+        )
+        params: list = [text(profile), text(platform), text(chat_id), text(thread_id)]
+        if session_key is not None:
+            where += " AND session_key = ?"
+            params.append(session_key)
+        if wake is not None:
+            where += " AND wake = ?"
+            params.append(1 if wake else 0)
+        return self._inbox_query(where, tuple(params))
+
+    def inbox_for_route(
+        self,
+        profile: Optional[str],
+        platform: Optional[str],
+        chat_id: Optional[str],
+        thread_id: Optional[str],
+        state: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Every record on a route (optionally one ``state``), by ``seq``."""
+        if state is not None and state not in self._INBOX_STATES:
+            raise ValueError(f"invalid inbox state: {state!r}")
+        text = self._inbox_text
+        where = "profile IS ? AND platform IS ? AND chat_id IS ? AND thread_id IS ?"
+        params: list = [text(profile), text(platform), text(chat_id), text(thread_id)]
+        if state is not None:
+            where += " AND state = ?"
+            params.append(state)
+        return self._inbox_query(where, tuple(params))
+
+    _INBOX_NOTICE_STATES = frozenset({"pending", "sent", "uncertain"})
+
+    def inbox_pending_notices(
+        self, limit: int = 50, after_seq: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Records whose user notice is still owed (``notice_state='pending'``).
+
+        Oldest first, at most *limit*, only those with ``seq > after_seq`` so a
+        sweeper can page past records it cannot deliver right now instead of
+        re-reading the same head of the queue forever.
+        """
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                "SELECT * FROM session_inbox WHERE notice_state = 'pending' "
+                "AND seq > ? ORDER BY seq LIMIT ?",
+                (int(after_seq), max(1, int(limit))),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def inbox_set_notice_state(
+        self, key: str, new_state: str, expected_state: Optional[str] = None
+    ) -> bool:
+        """Compare-and-set ``notice_state``; returns whether this call moved it.
+
+        ``expected_state`` guards the transition (``'pending'`` -> claim,
+        ``'uncertain'`` -> ``'sent'``/back to ``'pending'``), so two sweepers
+        cannot both own the same notice. ``None`` means "any non-NULL state".
+        """
+        if new_state not in self._INBOX_NOTICE_STATES:
+            raise ValueError(f"invalid notice_state: {new_state!r}")
+        if expected_state is not None and expected_state not in self._INBOX_NOTICE_STATES:
+            raise ValueError(f"invalid expected notice_state: {expected_state!r}")
+
+        def _do(conn):
+            if expected_state is None:
+                cur = conn.execute(
+                    "UPDATE session_inbox SET notice_state = ? "
+                    "WHERE key = ? AND notice_state IS NOT NULL",
+                    (new_state, key),
+                )
+            else:
+                cur = conn.execute(
+                    "UPDATE session_inbox SET notice_state = ? "
+                    "WHERE key = ? AND notice_state = ?",
+                    (new_state, key, expected_state),
+                )
+            return cur.rowcount == 1
+
+        return self._execute_write(_do)
+
+    def inbox_for_owners(self, owner_root_ids: List[str]) -> List[Dict[str, Any]]:
+        """Records with NO route (platform and chat NULL) owned by any of *owner_root_ids*.
+
+        Used by ``/results`` to find a result whose route could not be
+        recorded, from inside the owner's conversation.
+        """
+        ids = [i for i in dict.fromkeys(owner_root_ids) if i]
+        out: List[Dict[str, Any]] = []
+        for start in range(0, len(ids), self._INBOX_IN_CHUNK):
+            chunk = ids[start:start + self._INBOX_IN_CHUNK]
+            out.extend(self._inbox_query(
+                "platform IS NULL AND chat_id IS NULL AND owner_root_id IN ("
+                + ",".join("?" * len(chunk)) + ")",
+                tuple(chunk),
+            ))
+        return sorted(out, key=lambda r: r["seq"])
+
+    def inbox_routeless(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Newest records that carry no route (platform and chat NULL), oldest first."""
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                "SELECT * FROM (SELECT * FROM session_inbox WHERE platform IS NULL "
+                "AND chat_id IS NULL ORDER BY seq DESC LIMIT ?) ORDER BY seq",
+                (max(1, int(limit)),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def inbox_prune_payloads(self, older_than_s: float) -> int:
+        """Clear ``payload_json`` of old ``ingested``/``dropped`` records.
+
+        Age is measured from ``ingested_at`` (ingested) or ``created_at``
+        (dropped — there is no drop timestamp). Rows and keys are never
+        deleted, so a later ``inbox_put`` of the same key is still ``exists``.
+        Returns the number of payloads cleared.
+        """
+        now = time.time()
+        cutoff = now - float(older_than_s)
+
+        def _do(conn):
+            cur = conn.execute(
+                """UPDATE session_inbox
+                   SET payload_json = NULL, payload_pruned_at = ?
+                   WHERE state IN ('ingested', 'dropped')
+                     AND payload_json IS NOT NULL
+                     AND COALESCE(ingested_at, created_at) < ?""",
+                (now, cutoff),
+            )
+            return cur.rowcount
+
+        return self._execute_write(_do)
+
     def _insert_message_rows(self, conn, session_id: str, messages: List[Dict[str, Any]]) -> tuple[int, int]:
         """Insert *messages* as fresh active rows for *session_id*.
 
@@ -11590,6 +11984,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
 
             api_content = msg.get("api_content")
+            display_metadata_json = self._encode_display_metadata(msg.get("display_metadata"))
 
             cur = conn.execute(
                 """INSERT INTO messages (session_id, role, content, tool_call_id,
@@ -11619,11 +12014,18 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     1,
                     _scrub_surrogates(api_content) if isinstance(api_content, str) else None,
                     _scrub_surrogates(msg.get("display_kind")) if isinstance(msg.get("display_kind"), str) else None,
-                    self._encode_display_metadata(msg.get("display_metadata")),
+                    display_metadata_json,
                 ),
             )
             if isinstance(msg, dict) and cur.lastrowid is not None:
                 msg["_row_id"] = cur.lastrowid
+            # Same transaction as the row: a pending inbox key rendered by this
+            # row is ingested atomically with it. Keys come from the value that
+            # was just stored. Already-ingested keys (copies from
+            # compaction/rotation) are a no-op.
+            inbox_keys = self._inbox_keys_in_display_metadata(display_metadata_json)
+            if inbox_keys and cur.lastrowid is not None:
+                self._inbox_ingest_keys(conn, inbox_keys, session_id, cur.lastrowid)
             inserted += 1
             if tool_calls is not None:
                 tool_calls_total += (

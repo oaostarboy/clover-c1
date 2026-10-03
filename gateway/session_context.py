@@ -204,6 +204,41 @@ def set_current_session_id(session_id: str) -> None:
     os.environ["CLOVER_SESSION_ID"] = session_id
 
 
+# Session id of the conversation that OWNS the route, captured once (first
+# wins) when delegated-child execution begins. Inside a delegated child
+# ``CLOVER_SESSION_ID`` is the child's id while the route vars stay the
+# parent's, so anything stamped for later routing (a background process's or a
+# background delegation's ``parent_session_id``) must read this instead —
+# nested children keep the root, not their direct parent.
+_ROUTE_OWNER_SESSION_ID: ContextVar = ContextVar(
+    "CLOVER_ROUTE_OWNER_SESSION_ID", default=""
+)
+
+
+def get_route_owner_session_id() -> str:
+    """Route-owning session id captured by the outermost delegated child, or ``""``."""
+    return _ROUTE_OWNER_SESSION_ID.get() or ""
+
+
+@contextmanager
+def captured_route_owner_session_id() -> Iterator[None]:
+    """Capture the current ``CLOVER_SESSION_ID`` as the route owner, first wins.
+
+    A no-op when an outer scope already captured one or no session id is bound.
+    Must run BEFORE the child rebinds ``CLOVER_SESSION_ID``.
+    """
+    token = None
+    if not _ROUTE_OWNER_SESSION_ID.get():
+        current = get_session_env("CLOVER_SESSION_ID", "")
+        if current:
+            token = _ROUTE_OWNER_SESSION_ID.set(current)
+    try:
+        yield
+    finally:
+        if token is not None:
+            _ROUTE_OWNER_SESSION_ID.reset(token)
+
+
 @contextmanager
 def scoped_current_session_id(session_id: str | None = None) -> Iterator[None]:
     """Bind a task-local session id and restore the prior value on exit.

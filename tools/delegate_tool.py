@@ -4538,7 +4538,14 @@ def delegate_task(
             _agent_session_id = str(getattr(parent_agent, "session_id", "") or "")
             if _agent_session_id:
                 _session_key = _agent_session_id
-        _parent_session_id = getattr(parent_agent, "session_id", None)
+        # An orchestrator child's own id is not the route owner: stamp the root
+        # captured when delegated-child execution began, so the completion
+        # resolves to the conversation that owns the chat route.
+        from gateway.session_context import get_route_owner_session_id
+
+        _parent_session_id = get_route_owner_session_id() or getattr(
+            parent_agent, "session_id", None
+        )
         _child_agents = [c for (_, _, c) in children]
 
         # Detach every child from the parent's interrupt-propagation list — the

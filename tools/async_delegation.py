@@ -189,6 +189,27 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
     ):
         if name not in columns:
             conn.execute(f"ALTER TABLE async_delegations ADD COLUMN {name} {sql_type}")
+    _ensure_mirror_marker(conn)
+
+
+# Rollout boundary for mirroring terminal drops into the session inbox: the
+# moment code that mirrors them first opened THIS profile's delegation ledger.
+# Written once (never moved). Rows dropped before it predate the mirroring and
+# are the reviewed Ops backfill; rows dropped at or after it must always end up
+# with an inbox record, however old they get before a repair pass runs.
+_MIRROR_MARKER_KEY = "delegation_inbox_mirror_since"
+
+
+def _ensure_mirror_marker(conn: sqlite3.Connection) -> None:
+    # Same DDL as the SessionDB schema's state_meta; harmless if it exists.
+    conn.execute("CREATE TABLE IF NOT EXISTS state_meta (key TEXT PRIMARY KEY, value TEXT)")
+    if conn.execute(
+        "SELECT 1 FROM state_meta WHERE key = ? LIMIT 1", (_MIRROR_MARKER_KEY,)
+    ).fetchone() is None:
+        conn.execute(
+            "INSERT OR IGNORE INTO state_meta (key, value) VALUES (?, ?)",
+            (_MIRROR_MARKER_KEY, repr(time.time())),
+        )
 
 
 @contextmanager
@@ -210,6 +231,17 @@ def _transaction() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+# Routing origin persisted with the durable record: tenant/user (relay egress)
+# plus the dispatching turn's route (platform / chat / thread / profile), so a
+# result that is dropped later can be recorded against the route it belongs to
+# without ever guessing it from the positional layout of a session key.
+_ROUTING_ORIGIN_KEYS = (
+    "scope_id", "user_id", "user_name",
+    "origin_platform", "origin_chat_type", "origin_chat_id",
+    "origin_thread_id", "origin_profile",
+)
+
+
 def _capture_routing_origin() -> Dict[str, Any]:
     """Snapshot the dispatching turn's routing origin for the completion event.
 
@@ -221,8 +253,10 @@ def _capture_routing_origin() -> Dict[str, Any]:
     fail-closed egress guard needs the tenant discriminator (or a user
     binding) to route a scoped reply; without it, post-restart scoped
     completions bounce with "target not routed to an onboarded tenant"
-    (staging 2026-08-09 defect #4). Best-effort — empty values are simply
-    omitted so CLI/contextvar-unaware paths persist nothing new.
+    (staging 2026-08-09 defect #4). The ``origin_*`` route fields identify the
+    conversation the result belongs to when it must be recorded rather than
+    delivered. Best-effort — empty values are simply omitted so
+    CLI/contextvar-unaware paths persist nothing new.
     """
     origin: Dict[str, Any] = {}
     try:
@@ -232,6 +266,11 @@ def _capture_routing_origin() -> Dict[str, Any]:
             ("scope_id", "CLOVER_SESSION_SCOPE_ID"),
             ("user_id", "CLOVER_SESSION_USER_ID"),
             ("user_name", "CLOVER_SESSION_USER_NAME"),
+            ("origin_platform", "CLOVER_SESSION_PLATFORM"),
+            ("origin_chat_type", "CLOVER_SESSION_CHAT_TYPE"),
+            ("origin_chat_id", "CLOVER_SESSION_CHAT_ID"),
+            ("origin_thread_id", "CLOVER_SESSION_THREAD_ID"),
+            ("origin_profile", "CLOVER_SESSION_PROFILE"),
         ):
             value = get_session_env(env_name, "")
             if value:
@@ -255,7 +294,7 @@ def _persist_dispatch(record: Dict[str, Any]) -> None:
             # Routing origin (scope_id/user_id/user_name): persisted so a
             # restart-recovered completion can reconstruct a full
             # SessionSource — see _capture_routing_origin.
-            "scope_id", "user_id", "user_name",
+            *_ROUTING_ORIGIN_KEYS,
         )
         if key in record
     }
@@ -413,7 +452,7 @@ def recover_abandoned_delegations() -> int:
             # Routing origin persisted at dispatch (see _capture_routing_origin):
             # restores scope_id/user_id for the reconstructed SessionSource so
             # relay egress priming works after a restart.
-            for _k in ("scope_id", "user_id", "user_name"):
+            for _k in _ROUTING_ORIGIN_KEYS:
                 if task.get(_k):
                     event[_k] = task[_k]
             result = {"status": "unknown", "summary": None, "error": event["error"]}
@@ -449,6 +488,7 @@ def restore_undelivered_completions(target_queue) -> int:
     recover_abandoned_delegations()
     now = time.time()
     restored = 0
+    aged_out = []
     with _DB_LOCK, _transaction() as conn:
         rows = conn.execute(
             """SELECT delegation_id, event_json, completed_at, dispatched_at
@@ -473,12 +513,14 @@ def restore_undelivered_completions(target_queue) -> int:
                     delegation_id, (now - age_basis) / 3600.0,
                     _MAX_COMPLETION_REPLAY_AGE_S / 3600.0,
                 )
+                aged_out.append((delegation_id, "stale_replay"))
                 continue
             evt = json.loads(payload)
             if isinstance(evt, dict):
                 evt["restored"] = True
             target_queue.put(evt)
             restored += 1
+    _record_drops_in_inbox(aged_out)
     return restored
 
 
@@ -525,6 +567,169 @@ def claim_event_delivery(evt: Dict[str, Any], consumer: str) -> Optional[str]:
     return claim_id if claim_completion_delivery(delegation_id, claim_id) else None
 
 
+def _record_drops_in_inbox(drops) -> list:
+    """Mirror terminal ``dropped`` delegations into ``session_inbox`` (+ notice).
+
+    Every path that sets ``delivery_state='dropped'`` calls this AFTER its own
+    transaction commits (both tables live in one SQLite file, and a second
+    writer inside the open transaction would wait on it). ``drops`` is
+    ``[(delegation_id, reason), ...]``; returns the ids that could NOT be
+    recorded. Best effort by design: the row is
+    already terminal and its result stays queryable, so a failure here is a
+    WARNING, never an exception into the delivery path. ``inbox_put`` is
+    idempotent on the key, so a record the gateway already wrote (with the
+    resolved owner) is left as it is.
+    """
+    failed: list = []
+    if not drops:
+        return failed
+    try:
+        from clover_state import SessionDB
+        from gateway.completion_ownership import (
+            canonical_profile,
+            resolve_root_sync,
+            route_from_session_row,
+        )
+
+        with _DB_LOCK, _transaction() as conn:
+            rows = {
+                did: conn.execute(
+                    "SELECT event_json, result_json, task_json FROM async_delegations "
+                    "WHERE delegation_id=?", (did,),
+                ).fetchone()
+                for did, _reason in drops
+            }
+        db = SessionDB()
+        try:
+            for did, reason in drops:
+                try:
+                    row = rows.get(did)
+                    evt = json.loads(row[0]) if row and row[0] else {}
+                    if not isinstance(evt, dict):
+                        evt = {}
+                    if not evt and row and row[1]:
+                        evt = {"result": json.loads(row[1])}
+                    task = json.loads(row[2]) if row and row[2] else {}
+                    if not isinstance(task, dict):
+                        task = {}
+
+                    def origin(name, _evt=evt, _task=task):
+                        return _evt.get(name) or _task.get(name) or None
+
+                    platform, chat_id = origin("origin_platform"), origin("origin_chat_id")
+                    pin = evt.get("parent_session_id") or None
+                    # Store the resolved owner ROOT (what resolve_owner resolves
+                    # the pin to), not a delegated child's raw id; keep the raw
+                    # pin if it cannot be resolved.
+                    owner_root = (resolve_root_sync(db, pin) if pin else None) or pin
+                    route = None
+                    session_key = str(evt.get("session_key") or "") or None
+                    if platform and chat_id:
+                        route = {
+                            "profile": canonical_profile(origin("origin_profile")),
+                            "platform": platform,
+                            "chat_id": str(chat_id),
+                            "thread_id": origin("origin_thread_id"),
+                        }
+                    else:
+                        # No route on the row: recover it from the owner
+                        # session's persisted origin in the sessions table.
+                        for sid in (owner_root, pin):
+                            route = route_from_session_row(db.get_session(sid)) if sid else None
+                            if route:
+                                session_key = session_key or route.get("session_key")
+                                break
+                        if route is None:
+                            logger.warning(
+                                "Dropped delegation %s has no durable route origin; "
+                                "recording it against its owner only (found by /results "
+                                "in the owner's conversation, no notice can be sent)",
+                                did,
+                            )
+                    db.inbox_put({
+                        "key": f"deleg:{did}",
+                        "profile": route["profile"] if route else None,
+                        "platform": route["platform"] if route else None,
+                        "chat_id": route["chat_id"] if route else None,
+                        "thread_id": route["thread_id"] if route else None,
+                        "session_key": session_key,
+                        "owner_root_id": owner_root,
+                        "kind": "delegation",
+                        "wake": 0,
+                        "title": " ".join(str(evt.get("goal") or "").split())[:120],
+                        "payload_json": json.dumps(evt, default=str),
+                        "shown_to_user": 0,
+                    })
+                    db.inbox_drop(f"deleg:{did}", reason)
+                except Exception:
+                    failed.append(did)
+                    logger.warning(
+                        "Could not record dropped delegation %s in the session inbox",
+                        did, exc_info=True,
+                    )
+        finally:
+            db.close()
+    except Exception:
+        failed = [did for did, _reason in drops]
+        logger.warning(
+            "Could not record dropped delegations in the session inbox",
+            exc_info=True,
+        )
+    return failed
+
+
+# A drop is mirrored into the inbox right after its transaction commits; a
+# crash in that gap, or an inbox write that failed at runtime, leaves a
+# ``dropped`` row with no inbox record. Repair covers every such row dropped at
+# or after the rollout marker (see ``_ensure_mirror_marker``) whatever its age.
+def repair_dropped_without_inbox(since: float = 0.0) -> int:
+    """Create the inbox ``dropped`` record (+ pending notice) for ``dropped``
+    delegations at/after the rollout marker that have none. Idempotent.
+
+    Run at gateway startup and on every periodic notice sweep, per profile
+    scope. *since* is a caller-held high-water mark (only rows updated at or
+    after it are scanned) that keeps the periodic pass cheap; ``0.0`` scans
+    from the marker. Returns the number repaired.
+    """
+    return repair_dropped_without_inbox_scan(since)[1]
+
+
+def repair_dropped_without_inbox_scan(since: float = 0.0):
+    """Like :func:`repair_dropped_without_inbox` but returns ``(found, repaired, scanned_at)``
+    so a caller can advance its high-water mark only after a fully clean pass."""
+    scanned_at = time.time()
+    try:
+        from clover_state import SessionDB
+
+        SessionDB().close()  # make sure session_inbox exists in this state.db
+        with _DB_LOCK, _transaction() as conn:
+            marker_row = conn.execute(
+                "SELECT value FROM state_meta WHERE key = ?", (_MIRROR_MARKER_KEY,)
+            ).fetchone()
+            floor = max(float(marker_row[0]) if marker_row else 0.0, float(since))
+            ids = [
+                row[0] for row in conn.execute(
+                    """SELECT d.delegation_id FROM async_delegations d
+                       WHERE d.delivery_state='dropped' AND d.updated_at >= ?
+                         AND NOT EXISTS (SELECT 1 FROM session_inbox i
+                                         WHERE i.key = 'deleg:' || d.delegation_id
+                                           AND i.state != 'pending')
+                       ORDER BY d.updated_at""",
+                    (floor,),
+                ).fetchall()
+            ]
+    except Exception:
+        logger.warning("Could not scan for dropped delegations without an inbox record", exc_info=True)
+        return 0, 0, scanned_at
+    if not ids:
+        return 0, 0, scanned_at
+    logger.warning(
+        "Repairing %d dropped delegation(s) that had no session-inbox record", len(ids),
+    )
+    failed = _record_drops_in_inbox([(did, "repaired_after_drop") for did in ids])
+    return len(ids), len(ids) - len(failed), scanned_at
+
+
 def release_completion_delivery(delegation_id: str, claim_id: str) -> bool:
     """Release a failed delivery claim so another consumer may retry.
 
@@ -536,6 +741,7 @@ def release_completion_delivery(delegation_id: str, claim_id: str) -> bool:
     pending rows).
     """
     now = time.time()
+    was_capped = False
     with _DB_LOCK, _transaction() as conn:
         capped = conn.execute(
             """UPDATE async_delegations SET delivery_state='dropped',
@@ -550,15 +756,20 @@ def release_completion_delivery(delegation_id: str, claim_id: str) -> bool:
                 "marking terminally dropped (result remains queryable).",
                 delegation_id, _MAX_DELIVERY_ATTEMPTS,
             )
-            return True
-        cur = conn.execute(
-            """UPDATE async_delegations SET delivery_claim=NULL,
-                      delivery_claimed_at=NULL, updated_at=?
-               WHERE delegation_id=? AND delivery_state='pending'
-                 AND delivery_claim=?""",
-            (now, delegation_id, claim_id),
-        )
-        return cur.rowcount == 1
+            was_capped = True
+        else:
+            cur = conn.execute(
+                """UPDATE async_delegations SET delivery_claim=NULL,
+                          delivery_claimed_at=NULL, updated_at=?
+                   WHERE delegation_id=? AND delivery_state='pending'
+                     AND delivery_claim=?""",
+                (now, delegation_id, claim_id),
+            )
+            released = cur.rowcount == 1
+    if was_capped:
+        _record_drops_in_inbox([(delegation_id, "delivery_attempts_exhausted")])
+        return True
+    return released
 
 
 def drop_completion_delivery(delegation_id: str, claim_id: str) -> bool:
@@ -580,7 +791,10 @@ def drop_completion_delivery(delegation_id: str, claim_id: str) -> bool:
                  AND delivery_claim=?""",
             (now, delegation_id, claim_id),
         )
-        return cur.rowcount == 1
+        dropped = cur.rowcount == 1
+    if dropped:
+        _record_drops_in_inbox([(delegation_id, "undeliverable")])
+    return dropped
 
 
 def complete_completion_delivery(delegation_id: str, claim_id: str) -> bool:
@@ -1026,7 +1240,7 @@ def _push_completion_event(
     # Routing origin captured at dispatch (see _capture_routing_origin):
     # additive, lets the gateway reconstruct a full SessionSource (incl.
     # scope_id for relay tenant egress) when its own caches are cold.
-    for _k in ("scope_id", "user_id", "user_name"):
+    for _k in _ROUTING_ORIGIN_KEYS:
         if record.get(_k):
             evt[_k] = record[_k]
     # Structured stall metadata (#51690) — additive, present only on
@@ -1104,7 +1318,7 @@ def publish_batch_child_completion(
         "exit_reason": result.get("exit_reason"),
         "dispatched_at": parent["dispatched_at"], "completed_at": now,
     }
-    for key in ("scope_id", "user_id", "user_name"):
+    for key in _ROUTING_ORIGIN_KEYS:
         if parent.get(key):
             evt[key] = parent[key]
     with _DB_LOCK, _transaction() as conn:
@@ -1302,7 +1516,7 @@ def _push_batch_completion_event(
         "completed_at": completed_at,
     }
     # Routing origin captured at dispatch (see _capture_routing_origin).
-    for _k in ("scope_id", "user_id", "user_name"):
+    for _k in _ROUTING_ORIGIN_KEYS:
         if event_record.get(_k):
             evt[_k] = event_record[_k]
     # Structured stall metadata (#51690) — additive, present only on

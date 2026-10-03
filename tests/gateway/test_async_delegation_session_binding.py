@@ -78,6 +78,11 @@ class TestGatewayPinningFailsClosed:
         runner = object.__new__(GatewayRunner)
         db = MagicMock()
         db.get_session = AsyncMock(side_effect=lambda session_id: rows.get(session_id))
+        db.get_child_sessions = AsyncMock(
+            side_effect=lambda parent_id: [
+                r for r in rows.values() if r.get("parent_session_id") == parent_id
+            ]
+        )
         db.get_compression_tip = AsyncMock(
             return_value=compression_tip,
             side_effect=compression_error,
@@ -98,24 +103,6 @@ class TestGatewayPinningFailsClosed:
             runner.session_store, "advance_compression_session"
         ).assert_not_called()
 
-
-    @pytest.mark.asyncio
-    async def test_live_spawning_session_rebinds_from_different_route(self):
-        current = self._entry("sess_current")
-        pinned = self._entry("sess_live")
-        runner = self._make_runner(
-            {"sess_live": {"id": "sess_live", "ended_at": None}},
-            switched_entry=pinned,
-        )
-
-        resolved = await runner._resolve_async_delegation_session(
-            current, "sess_live"
-        )
-
-        assert resolved is pinned
-        getattr(runner.session_store, "switch_session").assert_called_once_with(
-            current.session_key, "sess_live"
-        )
 
     @pytest.mark.asyncio
     async def test_non_compression_ended_parent_drops(self):

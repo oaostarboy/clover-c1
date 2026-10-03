@@ -121,6 +121,16 @@ class ProgressAgent:
         return {"final_response": "done", "messages": [], "api_calls": 1}
 
 
+class SilentProgressAgent(ProgressAgent):
+    """Tool-using successful turn that intentionally delivers no reply."""
+
+    def run_conversation(self, message, conversation_history=None, task_id=None):
+        result = super().run_conversation(message, conversation_history, task_id)
+        result["final_response"] = "[SILENT]"
+        result["already_sent"] = True
+        return result
+
+
 class FailingAgent:
     def __init__(self, **kwargs):
         self.tool_progress_callback = kwargs.get("tool_progress_callback")
@@ -462,6 +472,43 @@ async def test_cleanup_removes_interim_commentary_after_final_delivery(monkeypat
     assert commentary["message_id"] in {
         item["message_id"] for item in adapter.deleted
     }
+
+
+@pytest.mark.asyncio
+async def test_intentional_silence_deletes_own_progress_without_card(
+    monkeypatch, tmp_path,
+):
+    adapter = FinalizingCleanupAdapter()
+    runner = _make_runner(adapter)
+    gateway_run = _install_fakes(monkeypatch, SilentProgressAgent, cleanup_on=True)
+    monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
+    monkeypatch.setattr(gateway_run, "_load_gateway_config", lambda: {
+        "display": {
+            "tool_progress": "all",
+            "platforms": {"telegram": {"cleanup_progress": True}},
+        },
+    })
+    source = SessionSource(platform=Platform.TELEGRAM, chat_id="-1001")
+    session_key = "agent:main:telegram:group:-1001"
+    result = await runner._run_agent(
+        message="hello", context_prompt="", history=[], source=source,
+        session_id="sess-silent-cleanup", session_key=session_key,
+    )
+
+    assert result["final_response"] == "[SILENT]"
+    progress = [item for item in adapter.sent if "tool call" not in item["content"]]
+    assert progress, "tool progress must have been emitted"
+    cb = adapter.pop_post_delivery_callback(session_key)
+    assert callable(cb), "silent turn cleanup must still be registered"
+    await _fire_post_delivery_cb(cb)
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if adapter.deleted:
+            break
+
+    deleted = {item["message_id"] for item in adapter.deleted}
+    assert {item["message_id"] for item in progress} <= deleted
+    assert not any("tool call" in item["content"] for item in adapter.edits)
 
 
 @pytest.mark.asyncio

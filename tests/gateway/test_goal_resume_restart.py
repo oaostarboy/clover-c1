@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gateway.config import GatewayConfig, Platform, PlatformConfig
-from gateway.platforms.base import MessageEvent, MessageType
+from gateway.platforms.base import EVENT_CLASS_HUMAN, MessageEvent, MessageType, message_event_class
 from gateway.run import GatewayRunner
 from gateway.session import SessionSource
 from clover_cli import goals
@@ -191,6 +191,21 @@ class TestGatewayResumeRestartsWork:
         state = goals.GoalManager(_GW_SID).state
         assert state.status == "active"
         assert state.turns_used == 0
+
+    @pytest.mark.asyncio
+    async def test_resume_continuation_is_a_synthetic_prompt_not_a_human_message(
+        self, clover_home
+    ):
+        """It must queue behind real people and never be told to a chat as "your message"."""
+        runner, adapter = _make_runner()
+        _exhaust_budget(_GW_SID)
+
+        await GatewayRunner._handle_goal_command(runner, _resume_event())
+
+        pending = adapter._pending_messages[_GW_KEY]
+        assert message_event_class(pending) != EVENT_CLASS_HUMAN
+        assert runner._record_unhandled_human_events([pending]) == 0
+        assert not (clover_home / "gateway_unhandled_on_restart.jsonl").exists()
 
     @pytest.mark.asyncio
     async def test_resume_without_goal_enqueues_nothing(self, clover_home):

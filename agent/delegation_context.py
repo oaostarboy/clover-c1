@@ -57,9 +57,13 @@ def delegated_child_context(session_id: str | None = None) -> Iterator[None]:
     try:
         # Import lazily: session_context calls is_delegated_child_context() when
         # deciding whether the compatibility os.environ mirror is safe.
-        from gateway.session_context import scoped_current_session_id
+        from gateway.session_context import (
+            captured_route_owner_session_id,
+            scoped_current_session_id,
+        )
 
-        with scoped_current_session_id(session_id):
+        # Capture the route-owning session id before the child rebinds it.
+        with captured_route_owner_session_id(), scoped_current_session_id(session_id):
             yield
     finally:
         _DELEGATED_CHILD_CONTEXT.reset(token)

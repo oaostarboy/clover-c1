@@ -113,6 +113,7 @@ def write_origin(work: Path, *, now: float | None = None) -> bool:
         "chat_id": chat_id,
         "thread_id": os.environ.get("CLOVER_SESSION_THREAD_ID", "").strip() or None,
         "session_key": os.environ.get("CLOVER_SESSION_KEY", "").strip() or None,
+        "session_id": os.environ.get("CLOVER_SESSION_ID", "").strip() or None,
         "pid": os.getpid(),
         "host": socket.gethostname(),
         "created_at": time.time() if now is None else now,

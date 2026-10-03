@@ -67,6 +67,11 @@ def _runner_with_rows(rows, *, switched_entry=None):
     runner = object.__new__(GatewayRunner)
     db = MagicMock()
     db.get_session = AsyncMock(side_effect=lambda session_id: rows.get(session_id))
+    db.get_child_sessions = AsyncMock(
+        side_effect=lambda parent_id: [
+            r for r in rows.values() if r.get("parent_session_id") == parent_id
+        ]
+    )
     db.get_compression_tip = AsyncMock(return_value=None)
     runner._session_db = db
     runner.session_store = MagicMock()
@@ -78,21 +83,36 @@ def _runner_with_rows(rows, *, switched_entry=None):
     return runner
 
 
+def _ended_with_successor(pin_id, end_reason):
+    """A pin ended for ``end_reason`` plus the auto-reset successor the route
+    now points at (``_reset_from`` is stamped on idle/daily resets too)."""
+    return {
+        pin_id: {
+            "id": pin_id,
+            "ended_at": "2026-08-09T00:00:00",
+            "end_reason": end_reason,
+        },
+        "sess_current": {
+            "id": "sess_current",
+            "ended_at": None,
+            "parent_session_id": pin_id,
+            "model_config": {"_reset_from": pin_id},
+        },
+    }
+
+
+def _route(current="sess_current", session_key="agent:main:slack:dm:U1"):
+    return ("default", session_key, current, "slack", "U1", None)
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("end_reason", ["idle", "idle_timeout", "timeout", None, ""])
+@pytest.mark.parametrize("end_reason", ["idle", "daily", "agent_close"])
 async def test_resolver_retargets_idle_ended_pin_to_current_session(end_reason):
-    """The delivery leg the classifier's "deliver" verdict promises: an
-    idle-ended pin must resolve to the chat's CURRENT session, not drop."""
+    """The delivery leg the classifier's "deliver" verdict promises: a pin
+    ended for an allowlisted non-boundary reason resolves to the chat's
+    CURRENT session (its verified reset successor), not a drop."""
     current = _entry("sess_current")
-    runner = _runner_with_rows(
-        {
-            "sess_idle": {
-                "id": "sess_idle",
-                "ended_at": "2026-08-09T00:00:00",
-                "end_reason": end_reason,
-            }
-        }
-    )
+    runner = _runner_with_rows(_ended_with_successor("sess_idle", end_reason))
 
     resolved = await runner._resolve_async_delegation_session(
         current, "sess_idle"
@@ -110,19 +130,40 @@ async def test_resolver_retargets_idle_ended_pin_to_current_session(end_reason):
 @pytest.mark.parametrize("end_reason", sorted(_USER_BOUNDARY_END_REASONS))
 async def test_resolver_still_drops_user_boundary_ends(end_reason):
     current = _entry("sess_current")
-    runner = _runner_with_rows(
-        {
-            "sess_closed": {
-                "id": "sess_closed",
-                "ended_at": "2026-08-09T00:00:00",
-                "end_reason": end_reason,
-            }
-        }
-    )
+    runner = _runner_with_rows(_ended_with_successor("sess_closed", end_reason))
     resolved = await runner._resolve_async_delegation_session(
         current, "sess_closed"
     )
     assert resolved is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "end_reason", ["idle_timeout", "timeout", None, "", "cron_complete"]
+)
+async def test_unknown_end_reason_on_reset_path_fails_closed(end_reason):
+    """Only allowlisted reasons prove an automatic succession; an unknown or
+    NULL reason may be a user boundary nobody classified (Fable r3 C1)."""
+    current = _entry("sess_current")
+    runner = _runner_with_rows(_ended_with_successor("sess_x", end_reason))
+
+    assert await runner._resolve_async_delegation_session(current, "sess_x") is None
+    assert (
+        await runner._classify_completion_target("sess_x", _route()) == "terminal"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pin_without_ancestry_to_route_is_not_delivered():
+    """Absence of ancestry never proves ownership: an idle-ended pin that the
+    route's current session does not descend from must not be adopted."""
+    current = _entry("sess_current")
+    rows = _ended_with_successor("sess_idle", "idle")
+    rows["sess_current"].pop("parent_session_id")
+    rows["sess_current"]["model_config"] = {}
+    runner = _runner_with_rows(rows)
+
+    assert await runner._resolve_async_delegation_session(current, "sess_idle") is None
 
 
 @pytest.mark.asyncio
@@ -136,15 +177,10 @@ async def test_classifier_and_resolver_agree_on_ended_parents(end_reason):
     deliver (return a session), and when it says "terminal" the resolver
     must drop. Divergence in the deliver->drop direction acks the durable
     row for an injection the pipeline then discards."""
-    row = {
-        "id": "sess_x",
-        "ended_at": "2026-08-09T00:00:00",
-        "end_reason": end_reason,
-    }
     current = _entry("sess_current")
-    runner = _runner_with_rows({"sess_x": row})
+    runner = _runner_with_rows(_ended_with_successor("sess_x", end_reason))
 
-    verdict = await runner._classify_completion_target("sess_x")
+    verdict = await runner._classify_completion_target("sess_x", _route())
     resolved = await runner._resolve_async_delegation_session(current, "sess_x")
 
     if verdict == "deliver":

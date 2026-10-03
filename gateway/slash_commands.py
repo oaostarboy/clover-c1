@@ -167,6 +167,7 @@ class GatewaySlashCommandsMixin:
 
         run_id = f"council-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000:06d}"
         work = profile_home / "council" / "runs" / run_id
+        launched = self._council_launch_session(source)
         progress_path = work / "progress.json"
         summary_path = work / "summary.json"
         metadata = self._thread_metadata_for_source(source)
@@ -228,6 +229,9 @@ class GatewaySlashCommandsMixin:
             failed["status"] = "failed"
             if card.owns_final:
                 await card.finish_failed(failed)
+                self._record_typed_council_context(
+                    work, "failure", card, None, failed, launched
+                )
             else:
                 await publish(failed)
             logger.warning(
@@ -248,6 +252,9 @@ class GatewaySlashCommandsMixin:
             failed["status"] = "failed"
             if card.owns_final:
                 await card.finish_failed(failed)
+                self._record_typed_council_context(
+                    work, "failure", card, None, failed, launched
+                )
                 return None
             await publish(failed)
             return "🏛 Council finished without a readable verdict."
@@ -258,6 +265,9 @@ class GatewaySlashCommandsMixin:
             # One message: the card and the answer travel together.
             await card.finish_done(done, summary)
             if card.final_delivered or card.final_maybe_delivered:
+                self._record_typed_council_context(
+                    work, "result", card, summary, done, launched
+                )
                 return None
             return format_council_result(summary)
         await publish(done)
@@ -320,15 +330,67 @@ class GatewaySlashCommandsMixin:
             return None
         return adapter, str(source.chat_id), self._thread_metadata_for_source(source)
 
-    async def _council_card_watcher(self) -> None:
-        """Show the 🏛 card for councils the agent launches itself."""
+    def _council_context_recorder(self, poll_s: float = 1.0):
+        """The one consumer that records a shown council result in the conversation."""
+        from gateway.council_context import CouncilContextRecorder
+
+        return CouncilContextRecorder(
+            getattr(self, "session_store", None),
+            is_running=getattr(self, "_is_session_running", None),
+            poll_s=poll_s,
+        )
+
+    def _make_council_watcher(self, *, poll_s: float = 1.0):
         from gateway.council_progress import CouncilRunWatcher
 
-        await CouncilRunWatcher(
+        recorder = self._council_context_recorder(poll_s)
+        return CouncilRunWatcher(
             homes=self._council_scan_homes,
             resolve_target=self._council_run_target,
+            poll_s=poll_s,
             card_style=lambda origin: self._council_card_style(str(origin.get("platform") or "")),
-        ).run()
+            on_delivered=recorder.record,
+            on_discovered=recorder.observe_origin_session,
+        )
+
+    def _council_launch_session(self, source) -> dict:
+        """``session_key``/``session_id`` of the conversation a ``/council`` was typed in."""
+        try:
+            key = self._session_key_for_source(source)
+            return {"session_key": key, "session_id": self.session_store.peek_session_id(key)}
+        except Exception:
+            logger.info("Council: could not resolve the launching session", exc_info=True)
+            return {"session_key": None, "session_id": None}
+
+    def _record_typed_council_context(
+        self, work: Path, kind: str, card: Any, summary, state: dict, launched: dict
+    ) -> None:
+        """``/council`` finals: same row, written in the background at the first idle moment."""
+        from gateway.council_progress import CouncilRunWatcher, _failure_delivery
+
+        if kind == "result":
+            delivery = "shown" if card.final_delivered else "uncertain"
+        else:
+            delivery = _failure_delivery(card)
+        now = time.time()
+        task = asyncio.ensure_future(
+            self._council_context_recorder().record(
+                origin={**launched, "created_at": now},
+                work=work,
+                kind=kind,
+                delivery=delivery,
+                summary=summary,
+                state=state,
+                deadline=now + CouncilRunWatcher.MAX_RUN_AGE_S,
+            )
+        )
+        tasks = self.__dict__.setdefault("_council_context_tasks", set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    async def _council_card_watcher(self) -> None:
+        """Show the 🏛 card for councils the agent launches itself."""
+        await self._make_council_watcher().run()
 
     def _typed_command_prefix_for(self, platform) -> str:
         """Return the prefix users can always type to reach Clover commands.
@@ -3132,6 +3194,7 @@ class GatewaySlashCommandsMixin:
                         source=event.source,
                         message_id=None,
                         channel_prompt=None,
+                        synthetic=True,
                     )
                     self._enqueue_fifo(_quick_key, cont_event, adapter)
             except Exception as exc:
@@ -5633,6 +5696,173 @@ class GatewaySlashCommandsMixin:
         if msg_count == 1:
             return t("gateway.resume.resumed_one", title=title, count=msg_count)
         return t("gateway.resume.resumed_many", title=title, count=msg_count)
+
+    # ── /results — background results that did not reach the assistant ──
+
+    _RESULTS_LIST_LIMIT = 20
+    _RESULTS_PAYLOAD_LIMIT = 3500
+
+    async def _results_visible_records(self, event: MessageEvent):
+        """``(route_records, visible, error)`` for the caller's route.
+
+        A record is visible only if it belongs to the caller's exact route
+        (profile/platform/chat/thread) AND its owner passes the ownership path
+        rule for the caller's CURRENT session. Route equality alone never
+        grants access: after ``/new`` the old conversation's results stay
+        hidden until the user ``/resume``s it.
+        """
+        from gateway.completion_ownership import resolve_owner, route_path_session_ids
+
+        source = await asyncio.to_thread(self._normalize_source_for_session_key, event.source)
+        session_key = self._session_key_for_source(source)
+        entry = await self.async_session_store.lookup_by_session_key(session_key)
+        if entry is None:
+            return [], [], None
+        route = await self._build_completion_route(source, session_key, entry.session_id)
+        route_records = await self._session_db.inbox_for_route(
+            route.profile, route.platform, route.chat_id, route.thread_id,
+        )
+        # Results whose route could not be recorded (no durable origin) are
+        # found by owner, from inside the owner's conversation.
+        path = await route_path_session_ids(route, db=self._session_db)
+        owner_records = await self._session_db.inbox_for_owners(path) if path else []
+        if path:
+            # A legacy record may carry a delegated child's raw pin as its owner
+            # (the writers now store the resolved root). Resolve each such
+            # pin's lineage (bounded) and keep the ones that land on this
+            # conversation's path.
+            from gateway.completion_ownership import resolve_root
+
+            path_set, direct = set(path), {r["key"] for r in owner_records}
+            roots: dict = {}
+            for rec in await self._session_db.inbox_routeless():
+                owner = rec.get("owner_root_id")
+                if not owner or rec["key"] in direct or owner in path_set:
+                    continue
+                if owner not in roots:
+                    roots[owner] = await resolve_root(owner, db=self._session_db)
+                if roots[owner] in path_set:
+                    owner_records.append(rec)
+        seen = {r["key"] for r in route_records}
+        records = sorted(
+            route_records + [r for r in owner_records if r["key"] not in seen],
+            key=lambda r: r["seq"],
+        )
+        exact_route = seen
+        verdicts: dict = {}
+        visible = []
+        for rec in records:
+            owner = rec.get("owner_root_id")
+            if not owner:
+                # No verified owner (an unpinned watch event). It is stored with
+                # the exact route the event was addressed to, and is shown only
+                # on that exact route: the audience the event itself would have
+                # reached. In a per-user group session that audience is one
+                # user, so the record's own session key must also be the
+                # caller's.
+                if rec["key"] in exact_route and (
+                    not rec.get("session_key") or rec["session_key"] == session_key
+                ):
+                    visible.append(rec)
+                continue
+            if owner not in verdicts:
+                verdicts[owner] = (
+                    await resolve_owner(owner, route, db=self._session_db)
+                ).verdict
+            if verdicts[owner] == "deliver":
+                visible.append(rec)
+        return records, visible, None
+
+    @staticmethod
+    def _results_state_label(rec: dict) -> str:
+        state = rec.get("state")
+        if state == "ingested":
+            return "delivered to the assistant"
+        if state == "dropped":
+            reason = str(rec.get("drop_reason") or "").strip()
+            return f"not delivered ({reason})" if reason else "not delivered"
+        return "waiting"
+
+    def _results_render_payload(self, rec: dict) -> str:
+        from gateway.run import _redact_gateway_user_facing_secrets
+
+        raw = rec.get("payload_json")
+        if rec.get("payload_pruned_at") or raw is None:
+            return "payload expired"
+        try:
+            data = json.loads(raw)
+        except (TypeError, ValueError):
+            data = raw
+        if isinstance(data, dict):
+            if rec.get("kind") == "delegation":
+                parts = [
+                    f"{label}: {data[name]}"
+                    for label, name in (
+                        ("Goal", "goal"), ("Status", "status"),
+                        ("Summary", "summary"), ("Error", "error"),
+                    )
+                    if data.get(name)
+                ]
+            elif rec.get("kind") == "process":
+                parts = [
+                    f"{label}: {data[name]}"
+                    for label, name in (
+                        ("Command", "command"), ("Exit code", "exit_code"),
+                        ("Output", "output"),
+                    )
+                    if data.get(name) not in (None, "")
+                ]
+            else:
+                parts = []
+            text = "\n".join(parts) or json.dumps(data, indent=2, default=str)
+        else:
+            text = str(data)
+        text = _redact_gateway_user_facing_secrets(text)
+        if len(text) > self._RESULTS_PAYLOAD_LIMIT:
+            text = text[: self._RESULTS_PAYLOAD_LIMIT - 1] + "…"
+        return text
+
+    async def _handle_results_command(self, event: MessageEvent) -> str:
+        """Handle /results [key] — read-only view of background results.
+
+        No arguments lists this route's records; a key shows one record.
+        Nothing is replayed or modified; an id alone never grants access.
+        """
+        if not self._session_db:
+            from clover_state import format_session_db_unavailable
+            return format_session_db_unavailable(prefix=t("gateway.shared.session_db_unavailable_prefix"))
+
+        key = event.get_command_args().strip()
+        try:
+            _all, visible, _err = await self._results_visible_records(event)
+        except Exception:
+            logger.warning("/results lookup failed", exc_info=True)
+            return "Could not read background results right now. Try again in a moment."
+
+        if not key:
+            if not visible:
+                return "No background results for this conversation."
+            shown = visible[-self._RESULTS_LIST_LIMIT:]
+            lines = ["Background results for this conversation:"]
+            for rec in shown:
+                title = " ".join(str(rec.get("title") or "").split()) or "background task"
+                lines.append(
+                    f"• {rec['key']} — {title[:80]} [{self._results_state_label(rec)}]"
+                )
+            if len(visible) > len(shown):
+                lines.append(f"(+{len(visible) - len(shown)} older)")
+            lines.append("Use `/results <key>` to view one.")
+            return "\n".join(lines)
+
+        rec = next((r for r in visible if r.get("key") == key), None)
+        if rec is None:
+            # Same answer for "missing" and "not yours": the key reveals nothing.
+            return f"No background result `{key}` for this conversation."
+        title = " ".join(str(rec.get("title") or "").split()) or "background task"
+        head = f"{rec['key']} — {title[:120]}\nStatus: {self._results_state_label(rec)}"
+        if rec.get("notice_state") == "uncertain":
+            head += "\n(The not-delivered notice may not have reached you.)"
+        return f"{head}\n\n{self._results_render_payload(rec)}"
 
     async def _handle_sessions_command(self, event: MessageEvent) -> str:
         """Handle /sessions — list previous sessions for gateway chats."""

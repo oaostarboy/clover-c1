@@ -3459,8 +3459,17 @@ def terminal_tool(
                             # notification when the user closes this session
                             # (/new) before the process finishes, instead of
                             # injecting it into the chat's NEW session.
-                            proc_session.parent_session_id = _gse(
-                                "CLOVER_SESSION_ID", ""
+                            #
+                            # Inside a delegated child CLOVER_SESSION_ID is the
+                            # CHILD's id while the route is the parent's; stamp
+                            # the route owner captured at child entry.
+                            from gateway.session_context import (
+                                get_route_owner_session_id,
+                            )
+
+                            proc_session.parent_session_id = (
+                                get_route_owner_session_id()
+                                or _gse("CLOVER_SESSION_ID", "")
                             )
 
                 # Mutual exclusion: if both notify_on_complete and watch_patterns

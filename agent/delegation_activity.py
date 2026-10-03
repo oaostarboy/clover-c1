@@ -984,17 +984,33 @@ def _worker_rows(child: ChildActivity, now: float, *, live: bool) -> List[str]:
 def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
     children = group.ordered()
     active = [c for c in children if c.state in _ACTIVE_STATES or c.state == "queued"]
-    elapsed = format_duration(now - group.created_at)
+    # Once every worker has ended the card's clock stops at the last one's end,
+    # whether or not the result was ever delivered: the board keeps showing a
+    # finished group until its summary posts, and every redraw used "now".
+    settled = bool(children) and all(c.state in TERMINAL_STATES for c in children)
+    if settled:
+        end = max((c.ended_at for c in children if c.ended_at), default=now)
+        elapsed = format_duration(max(0.0, end - group.created_at))
+    else:
+        elapsed = format_duration(now - group.created_at)
+    stopped = settled and all(c.state == "cancelled" for c in children)
     if len(children) == 1:
         child = children[0]
-        head = _stats_head("🔀", pretty_model(child.model) or "Subagent",
-                           _calls(child, live=True), elapsed)
-        quoted = [_bold_title(child), _doing(child, now)]
+        label = pretty_model(child.model) or "Subagent"
+        if stopped:
+            label += " · stopped"
+        head = _stats_head("🔀", label, _calls(child, live=True), elapsed)
+        if settled:
+            quoted = [_bold_title(child), f"{_state_icon(child.state)} {child.reason or child.state}"]
+        else:
+            quoted = [_bold_title(child), _doing(child, now)]
         if child.note and child.open_tools and child.visibility != "lifecycle":
             quoted.append(f"💬 {child.note}")
         return "\n".join([head] + _quote(quoted))
     done = sum(1 for c in children if c.state == "completed")
     label = f"{len(children)} subagents" + (f" · {done} done" if done else "")
+    if stopped:
+        label += " · stopped"
     head = _stats_head("🔀", label, sum(_calls(c, live=True) for c in children), elapsed)
     quoted: List[str] = []
     shown = 0

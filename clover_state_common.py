@@ -326,7 +326,7 @@ def _sql_session_last_active_by_id(session_id_expr: str) -> str:
     )
 
 
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 
 # FTS storage-layout version, tracked INDEPENDENTLY of SCHEMA_VERSION in the
@@ -546,6 +546,36 @@ CREATE TABLE IF NOT EXISTS async_delegations (
     delivery_claimed_at REAL
 );
 
+-- Durable per-session inbox for background results (delegation / process /
+-- council). Keys are global and permanent tombstones: rows are never deleted,
+-- only their payload is pruned after retention, so every recovery scanner
+-- hits the PRIMARY KEY and cannot re-ingest. ``state`` moves
+-- pending -> ingested (via the insert-time rule in SessionDB message writers)
+-- or pending -> dropped (only via SessionDB.inbox_drop).
+CREATE TABLE IF NOT EXISTS session_inbox (
+    key TEXT PRIMARY KEY,
+    profile TEXT,
+    platform TEXT,
+    chat_id TEXT,
+    thread_id TEXT,
+    session_key TEXT,
+    owner_root_id TEXT,
+    kind TEXT NOT NULL CHECK(kind IN ('delegation','process','council')),
+    wake INTEGER NOT NULL DEFAULT 0,
+    title TEXT,
+    payload_json TEXT,
+    shown_to_user INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','ingested','dropped')),
+    seq INTEGER NOT NULL,
+    created_at REAL NOT NULL,
+    ingested_at REAL,
+    ingested_session_id TEXT,
+    ingested_message_id INTEGER,
+    drop_reason TEXT,
+    payload_pruned_at REAL,
+    notice_state TEXT CHECK(notice_state IS NULL OR notice_state IN ('pending','sent','uncertain'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
@@ -566,6 +596,12 @@ CREATE INDEX IF NOT EXISTS idx_session_model_usage_session ON session_model_usag
 CREATE INDEX IF NOT EXISTS idx_session_model_usage_model ON session_model_usage(model);
 CREATE INDEX IF NOT EXISTS idx_async_delegations_delivery
     ON async_delegations(delivery_state, completed_at);
+CREATE INDEX IF NOT EXISTS idx_session_inbox_route
+    ON session_inbox(profile, platform, chat_id, thread_id, state);
+CREATE INDEX IF NOT EXISTS idx_session_inbox_owner
+    ON session_inbox(owner_root_id, state);
+CREATE INDEX IF NOT EXISTS idx_session_inbox_seq
+    ON session_inbox(seq);
 """
 
 

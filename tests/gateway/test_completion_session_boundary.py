@@ -39,24 +39,56 @@ def isolated_registry(tmp_path, monkeypatch):
 
 
 class _SessionDB:
-    def __init__(self, row, tip=None):
-        self._row = row
-        self._tip = tip
+    """Rows keyed by session id; the inbox calls are recorded."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.inbox = {}
 
     async def get_session(self, session_id):
-        return self._row
+        return self._rows.get(session_id)
+
+    async def get_child_sessions(self, parent_id):
+        return [r for r in self._rows.values() if r.get("parent_session_id") == parent_id]
 
     async def get_compression_tip(self, session_id):
-        return self._tip
+        return None
+
+    async def inbox_put(self, record):
+        self.inbox[record["key"]] = dict(record, state="pending")
+        return "inserted"
+
+    async def inbox_drop(self, key, reason):
+        self.inbox[key].update(state="dropped", drop_reason=reason)
+        return True
 
 
-def _runner(adapter, *, session_db=...):
+def _closed_with_successor(pin_id, end_reason):
+    """``pin_id`` ended for ``end_reason``; the route now points at its
+    ``_reset_from`` successor ``sess-now``."""
+    return _SessionDB(
+        {
+            pin_id: {"id": pin_id, "ended_at": 1786288000.0, "end_reason": end_reason},
+            "sess-now": {
+                "id": "sess-now",
+                "ended_at": None,
+                "parent_session_id": pin_id,
+                "model_config": {"_reset_from": pin_id},
+            },
+        }
+    )
+
+
+def _runner(adapter, *, session_db=..., current_session_id="sess-now"):
     runner = object.__new__(GatewayRunner)
     runner._running = True
     runner.adapters = {Platform.TELEGRAM: adapter}
     runner.session_store = SimpleNamespace(
         _ensure_loaded=lambda: None,
         _entries={},
+        lookup_by_session_key=lambda key: SimpleNamespace(
+            session_id=current_session_id, session_key=key,
+        ),
     )
     runner._session_source_cache = {}
     runner._completion_delivery_lock = __import__("threading").Lock()
@@ -186,18 +218,16 @@ def test_completion_from_user_closed_session_is_dropped(
     land in the chat's new session."""
     _finished_session(isolated_registry)
     adapter = SimpleNamespace(handle_message=AsyncMock())
-    runner = _runner(
-        adapter,
-        session_db=_SessionDB(
-            {"ended_at": 1786288000.0, "end_reason": "session_reset"}
-        ),
-    )
+    db = _closed_with_successor("sess-closed", "session_reset")
+    runner = _runner(adapter, session_db=db)
 
     _run_watcher(
         monkeypatch, runner, _watcher("proc_boundary", "sess-closed"),
     )
 
     adapter.handle_message.assert_not_awaited()
+    # ...and the dropped result is recorded, not silently lost.
+    assert db.inbox["proc:proc_boundary"]["state"] == "dropped"
 
 
 def test_completion_after_idle_end_still_delivers(
@@ -207,12 +237,7 @@ def test_completion_after_idle_end_still_delivers(
     and the completion must deliver."""
     _finished_session(isolated_registry)
     adapter = SimpleNamespace(handle_message=AsyncMock())
-    runner = _runner(
-        adapter,
-        session_db=_SessionDB(
-            {"ended_at": 1786288000.0, "end_reason": "idle_timeout"}
-        ),
-    )
+    runner = _runner(adapter, session_db=_closed_with_successor("sess-idle", "idle"))
 
     _run_watcher(
         monkeypatch, runner, _watcher("proc_boundary", "sess-idle"),
@@ -224,7 +249,11 @@ def test_completion_after_idle_end_still_delivers(
 def test_completion_from_live_session_delivers(monkeypatch, isolated_registry):
     _finished_session(isolated_registry)
     adapter = SimpleNamespace(handle_message=AsyncMock())
-    runner = _runner(adapter, session_db=_SessionDB({"ended_at": None}))
+    runner = _runner(
+        adapter,
+        session_db=_SessionDB({"sess-live": {"id": "sess-live", "ended_at": None}}),
+        current_session_id="sess-live",
+    )
 
     _run_watcher(
         monkeypatch, runner, _watcher("proc_boundary", "sess-live"),
@@ -238,7 +267,7 @@ def test_unstamped_legacy_completion_delivers(monkeypatch, isolated_registry):
     session DB is present."""
     _finished_session(isolated_registry)
     adapter = SimpleNamespace(handle_message=AsyncMock())
-    runner = _runner(adapter, session_db=_SessionDB(None))
+    runner = _runner(adapter, session_db=_SessionDB({}))
 
     _run_watcher(monkeypatch, runner, _watcher("proc_boundary"))
 
@@ -263,7 +292,9 @@ def test_retry_verdict_returns_false_for_watcher_repoll():
 
 def test_terminal_verdict_returns_none_without_injection():
     adapter = SimpleNamespace(handle_message=AsyncMock())
-    runner = _runner(adapter, session_db=_SessionDB(None))
+    runner = _runner(
+        adapter, session_db=_closed_with_successor("sess-gone", "session_reset"),
+    )
 
     result = asyncio.run(
         runner._deliver_completion_notification(
@@ -272,6 +303,22 @@ def test_terminal_verdict_returns_none_without_injection():
     )
 
     assert result is None
+    adapter.handle_message.assert_not_awaited()
+
+
+def test_unknown_pin_row_is_retryable_not_dropped():
+    """A missing row is uncertainty (lookup race), never proof the owner is
+    gone: the watcher must re-poll instead of dropping the result."""
+    adapter = SimpleNamespace(handle_message=AsyncMock())
+    runner = _runner(adapter, session_db=_SessionDB({}))
+
+    result = asyncio.run(
+        runner._deliver_completion_notification(
+            "text", _completion_evt("sess-missing"),
+        )
+    )
+
+    assert result is False
     adapter.handle_message.assert_not_awaited()
 
 
@@ -284,7 +331,9 @@ def test_async_delegation_gate_unchanged():
     delegation-owned gate (terminal verdict -> None), proving the completion
     branch did not fork or shadow the delegation policy."""
     adapter = SimpleNamespace(handle_message=AsyncMock())
-    runner = _runner(adapter, session_db=_SessionDB(None))
+    runner = _runner(
+        adapter, session_db=_closed_with_successor("sess-gone", "session_reset"),
+    )
 
     evt = {
         "type": "async_delegation",
