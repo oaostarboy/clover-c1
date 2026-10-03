@@ -7441,19 +7441,13 @@ def _recover_gateway_restart_after_abort(
     # process together with the old service. If systemd-run is unavailable,
     # fail closed rather than pretending the in-cgroup child is independent.
     if gateway_mode and sys.platform == "linux":
-        systemd_run = shutil.which("systemd-run")
-        if not systemd_run:
+        from clover_cli.update_contract import systemd_user_scope_argv
+
+        scoped = systemd_user_scope_argv(command)
+        if scoped is None:
             logger.warning("Cannot isolate fresh gateway recovery from the gateway cgroup")
             return _all_failed()
-        command = [
-            systemd_run,
-            "--user",
-            "--scope",
-            "--quiet",
-            "--collect",
-            "--",
-            *command,
-        ]
+        command = scoped
 
     kwargs = {
         "input": json.dumps({"profiles": profiles, "supervisors": candidates}),
