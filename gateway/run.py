@@ -25907,7 +25907,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         from clover_cli import linux_catchup_handoff
                         from clover_cli import update_receipt as _receipt_api
                         _fleet = _receipt_api.collect_fleet_versions()
-                        if linux_catchup_handoff.verify_and_finalize_receipt(
+                        # A tagged receipt must start after THIS chat request.
+                        # The legacy 120-second tolerance is not run identity.
+                        if ts >= pending_mtime and linux_catchup_handoff.verify_and_finalize_receipt(
                             receipt_path,
                             clover_home=_clover_home,
                             fleet=_fleet,

@@ -119,9 +119,27 @@ def verify_and_finalize_receipt(receipt_path: Path, *, clover_home: Path, fleet:
         ):
             return False
         tmp = receipt_path.with_name(f"{receipt_path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
-        tmp.replace(receipt_path)
-        (clover_home / "fleet_restart_pending").unlink(missing_ok=True)
-        return True
+        marker = clover_home / "fleet_restart_pending"
+        try:
+            tmp.write_text(json.dumps(record, indent=2), encoding="utf-8")
+            marker_bytes = marker.read_bytes() if marker.exists() else None
+            marker.unlink(missing_ok=True)
+            try:
+                tmp.replace(receipt_path)
+            except Exception:
+                # The success receipt is still provisional: reinstate the
+                # restart obligation if publishing it fails after marker clear.
+                try:
+                    marker.write_bytes(marker_bytes if marker_bytes is not None else
+                                       f"expected_sha={sha}".encode("utf-8"))
+                except OSError:
+                    pass
+                return False
+            return True
+        finally:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
     except Exception:
         return False

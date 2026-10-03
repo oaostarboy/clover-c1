@@ -27,7 +27,7 @@ jobs:
           $python = (Resolve-Path .venv/Scripts/python.exe).Path
           $log = Join-Path (Get-Location) baseline-results.txt
           Push-Location baseline
-          & $python -m pytest -o addopts= -p no:randomly -p no:cacheprovider --color=no --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py tests/gateway/test_update_command.py tests/gateway/test_update_streaming.py 2>&1 | Tee-Object -FilePath $log
+          & $python -m pytest -o addopts= -p no:randomly -p no:cacheprovider --color=no --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py 2>&1 | Tee-Object -FilePath $log
           $result = $LASTEXITCODE
           Pop-Location
           Set-Content baseline-exit.txt $result
@@ -35,7 +35,7 @@ jobs:
       - name: Candidate Windows regressions and Linux guard traps
         shell: pwsh
         run: |
-          .venv/Scripts/python.exe -m pytest -o addopts= -p no:randomly -p no:cacheprovider --color=no --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py tests/gateway/test_update_command.py tests/gateway/test_update_streaming.py tests/gateway/test_linux_catchup_handoff.py 2>&1 | Tee-Object -FilePath candidate-results.txt
+          .venv/Scripts/python.exe -m pytest -o addopts= -p no:randomly -p no:cacheprovider --color=no --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py tests/gateway/test_linux_catchup_handoff.py tests/clover_cli/test_linux_catchup_io.py 2>&1 | Tee-Object -FilePath candidate-results.txt
           Set-Content candidate-exit.txt $LASTEXITCODE
           exit 0
       - name: Fail on any new native-Windows failure

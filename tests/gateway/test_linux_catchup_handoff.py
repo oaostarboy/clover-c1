@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -13,6 +13,8 @@ from tests.gateway.restart_test_helpers import make_restart_runner
 
 
 def _receipt(home, *, targets, sha="f" * 40, started=None, outcome="running"):
+    # Production writes the chat request marker before starting the updater.
+    (home / ".update_pending.claimed.json").write_text("{}", encoding="utf-8")
     path = home / "logs" / "update_receipts" / "latest.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
@@ -31,7 +33,6 @@ async def _conclude(monkeypatch, home, fleet):
     monkeypatch.setattr(gateway_run.sys, "platform", "linux")
     from clover_cli import update_receipt
     monkeypatch.setattr(update_receipt, "collect_fleet_versions", lambda **kw: fleet)
-    (home / ".update_pending.claimed.json").write_text("{}", encoding="utf-8")
     runner, adapter = make_restart_runner()
     paths = [home / n for n in (".update_pending.json", ".update_pending.claimed.json",
                                 ".update_output.txt", ".update_exit_code",
@@ -215,3 +216,20 @@ def test_no_systemd_service_keeps_original_linux_catchup_path(monkeypatch):
     monkeypatch.setattr(update_cmd, "_owned_systemd_service_pids",
                         lambda: pytest.fail("no-service Linux handoff probe"))
     update_cmd._apply_pending_fleet_restart_catchup()
+
+
+@pytest.mark.asyncio
+async def test_recent_previous_catchup_cannot_claim_this_run(monkeypatch, tmp_path):
+    started = (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()
+    receipt_path = _receipt(
+        tmp_path, targets=[{"profile": "default", "pid": 101}], started=started,
+    )
+    marker = tmp_path / "fleet_restart_pending"
+    marker.write_text("expected_sha=" + "f" * 40)
+    before = receipt_path.read_text(encoding="utf-8")
+    adapter = await _conclude(monkeypatch, tmp_path, [
+        {"profile": "default", "pid": 301, "code_sha": "f" * 40, "state": "current"},
+    ])
+    assert "finished" not in adapter.sent[0]
+    assert receipt_path.read_text(encoding="utf-8") == before
+    assert marker.exists()
