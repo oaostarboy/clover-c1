@@ -6956,22 +6956,24 @@ class GatewaySlashCommandsMixin:
                 setsid_bin = shutil.which("setsid")
                 if setsid_bin:
                     # Preferred: setsid creates a new session, fully detached
-                    subprocess.Popen(
-                        [setsid_bin, "bash", "-c", update_cmd],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        env=spawn_env,
-                        start_new_session=True,
-                    )
+                    spawn_argv = [setsid_bin, "bash", "-c", update_cmd]
                 else:
                     # Fallback: start_new_session=True calls os.setsid() in child
-                    subprocess.Popen(
-                        ["bash", "-c", update_cmd],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        env=spawn_env,
-                        start_new_session=True,
-                    )
+                    spawn_argv = ["bash", "-c", update_cmd]
+                # A new session is still inside the gateway unit's cgroup, and
+                # the updater restarts that unit (KillMode=mixed SIGKILLs the
+                # cgroup).  Under a Linux *user* unit, start it in its own
+                # transient scope; elsewhere this returns the argv unchanged.
+                from clover_cli.update_contract import escape_gateway_cgroup
+
+                spawn_argv, spawn_env = escape_gateway_cgroup(spawn_argv, spawn_env)
+                subprocess.Popen(
+                    spawn_argv,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=spawn_env,
+                    start_new_session=True,
+                )
         except Exception as e:
             pending_path.unlink(missing_ok=True)
             exit_code_path.unlink(missing_ok=True)
