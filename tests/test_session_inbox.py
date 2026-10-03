@@ -558,3 +558,66 @@ def test_empty_and_missing_route_parts_match_either_spelling(db, written, read):
     assert [r["key"] for r in db.inbox_pending_for_route(*route)] == ["deleg:a"]
     assert [r["key"] for r in db.inbox_for_route(*route)] == ["deleg:a"]
     assert db.inbox_get("deleg:a")["thread_id"] is None
+
+
+# 13 ---------------------------------------------------------------------
+def test_each_session_db_file_keeps_its_own_inbox(tmp_path):
+    """A secondary-profile store is a separate file: same key, separate state."""
+    primary = SessionDB(db_path=tmp_path / "primary.db")
+    secondary = SessionDB(db_path=tmp_path / "secondary" / "state.db")
+    try:
+        primary.create_session("s1", "telegram")
+        secondary.create_session("s2", "telegram")
+        assert primary.inbox_put(_record("deleg:shared")) == "inserted"
+        assert secondary.inbox_put(_record("deleg:shared")) == "inserted"
+
+        secondary.append_messages_batch("s2", [_user_msg(["deleg:shared"])])
+
+        assert secondary.inbox_get("deleg:shared")["state"] == "ingested"
+        assert primary.inbox_get("deleg:shared")["state"] == "pending"
+        assert primary.inbox_get("deleg:shared")["ingested_message_id"] is None
+    finally:
+        primary.close()
+        secondary.close()
+
+
+def _ingested_snapshot(db, key):
+    rec = db.inbox_get(key)
+    return (rec["state"], rec["ingested_session_id"], rec["ingested_message_id"], rec["ingested_at"])
+
+
+def test_compaction_rewrite_of_ingested_row_keeps_original_ingestion_ids(db):
+    db.create_session("s1", "telegram")
+    db.inbox_put(_record("deleg:k1"))
+    db.append_messages_batch("s1", [_user_msg(["deleg:k1"])])
+    original = _ingested_snapshot(db, "deleg:k1")
+    assert original[0] == "ingested"
+
+    # The compacted set carries the same rendered row again (re-sequenced).
+    db.archive_and_compact("s1", [
+        {"role": "assistant", "content": "summary"},
+        _user_msg(["deleg:k1"]),
+    ])
+
+    assert _ingested_snapshot(db, "deleg:k1") == original
+    live = db.get_messages("s1")
+    assert [m["role"] for m in live] == ["assistant", "user"]
+
+
+def test_compaction_tail_clone_of_ingested_row_keeps_original_ingestion_ids(db):
+    db.create_session("s1", "telegram")
+    db.append_messages_batch("s1", [{"role": "user", "content": "old"}])
+    watermark = db.get_active_message_watermark("s1")
+    # Arrives during the slow summary call, i.e. after the watermark.
+    db.inbox_put(_record("deleg:k1"))
+    db.append_messages_batch("s1", [_user_msg(["deleg:k1"])])
+    original = _ingested_snapshot(db, "deleg:k1")
+    assert original[0] == "ingested"
+
+    db.archive_and_compact(
+        "s1", [{"role": "assistant", "content": "summary"}], watermark=watermark
+    )
+
+    assert _ingested_snapshot(db, "deleg:k1") == original
+    live = db.get_messages("s1")
+    assert any(m["role"] == "user" and m["content"] == "[background result]" for m in live)
