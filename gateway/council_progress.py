@@ -335,6 +335,7 @@ def _pid_alive(pid: Any) -> bool:
 
 GATEWAY_ACK = "gateway-card.json"
 GATEWAY_UNCERTAIN = "gateway-card-uncertain.json"
+GATEWAY_FAILED = "gateway-card-failed.json"
 
 
 def _write_gateway_ack(work: Path) -> None:
@@ -345,6 +346,13 @@ def _write_gateway_ack(work: Path) -> None:
         )
     except OSError:
         logger.debug("could not write %s", GATEWAY_ACK, exc_info=True)
+
+
+def _failure_delivery(card: Any) -> str:
+    """Was the failure card shown? The classic card edits a status in place."""
+    if not getattr(card, "owns_final", False) or getattr(card, "final_delivered", False):
+        return "shown"
+    return "uncertain" if getattr(card, "final_maybe_delivered", False) else "not_shown"
 
 
 class CouncilRunWatcher:
@@ -367,8 +375,16 @@ class CouncilRunWatcher:
         poll_s: float = 1.0,
         managed: Optional[set[str]] = None,
         card_style: Optional[Callable[[dict], str]] = None,
+        on_delivered: Optional[Callable[..., Awaitable[Any]]] = None,
+        on_discovered: Optional[Callable[[dict, Path], Any]] = None,
     ) -> None:
         self._homes = homes
+        # Awaited once a card is shown (or failed); records it in the
+        # launching conversation. See gateway/council_context.py.
+        self._on_delivered = on_delivered
+        # Called once per newly discovered run, so the gateway can bind an
+        # origin that has no session_id to the session live right now.
+        self._on_discovered = on_discovered
         self._card_style = card_style or (lambda origin: "v2")
         self._resolve_target = resolve_target
         self._poll_s = poll_s
@@ -413,8 +429,18 @@ class CouncilRunWatcher:
             age = time.time() - float(origin.get("created_at") or 0)
         except (TypeError, ValueError):
             age = self.MAX_RUN_AGE_S + 1
-        if age > self.MAX_RUN_AGE_S or (work / GATEWAY_ACK).exists() or (work / GATEWAY_UNCERTAIN).exists():
+        if age > self.MAX_RUN_AGE_S:
             return None
+        if self._on_discovered is not None:
+            try:
+                self._on_discovered(origin, work)
+            except Exception:
+                logger.warning("Council discovery hook for %s failed", run_id, exc_info=True)
+        shown = self._shown_delivery(work)
+        if shown is not None:
+            # The card was already handled (possibly by a previous gateway
+            # process): never replay it, but a missing context receipt is owed.
+            return self._resume_context(work, origin, state, *shown)
         status = str(state.get("status") or "running")
         if status != "running" and not (status == "done" and _read_json(work / "summary.json")):
             return None
@@ -437,6 +463,60 @@ class CouncilRunWatcher:
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
         return task
+
+    @staticmethod
+    def _shown_delivery(work: Path) -> Optional[tuple[str, str]]:
+        """``(kind, delivery)`` of a card this run already finished, else None."""
+        if (work / GATEWAY_ACK).exists():
+            return "result", "shown"
+        if (work / GATEWAY_UNCERTAIN).exists():
+            return "result", "uncertain"
+        if (work / GATEWAY_FAILED).exists():
+            marker = _read_json(work / GATEWAY_FAILED) or {}
+            return "failure", str(marker.get("delivery") or "shown")
+        return None
+
+    def _resume_context(
+        self, work: Path, origin: dict, state: dict, kind: str, delivery: str
+    ) -> Optional[asyncio.Task]:
+        from gateway.council_context import CONTEXT_RECEIPT
+
+        if self._on_delivered is None or (work / CONTEXT_RECEIPT).exists():
+            return None
+        summary = _read_json(work / "summary.json")
+        if kind == "result" and summary is None:
+            return None
+        task = asyncio.ensure_future(
+            self._record_context(origin, work, kind, delivery, summary, state)
+        )
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+        return task
+
+    async def _record_context(
+        self,
+        origin: dict,
+        work: Path,
+        kind: str,
+        delivery: str,
+        summary: Optional[Mapping[str, Any]],
+        state: Mapping[str, Any],
+    ) -> None:
+        if self._on_delivered is None:
+            return
+        try:
+            created = float(origin.get("created_at") or 0) or time.time()
+            await self._on_delivered(
+                origin=origin,
+                work=work,
+                kind=kind,
+                delivery=delivery,
+                summary=summary,
+                state=state,
+                deadline=created + self.MAX_RUN_AGE_S,
+            )
+        except Exception:
+            logger.warning("Council context for %s failed", work.name, exc_info=True)
 
     def _runner_gone(self, work: Path, origin: Mapping[str, Any]) -> bool:
         if origin.get("host") == socket.gethostname() and origin.get("pid"):
@@ -467,15 +547,28 @@ class CouncilRunWatcher:
                 await card.finish_done(last, summary)
                 if card.final_delivered:
                     _write_gateway_ack(work)
+                    delivery = "shown"
                 elif card.final_maybe_delivered:
                     # A lost response is not an ack. Do not replay it after a
                     # restart: it may already be visible in the chat.
+                    delivery = "uncertain"
                     try:
                         (work / GATEWAY_UNCERTAIN).write_text("{}", encoding="utf-8")
                     except OSError:
                         logger.warning("Could not record uncertain council delivery: %s", work)
+                else:
+                    delivery = "not_shown"
+                await self._record_context(origin, work, "result", delivery, summary, last)
             else:
                 await card.finish_failed(last)
+                delivery = _failure_delivery(card)
+                try:
+                    (work / GATEWAY_FAILED).write_text(
+                        json.dumps({"delivery": delivery}), encoding="utf-8"
+                    )
+                except OSError:
+                    logger.warning("Could not record failed council card: %s", work)
+                await self._record_context(origin, work, "failure", delivery, None, last)
         except Exception:
             logger.warning("Council card for %s failed", work.name, exc_info=True)
 

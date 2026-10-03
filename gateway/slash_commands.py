@@ -167,6 +167,7 @@ class GatewaySlashCommandsMixin:
 
         run_id = f"council-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000:06d}"
         work = profile_home / "council" / "runs" / run_id
+        launched = self._council_launch_session(source)
         progress_path = work / "progress.json"
         summary_path = work / "summary.json"
         metadata = self._thread_metadata_for_source(source)
@@ -228,6 +229,9 @@ class GatewaySlashCommandsMixin:
             failed["status"] = "failed"
             if card.owns_final:
                 await card.finish_failed(failed)
+                self._record_typed_council_context(
+                    work, "failure", card, None, failed, launched
+                )
             else:
                 await publish(failed)
             logger.warning(
@@ -248,6 +252,9 @@ class GatewaySlashCommandsMixin:
             failed["status"] = "failed"
             if card.owns_final:
                 await card.finish_failed(failed)
+                self._record_typed_council_context(
+                    work, "failure", card, None, failed, launched
+                )
                 return None
             await publish(failed)
             return "🏛 Council finished without a readable verdict."
@@ -258,6 +265,9 @@ class GatewaySlashCommandsMixin:
             # One message: the card and the answer travel together.
             await card.finish_done(done, summary)
             if card.final_delivered or card.final_maybe_delivered:
+                self._record_typed_council_context(
+                    work, "result", card, summary, done, launched
+                )
                 return None
             return format_council_result(summary)
         await publish(done)
@@ -320,15 +330,67 @@ class GatewaySlashCommandsMixin:
             return None
         return adapter, str(source.chat_id), self._thread_metadata_for_source(source)
 
-    async def _council_card_watcher(self) -> None:
-        """Show the 🏛 card for councils the agent launches itself."""
+    def _council_context_recorder(self, poll_s: float = 1.0):
+        """The one consumer that records a shown council result in the conversation."""
+        from gateway.council_context import CouncilContextRecorder
+
+        return CouncilContextRecorder(
+            getattr(self, "session_store", None),
+            is_running=getattr(self, "_is_session_running", None),
+            poll_s=poll_s,
+        )
+
+    def _make_council_watcher(self, *, poll_s: float = 1.0):
         from gateway.council_progress import CouncilRunWatcher
 
-        await CouncilRunWatcher(
+        recorder = self._council_context_recorder(poll_s)
+        return CouncilRunWatcher(
             homes=self._council_scan_homes,
             resolve_target=self._council_run_target,
+            poll_s=poll_s,
             card_style=lambda origin: self._council_card_style(str(origin.get("platform") or "")),
-        ).run()
+            on_delivered=recorder.record,
+            on_discovered=recorder.observe_origin_session,
+        )
+
+    def _council_launch_session(self, source) -> dict:
+        """``session_key``/``session_id`` of the conversation a ``/council`` was typed in."""
+        try:
+            key = self._session_key_for_source(source)
+            return {"session_key": key, "session_id": self.session_store.peek_session_id(key)}
+        except Exception:
+            logger.info("Council: could not resolve the launching session", exc_info=True)
+            return {"session_key": None, "session_id": None}
+
+    def _record_typed_council_context(
+        self, work: Path, kind: str, card: Any, summary, state: dict, launched: dict
+    ) -> None:
+        """``/council`` finals: same row, written in the background at the first idle moment."""
+        from gateway.council_progress import CouncilRunWatcher, _failure_delivery
+
+        if kind == "result":
+            delivery = "shown" if card.final_delivered else "uncertain"
+        else:
+            delivery = _failure_delivery(card)
+        now = time.time()
+        task = asyncio.ensure_future(
+            self._council_context_recorder().record(
+                origin={**launched, "created_at": now},
+                work=work,
+                kind=kind,
+                delivery=delivery,
+                summary=summary,
+                state=state,
+                deadline=now + CouncilRunWatcher.MAX_RUN_AGE_S,
+            )
+        )
+        tasks = self.__dict__.setdefault("_council_context_tasks", set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+
+    async def _council_card_watcher(self) -> None:
+        """Show the 🏛 card for councils the agent launches itself."""
+        await self._make_council_watcher().run()
 
     def _typed_command_prefix_for(self, platform) -> str:
         """Return the prefix users can always type to reach Clover commands.
