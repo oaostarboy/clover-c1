@@ -111,6 +111,9 @@ from gateway.completion_ownership import (  # noqa: E402
 _USER_BOUNDARY_END_REASONS = USER_BOUNDARY_END_REASONS
 # resolve_owner verdict -> the pre-flight class _classify_completion_target returns.
 _COMPLETION_VERDICT_CLASS = {"deliver": "deliver", "unowned": "terminal", "retry": "retry"}
+# Sent to a human whose busy-session follow-up was refused because the per-session
+# human queue is full.  Never a silent drop (I3).
+_QUEUE_FULL_REPLY = "I'm backed up — please resend that in a moment."
 # Round-2 #2: upper bound on a single stall-notify adapter.send so a wedged
 # transport cannot block the session-stall watcher pass (notify-only path;
 # on timeout the latch stays clear and the next tick retries).
@@ -2776,13 +2779,21 @@ from gateway.slash_commands import GatewaySlashCommandsMixin
 from gateway.turn_context import TurnContext, turn_had_live_reasoning_relay
 from gateway.platforms.base import (
     BasePlatformAdapter,
+    EVENT_CLASS_HUMAN,
+    EVENT_CLASS_INTERNAL,
+    EVENT_CLASS_PRIORITY,
+    EVENT_CLASS_SYNTHETIC,
     EphemeralReply,
+    MergeResult,
     MessageEvent,
     MessageType,
     _prefix_within_utf16_limit,
     _reply_anchor_for_event,
     build_auto_tts_output_path,
+    events_share_security_context,
     merge_pending_message_event,
+    message_event_class,
+    promote_next_pending,
     utf16_len,
 )
 from gateway.shutdown_watchdog import (
@@ -9516,36 +9527,196 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         else:
             pending_slot[session_key] = queued_event
 
+    def _bind_overflow_enqueuer(self, adapter: Any) -> None:
+        """Route events the adapter's merge refused into this runner's FIFO."""
+        setter = getattr(adapter, "set_overflow_enqueuer", None)
+        if not callable(setter):
+            return
+
+        def _enqueue(session_key: str, event: "MessageEvent", front: bool = False) -> None:
+            self._enqueue_fifo_for_adapter(session_key, event, adapter=adapter, front=front)
+
+        setter(_enqueue)
+        set_promoter = getattr(adapter, "set_pending_promoter", None)
+        if callable(set_promoter):
+            set_promoter(
+                lambda session_key, head: self._promote_queued_event(session_key, adapter, head)
+            )
+
+    def _enqueue_fifo_for_adapter(
+        self,
+        session_key: str,
+        event: "MessageEvent",
+        adapter: Any = None,
+        front: bool = False,
+    ) -> None:
+        """Overflow enqueuer for ``adapter.set_overflow_enqueuer``.
+
+        Called by the base adapter when ``merge_pending_message_event``
+        returned ``REFUSED``.  The event is queued behind the pending slot.
+        ``front`` puts an already-admitted event back as the very next one.
+        """
+        if adapter is None:
+            adapter = self._adapter_for_source(event.source)
+        if adapter is None:
+            raise RuntimeError("no adapter for overflow event")
+        if front:
+            self._requeue_front(session_key, adapter, event)
+            return
+        if not self._admit_to_queue(session_key, event, adapter):
+            self._schedule_queue_full_reply(adapter, event)
+            return
+        self._enqueue_behind_slot(session_key, event, adapter)
+
+    def _enqueue_behind_slot(
+        self, session_key: str, event: "MessageEvent", adapter: Any
+    ) -> None:
+        """Queue an event the pending slot refused; never overwrites the slot."""
+        if self._merge_into_overflow_tail(session_key, event):
+            return
+        self._enqueue_fifo(session_key, event, adapter)
+
+    def _merge_into_overflow_tail(self, session_key: str, event: "MessageEvent") -> bool:
+        """Fold a human photo burst into the last queued human media turn.
+
+        With a non-human event holding the slot a burst can no longer merge
+        into the slot, so it would fan out into one turn per photo.  Merge it
+        into the overflow tail instead, under the same rules as the slot.
+        """
+        if message_event_class(event) != EVENT_CLASS_HUMAN:
+            return False
+        if event.message_type != MessageType.PHOTO and not event.media_urls:
+            return False
+        state = self._peek_session_state(session_key)
+        overflow = state.conversation.queued_events if state else None
+        if not overflow:
+            return False
+        tail = overflow[-1]
+        if tail.message_type != MessageType.PHOTO and not tail.media_urls:
+            return False
+        return (
+            merge_pending_message_event(
+                {session_key: tail},
+                session_key,
+                event,
+                merge_text=event.message_type == MessageType.TEXT,
+            )
+            is MergeResult.MERGED
+        )
+
+    def _merge_or_enqueue(
+        self,
+        adapter: Any,
+        session_key: str,
+        event: "MessageEvent",
+        *,
+        merge_text: bool = False,
+    ) -> "MergeResult":
+        """Merge into the adapter's pending slot; queue behind it when refused."""
+        result = merge_pending_message_event(
+            adapter._pending_messages, session_key, event, merge_text=merge_text
+        )
+        if result is MergeResult.REFUSED:
+            self._enqueue_behind_slot(session_key, event, adapter)
+        return result
+
     def _promote_queued_event(
         self,
         session_key: str,
         adapter: Any,
         pending_event: Optional["MessageEvent"],
     ) -> Optional["MessageEvent"]:
-        """Promote the next overflow item after the slot was drained.
+        """Pick the next turn from the slot head plus the overflow FIFO.
 
         Called at the drain site after _dequeue_pending_event consumed
-        (or failed to consume) the slot.  If there's an overflow item:
-          - When pending_event is None (slot was empty), return the
-            overflow head as the new pending_event.
+        (or failed to consume) the slot.  ``[pending_event] + overflow`` is
+        stable-partitioned by class: queued human messages first, then
+        internal events, then synthetic prompts (goal continuations,
+        heartbeats), FIFO inside each class.  The first becomes the turn:
+          - When pending_event is None (slot was empty), the chosen event is
+            removed from the overflow and returned.
           - When pending_event already exists (slot was populated by an
-            interrupt follow-up or similar), stage the overflow head in
-            the slot so the NEXT recursion picks it up.
-        Returns the (possibly updated) pending_event for drain to use.
+            interrupt follow-up or similar), the next event is staged in the
+            slot so the NEXT recursion picks it up.
+        Events are moved, never copied or dropped.
+        Returns the (possibly different) pending_event for drain to use.
         """
         _q_state = self._peek_session_state(session_key)
         overflow = _q_state.conversation.queued_events if _q_state else None
         if not overflow:
             return pending_event
-        next_queued = overflow.pop(0)
+        slot = getattr(adapter, "_pending_messages", None) if adapter is not None else None
+        return promote_next_pending(slot, overflow, session_key, pending_event)
+
+    def _requeue_front(self, session_key: str, adapter: Any, event: "MessageEvent") -> None:
+        """Put an already-dequeued event back as the very next one.
+
+        Lossless and merge-free: an event currently holding the slot moves to
+        the front of the overflow.
+        """
+        overflow = self._session_state(session_key).conversation.queued_events
+        slot = getattr(adapter, "_pending_messages", None) if adapter is not None else None
+        if not isinstance(slot, dict):
+            overflow.insert(0, event)
+            return
+        occupant = slot.get(session_key)
+        if occupant is event:
+            return
+        slot[session_key] = event
+        if occupant is not None:
+            overflow.insert(0, occupant)
+
+    def _defer_followup_at_depth_cap(
+        self,
+        session_key: str,
+        adapter: Any,
+        pending_event: Optional["MessageEvent"],
+        pending: Optional[str],
+        source: Any,
+    ) -> None:
+        """Queue a follow-up instead of recursing once the depth cap is hit.
+
+        The event goes back at the front of the queue, unmerged, so the next
+        turn the adapter starts picks it up.  A text-only follow-up (an
+        interrupt message or leftover steer) becomes a human event first.
+        """
+        event = pending_event
+        if event is None and pending:
+            event = MessageEvent(text=pending, message_type=MessageType.TEXT, source=source)
+        if event is None:
+            return
+        if adapter is None:
+            logger.error(
+                "Interrupt depth cap reached for session %s with no adapter; "
+                "follow-up %r cannot be re-queued",
+                session_key, (event.text or "")[:40],
+            )
+            return
+        self._requeue_front(session_key, adapter, event)
+
+    def _reconcile_interrupt_with_queue(
+        self,
+        session_key: str,
+        adapter: Any,
+        pending_event: Optional["MessageEvent"],
+        interrupt_message: str,
+        source: Any,
+    ) -> tuple[Optional["MessageEvent"], Optional[str]]:
+        """Decide the next turn when a human interrupted the finished turn.
+
+        Returns ``(pending_event, pending_text)``.  A queued human event
+        already represents the interrupting message, so it runs exactly once
+        as the event.  When the drain picked a non-human event (no human is
+        queued), the interrupt message is a human message that was never
+        queued: it runs first, and the non-human event is kept at the front of
+        the queue rather than discarded.
+        """
         if pending_event is None:
-            return next_queued
-        if adapter is not None and hasattr(adapter, "_pending_messages"):
-            adapter._pending_messages[session_key] = next_queued
-        else:
-            # No adapter — push back so we don't silently drop the item.
-            overflow.insert(0, next_queued)
-        return pending_event
+            return None, interrupt_message
+        if message_event_class(pending_event) == EVENT_CLASS_HUMAN:
+            return pending_event, None
+        self._requeue_front(session_key, adapter, pending_event)
+        return None, interrupt_message
 
     def _queue_depth(self, session_key: str, *, adapter: Any = None) -> int:
         """Total pending /queue items for a session — slot + overflow."""
@@ -10581,11 +10752,101 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     # follow-ups is far beyond any realistic conversational backlog while
     # still small enough to never threaten memory.
     _BUSY_QUEUE_MAX_PENDING = 32
+    # Internal events (completions, plugin injections) are exempt from the
+    # human cap above and are counted on their own.  Past this many a WARNING
+    # is logged; the event is still queued (see _admit_to_queue).
+    _BUSY_INTERNAL_QUEUE_MAX_PENDING = 64
 
-    def _queue_or_replace_pending_event(self, session_key: str, event: MessageEvent) -> None:
+    def _queue_depth_by_class(
+        self, session_key: str, *, adapter: Any = None
+    ) -> Dict[str, int]:
+        """Queued events per class for a session — slot + overflow."""
+        counts = {EVENT_CLASS_HUMAN: 0, EVENT_CLASS_INTERNAL: 0, EVENT_CLASS_SYNTHETIC: 0}
+        _q_state = self._peek_session_state(session_key)
+        queued = list(_q_state.conversation.queued_events) if _q_state else []
+        slot = getattr(adapter, "_pending_messages", None) if adapter is not None else None
+        if isinstance(slot, dict) and session_key in slot:
+            queued.append(slot[session_key])
+        for queued_event in queued:
+            counts[message_event_class(queued_event)] += 1
+        return counts
+
+    def _admit_to_queue(self, session_key: str, event: "MessageEvent", adapter: Any) -> bool:
+        """Capacity check for one more queued event; False means refuse it.
+
+        Humans are capped at ``_BUSY_QUEUE_MAX_PENDING`` and told so by the
+        caller.  Internal events are never refused here: the producer of a
+        background completion acknowledges it as soon as the adapter has
+        accepted it, so refusing one after that point would lose a result the
+        producer already considers delivered.  Past the internal cap only a
+        WARNING is logged.
+        """
+        event_class = message_event_class(event)
+        if event_class == EVENT_CLASS_SYNTHETIC:
+            return True
+        depth = self._queue_depth_by_class(session_key, adapter=adapter)[event_class]
+        if event_class == EVENT_CLASS_INTERNAL:
+            if depth >= self._BUSY_INTERNAL_QUEUE_MAX_PENDING:
+                logger.warning(
+                    "Internal event queue for session %s is past its cap (%d); "
+                    "queueing anyway so the result is not lost.",
+                    session_key,
+                    self._BUSY_INTERNAL_QUEUE_MAX_PENDING,
+                )
+            return True
+        if depth >= self._BUSY_QUEUE_MAX_PENDING:
+            logger.warning(
+                "Refusing busy-mode follow-up for session %s — pending human queue at cap (%d).",
+                session_key,
+                self._BUSY_QUEUE_MAX_PENDING,
+            )
+            return False
+        return True
+
+    async def _send_queue_full_reply(self, adapter: Any, event: "MessageEvent") -> None:
+        """Tell a human their follow-up was not queued because the queue is full."""
+        if message_event_class(event) != EVENT_CLASS_HUMAN:
+            return
+        try:
+            reply_anchor = self._reply_anchor_for_event(event)
+            await adapter._send_with_retry(
+                chat_id=event.source.chat_id,
+                content=_QUEUE_FULL_REPLY,
+                reply_to=(
+                    reply_anchor
+                    if event.source.platform == Platform.TELEGRAM
+                    and event.source.chat_type == "dm"
+                    and event.source.thread_id
+                    else (None if event.source.platform == Platform.TELEGRAM and event.source.thread_id else event.message_id)
+                ),
+                metadata=self._thread_metadata_for_source(event.source, reply_anchor),
+            )
+        except Exception:
+            logger.warning("Could not send queue-full reply", exc_info=True)
+
+    def _schedule_queue_full_reply(self, adapter: Any, event: "MessageEvent") -> None:
+        """Sync-context variant of _send_queue_full_reply (adapter overflow path)."""
+        try:
+            task = asyncio.get_running_loop().create_task(
+                self._send_queue_full_reply(adapter, event)
+            )
+        except RuntimeError:
+            logger.warning("Queue-full reply for a dropped follow-up could not be scheduled")
+            return
+        background = getattr(self, "_background_tasks", None)
+        if background is not None:
+            background.add(task)
+            task.add_done_callback(background.discard)
+
+    def _queue_or_replace_pending_event(self, session_key: str, event: MessageEvent) -> bool:
+        """Queue a busy-session follow-up.  False when a human event was refused.
+
+        A refusal always leaves the sender to be told by the caller (the reply
+        text is ``_QUEUE_FULL_REPLY``); nothing is dropped silently.
+        """
         adapter = self._adapter_for_source(event.source)
         if not adapter:
-            return
+            return False
         # #28503 — Previously this called ``merge_pending_message_event``
         # with the default ``merge_text=False``, which silently OVERWROTE
         # the single pending slot when consecutive text messages arrived
@@ -10603,7 +10864,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "gateway_session_id",
             "gateway_session_strict",
         )
-        same_security_context = existing is not None and (
+        same_security_context = existing is not None and events_share_security_context(
+            existing, event
+        ) and (
             getattr(existing, "internal", False) == getattr(event, "internal", False)
             and getattr(existing, "allow_gateway_control", True)
             == getattr(event, "allow_gateway_control", True)
@@ -10620,23 +10883,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             or bool(getattr(event, "media_urls", None))
         ):
             # Preserve photo-burst / media-merge semantics for the head slot.
-            merge_pending_message_event(
+            merge_result = merge_pending_message_event(
                 adapter._pending_messages,
                 session_key,
                 event,
                 merge_text=event.message_type == MessageType.TEXT,
             )
-            return
+            if merge_result is not MergeResult.REFUSED:
+                return True
 
-        if self._queue_depth(session_key, adapter=adapter) >= self._BUSY_QUEUE_MAX_PENDING:
-            logger.warning(
-                "Dropping busy-mode follow-up for session %s — pending queue at cap (%d).",
-                session_key,
-                self._BUSY_QUEUE_MAX_PENDING,
-            )
-            return
+        if not self._admit_to_queue(session_key, event, adapter):
+            return False
 
-        self._enqueue_fifo(session_key, event, adapter)
+        self._enqueue_behind_slot(session_key, event, adapter)
+        return True
 
     async def _prepare_busy_steer_text(self, event: MessageEvent) -> str:
         """Return steerable text for a busy follow-up, transcribing voice first.
@@ -10714,11 +10974,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             reply_anchor = self._reply_anchor_for_event(event)
             thread_meta = self._thread_metadata_for_source(event.source, reply_anchor)
             if self._queue_during_drain_enabled(effective_mode):
-                self._queue_or_replace_pending_event(session_key, event)
-                message = f"⏳ Gateway {self._status_action_gerund()} — queued for the next turn after it comes back."
-                message = _clover_acks.notice(
-                    "draining", f"{event.source.platform.value}:{event.source.chat_id}", message,
-                    "I saved your message for when I'm back.")
+                if self._queue_or_replace_pending_event(session_key, event):
+                    message = f"⏳ Gateway {self._status_action_gerund()} — queued for the next turn after it comes back."
+                    message = _clover_acks.notice(
+                        "draining", f"{event.source.platform.value}:{event.source.chat_id}", message,
+                        "I saved your message for when I'm back.")
+                else:
+                    message = _QUEUE_FULL_REPLY
             else:
                 message = f"⏳ Gateway is {self._status_action_gerund()} and is not accepting another turn right now."
                 message = _clover_acks.notice(
@@ -10948,7 +11210,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # turn in arrival order while still preserving photo-burst / album
         # merge semantics for media.
         if not steered and not redirected:
-            self._queue_or_replace_pending_event(session_key, event)
+            if not self._queue_or_replace_pending_event(session_key, event):
+                # Queue full: the human is told and the running turn is left
+                # alone (no interrupt, no "interrupting" ack for a message
+                # that was not queued).
+                await self._send_queue_full_reply(adapter, event)
+                return True
 
         is_queue_mode = effective_mode == "queue"
         is_steer_mode = effective_mode == "steer"
@@ -13706,6 +13973,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             adapter.set_fatal_error_handler(self._handle_adapter_fatal_error)
             adapter.set_session_store(self.session_store)
             adapter.set_busy_session_handler(self._handle_active_session_busy_message)
+            self._bind_overflow_enqueuer(adapter)
             _set_reaction = getattr(adapter, "set_reaction_handler", None)
             if callable(_set_reaction):
                 _set_reaction(self._handle_reaction_event)
@@ -15724,6 +15992,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     adapter.set_fatal_error_handler(self._handle_adapter_fatal_error)
                     adapter.set_session_store(self.session_store)
                     adapter.set_busy_session_handler(self._handle_active_session_busy_message)
+                    self._bind_overflow_enqueuer(adapter)
                     _set_reaction = getattr(adapter, "set_reaction_handler", None)
                     if callable(_set_reaction):
                         _set_reaction(self._handle_reaction_event)
@@ -16863,6 +17132,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         adapter.set_busy_session_handler(
             self._make_profile_busy_session_handler(profile_name)
         )
+        self._bind_overflow_enqueuer(adapter)
         _set_reaction = getattr(adapter, "set_reaction_handler", None)
         if callable(_set_reaction):
             _set_reaction(self._handle_reaction_event)
@@ -18678,7 +18948,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.debug("PRIORITY photo follow-up for session %s — queueing without interrupt", _quick_key)
                 adapter = self._adapter_for_source(source)
                 if adapter:
-                    merge_pending_message_event(adapter._pending_messages, _quick_key, event)
+                    self._merge_or_enqueue(adapter, _quick_key, event)
                 return None
 
             effective_busy_input_mode = self._effective_busy_input_mode(source)
@@ -18704,11 +18974,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if effective_busy_input_mode == "queue":
                         self._enqueue_fifo(_quick_key, event, adapter)
                     else:
-                        merge_pending_message_event(
-                            adapter._pending_messages,
-                            _quick_key,
-                            event,
-                            merge_text=True,
+                        self._merge_or_enqueue(
+                            adapter, _quick_key, event, merge_text=True
                         )
                 return None
 
@@ -18728,11 +18995,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # agent starts.
                 adapter = self._adapter_for_source(source)
                 if adapter:
-                    merge_pending_message_event(
-                        adapter._pending_messages,
-                        _quick_key,
-                        event,
-                        merge_text=True,
+                    self._merge_or_enqueue(
+                        adapter, _quick_key, event, merge_text=True
                     )
                 return None
             if self._draining:
@@ -18740,7 +19004,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     effective_busy_input_mode
                 )
                 if queue_during_drain:
-                    self._queue_or_replace_pending_event(_quick_key, event)
+                    if not self._queue_or_replace_pending_event(_quick_key, event):
+                        return _QUEUE_FULL_REPLY
                 _drain_stock = (
                     f"⏳ Gateway {self._status_action_gerund()} — queued for the next turn after it comes back."
                     if queue_during_drain
@@ -18752,7 +19017,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     else "Send it again once I'm back.")
             if effective_busy_input_mode == "queue":
                 logger.debug("PRIORITY queue follow-up for session %s", _quick_key)
-                self._queue_or_replace_pending_event(_quick_key, event)
+                if not self._queue_or_replace_pending_event(_quick_key, event):
+                    return _QUEUE_FULL_REPLY
                 return None
             if effective_busy_input_mode == "steer":
                 # Steer mode: inject text into the running agent mid-run via
@@ -18776,7 +19042,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     logger.debug("PRIORITY steer for session %s", _quick_key)
                     return None
                 logger.debug("PRIORITY steer-fallback-to-queue for session %s", _quick_key)
-                self._queue_or_replace_pending_event(_quick_key, event)
+                if not self._queue_or_replace_pending_event(_quick_key, event):
+                    return _QUEUE_FULL_REPLY
                 return None
             # #30170 — Subagent protection (PRIORITY path). Same rationale
             # as ``_handle_active_session_busy_message``: an interrupt
@@ -18792,7 +19059,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "because the running agent has active subagents (#30170)",
                     _quick_key,
                 )
-                self._queue_or_replace_pending_event(_quick_key, event)
+                if not self._queue_or_replace_pending_event(_quick_key, event):
+                    return _QUEUE_FULL_REPLY
                 return None
             # #56391 — Compression protection (PRIORITY path). Same
             # rationale as ``_handle_active_session_busy_message``: context
@@ -18808,7 +19076,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "because context compression is in flight (#56391)",
                     _quick_key,
                 )
-                self._queue_or_replace_pending_event(_quick_key, event)
+                if not self._queue_or_replace_pending_event(_quick_key, event):
+                    return _QUEUE_FULL_REPLY
                 return None
             # Text-only corrections redirect the live turn (preserving
             # displayed context) when the runtime supports it; media/voice and
@@ -23326,6 +23595,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             source=source,
                             message_id=None,
                             channel_prompt=None,
+                            synthetic=True,
                         )
                         self._enqueue_fifo(quick_key, hb_event, adapter)
                     except Exception as exc:
@@ -23501,6 +23771,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     source=source,
                     message_id=None,
                     channel_prompt=None,
+                    synthetic=True,
                 )
                 self._enqueue_fifo(_quick_key, cont_event, adapter)
         except Exception as exc:
@@ -32018,17 +32289,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _stale_proc_sid,
                     )
                     pending_event = None
-                if result.get("interrupted") and not pending_event and result.get("interrupt_message"):
+                interrupt_message = None
+                if result.get("interrupted") and result.get("interrupt_message"):
                     interrupt_message = result.get("interrupt_message")
                     if _is_control_interrupt_message(interrupt_message):
-                        logger.info(
-                            "Ignoring control interrupt message for session %s: %s",
-                            session_key or "?",
-                            interrupt_message,
-                        )
-                    else:
-                        pending = interrupt_message
-                elif pending_event:
+                        if not pending_event:
+                            logger.info(
+                                "Ignoring control interrupt message for session %s: %s",
+                                session_key or "?",
+                                interrupt_message,
+                            )
+                        interrupt_message = None
+                if interrupt_message:
+                    pending_event, pending = self._reconcile_interrupt_with_queue(
+                        session_key, adapter, pending_event, interrupt_message, source,
+                    )
+                if pending_event:
                     # Transcribe audio media on the dequeued event BEFORE it is
                     # handed back as the next user turn, so queued/interrupting
                     # voice messages drain with the real transcript instead of
@@ -32112,10 +32388,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _interrupt_depth, session_key,
                     )
                     adapter = self._adapter_for_source(source)
-                    if adapter and pending_event:
-                        merge_pending_message_event(adapter._pending_messages, session_key, pending_event)
-                    elif adapter and hasattr(adapter, 'queue_message'):
-                        adapter.queue_message(session_key, pending)
+                    self._defer_followup_at_depth_cap(
+                        session_key, adapter, pending_event, pending, source,
+                    )
                     return result_holder[0] or {"final_response": response, "messages": history}
 
                 was_interrupted = result.get("interrupted")

@@ -2523,6 +2523,12 @@ class MessageEvent:
     # Proactive plugin events set this to False so untrusted payload text
     # remains conversational input.
     allow_gateway_control: bool = True
+
+    # Gateway-generated prompt that is regenerated on demand (goal
+    # continuations, heartbeat ticks).  Lowest turn priority: it runs after
+    # queued human messages and internal completion events, and is never
+    # merged with either.  Kept last to preserve positional construction.
+    synthetic: bool = False
     
     def is_command(self) -> bool:
         """Check if this is a command message (e.g., /new, /reset)."""
@@ -2832,13 +2838,105 @@ def _invalidate_pending_stt_cache(event: MessageEvent) -> None:
             delattr(event, attr)
 
 
+class MergeResult(Enum):
+    """Outcome of :func:`merge_pending_message_event`.
+
+    ``MERGED``   the event was folded into the occupied slot.
+    ``STORED``   the event now owns the slot (it was empty, or a same-class
+                 event was replaced under the pre-existing replace rule).
+    ``REFUSED``  the slot is occupied by an event the incoming one must not
+                 merge with or overwrite; nothing was changed and the caller
+                 owns the event and must queue it behind the slot.
+    """
+
+    MERGED = "merged"
+    STORED = "stored"
+    REFUSED = "refused"
+
+
+EVENT_CLASS_HUMAN = "human"
+EVENT_CLASS_INTERNAL = "internal"
+EVENT_CLASS_SYNTHETIC = "synthetic"
+
+# Turn priority after a busy turn: humans, then internal completions, then
+# synthetic prompts.  FIFO inside each class.
+EVENT_CLASS_PRIORITY = {
+    EVENT_CLASS_HUMAN: 0,
+    EVENT_CLASS_INTERNAL: 1,
+    EVENT_CLASS_SYNTHETIC: 2,
+}
+
+
+def message_event_class(event: Any) -> str:
+    """Classify a queued event as ``human``, ``internal`` or ``synthetic``."""
+    if getattr(event, "synthetic", False) is True:
+        return EVENT_CLASS_SYNTHETIC
+    if getattr(event, "internal", False) is True:
+        return EVENT_CLASS_INTERNAL
+    return EVENT_CLASS_HUMAN
+
+
+def events_share_security_context(first: Any, second: Any) -> bool:
+    """True when two events came from the same class, trust level and sender."""
+
+    def _origin(event: Any) -> tuple:
+        source = getattr(event, "source", None)
+        return (
+            getattr(source, "user_id", None),
+            getattr(source, "chat_id", None),
+            getattr(source, "thread_id", None),
+        )
+
+    return (
+        message_event_class(first) == message_event_class(second)
+        and getattr(first, "internal", False) == getattr(second, "internal", False)
+        and getattr(first, "synthetic", False) == getattr(second, "synthetic", False)
+        and getattr(first, "allow_gateway_control", True)
+        == getattr(second, "allow_gateway_control", True)
+        and _origin(first) == _origin(second)
+    )
+
+
+def promote_next_pending(
+    slot: Optional[Dict[str, MessageEvent]],
+    overflow: List[MessageEvent],
+    session_key: str,
+    head: Optional[MessageEvent],
+) -> Optional[MessageEvent]:
+    """Pick the next turn from ``[head] + overflow`` by class priority.
+
+    The single selector behind every drain: queued human messages first, then
+    internal events, then synthetic prompts, FIFO inside each class.  ``head``
+    is the event just taken out of the pending ``slot`` (or None).  The chosen
+    event is returned; when a head existed the next one is staged in the slot
+    so the following drain finds it.  ``overflow`` is rewritten in place.
+    Events are moved, never copied or dropped, and a foreign occupant of the
+    slot is never evicted.
+    """
+    if not overflow:
+        return head
+    candidates = ([head] if head is not None else []) + list(overflow)
+    ordered = sorted(
+        candidates,
+        key=lambda event: EVENT_CLASS_PRIORITY[message_event_class(event)],
+    )
+    chosen, rest = ordered[0], ordered[1:]
+    if head is not None and rest and isinstance(slot, dict):
+        occupant = slot.get(session_key)
+        if occupant is None or any(occupant is event for event in candidates):
+            slot[session_key] = rest[0]
+            rest = rest[1:]
+    overflow[:] = rest
+    return chosen
+
+
 def merge_pending_message_event(
     pending_messages: Dict[str, MessageEvent],
     session_key: str,
     event: MessageEvent,
     *,
     merge_text: bool = False,
-) -> None:
+) -> MergeResult:
     """Store or merge a pending event for a session.
 
     Photo bursts/albums often arrive as multiple near-simultaneous PHOTO
@@ -2849,9 +2947,21 @@ def merge_pending_message_event(
     instead of replacing the pending turn. This is used for Telegram bursty
     follow-ups so a multi-part user thought is not silently truncated to only
     the last queued fragment.
+
+    Only human events from the same sender merge.  An occupied slot whose
+    event differs in class (human / internal / synthetic) or security context
+    is never merged into and never overwritten: the call returns ``REFUSED``
+    and the caller must queue the event behind the slot.  Internal and
+    synthetic events never merge with anything, including each other.
     """
     existing = pending_messages.get(session_key)
     if existing:
+        if (
+            message_event_class(existing) != EVENT_CLASS_HUMAN
+            or not events_share_security_context(existing, event)
+        ):
+            return MergeResult.REFUSED
+
         existing_is_photo = getattr(existing, "message_type", None) == MessageType.PHOTO
         incoming_is_photo = event.message_type == MessageType.PHOTO
         existing_has_media = bool(existing.media_urls)
@@ -2863,7 +2973,7 @@ def merge_pending_message_event(
             if event.text:
                 existing.text = BasePlatformAdapter._merge_caption(existing.text, event.text)
             _invalidate_pending_stt_cache(existing)
-            return
+            return MergeResult.MERGED
 
         if existing_has_media or incoming_has_media:
             if incoming_has_media:
@@ -2882,7 +2992,7 @@ def merge_pending_message_event(
             ):
                 existing.message_type = event.message_type
             _invalidate_pending_stt_cache(existing)
-            return
+            return MergeResult.MERGED
 
         if (
             merge_text
@@ -2891,9 +3001,10 @@ def merge_pending_message_event(
         ):
             if event.text:
                 existing.text = f"{existing.text}\n{event.text}" if existing.text else event.text
-            return
+            return MergeResult.MERGED
 
     pending_messages[session_key] = event
+    return MergeResult.STORED
 
 
 # Error substrings that indicate a transient *connection* failure worth retrying.
@@ -3242,6 +3353,16 @@ class BasePlatformAdapter(ABC):
         self._post_delivery_callbacks: Dict[str, Any] = {}
         self._expected_cancelled_tasks: set[asyncio.Task] = set()
         self._busy_session_handler: Optional[Callable[[MessageEvent, str], Awaitable[bool]]] = None
+        # Where a REFUSED merge parks the event.  The gateway runner registers
+        # its FIFO here; with no runner (standalone adapters, tests) the event
+        # waits in a per-session local FIFO that is drained behind the slot.
+        self._overflow_enqueuer: Optional[Callable[..., Any]] = None
+        # Class-priority selection over the runner's overflow, used by the
+        # adapter's own post-response drains.  ``(session_key, head) -> event``.
+        self._pending_promoter: Optional[
+            Callable[[str, Optional[MessageEvent]], Optional[MessageEvent]]
+        ] = None
+        self._local_overflow: Dict[str, List[MessageEvent]] = {}
         # Owning profile for a multiplexed secondary adapter, installed by
         # ``GatewayRunner._configure_profile_adapter``. Adapter-level session
         # keys must carry the profile namespace, but ``source.profile`` is only
@@ -3896,6 +4017,28 @@ class BasePlatformAdapter(ABC):
     def set_busy_session_handler(self, handler: Optional[Callable[[MessageEvent, str], Awaitable[bool]]]) -> None:
         """Set an optional handler for messages arriving during active sessions."""
         self._busy_session_handler = handler
+
+    def set_overflow_enqueuer(
+        self, enqueuer: Optional[Callable[[str, MessageEvent], Any]]
+    ) -> None:
+        """Set the FIFO that receives events a merge refused to store.
+
+        ``enqueuer(session_key, event)`` must queue the event behind the
+        pending slot.  Pass ``None`` to fall back to the adapter's local FIFO.
+        """
+        self._overflow_enqueuer = enqueuer
+
+    def set_pending_promoter(
+        self,
+        promoter: Optional[Callable[[str, Optional[MessageEvent]], Optional[MessageEvent]]],
+    ) -> None:
+        """Set the selector the adapter's own drains use over the runner's queue.
+
+        ``promoter(session_key, head)`` receives the event just taken from the
+        pending slot and returns the event to run next (human, then internal,
+        then synthetic), staging the following one in the slot.
+        """
+        self._pending_promoter = promoter
 
     def set_reaction_handler(
         self, handler: Optional[Callable[[Dict[str, Any]], Awaitable[None]]]
@@ -5841,6 +5984,95 @@ class BasePlatformAdapter(ABC):
             return f"{existing_text}\n\n{new_text}".strip()
         return existing_text
 
+    def _merge_or_overflow(
+        self,
+        session_key: str,
+        event: MessageEvent,
+        *,
+        merge_text: bool = False,
+    ) -> MergeResult:
+        """Merge ``event`` into the pending slot, or queue it behind the slot.
+
+        Every caller of :func:`merge_pending_message_event` inside the adapter
+        goes through here so a ``REFUSED`` result is never dropped.
+        """
+        result = merge_pending_message_event(
+            self._pending_messages, session_key, event, merge_text=merge_text
+        )
+        if result is MergeResult.REFUSED:
+            self._enqueue_overflow(session_key, event)
+        return result
+
+    def _local_overflow_store(self) -> Dict[str, List[MessageEvent]]:
+        store = getattr(self, "_local_overflow", None)
+        if store is None:
+            store = {}
+            self._local_overflow = store
+        return store
+
+    def _enqueue_overflow(self, session_key: str, event: MessageEvent) -> None:
+        enqueuer = getattr(self, "_overflow_enqueuer", None)
+        if enqueuer is not None:
+            try:
+                enqueuer(session_key, event)
+                return
+            except Exception:
+                logger.warning(
+                    "[%s] Overflow enqueuer failed for %s; keeping the event in the local queue",
+                    self.name, session_key, exc_info=True,
+                )
+        self._local_overflow_store().setdefault(session_key, []).append(event)
+
+    def _pop_pending_event(
+        self, session_key: str, *, via_promoter: bool = False
+    ) -> Optional[MessageEvent]:
+        """Pop the pending slot and choose the next turn by class priority.
+
+        ``via_promoter`` is for the adapter's own drains: it also consults the
+        runner's overflow through the registered promoter, so events that
+        arrive while a response is still being sent get the same ordering as
+        the runner's drain.  Plain pops (the runner's drain calls its own
+        promotion afterwards) only look at the adapter-local queue.
+        """
+        head = self._pending_messages.pop(session_key, None)
+        promoter = getattr(self, "_pending_promoter", None)
+        if via_promoter and promoter is not None and head is not None:
+            try:
+                return promoter(session_key, head)
+            except Exception:
+                logger.warning(
+                    "[%s] Pending promoter failed for %s; using the slot head",
+                    self.name, session_key, exc_info=True,
+                )
+                return head
+        store = self._local_overflow_store()
+        queued = store.get(session_key)
+        if not queued:
+            return head
+        chosen = promote_next_pending(self._pending_messages, queued, session_key, head)
+        if not queued:
+            store.pop(session_key, None)
+        return chosen
+
+    def _restore_pending_head(self, session_key: str, event: MessageEvent) -> None:
+        """Put a popped event back in front of whatever now occupies the slot."""
+        occupant = self._pending_messages.get(session_key)
+        if occupant is None or occupant is event:
+            self._pending_messages[session_key] = event
+            return
+        enqueuer = getattr(self, "_overflow_enqueuer", None)
+        if enqueuer is not None:
+            try:
+                enqueuer(session_key, event, front=True)
+                return
+            except Exception:
+                logger.warning(
+                    "[%s] Overflow enqueuer failed restoring %s; using the local queue",
+                    self.name, session_key, exc_info=True,
+                )
+        self._pending_messages[session_key] = event
+        self._local_overflow_store().setdefault(session_key, []).insert(0, occupant)
+
     def _text_debounce_store(self) -> dict[str, TextDebounceState]:
         store = getattr(self, "_text_debounce", None)
         if store is None:
@@ -5902,20 +6134,11 @@ class BasePlatformAdapter(ABC):
 
         if state is not None and not self._can_merge_text_debounce_events(state.event, event):
             # Preserve sender attribution in shared sessions. The current
-            # buffer becomes the next pending turn; the new sender starts a
-            # fresh debounce burst when the pending slot allows it.
-            await self._flush_text_debounce_now(session_key)
-            state = store.get(session_key)
-            if state is not None and not self._can_merge_text_debounce_events(state.event, event):
-                existing_pending = self._pending_messages.get(session_key)
-                if existing_pending is not None and self._can_merge_text_debounce_events(existing_pending, event):
-                    merge_pending_message_event(
-                        self._pending_messages,
-                        session_key,
-                        event,
-                        merge_text=True,
-                    )
-                return
+            # buffer becomes the next pending turn (merged into the slot or
+            # queued behind it, never dropped) and the new sender starts a
+            # fresh debounce burst.
+            self._flush_text_debounce_sync(session_key)
+            state = None
 
         now = time.monotonic()
         if state is None:
@@ -5962,8 +6185,17 @@ class BasePlatformAdapter(ABC):
 
     async def _flush_text_debounce_now(self, session_key: str) -> bool:
         """Force-flush one debounced busy-text burst into the pending slot."""
+        return self._flush_text_debounce_sync(session_key)
+
+    def _flush_text_debounce_sync(self, session_key: str) -> bool:
+        """Move one debounced burst into the pending slot, or behind it.
+
+        A burst the slot refuses (another sender, or a non-human head) goes
+        through the class-aware overflow, so it is never left buffered behind
+        an event it should outrank and never dropped.
+        """
         store = self._text_debounce_store()
-        state = store.get(session_key)
+        state = store.pop(session_key, None)
         if state is None:
             return False
 
@@ -5972,22 +6204,7 @@ class BasePlatformAdapter(ABC):
             state.task.cancel()
         state.task = None
 
-        existing_pending = self._pending_messages.get(session_key)
-        if (
-            existing_pending is not None
-            and not self._can_merge_text_debounce_events(existing_pending, state.event)
-        ):
-            return False
-
-        state = store.pop(session_key, None)
-        if state is None:
-            return False
-        merge_pending_message_event(
-            self._pending_messages,
-            session_key,
-            state.event,
-            merge_text=True,
-        )
+        self._merge_or_overflow(session_key, state.event, merge_text=True)
         return True
 
     def _discard_text_debounce(self, session_key: str) -> None:
@@ -6064,6 +6281,7 @@ class BasePlatformAdapter(ABC):
         )
         self._active_sessions.pop(session_key, None)
         self._pending_messages.pop(session_key, None)
+        self._local_overflow_store().pop(session_key, None)
         self._session_tasks.pop(session_key, None)
         self._discard_text_debounce(session_key)
         return True
@@ -6147,6 +6365,7 @@ class BasePlatformAdapter(ABC):
                 )
         if discard_pending:
             self._pending_messages.pop(session_key, None)
+            self._local_overflow_store().pop(session_key, None)
             self._discard_text_debounce(session_key)
         if release_guard:
             self._release_session_guard(session_key)
@@ -6163,7 +6382,7 @@ class BasePlatformAdapter(ABC):
         command was running — spawns a fresh processing task for it.
         """
         await self._flush_text_debounce_now(session_key)
-        pending_event = self._pending_messages.pop(session_key, None)
+        pending_event = self._pop_pending_event(session_key)
         self._release_session_guard(session_key, guard=command_guard)
         if pending_event is None:
             return
@@ -6427,7 +6646,7 @@ class BasePlatformAdapter(ABC):
             # then process them immediately after the current task finishes.
             if event.message_type == MessageType.PHOTO:
                 logger.debug("[%s] Queuing photo follow-up for session %s without interrupt", self.name, session_key)
-                merge_pending_message_event(self._pending_messages, session_key, event)
+                self._merge_or_overflow(session_key, event)
                 return  # Don't interrupt now - will run after current task completes
 
             if self._is_queue_text_debounce_candidate(event):
@@ -6446,8 +6665,7 @@ class BasePlatformAdapter(ABC):
                     self.name,
                     session_key,
                 )
-                merge_pending_message_event(
-                    self._pending_messages,
+                self._merge_or_overflow(
                     session_key,
                     event,
                     merge_text=event.message_type == MessageType.TEXT,
@@ -7064,7 +7282,7 @@ class BasePlatformAdapter(ABC):
 
             # Check if there's a pending message that was queued during our processing
             if session_key in self._pending_messages:
-                pending_event = self._pending_messages.pop(session_key)
+                pending_event = self._pop_pending_event(session_key, via_promoter=True)
                 logger.debug("[%s] Processing queued follow-up message", self.name)
                 # Keep the _active_sessions entry live across the turn chain
                 # and only CLEAR the interrupt Event — do NOT delete the entry.
@@ -7206,7 +7424,7 @@ class BasePlatformAdapter(ABC):
             # busy-handler path.  Without this block, we would delete the
             # active-session entry and the queued message would be silently
             # dropped (user never gets a reply).
-            late_pending = self._pending_messages.pop(session_key, None)
+            late_pending = self._pop_pending_event(session_key, via_promoter=True)
             if late_pending is not None:
                 current_task = asyncio.current_task()
                 existing_task = self._session_tasks.get(session_key)
@@ -7222,7 +7440,7 @@ class BasePlatformAdapter(ABC):
                     # (#17758 follow-up: prevents the create_task path
                     # from racing with itself across the in-band/finally
                     # boundary).
-                    self._pending_messages[session_key] = late_pending
+                    self._restore_pending_head(session_key, late_pending)
                 else:
                     logger.debug(
                         "[%s] Late-arrival pending message during cleanup — spawning drain task",
@@ -7342,6 +7560,7 @@ class BasePlatformAdapter(ABC):
         except Exception:
             pass
         self._pending_messages.clear()
+        self._local_overflow_store().clear()
         self._active_sessions.clear()
         for state in list(self._text_debounce_store().values()):
             if state.task is not None and not state.task.done():
@@ -7353,8 +7572,14 @@ class BasePlatformAdapter(ABC):
         return session_key in self._active_sessions and self._active_sessions[session_key].is_set()
     
     def get_pending_message(self, session_key: str) -> Optional[MessageEvent]:
-        """Get and clear any pending message for a session."""
-        return self._pending_messages.pop(session_key, None)
+        """Get and clear any pending message for a session.
+
+        A busy-text burst still waiting on its debounce timer is flushed first
+        so it takes part in the class-ordered selection instead of being
+        overtaken by a lower-priority head.
+        """
+        self._flush_text_debounce_sync(session_key)
+        return self._pop_pending_event(session_key)
     
     def build_source(
         self,
