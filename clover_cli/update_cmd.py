@@ -3297,6 +3297,16 @@ def _live_gateway_serves(expected_sha: str) -> bool:
 
 def _pending_fleet_restart_needed() -> bool:
     """True when a prior pull still owes the fleet a restart (#95294)."""
+    if sys.platform.startswith("linux"):
+        try:
+            from clover_cli import linux_catchup_handoff
+            home = get_clover_home()
+            if linux_catchup_handoff.pending_receipt_requires_catchup(
+                home / "logs" / "update_receipts" / "latest.json", clover_home=home,
+            ):
+                return True
+        except Exception:
+            pass
     try:
         if _fleet_restart_pending_marker_path().is_file():
             return True
@@ -3585,6 +3595,33 @@ def _windows_gateways_relaunched_now(token: dict | None) -> bool:
     )
 
 
+def _apply_linux_systemd_catchup(pre_restart_pids: set[int]) -> None:
+    """Persist proof, restart owned Linux systemd services, verify successors."""
+    from clover_cli import linux_catchup_handoff as handoff
+    from clover_cli import update_receipt as receipt
+    from clover_cli.config import get_clover_home
+
+    home = get_clover_home()
+    if not handoff.prepare_pending_receipt(
+        receipt, clover_home=home, pre_restart_pids=pre_restart_pids
+    ):
+        print("  ⚠ Could not persist proof for the Linux systemd catch-up restart; leaving it pending.")
+        sys.exit(1)
+    print()
+    _warn_pending_fleet_restart()
+    print("→ Running the pending fleet restart...")
+    if not _run_pending_fleet_restart():
+        print("  ⚠ Fleet restart incomplete. Recover with: clover gateway restart")
+        sys.exit(1)
+    latest = home / "logs" / "update_receipts" / "latest.json"
+    fleet = receipt.collect_fleet_versions()
+    if not handoff.verify_and_finalize_receipt(latest, clover_home=home, fleet=fleet):
+        print("  ⚠ Linux systemd catch-up restart could not be verified; leaving it pending.")
+        sys.exit(1)
+    if receipt._current is not None:
+        receipt._current.data["linux_systemd_catchup"]["verified"] = True
+
+
 def _apply_pending_fleet_restart_catchup() -> None:
     """On an already-up-to-date ``clover update``, finish a skipped restart.
 
@@ -3593,6 +3630,25 @@ def _apply_pending_fleet_restart_catchup() -> None:
     """
     if not _pending_fleet_restart_needed():
         return
+    # A durable Linux/systemd catch-up receipt names the profiles whose new
+    # PIDs must be proved. Do not let the legacy empty-PID fast path treat a
+    # stopped target as completed; leave the tagged receipt as the obligation.
+    if sys.platform.startswith("linux"):
+        from clover_cli import gateway
+        from clover_cli import linux_catchup_handoff as handoff
+
+        if gateway.supports_systemd_services():
+            owned_targets = _owned_systemd_service_pids()
+            if owned_targets:
+                _apply_linux_systemd_catchup(owned_targets)
+                return
+            home = get_clover_home()
+            if handoff.pending_receipt_requires_catchup(
+                home / "logs" / "update_receipts" / "latest.json", clover_home=home,
+            ):
+                print("  ⚠ A tagged Linux systemd restart target is not running; leaving its restart obligation pending.")
+                print("  Recover with: clover gateway restart, then re-run clover update.")
+                sys.exit(1)
     print()
     _warn_pending_fleet_restart()
     print("→ Running the pending fleet restart...")
