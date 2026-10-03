@@ -11538,6 +11538,252 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         return row[0] if row else None
 
+    # ── Session inbox (durable background results) ──
+    #
+    # ``session_inbox`` holds every background result (delegation / process /
+    # council) until a user row that renders it is committed. Keys are global
+    # (never per-session) and permanent: rows are never deleted, only their
+    # payload is pruned, so the PRIMARY KEY doubles as the "already seen"
+    # tombstone for every recovery scanner. A record leaves ``pending`` in
+    # exactly two ways: insert-time ingestion (``_inbox_ingest_keys``, run by
+    # the message writers in the same transaction as the row) or
+    # ``inbox_drop``.
+
+    _INBOX_KINDS = frozenset({"delegation", "process", "council"})
+    _INBOX_STATES = frozenset({"pending", "ingested", "dropped"})
+    _INBOX_IN_CHUNK = 500
+
+    @staticmethod
+    def _inbox_text(value: Any) -> Optional[str]:
+        return None if value is None else str(value)
+
+    @staticmethod
+    def _inbox_insert(conn, record: Dict[str, Any]) -> str:
+        """Insert one inbox record on *conn*; never commits.
+
+        ``ON CONFLICT(key) DO NOTHING`` rather than ``INSERT OR IGNORE``: the
+        latter would also swallow a CHECK violation and report ``exists`` for a
+        malformed record.
+        """
+        key = record.get("key")
+        if not isinstance(key, str) or not key:
+            raise ValueError("inbox record requires a non-empty string key")
+        kind = record.get("kind")
+        if kind not in SessionDB._INBOX_KINDS:
+            raise ValueError(f"invalid inbox kind: {kind!r}")
+        payload = record.get("payload_json")
+        if payload is None:
+            payload = record.get("payload")
+        if payload is not None and not isinstance(payload, str):
+            payload = json.dumps(payload, default=str)
+        text = SessionDB._inbox_text
+        cur = conn.execute(
+            """INSERT INTO session_inbox
+               (key, profile, platform, chat_id, thread_id, session_key,
+                owner_root_id, kind, wake, title, payload_json, shown_to_user,
+                state, seq, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending',
+                       (SELECT COALESCE(MAX(seq), 0) + 1 FROM session_inbox), ?)
+               ON CONFLICT(key) DO NOTHING""",
+            (
+                key,
+                text(record.get("profile")),
+                text(record.get("platform")),
+                text(record.get("chat_id")),
+                text(record.get("thread_id")),
+                text(record.get("session_key")),
+                text(record.get("owner_root_id")),
+                kind,
+                1 if record.get("wake") else 0,
+                text(record.get("title")),
+                payload,
+                1 if record.get("shown_to_user") else 0,
+                float(record.get("created_at") or time.time()),
+            ),
+        )
+        return "inserted" if cur.rowcount == 1 else "exists"
+
+    def inbox_put(self, record: Dict[str, Any]) -> str:
+        """Durably record a background result. Returns ``'inserted'`` or ``'exists'``.
+
+        Idempotent on ``record['key']``. Accepts ``payload`` (any JSON-able
+        value) or a pre-serialised ``payload_json``. New records are always
+        ``pending`` with the next ``seq``.
+        """
+        return self._execute_write(lambda conn: self._inbox_insert(conn, record))
+
+    @staticmethod
+    def inbox_put_and_mark(
+        conn, record: Dict[str, Any], delegation_id: Optional[str] = None
+    ) -> str:
+        """Insert the inbox record and mark its delegation ``inboxed`` on *conn*.
+
+        Connection-level: the caller owns the transaction (commit/rollback), so
+        both statements land or neither does. ``async_delegations`` is touched
+        only while still ``pending`` — a re-delivery whose key already exists
+        still flips it, but a ``delivered``/``dropped`` row is never moved.
+        """
+        result = SessionDB._inbox_insert(conn, record)
+        if delegation_id:
+            conn.execute(
+                "UPDATE async_delegations SET delivery_state = 'inboxed', "
+                "updated_at = ? WHERE delegation_id = ? AND delivery_state = 'pending'",
+                (time.time(), delegation_id),
+            )
+        return result
+
+    def inbox_drop(self, key: str, reason: str) -> bool:
+        """Move a ``pending`` record to ``dropped``. The only path to that state.
+
+        Queues a user notice (``notice_state='pending'``) unless the user has
+        already seen the content (``shown_to_user=1``). Ingested/dropped/missing
+        records are untouched. Returns whether a record was dropped.
+        """
+        if not isinstance(reason, str) or not reason:
+            raise ValueError("inbox_drop requires a non-empty reason")
+
+        def _do(conn):
+            cur = conn.execute(
+                """UPDATE session_inbox
+                   SET state = 'dropped', drop_reason = ?,
+                       notice_state = CASE WHEN shown_to_user = 1 THEN NULL ELSE 'pending' END
+                   WHERE key = ? AND state = 'pending'""",
+                (reason, key),
+            )
+            return cur.rowcount == 1
+
+        return self._execute_write(_do)
+
+    @staticmethod
+    def _inbox_ingest_keys(
+        conn, keys: List[str], session_id: str, message_id: int
+    ) -> None:
+        """Mark ``pending`` *keys* ingested by *message_id* on the caller's txn.
+
+        Non-pending keys (already ingested by the original row, dropped, or
+        unknown) are a no-op, so rotation/compaction copies that carry the key
+        again neither error nor move the original ingestion ids.
+        """
+        now = time.time()
+        for start in range(0, len(keys), SessionDB._INBOX_IN_CHUNK):
+            chunk = keys[start:start + SessionDB._INBOX_IN_CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            conn.execute(
+                "UPDATE session_inbox SET state = 'ingested', "
+                "ingested_session_id = ?, ingested_message_id = ?, ingested_at = ? "
+                f"WHERE state = 'pending' AND key IN ({placeholders})",
+                (session_id, message_id, now, *chunk),
+            )
+
+    @staticmethod
+    def _inbox_keys_in_display_metadata(raw: Any) -> List[str]:
+        """``display_metadata.inbox_keys`` from a dict or JSON-string value."""
+        # Cheap precheck: this runs once per inserted row, including large
+        # branch/compaction copies where almost no row carries keys.
+        if not raw or not isinstance(raw, (str, dict)) or "inbox_keys" not in raw:
+            return []
+        meta = SessionDB._decode_display_metadata(raw)
+        keys = (meta or {}).get("inbox_keys")
+        if not isinstance(keys, (list, tuple)):
+            return []
+        return [k for k in keys if isinstance(k, str) and k]
+
+    def _inbox_query(self, where: str, params: tuple) -> List[Dict[str, Any]]:
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM session_inbox WHERE {where} ORDER BY seq", params
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def inbox_get(self, key: str) -> Optional[Dict[str, Any]]:
+        rows = self._inbox_query("key = ?", (key,))
+        return rows[0] if rows else None
+
+    def inbox_pending_for(
+        self, owner_root_id: str, include_wake: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Pending records for an owner, by ``seq``. ``include_wake=False`` → wake=0 only."""
+        where = "owner_root_id = ? AND state = 'pending'"
+        if not include_wake:
+            where += " AND wake = 0"
+        return self._inbox_query(where, (owner_root_id,))
+
+    def inbox_pending_for_owner(self, owner_root_id: str) -> List[Dict[str, Any]]:
+        return self.inbox_pending_for(owner_root_id, include_wake=True)
+
+    def inbox_pending_for_route(
+        self,
+        profile: Optional[str],
+        platform: Optional[str],
+        chat_id: Optional[str],
+        thread_id: Optional[str],
+        session_key: Optional[str] = None,
+        wake: Optional[bool] = None,
+    ) -> List[Dict[str, Any]]:
+        """Pending records for a route, by ``seq``, regardless of owner.
+
+        Matched on the route (NULL-safe, so a missing ``thread_id`` matches
+        only records without one) so a successor session on the same route —
+        e.g. after an idle reset — sees them. ``session_key=None`` skips that
+        filter; ``wake=True/False`` restricts to wake=1/wake=0.
+        """
+        text = self._inbox_text
+        where = (
+            "profile IS ? AND platform IS ? AND chat_id IS ? AND thread_id IS ? "
+            "AND state = 'pending'"
+        )
+        params: list = [text(profile), text(platform), text(chat_id), text(thread_id)]
+        if session_key is not None:
+            where += " AND session_key = ?"
+            params.append(session_key)
+        if wake is not None:
+            where += " AND wake = ?"
+            params.append(1 if wake else 0)
+        return self._inbox_query(where, tuple(params))
+
+    def inbox_for_route(
+        self,
+        profile: Optional[str],
+        platform: Optional[str],
+        chat_id: Optional[str],
+        thread_id: Optional[str],
+        state: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Every record on a route (optionally one ``state``), by ``seq``."""
+        if state is not None and state not in self._INBOX_STATES:
+            raise ValueError(f"invalid inbox state: {state!r}")
+        text = self._inbox_text
+        where = "profile IS ? AND platform IS ? AND chat_id IS ? AND thread_id IS ?"
+        params: list = [text(profile), text(platform), text(chat_id), text(thread_id)]
+        if state is not None:
+            where += " AND state = ?"
+            params.append(state)
+        return self._inbox_query(where, tuple(params))
+
+    def inbox_prune_payloads(self, older_than_s: float) -> int:
+        """Clear ``payload_json`` of old ``ingested``/``dropped`` records.
+
+        Age is measured from ``ingested_at`` (ingested) or ``created_at``
+        (dropped — there is no drop timestamp). Rows and keys are never
+        deleted, so a later ``inbox_put`` of the same key is still ``exists``.
+        Returns the number of payloads cleared.
+        """
+        now = time.time()
+        cutoff = now - float(older_than_s)
+
+        def _do(conn):
+            cur = conn.execute(
+                """UPDATE session_inbox
+                   SET payload_json = NULL, payload_pruned_at = ?
+                   WHERE state IN ('ingested', 'dropped')
+                     AND payload_json IS NOT NULL
+                     AND COALESCE(ingested_at, created_at) < ?""",
+                (now, cutoff),
+            )
+            return cur.rowcount
+
+        return self._execute_write(_do)
+
     def _insert_message_rows(self, conn, session_id: str, messages: List[Dict[str, Any]]) -> tuple[int, int]:
         """Insert *messages* as fresh active rows for *session_id*.
 
