@@ -8,6 +8,8 @@ jobs:
   windows-isolation:
     runs-on: windows-latest
     timeout-minutes: 15
+    env:
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -23,13 +25,30 @@ jobs:
         run: |
           git worktree add --detach baseline fb4e4f0a
           $python = (Resolve-Path .venv/Scripts/python.exe).Path
+          $log = Join-Path (Get-Location) baseline-results.txt
           Push-Location baseline
-          & $python -m pytest -o addopts= -p no:randomly -p no:cacheprovider --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py tests/gateway/test_update_command.py tests/gateway/test_update_streaming.py
+          & $python -m pytest -o addopts= -p no:randomly -p no:cacheprovider --color=no --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py tests/gateway/test_update_command.py tests/gateway/test_update_streaming.py 2>&1 | Tee-Object -FilePath $log
           $result = $LASTEXITCODE
           Pop-Location
-          if ($result -ne 0) { exit $result }
+          Set-Content baseline-exit.txt $result
+          exit 0
       - name: Candidate Windows regressions and Linux guard traps
         shell: pwsh
         run: |
-          .venv/Scripts/python.exe -m pytest -o addopts= -p no:randomly -p no:cacheprovider --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py tests/gateway/test_update_command.py tests/gateway/test_update_streaming.py tests/gateway/test_linux_catchup_handoff.py
-          exit $LASTEXITCODE
+          .venv/Scripts/python.exe -m pytest -o addopts= -p no:randomly -p no:cacheprovider --color=no --tb=short -q tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_windows_update_single_relaunch.py tests/clover_cli/test_windows_update_restart_reconciliation.py tests/gateway/test_update_stale_receipt.py tests/gateway/test_update_command.py tests/gateway/test_update_streaming.py tests/gateway/test_linux_catchup_handoff.py 2>&1 | Tee-Object -FilePath candidate-results.txt
+          Set-Content candidate-exit.txt $LASTEXITCODE
+          exit 0
+      - name: Fail on any new native-Windows failure
+        shell: pwsh
+        run: .venv/Scripts/python.exe .github/scripts/linux-catchup-native-compare.py
+      - name: Preserve proof logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-catchup-native-windows-proof
+          path: |
+            baseline-results.txt
+            candidate-results.txt
+            baseline-exit.txt
+            candidate-exit.txt
+            native-comparison.json
