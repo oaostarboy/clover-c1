@@ -75,7 +75,7 @@ def test_late_todo_completion_cannot_authorize_a_new_turn(tmp_path, monkeypatch)
     dc.begin_turn(agent)
     monkeypatch.setattr(executor, '_resolve_concurrent_tool_timeout', lambda: 0.05)
     applied, release, recorded = threading.Event(), threading.Event(), threading.Event()
-    real_todo, real_record = todo.todo_tool, dc.record_declaration
+    real_todo, real_for_agent = todo.todo_tool, todo.todo_for_agent
 
     def delayed_return(*args, **kwargs):
         result = real_todo(*args, **kwargs)
@@ -83,14 +83,16 @@ def test_late_todo_completion_cannot_authorize_a_new_turn(tmp_path, monkeypatch)
         assert release.wait(5)
         return result
 
-    def observed_record(*args, **kwargs):
+    def observed_for_agent(*args, **kwargs):
+        # The worker no longer registers authority itself (the foreground root
+        # does), so the completion signal is the real todo_for_agent returning.
         try:
-            return real_record(*args, **kwargs)
+            return real_for_agent(*args, **kwargs)
         finally:
             recorded.set()
 
     monkeypatch.setattr(todo, 'todo_tool', delayed_return)
-    monkeypatch.setattr(dc, 'record_declaration', observed_record)
+    monkeypatch.setattr(todo, 'todo_for_agent', observed_for_agent)
     errors = []
 
     def old_turn():

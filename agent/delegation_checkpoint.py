@@ -37,7 +37,7 @@ import os
 import threading
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -165,12 +165,37 @@ class Verdict:
 ALLOWED = Verdict()
 
 
+class AppliedSlot:
+    """Private per-invocation transport between a todo worker and the root.
+
+    The worker may only WRITE data here: ``decision`` (the normalized
+    declaration ``todo`` really applied) and ``completed`` (set after a normal
+    managed return). Neither is authority. The foreground root alone reads a
+    snapshot of them after it has accepted the completion.
+    """
+
+    __slots__ = ("decision", "completed", "registered")
+
+    def __init__(self) -> None:
+        self.decision: Optional[Dict[str, str]] = None
+        self.completed: bool = False
+        self.registered: bool = False
+
+
 @dataclass(frozen=True)
 class DeclarationOwner:
-    """Checkpoint identity and generation captured BEFORE a todo call runs."""
+    """Immutable per-invocation receipt, captured BEFORE a todo call runs.
+
+    Pairs the checkpoint identity + generation with the agent identity and the
+    tool-call id, plus this invocation's own private ``AppliedSlot``. A new
+    receipt (and slot) is allocated for every call; none is ever shared.
+    """
 
     checkpoint: "DelegationCheckpoint"
     generation: int
+    agent_id: int = 0
+    tool_call_id: str = ""
+    slot: AppliedSlot = field(default_factory=AppliedSlot, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -533,12 +558,17 @@ def ticket_for(agent: Any) -> Optional[DispatchTicket]:
     return checkpoint.ticket()
 
 
-def claim_declaration(agent: Any) -> Optional[DeclarationOwner]:
+def claim_declaration(agent: Any, tool_call_id: str = "") -> Optional[DeclarationOwner]:
     """Capture who owns a declaration before the todo call executes."""
     checkpoint = get_checkpoint(agent)
     if checkpoint is None:
         return None
-    return DeclarationOwner(checkpoint, checkpoint.current_generation())
+    return DeclarationOwner(
+        checkpoint,
+        checkpoint.current_generation(),
+        agent_id=id(agent),
+        tool_call_id=tool_call_id or "",
+    )
 
 
 def record_declaration(
@@ -546,16 +576,14 @@ def record_declaration(
     decision: Optional[Dict[str, str]],
     owner: Optional[DeclarationOwner] = None,
 ) -> bool:
-    """Register a valid, successfully-applied ``todo.delegation`` event.
+    """Root-side atomic application of a declaration (validate + declare).
 
-    ``owner`` is the receipt the CALLER captured with ``claim_declaration``
-    before handing the call to any worker. There is deliberately no fallback:
-    a caller that skipped the receipt authorizes nothing, because claiming
-    here would claim whatever generation exists after any delay.
+    Called ONLY by the foreground root after it accepted a normal completion
+    (see ``register_accepted_declaration``); a todo worker never calls it.
+    There is no fallback: without a receipt nothing is granted.
 
     Authority is granted only if BOTH the checkpoint object and its generation
-    still match the receipt. The todo result itself is returned to the model
-    either way; nothing that is already running is cancelled.
+    still match the receipt, atomically under the checkpoint lock.
     """
     if not decision or owner is None:
         return False
@@ -564,6 +592,57 @@ def record_declaration(
     return owner.checkpoint.declare(
         decision["mode"], decision["reason"], expected_generation=owner.generation
     )
+
+
+def register_accepted_declaration(
+    agent: Any,
+    owner: Optional[DeclarationOwner],
+    tool_call_id: str,
+    decision: Optional[Dict[str, str]] = None,
+) -> bool:
+    """Foreground root registers an applied declaration it has ACCEPTED.
+
+    The caller has already established that this invocation returned a normal
+    completed result (not timed out, cancelled, abandoned, blocked or crashed).
+    ``decision`` is the root's frozen snapshot of the slot when it has one (the
+    concurrent boundary); otherwise the slot is read now. The receipt must
+    belong to exactly this agent and tool call, and registers at most once.
+    """
+    if owner is None:
+        return False
+    if owner.agent_id != id(agent) or owner.tool_call_id != (tool_call_id or ""):
+        return False
+    slot = owner.slot
+    if slot.registered:
+        return False
+    slot.registered = True
+    return record_declaration(
+        agent, decision if decision is not None else slot.decision, owner
+    )
+
+
+_EXECUTOR_OWNED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "delegation_checkpoint_executor_owned", default=False
+)
+
+
+class executor_context:
+    """Marks the whole executor-owned worker pipeline (middleware, plugin hooks,
+    dispatch). Inside it a legacy ``invoke_tool`` call with no explicit owner
+    must not reacquire declaration authority; the foreground root registers."""
+
+    def __enter__(self) -> None:
+        self._token = _EXECUTOR_OWNED.set(True)
+
+    def __exit__(self, *exc_info) -> None:
+        try:
+            _EXECUTOR_OWNED.reset(self._token)
+        except ValueError:
+            _EXECUTOR_OWNED.set(False)
+
+
+def in_executor_context() -> bool:
+    return _EXECUTOR_OWNED.get()
 
 
 # Sentinel for ``invoke_tool(declaration_owner=...)``: "the caller said

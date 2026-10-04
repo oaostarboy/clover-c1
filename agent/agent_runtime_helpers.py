@@ -3431,14 +3431,23 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
     if not isinstance(function_args, dict):
         function_args = {}
 
-    # Earliest boundary of a direct synchronous legacy call: before request
-    # middleware, plugin hooks and execution middleware can delay it.
-    if function_name == "todo" and declaration_owner is _RECEIPT_UNSET:
-        from agent.delegation_checkpoint import claim_declaration
-
-        declaration_owner = claim_declaration(agent)
-    elif declaration_owner is _RECEIPT_UNSET:
+    # Declaration ownership. ``declaration_owner`` unset = a genuinely
+    # synchronous legacy caller: it is its own boundary, so it captures a
+    # private receipt HERE (before request middleware / plugin hooks can delay
+    # it) and registers it only on its own normal return below. Inside the
+    # executor-owned pipeline an unset owner is a nested/mismatched call and
+    # fails closed. An explicit ``None`` grants nothing; an explicit owner
+    # comes from the executor, whose foreground root registers it.
+    _legacy_owner = None
+    if declaration_owner is _RECEIPT_UNSET:
         declaration_owner = None
+        if function_name == "todo":
+            from agent.delegation_checkpoint import claim_declaration, in_executor_context
+
+            if not in_executor_context():
+                _legacy_owner = declaration_owner = claim_declaration(
+                    agent, tool_call_id or ""
+                )
 
     _tool_middleware_trace = list(tool_request_middleware_trace or [])
     try:
@@ -3751,21 +3760,29 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
 
     with _checkpoint.admitted(_owned_admission):
         if skip_tool_execution_middleware:
-            return _execute(function_args)
+            _result = _execute(function_args)
+        else:
+            from clover_cli.middleware import run_tool_execution_middleware
 
-        from clover_cli.middleware import run_tool_execution_middleware
+            _result = run_tool_execution_middleware(
+                function_name,
+                function_args,
+                lambda next_args: _execute(next_args if isinstance(next_args, dict) else function_args),
+                original_args=function_args,
+                task_id=effective_task_id or "",
+                session_id=getattr(agent, "session_id", "") or "",
+                tool_call_id=tool_call_id or "",
+                turn_id=getattr(agent, "_current_turn_id", "") or "",
+                api_request_id=getattr(agent, "_current_api_request_id", "") or "",
+            )
+    # Synchronous legacy acceptance: this call's own normal return (an
+    # exception propagates above and registers nothing; a plugin block or a
+    # middleware that never ran the tool leaves the slot empty).
+    if _legacy_owner is not None:
+        from agent.delegation_checkpoint import register_accepted_declaration
 
-        return run_tool_execution_middleware(
-            function_name,
-            function_args,
-            lambda next_args: _execute(next_args if isinstance(next_args, dict) else function_args),
-            original_args=function_args,
-            task_id=effective_task_id or "",
-            session_id=getattr(agent, "session_id", "") or "",
-            tool_call_id=tool_call_id or "",
-            turn_id=getattr(agent, "_current_turn_id", "") or "",
-            api_request_id=getattr(agent, "_current_api_request_id", "") or "",
-        )
+        register_accepted_declaration(agent, _legacy_owner, tool_call_id or "")
+    return _result
 
 
 
