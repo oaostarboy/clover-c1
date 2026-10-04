@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 
+from agent.prompt_builder import TODO_DELEGATION_DECISION_GUIDANCE
 from tests.agent.test_delegation_checkpoint import (
     _agent,
     _delegate,
@@ -26,17 +27,17 @@ def _stable_prompt(agent):
 
 
 def test_stable_prompt_teaches_the_checkpoint_only_to_agents_it_gates():
-    assert 'Before your first work tool' in _stable_prompt(_agent())
-    assert 'Before your first work tool' not in _stable_prompt(_agent(platform='cron'))
-    assert 'Before your first work tool' not in _stable_prompt(_agent(enabled_toolsets=['todo', 'file']))
+    assert TODO_DELEGATION_DECISION_GUIDANCE in _stable_prompt(_agent())
+    assert TODO_DELEGATION_DECISION_GUIDANCE not in _stable_prompt(_agent(platform='cron'))
+    assert TODO_DELEGATION_DECISION_GUIDANCE not in _stable_prompt(_agent(enabled_toolsets=['todo', 'file']))
     exempt = _agent()
     exempt._delegation_checkpoint_exempt = 'oneshot'
-    assert 'Before your first work tool' not in _stable_prompt(exempt)
+    assert TODO_DELEGATION_DECISION_GUIDANCE not in _stable_prompt(exempt)
 
 
 def test_rollback_config_removes_the_instruction_too():
     _set_checkpoint_config({'enabled': False})
-    assert 'Before your first work tool' not in _stable_prompt(_agent())
+    assert TODO_DELEGATION_DECISION_GUIDANCE not in _stable_prompt(_agent())
 
 
 def test_gating_never_changes_prompt_bytes_or_tool_schemas(tmp_path):
