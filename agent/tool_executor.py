@@ -708,12 +708,50 @@ def _run_agent_tool_execution_middleware(
             )
             return result
 
+        # Mandatory delegation checkpoint. Admission runs inside the ordered
+        # start so concurrent work reserves its budget in emission order, and
+        # before any side effect. A block leaves memory/skill nudge counters
+        # and the start order exactly as a guardrail block does.
+        checkpoint_state: dict[str, Any] = {"verdict": None}
+
+        def _admit_then_begin() -> None:
+            from agent import delegation_checkpoint
+
+            verdict = delegation_checkpoint.admit(
+                agent, function_name, final_args, tool_call_id
+            )
+            checkpoint_state["verdict"] = verdict
+            if not verdict.blocked:
+                try:
+                    _begin()
+                except BaseException:
+                    if verdict.admission is not None:
+                        verdict.admission.checkpoint.refund(verdict.admission)
+                    raise
+
+        _advance_start_order(_admit_then_begin)
+        checkpoint_verdict = checkpoint_state["verdict"]
+        if checkpoint_verdict is not None and checkpoint_verdict.blocked:
+            state["blocked"] = True
+            _emit_terminal_post_tool_call(
+                agent,
+                function_name=function_name,
+                function_args=final_args,
+                result=checkpoint_verdict.block_result,
+                effective_task_id=effective_task_id,
+                tool_call_id=tool_call_id,
+                status="blocked",
+                error_type=checkpoint_verdict.block_code or "delegation_checkpoint",
+                error_message=checkpoint_verdict.block_message,
+                middleware_trace=list(state["middleware_trace"]),
+            )
+            return checkpoint_verdict.block_result
+        admission = checkpoint_verdict.admission if checkpoint_verdict is not None else None
+
         if function_name == "memory":
             agent._turns_since_memory = 0
         elif function_name == "skill_manage":
             agent._iters_since_skill = 0
-
-        _advance_start_order(_begin)
 
         # Keep the gateway turn-inactivity watchdog from abandoning a turn
         # whose tool call runs silently for longer than the inactivity
@@ -731,7 +769,10 @@ def _run_agent_tool_execution_middleware(
         )
         _hb_thread.start()
         try:
-            return execute(final_args)
+            from agent.delegation_checkpoint import admitted
+
+            with admitted(admission):
+                return execute(final_args)
         finally:
             _hb_stop.set()
             _hb_thread.join(timeout=2.0)
