@@ -2780,6 +2780,16 @@ def _resolve_command_cwd(
     return recorded or default_cwd
 
 
+def _report_checkpoint_nonexecution() -> None:
+    """Private receipt: this terminal call was denied/pending, so it never ran."""
+    try:
+        from agent.delegation_checkpoint import report_nonexecution
+
+        report_nonexecution("terminal")
+    except Exception:
+        logger.debug("delegation checkpoint receipt failed", exc_info=True)
+
+
 def terminal_tool(
     command: str,
     background: bool = False,
@@ -3211,6 +3221,7 @@ def terminal_tool(
             if not approval["approved"]:
                 # Check if this is an approval_required (gateway ask mode)
                 if approval.get("status") == "pending_approval":
+                    _report_checkpoint_nonexecution()
                     return json.dumps({
                         "output": "",
                         "exit_code": -1,
@@ -3229,6 +3240,7 @@ def terminal_tool(
                     f"Command denied: {desc}. "
                     "Use the approval prompt to allow it, or rephrase the command."
                 )
+                _report_checkpoint_nonexecution()
                 return json.dumps({
                     "output": "",
                     "exit_code": -1,

@@ -1237,6 +1237,16 @@ def _emit_post_tool_call_hook(
         logger.debug("post_tool_call hook error: %s", _hook_err)
 
 
+def _report_checkpoint_nonexecution(function_name: str) -> None:
+    """Private receipt to the delegation checkpoint: this call never executed."""
+    try:
+        from agent.delegation_checkpoint import report_nonexecution
+
+        report_nonexecution(function_name)
+    except Exception:
+        logger.debug("delegation checkpoint receipt failed", exc_info=True)
+
+
 def handle_function_call(
     function_name: str,
     function_args: Dict[str, Any],
@@ -1474,6 +1484,7 @@ def handle_function_call(
 
             edit_block_message = maybe_require_edit_approval(function_name, function_args)
             if edit_block_message is not None:
+                _report_checkpoint_nonexecution(function_name)
                 _emit_post_tool_call_hook(
                     function_name=function_name,
                     function_args=function_args,
@@ -1491,6 +1502,7 @@ def handle_function_call(
         except Exception as _edit_approval_err:
             logger.debug("ACP edit approval guard error: %s", _edit_approval_err)
             if function_name in {"write_file", "patch"}:
+                _report_checkpoint_nonexecution(function_name)
                 result = tool_error("Edit approval denied: approval guard failed")
                 _emit_post_tool_call_hook(
                     function_name=function_name,

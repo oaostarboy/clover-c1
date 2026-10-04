@@ -3693,22 +3693,60 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                 **dispatch_kwargs,
             )
 
-    if skip_tool_execution_middleware:
-        return _execute(function_args)
+    # Delegation checkpoint for registered/legacy invocation. The executor's
+    # funnel already admitted its own calls and hands that admission over via a
+    # private ContextVar; `skip_tool_execution_middleware` alone is never
+    # authorization. A call with no matching admission is gated here, once.
+    from agent import delegation_checkpoint as _checkpoint
 
-    from clover_cli.middleware import run_tool_execution_middleware
+    _owned_admission = None
+    if _checkpoint.current_admission_for(
+        agent,
+        _checkpoint.resolve_work_name(function_name, function_args),
+        tool_call_id or "",
+    ) is None:
+        _verdict = _checkpoint.admit(
+            agent, function_name, function_args, tool_call_id or ""
+        )
+        if _verdict.blocked:
+            try:
+                from model_tools import _emit_post_tool_call_hook
+                _emit_post_tool_call_hook(
+                    function_name=function_name,
+                    function_args=function_args,
+                    result=_verdict.block_result,
+                    task_id=effective_task_id or "",
+                    session_id=getattr(agent, "session_id", "") or "",
+                    tool_call_id=tool_call_id or "",
+                    turn_id=getattr(agent, "_current_turn_id", "") or "",
+                    api_request_id=getattr(agent, "_current_api_request_id", "") or "",
+                    status="blocked",
+                    error_type=_verdict.block_code or "delegation_checkpoint",
+                    error_message=_verdict.block_message,
+                    middleware_trace=list(_tool_middleware_trace),
+                )
+            except Exception:
+                pass
+            return _verdict.block_result
+        _owned_admission = _verdict.admission
 
-    return run_tool_execution_middleware(
-        function_name,
-        function_args,
-        lambda next_args: _execute(next_args if isinstance(next_args, dict) else function_args),
-        original_args=function_args,
-        task_id=effective_task_id or "",
-        session_id=getattr(agent, "session_id", "") or "",
-        tool_call_id=tool_call_id or "",
-        turn_id=getattr(agent, "_current_turn_id", "") or "",
-        api_request_id=getattr(agent, "_current_api_request_id", "") or "",
-    )
+    with _checkpoint.admitted(_owned_admission):
+        if skip_tool_execution_middleware:
+            return _execute(function_args)
+
+        from clover_cli.middleware import run_tool_execution_middleware
+
+        return run_tool_execution_middleware(
+            function_name,
+            function_args,
+            lambda next_args: _execute(next_args if isinstance(next_args, dict) else function_args),
+            original_args=function_args,
+            task_id=effective_task_id or "",
+            session_id=getattr(agent, "session_id", "") or "",
+            tool_call_id=tool_call_id or "",
+            turn_id=getattr(agent, "_current_turn_id", "") or "",
+            api_request_id=getattr(agent, "_current_api_request_id", "") or "",
+        )
 
 
 
