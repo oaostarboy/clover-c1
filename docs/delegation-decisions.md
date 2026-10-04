@@ -99,6 +99,13 @@ Known limits:
   120-second budget bounds this.
 - The TUI's `async_delegation_complete` delivery has a trusted origin but is
   deliberately not widened; it resets like any other entry.
+- A `todo` declaration takes effect only when the foreground accepts its normal
+  completion. A declaration that was held by middleware or a plugin hook and then
+  timed out, was cancelled or abandoned, crashed, was denied, or belongs to an
+  older turn or checkpoint may still update the plan metadata, but it never
+  grants authority, even if it finishes later in the same turn. Out-of-tree code
+  that runs the `todo` tool on its own abandoned thread without the executor's
+  private context is outside this contract; it is not made safe by it.
 - A work call is checked when it is about to run. A tool that is already
   running is never aborted when its budget runs out.
 - Starting a child does not by itself return control to the user. After

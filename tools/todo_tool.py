@@ -451,14 +451,16 @@ def todo_tool(
 
 
 def todo_for_agent(agent: Any, args: Dict[str, Any], owner: Any = None) -> str:
-    """Run ``todo`` for ``agent`` and register an applied declaration.
+    """Run ``todo`` for ``agent``; fill the invocation's private slot.
 
-    ``owner`` is the declaration receipt the CALLER captured (via
-    ``agent.delegation_checkpoint.claim_declaration``) on its own thread before
-    handing this call to any worker, middleware or plugin hook. It is never
-    claimed here: by the time this runs a held call may belong to an older
-    turn. Without a receipt the plan metadata is still recorded but no runtime
-    authorization is granted.
+    ``owner`` is this invocation's receipt, allocated by the CALLER
+    (``agent.delegation_checkpoint.claim_declaration``) before any worker
+    handoff. This helper only updates the TodoStore and writes the normalized
+    applied declaration into the receipt's private slot. It NEVER grants
+    runtime authority: that belongs to the foreground root, which registers
+    the declaration after it has accepted a normal completion. A late, stale,
+    abandoned or ownerless call can therefore still update plan metadata but
+    can never authorize work.
     """
     applied: List[Dict[str, str]] = []
     result = todo_tool(
@@ -469,10 +471,9 @@ def todo_for_agent(agent: Any, args: Dict[str, Any], owner: Any = None) -> str:
         delegation_check=delegation_check_for_agent(agent),
         applied_delegation=applied,
     )
-    if applied and owner is not None:
-        from agent.delegation_checkpoint import record_declaration
-
-        record_declaration(agent, applied[-1], owner)
+    slot = getattr(owner, "slot", None)
+    if applied and slot is not None and slot.decision is None:
+        slot.decision = dict(applied[-1])
     return result
 
 
