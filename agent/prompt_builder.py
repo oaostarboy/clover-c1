@@ -513,9 +513,9 @@ PLAN_FIRST_DELEGATION_GUIDANCE = (
 TODO_DELEGATION_DECISION_GUIDANCE = (
     "Before your first work tool of a task (file, terminal, browser, code, "
     "memory or any tool other than todo, skill/tool lookup, clarify and "
-    "delegate_task), record a choice with todo delegation: mode 'direct' with "
-    "a brief operational reason, or mode 'delegate' with a reason followed by "
-    "an actual delegate_task call. A decision-only todo call is enough; no "
+    "delegate_task), record todo delegation mode 'direct' with a brief "
+    "operational reason, or mode 'delegate' with a reason followed by an "
+    "actual delegate_task call. A decision-only todo call is enough; no "
     "checklist is needed. Work tools are blocked until you do, and the choice "
     "must be renewed after a handful of work calls or a couple of minutes. "
     "Quick tasks stay direct; respect explicit no-subagent instructions. After "
