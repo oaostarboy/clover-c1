@@ -221,14 +221,15 @@ def test_real_async_dispatch_unlocks_work_in_the_same_batch(tmp_path, child_runs
 def test_inline_child_start_when_async_delivery_is_unsupported_also_unlocks(tmp_path, child_runs):
     from gateway.session_context import clear_session_vars, set_session_vars
 
-    tokens = set_session_vars(platform='api_server', chat_id='s', session_key='s', async_delivery=False)
+    tokens = set_session_vars(platform='batch', chat_id='', session_key='s', async_delivery=False)
     try:
         agent = _agent()
         target = tmp_path / 'out.txt'
 
         _, ran, _ = run_batch(agent, [_delegate(), _spawn('inline lane'), _write(target, 'after')])
 
-        assert child_runs == ['inline lane']
+        assert 'results' in ran and ran.get('status') != 'dispatched', 'expected the inline fallback, not async'
+        assert child_runs == ['inline lane'], 'the child must have run before delegate_task returned'
         assert target.read_text() == 'after'
     finally:
         clear_session_vars(tokens)
@@ -654,7 +655,7 @@ def test_orchestrator_child_is_never_gated(tmp_path, monkeypatch):
 
     monkeypatch.setattr(dt, '_run_single_child', capture)
     from gateway.session_context import clear_session_vars, set_session_vars
-    tokens = set_session_vars(platform='api_server', chat_id='s', session_key='s', async_delivery=False)
+    tokens = set_session_vars(platform='batch', chat_id='', session_key='s', async_delivery=False)
     try:
         parent = _agent()
         run_batch(parent, [_direct(), ('delegate_task', {'goal': 'orchestrate', 'role': 'orchestrator'})])
