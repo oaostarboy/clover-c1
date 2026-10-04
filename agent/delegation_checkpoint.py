@@ -166,6 +166,14 @@ ALLOWED = Verdict()
 
 
 @dataclass(frozen=True)
+class DeclarationOwner:
+    """Checkpoint identity and generation captured BEFORE a todo call runs."""
+
+    checkpoint: "DelegationCheckpoint"
+    generation: int
+
+
+@dataclass(frozen=True)
 class DispatchTicket:
     """Generation-bound right to credit one real child start."""
 
@@ -213,12 +221,28 @@ class DelegationCheckpoint:
             self.settings = settings
             self._reset_locked()
 
-    def declare(self, mode: str, reason: str) -> None:
-        """Record a valid ``todo.delegation`` event. Every event renews."""
+    def declare(
+        self, mode: str, reason: str, *, expected_generation: Optional[int] = None
+    ) -> bool:
+        """Record a valid ``todo.delegation`` event. Every event renews.
+
+        ``expected_generation`` is the generation captured before the todo call
+        ran. If this checkpoint has moved on since (a new turn, a renewal, a
+        budget expiry), the declaration is stale: it is not applied, so a
+        completion that arrives late can never grant authority to a newer
+        work episode. Returns whether the declaration was applied.
+        """
         with self._lock:
+            if expected_generation is not None and expected_generation != self.generation:
+                return False
             self._reset_locked()
             self.decision = {"mode": mode, "reason": reason}
             self.state = SPAWN_REQUIRED if mode == "delegate" else DIRECT_AUTHORIZED
+            return True
+
+    def current_generation(self) -> int:
+        with self._lock:
+            return self.generation
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
@@ -509,11 +533,34 @@ def ticket_for(agent: Any) -> Optional[DispatchTicket]:
     return checkpoint.ticket()
 
 
-def record_declaration(agent: Any, decision: Optional[Dict[str, str]]) -> None:
-    """Register a valid, successfully-applied ``todo.delegation`` event."""
-    if not decision:
-        return
+def claim_declaration(agent: Any) -> Optional[DeclarationOwner]:
+    """Capture who owns a declaration before the todo call executes."""
     checkpoint = get_checkpoint(agent)
     if checkpoint is None:
-        return
-    checkpoint.declare(decision["mode"], decision["reason"])
+        return None
+    return DeclarationOwner(checkpoint, checkpoint.current_generation())
+
+
+def record_declaration(
+    agent: Any,
+    decision: Optional[Dict[str, str]],
+    owner: Optional[DeclarationOwner] = None,
+) -> bool:
+    """Register a valid, successfully-applied ``todo.delegation`` event.
+
+    Authority is granted only if BOTH the checkpoint object and its generation
+    still match what ``claim_declaration`` captured before the todo call ran.
+    The todo result itself is returned to the model either way; nothing that
+    is already running is cancelled.
+    """
+    if not decision:
+        return False
+    if owner is None:
+        owner = claim_declaration(agent)
+        if owner is None:
+            return False
+    if getattr(agent, "_delegation_checkpoint", None) is not owner.checkpoint:
+        return False
+    return owner.checkpoint.declare(
+        decision["mode"], decision["reason"], expected_generation=owner.generation
+    )

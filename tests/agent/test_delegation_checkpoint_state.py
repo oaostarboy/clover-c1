@@ -207,17 +207,17 @@ def test_begin_turn_rereads_settings_for_the_new_turn():
 def child_runs(monkeypatch):
     import time
 
-    import tools.delegate_tool as dt
+    import run_agent
     from tools.process_registry import process_registry
 
     started = []
 
-    def fake_child(task_index, goal, child=None, parent_agent=None, **kw):
-        started.append(goal)
-        return {'task_index': task_index, 'status': 'completed', 'summary': 'ok',
-                'api_calls': 1, 'duration_seconds': 0.0, 'model': 'm', 'exit_reason': 'completed'}
+    def conversation(self, user_message=None, **kwargs):
+        started.append(user_message)
+        return {'final_response': 'ok', 'messages': [], 'api_calls': 1, 'completed': True,
+                'input_tokens': 0, 'output_tokens': 0}
 
-    monkeypatch.setattr(dt, '_run_single_child', fake_child)
+    monkeypatch.setattr(run_agent.AIAgent, 'run_conversation', conversation)
     yield started
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:

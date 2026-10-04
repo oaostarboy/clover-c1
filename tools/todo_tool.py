@@ -456,6 +456,11 @@ def todo_for_agent(agent: Any, args: Dict[str, Any]) -> str:
     The one place both executor paths call, so a valid ``delegation`` is
     reported to the runtime checkpoint exactly when the tool really applied it.
     """
+    from agent.delegation_checkpoint import claim_declaration
+
+    # Capture checkpoint identity + generation BEFORE the call can be delayed
+    # or abandoned; a late completion then cannot authorize a newer turn.
+    owner = claim_declaration(agent)
     applied: List[Dict[str, str]] = []
     result = todo_tool(
         todos=args.get("todos"),
@@ -465,10 +470,10 @@ def todo_for_agent(agent: Any, args: Dict[str, Any]) -> str:
         delegation_check=delegation_check_for_agent(agent),
         applied_delegation=applied,
     )
-    if applied:
+    if applied and owner is not None:
         from agent.delegation_checkpoint import record_declaration
 
-        record_declaration(agent, applied[-1])
+        record_declaration(agent, applied[-1], owner)
     return result
 
 

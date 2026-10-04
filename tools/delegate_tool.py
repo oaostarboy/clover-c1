@@ -2688,11 +2688,17 @@ def _run_single_child(
     owner_session_id: Optional[str] = None,
     owner_transport: Any = None,
     owner_session_record: Any = None,
+    checkpoint_ticket: Any = None,
     **_kwargs,
 ) -> Dict[str, Any]:
     """
     Run a pre-built child agent. Called from within a thread.
     Returns a structured result dict.
+
+    ``checkpoint_ticket`` (inline callers only) is the parent's delegation
+    checkpoint right to credit a REAL child start. It is spent at the point the
+    child conversation actually begins, after credential leasing and every
+    other pre-start step succeeded.
     """
     child_start = time.monotonic()
 
@@ -3040,6 +3046,10 @@ def _run_single_child(
             from agent.delegation_context import delegated_child_context
 
             with delegated_child_context(str(getattr(child, "session_id", "") or "")):
+                if checkpoint_ticket is not None:
+                    # The conversation-start boundary: nothing earlier (pool
+                    # construction, submission, credential lease) counts.
+                    checkpoint_ticket.credit("inline")
                 return child.run_conversation(
                     user_message=goal,
                     task_id=child_task_id,
@@ -4268,8 +4278,9 @@ def delegate_task(
         checkpoint credits. The detached background runner never sets it (its
         acceptance was already credited at dispatch).
         """
-        if credit_inline_start and _checkpoint_ticket is not None:
-            _checkpoint_ticket.credit("inline")
+        # Only foreground/inline callers hand the ticket to the real child
+        # runner, which spends it when the child conversation actually starts.
+        _start_ticket = _checkpoint_ticket if credit_inline_start else None
         if n_tasks == 1:
             # Single task -- run directly (no thread pool overhead)
             _i, _t, child = children[0]
@@ -4281,6 +4292,7 @@ def delegate_task(
                 owner_session_id=_origin_ui_session_id or None,
                 owner_transport=_origin_owner_transport,
                 owner_session_record=_origin_owner_session_record,
+                checkpoint_ticket=_start_ticket,
             )
             results.append(result)
         else:
@@ -4306,6 +4318,7 @@ def delegate_task(
                         owner_session_id=_origin_ui_session_id or None,
                         owner_transport=_origin_owner_transport,
                         owner_session_record=_origin_owner_session_record,
+                        checkpoint_ticket=_start_ticket,
                     )
                     futures[future] = i
 

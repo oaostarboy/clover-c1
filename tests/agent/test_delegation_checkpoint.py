@@ -146,18 +146,20 @@ def test_a_policy_block_is_not_counted_as_a_repeated_tool_failure(tmp_path):
 
 @pytest.fixture
 def child_runs(monkeypatch):
-    """Real child construction and dispatch; only the child's model loop is faked."""
-    import tools.delegate_tool as dt
+    """Real child construction, pool, lease and runner; only the child's model
+    conversation is faked. (Replacing the runner itself would bypass the very
+    start boundary the checkpoint credits.)"""
+    import run_agent
     from tools.process_registry import process_registry
 
     started = []
 
-    def fake_child(task_index, goal, child=None, parent_agent=None, **kw):
-        started.append(goal)
-        return {'task_index': task_index, 'status': 'completed', 'summary': f'done: {goal}',
-                'api_calls': 1, 'duration_seconds': 0.01, 'model': 'm', 'exit_reason': 'completed'}
+    def conversation(self, user_message=None, **kwargs):
+        started.append(user_message)
+        return {'final_response': f'done: {user_message}', 'messages': [], 'api_calls': 1,
+                'completed': True, 'input_tokens': 0, 'output_tokens': 0}
 
-    monkeypatch.setattr(dt, '_run_single_child', fake_child)
+    monkeypatch.setattr(run_agent.AIAgent, 'run_conversation', conversation)
     yield started
     import time
     deadline = time.monotonic() + 5
