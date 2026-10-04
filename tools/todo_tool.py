@@ -570,7 +570,7 @@ TODO_SCHEMA = {
             },
             "delegation": {
                 "type": "object",
-                "description": "Optional plan-level delegation decision. Give a brief operational rationale, not private reasoning.",
+                "description": "Delegation decision. A root that can delegate must record one before its first work tool (decision-only calls without todos are fine): direct, or delegate followed by delegate_task. Give a brief operational rationale, not private reasoning.",
                 "properties": {
                     "mode": {"type": "string", "enum": ["delegate", "direct"]},
                     "reason": {"type": "string", "maxLength": MAX_DELEGATION_REASON_CHARS}

@@ -1148,6 +1148,15 @@ Key config knobs (under `delegation:` in `config.yaml`):
 `orchestrator_enabled`, `subagent_auto_approve`, `inherit_mcp_toolsets`,
 `max_iterations`.
 
+Mandatory checkpoint: a conversational root with both `todo` and
+`delegate_task` cannot run its first work tool until it records `todo`
+`delegation` direct(reason), or delegate(reason) plus an actual child start.
+Policy lives in `agent/delegation_checkpoint.py`, is enforced in the executor's
+common dispatch funnel (`agent/tool_executor.py`) and for legacy
+`invoke_tool`, and renews after `delegation.checkpoint.max_work_tools` /
+`max_foreground_seconds`. `delegation.checkpoint.enabled: false` is the
+rollback. Details and known limits: `docs/delegation-decisions.md`.
+
 Durability rule: background `delegate_task` is detached from the current
 turn but still process-local. For work that must survive process restart, use
 `cronjob` or `terminal(background=True, notify_on_complete=True)` instead.

@@ -1592,6 +1592,10 @@ delegation:
                                               # or auto-approve "once" (true) instead of blocking on stdin.
                                               # The parent TUI owns stdin, so blocking would deadlock; non-interactive resolution is required.
                                               # Both choices emit a logger.warning audit line. Flip to true only for cron/batch pipelines.
+  # checkpoint:                               # Mandatory delegation checkpoint for conversational roots with todo + delegate_task
+  #   enabled: true                           # false = rollback: never gate work tools
+  #   max_work_tools: 5                       # parent work calls one direct/delegate choice covers (positive integer)
+  #   max_foreground_seconds: 120             # seconds after the first work call before the choice must be renewed
   # inherit_mcp_toolsets: true                # When explicit child toolsets are narrowed, also keep the parent's MCP toolsets (default: true). Set false for strict intersection.
   # model: "google/gemini-3-flash-preview"    # Override model for subagents (empty = inherit parent)
   # provider: "openrouter"                    # Override provider for subagents (empty = inherit parent)
