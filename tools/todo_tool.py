@@ -376,6 +376,7 @@ def todo_tool(
     store: Optional[TodoStore] = None,
     delegation: Optional[Dict[str, Any]] = None,
     delegation_check: bool = False,
+    applied_delegation: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     """
     Single entry point for the todo tool. Reads or writes depending on params.
@@ -384,6 +385,9 @@ def todo_tool(
         todos: if provided, write these items. If None, read current list.
         merge: if True, update by id. If False (default), replace entire list.
         store: the TodoStore instance from the AIAgent.
+        applied_delegation: internal out-list. When a valid ``delegation`` was
+            really applied, the normalized decision is appended to it so the
+            runtime checkpoint never has to parse this tool's output.
 
     Returns:
         JSON string with the full current list and summary metadata.
@@ -416,6 +420,9 @@ def todo_tool(
             store.set_delegation(normalized_delegation)
         items = store.read()
 
+    if normalized_delegation is not None and applied_delegation is not None:
+        applied_delegation.append(dict(normalized_delegation))
+
     # Build summary counts
     pending = sum(1 for i in items if i["status"] == "pending")
     in_progress = sum(1 for i in items if i["status"] == "in_progress")
@@ -441,6 +448,28 @@ def todo_tool(
             "cancelled": cancelled,
         },
     }, ensure_ascii=False)
+
+
+def todo_for_agent(agent: Any, args: Dict[str, Any]) -> str:
+    """Run ``todo`` for ``agent`` and register an applied declaration.
+
+    The one place both executor paths call, so a valid ``delegation`` is
+    reported to the runtime checkpoint exactly when the tool really applied it.
+    """
+    applied: List[Dict[str, str]] = []
+    result = todo_tool(
+        todos=args.get("todos"),
+        merge=args.get("merge", False),
+        store=agent._todo_store,
+        delegation=args.get("delegation"),
+        delegation_check=delegation_check_for_agent(agent),
+        applied_delegation=applied,
+    )
+    if applied:
+        from agent.delegation_checkpoint import record_declaration
+
+        record_declaration(agent, applied[-1])
+    return result
 
 
 def _normalize_delegation(value: Any) -> Optional[Dict[str, str]]:
