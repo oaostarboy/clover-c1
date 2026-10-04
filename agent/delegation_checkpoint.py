@@ -548,19 +548,24 @@ def record_declaration(
 ) -> bool:
     """Register a valid, successfully-applied ``todo.delegation`` event.
 
+    ``owner`` is the receipt the CALLER captured with ``claim_declaration``
+    before handing the call to any worker. There is deliberately no fallback:
+    a caller that skipped the receipt authorizes nothing, because claiming
+    here would claim whatever generation exists after any delay.
+
     Authority is granted only if BOTH the checkpoint object and its generation
-    still match what ``claim_declaration`` captured before the todo call ran.
-    The todo result itself is returned to the model either way; nothing that
-    is already running is cancelled.
+    still match the receipt. The todo result itself is returned to the model
+    either way; nothing that is already running is cancelled.
     """
-    if not decision:
+    if not decision or owner is None:
         return False
-    if owner is None:
-        owner = claim_declaration(agent)
-        if owner is None:
-            return False
     if getattr(agent, "_delegation_checkpoint", None) is not owner.checkpoint:
         return False
     return owner.checkpoint.declare(
         decision["mode"], decision["reason"], expected_generation=owner.generation
     )
+
+
+# Sentinel for ``invoke_tool(declaration_owner=...)``: "the caller said
+# nothing", as opposed to an explicit ``None`` ("no receipt, grant nothing").
+RECEIPT_UNSET: Any = object()
