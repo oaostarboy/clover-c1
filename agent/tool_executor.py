@@ -1348,6 +1348,10 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     agent._current_tool = tool_names_str
     agent._touch_activity(f"executing {num_tools} tools concurrently: {tool_names_str}")
 
+    # Declaration receipts for todo calls, captured on THIS (calling) thread
+    # before any worker is submitted; see agent/delegation_checkpoint.py.
+    declaration_owners: dict[int, Any] = {}
+
     def _run_tool(
         index,
         tool_call,
@@ -1426,6 +1430,9 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                         skip_tool_request_middleware=True,
                         skip_tool_execution_middleware=True,
                         tool_request_middleware_trace=list(middleware_trace),
+                        # Receipt captured before this worker was submitted
+                        # (explicit None = grant nothing).
+                        declaration_owner=declaration_owners.get(index),
                     )
 
                 managed = _run_agent_tool_execution_middleware(
@@ -1563,6 +1570,11 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
             from tools.daemon_pool import DaemonThreadPoolExecutor
             executor = DaemonThreadPoolExecutor(max_workers=max_workers)
             abandon_executor = False
+            from agent.delegation_checkpoint import claim_declaration
+
+            for _i, _tc, _name, _args, _sb in runnable_calls:
+                if _name == "todo":
+                    declaration_owners[_i] = claim_declaration(agent)
             try:
                 for submit_index, (i, tc, name, args, scope_block) in enumerate(
                     runnable_calls
@@ -2126,9 +2138,16 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
         tool_start_time = time.time()
 
         if function_name == "todo":
+            # Capture declaration ownership HERE, on the calling thread, before
+            # the call is handed to a worker where execution middleware or a
+            # pre_tool_call hook may hold it past an interrupt/deadline.
+            from agent.delegation_checkpoint import claim_declaration
+
+            _declaration_owner = claim_declaration(agent)
+
             def _execute(next_args: dict) -> Any:
                 from tools.todo_tool import todo_for_agent
-                return todo_for_agent(agent, next_args)
+                return todo_for_agent(agent, next_args, _declaration_owner)
             function_result, function_args, middleware_trace, _execution_blocked, _execution_dispatched = _managed_values(_run_agent_tool_execution_middleware(
                 agent,
                 function_name=function_name,

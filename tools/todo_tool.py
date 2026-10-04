@@ -450,17 +450,16 @@ def todo_tool(
     }, ensure_ascii=False)
 
 
-def todo_for_agent(agent: Any, args: Dict[str, Any]) -> str:
+def todo_for_agent(agent: Any, args: Dict[str, Any], owner: Any = None) -> str:
     """Run ``todo`` for ``agent`` and register an applied declaration.
 
-    The one place both executor paths call, so a valid ``delegation`` is
-    reported to the runtime checkpoint exactly when the tool really applied it.
+    ``owner`` is the declaration receipt the CALLER captured (via
+    ``agent.delegation_checkpoint.claim_declaration``) on its own thread before
+    handing this call to any worker, middleware or plugin hook. It is never
+    claimed here: by the time this runs a held call may belong to an older
+    turn. Without a receipt the plan metadata is still recorded but no runtime
+    authorization is granted.
     """
-    from agent.delegation_checkpoint import claim_declaration
-
-    # Capture checkpoint identity + generation BEFORE the call can be delayed
-    # or abandoned; a late completion then cannot authorize a newer turn.
-    owner = claim_declaration(agent)
     applied: List[Dict[str, str]] = []
     result = todo_tool(
         todos=args.get("todos"),
