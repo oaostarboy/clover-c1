@@ -4125,6 +4125,13 @@ def delegate_task(
         _capture_gateway_steer_authority(_origin_ui_session_id)
     )
 
+    # Delegation checkpoint: a generation-bound right to credit a REAL child
+    # start for a root that declared `delegate`. Captured here, on the calling
+    # thread, so a late async child can never satisfy a newer declaration.
+    from agent.delegation_checkpoint import ticket_for as _checkpoint_ticket_for
+
+    _checkpoint_ticket = _checkpoint_ticket_for(parent_agent)
+
     # Build all child agents on the main thread (thread-safe construction).
     # _build_child_preserving_parent_tools saves/restores the parent's
     # resolved tool names around each construction under a lock, so child
@@ -4243,7 +4250,10 @@ def delegate_task(
                 logger.debug("Progress callback queued relay failed: %s", e)
 
     def _execute_and_aggregate(
-        *, honor_parent_interrupt: bool = True, on_child_complete=None
+        *,
+        honor_parent_interrupt: bool = True,
+        on_child_complete=None,
+        credit_inline_start: bool = False,
     ) -> dict:
         """Run all built children (1 or N), join on them, aggregate results,
         fire subagent_stop hooks + cost rollup, and return the combined result
@@ -4252,7 +4262,14 @@ def delegate_task(
         the parent turn isn't blocked. Background fan-outs publish each
         completed child before the join; synchronous callers still receive
         the combined results after all children finish.
+
+        ``credit_inline_start`` is set only by the foreground/inline callers:
+        their children really start here, which is what the delegation
+        checkpoint credits. The detached background runner never sets it (its
+        acceptance was already credited at dispatch).
         """
+        if credit_inline_start and _checkpoint_ticket is not None:
+            _checkpoint_ticket.credit("inline")
         if n_tasks == 1:
             # Single task -- run directly (no thread pool overhead)
             _i, _t, child = children[0]
@@ -4490,7 +4507,7 @@ def delegate_task(
                 "delegate_task: async delivery unsupported on this session "
                 "runtime; running the batch synchronously instead."
             )
-            _sync_result = _execute_and_aggregate()
+            _sync_result = _execute_and_aggregate(credit_inline_start=True)
             if isinstance(_sync_result, dict):
                 _sync_result["note"] = (
                     "background=true is not available in this session — it cannot "
@@ -4659,6 +4676,8 @@ def delegate_task(
         )
 
         if dispatch.get("status") == "dispatched":
+            if _checkpoint_ticket is not None:
+                _checkpoint_ticket.credit("async")
             n = len(_goals)
             note = _background_dispatch_note(n)
             payload = {
@@ -4699,7 +4718,7 @@ def delegate_task(
             "batch synchronously instead.",
             dispatch.get("error", "rejected"),
         )
-        _cap_result = _execute_and_aggregate()
+        _cap_result = _execute_and_aggregate(credit_inline_start=True)
         if isinstance(_cap_result, dict):
             _cap_result["note"] = (
                 "The background delegation pool was at capacity "
@@ -4711,7 +4730,9 @@ def delegate_task(
         return json.dumps(_cap_result, ensure_ascii=False)
 
     # ----- Synchronous path -----
-    return json.dumps(_execute_and_aggregate(), ensure_ascii=False)
+    return json.dumps(
+        _execute_and_aggregate(credit_inline_start=True), ensure_ascii=False
+    )
 
 
 def _resolve_child_credential_pool(

@@ -2086,15 +2086,8 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
 
         if function_name == "todo":
             def _execute(next_args: dict) -> Any:
-                from tools.todo_tool import todo_tool as _todo_tool
-                from tools.todo_tool import delegation_check_for_agent
-                return _todo_tool(
-                    todos=next_args.get("todos"),
-                    merge=next_args.get("merge", False),
-                    store=agent._todo_store,
-                    delegation=next_args.get("delegation"),
-                    delegation_check=delegation_check_for_agent(agent),
-                )
+                from tools.todo_tool import todo_for_agent
+                return todo_for_agent(agent, next_args)
             function_result, function_args, middleware_trace, _execution_blocked, _execution_dispatched = _managed_values(_run_agent_tool_execution_middleware(
                 agent,
                 function_name=function_name,
