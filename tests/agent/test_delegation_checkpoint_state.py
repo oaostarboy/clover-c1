@@ -256,15 +256,16 @@ def test_accepted_async_child_credits_the_declaration(child_runs):
 def test_inline_child_start_credits_the_declaration(child_runs):
     from gateway.session_context import clear_session_vars, set_session_vars
 
-    tokens = set_session_vars(platform='api_server', chat_id='s', session_key='s', async_delivery=False)
+    tokens = set_session_vars(platform='batch', chat_id='', session_key='s', async_delivery=False)
     try:
         agent = _agent()
         _declare(agent, 'delegate')
-        agent._invoke_tool('delegate_task', {'goal': 'inline lane'}, 't')
+        out = json.loads(agent._invoke_tool('delegate_task', {'goal': 'inline lane'}, 't'))
     finally:
         clear_session_vars(tokens)
 
-    assert child_runs == ['inline lane']
+    assert 'results' in out and out.get('status') != 'dispatched', 'expected the inline fallback, not async'
+    assert child_runs == ['inline lane'], 'the child must have run before delegate_task returned'
     assert _state(agent)['state'] == dc.DELEGATED_STARTED
 
 
