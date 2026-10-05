@@ -1382,6 +1382,38 @@ def has_async_capacity(max_async_children: int) -> bool:
     return running < max_async_children
 
 
+class _AdmissionGate:
+    """Execution fence between ``executor.submit`` and the dispatch decision.
+
+    ``ThreadPoolExecutor.submit`` enqueues the work item *before* it starts or
+    wakes a worker, so a ``submit`` that raises does not prove the item cannot
+    run: a later (or already-busy) worker will still pick it up.  The queued
+    wrapper therefore waits here for the dispatcher's verdict and only a
+    verdict of "accepted" lets the runner start.  The first verdict wins.
+    """
+
+    def __init__(self) -> None:
+        self._decided = threading.Event()
+        self._lock = threading.Lock()
+        self._accepted = False
+
+    def _decide(self, accepted: bool) -> None:
+        with self._lock:
+            if not self._decided.is_set():
+                self._accepted = accepted
+                self._decided.set()
+
+    def accept(self) -> None:
+        self._decide(True)
+
+    def abort(self) -> None:
+        self._decide(False)
+
+    def wait_accepted(self) -> bool:
+        self._decided.wait()
+        return self._accepted
+
+
 def _withdraw_unscheduled_batch(delegation_id: str) -> None:
     """Undo a dispatch whose worker was never scheduled."""
     with _records_lock:
@@ -1515,16 +1547,32 @@ def dispatch_async_delegation_batch(
         finally:
             _finalize_batch(delegation_id, combined, status)
 
+    # A raising ``submit`` can leave the item queued (see _AdmissionGate), so
+    # the queued wrapper may only start the runner once the dispatch is
+    # accepted; every exit below resolves the verdict.
+    gate = _AdmissionGate()
+
+    def _admitted_worker() -> None:
+        if gate.wait_accepted():
+            _worker()
+
+    submitted = False
     try:
         # Propagate the dispatching profile to the detached batch children.
-        executor.submit(propagate_context_to_thread(_worker))
-    except Exception as exc:  # pragma: no cover
+        executor.submit(propagate_context_to_thread(_admitted_worker))
+        submitted = True
+    except Exception as exc:
         _withdraw_unscheduled_batch(delegation_id)
         return {
             "status": "rejected",
             "reason": "schedule",
             "error": f"Failed to schedule async delegation batch: {exc}",
         }
+    finally:
+        if submitted:
+            gate.accept()
+        else:
+            gate.abort()
     if progress_fn is not None:
         _ensure_stale_monitor_best_effort(delegation_id)
 

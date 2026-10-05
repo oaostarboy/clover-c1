@@ -244,6 +244,133 @@ def test_executor_construction_failure_rejected(harness, monkeypatch):
     assert ad.active_count() == 0
 
 
+class _PoolThreadStart:
+    """Make the real pool's worker-thread start fail on demand.
+
+    ``ThreadPoolExecutor.submit`` enqueues the work item *before* it starts a
+    thread, so a start failure raises out of ``submit`` while the item is
+    still queued.  Only ``async-delegate`` workers are affected.
+    """
+
+    def __init__(self, monkeypatch):
+        real_start = threading.Thread.start
+        self.failing = False
+        outer = self
+
+        def _start(thread):
+            if outer.failing and thread.name.startswith("async-delegate"):
+                raise RuntimeError("can't start new thread")
+            return real_start(thread)
+
+        monkeypatch.setattr(threading.Thread, "start", _start)
+
+
+def _drain_pool(max_workers: int):
+    """Run a sentinel through the real pool so every queued item is consumed."""
+    ad._get_executor(max_workers).submit(lambda: None).result(timeout=10)
+
+
+def _durable_rows() -> int:
+    with ad._DB_LOCK, ad._transaction() as conn:
+        return conn.execute("SELECT COUNT(*) FROM async_delegations").fetchone()[0]
+
+
+def _completion_events():
+    from tools.process_registry import process_registry
+
+    events = []
+    while not process_registry.completion_queue.empty():
+        events.append(process_registry.completion_queue.get_nowait())
+    return events
+
+
+def test_thread_start_failure_leaves_no_runnable_rejected_job(harness, monkeypatch):
+    """A pool whose first worker cannot start rejects the dispatch.  The work
+    item is already queued at that point; once the pool recovers it must be
+    inert: the rejected runner never runs, its children were released exactly
+    once, and nothing is completed, registered or persisted."""
+    _completion_events()
+    pool = _PoolThreadStart(monkeypatch)
+    root = _root()
+
+    pool.failing = True
+    parsed = _delegate(root)
+    pool.failing = False
+    _assert_rejected(parsed, "schedule")
+
+    _drain_pool(1)
+
+    assert harness.runs == []
+    assert [c.closed for c in harness.built] == [1]
+    assert _completion_events() == []
+    assert ad.active_count() == 0
+    assert ad.list_async_delegations() == []
+    assert _durable_rows() == 0
+    assert root._delegation_checkpoint.state == dc.SPAWN_REQUIRED
+
+
+def test_pool_growth_failure_cannot_race_an_existing_worker(monkeypatch):
+    """With a worker already busy, a failing pool growth rejects the dispatch
+    while that worker is free to pick the queued item up the moment its
+    current job ends.  The rejected runner must still never run."""
+    _completion_events()
+    pool = _PoolThreadStart(monkeypatch)
+    release = threading.Event()
+    ran = []
+
+    held = ad.dispatch_async_delegation_batch(
+        goals=["held"], context=None, toolsets=None, role="leaf", model="m",
+        session_key="", runner=lambda: (release.wait(60), {"results": []})[1],
+        max_async_children=2,
+    )
+    assert held["status"] == "dispatched"
+    try:
+        pool.failing = True
+        rejected = ad.dispatch_async_delegation_batch(
+            goals=["rejected"], context=None, toolsets=None, role="leaf",
+            model="m", session_key="",
+            runner=lambda: ran.append("rejected") or {"results": []},
+            max_async_children=2,
+        )
+        pool.failing = False
+        assert rejected["status"] == "rejected"
+        assert rejected["reason"] == "schedule"
+    finally:
+        release.set()
+
+    _drain_pool(2)
+    deadline = time.monotonic() + 10
+    while ad.active_count() and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+    assert ran == []
+    assert {e.get("delegation_id") for e in _completion_events()} <= {
+        held["delegation_id"]
+    }
+    assert ad.active_count() == 0
+
+
+def test_accepted_dispatch_still_runs_through_the_admission_gate(monkeypatch):
+    """The admission decision must not delay or lose a job that was accepted."""
+    _completion_events()
+    ran = []
+    result = ad.dispatch_async_delegation_batch(
+        goals=["ok"], context=None, toolsets=None, role="leaf", model="m",
+        session_key="",
+        runner=lambda: ran.append("ok") or {"results": [
+            {"task_index": 0, "status": "completed", "summary": "s"}]},
+        max_async_children=1,
+    )
+    assert result["status"] == "dispatched"
+    deadline = time.monotonic() + 10
+    while ad.active_count() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert ran == ["ok"]
+    assert [e.get("delegation_id") for e in _completion_events()] == [
+        result["delegation_id"]
+    ]
+
+
 def test_persistence_failure_rejected_no_phantom_record(harness, monkeypatch):
     root = _root()
 
