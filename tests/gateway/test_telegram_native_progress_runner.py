@@ -71,6 +71,11 @@ class ScriptedAgent:
                     self.interim_assistant_callback(op[1], already_streamed=False)
             elif kind == "delta":
                 self.stream_delta_callback(op[1])
+            elif kind == "fail":
+                return {
+                    "final_response": "", "failed": True, "error": "simulated provider failure",
+                    "messages": [], "api_calls": 1,
+                }
         if self.stream_delta_callback:
             self.stream_delta_callback(FINAL)
         return {

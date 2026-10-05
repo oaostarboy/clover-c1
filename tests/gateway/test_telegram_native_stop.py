@@ -69,10 +69,17 @@ class BlockingAgent:
             self._gateway_turn_process_task_id = "tid-" + str(message)
         if getattr(self, "_gateway_turn_process_baseline", None) is None:
             self._gateway_turn_process_baseline = {"baseline": 1}
+        if "fast" in message:                      # an unrelated, instantly finishing turn
+            if self.stream_delta_callback:
+                self.stream_delta_callback(FOLLOWUP)
+            return {"final_response": FOLLOWUP, "response_previewed": True, "messages": [], "api_calls": 1}
         if "second question" not in message and "hello" in message:
             cb = self.tool_progress_callback
             if cb:
                 cb("tool.started", "web_search", "sony reviews", {"query": "sony reviews"})
+                if "burst" in message:             # a flood of tool events
+                    for i in range(300):
+                        cb("tool.started", f"burst_tool_{i}", f"item {i}", {"i": i})
             if self.stream_delta_callback:
                 self.stream_delta_callback("partial answer so far ")
             time.sleep(0.3)   # a turn that outlives the consumer's first pump (frames can go out)
