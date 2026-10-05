@@ -4292,110 +4292,123 @@ def delegate_task(
     # toolset resolution never leaks into the parent (shared with the plugin
     # subagent-lifecycle API).
     children = []
-    for i, t in enumerate(task_list):
-        # Per-task role beats top-level; normalise again so unknown
-        # per-task values warn and degrade to leaf uniformly.
-        effective_role = _normalize_role(t.get("role") or top_role)
-        # T1-24: schema'd tasks get the contract appended to their context
-        # so the child knows the expected output shape before it starts.
-        _task_schema = task_schemas[i] if i < len(task_schemas) else None
-        _child_context = t.get("context")
-        if _task_schema is not None:
-            from tools.delegation_output_schema import append_output_contract
+    try:
+        for i, t in enumerate(task_list):
+            # Per-task role beats top-level; normalise again so unknown
+            # per-task values warn and degrade to leaf uniformly.
+            effective_role = _normalize_role(t.get("role") or top_role)
+            # T1-24: schema'd tasks get the contract appended to their context
+            # so the child knows the expected output shape before it starts.
+            _task_schema = task_schemas[i] if i < len(task_schemas) else None
+            _child_context = t.get("context")
+            if _task_schema is not None:
+                from tools.delegation_output_schema import append_output_contract
 
-            _child_context = append_output_contract(_child_context, _task_schema)
+                _child_context = append_output_contract(_child_context, _task_schema)
 
-        # Per-task model tier (value routing): resolves to the first
-        # authenticated candidate for t["tier"], shaped like a delegation
-        # credential cfg and fed through the SAME _resolve_delegation_credentials
-        # path a delegation.provider/model pin uses. Precedence: task.tier
-        # (if it resolves) > delegation.provider/model pin > inherit parent.
-        # A tier that doesn't resolve, or whose credential resolution raises,
-        # falls back to the batch-level `creds` (the pin-or-inherit result
-        # already computed above) instead of failing the whole batch.
-        task_creds = creds
-        task_tier_fallback: Optional[str] = None
-        requested_tier = t.get("tier")
-        if isinstance(requested_tier, str) and requested_tier.strip():
-            tier_name = requested_tier.strip()
-            tier_match = _resolve_tier(tier_name, cfg, parent_agent)
-            if tier_match is None:
-                task_tier_fallback = (
-                    f"tier '{tier_name}' has no authenticated candidate; "
-                    "using the default model."
-                )
-            else:
-                try:
-                    task_creds = _resolve_delegation_credentials(tier_match, parent_agent)
-                except ValueError as exc:
+            # Per-task model tier (value routing): resolves to the first
+            # authenticated candidate for t["tier"], shaped like a delegation
+            # credential cfg and fed through the SAME _resolve_delegation_credentials
+            # path a delegation.provider/model pin uses. Precedence: task.tier
+            # (if it resolves) > delegation.provider/model pin > inherit parent.
+            # A tier that doesn't resolve, or whose credential resolution raises,
+            # falls back to the batch-level `creds` (the pin-or-inherit result
+            # already computed above) instead of failing the whole batch.
+            task_creds = creds
+            task_tier_fallback: Optional[str] = None
+            requested_tier = t.get("tier")
+            if isinstance(requested_tier, str) and requested_tier.strip():
+                tier_name = requested_tier.strip()
+                tier_match = _resolve_tier(tier_name, cfg, parent_agent)
+                if tier_match is None:
                     task_tier_fallback = (
-                        f"tier '{tier_name}' credential resolution failed "
-                        f"({exc}); using the default model."
+                        f"tier '{tier_name}' has no authenticated candidate; "
+                        "using the default model."
                     )
+                else:
+                    try:
+                        task_creds = _resolve_delegation_credentials(tier_match, parent_agent)
+                    except ValueError as exc:
+                        task_tier_fallback = (
+                            f"tier '{tier_name}' credential resolution failed "
+                            f"({exc}); using the default model."
+                        )
 
-        try:
-            child = _build_child_preserving_parent_tools(
-                task_index=i,
-                goal=t["goal"],
-                context=_child_context,
-                # Subagents always inherit the parent's toolsets; the model
-                # cannot choose or narrow them (no model-facing toolsets arg).
-                toolsets=None,
-                model=task_creds["model"],
-                max_iterations=effective_max_iter,
-                task_count=n_tasks,
-                parent_agent=parent_agent,
-                override_provider=task_creds["provider"],
-                override_base_url=task_creds["base_url"],
-                override_api_key=task_creds["api_key"],
-                override_api_mode=task_creds["api_mode"],
-                override_request_overrides=task_creds.get("request_overrides"),
-                override_max_tokens=task_creds.get("max_output_tokens"),
-                override_acp_command=task_creds.get("command"),
-                override_acp_args=task_creds.get("args"),
-                role=effective_role,
-            )
-        except ValueError as exc:
-            # Explicit-pin preflight failures (e.g. pinned delegation.command
-            # missing from PATH) refuse the spawn loudly (#80450). Children
-            # already built for earlier tasks will never run: release them.
-            if _strict_background:
-                return _reject_background("construction", str(exc), children)
-            for _bi, _bt, _built in children:
-                _release_child_resources(_built, parent_agent)
-            return tool_error(str(exc))
-        if task_tier_fallback:
-            child._delegate_tier_fallback = task_tier_fallback
-        # Attach the validated schema for the completion-side validation
-        # hook in _run_single_child. Absent (None) on schema-less tasks.
-        if _task_schema is not None:
             try:
-                child._delegate_output_schema = _task_schema
-            except Exception:
-                logger.debug("Could not attach output schema to child %d", i)
-        # Tee the child's progress events into its live transcript log.
-        # wrap_progress_callback preserves the inner callback contract
-        # (including the _flush attribute) and never lets writer failures
-        # reach the agent loop. When no parent display exists the inner
-        # callback is None and the wrapper still records events.
-        _writer = live_writers[i] if i < len(live_writers) else None
-        if _writer is not None:
-            child.tool_progress_callback = wrap_progress_callback(
-                getattr(child, "tool_progress_callback", None), _writer
-            )
-            child._live_transcript_path = str(_writer.path)
-        # Delegation identity for the live registry + process-notification
-        # attribution (child-started background processes report under it).
-        if live_deleg_id:
-            setattr(child, "_delegation_id", live_deleg_id)
-        _identity_ref = getattr(child, "_progress_identity_ref", None)
-        if isinstance(_identity_ref, dict):
-            from agent.delegation_activity import derive_task_title
-
-            _identity_ref["title"] = derive_task_title(t.get("goal"), t.get("title"))
+                child = _build_child_preserving_parent_tools(
+                    task_index=i,
+                    goal=t["goal"],
+                    context=_child_context,
+                    # Subagents always inherit the parent's toolsets; the model
+                    # cannot choose or narrow them (no model-facing toolsets arg).
+                    toolsets=None,
+                    model=task_creds["model"],
+                    max_iterations=effective_max_iter,
+                    task_count=n_tasks,
+                    parent_agent=parent_agent,
+                    override_provider=task_creds["provider"],
+                    override_base_url=task_creds["base_url"],
+                    override_api_key=task_creds["api_key"],
+                    override_api_mode=task_creds["api_mode"],
+                    override_request_overrides=task_creds.get("request_overrides"),
+                    override_max_tokens=task_creds.get("max_output_tokens"),
+                    override_acp_command=task_creds.get("command"),
+                    override_acp_args=task_creds.get("args"),
+                    role=effective_role,
+                )
+            except ValueError as exc:
+                # Explicit-pin preflight failures (e.g. pinned delegation.command
+                # missing from PATH) refuse the spawn loudly (#80450). Children
+                # already built for earlier tasks will never run: release them.
+                if _strict_background:
+                    return _reject_background("construction", str(exc), children)
+                for _bi, _bt, _built in children:
+                    _release_child_resources(_built, parent_agent)
+                return tool_error(str(exc))
+            # From here the child is owned by `children`, so a failure while wiring
+            # it up releases it with the rest.
+            children.append((i, t, child))
+            if task_tier_fallback:
+                child._delegate_tier_fallback = task_tier_fallback
+            # Attach the validated schema for the completion-side validation
+            # hook in _run_single_child. Absent (None) on schema-less tasks.
+            if _task_schema is not None:
+                try:
+                    child._delegate_output_schema = _task_schema
+                except Exception:
+                    logger.debug("Could not attach output schema to child %d", i)
+            # Tee the child's progress events into its live transcript log.
+            # wrap_progress_callback preserves the inner callback contract
+            # (including the _flush attribute) and never lets writer failures
+            # reach the agent loop. When no parent display exists the inner
+            # callback is None and the wrapper still records events.
+            _writer = live_writers[i] if i < len(live_writers) else None
+            if _writer is not None:
+                child.tool_progress_callback = wrap_progress_callback(
+                    getattr(child, "tool_progress_callback", None), _writer
+                )
+                child._live_transcript_path = str(_writer.path)
+            # Delegation identity for the live registry + process-notification
+            # attribution (child-started background processes report under it).
             if live_deleg_id:
-                _identity_ref["delegation_id"] = live_deleg_id
-        children.append((i, t, child))
+                setattr(child, "_delegation_id", live_deleg_id)
+            _identity_ref = getattr(child, "_progress_identity_ref", None)
+            if isinstance(_identity_ref, dict):
+                from agent.delegation_activity import derive_task_title
+
+                _identity_ref["title"] = derive_task_title(t.get("goal"), t.get("title"))
+                if live_deleg_id:
+                    _identity_ref["delegation_id"] = live_deleg_id
+    except Exception as exc:
+        # Any other construction/wiring failure: the children built so far
+        # will never run, whoever the caller is.
+        if _strict_background:
+            return _reject_background(
+                "construction", f"{type(exc).__name__}: {exc}", children
+            )
+        for _bi, _bt, _built in children:
+            _release_child_resources(_built, parent_agent)
+        raise
 
     # Announce every built child as queued before any runs, so progress
     # surfaces can show the whole roster (children beyond the concurrency cap

@@ -348,6 +348,78 @@ def test_construction_failure_is_a_rejection_for_strict_callers(harness):
     assert root._delegation_checkpoint.state == dc.SPAWN_REQUIRED
 
 
+@pytest.mark.parametrize("exc", [RuntimeError("model client init failed"), OSError("too many open files")])
+def test_any_construction_failure_is_a_rejection_for_strict_callers(harness, monkeypatch, exc):
+    """Not only the explicit-pin ValueError: an earlier child is already built."""
+    root = _root()
+    built = harness.built
+
+    def _build(**kw):
+        if kw["task_index"] == 1:
+            raise exc
+        child = _FakeChild(kw["task_index"])
+        built.append(child)
+        kw["parent_agent"]._active_children.append(child)
+        return child
+
+    monkeypatch.setattr(dt, "_build_child_agent", _build)
+    parsed = _delegate(root, tasks=[{"goal": "Part one of the work, in full."},
+                                    {"goal": "Part two of the work, in full."}])
+    _assert_rejected(parsed, "construction")
+    assert [c.closed for c in built] == [1]
+    assert root._active_children == []
+    assert harness.runs == []
+    assert ad.active_count() == 0
+    assert _manifest_statuses() == ["rejected", "rejected"]
+    assert root._delegation_checkpoint.state == dc.SPAWN_REQUIRED
+    assert root._delegation_checkpoint.phase == dc.PHASE_FOREGROUND
+
+
+@pytest.mark.parametrize("exc", [RuntimeError("model client init failed"), OSError("too many open files")])
+def test_any_construction_failure_closes_prior_children_for_every_caller(harness, monkeypatch, exc):
+    """Noneligible callers keep raising, but nothing built may leak."""
+    root = _root(eligible=False)
+    built = harness.built
+
+    def _build(**kw):
+        if kw["task_index"] == 1:
+            raise exc
+        child = _FakeChild(kw["task_index"])
+        built.append(child)
+        kw["parent_agent"]._active_children.append(child)
+        return child
+
+    monkeypatch.setattr(dt, "_build_child_agent", _build)
+    with pytest.raises(type(exc)):
+        dt.delegate_task(
+            tasks=[{"goal": "Part one of the work, in full."},
+                   {"goal": "Part two of the work, in full."}],
+            background=True, parent_agent=root,
+        )
+    assert [c.closed for c in built] == [1]
+    assert root._active_children == []
+
+
+def test_failure_while_wiring_a_built_child_releases_that_child_too(harness, monkeypatch):
+    root = _root()
+    wired = {"n": 0}
+
+    def _wrap(inner, writer):
+        wired["n"] += 1
+        if wired["n"] == 2:
+            raise OSError("cannot open live transcript")
+        return inner
+
+    monkeypatch.setattr("tools.delegation_live_log.wrap_progress_callback", _wrap)
+    parsed = _delegate(root, tasks=[{"goal": "Part one of the work, in full."},
+                                    {"goal": "Part two of the work, in full."}])
+    _assert_rejected(parsed, "construction")
+    # The second child was built but never made it into the roster.
+    assert [c.closed for c in harness.built] == [1, 1]
+    assert root._active_children == []
+    assert harness.runs == []
+
+
 # ── what must not change ───────────────────────────────────────────────────
 
 def test_capacity_fallback_unchanged_for_noneligible_caller(harness):
@@ -381,3 +453,46 @@ def test_accepted_background_dispatch_hands_the_request_off(harness):
         assert ad.active_count() == 1
     finally:
         harness.hold.set()
+
+
+# ── ancillary failure after the worker was accepted ────────────────────────
+
+def test_monitor_failure_after_submit_still_hands_the_request_off(harness, monkeypatch):
+    """The detached job is already running once ``submit`` succeeded.  A
+    failure in the stale-monitor thread must not turn that accepted job into a
+    raised error: the root would stay open with a job it never handed off."""
+    from tools.process_registry import process_registry
+
+    while not process_registry.completion_queue.empty():
+        process_registry.completion_queue.get_nowait()
+
+    def _no_thread():
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(ad, "_ensure_stale_monitor", _no_thread)
+    root = _root()
+    harness.hold = threading.Event()
+    try:
+        parsed = _delegate(root)
+        assert parsed["status"] == "dispatched"
+        delegation_id = parsed["delegation_id"]
+        cp = root._delegation_checkpoint
+        assert cp.phase == dc.PHASE_HANDED_OFF
+        assert dc.completion_directive(root).reason == "delegation_handoff"
+        assert dc.admit(root, "write_file", {}, "w1").block_code == dc.HANDOFF_ACTIVE
+        assert dc.admit(root, "delegate_task", {"goal": "again"}, "d2").block_code == dc.SPAWN_CLOSED
+        # The job survived: running, not interrupted, not duplicated inline.
+        assert ad.get_durable_delegation(delegation_id)["state"] == "running"
+        assert all(not c.interrupted for c in harness.built)
+        assert len(harness.built) == 1
+    finally:
+        harness.hold.set()
+
+    deadline = time.monotonic() + 10
+    while ad.active_count() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    events = []
+    while not process_registry.completion_queue.empty():
+        events.append(process_registry.completion_queue.get_nowait())
+    assert [e.get("delegation_id") for e in events] == [delegation_id]
+    assert harness.runs == ["Build the reusable explainer and verify every output."]
