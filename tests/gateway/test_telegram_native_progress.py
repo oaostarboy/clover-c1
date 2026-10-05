@@ -215,3 +215,253 @@ async def test_native_draft_refuses_when_feature_off_and_old_draft_path_is_uncha
     assert call["chat_id"] == 12345 and call["draft_id"] == 7
     assert "can_stop" not in call
     assert api.methods("get_sticker_set") == []
+
+
+# ── AIActions icon lookup (bounded, cached, never blocks a frame) ───────────
+
+import asyncio  # noqa: E402
+
+from telegram.error import BadRequest, RetryAfter  # noqa: E402
+
+# Deliberately NOT the docs sample id: ids must come from the runtime lookup.
+ID_THINK, ID_RUN, ID_OK, ID_FAIL = (
+    "7700000000000001", "7700000000000002", "7700000000000003", "7700000000000004",
+)
+
+
+def _sticker(emoji, custom_id, *, animated=True, video=False, kind="custom_emoji"):
+    # tests/gateway mocks the ``telegram`` package, so build the PTB Sticker
+    # shape (verified against real PTB in tests/plugins/platforms/telegram).
+    return SimpleNamespace(
+        file_id=f"f{custom_id}", file_unique_id=f"u{custom_id}", width=100, height=100,
+        is_animated=animated, is_video=video, type=kind, emoji=emoji,
+        custom_emoji_id=custom_id,
+    )
+
+
+def _aiactions(stickers=None):
+    return SimpleNamespace(
+        name="AIActions", title="AI Actions", sticker_type="custom_emoji",
+        stickers=stickers if stickers is not None else [
+            _sticker("🧠", ID_THINK), _sticker("⚙️", ID_RUN),
+            _sticker("✅", ID_OK), _sticker("❌", ID_FAIL),
+        ],
+    )
+
+
+class Clock:
+    def __init__(self):
+        self.t = 1000.0
+
+    def __call__(self):
+        return self.t
+
+
+def native_adapter(**kw):
+    adapter, api = make_adapter(native_progress=True, **kw)
+    adapter._native_stop_ready = True
+    adapter._native_clock = Clock()
+    return adapter, api
+
+
+async def _settle_lookup(adapter):
+    task = getattr(adapter, "_native_icon_task", None)
+    if task is not None:
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def _frame(adapter, draft_id=1):
+    return await adapter.send_native_progress_draft(
+        "1", draft_id, [row("🔍 Searching", started_at=0.0)], "", now=3.0,
+    )
+
+
+def _markdowns(api):
+    return [f["rich_message"]["markdown"] for f in api.rich_drafts()]
+
+
+def test_icon_lookup_budgets_match_the_plan():
+    assert TelegramAdapter.NATIVE_ICON_LOOKUP_TIMEOUT == 5.0
+    assert TelegramAdapter.NATIVE_ICON_POSITIVE_TTL == 24 * 3600
+    assert TelegramAdapter.NATIVE_ICON_NEGATIVE_TTL == 5 * 60
+
+
+@pytest.mark.asyncio
+async def test_first_frame_never_waits_for_icon_lookup_and_later_frames_use_runtime_ids():
+    adapter, api = native_adapter()
+    api.sticker_sets["AIActions"] = _aiactions()
+    api.delay["get_sticker_set"] = 0.2
+
+    t0 = asyncio.get_running_loop().time()
+    first = await _frame(adapter)
+    assert first.success is True
+    assert asyncio.get_running_loop().time() - t0 < 0.15  # did not wait on the lookup
+    assert "<tg-emoji" not in _markdowns(api)[0]          # text is visible immediately
+    assert "Searching" in _markdowns(api)[0]
+
+    await _settle_lookup(adapter)
+    await _frame(adapter)
+    md = _markdowns(api)[-1]
+    assert f'<tg-emoji emoji-id="{ID_RUN}">⚙️</tg-emoji>' in md
+    assert "5368324170671202286" not in md  # docs sample id is never product data
+    assert len(api.methods("get_sticker_set")) == 1
+    assert api.methods("get_sticker_set")[0]["name"] == "AIActions"
+
+
+@pytest.mark.asyncio
+async def test_lookup_is_single_flight_across_concurrent_frames():
+    adapter, api = native_adapter()
+    api.sticker_sets["AIActions"] = _aiactions()
+    api.delay["get_sticker_set"] = 0.1
+
+    await asyncio.gather(*[_frame(adapter, 10 + i) for i in range(8)])
+    await _settle_lookup(adapter)
+
+    assert len(api.methods("get_sticker_set")) == 1
+
+
+@pytest.mark.asyncio
+async def test_lookup_timeout_falls_back_to_text_and_is_negative_cached_for_five_minutes(monkeypatch):
+    adapter, api = native_adapter()
+    monkeypatch.setattr(TelegramAdapter, "NATIVE_ICON_LOOKUP_TIMEOUT", 0.05)
+    api.sticker_sets["AIActions"] = _aiactions()
+    api.delay["get_sticker_set"] = 1.0
+
+    await _frame(adapter)
+    await _settle_lookup(adapter)
+    await _frame(adapter)
+    assert all("<tg-emoji" not in md for md in _markdowns(api))
+    assert len(api.methods("get_sticker_set")) == 1
+
+    adapter._native_clock.t += 299          # still inside the 5 minute negative TTL
+    await _frame(adapter)
+    await _settle_lookup(adapter)
+    assert len(api.methods("get_sticker_set")) == 1
+
+    api.delay["get_sticker_set"] = 0.0
+    adapter._native_clock.t += 2            # past it: exactly one fresh attempt
+    await _frame(adapter)
+    await _settle_lookup(adapter)
+    assert len(api.methods("get_sticker_set")) == 2
+    await _frame(adapter)
+    assert "<tg-emoji" in _markdowns(api)[-1]
+
+
+@pytest.mark.asyncio
+async def test_positive_cache_lives_24_hours_then_refreshes_once():
+    adapter, api = native_adapter()
+    api.sticker_sets["AIActions"] = _aiactions()
+
+    await _frame(adapter)
+    await _settle_lookup(adapter)
+    adapter._native_clock.t += 24 * 3600 - 5
+    for _ in range(3):
+        await _frame(adapter)
+        await _settle_lookup(adapter)
+    assert len(api.methods("get_sticker_set")) == 1
+    assert "<tg-emoji" in _markdowns(api)[-1]
+
+    adapter._native_clock.t += 10
+    await _frame(adapter)           # stale cache is still usable while refreshing
+    assert "<tg-emoji" in _markdowns(api)[-1]
+    await _settle_lookup(adapter)
+    assert len(api.methods("get_sticker_set")) == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_after_suppresses_lookups_without_a_retry_loop():
+    adapter, api = native_adapter()
+    api.fail["get_sticker_set"] = RetryAfter(900)
+
+    for _ in range(4):
+        await _frame(adapter)
+        await _settle_lookup(adapter)
+    assert len(api.methods("get_sticker_set")) == 1
+
+    adapter._native_clock.t += 899
+    await _frame(adapter)
+    await _settle_lookup(adapter)
+    assert len(api.methods("get_sticker_set")) == 1
+
+    api.fail.clear()
+    api.sticker_sets["AIActions"] = _aiactions()
+    adapter._native_clock.t += 2
+    await _frame(adapter)
+    await _settle_lookup(adapter)
+    assert len(api.methods("get_sticker_set")) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stickers",
+    [
+        [],                                                                  # empty set
+        [_sticker("⚙️", ID_RUN, animated=False, video=False)],               # static only
+        [_sticker("⚙️", ID_RUN, kind="regular")],                            # not custom emoji
+        [_sticker("🐟", ID_RUN)],                                            # no role match
+        [SimpleNamespace(is_animated=True, is_video=False, type="custom_emoji", emoji="⚙️", custom_emoji_id=None)],
+    ],
+)
+async def test_unusable_sets_stay_text_only_and_are_negative_cached(stickers):
+    adapter, api = native_adapter()
+    api.sticker_sets["AIActions"] = _aiactions(stickers)
+
+    await _frame(adapter)
+    await _settle_lookup(adapter)
+    await _frame(adapter)
+    await _frame(adapter)
+
+    assert all("<tg-emoji" not in md for md in _markdowns(api))
+    assert all(f["can_stop"] is True for f in api.rich_drafts())
+    assert len(api.methods("get_sticker_set")) == 1
+
+
+@pytest.mark.asyncio
+async def test_video_sticker_counts_as_animation_capable():
+    adapter, api = native_adapter()
+    api.sticker_sets["AIActions"] = _aiactions([_sticker("⚙️", ID_RUN, animated=False, video=True)])
+    await _frame(adapter)
+    await _settle_lookup(adapter)
+    await _frame(adapter)
+    assert f'emoji-id="{ID_RUN}"' in _markdowns(api)[-1]
+
+
+@pytest.mark.asyncio
+async def test_entitlement_rejection_degrades_icons_only():
+    adapter, api = native_adapter()
+    api.sticker_sets["AIActions"] = _aiactions()
+    await _frame(adapter)
+    await _settle_lookup(adapter)
+
+    api.fail["sendRichMessageDraft"] = lambda kw: (
+        BadRequest("Bad Request: can't parse entities: custom emoji can't be used")
+        if "<tg-emoji" in kw["api_kwargs"]["rich_message"]["markdown"] else None
+    )
+    result = await _frame(adapter)
+
+    assert result.success is True               # the frame still landed, immediately
+    last = _markdowns(api)[-1]
+    assert "<tg-emoji" not in last and "⚙️" in last   # real sticker emoji, no custom tag
+    assert adapter._native_progress_disabled is False   # native display + Stop untouched
+    await _frame(adapter)
+    assert all("<tg-emoji" not in md for md in _markdowns(api)[-2:])
+    assert adapter._native_icons_disabled is True
+
+
+@pytest.mark.asyncio
+async def test_lookup_failures_are_redacted_and_off_mode_never_looks_up(caplog):
+    adapter, api = native_adapter()
+    token = "8123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
+    api.fail["get_sticker_set"] = RuntimeError(f"https://api.telegram.org/bot{token}/getStickerSet failed")
+    with caplog.at_level(logging.DEBUG):
+        await _frame(adapter)
+        await _settle_lookup(adapter)
+    assert token not in caplog.text
+    assert adapter._native_progress_disabled is False
+
+    off, off_api = make_adapter()          # native_progress off
+    off._native_stop_ready = True
+    await off.send_draft("1", 5, "hi", None)
+    assert off.supports_native_progress(chat_type="dm") is False
+    assert off_api.methods("get_sticker_set") == []
+    assert getattr(off, "_native_icon_task", None) is None

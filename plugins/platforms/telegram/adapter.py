@@ -608,6 +608,21 @@ class TelegramAdapter(BasePlatformAdapter):
     splits_long_messages = True  # send() chunks via truncate_message(MAX_MESSAGE_LENGTH)
     # Bot API 10.1 Rich Messages cap the raw markdown/html text at 32,768
     # UTF-8 characters. Content above this is sent via the legacy chunking path.
+    # AIActions icon lookup budgets (see _native_icons_nowait).
+    NATIVE_ICON_SET_NAME = "AIActions"
+    NATIVE_ICON_LOOKUP_TIMEOUT = 5.0
+    NATIVE_ICON_POSITIVE_TTL = 24 * 3600
+    NATIVE_ICON_NEGATIVE_TTL = 5 * 60
+    # role -> sticker emoji preferences, most preferred first.  The set's actual
+    # ids/emoji always come from the runtime lookup; this only chooses which
+    # returned sticker fills which role (deterministic, set order breaks ties).
+    _NATIVE_ICON_ROLE_EMOJI = {
+        "thinking": ("\U0001F9E0", "\U0001F4AD"),
+        "running": ("\u2699", "\U0001F504", "\u23F3", "\U0001F527", "\U0001F6E0"),
+        "succeeded": ("\u2705", "\u2714", "\u2611"),
+        "failed": ("\u274C", "\u26A0", "\U0001F6AB"),
+    }
+
     RICH_MESSAGE_MAX_CHARS = 32768
     # Backwards-compatible alias for tests/external callers that referenced the
     # initial implementation name. The API limit is character-based, not bytes.
@@ -742,6 +757,15 @@ class TelegramAdapter(BasePlatformAdapter):
         # Latched after a capability failure of the native draft itself.
         self._native_progress_disabled: bool = False
         self._native_inert_logged: bool = False
+        # AIActions animated-icon cache (lazy, bounded, never blocks a frame).
+        self._native_clock: Callable[[], float] = time.monotonic
+        self._native_icons: Optional[Dict[str, Any]] = None
+        self._native_icons_expires_at: float = 0.0
+        self._native_icon_retry_not_before: float = 0.0
+        self._native_icon_task: Optional["asyncio.Task"] = None
+        # Latched when Telegram rejects custom-emoji markup: icons degrade to
+        # the plain sticker emoji, the native composer and Stop are untouched.
+        self._native_icons_disabled: bool = False
         # Transient Telegram sendChatAction failures (network blips, 429/5xx)
         # can happen on every keep-typing tick while the agent is waiting on a
         # long model call. Back off per chat so a short Telegram-side outage
@@ -6248,6 +6272,107 @@ class TelegramAdapter(BasePlatformAdapter):
             return False
         return self.supports_draft_streaming(chat_type=chat_type, metadata=metadata)
 
+    @staticmethod
+    def _retry_after_seconds(exc: BaseException) -> Optional[float]:
+        value = getattr(exc, "retry_after", None)
+        if value is None:
+            return None
+        try:
+            return float(getattr(value, "total_seconds", lambda: value)())
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _normalize_emoji(value: Optional[str]) -> str:
+        return (value or "").replace("\ufe0f", "").strip()
+
+    def _select_native_icons(self, sticker_set: Any) -> Dict[str, Any]:
+        """Pick role icons from the REAL returned set (animation-capable only)."""
+        from plugins.platforms.telegram.native_progress import NativeIcon
+
+        set_type = getattr(sticker_set, "sticker_type", None)
+        usable = []
+        for sticker in list(getattr(sticker_set, "stickers", None) or []):
+            custom_id = str(getattr(sticker, "custom_emoji_id", "") or "")
+            kind = getattr(sticker, "type", None) or set_type
+            animated = bool(getattr(sticker, "is_animated", False) or getattr(sticker, "is_video", False))
+            emoji = getattr(sticker, "emoji", None)
+            if custom_id.isdigit() and kind == "custom_emoji" and animated and emoji:
+                usable.append((self._normalize_emoji(emoji), custom_id, emoji))
+        icons: Dict[str, Any] = {}
+        for role, preferred in self._NATIVE_ICON_ROLE_EMOJI.items():
+            for want in preferred:
+                match = next((u for u in usable if u[0] == self._normalize_emoji(want)), None)
+                if match is not None:
+                    icons[role] = NativeIcon(custom_emoji_id=match[1], emoji=match[2])
+                    break
+        return icons
+
+    async def _lookup_native_icons(self) -> None:
+        """One bounded ``getStickerSet("AIActions")`` attempt (single-flight task)."""
+        now = self._native_clock()
+        try:
+            sticker_set = await asyncio.wait_for(
+                self._bot.get_sticker_set(self.NATIVE_ICON_SET_NAME),
+                timeout=self.NATIVE_ICON_LOOKUP_TIMEOUT,
+            )
+        except asyncio.CancelledError:
+            raise
+        except asyncio.TimeoutError:
+            self._native_icon_retry_not_before = now + self.NATIVE_ICON_NEGATIVE_TTL
+            logger.debug("[%s] AIActions icon lookup timed out; using text-only rows", self.name)
+            return
+        except Exception as exc:
+            wait = self._retry_after_seconds(exc)
+            self._native_icon_retry_not_before = now + max(
+                self.NATIVE_ICON_NEGATIVE_TTL, wait or 0.0
+            )
+            logger.debug(
+                "[%s] AIActions icon lookup failed (%s); using text-only rows",
+                self.name, _redact_telegram_error_text(exc),
+            )
+            return
+        icons = self._select_native_icons(sticker_set)
+        if not icons:
+            self._native_icons = None
+            self._native_icon_retry_not_before = now + self.NATIVE_ICON_NEGATIVE_TTL
+            logger.debug("[%s] AIActions set has no usable animated icons", self.name)
+            return
+        self._native_icons = icons
+        self._native_icons_expires_at = now + self.NATIVE_ICON_POSITIVE_TTL
+        self._native_icon_retry_not_before = 0.0
+
+    def _native_icons_nowait(self) -> Optional[Dict[str, Any]]:
+        """Icons usable RIGHT NOW; kicks a background lookup when needed.
+
+        Never awaits the network: the caller renders text immediately and later
+        frames pick the icons up once the (bounded, single-flight) lookup lands.
+        """
+        if not self._native_progress_enabled or self._native_progress_disabled:
+            return None
+        now = self._native_clock()
+        fresh = self._native_icons is not None and now < self._native_icons_expires_at
+        task = self._native_icon_task
+        if (
+            not fresh
+            and not self._native_icons_disabled
+            and now >= self._native_icon_retry_not_before
+            and (task is None or task.done())
+            and self._bot is not None
+        ):
+            try:
+                self._native_icon_task = asyncio.get_running_loop().create_task(
+                    self._lookup_native_icons()
+                )
+            except RuntimeError:
+                pass
+        icons = self._native_icons
+        if icons and self._native_icons_disabled:
+            from plugins.platforms.telegram.native_progress import NativeIcon
+
+            return {role: NativeIcon(custom_emoji_id="", emoji=ic.emoji) for role, ic in icons.items()}
+        return icons
+
     async def send_native_progress_draft(
         self,
         chat_id: str,
@@ -6276,27 +6401,56 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(success=False, error="invalid_draft_id")
         from plugins.platforms.telegram.native_progress import compose_markdown
 
-        markdown = compose_markdown(
-            rows,
-            _rich_normalize_linebreaks(answer) if answer else "",
-            now=time.monotonic() if now is None else now,
-            idle_since=idle_since,
-            icons=icons,
-        )
+        if icons is None:
+            icons = self._native_icons_nowait()
+        answer_md = _rich_normalize_linebreaks(answer) if answer else ""
+        when = time.monotonic() if now is None else now
+
+        def _markdown(icon_map):
+            return compose_markdown(
+                rows, answer_md, now=when, idle_since=idle_since, icons=icon_map,
+            )
+
+        markdown = _markdown(icons)
         if not markdown.strip():
             return SendResult(success=False, error="empty_frame")
         if not self._content_fits_rich_limits(markdown):
             return SendResult(success=False, error="native_frame_too_large")
-        payload: Dict[str, Any] = {
-            "chat_id": normalize_telegram_chat_id(chat_id),
-            "draft_id": int(draft_id),
-            "rich_message": {"markdown": markdown},
-            "can_stop": True,
-        }
+
+        def _payload(text: str) -> Dict[str, Any]:
+            return {
+                "chat_id": normalize_telegram_chat_id(chat_id),
+                "draft_id": int(draft_id),
+                "rich_message": {"markdown": text},
+                "can_stop": True,
+            }
+
         try:
-            ok = await self._bot.do_api_request("sendRichMessageDraft", api_kwargs=payload)
+            try:
+                ok = await self._bot.do_api_request(
+                    "sendRichMessageDraft", api_kwargs=_payload(markdown)
+                )
+            except Exception as exc:
+                if (
+                    "<tg-emoji" in markdown
+                    and self._is_bad_request_error(exc)
+                    and not self._is_rich_capability_error(exc)
+                ):
+                    # Custom-emoji markup/entitlement rejected: latch ICONS off
+                    # and resend this very frame with the real sticker emoji.
+                    self._native_icons_disabled = True
+                    logger.info(
+                        "[%s] native_progress custom icons rejected (%s); using plain emoji",
+                        self.name, _redact_telegram_error_text(exc),
+                    )
+                    markdown = _markdown(self._native_icons_nowait())
+                    ok = await self._bot.do_api_request(
+                        "sendRichMessageDraft", api_kwargs=_payload(markdown)
+                    )
+                else:
+                    raise
         except Exception as exc:
-            retry_after = getattr(exc, "retry_after", None)
+            retry_after = self._retry_after_seconds(exc)
             if self._is_rich_capability_error(exc):
                 self._native_progress_disabled = True
                 logger.warning(
@@ -6311,8 +6465,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return SendResult(
                 success=False,
                 error=_redact_telegram_error_text(exc),
-                retry_after=float(getattr(retry_after, "total_seconds", lambda: retry_after)())
-                if retry_after is not None else None,
+                retry_after=retry_after,
             )
         if not ok:
             return SendResult(success=False, error="draft_rejected")

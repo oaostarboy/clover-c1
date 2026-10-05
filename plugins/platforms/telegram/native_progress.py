@@ -112,7 +112,12 @@ def _text_lines(text: str) -> str:
 
 
 def _icon_tag(icon: Optional[NativeIcon]) -> str:
-    if icon is None or not _EMOJI_ID_RE.match(icon.custom_emoji_id or ""):
+    if icon is None or not icon.emoji:
+        return ""
+    if not icon.custom_emoji_id:
+        # Fallback mode: the real sticker emoji as plain text, no custom tag.
+        return f"{escape_text(icon.emoji)} "
+    if not _EMOJI_ID_RE.match(icon.custom_emoji_id):
         return ""
     return f'<tg-emoji emoji-id="{icon.custom_emoji_id}">{escape_text(icon.emoji)}</tg-emoji> '
 
