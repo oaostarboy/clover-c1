@@ -77,7 +77,7 @@ def test_enabled_flag_only_turns_off_explicitly(raw, expected):
 
 # ── declarations ───────────────────────────────────────────────────────────
 
-def test_valid_declaration_sets_the_mode_and_every_event_renews():
+def test_valid_declaration_sets_the_mode_and_every_event_supersedes_older_receipts():
     agent = _agent()
     assert _state(agent)['state'] == dc.UNDECIDED
 
@@ -88,7 +88,7 @@ def test_valid_declaration_sets_the_mode_and_every_event_renews():
     revision_before = agent._todo_store.snapshot()['revision']
     _declare(agent, 'direct')  # byte-identical: the todo revision does not move
     assert agent._todo_store.snapshot()['revision'] == revision_before
-    assert _state(agent)['generation'] > first['generation'], 'an unchanged declaration must still renew'
+    assert _state(agent)['generation'] > first['generation'], 'an unchanged declaration must still supersede older receipts'
 
     _declare(agent, 'delegate')
     assert _state(agent)['state'] == dc.SPAWN_REQUIRED
@@ -244,14 +244,14 @@ def test_non_spawns_and_failed_dispatch_leave_spawn_required(child_runs, args):
     assert child_runs == []
 
 
-def test_accepted_async_child_credits_the_declaration(child_runs):
+def test_accepted_async_child_takes_over_the_request(child_runs):
     agent = _agent()
     _declare(agent, 'delegate')
 
     out = json.loads(agent._invoke_tool('delegate_task', {'goal': 'lane'}, 't'))
 
     assert out['status'] == 'dispatched'
-    assert _state(agent)['state'] == dc.DELEGATED_STARTED
+    assert _state(agent)['phase'] == dc.PHASE_HANDED_OFF
 
 
 def test_explicit_synchronous_child_start_credits_the_declaration(child_runs):
@@ -288,11 +288,12 @@ def test_stale_ticket_cannot_credit_a_newer_declaration():
     agent = _agent()
     _declare(agent, 'delegate')
     stale = dc.ticket_for(agent)
-    _declare(agent, 'delegate')  # renewed: the earlier ticket is from another generation
+    _declare(agent, 'delegate')  # redeclared: the earlier ticket is from another generation
 
-    assert stale.credit('async') is False
-    assert _state(agent)['state'] == dc.SPAWN_REQUIRED
-    assert dc.ticket_for(agent).credit('async') is True
+    assert stale.accept_handoff(delegation_id='d-stale', goals=['lane']) is False
+    assert _state(agent)['phase'] == dc.PHASE_FOREGROUND
+    assert dc.ticket_for(agent).accept_handoff(delegation_id='d-live', goals=['lane']) is True
+    assert _state(agent)['phase'] == dc.PHASE_HANDED_OFF
 
 
 def test_a_spawn_without_any_declaration_credits_nothing(child_runs):

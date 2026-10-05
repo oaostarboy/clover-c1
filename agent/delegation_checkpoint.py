@@ -8,8 +8,11 @@ accounting; the executor calls :func:`admit` on its common dispatch funnel.
 
 What this is not: a task classifier. The model still makes the choice and
 nothing here judges whether the stated reason is good. It only guarantees that
-a choice was made, and that a ``delegate`` choice was followed by a real child
-start before further work.
+a choice was made, that a ``delegate`` choice was followed by a real child
+start before further work, and that the root's foreground allowance belongs to
+one human request: it is never renewed by declaring again, only by a new human
+request, and an accepted background dispatch closes the root's heavy work for
+that request (the worker owns the remaining phase).
 
 State is private to the root ``AIAgent`` (``agent._delegation_checkpoint``) and
 is deliberately separate from ``TodoStore._delegation``, which is cleared when a
@@ -49,6 +52,18 @@ DELEGATED_STARTED = "delegated_started"
 
 DECISION_REQUIRED = "delegation_decision_required"
 DISPATCH_REQUIRED = "delegation_dispatch_required"
+FOREGROUND_EXHAUSTED = "delegation_foreground_exhausted"
+HANDOFF_ACTIVE = "delegation_handoff_active"
+SPAWN_CLOSED = "delegation_spawn_closed"
+
+# How much authority a request still has. ``state`` records that a choice was
+# made; ``phase`` records how much foreground work that choice may still do.
+PHASE_FOREGROUND = "foreground"
+PHASE_EXHAUSTED = "exhausted"
+PHASE_HANDED_OFF = "handed_off"
+
+_MAX_OWNED_HANDOFFS = 64
+_MAX_GOAL_CHARS = 160
 
 DEFAULT_MAX_WORK_TOOLS = 5
 DEFAULT_MAX_FOREGROUND_SECONDS = 120.0
@@ -199,14 +214,52 @@ class DeclarationOwner:
 
 
 @dataclass(frozen=True)
+class OwnedHandoff:
+    """The background job a request handed its remaining phase to.
+
+    Built by the checkpoint (never by the caller) at the moment the dispatch is
+    accepted, so every binding field comes from runtime state. ``receipt_ids``
+    are the durable async-delegation row ids that will carry the result: the
+    delegation id for one goal, ``<id>:child:<i>`` per goal for a fan-out.
+    """
+
+    delegation_id: str
+    request_id: str
+    generation: int
+    accepted_at: float
+    goals: tuple
+    subagent_ids: tuple
+    declared_reason: str
+    receipt_ids: tuple
+    consumed_receipts: set = field(default_factory=set, compare=False, repr=False)
+
+
+@dataclass(frozen=True)
 class DispatchTicket:
-    """Generation-bound right to credit one real child start."""
+    """Generation-bound right to credit a real child start or accept a handoff."""
 
     checkpoint: "DelegationCheckpoint"
     generation: int
 
     def credit(self, kind: str) -> bool:
         return self.checkpoint._credit_dispatch(self.generation, kind)
+
+    def accept_handoff(
+        self, *, delegation_id: str, goals: Any, subagent_ids: Any = ()
+    ) -> bool:
+        """A background dispatch was really accepted: it owns the rest.
+
+        Only a ticket from the live generation of a request that still has
+        foreground authority can hand off. A stale, superseded or already
+        handed-off ticket returns False and changes nothing; it never cancels
+        the job.
+        """
+        return self.checkpoint._accept_handoff(
+            self.generation,
+            delegation_id=delegation_id,
+            goals=goals,
+            subagent_ids=subagent_ids,
+        )
 
 
 class DelegationCheckpoint:
@@ -221,25 +274,33 @@ class DelegationCheckpoint:
         self._clock = clock
         self.settings = settings or CheckpointSettings()
         self.generation = 0
+        self.request_id = uuid.uuid4().hex
+        self.phase = PHASE_FOREGROUND
         self.state = UNDECIDED
         self.used = 0
         self.first_work_at: Optional[float] = None
-        self.renewal_pending = False
         self.decision: Optional[Dict[str, str]] = None
+        self.exit_armed = False
         self._outstanding: Dict[str, Admission] = {}
+        # Handoffs outlive the request that made them so a late result can be
+        # attributed to its own request, never to a newer one.
+        self._owned: Dict[str, OwnedHandoff] = {}
 
     # ── lifecycle ──────────────────────────────────────────────────────
     def _reset_locked(self) -> None:
+        """A new human request: the only thing that restores the allowance."""
         self.generation += 1
+        self.request_id = uuid.uuid4().hex
+        self.phase = PHASE_FOREGROUND
         self.state = UNDECIDED
         self.used = 0
         self.first_work_at = None
-        self.renewal_pending = False
         self.decision = None
+        self.exit_armed = False
         self._outstanding.clear()
 
     def begin_turn(self, *, preserve: bool, settings: CheckpointSettings) -> None:
-        """Start a work episode, or keep the live one for a trusted delivery."""
+        """Start a request, or keep the live ledger for a trusted delivery."""
         with self._lock:
             if preserve:
                 return
@@ -249,18 +310,23 @@ class DelegationCheckpoint:
     def declare(
         self, mode: str, reason: str, *, expected_generation: Optional[int] = None
     ) -> bool:
-        """Record a valid ``todo.delegation`` event. Every event renews.
+        """Record a valid ``todo.delegation`` event.
+
+        A declaration says what the agent intends; it grants no allowance. It
+        never touches the request, the phase or the work ledger, so restating
+        the choice, renaming the todo or naming a new phase cannot extend the
+        foreground budget. It still bumps ``generation`` so an earlier
+        in-flight declaration, admission or ticket can never apply to it.
 
         ``expected_generation`` is the generation captured before the todo call
-        ran. If this checkpoint has moved on since (a new turn, a renewal, a
-        budget expiry), the declaration is stale: it is not applied, so a
-        completion that arrives late can never grant authority to a newer
-        work episode. Returns whether the declaration was applied.
+        ran. If this checkpoint has moved on since (a new request or another
+        declaration), the declaration is stale and not applied. Returns whether
+        it was applied.
         """
         with self._lock:
             if expected_generation is not None and expected_generation != self.generation:
                 return False
-            self._reset_locked()
+            self.generation += 1
             self.decision = {"mode": mode, "reason": reason}
             self.state = SPAWN_REQUIRED if mode == "delegate" else DIRECT_AUTHORIZED
             return True
@@ -273,6 +339,8 @@ class DelegationCheckpoint:
         with self._lock:
             return {
                 "generation": self.generation,
+                "request_id": self.request_id,
+                "phase": self.phase,
                 "state": self.state,
                 "used": self.used,
                 "decision": dict(self.decision) if self.decision else None,
@@ -282,18 +350,39 @@ class DelegationCheckpoint:
     # ── admission ──────────────────────────────────────────────────────
     def admit(self, tool_name: str, tool_call_id: str) -> Verdict:
         with self._lock:
+            if self.phase == PHASE_HANDED_OFF:
+                return self._block(HANDOFF_ACTIVE, tool_name)
+            if self.phase == PHASE_EXHAUSTED:
+                return self._block(FOREGROUND_EXHAUSTED, tool_name)
             if self.state == SPAWN_REQUIRED:
                 return self._block(DISPATCH_REQUIRED, tool_name)
             if self.state in (DIRECT_AUTHORIZED, DELEGATED_STARTED):
                 if self._budget_exhausted_locked():
-                    self.state = UNDECIDED
-                    self.renewal_pending = True
-                    self.decision = None
-                    self._outstanding.clear()
-                    self.generation += 1
-                    return self._block(DECISION_REQUIRED, tool_name)
+                    self.phase = PHASE_EXHAUSTED
+                    return self._block(FOREGROUND_EXHAUSTED, tool_name)
                 return self._reserve_locked(tool_name, tool_call_id)
             return self._block(DECISION_REQUIRED, tool_name)
+
+    def admit_spawn(self, is_background: bool) -> Verdict:
+        """Gate one ``delegate_task`` dispatch (not list/steer/stop).
+
+        A background dispatch is the one way out of an exhausted request, and a
+        rejected one leaves the phase alone. A synchronous dispatch is held to
+        the same budget as any work call, but only latches here: the unit is
+        charged at the real child start (``credit('inline')``), so a rejected
+        construction spends nothing and a started child is charged once.
+        """
+        with self._lock:
+            if self.phase == PHASE_HANDED_OFF:
+                return self._block(SPAWN_CLOSED, "delegate_task")
+            if is_background:
+                return ALLOWED
+            if self.phase == PHASE_EXHAUSTED:
+                return self._block(FOREGROUND_EXHAUSTED, "delegate_task")
+            if self._budget_exhausted_locked():
+                self.phase = PHASE_EXHAUSTED
+                return self._block(FOREGROUND_EXHAUSTED, "delegate_task")
+            return ALLOWED
 
     def _budget_exhausted_locked(self) -> bool:
         if self.used >= self.settings.max_work_tools:
@@ -326,25 +415,41 @@ class DelegationCheckpoint:
                 "delegate_task first (list/steer/stop do not count), or record "
                 "todo delegation mode 'direct' with the blocker as the reason."
             )
-            recovery = {
+            recovery: Dict[str, Any] = {
                 "tool": "delegate_task",
                 "alternative": _direct_recovery(),
             }
-        else:
-            renewal = (
-                f" Your previous choice covered at most "
-                f"{self.settings.max_work_tools} work tools or "
-                f"{self.settings.max_foreground_seconds:g} seconds; renew it "
-                "(restating the same choice is fine)."
-                if self.renewal_pending
-                else ""
+        elif code == FOREGROUND_EXHAUSTED:
+            message = (
+                f"Delegation checkpoint ({code}): '{tool_name}' was not run. "
+                "The foreground allowance for this request "
+                f"({self.settings.max_work_tools} work calls or "
+                f"{self.settings.max_foreground_seconds:g} seconds) is spent and "
+                "declaring again does not extend it. If the user allowed "
+                "delegated work, hand the remaining phase to delegate_task; "
+                "otherwise stop and give the user an honest status."
             )
+            recovery = {
+                "tool": "delegate_task",
+                "only_if": "the user has not prohibited subagents",
+                "otherwise": "stop and report an honest status to the user",
+            }
+        elif code in (HANDOFF_ACTIVE, SPAWN_CLOSED):
+            message = (
+                f"Delegation checkpoint ({code}): '{tool_name}' was not run. "
+                "A background job for this request is already running and owns "
+                "the remaining phase; its result returns into this "
+                "conversation. Do not repeat its work here: stop and give the "
+                "user a short status."
+            )
+            recovery = {"action": "stop and report a short status to the user"}
+        else:
             message = (
                 f"Delegation checkpoint ({code}): '{tool_name}' was not run. "
                 "Before using work tools, record your choice with the todo tool: "
                 "delegation={mode: 'direct', reason: '<brief operational "
                 "rationale>'} to do the work yourself, or mode 'delegate' and "
-                f"then call delegate_task.{renewal}"
+                "then call delegate_task."
             )
             recovery = _direct_recovery()
         payload = {
@@ -383,12 +488,67 @@ class DelegationCheckpoint:
             return DispatchTicket(self, self.generation)
 
     def _credit_dispatch(self, generation: int, kind: str) -> bool:
+        """A synchronous child really started (``kind == 'inline'``).
+
+        Clears ``SPAWN_REQUIRED`` and spends one work unit, so a chain of
+        synchronous children cannot run unbounded inside one request. A
+        background dispatch is not credited here: it is a handoff
+        (:meth:`_accept_handoff`).
+        """
         with self._lock:
-            if generation != self.generation or self.state != SPAWN_REQUIRED:
+            if kind != "inline" or generation != self.generation:
                 return False
-            self.state = DELEGATED_STARTED
-            logger.debug("delegation checkpoint: child start credited (%s)", kind)
+            credited = False
+            if self.state == SPAWN_REQUIRED:
+                self.state = DELEGATED_STARTED
+                credited = True
+            if self.phase == PHASE_FOREGROUND:
+                if self.first_work_at is None:
+                    self.first_work_at = self._clock()
+                self.used += 1
+                credited = True
+            logger.debug("delegation checkpoint: inline child start credited")
+            return credited
+
+    def _accept_handoff(
+        self, generation: int, *, delegation_id: str, goals: Any, subagent_ids: Any
+    ) -> bool:
+        with self._lock:
+            if generation != self.generation:
+                return False
+            if self.phase not in (PHASE_FOREGROUND, PHASE_EXHAUSTED):
+                return False
+            goal_texts = tuple(str(g)[:_MAX_GOAL_CHARS] for g in (goals or ()))
+            if len(goal_texts) <= 1:
+                receipt_ids = (delegation_id,)
+            else:
+                receipt_ids = tuple(
+                    f"{delegation_id}:child:{i}" for i in range(len(goal_texts))
+                )
+            self._owned[delegation_id] = OwnedHandoff(
+                delegation_id=delegation_id,
+                request_id=self.request_id,
+                generation=generation,
+                accepted_at=self._clock(),
+                goals=goal_texts,
+                subagent_ids=tuple(str(s) for s in (subagent_ids or ())),
+                declared_reason=(self.decision or {}).get("reason", ""),
+                receipt_ids=receipt_ids,
+            )
+            while len(self._owned) > _MAX_OWNED_HANDOFFS:
+                self._evict_owned_locked()
+            self.phase = PHASE_HANDED_OFF
+            self.exit_armed = True
+            logger.debug("delegation checkpoint: handoff accepted (%s)", delegation_id)
             return True
+
+    def _evict_owned_locked(self) -> None:
+        """Drop the oldest fully consumed handoff, else the oldest of all."""
+        for key, handoff in self._owned.items():
+            if handoff.receipt_ids and set(handoff.receipt_ids) <= handoff.consumed_receipts:
+                del self._owned[key]
+                return
+        del self._owned[next(iter(self._owned))]
 
 
 def _direct_recovery() -> Dict[str, Any]:
@@ -473,18 +633,23 @@ def begin_turn(agent: Any, persist_user_display_kind: Optional[str] = None) -> N
     )
 
 
-def resolve_work_name(function_name: str, function_args: Any) -> str:
-    """Peel the Tool Search ``tool_call`` wrapper to the underlying tool name."""
+def resolve_work_call(function_name: str, function_args: Any) -> tuple:
+    """Peel the Tool Search ``tool_call`` wrapper to the underlying (name, args)."""
     try:
         from tools import tool_search as _ts
 
         if function_name == _ts.TOOL_CALL_NAME and isinstance(function_args, dict):
-            underlying, _args, err = _ts.resolve_underlying_call(function_args)
+            underlying, args, err = _ts.resolve_underlying_call(function_args)
             if not err and underlying:
-                return underlying
+                return underlying, args
     except Exception:
         pass
-    return function_name
+    return function_name, function_args
+
+
+def resolve_work_name(function_name: str, function_args: Any) -> str:
+    """Peel the Tool Search ``tool_call`` wrapper to the underlying tool name."""
+    return resolve_work_call(function_name, function_args)[0]
 
 
 def current_admission_for(agent: Any, tool_name: str, tool_call_id: str) -> Optional[Admission]:
@@ -500,16 +665,37 @@ def current_admission_for(agent: Any, tool_name: str, tool_call_id: str) -> Opti
     return None
 
 
+def _is_spawn_dispatch(args: Any) -> bool:
+    """A ``delegate_task`` call that would start children (not list/steer/stop)."""
+    if not isinstance(args, dict):
+        return False
+    action = args.get("action")
+    if action is not None and not isinstance(action, str):
+        return False
+    return (action or "").strip().lower() in ("", "spawn")
+
+
+def _admit_spawn(checkpoint: DelegationCheckpoint, agent: Any, args: Any) -> Verdict:
+    if not _is_spawn_dispatch(args):
+        return ALLOWED
+    # The dispatcher's own rule decides background; call arguments never do.
+    from tools.delegate_tool import _model_background_value
+
+    return checkpoint.admit_spawn(_model_background_value(args, agent))
+
+
 def admit(agent: Any, function_name: str, function_args: Any, tool_call_id: str) -> Verdict:
     """Gate one resolved tool call. Exempt/ineligible agents pass unchanged."""
-    name = resolve_work_name(function_name, function_args)
-    if name in CONTROL_PLANE_TOOLS:
+    name, args = resolve_work_call(function_name, function_args)
+    if name in CONTROL_PLANE_TOOLS and name != "delegate_task":
         return ALLOWED
     checkpoint = get_checkpoint(agent)
     if checkpoint is None or not checkpoint.settings.enabled:
         return ALLOWED
     if not is_eligible(agent):
         return ALLOWED
+    if name == "delegate_task":
+        return _admit_spawn(checkpoint, agent, args)
     return checkpoint.admit(name, tool_call_id)
 
 

@@ -223,14 +223,15 @@ def test_control_actions_and_failed_dispatch_do_not_unlock(tmp_path, child_runs,
     assert child_runs == []
 
 
-def test_real_async_dispatch_unlocks_work_in_the_same_batch(tmp_path, child_runs):
+def test_real_async_dispatch_hands_the_request_off_in_the_same_batch(tmp_path, child_runs):
     agent = _agent()
     target = tmp_path / 'out.txt'
 
     _, dispatched, written = run_batch(agent, [_delegate(), _spawn(), _write(target, 'after')])
 
     assert dispatched['status'] == 'dispatched'
-    assert target.read_text() == 'after'
+    assert not target.exists(), 'root work ran after the worker owned the remaining phase'
+    assert written['error_type'] == 'delegation_handoff_active'
 
 
 def test_explicit_synchronous_child_start_also_unlocks(tmp_path, child_runs):
@@ -254,7 +255,8 @@ def test_a_child_started_before_the_declaration_cannot_satisfy_it(tmp_path, chil
     run_batch(agent, [_delegate()])
     (blocked,) = run_batch(agent, [_write(target)])
 
-    assert 'delegation_dispatch_required' in json.dumps(blocked)
+    # The early background job owns the request; it did not unlock root work.
+    assert 'delegation_handoff_active' in json.dumps(blocked)
     assert not target.exists()
 
 
@@ -479,24 +481,23 @@ def _clocked(agent):
     return clock
 
 
-def test_sixth_work_call_needs_renewal_and_an_unchanged_declaration_renews(tmp_path):
+def test_sixth_work_call_is_blocked_and_declaring_again_does_not_renew(tmp_path):
     agent = _agent()
     run_batch(agent, [_direct()])
     for i in range(5):
         run_batch(agent, [_write(tmp_path / f'w{i}.txt')])
     (blocked,) = run_batch(agent, [_write(tmp_path / 'w5.txt')])
 
-    assert 'delegation_decision_required' in json.dumps(blocked)
-    assert 'renew' in json.dumps(blocked)
+    assert 'delegation_foreground_exhausted' in json.dumps(blocked)
     assert not (tmp_path / 'w5.txt').exists()
     assert all((tmp_path / f'w{i}.txt').exists() for i in range(5))
 
-    run_batch(agent, [_direct()])  # same text, same todo revision: still a renewal event
+    run_batch(agent, [_direct()])  # same text: the allowance belongs to the request
     run_batch(agent, [_write(tmp_path / 'w5.txt')])
-    assert (tmp_path / 'w5.txt').exists()
+    assert not (tmp_path / 'w5.txt').exists()
 
 
-def test_unrelated_todo_progress_writes_do_not_renew(tmp_path):
+def test_unrelated_todo_progress_writes_do_not_extend_the_allowance(tmp_path):
     agent = _agent()
     run_batch(agent, [_direct()])
     for i in range(5):
@@ -504,10 +505,10 @@ def test_unrelated_todo_progress_writes_do_not_renew(tmp_path):
     run_batch(agent, [('todo', {'todos': [{'id': 'a', 'content': 'x', 'status': 'in_progress'}]})])
     (blocked,) = run_batch(agent, [_write(tmp_path / 'w5.txt')])
 
-    assert 'delegation_decision_required' in json.dumps(blocked)
+    assert 'delegation_foreground_exhausted' in json.dumps(blocked)
 
 
-def test_elapsed_time_renews_at_exactly_the_boundary(tmp_path):
+def test_elapsed_time_exhausts_at_exactly_the_boundary(tmp_path):
     agent = _agent()
     clock = _clocked(agent)
     run_batch(agent, [_direct()])
@@ -520,7 +521,7 @@ def test_elapsed_time_renews_at_exactly_the_boundary(tmp_path):
 
     assert (tmp_path / 'just-inside.txt').exists()
     assert not (tmp_path / 'at-boundary.txt').exists()
-    assert 'delegation_decision_required' in json.dumps(blocked)
+    assert 'delegation_foreground_exhausted' in json.dumps(blocked)
 
 
 def test_time_does_not_run_before_the_first_work_call(tmp_path):
@@ -552,16 +553,19 @@ def test_executed_failures_count_against_the_budget(tmp_path):
         run_batch(agent, [('read_file', {'path': str(tmp_path / f'missing-{i}.txt')})])
     (blocked,) = run_batch(agent, [_write(tmp_path / 'after.txt')])
 
-    assert 'delegation_decision_required' in json.dumps(blocked)
+    assert 'delegation_foreground_exhausted' in json.dumps(blocked)
 
 
-def test_child_work_does_not_spend_the_parent_budget(tmp_path, child_runs):
+def test_a_synchronous_child_spends_one_parent_unit_and_nothing_more(tmp_path, child_runs):
     agent = _agent()
-    run_batch(agent, [_delegate(), _spawn('lane one')])
-    for i in range(5):
+    run_batch(agent, [_direct()])
+    sync_spawn(agent, goal='lane one')
+    for i in range(4):
         run_batch(agent, [_write(tmp_path / f'w{i}.txt')])
+    (blocked,) = run_batch(agent, [_write(tmp_path / 'w4.txt')])
 
-    assert all((tmp_path / f'w{i}.txt').exists() for i in range(5))
+    assert all((tmp_path / f'w{i}.txt').exists() for i in range(4))
+    assert 'delegation_foreground_exhausted' in json.dumps(blocked)
 
 
 @pytest.mark.parametrize('bad', [0, -3, True, False, 'five', None, float('inf'), float('nan'), 2.5, [], {}])
@@ -574,7 +578,7 @@ def test_invalid_budget_settings_fall_back_to_finite_positive_defaults(tmp_path,
     (blocked,) = run_batch(agent, [_write(tmp_path / 'w5.txt')])
 
     assert all((tmp_path / f'w{i}.txt').exists() for i in range(5)), 'a bad value produced a zero budget'
-    assert 'delegation_decision_required' in json.dumps(blocked)
+    assert 'delegation_foreground_exhausted' in json.dumps(blocked)
 
 
 def test_configured_budget_is_honored(tmp_path):
@@ -585,7 +589,7 @@ def test_configured_budget_is_honored(tmp_path):
     run_batch(agent, [_write(tmp_path / 'b.txt')])
     (blocked,) = run_batch(agent, [_write(tmp_path / 'c.txt')])
 
-    assert 'delegation_decision_required' in json.dumps(blocked)
+    assert 'delegation_foreground_exhausted' in json.dumps(blocked)
     assert not (tmp_path / 'c.txt').exists()
 
 
@@ -857,7 +861,7 @@ def test_legacy_invoke_after_a_declaration_runs_once_and_charges_once(tmp_path):
                                'legacy', 'legacy-5')
 
     assert all((tmp_path / f'l{i}.txt').exists() for i in range(5))
-    assert 'delegation_decision_required' in sixth
+    assert 'delegation_foreground_exhausted' in sixth
 
 
 def test_executor_funnel_does_not_double_charge_through_invoke_tool(tmp_path):
@@ -873,7 +877,7 @@ def test_executor_funnel_does_not_double_charge_through_invoke_tool(tmp_path):
 
     assert (tmp_path / 'fifth.txt').exists(), 'a batch of 4 reads must cost 4, not 8'
     (blocked,) = run_batch(agent, [_write(tmp_path / 'sixth.txt')])
-    assert 'delegation_decision_required' in json.dumps(blocked)
+    assert 'delegation_foreground_exhausted' in json.dumps(blocked)
 
 
 # ── batch order, concurrent reservations ───────────────────────────────────
@@ -917,7 +921,7 @@ def test_concurrent_batch_reserves_budget_in_emission_order(tmp_path):
 
     admitted = ['content-' in json.dumps(r) for r in results]
     assert admitted == [True] * 5 + [False] * 3, 'later calls in emission order must be the ones blocked'
-    assert all('delegation_decision_required' in json.dumps(r) for r in results[5:])
+    assert all('delegation_foreground_exhausted' in json.dumps(r) for r in results[5:])
 
 
 def test_segmented_mixed_batch_keeps_order_and_pairing(tmp_path):
@@ -957,7 +961,7 @@ def test_acp_edit_denials_are_refunded_but_executed_edits_are_not(tmp_path):
 
     assert not (tmp_path / 'denied.txt').exists()
     assert all((tmp_path / f'ok{i}.txt').exists() for i in range(5)), 'denials consumed the budget'
-    assert 'delegation_decision_required' in json.dumps(blocked)
+    assert 'delegation_foreground_exhausted' in json.dumps(blocked)
 
 
 def test_acp_guard_exception_is_treated_like_a_denial(tmp_path, monkeypatch):
@@ -1029,7 +1033,7 @@ def test_tool_output_claiming_a_denial_cannot_refund(tmp_path):
         run_batch(agent, [('terminal', {'command': f"echo '{spoof}'"})])
     (blocked,) = run_batch(agent, [('terminal', {'command': f'touch {tmp_path}/after.txt'})])
 
-    assert 'delegation_decision_required' in json.dumps(blocked)
+    assert 'delegation_foreground_exhausted' in json.dumps(blocked)
     assert not (tmp_path / 'after.txt').exists()
 
 
@@ -1064,15 +1068,15 @@ def test_receipts_are_generation_bound_and_single_use():
     checkpoint = get_checkpoint(agent)
     checkpoint.declare('direct', 'first')
     first = checkpoint.admit('write_file', 'c1').admission
-    checkpoint.declare('direct', 'renewed')  # a renewal supersedes in-flight reservations
+    checkpoint.declare('direct', 'again')  # supersedes in-flight reservations, keeps the ledger
     second = checkpoint.admit('write_file', 'c2').admission
-    assert checkpoint.snapshot()['used'] == 1
+    assert checkpoint.snapshot()['used'] == 2
 
-    assert checkpoint.refund(first) is False, 'a late refund reached a renewed generation'
-    assert checkpoint.snapshot()['used'] == 1
+    assert checkpoint.refund(first) is False, 'a late refund reached a newer generation'
+    assert checkpoint.snapshot()['used'] == 2
     assert checkpoint.refund(second) is True
     assert checkpoint.refund(second) is False, 'a receipt must be single-use'
-    assert checkpoint.snapshot()['used'] == 0
+    assert checkpoint.snapshot()['used'] == 1
 
     third = checkpoint.admit('terminal', 'c3').admission
     with admitted(third):
