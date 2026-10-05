@@ -122,7 +122,7 @@ class NativeProgressScope:
     """Which run a native draft belongs to (captured at bind time)."""
 
     session_key: str
-    run_generation: int
+    run_generation: Optional[int]
     source: Any = None
 
 
@@ -142,7 +142,7 @@ class NativeAwareProgressQueue(queue.Queue):
 
     def put(self, item: Any, block: bool = True, timeout: Optional[float] = None) -> None:
         consumer = self._holder[0] if self._holder else None
-        if consumer is not None and getattr(consumer, "native_activity_active", False) is True:
+        if consumer is not None and getattr(consumer, "owns_progress_routing", False) is True:
             try:
                 if consumer.route_progress_item(item):
                     return

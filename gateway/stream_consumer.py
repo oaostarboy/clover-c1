@@ -651,6 +651,11 @@ class GatewayStreamConsumer:
         """True while this consumer owns the native activity composer."""
         return self._np_state == "active"
 
+    @property
+    def owns_progress_routing(self) -> bool:
+        """Active, or stopped by the user (late lines are suppressed, not re-routed)."""
+        return self._np_state in ("active", "stopped")
+
     def note_tool(self, tool_name: Optional[str]) -> None:
         """Tag the NEXT progress line from this thread with its tool name.
 
@@ -678,6 +683,8 @@ class GatewayStreamConsumer:
         self._np_tls.tool = None      # a pending note_tool() tag is consumed by this line
         if not line:
             return False
+        if self._np_state == "stopped":
+            return True               # post-Stop suppression, same as today's display
         if self._np_state != "off":
             return self._np_submit(("replace" if replace_last else "line", line, tool))
         self._queue.put((_TOOL_PROGRESS, line))
@@ -698,6 +705,9 @@ class GatewayStreamConsumer:
     def route_progress_item(self, item: Any) -> bool:
         """Consume one of today's progress-queue items; False = use the queue."""
         tool = getattr(self._np_tls, "tool", None)
+        if self._np_state == "stopped":
+            self._np_tls.tool = None
+            return True
         if isinstance(item, str):
             self._np_tls.tool = None
             return self.on_tool_progress(item, tool=tool)
@@ -1188,6 +1198,7 @@ class GatewayStreamConsumer:
                     # turn's activity (rows survive segment resets).
                     self._np_answer = ""
                     self._np_dirty = bool(len(self._np_ledger) or self._np_events)
+                    self._np_bind()
 
     async def _handle_approval_boundary(self, boundary_future, cancelled_flag=None) -> None:
         """Process an approval boundary: finalize stream, disable native for post-approval.
@@ -1580,6 +1591,7 @@ class GatewayStreamConsumer:
             # Eligibility said yes but the draft transport did not resolve:
             # hand any already-accepted lines back to today's display.
             await self._np_fallback("no_draft_transport")
+        self._np_bind()
 
         try:
             while True:
@@ -2915,8 +2927,8 @@ class GatewayStreamConsumer:
         transport, and a working persistent-artifact path (so no visible line
         can be lost when the 30 s draft expires).
         """
-        if self._on_native_history is None:
-            return False
+        if self._on_native_history is None or self._np_scope is None:
+            return False        # no artifact path / no Stop scope: never a native preview
         if not isinstance(self.adapter, _BasePlatformAdapter):
             return False
         if not callable(getattr(type(self.adapter), "supports_native_progress", None)):
@@ -2942,7 +2954,45 @@ class GatewayStreamConsumer:
             self._np_state = new_state
             self._np_owner = object()
         self._np_apply_events()
+        self._np_unbind()
         return True
+
+    def _np_bind(self) -> None:
+        """Register the current draft id so an authorized Stop can find this run."""
+        bind = getattr(type(self.adapter), "native_progress_bind", None)
+        if self._np_state == "active" and callable(bind) and self._draft_id is not None:
+            try:
+                self.adapter.native_progress_bind(
+                    self.chat_id, None, self._draft_id, self, self._np_scope,
+                )
+            except Exception:
+                logger.debug("native_progress_bind failed", exc_info=True)
+
+    def _np_unbind(self) -> None:
+        unbind = getattr(type(self.adapter), "native_progress_unbind", None)
+        if callable(unbind):
+            try:
+                self.adapter.native_progress_unbind(self)
+            except Exception:
+                logger.debug("native_progress_unbind failed", exc_info=True)
+
+    @property
+    def initial_reply_to_id(self) -> Optional[str]:
+        return self._initial_reply_to_id
+
+    def native_stop_claim(self) -> bool:
+        """Atomically claim a user Stop: fence the writer, unregister the draft.
+
+        Synchronous on purpose (called from the PTB update handler): no await,
+        no network.  True only for the first claim of an active composer; the
+        caller then runs the scoped cancellation and :meth:`native_stop_finish`.
+        """
+        return self._np_fence("stopped")
+
+    async def native_stop_finish(self) -> None:
+        """After a claimed Stop: cancel any in-flight frame and keep the history."""
+        await self._np_retire_send(0)
+        await self._np_persist("stopped")
 
     async def _np_retire_send(self, wait: float) -> None:
         task, self._np_task = self._np_task, None

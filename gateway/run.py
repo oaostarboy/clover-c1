@@ -29789,8 +29789,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         interrupt_reason: str,
         invalidation_reason: str,
         release_running_state: bool = True,
+        preserve_queued: bool = False,
+        reap_turn_processes: bool = True,
     ) -> None:
-        """Interrupt the current run and clear queued session state consistently."""
+        """Interrupt the current run and clear queued session state consistently.
+
+        ``preserve_queued`` keeps the adapter's queued follow-up (and any pending
+        command) for the next turn instead of discarding it, and
+        ``reap_turn_processes=False`` skips the turn's background-process
+        reaper.  The defaults are exactly today's ``/stop`` / ``/new`` semantics;
+        only the native Telegram Stop button passes the narrower values.
+        """
         if not session_key:
             return
         _iac_state = self._peek_session_state(session_key)
@@ -29815,7 +29824,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _generation_at_interrupt = self._invalidate_session_run_generation(
             session_key, reason=invalidation_reason
         )
-        if _process_task_id and _process_baseline is not None:
+        if reap_turn_processes and _process_task_id and _process_baseline is not None:
             threading.Thread(
                 target=_reap_gateway_turn_processes,
                 args=(_process_task_id, _process_baseline),
@@ -29848,10 +29857,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
             else:
                 await adapter.interrupt_session_activity(session_key, source.chat_id)
-        if adapter and hasattr(adapter, "get_pending_message"):
-            adapter.get_pending_message(session_key)  # consume and discard
-        if _iac_state is not None:
-            _iac_state.persistent.pending_command_text = None
+        if not preserve_queued:
+            if adapter and hasattr(adapter, "get_pending_message"):
+                adapter.get_pending_message(session_key)  # consume and discard
+            if _iac_state is not None:
+                _iac_state.persistent.pending_command_text = None
         if release_running_state:
             self._release_running_agent_state(session_key)
             # Evict the cached agent: ``_interrupt_requested`` is only
@@ -29864,6 +29874,48 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # object keeps its interrupt flag so a hung drain still dies
             # when it unblocks.
             self._evict_cached_agent(session_key)
+
+    async def native_stop_current(self, scope: "NativeProgressScope", consumer: Any) -> bool:
+        """Cancel ONE run on behalf of an authorized native Telegram Stop.
+
+        The adapter already fenced the draft writer (``native_stop_claim``) and
+        proved private chat + authorization.  Here, with no await between the
+        currency check and the hook, the captured run generation must still be
+        current; then the existing interrupt hook runs with the narrow options:
+        the queued follow-up is preserved and the turn's background processes
+        are not reaped (detached workers keep running).  Afterwards the visible
+        history is persisted and one normal confirmation is sent.  Returns
+        whether a run was actually cancelled.
+        """
+        session_key = scope.session_key
+        source = scope.source
+        cancelled = False
+        if self._is_session_run_current(session_key, scope.run_generation):
+            stopped_runs = self.__dict__.setdefault("_native_stopped_runs", set())
+            if len(stopped_runs) > 64:
+                stopped_runs.clear()          # defensive bound; entries are consumed per turn
+            stopped_runs.add((session_key, scope.run_generation))
+            await self._interrupt_and_clear_session(
+                session_key,
+                source,
+                interrupt_reason=_INTERRUPT_REASON_STOP,
+                invalidation_reason="native_stop",
+                preserve_queued=True,
+                reap_turn_processes=False,
+            )
+            cancelled = True
+        await consumer.native_stop_finish()
+        if cancelled:
+            adapter = self._adapter_for_source(source)
+            if adapter is not None:
+                await adapter.send(
+                    chat_id=source.chat_id,
+                    content=_clover_acks.stop_ack(t("gateway.stop.stopped"), session_key),
+                    reply_to=getattr(consumer, "initial_reply_to_id", None),
+                    metadata=self._thread_metadata_for_source(source),
+                )
+            logger.info("native STOP for session %s — current run cancelled, queue preserved", session_key)
+        return cancelled
 
     async def _refresh_agent_cache_message_count(
         self, session_key: str, session_id: Optional[str]
@@ -32670,7 +32722,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # Use session_key (not source.chat_id) to match adapter's storage keys.
             pending_event = None
             pending = None
-            if result and adapter and session_key:
+            # A native Telegram Stop invalidated this run's generation but asked
+            # to PRESERVE the queued follow-up.  Draining it in-band would run it
+            # (and then discard its reply) under the stale generation, so leave it
+            # in the adapter queue: the base session loop dispatches it as a fresh
+            # turn with its own generation as soon as this handler returns.
+            if (session_key, run_generation) in self.__dict__.get("_native_stopped_runs", ()):
+                self._native_stopped_runs.discard((session_key, run_generation))
+                logger.info(
+                    "Native stop: leaving queued follow-up for %s to the session loop",
+                    session_key or "?",
+                )
+            elif result and adapter and session_key:
                 pending_event = _dequeue_pending_event(adapter, session_key)
                 # /queue overflow: after consuming the adapter's "next-up"
                 # slot, promote the next queued event into it so the

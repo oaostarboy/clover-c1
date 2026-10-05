@@ -8,6 +8,7 @@ Uses python-telegram-bot library for:
 """
 
 import asyncio
+import collections.abc
 import dataclasses
 import inspect
 import json
@@ -19,6 +20,7 @@ import threading
 import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Set
 
 logger = logging.getLogger(__name__)
@@ -754,6 +756,10 @@ class TelegramAdapter(BasePlatformAdapter):
         # its authorization path are live; without a working Stop the native
         # composer is never offered (no fake Stop button).
         self._native_stop_ready: bool = False
+        # (chat_id, thread_id, draft_id) -> entry(consumer, scope) for every
+        # live native draft; the only way a Stop update can reach a run.
+        self._native_drafts: Dict[tuple, Any] = {}
+        self._native_stop_tasks: Set["asyncio.Task"] = set()
         # Latched after a capability failure of the native draft itself.
         self._native_progress_disabled: bool = False
         self._native_inert_logged: bool = False
@@ -2710,6 +2716,9 @@ class TelegramAdapter(BasePlatformAdapter):
         """
         if getattr(self, "_polling_teardown_started", False):
             raise _PollingLifecycleAbort("Telegram polling teardown started")
+        # A new generation has not subscribed to the Stop update yet: native
+        # stays unavailable until start_polling succeeds below.
+        self._native_stop_ready = False
         generation, progress = self._begin_polling_generation()
         if not self._polling_progress_accepting:
             raise _PollingLifecycleAbort("Telegram polling teardown started")
@@ -2734,7 +2743,7 @@ class TelegramAdapter(BasePlatformAdapter):
             # caller recovery will dispose/rebuild the whole adapter.
             await _await_with_thread_deadline(
                 app.updater.start_polling(
-                    allowed_updates=Update.ALL_TYPES,
+                    allowed_updates=self._allowed_update_types(),
                     drop_pending_updates=drop_pending_updates,
                     error_callback=_generation_error_callback,
                 ),
@@ -2751,6 +2760,9 @@ class TelegramAdapter(BasePlatformAdapter):
             self._polling_progress_accepting = False
             self._send_path_degraded = True
             raise _PollingLifecycleAbort("Telegram polling teardown started")
+        # The Stop update is now subscribed and its handler (group 98) is
+        # registered with the application: the native composer may be offered.
+        self._native_stop_ready = bool(self._native_progress_enabled)
         if schedule_verifier:
             self._schedule_polling_progress_verifier(generation, progress)
         return generation, progress
@@ -4454,6 +4466,11 @@ class TelegramAdapter(BasePlatformAdapter):
         # gateway_platform_event observer (see _on_platform_update); group 99 so
         # it observes alongside, never displaces, the core handlers.
         app.add_handler(TypeHandler(Update, self._on_platform_update), group=99)
+        if self._native_progress_enabled:
+            # Native Stop intake: its own previously unused group, ahead of the
+            # catch-all 99 and apart from normal group 0.  The callback does a
+            # synchronous claim and returns; it only reacts to the raw update.
+            app.add_handler(TypeHandler(Update, self._on_stopped_message_generation), group=98)
 
     def _cold_boot_drop_pending(self, *, is_reconnect: bool) -> bool:
         """Whether to tell Telegram to drop its server-side pending-update queue.
@@ -4913,7 +4930,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     url_path=webhook_path,
                     webhook_url=webhook_url,
                     secret_token=webhook_secret,
-                    allowed_updates=Update.ALL_TYPES,
+                    allowed_updates=self._allowed_update_types(),
                     # Webhooks are push-based — Telegram does not hold a
                     # server-side getUpdates queue, so this flag is a no-op
                     # in practice. Mirror the polling path's reconnect
@@ -4921,6 +4938,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     drop_pending_updates=self._cold_boot_drop_pending(is_reconnect=is_reconnect),
                 )
                 self._webhook_mode = True
+                self._native_stop_ready = bool(self._native_progress_enabled)
                 self._polling_progress_accepting = False
                 self._send_path_degraded = False
                 logger.info(
@@ -5211,6 +5229,16 @@ class TelegramAdapter(BasePlatformAdapter):
         self._polling_generation = getattr(self, "_polling_generation", 0) + 1
         self._polling_progress_event = asyncio.Event()
         self._send_path_degraded = True
+        # Native activity display: no Stop can be served once we disconnect.
+        # Forget every draft (restart/reconnect ids are unknown to a new
+        # process anyway), cancel in-flight Stop work and the icon lookup.
+        self._native_stop_ready = False
+        self._native_drafts.clear()
+        for stop_task in list(getattr(self, "_native_stop_tasks", ())):
+            stop_task.cancel()
+        icon_task = getattr(self, "_native_icon_task", None)
+        if icon_task is not None and not icon_task.done():
+            icon_task.cancel()
 
         # Release the bot-token lock immediately so a wedged close cannot block
         # the reconnect watcher from acquiring it (#80598). The rest of teardown
@@ -6235,6 +6263,119 @@ class TelegramAdapter(BasePlatformAdapter):
         if not self._bot or not hasattr(self._bot, "send_message_draft"):
             return False
         return (chat_type or "").lower() in {"dm", "private"}
+
+    # ── Native Stop (raw ``stopped_message_generation`` update) ─────────────
+
+    _STOP_UPDATE_TYPE = "stopped_message_generation"
+
+    def _allowed_update_types(self):
+        """``allowed_updates`` for polling/webhook.
+
+        OFF returns PTB's own ``Update.ALL_TYPES`` untouched.  ON appends the
+        one update type PTB 22.x does not list so Telegram delivers the Stop
+        press; the update then arrives only in ``Update.api_kwargs``.
+        """
+        if not self._native_progress_enabled:
+            return Update.ALL_TYPES
+        return list(Update.ALL_TYPES) + [self._STOP_UPDATE_TYPE]
+
+    def native_progress_bind(self, chat_id, thread_id, draft_id, consumer, scope) -> None:
+        """Register one live draft id for Stop (consumer owns it; many per turn)."""
+        self._native_drafts[(str(chat_id), None if thread_id is None else str(thread_id), int(draft_id))] = (
+            SimpleNamespace(consumer=consumer, scope=scope)
+        )
+
+    def native_progress_unbind(self, consumer) -> None:
+        """Drop every draft registered by ``consumer`` (terminal / stop / fallback)."""
+        for key in [k for k, v in self._native_drafts.items() if v.consumer is consumer]:
+            self._native_drafts.pop(key, None)
+
+    def _raw_stopped_generation(self, update) -> Optional[Dict[str, Any]]:
+        """Normalize a Stop update; None unless every field is well formed.
+
+        Prefers a future direct ``Update.stopped_message_generation`` field and
+        otherwise reads the raw ``api_kwargs`` entry PTB 22.x keeps.
+        """
+        raw = getattr(update, self._STOP_UPDATE_TYPE, None)
+        if raw is None:
+            # PTB 22.x exposes api_kwargs as a read-only mapping proxy, not a dict.
+            kwargs = getattr(update, "api_kwargs", None)
+            raw = kwargs.get(self._STOP_UPDATE_TYPE) if isinstance(kwargs, collections.abc.Mapping) else None
+        if raw is None:
+            return None
+
+        def field(obj, name):
+            return obj.get(name) if isinstance(obj, collections.abc.Mapping) else getattr(obj, name, None)
+
+        chat = field(raw, "chat")
+        chat_id = field(chat, "id") if chat is not None else None
+        chat_type = field(chat, "type") if chat is not None else None
+        draft_id = field(raw, "draft_id")
+        if isinstance(chat_id, bool) or not isinstance(chat_id, int):
+            return None
+        if isinstance(draft_id, bool) or not isinstance(draft_id, int) or draft_id == 0:
+            return None
+        if not isinstance(chat_type, str):
+            return None
+        return {
+            "chat_id": chat_id,
+            "chat_type": chat_type,
+            "thread_id": field(raw, "message_thread_id"),
+            "draft_id": draft_id,
+        }
+
+    def _claim_native_stop(self, parsed: Dict[str, Any]) -> bool:
+        """Synchronously validate, authorize and claim one Stop; schedule the cancel.
+
+        Never awaits: PTB dispatches updates sequentially, so the network work
+        (scoped cancellation, history, confirmation) runs as a tracked task.
+        Every failure mode is a silent no-op.
+        """
+        if parsed["chat_type"] != "private" or parsed["thread_id"] is not None:
+            return False                  # topics/groups keep today's display + /stop
+        chat_id = str(parsed["chat_id"])
+        entry = self._native_drafts.get((chat_id, None, parsed["draft_id"]))
+        if entry is None:
+            return False                  # unknown / expired / foreign / pre-restart id
+        # private chat: the user id is the chat id (the update has no ``from``)
+        if not self._is_callback_user_authorized(
+            chat_id, chat_id=chat_id, chat_type="private", thread_id=None,
+        ):
+            return False
+        runner = getattr(getattr(self, "_message_handler", None), "__self__", None)
+        is_current = getattr(runner, "_is_session_run_current", None)
+        stop_current = getattr(runner, "native_stop_current", None)
+        if not callable(is_current) or not callable(stop_current):
+            return False
+        scope = entry.scope
+        if not is_current(scope.session_key, scope.run_generation):
+            return False                  # stale: a newer run or /new owns the session
+        if not entry.consumer.native_stop_claim():
+            return False                  # duplicate: already claimed / terminal
+        self.native_progress_unbind(entry.consumer)
+        task = asyncio.ensure_future(self._run_native_stop(stop_current, scope, entry.consumer))
+        self._native_stop_tasks.add(task)
+        task.add_done_callback(self._native_stop_tasks.discard)
+        return True
+
+    async def _run_native_stop(self, stop_current, scope, consumer) -> None:
+        try:
+            await stop_current(scope, consumer)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("[%s] native stop failed", self.name, exc_info=True)
+
+    async def _on_stopped_message_generation(self, update, context=None) -> None:
+        """PTB handler (group 98) for the raw Stop update.  Never raises."""
+        if not self._native_progress_enabled:
+            return
+        try:
+            parsed = self._raw_stopped_generation(update)
+            if parsed is not None:
+                self._claim_native_stop(parsed)
+        except Exception:
+            logger.debug("[%s] native stop intake error", self.name, exc_info=True)
 
     def supports_native_progress(
         self,

@@ -500,9 +500,14 @@ def make_consumer(adapter, *, chat_type="dm", metadata=None, history="default", 
     cfg = StreamConsumerConfig(
         transport="draft", chat_type=chat_type, edit_interval=0.05, buffer_threshold=5, cursor="",
     )
-    kwargs = dict(metadata=metadata, initial_reply_to_id="99")
-    # Native mode is only offered when the existing persistent-artifact path is
-    # wired (the gateway always passes it); history=None omits it.
+    from gateway.native_progress import NativeProgressScope
+
+    kwargs = dict(
+        metadata=metadata, initial_reply_to_id="99",
+        native_scope=NativeProgressScope(session_key="sess", run_generation=1, source=None),
+    )
+    # Native mode is only offered when the existing persistent-artifact path and a
+    # Stop scope are wired (the gateway always passes both); history=None omits it.
     if history == "default":
         history = History(adapter._bot)
     if history is not None:
