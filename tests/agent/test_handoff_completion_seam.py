@@ -83,7 +83,15 @@ def test_accepted_handoff_ends_turn_without_a_second_provider_call(harness, tmp_
     harness.hold = threading.Event()
     agent = _root([
         _tools(_declare("delegate")),
-        _tools(_call("delegate_task", {"goal": "Build the explainer and verify every output."})),
+        _tools(_call("delegate_task", {
+            "goal": "Build the explainer and verify every output.",
+            "handoff": {
+                "work": "making your video",
+                "outcome": "a verified 30-second narrated MP4",
+                "estimated_minutes_min": 5,
+                "estimated_minutes_max": 10,
+            },
+        })),
         _text("SHOULD NOT BE REACHED"),
     ])
     deltas = []
@@ -96,7 +104,10 @@ def test_accepted_handoff_ends_turn_without_a_second_provider_call(harness, tmp_
         dispatch = json.loads(_tool_rows(result)[-1]["content"])
         delegation_id = dispatch["delegation_id"]
         assert result["final_response"] != "SHOULD NOT BE REACHED"
-        assert delegation_id in result["final_response"]
+        assert "A worker is making your video." in result["final_response"]
+        assert "Goal: a verified 30-second narrated MP4." in result["final_response"]
+        assert "Estimated time: about 5–10 minutes." in result["final_response"]
+        assert "async-" not in result["final_response"]
         roles = [m["role"] for m in result["messages"]]
         assert roles[-3:] == ["assistant", "tool", "assistant"], "role alternation intact"
         assert result["messages"][-1]["content"] == result["final_response"]
@@ -108,6 +119,39 @@ def test_accepted_handoff_ends_turn_without_a_second_provider_call(harness, tmp_
         assert ad.active_count() == 1
         assert all(not child.interrupted for child in harness.built)
         assert not harness.hold.is_set()
+    finally:
+        harness.hold.set()
+
+
+def test_accepted_batch_handoff_uses_plural_copy_and_keeps_children_running(harness):
+    harness.hold = threading.Event()
+    tasks = [
+        {"goal": f"Review release {name}.", "title": f"Release {name}"}
+        for name in ("A", "B", "C")
+    ]
+    agent = _root([
+        _tools(_declare("delegate")),
+        _tools(_call("delegate_task", {
+            "tasks": tasks,
+            "handoff": {
+                "work": "reviewing three releases",
+                "outcome": "three checked release reports",
+            },
+        })),
+        _text("SHOULD NOT BE REACHED"),
+    ])
+    try:
+        result, _ = _run(agent)
+        text = result["final_response"]
+        assert text.startswith("Workers are reviewing three releases.")
+        assert "Goal: three checked release reports." in text
+        assert "Estimated time: no reliable estimate yet." in text
+        assert "release reports" in text
+        assert agent.client.chat.completions.create.call_count == 2
+        dispatch = json.loads(_tool_rows(result)[-1]["content"])
+        assert dispatch["count"] == 3
+        assert ad.get_durable_delegation(dispatch["delegation_id"])["state"] == "running"
+        assert all(not child.interrupted for child in harness.built)
     finally:
         harness.hold.set()
 
@@ -215,8 +259,38 @@ def test_handoff_directive_is_consumed_once_and_names_the_job():
     directive = dc.completion_directive(root)
 
     assert directive.reason == "delegation_handoff"
-    assert "async-abc" in directive.text and "Build the explainer." in directive.text
+    assert directive.text == (
+        "A worker is working on the delegated task.\n"
+        "Goal: Build the explainer.\n"
+        "Estimated time: no reliable estimate yet.\n"
+        "You can keep chatting."
+    )
+    assert "async-abc" not in directive.text
     assert dc.completion_directive(root) is None, "consumed once"
+
+
+def test_handoff_rejects_bad_public_text_and_unknowns_invalid_eta():
+    root = _unit_root()
+    cp = root._delegation_checkpoint
+    cp.declare("delegate", "Long phase.")
+    assert cp.ticket().accept_handoff(
+        delegation_id="internal-job-token",
+        goals=["first.", "second.", "third.", "fourth."],
+        handoff={
+            "work": "reviewing async_private-id",
+            "outcome": "a report from /secret/files",
+            "estimated_minutes_min": 0,
+            "estimated_minutes_max": 9,
+        },
+    )
+    text = dc.completion_directive(root).text
+    assert text.startswith("Workers are working on the delegated tasks.")
+    assert "Goal: the results described in the tasks." in text
+    assert "Estimated time: no reliable estimate yet." in text
+    assert "internal-job-token" not in text
+    assert "async_private-id" not in text
+    assert "/secret/files" not in text
+    assert "first." not in text and "fourth." not in text
 
 
 def test_exhausted_text_names_an_unconsumed_handoff_and_never_denies_it():
