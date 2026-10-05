@@ -4818,8 +4818,6 @@ def delegate_task(
         )
 
         if dispatch.get("status") == "dispatched":
-            if _checkpoint_ticket is not None:
-                _checkpoint_ticket.credit("async")
             n = len(_goals)
             note = _background_dispatch_note(n)
             payload = {
@@ -4833,6 +4831,15 @@ def delegate_task(
             _sids = [
                 getattr(_c, "_subagent_id", None) for _c in _child_agents
             ]
+            if _checkpoint_ticket is not None:
+                # The accepted job owns this request's remaining phase. A
+                # ticket that no longer has the authority gets False and the
+                # job simply runs on; nothing here ever cancels it.
+                _checkpoint_ticket.accept_handoff(
+                    delegation_id=dispatch["delegation_id"],
+                    goals=_goals,
+                    subagent_ids=[s for s in _sids if isinstance(s, str) and s],
+                )
             if any(isinstance(s, str) and s for s in _sids):
                 payload["subagent_ids"] = _sids
                 payload["control_hint"] = (

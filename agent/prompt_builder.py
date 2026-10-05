@@ -521,10 +521,12 @@ TODO_DELEGATION_DECISION_GUIDANCE = (
     "mode 'direct' with a brief operational reason, or mode 'delegate' with a "
     "reason followed by an actual delegate_task call. A decision-only todo "
     "call is enough; no checklist is needed. Work tools are blocked until you "
-    "do, and the choice must be renewed after a handful of work calls or a "
-    "couple of minutes. Quick tasks stay direct; respect explicit no-subagent "
-    "instructions. After dispatching background workers, end your turn with a "
-    "short acknowledgement."
+    "do. A choice covers only a handful of work calls or a couple of minutes "
+    "for the user's request, and declaring again does not extend it: once it "
+    "is spent, or once a background worker is dispatched, work tools stay "
+    "blocked until the user's next message. Quick tasks stay direct; respect "
+    "explicit no-subagent instructions. After dispatching background workers, "
+    "end your turn with a short acknowledgement."
 )
 
 PARALLEL_TOOL_CALL_GUIDANCE = (

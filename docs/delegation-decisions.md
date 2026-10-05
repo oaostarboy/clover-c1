@@ -16,10 +16,12 @@ recorded a delegation choice through the existing `todo` tool:
 - `delegate`: give a reason **and** actually start a child with
   `delegate_task`. The choice alone does not unlock work. Listing, steering or
   stopping children, a malformed call, or a dispatch that fails before any
-  child starts does not count. An accepted background child counts, and so does
-  a child that actually starts inline when background delivery is unavailable
-  (a stateless HTTP endpoint, or the background pool being full). It does not
-  wait for the child to finish.
+  child starts does not count. An accepted background child counts, and it takes
+  over the rest of the request (see below) rather than unlocking more root
+  work. A background request that cannot be had (no delivery path, pool full) is
+  reported as `rejected` and nothing runs inline instead. An explicitly
+  synchronous child that actually starts also counts and spends one work unit.
+  The root does not wait for a background child to finish.
 
 The call is `todo` with a `delegation` argument holding `mode` and a non-empty
 `reason`. No checklist is needed: a decision-only call is enough for a one-step
@@ -42,22 +44,39 @@ tools are work. A deferred tool reached through `tool_call` is classified by the
 tool it resolves to, not by the wrapper. Pure text replies never need a
 decision.
 
-### When a choice must be renewed
+### The foreground allowance belongs to the request
 
-A choice covers at most 5 parent work calls, or 120 seconds after the first of
-them. After that the next work call is blocked until the agent declares again;
-restating the same choice is enough. Time is measured on a monotonic clock from
-the first work call, so thinking time before work does not count. Calls that
-did not run do not count: policy blocks, control-plane calls, plugin or
+A human request gets one foreground allowance: at most 5 parent work calls, or
+120 seconds after the first of them. It is not renewable. Declaring again,
+restating the choice, renaming the todo, naming a new phase, a late declaration
+completion and context compression all leave it untouched; only a new human
+message starts a new allowance. Once it is spent the next work call is blocked
+with `delegation_foreground_exhausted`. Time is measured on a monotonic clock
+from the first work call, so thinking time before work does not count. Calls
+that did not run do not count: policy blocks, control-plane calls, plugin or
 guardrail denials, and calls refunded because an ACP edit or a terminal command
-was denied or left pending approval. Calls that ran and failed do count. Child
-activity does not count. One `execute_code` call counts once, however many
-tools its script calls internally.
+was denied or left pending approval. Calls that ran and failed do count. A
+child's own tool calls do not count, but a synchronous child start spends one
+unit, so a chain of synchronous children is bounded too.
+
+From an exhausted request the only way out is a background `delegate_task`
+dispatch (the runtime decides whether a root's dispatch is background; the
+`background` argument is never consulted). If the user said not to use
+subagents, the agent stops and reports an honest status instead.
+
+An accepted background dispatch hands the rest of the request to the worker.
+The checkpoint records who owns it (request, goals, subagent ids, the reason in
+force and the durable result row ids) and closes the root's work tools
+(`delegation_handoff_active`) and further spawning (`delegation_spawn_closed`)
+for that request. A dispatch that is rejected, or whose ticket belongs to an
+older request, hands off nothing and never cancels the job. `list`, `steer` and
+`stop` stay available in every phase.
 
 A new human message starts a new task, so the choice starts undecided again.
 Within a turn, extra model iterations and `/steer` do not reset it. A trusted
-gateway delivery of a background child's result keeps the live choice. CLI and
-TUI deliveries cannot prove their origin and cost one more declaration. History
+gateway delivery of a background child's result keeps the live ledger as it
+stands (an exhausted or handed-off request stays closed). CLI and TUI
+deliveries cannot prove their origin and cost one more declaration. History
 restored after a restart never carries a choice into a new request.
 
 ### Who is exempt

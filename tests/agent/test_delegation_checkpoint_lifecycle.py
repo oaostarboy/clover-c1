@@ -122,7 +122,7 @@ def test_late_todo_completion_cannot_authorize_a_new_turn(tmp_path, monkeypatch)
     assert not errors
 
 
-def test_late_declaration_after_budget_renewal_is_ignored(tmp_path):
+def test_late_declaration_after_a_newer_declaration_is_ignored(tmp_path):
     """Same ownership rule inside one turn: a stale receipt never overwrites."""
     import agent.delegation_checkpoint as dc
 
@@ -256,7 +256,7 @@ def test_unsupported_delivery_rejects_instead_of_running_inline(tmp_path, inline
     assert blocked['error_type'] == 'delegation_dispatch_required'
 
 
-def test_a_child_that_starts_after_a_renewal_cannot_satisfy_the_newer_declaration(
+def test_a_child_that_starts_after_a_redeclaration_cannot_satisfy_the_newer_declaration(
         tmp_path, monkeypatch):
     """The ticket is generation-bound: a child entering its conversation after
     the parent re-declared must not unlock the newer declaration."""

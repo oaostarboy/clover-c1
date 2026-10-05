@@ -370,14 +370,14 @@ def test_explicit_synchronous_call_is_unchanged(harness):
     assert root._delegation_checkpoint.state == dc.DELEGATED_STARTED
 
 
-def test_accepted_background_dispatch_still_credits_the_declaration(harness):
+def test_accepted_background_dispatch_hands_the_request_off(harness):
     root = _root()
     harness.hold = threading.Event()
     try:
         parsed = _delegate(root)
         assert parsed["status"] == "dispatched"
         assert parsed["mode"] == "background"
-        assert root._delegation_checkpoint.state == dc.DELEGATED_STARTED
+        assert root._delegation_checkpoint.phase == dc.PHASE_HANDED_OFF
         assert ad.active_count() == 1
     finally:
         harness.hold.set()

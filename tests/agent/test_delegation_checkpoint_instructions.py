@@ -48,7 +48,7 @@ def test_gating_never_changes_prompt_bytes_or_tool_schemas(tmp_path):
     run_batch(agent, [_write(tmp_path / 'a.txt')])                 # blocked
     run_batch(agent, [_direct(), _write(tmp_path / 'b.txt')])      # declared, executed
     for i in range(6):
-        run_batch(agent, [_write(tmp_path / f'c{i}.txt')])         # budget -> renewal block
+        run_batch(agent, [_write(tmp_path / f'c{i}.txt')])         # allowance spent -> exhausted block
 
     assert _stable_prompt(agent) == prompt_before
     assert json.dumps(agent.tools, sort_keys=True) == tools_before
