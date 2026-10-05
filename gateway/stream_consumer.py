@@ -675,6 +675,7 @@ class GatewayStreamConsumer:
         display this returns False so the caller routes the line through
         today's progress queue instead (nothing is dropped).
         """
+        self._np_tls.tool = None      # a pending note_tool() tag is consumed by this line
         if not line:
             return False
         if self._np_state != "off":

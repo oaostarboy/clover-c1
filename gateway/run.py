@@ -2727,6 +2727,7 @@ os.environ["CLOVER_QUIET"] = "1"
 from gateway import clover_acks as _clover_acks
 from gateway.cwd_placeholder import CWD_PLACEHOLDERS, resolve_placeholder_terminal_cwd
 from gateway.stream_consumer import format_thought
+from gateway.native_progress import NativeAwareProgressQueue, NativeProgressScope
 from gateway.progress_cleanup import (
     collapse_or_delete as _collapse_or_delete_bubbles,
     delete_bubble as _delete_progress_bubble,
@@ -4612,6 +4613,21 @@ class TurnRunner:
         if not ctx.progress_queue or not ctx._run_still_current():
             return
 
+        # Native activity composer: a finished tool updates its row's state
+        # (outcome/time are only claimed when the pairing is honest).  The
+        # result payload is never read — only duration and the error flag.
+        if event_type == "tool.completed" and tool_name:
+            _sc_done = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+            if _sc_done is not None and getattr(_sc_done, "native_activity_active", False) is True:
+                try:
+                    _sc_done.on_tool_complete(
+                        tool_name,
+                        duration=kwargs.get("duration"),
+                        is_error=kwargs.get("is_error"),
+                    )
+                except Exception as _np_err:
+                    logger.debug("native activity completion failed: %s", _np_err)
+
         # First-touch onboarding: the first time a tool takes longer than
         # _LONG_TOOL_THRESHOLD_S during a run that's streaming every tool
         # (progress_mode == "all"), append a one-time hint suggesting
@@ -4712,6 +4728,11 @@ class TurnRunner:
         if ctx.progress_mode == "new" and tool_name == ctx.last_tool[0]:
             return
         ctx.last_tool[0] = tool_name
+        # Native activity composer: tag the line built below with its tool so
+        # a later completion can be paired (consumed by the queue router).
+        _sc_note = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+        if _sc_note is not None and getattr(_sc_note, "native_activity_active", False) is True:
+            _sc_note.note_tool(tool_name)
 
         # Build progress message with primary argument preview
         from agent.display import get_tool_emoji
@@ -4844,8 +4865,11 @@ class TurnRunner:
             _sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
             if _sc is not None and getattr(_sc, "accepts_tool_progress", False):
                 # Replace the last progress line with the dedup version
-                _sc.on_tool_progress(f"{msg} (×{ctx.repeat_count[0] + 1})")
-                return
+                if _sc.on_tool_progress(
+                    f"{msg} (×{ctx.repeat_count[0] + 1})",
+                    tool=tool_name, replace_last=True,
+                ):
+                    return
             # Update the last line in progress_lines with a counter
             # via a special "dedup" queue message.
             ctx.progress_queue.put(("__dedup__", msg, ctx.repeat_count[0]))
@@ -4858,8 +4882,8 @@ class TurnRunner:
         # stream bubble instead of the separate progress queue.
         _sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
         if _sc is not None and getattr(_sc, "accepts_tool_progress", False):
-            _sc.on_tool_progress(msg)
-            return
+            if _sc.on_tool_progress(msg, tool=tool_name):
+                return
 
         ctx.progress_queue.put(msg)
 
@@ -5058,6 +5082,62 @@ class TurnRunner:
                         "task-card stop failed during turn cleanup",
                         exc_info=True,
                     )
+
+    async def persist_native_activity(self, lines: List[str], reason: str) -> None:
+        """Persist the lines the native activity draft showed (the draft is
+        ephemeral) through the same send path, limits, threading and cleanup
+        tracking as today's tool-progress bubble.
+
+        Called by the stream consumer exactly once — at turn end before the
+        final reply, on Stop / abandon, or when the native display falls back
+        (capability loss, size or keepalive caps) — so no visible line is lost
+        and ``cleanup_progress`` collapses the artifact into the summary card
+        exactly as it does for a legacy bubble.
+        """
+        ctx = self._ctx
+        adapter = self._runner._adapter_for_source(ctx.source)
+        if not adapter or not lines:
+            return
+        len_fn = adapter.message_len_fn if isinstance(adapter, BasePlatformAdapter) else len
+        try:
+            raw_limit = int(getattr(adapter, "MAX_MESSAGE_LENGTH", 4000) or 4000)
+        except Exception:
+            raw_limit = 4000
+        if isinstance(adapter, BasePlatformAdapter):
+            try:
+                raw_limit = int(adapter.max_message_length_for_chat(ctx.source.chat_id) or 4000)
+                len_fn = adapter.message_len_fn_for_chat(ctx.source.chat_id)
+            except Exception:
+                pass
+        limit = max(1, raw_limit - (64 if raw_limit > 128 else 0))
+
+        groups: List[List[str]] = []
+        if ctx.progress_grouping == "separate":
+            groups = [[str(line)] for line in lines]
+        else:
+            current: List[str] = []
+            for line in lines:
+                candidate = current + [str(line)]
+                if current and len_fn("\n".join(candidate)) > limit:
+                    groups.append(current)
+                    current = [str(line)]
+                else:
+                    current = candidate
+            if current:
+                groups.append(current)
+        for group in groups:
+            result = await adapter.send(
+                chat_id=ctx.source.chat_id,
+                content="\n".join(group),
+                reply_to=ctx._progress_reply_to,
+                metadata=ctx._progress_metadata,
+            )
+            if (
+                ctx._cleanup_progress
+                and getattr(result, "success", False)
+                and getattr(result, "message_id", None)
+            ):
+                ctx._cleanup_msg_ids.append(str(result.message_id))
 
     async def send_progress_messages(self):
         ctx = self._ctx
@@ -5766,6 +5846,12 @@ class TurnRunner:
                         on_before_finalize=_pause_typing_before_finalize,
                         initial_reply_to_id=ctx.event_message_id,
                         run_still_current=ctx._run_still_current,
+                        on_native_history=self.persist_native_activity,
+                        native_scope=NativeProgressScope(
+                            session_key=ctx.session_key or "",
+                            run_generation=ctx.run_generation,
+                            source=ctx.source,
+                        ),
                     )
                     if _want_stream_deltas:
                         def _stream_delta_cb(text: str) -> None:
@@ -31357,7 +31443,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
 
         # Queue for progress messages (thread-safe)
-        progress_queue = queue.Queue() if needs_progress_queue else None
+        # The consumer holder exists before the queue so the native Telegram
+        # activity composer (when it owns the display) can take today's
+        # progress items; otherwise this is an ordinary queue.Queue.
+        stream_consumer_holder = [None]  # Mutable container for stream consumer
+        progress_queue = (
+            NativeAwareProgressQueue(stream_consumer_holder) if needs_progress_queue else None
+        )
         last_tool = [None]  # Mutable container for tracking in closure
         last_progress_msg = [None]  # Track last message for dedup
         repeat_count = [0]  # How many times the same message repeated
@@ -31672,7 +31764,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         turn_ctx.agent_holder = agent_holder
         result_holder = [None]  # Mutable container for the result
         tools_holder = [None]   # Mutable container for the tool definitions
-        stream_consumer_holder = [None]  # Mutable container for stream consumer
         # #60671 — streaming PCM audio consumer.  Created on the gateway
         # event-loop thread (NOT inside run_sync's executor worker) so the
         # outer finalisation / interrupt paths can reference it without a

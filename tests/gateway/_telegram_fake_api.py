@@ -65,8 +65,11 @@ class FakeTelegramApi:
         return SimpleNamespace(message_id=next(self._ids))
 
     async def send_message(self, **kwargs):
-        await self._enter("send_message", dict(kwargs))
-        return SimpleNamespace(message_id=next(self._ids))
+        recorded = dict(kwargs)
+        await self._enter("send_message", recorded)
+        message_id = next(self._ids)
+        recorded["_message_id"] = message_id     # lets tests follow edits of one bubble
+        return SimpleNamespace(message_id=message_id)
 
     async def send_message_draft(self, **kwargs):
         await self._enter("send_message_draft", dict(kwargs))
