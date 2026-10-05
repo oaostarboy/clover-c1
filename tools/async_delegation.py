@@ -1169,7 +1169,7 @@ def dispatch_async_delegation(
             "error": f"Failed to schedule async delegation: {exc}",
         }
     if progress_fn is not None:
-        _ensure_stale_monitor()
+        _ensure_stale_monitor_best_effort(delegation_id)
 
     logger.info(
         "Dispatched async delegation %s (session_key=%s): %s",
@@ -1526,7 +1526,7 @@ def dispatch_async_delegation_batch(
             "error": f"Failed to schedule async delegation batch: {exc}",
         }
     if progress_fn is not None:
-        _ensure_stale_monitor()
+        _ensure_stale_monitor_best_effort(delegation_id)
 
     logger.info(
         "Dispatched async delegation batch %s (%d task(s), session_key=%s)",
@@ -1652,6 +1652,24 @@ def _push_batch_completion_event(
             "Async delegation batch %s: failed to enqueue completion event; "
             "result lost: %s",
             event_record.get("delegation_id"), exc,
+        )
+
+
+def _ensure_stale_monitor_best_effort(delegation_id: str) -> None:
+    """Start the stale monitor for a job that is already scheduled.
+
+    Once ``submit`` has succeeded the job is running and owned, so a failure to
+    start the monitoring thread (thread exhaustion) must not escape the
+    dispatcher: the caller would see an exception for a live job and never
+    record the handoff. The job simply runs without stall detection.
+    """
+    try:
+        _ensure_stale_monitor()
+    except Exception:
+        logger.warning(
+            "Async delegation %s is running but its stale monitor could not "
+            "be started; stall detection is off for it.",
+            delegation_id, exc_info=True,
         )
 
 
