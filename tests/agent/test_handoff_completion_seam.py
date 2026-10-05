@@ -123,6 +123,75 @@ def test_accepted_handoff_ends_turn_without_a_second_provider_call(harness, tmp_
         harness.hold.set()
 
 
+@pytest.mark.parametrize(
+    ("low", "high", "expected"),
+    [
+        (5, 10, "Estimated time: about 5–10 minutes."),
+        (1_000_000, 10_000_000, "Estimated time: no reliable estimate yet."),
+        (1e-9, 2e-9, "Estimated time: no reliable estimate yet."),
+        (float("inf"), 10, "Estimated time: no reliable estimate yet."),
+        (float("nan"), 10, "Estimated time: no reliable estimate yet."),
+        (True, 10, "Estimated time: no reliable estimate yet."),
+        (10, 5, "Estimated time: no reliable estimate yet."),
+        (5, 5, "Estimated time: about 5 minutes."),
+        (2.5, 7.3333333, "Estimated time: about 3–7 minutes."),
+        (1440, 1440, "Estimated time: about 1440 minutes."),
+        (1441, 1441, "Estimated time: no reliable estimate yet."),
+    ],
+)
+def test_accepted_handoff_renders_only_readable_ordered_eta(harness, low, high, expected):
+    harness.hold = threading.Event()
+    agent = _root([
+        _tools(_declare("delegate")),
+        _tools(_call("delegate_task", {
+            "goal": "Build the explainer and verify every output.",
+            "handoff": {
+                "work": "making your video",
+                "outcome": "a verified 30-second narrated MP4",
+                "estimated_minutes_min": low,
+                "estimated_minutes_max": high,
+            },
+        })),
+        _text("SHOULD NOT BE REACHED"),
+    ])
+    try:
+        result, _ = _run(agent)
+        assert result["turn_exit_reason"] == "delegation_handoff"
+        assert expected in result["final_response"]
+        assert "e+" not in result["final_response"]
+        assert agent.client.chat.completions.create.call_count == 2
+    finally:
+        harness.hold.set()
+
+
+def test_accepted_batch_handoff_formats_readable_eta_for_multiple_workers(harness):
+    harness.hold = threading.Event()
+    tasks = [
+        {"goal": f"Review release {name}.", "title": f"Release {name}"}
+        for name in ("A", "B", "C")
+    ]
+    agent = _root([
+        _tools(_declare("delegate")),
+        _tools(_call("delegate_task", {
+            "tasks": tasks,
+            "handoff": {
+                "work": "reviewing three releases",
+                "outcome": "three checked release reports",
+                "estimated_minutes_min": 12.4,
+                "estimated_minutes_max": 18.6,
+            },
+        })),
+        _text("SHOULD NOT BE REACHED"),
+    ])
+    try:
+        result, _ = _run(agent)
+        assert result["final_response"].startswith("Workers are reviewing three releases.")
+        assert "Estimated time: about 12–19 minutes." in result["final_response"]
+        assert agent.client.chat.completions.create.call_count == 2
+    finally:
+        harness.hold.set()
+
+
 def test_accepted_batch_handoff_uses_plural_copy_and_keeps_children_running(harness):
     harness.hold = threading.Event()
     tasks = [
