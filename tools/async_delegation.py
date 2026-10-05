@@ -1338,6 +1338,34 @@ def publish_batch_child_completion(
         process_registry.completion_queue.put(evt)
 
 
+def has_async_capacity(max_async_children: int) -> bool:
+    """Whether one more async unit would currently fit.
+
+    Advisory only: the authoritative check is the atomic one inside
+    ``dispatch_async_delegation_batch``. Callers use this to refuse before
+    building child agents they would only have to tear down again.
+    """
+    with _records_lock:
+        running = sum(
+            1 for r in _records.values()
+            if r.get("status") in ("running", "stalling")
+        )
+    return running < max_async_children
+
+
+def _withdraw_unscheduled_batch(delegation_id: str) -> None:
+    """Undo a dispatch whose worker was never scheduled."""
+    with _records_lock:
+        _records.pop(delegation_id, None)
+    try:
+        _delete_durable_delegation(delegation_id)
+    except Exception:
+        logger.debug(
+            "Could not delete durable row for unscheduled batch %s",
+            delegation_id, exc_info=True,
+        )
+
+
 def dispatch_async_delegation_batch(
     *,
     goals: List[str],
@@ -1401,6 +1429,7 @@ def dispatch_async_delegation_batch(
         if running >= max_async_children:
             return {
                 "status": "rejected",
+                "reason": "capacity",
                 "error": (
                     f"Async delegation capacity reached ({max_async_children} "
                     f"running). Wait for one to finish (its result will re-enter "
@@ -1410,8 +1439,27 @@ def dispatch_async_delegation_batch(
             }
         _records[delegation_id] = record
 
-    _persist_dispatch(record)
-    executor = _get_executor(max_async_children)
+    # The record is visible (and counts against capacity) from here on, so any
+    # failure before the worker is scheduled must withdraw it again; otherwise
+    # a phantom "running" unit would hold a slot until the process exits.
+    try:
+        _persist_dispatch(record)
+    except Exception as exc:
+        _withdraw_unscheduled_batch(delegation_id)
+        return {
+            "status": "rejected",
+            "reason": "persistence",
+            "error": f"Failed to persist async delegation batch: {exc}",
+        }
+    try:
+        executor = _get_executor(max_async_children)
+    except Exception as exc:
+        _withdraw_unscheduled_batch(delegation_id)
+        return {
+            "status": "rejected",
+            "reason": "schedule",
+            "error": f"Failed to start the async delegation executor: {exc}",
+        }
 
     def _worker() -> None:
         combined: Dict[str, Any] = {}
@@ -1442,11 +1490,10 @@ def dispatch_async_delegation_batch(
         # Propagate the dispatching profile to the detached batch children.
         executor.submit(propagate_context_to_thread(_worker))
     except Exception as exc:  # pragma: no cover
-        with _records_lock:
-            _records.pop(delegation_id, None)
-        _delete_durable_delegation(delegation_id)
+        _withdraw_unscheduled_batch(delegation_id)
         return {
             "status": "rejected",
+            "reason": "schedule",
             "error": f"Failed to schedule async delegation batch: {exc}",
         }
     if progress_fn is not None:

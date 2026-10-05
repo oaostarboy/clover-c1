@@ -23,6 +23,7 @@ from tests.agent.test_delegation_checkpoint import (
     _direct,
     _write,
     run_batch,
+    sync_spawn,
 )
 
 
@@ -162,7 +163,7 @@ def test_declaration_in_the_current_turn_still_authorizes(tmp_path):
 # ── 2. inline start boundary ───────────────────────────────────────────────
 
 def test_credential_lease_failure_before_the_child_conversation_does_not_unlock(
-        tmp_path, monkeypatch, inline_session, child_conversations):
+        tmp_path, monkeypatch, child_conversations):
     import tools.delegate_tool as dt
 
     original = dt._build_child_preserving_parent_tools
@@ -180,7 +181,7 @@ def test_credential_lease_failure_before_the_child_conversation_does_not_unlock(
     agent = _agent()
     run_batch(agent, [_delegate()])
     try:
-        run_batch(agent, [('delegate_task', {'goal': 'lease fails'})])
+        sync_spawn(agent, goal='lease fails')
     except Exception:
         pass
     target = tmp_path / 'should-not-write.txt'
@@ -193,7 +194,7 @@ def test_credential_lease_failure_before_the_child_conversation_does_not_unlock(
 
 
 def test_pool_construction_failure_before_any_child_entry_does_not_unlock(
-        tmp_path, monkeypatch, inline_session, child_conversations):
+        tmp_path, monkeypatch, child_conversations):
     import tools.daemon_pool as pool
 
     def broken_pool(*args, **kwargs):
@@ -204,9 +205,7 @@ def test_pool_construction_failure_before_any_child_entry_does_not_unlock(
     with monkeypatch.context() as patch:
         patch.setattr(pool, 'DaemonThreadPoolExecutor', broken_pool)
         with pytest.raises(RuntimeError, match='pool construction failure'):
-            agent._dispatch_delegate_task({
-                'tasks': [{'goal': 'offline review lane A'}, {'goal': 'offline review lane B'}],
-                'background': False})
+            sync_spawn(agent, tasks=[{'goal': 'offline review lane A'}, {'goal': 'offline review lane B'}])
     target = tmp_path / 'no-child-started.txt'
 
     (blocked,) = run_batch(agent, [_write(target)])
@@ -216,30 +215,49 @@ def test_pool_construction_failure_before_any_child_entry_does_not_unlock(
     assert blocked['error_type'] == 'delegation_dispatch_required'
 
 
-def test_real_inline_child_conversation_start_unlocks(tmp_path, inline_session, child_conversations):
+def test_real_inline_child_conversation_start_unlocks(tmp_path, child_conversations):
     agent = _agent()
     target = tmp_path / 'ok.txt'
 
-    _, ran, _ = run_batch(agent, [_delegate(), ('delegate_task', {'goal': 'inline lane'}), _write(target, 'after')])
+    run_batch(agent, [_delegate()])
+    ran = sync_spawn(agent, goal='inline lane')
+    run_batch(agent, [_write(target, 'after')])
 
     assert 'results' in ran and ran.get('status') != 'dispatched'
     assert child_conversations == ['inline lane']
     assert target.read_text() == 'after'
 
 
-def test_real_inline_batch_unlocks_once_the_first_child_starts(tmp_path, inline_session, child_conversations):
+def test_real_inline_batch_unlocks_once_the_first_child_starts(tmp_path, child_conversations):
     agent = _agent()
     target = tmp_path / 'ok.txt'
 
-    run_batch(agent, [_delegate(), ('delegate_task', {'tasks': [{'goal': 'offline review lane A'}, {'goal': 'offline review lane B'}]}),
-                      _write(target, 'after')])
+    run_batch(agent, [_delegate()])
+    sync_spawn(agent, tasks=[{'goal': 'offline review lane A'}, {'goal': 'offline review lane B'}])
+    run_batch(agent, [_write(target, 'after')])
 
     assert sorted(child_conversations) == ['offline review lane A', 'offline review lane B']
     assert target.read_text() == 'after'
 
 
+def test_unsupported_delivery_rejects_instead_of_running_inline(tmp_path, inline_session, child_conversations):
+    """Model path in a session that cannot receive a detached result: the root
+    is told the handoff was refused. Nothing runs inline and nothing unlocks."""
+    agent = _agent()
+    target = tmp_path / 'no.txt'
+
+    _, rejected, blocked = run_batch(
+        agent, [_delegate(), ('delegate_task', {'goal': 'inline lane'}), _write(target, 'after')])
+
+    assert rejected['status'] == 'rejected' and rejected['started'] is False
+    assert rejected['reason'] == 'delivery_unsupported'
+    assert child_conversations == []
+    assert not target.exists()
+    assert blocked['error_type'] == 'delegation_dispatch_required'
+
+
 def test_a_child_that_starts_after_a_renewal_cannot_satisfy_the_newer_declaration(
-        tmp_path, monkeypatch, inline_session):
+        tmp_path, monkeypatch):
     """The ticket is generation-bound: a child entering its conversation after
     the parent re-declared must not unlock the newer declaration."""
     import run_agent
@@ -262,7 +280,7 @@ def test_a_child_that_starts_after_a_renewal_cannot_satisfy_the_newer_declaratio
 
     monkeypatch.setattr(dc.DispatchTicket, 'credit', credit_after_renewal)
     monkeypatch.setattr(run_agent.AIAgent, 'run_conversation', renewing_conversation)
-    run_batch(agent, [('delegate_task', {'goal': 'late lane'})])
+    sync_spawn(agent, goal='late lane')
     target = tmp_path / 'no.txt'
 
     (blocked,) = run_batch(agent, [_write(target)])
