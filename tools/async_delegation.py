@@ -44,7 +44,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
 
 from clover_constants import get_clover_home
 from tools.daemon_pool import DaemonThreadPoolExecutor
@@ -839,6 +839,35 @@ def get_durable_delegation(delegation_id: str) -> Optional[Dict[str, Any]]:
         "delivery_state": row[5], "delivery_attempts": row[6],
         "origin_session_id": row[7] or "",
     }
+
+
+def owned_receipts_ready(receipt_ids: Iterable[str]) -> tuple:
+    """The subset of ``receipt_ids`` whose durable row is a claimed terminal result.
+
+    Reads the durable table only, never the in-memory record: a job flips to
+    ``finalizing`` in memory before its result is committed, so only a terminal
+    row proves a committed result. The delivery claim (or a completed delivery)
+    proves the text was handed to a consumer. Missing rows, unknown states,
+    unclaimed or dropped rows, and any database error yield nothing (fail
+    closed).
+    """
+    ids = [str(r) for r in receipt_ids if r]
+    if not ids:
+        return ()
+    try:
+        marks = ",".join("?" for _ in ids)
+        with _DB_LOCK, _transaction() as conn:
+            rows = conn.execute(
+                f"""SELECT delegation_id FROM async_delegations
+                    WHERE delegation_id IN ({marks})
+                      AND state NOT IN ('running', 'finalizing')
+                      AND (delivery_claim IS NOT NULL OR delivery_state='delivered')""",
+                ids,
+            ).fetchall()
+    except Exception:
+        logger.debug("owned_receipts_ready failed closed", exc_info=True)
+        return ()
+    return tuple(row[0] for row in rows)
 
 
 def _get_executor(max_workers: int) -> ThreadPoolExecutor:
