@@ -55,22 +55,34 @@ DISPATCH_REQUIRED = "delegation_dispatch_required"
 FOREGROUND_EXHAUSTED = "delegation_foreground_exhausted"
 HANDOFF_ACTIVE = "delegation_handoff_active"
 SPAWN_CLOSED = "delegation_spawn_closed"
+INTEGRATION_EXHAUSTED = "delegation_integration_exhausted"
 
 # How much authority a request still has. ``state`` records that a choice was
 # made; ``phase`` records how much foreground work that choice may still do.
 PHASE_FOREGROUND = "foreground"
 PHASE_EXHAUSTED = "exhausted"
 PHASE_HANDED_OFF = "handed_off"
+# Reported while a completion-integration window is open / spent. A window is an
+# overlay for one internal turn; the stored ledger phase underneath is untouched.
+PHASE_INTEGRATING = "integrating"
+PHASE_CLOSED = "closed"
 
+_CLOSING_CODES = frozenset({
+    FOREGROUND_EXHAUSTED, HANDOFF_ACTIVE, SPAWN_CLOSED, INTEGRATION_EXHAUSTED,
+})
 _MAX_OWNED_HANDOFFS = 64
 _MAX_GOAL_CHARS = 160
 
 DEFAULT_MAX_WORK_TOOLS = 5
 DEFAULT_MAX_FOREGROUND_SECONDS = 120.0
+DEFAULT_MAX_INTEGRATION_WINDOWS = 2
+_MAX_WINDOW_HISTORY = 64
 
-# The only trusted origin kind whose delivery keeps a live decision. Exact
-# match: other kinds (including the TUI's async_delegation_complete) reset.
-PRESERVE_DISPLAY_KIND = "internal_notification"
+# The only trusted origin kind whose delivery keeps a live ledger and may open
+# an integration window. Exact match: other kinds (including the TUI's
+# async_delegation_complete) reset to a fresh request.
+INTEGRATION_KINDS = frozenset({"internal_notification"})
+PRESERVE_KINDS = INTEGRATION_KINDS
 
 # Control plane: choosing, discovering and dispatching. Everything else —
 # including unknown, new and MCP tools — is work.
@@ -92,6 +104,7 @@ class CheckpointSettings:
     enabled: bool = True
     max_work_tools: int = DEFAULT_MAX_WORK_TOOLS
     max_foreground_seconds: float = DEFAULT_MAX_FOREGROUND_SECONDS
+    max_integration_windows: int = DEFAULT_MAX_INTEGRATION_WINDOWS
 
 
 def _positive_int(value: Any, default: int) -> int:
@@ -134,6 +147,9 @@ def normalize_settings(raw: Any) -> CheckpointSettings:
         max_foreground_seconds=_positive_seconds(
             raw.get("max_foreground_seconds"), DEFAULT_MAX_FOREGROUND_SECONDS
         ),
+        max_integration_windows=_positive_int(
+            raw.get("max_integration_windows"), DEFAULT_MAX_INTEGRATION_WINDOWS
+        ),
     )
 
 
@@ -161,6 +177,7 @@ class Admission:
     generation: int
     tool_name: str
     tool_call_id: str
+    in_window: bool = False
 
 
 @dataclass(frozen=True)
@@ -234,6 +251,29 @@ class OwnedHandoff:
     consumed_receipts: set = field(default_factory=set, compare=False, repr=False)
 
 
+@dataclass
+class IntegrationWindow:
+    """A bounded verification allowance for one finished background result.
+
+    Owned by the request that handed off, never by the live ledger: work done
+    inside it spends this window's own budget only.
+    """
+
+    request_id: str
+    receipt_ids: tuple
+    used: int = 0
+    first_work_at: Optional[float] = None
+    spent: bool = False
+
+
+@dataclass(frozen=True)
+class Directive:
+    """A deterministic, provider-free end-of-turn message (see completion_directive)."""
+
+    reason: str
+    text: str
+
+
 @dataclass(frozen=True)
 class DispatchTicket:
     """Generation-bound right to credit a real child start or accept a handoff."""
@@ -281,7 +321,12 @@ class DelegationCheckpoint:
         self.first_work_at: Optional[float] = None
         self.decision: Optional[Dict[str, str]] = None
         self.exit_armed = False
+        self.turn_blocks = 0
+        self._blocked_in_message = False
+        self.window: Optional[IntegrationWindow] = None
         self._outstanding: Dict[str, Admission] = {}
+        # Integration windows opened per originating request (bounded).
+        self._windows_by_request: Dict[str, int] = {}
         # Handoffs outlive the request that made them so a late result can be
         # attributed to its own request, never to a newer one.
         self._owned: Dict[str, OwnedHandoff] = {}
@@ -297,15 +342,90 @@ class DelegationCheckpoint:
         self.first_work_at = None
         self.decision = None
         self.exit_armed = False
+        self.turn_blocks = 0
+        self._blocked_in_message = False
+        self.window = None
         self._outstanding.clear()
 
-    def begin_turn(self, *, preserve: bool, settings: CheckpointSettings) -> None:
-        """Start a request, or keep the live ledger for a trusted delivery."""
+    def begin_turn(
+        self,
+        *,
+        preserve: bool,
+        settings: CheckpointSettings,
+        kind: Optional[str] = None,
+        receipt_probe: Optional[Callable[[Any], Any]] = None,
+    ) -> None:
+        """Start a request, or keep the live ledger for a trusted delivery.
+
+        A preserved internal delivery keeps the stored ledger exactly as it is.
+        It may additionally open one bounded integration window, but only when
+        a durable, claimed, terminal receipt of a job this checkpoint handed
+        off authenticates (``receipt_probe``; the real durable table by
+        default). Everything else leaves no new authority.
+        """
         with self._lock:
-            if preserve:
+            # Per-turn flags never outlive their turn, preserved or not.
+            self.window = None
+            self.exit_armed = False
+            self.turn_blocks = 0
+            self._blocked_in_message = False
+            if not preserve:
+                self.settings = settings
+                self._reset_locked()
                 return
-            self.settings = settings
-            self._reset_locked()
+            candidates = {
+                rid: handoff
+                for handoff in self._owned.values()
+                for rid in handoff.receipt_ids
+                if rid not in handoff.consumed_receipts
+            }
+        if kind not in INTEGRATION_KINDS or not candidates:
+            return
+        probe = receipt_probe or _durable_receipts_ready
+        try:
+            ready = set(probe(tuple(candidates)))
+        except Exception:
+            logger.debug("receipt probe failed; no window opened", exc_info=True)
+            return
+        ready &= set(candidates)
+        if ready:
+            self._open_window(ready, candidates)
+
+    def _open_window(self, ready: set, candidates: Dict[str, "OwnedHandoff"]) -> None:
+        with self._lock:
+            # Authenticated receipts are spent when seen; replay grants nothing.
+            ready = {r for r in ready if r not in candidates[r].consumed_receipts}
+            if not ready:
+                return
+            by_request: Dict[str, list] = {}
+            for rid in sorted(ready):
+                by_request.setdefault(candidates[rid].request_id, []).append(rid)
+                candidates[rid].consumed_receipts.add(rid)
+            # The earliest handed-off request with cap left owns the window;
+            # receipts beyond a request's cap are report-only.
+            for request_id in sorted(
+                by_request,
+                key=lambda r: min(
+                    candidates[x].accepted_at for x in by_request[r]
+                ),
+            ):
+                if (
+                    self._windows_by_request.get(request_id, 0)
+                    >= self.settings.max_integration_windows
+                ):
+                    continue
+                self._windows_by_request[request_id] = (
+                    self._windows_by_request.get(request_id, 0) + 1
+                )
+                while len(self._windows_by_request) > _MAX_WINDOW_HISTORY:
+                    del self._windows_by_request[next(iter(self._windows_by_request))]
+                self.window = IntegrationWindow(
+                    request_id=request_id,
+                    receipt_ids=tuple(by_request[request_id]),
+                )
+                self.generation += 1
+                logger.debug("delegation checkpoint: integration window opened")
+                return
 
     def declare(
         self, mode: str, reason: str, *, expected_generation: Optional[int] = None
@@ -335,12 +455,17 @@ class DelegationCheckpoint:
         with self._lock:
             return self.generation
 
+    def _effective_phase_locked(self) -> str:
+        if self.window is not None:
+            return PHASE_CLOSED if self.window.spent else PHASE_INTEGRATING
+        return self.phase
+
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
             return {
                 "generation": self.generation,
                 "request_id": self.request_id,
-                "phase": self.phase,
+                "phase": self._effective_phase_locked(),
                 "state": self.state,
                 "used": self.used,
                 "decision": dict(self.decision) if self.decision else None,
@@ -350,6 +475,8 @@ class DelegationCheckpoint:
     # ── admission ──────────────────────────────────────────────────────
     def admit(self, tool_name: str, tool_call_id: str) -> Verdict:
         with self._lock:
+            if self.window is not None:
+                return self._admit_window_locked(tool_name, tool_call_id)
             if self.phase == PHASE_HANDED_OFF:
                 return self._block(HANDOFF_ACTIVE, tool_name)
             if self.phase == PHASE_EXHAUSTED:
@@ -373,7 +500,7 @@ class DelegationCheckpoint:
         construction spends nothing and a started child is charged once.
         """
         with self._lock:
-            if self.phase == PHASE_HANDED_OFF:
+            if self.window is not None or self.phase == PHASE_HANDED_OFF:
                 return self._block(SPAWN_CLOSED, "delegate_task")
             if is_background:
                 return ALLOWED
@@ -393,6 +520,33 @@ class DelegationCheckpoint:
                 return True
         return False
 
+    def _admit_window_locked(self, tool_name: str, tool_call_id: str) -> Verdict:
+        """Work inside an integration window: same size as the base budget."""
+        window = self.window
+        if not window.spent:
+            expired = (
+                window.first_work_at is not None
+                and self._clock() - window.first_work_at
+                >= self.settings.max_foreground_seconds
+            )
+            if window.used >= self.settings.max_work_tools or expired:
+                window.spent = True
+        if window.spent:
+            return self._block(INTEGRATION_EXHAUSTED, tool_name)
+        if window.first_work_at is None:
+            window.first_work_at = self._clock()
+        window.used += 1
+        admission = Admission(
+            checkpoint=self,
+            token=uuid.uuid4().hex,
+            generation=self.generation,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id or "",
+            in_window=True,
+        )
+        self._outstanding[admission.token] = admission
+        return Verdict(admission=admission)
+
     def _reserve_locked(self, tool_name: str, tool_call_id: str) -> Verdict:
         if self.first_work_at is None:
             self.first_work_at = self._clock()
@@ -408,6 +562,9 @@ class DelegationCheckpoint:
         return Verdict(admission=admission)
 
     def _block(self, code: str, tool_name: str) -> Verdict:
+        if code in _CLOSING_CODES:
+            # Counted per assistant message at the loop seam, not per call.
+            self._blocked_in_message = True
         if code == DISPATCH_REQUIRED:
             message = (
                 f"Delegation checkpoint ({code}): you chose to delegate, so "
@@ -434,6 +591,17 @@ class DelegationCheckpoint:
                 "only_if": "the user has not prohibited subagents",
                 "otherwise": "stop and report an honest status to the user",
             }
+        elif code == INTEGRATION_EXHAUSTED or (
+            code == SPAWN_CLOSED and self.window is not None
+        ):
+            message = (
+                f"Delegation checkpoint ({code}): '{tool_name}' was not run. "
+                "This turn only checks and reports a finished background "
+                "result, and its verification allowance is limited and "
+                "closed to new helpers. Stop and give the user an honest "
+                "status of what you verified and what you could not."
+            )
+            recovery = {"action": "stop and report an honest status to the user"}
         elif code in (HANDOFF_ACTIVE, SPAWN_CLOSED):
             message = (
                 f"Delegation checkpoint ({code}): '{tool_name}' was not run. "
@@ -477,6 +645,12 @@ class DelegationCheckpoint:
                 return False
             if self._outstanding.pop(admission.token, None) is None:
                 return False
+            if admission.in_window:
+                if self.window is not None:
+                    self.window.used = max(0, self.window.used - 1)
+                    if self.window.used == 0:
+                        self.window.first_work_at = None
+                return True
             self.used = max(0, self.used - 1)
             if self.used == 0:
                 self.first_work_at = None
@@ -498,6 +672,8 @@ class DelegationCheckpoint:
         with self._lock:
             if kind != "inline" or generation != self.generation:
                 return False
+            if self.window is not None:
+                return False
             credited = False
             if self.state == SPAWN_REQUIRED:
                 self.state = DELEGATED_STARTED
@@ -514,7 +690,7 @@ class DelegationCheckpoint:
         self, generation: int, *, delegation_id: str, goals: Any, subagent_ids: Any
     ) -> bool:
         with self._lock:
-            if generation != self.generation:
+            if generation != self.generation or self.window is not None:
                 return False
             if self.phase not in (PHASE_FOREGROUND, PHASE_EXHAUSTED):
                 return False
@@ -549,6 +725,75 @@ class DelegationCheckpoint:
                 del self._owned[key]
                 return
         del self._owned[next(iter(self._owned))]
+
+
+    # ── normal completion ──────────────────────────────────────────────
+    def take_completion_directive(self) -> Optional[Directive]:
+        """Whether the turn should end now, and with what deterministic text.
+
+        Called once per assistant message, after every tool result of that
+        message is canonical. An accepted handoff ends the turn at once. A
+        message with a close/exhaust block gets one more provider call so the
+        model can write its own status; a second such message ends the turn.
+        Never cancels anything and never calls a provider.
+        """
+        with self._lock:
+            if self.exit_armed:
+                self.exit_armed = False
+                self._blocked_in_message = False
+                return Directive("delegation_handoff", self._handoff_text_locked())
+            if not self._blocked_in_message:
+                return None
+            self._blocked_in_message = False
+            self.turn_blocks += 1
+            if self.turn_blocks < 2:
+                return None
+            if self.window is not None:
+                return Directive(
+                    INTEGRATION_EXHAUSTED,
+                    "I stopped checking here: the verification allowance for the "
+                    "finished background result is spent, and the calls in my "
+                    "last message were not run.",
+                )
+            return Directive(FOREGROUND_EXHAUSTED, self._exhausted_text_locked())
+
+    def _live_handoffs_locked(self, request_id: str) -> list:
+        return [
+            h for h in self._owned.values()
+            if h.request_id == request_id
+            and not set(h.receipt_ids) <= h.consumed_receipts
+        ]
+
+    def _handoff_text_locked(self) -> str:
+        handoffs = self._live_handoffs_locked(self.request_id)
+        if not handoffs:
+            return "I handed the remaining work to a background job."
+        handoff = max(handoffs, key=lambda h: h.accepted_at)
+        goals = "; ".join(f"\u201c{g}\u201d" for g in handoff.goals[:3])
+        if len(handoff.goals) > 3:
+            goals += f"; and {len(handoff.goals) - 3} more"
+        count = len(handoff.goals)
+        what = f"{count} parallel jobs" if count > 1 else "a background job"
+        return (
+            f"I handed the work to {what} ({handoff.delegation_id}): {goals}. "
+            "It runs independently, and its result will come back into this "
+            "conversation when it finishes; nothing from it is verified yet. "
+            "You can keep talking to me in the meantime."
+        )
+
+    def _exhausted_text_locked(self) -> str:
+        base = (
+            "I stopped here: the foreground allowance for this request is "
+            "spent, and the calls in my last message were not run."
+        )
+        handoffs = self._live_handoffs_locked(self.request_id)
+        if handoffs:
+            ids = ", ".join(h.delegation_id for h in handoffs)
+            return (
+                f"{base} A background job started for this request ({ids}) is "
+                "still running and its result will return to this conversation."
+            )
+        return f"{base} Also, no background job was started for this request."
 
 
 def _direct_recovery() -> Dict[str, Any]:
@@ -628,9 +873,27 @@ def begin_turn(agent: Any, persist_user_display_kind: Optional[str] = None) -> N
             get_checkpoint(agent)  # lazily created undecided
         return
     existing.begin_turn(
-        preserve=persist_user_display_kind == PRESERVE_DISPLAY_KIND,
+        preserve=persist_user_display_kind in PRESERVE_KINDS,
         settings=load_settings(),
+        kind=persist_user_display_kind,
     )
+
+
+def _durable_receipts_ready(receipt_ids: Any) -> Any:
+    from tools.async_delegation import owned_receipts_ready
+
+    return owned_receipts_ready(receipt_ids)
+
+
+def completion_directive(agent: Any) -> Optional[Directive]:
+    """The conversation loop's question after a tool round: end the turn now?
+
+    Reads existing state only; agents without a checkpoint never end early.
+    """
+    checkpoint = getattr(agent, "_delegation_checkpoint", None)
+    if not isinstance(checkpoint, DelegationCheckpoint):
+        return None
+    return checkpoint.take_completion_directive()
 
 
 def resolve_work_call(function_name: str, function_args: Any) -> tuple:

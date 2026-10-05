@@ -241,7 +241,7 @@ def test_trusted_delivery_keeps_the_exhausted_ledger():
     assert _work(root).blocked
     request = cp.request_id
 
-    dc.begin_turn(root, dc.PRESERVE_DISPLAY_KIND)
+    dc.begin_turn(root, "internal_notification")
 
     assert cp.request_id == request
     assert _work(root).block_code == dc.FOREGROUND_EXHAUSTED
