@@ -19,7 +19,7 @@ import threading
 import time
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Set
 
 logger = logging.getLogger(__name__)
 
@@ -728,6 +728,20 @@ class TelegramAdapter(BasePlatformAdapter):
         # endpoint) so later sends skip the doomed rich attempt entirely.
         self._rich_send_disabled: bool = False
         self._rich_draft_disabled: bool = False
+        # Native activity display (platforms.telegram.extra.native_progress):
+        # an opt-in, ephemeral ``sendRichMessageDraft`` composer with native
+        # thinking block and Stop.  Off by default; when off none of the state
+        # below is consulted and no extra update types or lookups happen.  It
+        # never mutates the rich_messages / rich_drafts flags above — it only
+        # lets THIS composer use the draft endpoint on its own latch.
+        self._native_progress_enabled: bool = self._coerce_bool_extra("native_progress", False)
+        # True only once the raw ``stopped_message_generation`` subscription and
+        # its authorization path are live; without a working Stop the native
+        # composer is never offered (no fake Stop button).
+        self._native_stop_ready: bool = False
+        # Latched after a capability failure of the native draft itself.
+        self._native_progress_disabled: bool = False
+        self._native_inert_logged: bool = False
         # Transient Telegram sendChatAction failures (network blips, 429/5xx)
         # can happen on every keep-typing tick while the agent is waiting on a
         # long model call. Back off per chat so a short Telegram-side outage
@@ -6197,6 +6211,112 @@ class TelegramAdapter(BasePlatformAdapter):
         if not self._bot or not hasattr(self._bot, "send_message_draft"):
             return False
         return (chat_type or "").lower() in {"dm", "private"}
+
+    def supports_native_progress(
+        self,
+        chat_type: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        chat_id: Optional[str] = None,
+    ) -> bool:
+        """Whether this chat may use the native activity composer.
+
+        Requires the opt-in, rich messages, a rich-capable bot, a live Stop
+        path, and a plain private one-to-one chat: any forum/topic/thread or
+        direct-messages-topic route keeps today's display (the official
+        sendRichMessageDraft docs only promise a private ``chat_id``).
+        """
+        if not self._native_progress_enabled or self._native_progress_disabled:
+            return False
+        if not self._rich_delivery_enabled() or getattr(self, "_rich_send_disabled", False):
+            if not self._native_inert_logged:
+                self._native_inert_logged = True
+                logger.info(
+                    "[%s] native_progress is enabled but rich_messages is off or unavailable; "
+                    "using the standard progress display",
+                    self.name,
+                )
+            return False
+        if not self._native_stop_ready or not self._bot_supports_rich():
+            return False
+        if (chat_type or "").lower() not in {"dm", "private"}:
+            return False
+        if self._metadata_thread_id(metadata) is not None:
+            return False
+        if self._metadata_direct_messages_topic_id(metadata) is not None:
+            return False
+        if metadata and metadata.get("telegram_dm_topic_reply_fallback"):
+            return False
+        return self.supports_draft_streaming(chat_type=chat_type, metadata=metadata)
+
+    async def send_native_progress_draft(
+        self,
+        chat_id: str,
+        draft_id: int,
+        rows: Sequence[Any],
+        answer: str = "",
+        *,
+        now: Optional[float] = None,
+        idle_since: Optional[float] = None,
+        icons: Optional[Mapping[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SendResult:
+        """Emit one native activity frame (``sendRichMessageDraft`` + ``can_stop``).
+
+        The thinking block carries the already-visible activity rows; the
+        partial answer follows as ordinary rich markdown.  Official limits: the
+        draft id must be non-zero and the rich text is capped at 32768
+        characters; an oversized frame is refused WITHOUT latching so the caller
+        can fall back to today's display for the overflow.
+        """
+        if not self._bot:
+            return SendResult(success=False, error="not_connected")
+        if not self._native_progress_enabled or self._native_progress_disabled:
+            return SendResult(success=False, error="native_progress_unavailable")
+        if not int(draft_id):
+            return SendResult(success=False, error="invalid_draft_id")
+        from plugins.platforms.telegram.native_progress import compose_markdown
+
+        markdown = compose_markdown(
+            rows,
+            _rich_normalize_linebreaks(answer) if answer else "",
+            now=time.monotonic() if now is None else now,
+            idle_since=idle_since,
+            icons=icons,
+        )
+        if not markdown.strip():
+            return SendResult(success=False, error="empty_frame")
+        if not self._content_fits_rich_limits(markdown):
+            return SendResult(success=False, error="native_frame_too_large")
+        payload: Dict[str, Any] = {
+            "chat_id": normalize_telegram_chat_id(chat_id),
+            "draft_id": int(draft_id),
+            "rich_message": {"markdown": markdown},
+            "can_stop": True,
+        }
+        try:
+            ok = await self._bot.do_api_request("sendRichMessageDraft", api_kwargs=payload)
+        except Exception as exc:
+            retry_after = getattr(exc, "retry_after", None)
+            if self._is_rich_capability_error(exc):
+                self._native_progress_disabled = True
+                logger.warning(
+                    "[%s] native_progress disabled: sendRichMessageDraft unsupported (%s)",
+                    self.name, _redact_telegram_error_text(exc),
+                )
+            else:
+                logger.debug(
+                    "[%s] native progress frame failed (%s)",
+                    self.name, _redact_telegram_error_text(exc),
+                )
+            return SendResult(
+                success=False,
+                error=_redact_telegram_error_text(exc),
+                retry_after=float(getattr(retry_after, "total_seconds", lambda: retry_after)())
+                if retry_after is not None else None,
+            )
+        if not ok:
+            return SendResult(success=False, error="draft_rejected")
+        return SendResult(success=True, message_id=None)
 
     async def send_draft(
         self,

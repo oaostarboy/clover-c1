@@ -2516,6 +2516,7 @@ DEFAULT_CONFIG = {
         "extra": {
             "rich_messages": False,     # Bot API 10.1 rich messages (tables/task lists/details/math) render natively; set True to opt in. Default stays legacy MarkdownV2 because rich messages can be hard to copy as plain text in Telegram clients.
             "rich_drafts": False,       # Experimental Bot API 10.1 rich draft previews during Telegram DM streaming. Default off because Telegram Desktop/macOS can visually overlay rich draft frames until the chat redraws.
+            "native_progress": False,   # Opt-in native Telegram activity display in private chats: one ephemeral rich draft with a native thinking block, per-tool rows and a real Stop button, instead of separate progress bubbles. Requires rich_messages. Default off keeps today's progress display exactly.
         },
     },
 
