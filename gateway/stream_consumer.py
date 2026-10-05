@@ -24,9 +24,11 @@ import re
 import secrets
 import threading
 import time
+import collections
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, Sequence
 
+from gateway.native_progress import ActivityLedger, NativeProgressScope
 from gateway.platforms.base import BasePlatformAdapter as _BasePlatformAdapter
 from gateway.platforms.base import _custom_unit_to_cp
 from gateway.platforms.base import MEDIA_TAG_CLEANUP_RE
@@ -383,6 +385,15 @@ class GatewayStreamConsumer:
     # comfortably inside the connector's JS number range (2^53).
     _draft_id_counter: int = secrets.randbits(49)
 
+    # Native activity display budgets (local pacing, NOT Telegram quotas; the
+    # official 30 s draft expiry is why the keepalive stays well under it).
+    NATIVE_MIN_SEND_INTERVAL = 1.0
+    NATIVE_REFRESH_INTERVAL = 5.0       # elapsed refresh while a tool runs
+    NATIVE_KEEPALIVE_INTERVAL = 15.0    # idle keepalive, <= 20 s after last accepted frame
+    NATIVE_MAX_KEEPALIVES = 15
+    NATIVE_MAX_AGE = 300.0
+    NATIVE_FINAL_DRAIN = 2.0
+
     def __init__(
         self,
         adapter: Any,
@@ -394,6 +405,8 @@ class GatewayStreamConsumer:
         on_before_finalize: Optional[Callable[[], Any]] = None,
         initial_reply_to_id: Optional[str] = None,
         run_still_current: Optional[Callable[[], bool]] = None,
+        on_native_history: Optional[Callable[[Sequence[str], str], Awaitable[Any]]] = None,
+        native_scope: Optional[NativeProgressScope] = None,
     ):
         self.adapter = adapter
         self.chat_id = chat_id
@@ -580,6 +593,31 @@ class GatewayStreamConsumer:
         self._tool_progress_lines: list[str] = []
         self._tool_progress_active: bool = False
 
+        # Native activity display (opt-in, Telegram private chats): this
+        # consumer is the single composer for status rows + partial answer.
+        # "off" -> today's display; "active" -> owns the draft; "terminal" /
+        # "fallback" -> fenced (a late in-flight send can never revive it).
+        self._on_native_history = on_native_history
+        self._np_scope = native_scope
+        self._np_lock = threading.Lock()
+        self._np_events: "collections.deque" = collections.deque()
+        self._np_tls = threading.local()
+        self._np_ledger = ActivityLedger()
+        self._np_clock: Callable[[], float] = time.monotonic
+        self._np_owner = object()
+        self._np_task: Optional["asyncio.Task"] = None
+        self._np_answer = ""
+        self._np_dirty = False
+        self._np_first_at: Optional[float] = None
+        self._np_last_started: Optional[float] = None
+        self._np_last_accepted: Optional[float] = None
+        self._np_keepalives = 0
+        self._np_not_before = 0.0
+        self._np_history_done = False
+        self._np_idle_since: Optional[float] = None
+        self._np_acked_at = 0.0
+        self._np_state = "active" if self._resolve_native_progress() else "off"
+
 
     def _stream_is_message(self) -> bool:
         """Whether THIS chat's transport treats the stream as the message.
@@ -606,20 +644,103 @@ class GatewayStreamConsumer:
         True only when native streaming is resolved and active. Callers use
         this to decide the progress routing path (in-stream vs progress_queue).
         """
-        return self._use_native_streaming
+        return self._use_native_streaming or self._np_state == "active"
 
-    def on_tool_progress(self, line: str) -> None:
-        """Inject a tool-progress status line into the native stream bubble.
+    @property
+    def native_activity_active(self) -> bool:
+        """True while this consumer owns the native activity composer."""
+        return self._np_state == "active"
 
-        Thread-safe (called from agent worker thread via queue.Queue). Only
-        meaningful when native streaming is active — callers should gate on
-        ``accepts_tool_progress``.
+    def note_tool(self, tool_name: Optional[str]) -> None:
+        """Tag the NEXT progress line from this thread with its tool name.
 
-        The line is displayed as an overlay until the next text delta arrives,
-        at which point real content overwrites the tool-progress lines.
+        The gateway builds the visible line and puts it on the progress queue
+        in the same call; the tag lets the composer pair a later completion.
         """
-        if line:
-            self._queue.put((_TOOL_PROGRESS, line))
+        self._np_tls.tool = tool_name or None
+
+    def on_tool_progress(
+        self,
+        line: str,
+        *,
+        tool: Optional[str] = None,
+        replace_last: bool = False,
+    ) -> bool:
+        """Inject a tool-progress status line.
+
+        Thread-safe (called from agent worker thread). Returns True when the
+        line was consumed.  Native streaming (WeCom) shows it as an overlay
+        until the next text delta; the native Telegram composer keeps it as a
+        row of the whole-turn activity.  When the composer no longer owns the
+        display this returns False so the caller routes the line through
+        today's progress queue instead (nothing is dropped).
+        """
+        if not line:
+            return False
+        if self._np_state != "off":
+            return self._np_submit(("replace" if replace_last else "line", line, tool))
+        self._queue.put((_TOOL_PROGRESS, line))
+        return True
+
+    def on_tool_complete(
+        self,
+        tool_name: str,
+        *,
+        duration: Optional[float] = None,
+        is_error: Optional[bool] = None,
+    ) -> bool:
+        """Report a finished tool call (outcome/time are claimed only when honest)."""
+        if not tool_name or self._np_state != "active":
+            return False
+        return self._np_submit(("complete", tool_name, duration, is_error))
+
+    def route_progress_item(self, item: Any) -> bool:
+        """Consume one of today's progress-queue items; False = use the queue."""
+        tool = getattr(self._np_tls, "tool", None)
+        if isinstance(item, str):
+            self._np_tls.tool = None
+            return self.on_tool_progress(item, tool=tool)
+        if isinstance(item, tuple) and len(item) == 3 and item[0] == "__dedup__":
+            self._np_tls.tool = None
+            return self.on_tool_progress(
+                f"{item[1]} (×{item[2] + 1})", tool=tool, replace_last=True,
+            )
+        if isinstance(item, tuple) and item[:1] == ("__reset__",):
+            return True        # content bubble landed; the composer keeps the whole turn
+        return False
+
+    def _np_submit(self, event: tuple) -> bool:
+        with self._np_lock:
+            if self._np_state != "active":
+                return False
+            self._np_events.append((self._np_clock(), event))
+            return True
+
+    def _np_apply_events(self) -> None:
+        """Fold queued activity events into the ledger (loop thread only)."""
+        while True:
+            try:
+                at, event = self._np_events.popleft()
+            except IndexError:
+                return
+            kind = event[0]
+            if kind == "complete":
+                self._np_ledger.complete_tool(event[1], duration=event[2], is_error=event[3])
+                self._np_idle_since = at
+            elif kind == "replace":
+                self._np_ledger.replace_last(event[1], tool=event[2], now=at)
+            else:
+                text = event[1]
+                if event[2]:
+                    self._np_ledger.add_line(text, tool=event[2], now=at)
+                elif kind == "commentary":
+                    self._np_ledger.add_line(text, kind="commentary", now=at)
+                else:
+                    thought = text.startswith(THOUGHT_BUBBLE_PREFIX.strip())
+                    self._np_ledger.add_line(text, kind="thought" if thought else "line", now=at)
+            if self._np_first_at is None:
+                self._np_first_at = at
+            self._np_dirty = True
 
     def _compose_frame_content(self) -> str:
         """Compose the current frame content for native streaming.
@@ -930,6 +1051,13 @@ class GatewayStreamConsumer:
     def on_commentary(self, text: str) -> None:
         """Queue a completed interim assistant commentary message."""
         if text:
+            if self._np_state == "active":
+                # Native composer: commentary is a row of the single activity
+                # block (exact text today's bubble shows), kept in the
+                # persistent artifact at turn end — not a separate bubble.
+                shown = format_thought(self._clean_for_display(text))
+                if shown and self._np_submit(("commentary", shown, None)):
+                    return
             self._queue.put((_COMMENTARY, text))
 
     def flush_pending_sync(self, timeout: float = 5.0) -> bool:
@@ -1054,6 +1182,11 @@ class GatewayStreamConsumer:
             if not self._stream_is_message():
                 type(self)._draft_id_counter += 1
                 self._draft_id = type(self)._draft_id_counter
+                if self._np_state == "active":
+                    # New draft identity: its first frame re-sends the whole
+                    # turn's activity (rows survive segment resets).
+                    self._np_answer = ""
+                    self._np_dirty = bool(len(self._np_ledger) or self._np_events)
 
     async def _handle_approval_boundary(self, boundary_future, cancelled_flag=None) -> None:
         """Process an approval boundary: finalize stream, disable native for post-approval.
@@ -1442,6 +1575,10 @@ class GatewayStreamConsumer:
                     "Stream consumer using native-draft transport (chat=%s draft_id=%s)",
                     self.chat_id, self._draft_id,
                 )
+        if self._np_state == "active" and not self._use_draft_streaming:
+            # Eligibility said yes but the draft transport did not resolve:
+            # hand any already-accepted lines back to today's display.
+            await self._np_fallback("no_draft_transport")
 
         try:
             while True:
@@ -1449,6 +1586,7 @@ class GatewayStreamConsumer:
                 # (e.g. /new or /stop). Prevents stale deltas from being
                 # delivered after the user has already moved on.
                 if not self._run_still_current():
+                    await self._np_finish("abandoned")
                     await self._abandon_native_stream()
                     return
 
@@ -1558,6 +1696,16 @@ class GatewayStreamConsumer:
                         self._filter_and_accumulate(item)
                     except queue.Empty:
                         break
+
+                # Native composer: on turn end fence the writer, drain the
+                # in-flight send (bounded) and hand the visible lines to the
+                # persistent artifact BEFORE the final goes out; otherwise
+                # pump the next paced frame / refresh / keepalive.
+                if self._np_state == "active":
+                    if got_done:
+                        await self._np_finish("done")
+                    else:
+                        await self._np_pump()
 
                 # Handle approval boundary: close current stream, reset for new turn.
                 # Must happen before got_done/segment_break processing since it
@@ -2147,6 +2295,11 @@ class GatewayStreamConsumer:
                 await asyncio.sleep(0.05)  # Small yield to not busy-loop
 
         except asyncio.CancelledError:
+            try:
+                # Fence the native composer first and keep its visible lines.
+                await self._np_finish("cancelled")
+            except BaseException:
+                pass
             # Best-effort final edit on cancellation.  finalize=True so
             # REQUIRES_EDIT_FINALIZE platforms (Telegram) apply final
             # formatting — a plain edit here would leave the entire reply
@@ -2186,6 +2339,8 @@ class GatewayStreamConsumer:
         except Exception as e:
             logger.error("Stream consumer error: %s", e)
         finally:
+            # run() never exits leaving a live native writer or in-flight send.
+            self._np_release()
             # Safety net: if run() exits (normal return, cancellation, or
             # exception) while a _FLUSH barrier is still queued or was consumed
             # but not yet signaled, wake any waiters now. Without this a caller
@@ -2750,6 +2905,199 @@ class GatewayStreamConsumer:
             return False
         return bool(supported)
 
+    # ── Native activity composer ────────────────────────────────────────────
+
+    def _resolve_native_progress(self) -> bool:
+        """Whether the native Telegram activity display owns this turn's status.
+
+        Needs the adapter's opt-in capability for THIS chat, the draft
+        transport, and a working persistent-artifact path (so no visible line
+        can be lost when the 30 s draft expires).
+        """
+        if self._on_native_history is None:
+            return False
+        if not isinstance(self.adapter, _BasePlatformAdapter):
+            return False
+        if not callable(getattr(type(self.adapter), "supports_native_progress", None)):
+            return False
+        if self._stream_is_message() or not self._resolve_draft_streaming():
+            return False
+        try:
+            return self.adapter.supports_native_progress(
+                chat_type=self.cfg.chat_type or None,
+                metadata=self.metadata,
+                chat_id=self.chat_id,
+            ) is True
+        except Exception:
+            logger.debug("supports_native_progress probe raised", exc_info=True)
+            return False
+
+    def _np_fence(self, new_state: str) -> bool:
+        """ACTIVE -> fenced, exactly once.  Retires the owner token so a late
+        in-flight send result can never revive the display."""
+        with self._np_lock:
+            if self._np_state != "active":
+                return False
+            self._np_state = new_state
+            self._np_owner = object()
+        self._np_apply_events()
+        return True
+
+    async def _np_retire_send(self, wait: float) -> None:
+        task, self._np_task = self._np_task, None
+        if task is None:
+            return
+        if not task.done():
+            if wait > 0:
+                await asyncio.wait({task}, timeout=wait)
+            if not task.done():
+                task.cancel()
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+
+    def _np_release(self) -> None:
+        """Synchronous last-resort fence for run() exit paths."""
+        if self._np_fence("terminal"):
+            logger.debug("native composer released on run() exit (turn=%s)", self._turn_id)
+        task, self._np_task = self._np_task, None
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            task.add_done_callback(lambda t: t.cancelled() or t.exception())
+
+    async def _np_persist(self, reason: str) -> None:
+        """Hand every visible line to today's persistent artifact path, once."""
+        if self._np_history_done:
+            return
+        lines = self._np_ledger.lines()
+        if not lines or self._on_native_history is None:
+            return
+        self._np_history_done = True
+        try:
+            result = self._on_native_history(list(lines), reason)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:
+            logger.warning("native activity history hand-off failed", exc_info=True)
+
+    async def _np_finish(self, reason: str) -> None:
+        if not self._np_fence("terminal"):
+            return
+        await self._np_retire_send(self.NATIVE_FINAL_DRAIN)
+        await self._np_persist(reason)
+
+    async def _np_fallback(self, reason: str) -> None:
+        """Leave the native display; flush everything shown into today's path."""
+        if not self._np_fence("fallback"):
+            return
+        logger.info("native activity display falling back to the standard display: %s", reason)
+        await self._np_retire_send(0)
+        # The partial answer was only inside native frames: let the legacy
+        # draft path re-send it on its next frame.
+        self._last_sent_text = ""
+        await self._np_persist(f"fallback:{reason}")
+
+    async def _np_send(self, owner: object, draft_id: int, rows: list, answer: str,
+                       idle_since: Optional[float]):
+        from gateway.platforms.base import SendResult
+
+        try:
+            result = await self.adapter.send_native_progress_draft(
+                self.chat_id, draft_id, rows, answer,
+                now=self._np_clock(), idle_since=idle_since,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            result = SendResult(success=False, error=str(exc))
+        # Stamp the acknowledgement time when it happens, not when the loop
+        # next looks at the task.
+        self._np_acked_at = self._np_clock()
+        return result
+
+    async def _np_reap(self, task: "asyncio.Task") -> bool:
+        """Apply a finished send's result.  False => composer left native."""
+        try:
+            result = task.result()
+        except asyncio.CancelledError:
+            return True
+        except Exception:
+            return True
+        if getattr(task, "_np_owner", None) is not self._np_owner or self._np_state != "active":
+            return False        # retired owner: a late accepted send is ignored
+        if getattr(result, "success", False):
+            self._np_last_accepted = self._np_acked_at
+            return True
+        error = getattr(result, "error", "") or ""
+        if error == "empty_frame":
+            return True
+        retry_after = getattr(result, "retry_after", None)
+        if retry_after:
+            self._np_not_before = self._np_clock() + float(retry_after)
+            self._np_dirty = True
+            return True
+        await self._np_fallback("frame_too_large" if error == "native_frame_too_large" else "send_failed")
+        return False
+
+    async def _np_pump(self) -> None:
+        """One paced step of the composer: reap, then send / refresh / keepalive.
+
+        Never awaits the network: the send runs as a tracked task, and the
+        deadline checks here are the only timer (no orphan keepalive task)."""
+        if self._np_state != "active":
+            return
+        self._np_apply_events()
+        task = self._np_task
+        if task is not None:
+            if not task.done():
+                return
+            self._np_task = None
+            if not await self._np_reap(task):
+                return
+        now = self._np_clock()
+        if now < self._np_not_before:
+            return
+        if not (len(self._np_ledger) or self._np_answer.strip()):
+            return
+        if self._np_first_at is not None and now - self._np_first_at > self.NATIVE_MAX_AGE:
+            await self._np_fallback("cap")
+            return
+        spaced = (
+            self._np_last_started is None
+            or now - self._np_last_started >= self.NATIVE_MIN_SEND_INTERVAL
+        )
+        if not spaced:
+            return
+        kind = None
+        if self._np_dirty:
+            kind = "content"
+        elif self._np_last_accepted is not None:
+            idle = now - self._np_last_accepted
+            running = any(r.state == "running" for r in self._np_ledger.rows)
+            if running and idle >= self.NATIVE_REFRESH_INTERVAL:
+                kind = "refresh"
+            elif idle >= self.NATIVE_KEEPALIVE_INTERVAL:
+                kind = "keepalive"
+        if kind is None:
+            return
+        if kind != "content":
+            if self._np_keepalives >= self.NATIVE_MAX_KEEPALIVES:
+                await self._np_fallback("cap")
+                return
+            self._np_keepalives += 1
+        if self._np_first_at is None:
+            self._np_first_at = now
+        self._np_dirty = False
+        self._np_last_started = now
+        task = asyncio.ensure_future(self._np_send(
+            self._np_owner, self._draft_id, self._np_ledger.snapshot(),
+            self._np_answer, self._np_ledger_idle_since(),
+        ))
+        task._np_owner = self._np_owner
+        self._np_task = task
+
+    def _np_ledger_idle_since(self) -> Optional[float]:
+        return self._np_idle_since
+
     async def _send_draft_frame(self, text: str) -> bool:
         """Emit a single animated draft frame for the current accumulated text.
 
@@ -2764,6 +3112,13 @@ class GatewayStreamConsumer:
             # set in tandem with _draft_id in run().  Disable to be safe.
             self._use_draft_streaming = False
             return False
+        if self._np_state == "active":
+            # Native composer: hand the partial answer to the pump (which owns
+            # pacing and the in-flight send); never await the network here.
+            self._np_answer = text
+            self._np_dirty = True
+            self._last_sent_text = text
+            return True
         # Carry the per-turn identity on EVERY frame (review B2): the
         # turn-final send goes out via _metadata_for_send, which stamps
         # reply_to_message_id — the relay adapter keys draft/seal state on

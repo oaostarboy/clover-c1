@@ -465,3 +465,422 @@ async def test_lookup_failures_are_redacted_and_off_mode_never_looks_up(caplog):
     assert off.supports_native_progress(chat_type="dm") is False
     assert off_api.methods("get_sticker_set") == []
     assert getattr(off, "_native_icon_task", None) is None
+
+
+# ═══ P1: one GatewayStreamConsumer owns status + partial answer ═════════════
+
+import time  # noqa: E402
+
+from gateway.stream_consumer import GatewayStreamConsumer, StreamConsumerConfig, format_thought  # noqa: E402
+
+
+async def until(predicate, timeout=3.0, step=0.01):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        if predicate():
+            return True
+        await asyncio.sleep(step)
+    return bool(predicate())
+
+
+class History:
+    """Records what the consumer hands to the existing persistent-artifact path."""
+
+    def __init__(self, api=None):
+        self.calls = []
+        self.api = api
+
+    async def __call__(self, lines, reason):
+        self.calls.append(
+            (list(lines), reason, len(self.api.calls) if self.api is not None else None)
+        )
+
+
+def make_consumer(adapter, *, chat_type="dm", metadata=None, history="default", native_kwargs=None):
+    cfg = StreamConsumerConfig(
+        transport="draft", chat_type=chat_type, edit_interval=0.05, buffer_threshold=5, cursor="",
+    )
+    kwargs = dict(metadata=metadata, initial_reply_to_id="99")
+    # Native mode is only offered when the existing persistent-artifact path is
+    # wired (the gateway always passes it); history=None omits it.
+    if history == "default":
+        history = History(adapter._bot)
+    if history is not None:
+        kwargs["on_native_history"] = history
+    kwargs.update(native_kwargs or {})
+    return GatewayStreamConsumer(adapter, "12345", cfg, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_native_composer_is_ineligible_without_a_persistent_history_path():
+    adapter, api = native_adapter()
+    consumer = make_consumer(adapter, history=None)
+    assert consumer.accepts_tool_progress is False
+    assert consumer.native_activity_active is False
+
+
+def fast(monkeypatch, *, spacing=0.0, drain=None, refresh=None, keepalive=None, max_keepalives=None):
+    monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_MIN_SEND_INTERVAL", spacing)
+    if drain is not None:
+        monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_FINAL_DRAIN", drain)
+    if refresh is not None:
+        monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_REFRESH_INTERVAL", refresh)
+    if keepalive is not None:
+        monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_KEEPALIVE_INTERVAL", keepalive)
+    if max_keepalives is not None:
+        monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_MAX_KEEPALIVES", max_keepalives)
+
+
+def final_sends(api):
+    """Persistent (non-draft) messages a user would see in history."""
+    return [kw for kw in api.methods("send_message")] + [
+        kw for m, kw in api.calls if m == "do_api_request:sendRichMessage"
+    ]
+
+
+def thinking_of(md):
+    head, _, tail = md.partition("</tg-thinking>")
+    return head, tail.strip()
+
+
+def test_consumer_budgets_match_the_plan():
+    c = GatewayStreamConsumer
+    assert c.NATIVE_MIN_SEND_INTERVAL == 1.0
+    assert c.NATIVE_REFRESH_INTERVAL == 5.0
+    assert c.NATIVE_KEEPALIVE_INTERVAL <= 20.0
+    assert c.NATIVE_MAX_KEEPALIVES == 15
+    assert c.NATIVE_MAX_AGE == 300.0
+    assert c.NATIVE_FINAL_DRAIN == 2.0
+
+
+@pytest.mark.asyncio
+async def test_one_composer_shows_rows_and_partial_answer_on_one_draft_and_final_is_sent_once(monkeypatch):
+    fast(monkeypatch)
+    adapter, api = native_adapter()
+    consumer = make_consumer(adapter)
+    assert consumer.accepts_tool_progress is True
+    task = asyncio.create_task(consumer.run())
+
+    consumer.on_tool_progress("🔍 Searching the web for sony reviews", tool="web_search")
+    assert await until(lambda: api.rich_drafts())
+    consumer.on_delta("Here is the ")
+    assert await until(lambda: any("Here is the" in thinking_of(m)[1] for m in _markdowns(api)))
+    consumer.on_tool_complete("web_search", duration=2.0, is_error=False)
+    consumer.on_delta("answer.")
+    assert await until(lambda: any("Succeeded" in m for m in _markdowns(api)))
+    consumer.finish("Here is the answer.")
+    await asyncio.wait_for(task, 3)
+
+    drafts = api.rich_drafts()
+    assert len({d["draft_id"] for d in drafts}) == 1 and drafts[0]["draft_id"] > 0
+    assert all(d["can_stop"] is True and d["chat_id"] == 12345 for d in drafts)
+    mds = _markdowns(api)
+    assert any("Executing" in m and "Searching the web for sony reviews" in m for m in mds)
+    assert any("Succeeded" in m and "· 2s" in m for m in mds)
+    # No second progress bubble, no legacy draft/edit: the only persistent send is the final.
+    assert api.methods("send_message_draft") == [] and api.methods("edit_message_text") == []
+    sent = final_sends(api)
+    assert len(sent) == 1
+    assert "Here is the answer" in str(sent[0])  # MarkdownV2 escapes the period
+    assert "tg-thinking" not in str(sent[0])
+
+
+@pytest.mark.asyncio
+async def test_off_mode_consumer_is_byte_identical_to_the_legacy_draft_path(monkeypatch):
+    fast(monkeypatch)
+    adapter, api = make_adapter()  # native_progress off
+    adapter._native_stop_ready = True
+    consumer = make_consumer(adapter)
+    assert consumer.accepts_tool_progress is False
+    task = asyncio.create_task(consumer.run())
+    consumer.on_tool_progress("🔍 Searching")        # ignored exactly as today
+    consumer.on_delta("hello wor")
+    assert await until(lambda: api.methods("send_message_draft"))
+    consumer.on_delta("ld")
+    consumer.finish("hello world")
+    await asyncio.wait_for(task, 3)
+
+    assert api.rich_drafts() == []
+    assert api.methods("get_sticker_set") == []
+    assert all("can_stop" not in kw for kw in api.methods("send_message_draft"))
+    assert len(final_sends(api)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chat_type, metadata, extra",
+    [
+        ("group", None, {}),
+        ("forum", {"thread_id": "7"}, {}),
+        ("dm", {"thread_id": "7"}, {}),
+        ("dm", None, {"rich_messages": False}),
+    ],
+)
+async def test_unsupported_routes_keep_todays_display(chat_type, metadata, extra):
+    adapter, api = make_adapter(native_progress=True, **extra)
+    adapter._native_stop_ready = True
+    consumer = make_consumer(adapter, chat_type=chat_type, metadata=metadata)
+    assert consumer.accepts_tool_progress is False
+    consumer.on_tool_progress("🔍 Searching", tool="web_search")
+    assert api.rich_drafts() == []
+
+
+@pytest.mark.asyncio
+async def test_segment_break_allocates_new_draft_and_repopulates_the_activity(monkeypatch):
+    fast(monkeypatch)
+    adapter, api = native_adapter()
+    consumer = make_consumer(adapter)
+    task = asyncio.create_task(consumer.run())
+
+    consumer.on_tool_progress("🔍 first lookup", tool="web_search")
+    consumer.on_delta("segment one text")
+    assert await until(lambda: any("segment one text" in thinking_of(m)[1] for m in _markdowns(api)))
+    first_id = api.rich_drafts()[-1]["draft_id"]
+    consumer.on_segment_break()
+    consumer.on_tool_progress("💻 second step", tool="terminal")
+    consumer.on_delta("segment two text")
+    assert await until(lambda: any("segment two text" in thinking_of(m)[1] for m in _markdowns(api)))
+    consumer.finish("segment two text")
+    await asyncio.wait_for(task, 3)
+
+    second = [d for d in api.rich_drafts() if "segment two text" in thinking_of(d["rich_message"]["markdown"])[1]]
+    assert second and second[0]["draft_id"] != first_id and second[0]["draft_id"] > 0
+    head = thinking_of(second[0]["rich_message"]["markdown"])[0]
+    assert "first lookup" in head and "second step" in head   # whole-turn activity survives
+
+
+@pytest.mark.asyncio
+async def test_frames_are_locally_paced(monkeypatch):
+    fast(monkeypatch, spacing=0.25)
+    adapter, api = native_adapter()
+    consumer = make_consumer(adapter)
+    task = asyncio.create_task(consumer.run())
+    for i in range(12):
+        consumer.on_tool_progress(f"⚙️ step {i}", tool=f"tool{i}")
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.4)
+    consumer.finish("")
+    await asyncio.wait_for(task, 3)
+
+    times = [t for (m, _), t in zip(api.calls, api.call_times) if m == "do_api_request:sendRichMessageDraft"]
+    assert len(times) >= 2
+    assert all(b - a >= 0.24 for a, b in zip(times, times[1:]))
+    # Coalesced: 12 events do not become 12 sends.
+    assert len(times) <= 5
+
+
+@pytest.mark.asyncio
+async def test_stalled_draft_send_never_delays_final_beyond_the_drain_bound(monkeypatch):
+    fast(monkeypatch, drain=0.3)
+    adapter, api = native_adapter()
+    api.gate["sendRichMessageDraft"] = asyncio.Event()      # network send that never answers
+    history = History(api)
+    consumer = make_consumer(adapter, history=history)
+    task = asyncio.create_task(consumer.run())
+
+    consumer.on_tool_progress("🔍 stalled lookup", tool="web_search")
+    assert await until(lambda: api.rich_drafts())            # send is now in flight (and stuck)
+    consumer.on_delta("final answer text")
+    started = asyncio.get_running_loop().time()
+    consumer.finish("final answer text")
+    await asyncio.wait_for(task, 3)
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert elapsed < 1.5                                     # drain bound, not the stalled network
+    assert len(final_sends(api)) == 1 and "final answer text" in str(final_sends(api)[0])
+    frames_at_final = len(api.rich_drafts())
+    # The stuck frame finally lands after the final: it must be ignored, no revival.
+    api.gate["sendRichMessageDraft"].set()
+    await asyncio.sleep(0.3)
+    assert len(api.rich_drafts()) == frames_at_final
+    assert consumer.native_activity_active is False
+    assert len(final_sends(api)) == 1
+    assert history.calls and history.calls[0][0] == ["🔍 stalled lookup"]
+
+
+@pytest.mark.asyncio
+async def test_idle_keepalive_is_bounded_then_flushes_to_the_legacy_artifact(monkeypatch):
+    fast(monkeypatch, keepalive=0.1, refresh=100.0, max_keepalives=3)
+    adapter, api = native_adapter()
+    history = History(api)
+    consumer = make_consumer(adapter, history=history)
+    task = asyncio.create_task(consumer.run())
+
+    consumer.on_tool_progress("🔍 long running", tool="web_search")
+    assert await until(lambda: history.calls, timeout=4)
+    frames = api.rich_drafts()
+    assert 2 <= len(frames) <= 5                              # first frame + <= 3 keepalives
+    assert all(f["can_stop"] is True for f in frames)
+    assert history.calls[0][0] == ["🔍 long running"] and history.calls[0][1].startswith("fallback")
+    assert consumer.accepts_tool_progress is False            # later lines use the existing queue
+    settled = len(api.rich_drafts())
+    await asyncio.sleep(0.4)
+    assert len(api.rich_drafts()) == settled                  # nothing keeps writing
+    consumer.finish("")
+    await asyncio.wait_for(task, 3)
+    assert len(history.calls) == 1                            # flushed exactly once
+
+
+@pytest.mark.asyncio
+async def test_wall_clock_cap_flushes_even_when_content_keeps_changing(monkeypatch):
+    fast(monkeypatch)
+    adapter, api = native_adapter()
+    history = History(api)
+    consumer = make_consumer(adapter, history=history)
+    clock = Clock()
+    consumer._np_clock = clock
+    task = asyncio.create_task(consumer.run())
+
+    consumer.on_tool_progress("🔍 early", tool="web_search")
+    assert await until(lambda: api.rich_drafts())
+    clock.t += 301
+    consumer.on_tool_progress("🔍 later", tool="web_search2")
+    assert await until(lambda: history.calls)
+    assert history.calls[0][0] == ["🔍 early", "🔍 later"]
+    consumer.finish("")
+    await asyncio.wait_for(task, 3)
+
+
+@pytest.mark.asyncio
+async def test_running_tool_refreshes_elapsed_time(monkeypatch):
+    fast(monkeypatch)
+    adapter, api = native_adapter()
+    consumer = make_consumer(adapter)
+    clock = Clock()
+    consumer._np_clock = clock
+    task = asyncio.create_task(consumer.run())
+
+    consumer.on_tool_progress("🔍 slow search", tool="web_search")
+    assert await until(lambda: api.rich_drafts())
+    before = len(api.rich_drafts())
+    clock.t += 12
+    assert await until(lambda: len(api.rich_drafts()) > before)
+    head = thinking_of(_markdowns(api)[-1])[0]
+    assert "Searching · 12s" in head and "Executing" in head
+    consumer.finish("")
+    await asyncio.wait_for(task, 3)
+
+
+@pytest.mark.asyncio
+async def test_tool_outcomes_are_only_claimed_when_justified(monkeypatch):
+    fast(monkeypatch)
+    adapter, api = native_adapter()
+    consumer = make_consumer(adapter)
+    task = asyncio.create_task(consumer.run())
+
+    consumer.on_tool_progress("🔍 one", tool="web_search")
+    consumer.on_tool_complete("web_search", duration=1.5, is_error=True)
+    consumer.on_tool_progress("📄 two A", tool="read_file")
+    consumer.on_tool_progress("📄 two B", tool="read_file")      # same tool, concurrent
+    consumer.on_tool_complete("read_file", duration=0.1, is_error=False)
+    assert await until(lambda: any("Failed" in m for m in _markdowns(api)))
+    mid = thinking_of(_markdowns(api)[-1])[0]
+    assert "one — Failed · 1s" in mid
+    assert "two A — Executing" in mid and "two B — Executing" in mid   # ambiguous: no guess
+    consumer.on_tool_complete("read_file", duration=0.2, is_error=False)
+    assert await until(lambda: "two A — Completed" in thinking_of(_markdowns(api)[-1])[0])
+    end = thinking_of(_markdowns(api)[-1])[0]
+    assert "two B — Completed" in end and "Succeeded" not in end
+    consumer.finish("")
+    await asyncio.wait_for(task, 3)
+
+
+@pytest.mark.asyncio
+async def test_visible_lines_are_handed_to_the_persistent_artifact_before_the_final(monkeypatch):
+    fast(monkeypatch)
+    adapter, api = native_adapter()
+    history = History(api)
+    consumer = make_consumer(adapter, history=history)
+    task = asyncio.create_task(consumer.run())
+
+    consumer.on_tool_progress("🔍 Searching", tool="web_search")
+    consumer.on_commentary("checking the second source")
+    consumer.on_tool_progress("💻 terminal", tool="terminal")
+    assert await until(lambda: len(api.rich_drafts()) >= 1)
+    consumer.on_delta("the answer")
+    consumer.finish("the answer")
+    await asyncio.wait_for(task, 3)
+
+    [(lines, reason, calls_before)] = history.calls
+    assert lines == ["🔍 Searching", format_thought("checking the second source"), "💻 terminal"]
+    assert reason == "done"
+    final_index = next(i for i, (m, kw) in enumerate(api.calls) if m == "send_message")
+    assert calls_before <= final_index                       # artifact first, final after
+    # commentary rode the composer, not a separate bubble
+    assert not any("checking the second source" in str(kw) for kw in api.methods("send_message"))
+
+
+@pytest.mark.asyncio
+async def test_dedup_replaces_the_last_row_like_the_legacy_bubble(monkeypatch):
+    fast(monkeypatch)
+    adapter, api = native_adapter()
+    history = History(api)
+    consumer = make_consumer(adapter, history=history)
+    task = asyncio.create_task(consumer.run())
+    consumer.on_tool_progress("⚙️ run", tool="execute_code")
+    consumer.on_tool_progress("⚙️ run (×2)", tool="execute_code", replace_last=True)
+    consumer.on_tool_progress("⚙️ run (×3)", tool="execute_code", replace_last=True)
+    consumer.finish("")
+    await asyncio.wait_for(task, 3)
+    assert history.calls[0][0] == ["⚙️ run (×3)"]
+
+
+@pytest.mark.asyncio
+async def test_capability_failure_falls_back_once_and_keeps_the_answer_flowing(monkeypatch):
+    fast(monkeypatch)
+    adapter, api = native_adapter()
+    api.fail["sendRichMessageDraft"] = type("EndPointNotFound", (Exception,), {})("no such method")
+    history = History(api)
+    consumer = make_consumer(adapter, history=history)
+    task = asyncio.create_task(consumer.run())
+
+    consumer.on_tool_progress("🔍 Searching", tool="web_search")
+    assert await until(lambda: history.calls)
+    assert history.calls[0][0] == ["🔍 Searching"] and history.calls[0][1].startswith("fallback")
+    assert adapter._native_progress_disabled is True
+    assert consumer.accepts_tool_progress is False
+    consumer.on_delta("legacy preview text")
+    assert await until(lambda: api.methods("send_message_draft"))
+    consumer.finish("legacy preview text")
+    await asyncio.wait_for(task, 3)
+    assert len(final_sends(api)) == 1
+    assert len(history.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_oversize_frame_moves_everything_to_the_legacy_artifact(monkeypatch):
+    fast(monkeypatch)
+    adapter, api = native_adapter()
+    history = History(api)
+    consumer = make_consumer(adapter, history=history)
+    task = asyncio.create_task(consumer.run())
+    huge = "📄 " + "y" * 40000
+    consumer.on_tool_progress(huge, tool="read_file")
+    assert await until(lambda: history.calls)
+    assert history.calls[0][0] == [huge]                     # nothing dropped
+    assert adapter._native_progress_disabled is False         # size is not a capability failure
+    consumer.finish("")
+    await asyncio.wait_for(task, 3)
+
+
+@pytest.mark.asyncio
+async def test_retry_after_pauses_native_frames_without_falling_back(monkeypatch):
+    fast(monkeypatch)
+    adapter, api = native_adapter()
+    attempts = []
+
+    def flood(kwargs):
+        attempts.append(1)
+        return RetryAfter(1) if len(attempts) == 1 else None
+
+    api.fail["sendRichMessageDraft"] = flood
+    history = History(api)
+    consumer = make_consumer(adapter, history=history)
+    monkeypatch.setattr(RetryAfter, "retry_after", 0.3, raising=False)
+    task = asyncio.create_task(consumer.run())
+    consumer.on_tool_progress("🔍 flooded", tool="web_search")
+    assert await until(lambda: len(attempts) >= 2, timeout=4)
+    assert history.calls == []                                # not a fallback
+    assert consumer.accepts_tool_progress is True
+    consumer.finish("")
+    await asyncio.wait_for(task, 3)
