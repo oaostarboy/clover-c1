@@ -108,7 +108,10 @@ def test_icon_selection_works_with_real_ptb_sticker_objects():
     adapter = make_adapter(True)
     icons = adapter._select_native_icons(StickerSet(
         name="AIActions", title="t", sticker_type="custom_emoji",
-        stickers=[sticker("\U0001F9E0", "7700000000000001"), sticker("⚙️", "7700000000000002")],
+        stickers=[sticker("🙂", "5535457114983497745"), sticker("🙂", "5537581341383589905")],
     ))
-    assert icons["thinking"].custom_emoji_id == "7700000000000001"
-    assert icons["running"].custom_emoji_id == "7700000000000002"
+    assert icons["thinking"].custom_emoji_id == "5535457114983497745"
+    assert icons["thinking"].emoji == "🧠"
+    assert icons["running"].custom_emoji_id == "5537581341383589905"
+    assert icons["running"].emoji == "🔧"
+    assert "succeeded" not in icons and "failed" not in icons

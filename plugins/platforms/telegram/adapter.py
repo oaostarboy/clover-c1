@@ -615,14 +615,13 @@ class TelegramAdapter(BasePlatformAdapter):
     NATIVE_ICON_LOOKUP_TIMEOUT = 5.0
     NATIVE_ICON_POSITIVE_TTL = 24 * 3600
     NATIVE_ICON_NEGATIVE_TTL = 5 * 60
-    # role -> sticker emoji preferences, most preferred first.  The set's actual
-    # ids/emoji always come from the runtime lookup; this only chooses which
-    # returned sticker fills which role (deterministic, set order breaks ties).
-    _NATIVE_ICON_ROLE_EMOJI = {
-        "thinking": ("\U0001F9E0", "\U0001F4AD"),
-        "running": ("\u2699", "\U0001F504", "\u23F3", "\U0001F527", "\U0001F6E0"),
-        "succeeded": ("\u2705", "\u2714", "\u2611"),
-        "failed": ("\u274C", "\u26A0", "\U0001F6AB"),
+    # Visually verified AIActions roles.  Telegram's returned sticker emoji is
+    # 🙂 for nearly the whole set, so role selection must use explicit ids that
+    # were matched to rendered artwork, then revalidate every id against the
+    # current getStickerSet response.  No guessed order or metadata semantics.
+    _NATIVE_ICON_ROLE_IDS = {
+        "thinking": ("5535457114983497745", "🧠"),  # outlined brain
+        "running": ("5537581341383589905", "🔧"),  # wrench + play mark
     }
 
     RICH_MESSAGE_MAX_CHARS = 32768
@@ -6432,21 +6431,20 @@ class TelegramAdapter(BasePlatformAdapter):
         from plugins.platforms.telegram.native_progress import NativeIcon
 
         set_type = getattr(sticker_set, "sticker_type", None)
-        usable = []
+        usable: set[str] = set()
         for sticker in list(getattr(sticker_set, "stickers", None) or []):
             custom_id = str(getattr(sticker, "custom_emoji_id", "") or "")
             kind = getattr(sticker, "type", None) or set_type
             animated = bool(getattr(sticker, "is_animated", False) or getattr(sticker, "is_video", False))
-            emoji = getattr(sticker, "emoji", None)
-            if custom_id.isdigit() and kind == "custom_emoji" and animated and emoji:
-                usable.append((self._normalize_emoji(emoji), custom_id, emoji))
+            if custom_id.isdigit() and kind == "custom_emoji" and animated:
+                usable.add(custom_id)
         icons: Dict[str, Any] = {}
-        for role, preferred in self._NATIVE_ICON_ROLE_EMOJI.items():
-            for want in preferred:
-                match = next((u for u in usable if u[0] == self._normalize_emoji(want)), None)
-                if match is not None:
-                    icons[role] = NativeIcon(custom_emoji_id=match[1], emoji=match[2])
-                    break
+        for role, (verified_id, fallback_emoji) in self._NATIVE_ICON_ROLE_IDS.items():
+            if verified_id in usable:
+                icons[role] = NativeIcon(
+                    custom_emoji_id=verified_id,
+                    emoji=fallback_emoji,
+                )
         return icons
 
     async def _lookup_native_icons(self) -> None:
