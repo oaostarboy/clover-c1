@@ -73,11 +73,35 @@ older request, hands off nothing and never cancels the job. `list`, `steer` and
 `stop` stay available in every phase.
 
 A new human message starts a new task, so the choice starts undecided again.
-Within a turn, extra model iterations and `/steer` do not reset it. A trusted
-gateway delivery of a background child's result keeps the live ledger as it
-stands (an exhausted or handed-off request stays closed). CLI and TUI
-deliveries cannot prove their origin and cost one more declaration. History
+Within a turn, extra model iterations and `/steer` do not reset it. History
 restored after a restart never carries a choice into a new request.
+
+### Ending the root's turn, and integrating the result
+
+An accepted handoff ends the root's turn through the normal conversation-loop
+exit: the loop appends one deterministic assistant message (it names the job and
+its goals, says it runs independently and that the result returns here, and
+claims nothing is done), makes no further provider call, cancels nothing, and
+still runs the usual turn-end persistence and learning. The gateway releases the
+busy slot as it always does, so the next human message is handled normally while
+the detached job keeps running. If the allowance is spent and the model keeps
+asking for blocked calls, the first blocked assistant message gets one more
+provider call so the model can write its own status; a second ends the turn with
+a deterministic text that states only what the runtime knows (the allowance is
+spent, the calls were not run, and whether a background job of this request is
+still running).
+
+A trusted gateway delivery (`internal_notification`) keeps the stored ledger as
+it stands. It may additionally open one bounded verification window, but only
+when the durable row of a job this request handed off is terminal and its text
+was claimed or delivered (a fan-out's receipts are its per-child rows). The
+in-memory job status is never consulted, event text is never parsed, a replayed
+receipt grants nothing, and each request opens at most
+`max_integration_windows` windows. A window has the same size as the base
+allowance, spends its own budget (never the stored ledger, so a late result
+cannot alter a newer request), and cannot spawn. Receipts beyond the cap and a
+fan-out's batch-level join event still arrive as text but open no window.
+CLI and TUI deliveries cannot prove their origin; they cost a fresh request.
 
 ### Who is exempt
 
@@ -97,6 +121,7 @@ delegation:
     enabled: true            # false is the rollback: no gating at all
     max_work_tools: 5        # positive integer
     max_foreground_seconds: 120   # positive number
+    max_integration_windows: 2    # positive integer, per handed-off request
 ```
 
 Invalid, boolean, non-finite or non-positive values fall back to the defaults,
@@ -114,8 +139,13 @@ blocker.
 Known limits:
 
 - External gateway adapters that mark an inbound event `internal` (for example
-  a webhook) also keep a live choice across that delivery. The 5-call and
-  120-second budget bounds this.
+  a webhook) keep the stored ledger across that delivery. They gain a window
+  only by presenting a durable claimed receipt of a job the request handed off.
+- Admission is checked at the next call. A tool call already in flight, or a
+  provider stall, cannot be pre-empted; the loop exit happens after the current
+  round's results are canonical.
+- The ledger, owned handoffs and windows are process-local. After an agent
+  eviction or restart a late result arrives as text only.
 - The TUI's `async_delegation_complete` delivery has a trusted origin but is
   deliberately not widened; it resets like any other entry.
 - A `todo` declaration takes effect only when the foreground accepts its normal
