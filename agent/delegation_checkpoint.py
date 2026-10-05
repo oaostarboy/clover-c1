@@ -602,13 +602,27 @@ class DelegationCheckpoint:
                 "status of what you verified and what you could not."
             )
             recovery = {"action": "stop and report an honest status to the user"}
+        elif code in (HANDOFF_ACTIVE, SPAWN_CLOSED) and not self._live_handoffs_locked(
+            self.request_id
+        ):
+            # Every receipt of this request's job was already delivered: it is
+            # not running any more, but the request's foreground stays closed.
+            message = (
+                f"Delegation checkpoint ({code}): '{tool_name}' was not run. "
+                "The background job for this request has already finished and "
+                "its result was already delivered into this conversation. No "
+                "further foreground work is available for this request: stop "
+                "and give the user a short status; their next message starts "
+                "a new request."
+            )
+            recovery = {"action": "stop and report a short status to the user"}
         elif code in (HANDOFF_ACTIVE, SPAWN_CLOSED):
             message = (
                 f"Delegation checkpoint ({code}): '{tool_name}' was not run. "
-                "A background job for this request is already running and owns "
-                "the remaining phase; its result returns into this "
-                "conversation. Do not repeat its work here: stop and give the "
-                "user a short status."
+                "A background job for this request owns the remaining phase "
+                "and its result has not yet returned into this conversation. "
+                "Do not repeat its work here: stop and give the user a short "
+                "status."
             )
             recovery = {"action": "stop and report a short status to the user"}
         else:
@@ -690,6 +704,10 @@ class DelegationCheckpoint:
         self, generation: int, *, delegation_id: str, goals: Any, subagent_ids: Any
     ) -> bool:
         with self._lock:
+            # Rollback (delegation.checkpoint.enabled: false) means the whole
+            # feature: no ownership, no forced exit, baseline behaviour.
+            if not self.settings.enabled:
+                return False
             if generation != self.generation or self.window is not None:
                 return False
             if self.phase not in (PHASE_FOREGROUND, PHASE_EXHAUSTED):
@@ -738,6 +756,8 @@ class DelegationCheckpoint:
         Never cancels anything and never calls a provider.
         """
         with self._lock:
+            if not self.settings.enabled:
+                return None
             if self.exit_armed:
                 self.exit_armed = False
                 self._blocked_in_message = False
@@ -790,8 +810,21 @@ class DelegationCheckpoint:
         if handoffs:
             ids = ", ".join(h.delegation_id for h in handoffs)
             return (
-                f"{base} A background job started for this request ({ids}) is "
-                "still running and its result will return to this conversation."
+                f"{base} A background job started for this request ({ids}) has "
+                "not returned yet and its result will return to this conversation."
+            )
+        if self.phase == PHASE_HANDED_OFF:
+            # Handed off and every receipt already consumed (the record itself
+            # may even have been evicted): never deny it, never call it running.
+            ids = ", ".join(
+                h.delegation_id for h in self._owned.values()
+                if h.request_id == self.request_id
+            )
+            named = f" ({ids})" if ids else ""
+            return (
+                f"{base} The background job started for this request{named} "
+                "has already finished and its result was already delivered to "
+                "this conversation."
             )
         return f"{base} Also, no background job was started for this request."
 
