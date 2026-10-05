@@ -273,3 +273,130 @@ def test_a_new_request_clears_an_unconsumed_handoff_exit():
     dc.begin_turn(root, None)
 
     assert dc.completion_directive(root) is None
+
+
+# ── rollback: delegation.checkpoint.enabled=false is the whole feature ─────
+
+def test_rollback_switch_leaves_a_background_dispatch_to_the_model(harness):
+    """With the checkpoint disabled an accepted background dispatch must behave
+    like baseline: the loop asks the provider again instead of ending the turn
+    with the deterministic handoff text."""
+    harness.hold = threading.Event()
+    disabled = dc.CheckpointSettings(enabled=False)
+    agent = _root([
+        _tools(_call("delegate_task", {"goal": "Build the explainer and verify every output."})),
+        _text("Carrying on in the normal way."),
+    ])
+    try:
+        with patch.object(dc, "load_settings", return_value=disabled):
+            result, _ = _run(agent)
+
+        assert agent.client.chat.completions.create.call_count == 2
+        assert result["final_response"] == "Carrying on in the normal way."
+        assert result["turn_exit_reason"].startswith("text_response")
+        checkpoint = dc.get_checkpoint(agent)
+        assert checkpoint.phase == dc.PHASE_FOREGROUND
+        # The dispatched job itself is untouched.
+        assert ad.active_count() == 1
+    finally:
+        harness.hold.set()
+
+
+def test_rollback_switch_grants_no_handoff_and_no_exit_directive():
+    root = _unit_root()
+    root._delegation_checkpoint = dc.DelegationCheckpoint(
+        dc.CheckpointSettings(enabled=False)
+    )
+    ticket = dc.ticket_for(root)
+
+    accepted = ticket is not None and ticket.accept_handoff(
+        delegation_id="async-abc", goals=["g"], subagent_ids=[]
+    )
+
+    assert accepted is False
+    assert dc.completion_directive(root) is None
+    assert root._delegation_checkpoint.phase == dc.PHASE_FOREGROUND
+
+
+# ── status text states only what is true about the owned job ───────────────
+
+def _consumed_handoff_root(*, goals=("render the video",), receipts=None):
+    root = _unit_root()
+    cp = root._delegation_checkpoint
+    cp.declare("delegate", "Long phase.")
+    assert cp.ticket().accept_handoff(
+        delegation_id="async-abc", goals=list(goals), subagent_ids=[]
+    )
+    assert dc.completion_directive(root).reason == "delegation_handoff"
+    # The result is delivered and its receipt consumed by an internal turn.
+    ready = receipts if receipts is not None else (lambda ids: tuple(ids))
+    cp.begin_turn(
+        preserve=True, settings=cp.settings, kind="internal_notification",
+        receipt_probe=ready,
+    )
+    # A later internal turn of the same request (no further receipt).
+    cp.begin_turn(
+        preserve=True, settings=cp.settings, kind="internal_notification",
+        receipt_probe=lambda ids: (),
+    )
+    return root
+
+
+def test_block_text_does_not_claim_a_finished_job_is_still_running():
+    root = _consumed_handoff_root()
+
+    verdict = _blocked_write(root, "a")
+
+    assert verdict.block_code == dc.HANDOFF_ACTIVE
+    assert "already running" not in verdict.block_message
+    assert "already delivered" in verdict.block_message
+    assert "write_file" in verdict.block_message  # still says the call was not run
+
+
+def test_exit_text_after_a_consumed_handoff_does_not_deny_the_handoff():
+    root = _consumed_handoff_root()
+    assert _blocked_write(root, "a").blocked
+    assert dc.completion_directive(root) is None
+    assert _blocked_write(root, "b").blocked
+
+    directive = dc.completion_directive(root)
+
+    assert directive.reason == dc.FOREGROUND_EXHAUSTED
+    assert "no background job was started" not in directive.text
+    assert "async-abc" in directive.text
+    assert "already finished" in directive.text or "already delivered" in directive.text
+    assert "still running" not in directive.text
+
+
+def test_report_only_receipt_beyond_the_window_cap_is_not_called_running():
+    root = _unit_root()
+    cp = root._delegation_checkpoint
+    cp.settings = dc.CheckpointSettings(max_integration_windows=1)
+    cp.declare("delegate", "Fan out.")
+    assert cp.ticket().accept_handoff(delegation_id="d", goals=["a", "b"], subagent_ids=[])
+    dc.completion_directive(root)
+    cp.begin_turn(preserve=True, settings=cp.settings, kind="internal_notification",
+                  receipt_probe=lambda ids: ("d:child:0",))
+    cp.begin_turn(preserve=True, settings=cp.settings, kind="internal_notification",
+                  receipt_probe=lambda ids: ("d:child:1",))
+
+    # child 1 was delivered (report-only) and child 0's window is gone: both
+    # receipts are consumed, so nothing is running any more.
+    verdict = _blocked_write(root, "a")
+
+    assert "already running" not in verdict.block_message
+
+
+def test_block_text_for_a_job_whose_result_has_not_returned_still_says_so():
+    root = _unit_root()
+    cp = root._delegation_checkpoint
+    cp.declare("delegate", "Long phase.")
+    assert cp.ticket().accept_handoff(delegation_id="async-abc", goals=["g"], subagent_ids=[])
+    dc.completion_directive(root)
+    cp.begin_turn(preserve=True, settings=cp.settings, kind="internal_notification",
+                  receipt_probe=lambda ids: ())
+
+    verdict = _blocked_write(root, "a")
+
+    assert "has not yet returned" in verdict.block_message
+    assert "already finished" not in verdict.block_message
