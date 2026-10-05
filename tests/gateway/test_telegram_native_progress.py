@@ -121,6 +121,35 @@ def test_native_progress_requires_rich_capable_bot():
 
 
 @pytest.mark.asyncio
+async def test_screenshot_activity_rows_render_with_hierarchy_without_losing_repeated_details():
+    adapter, api = native_adapter()
+    rows = [
+        row("Thinking through the task", kind="thought", tool=None, state="info"),
+        row("Running code from pathlib import Path W=Path('/home/…')", tool="execute_code",
+            state="running", started_at=0.4),
+        row("Updating tasks reading task list", tool="todo", state="succeeded",
+            started_at=0.0, duration=0.2),
+        row("Running code from pathlib import Path import subprocess…", tool="execute_code",
+            state="succeeded", started_at=0.0, duration=0.4),
+        row("Running code from pathlib import Path import re…", tool="execute_code",
+            state="succeeded", started_at=0.0, duration=0.4),
+    ]
+
+    await adapter.send_native_progress_draft("1", 81, rows, "", now=6.4)
+    md = _markdowns(api)[-1]
+    header = md.partition("<br><br>")[0]
+
+    assert "<b>Running · 6s</b>" in header
+    assert "Running code from pathlib" not in header
+    assert "<b>Running code</b>" in md and "<code>Running code from pathlib import Path" in md
+    assert "<i>Thought</i><br><i>Thinking through the task</i>" in md
+    assert "<b>Updating tasks</b>" in md
+    assert "— Succeeded · 0s" in md
+    assert md.count("Running code from pathlib import Path") == 3
+    assert "<br><br>" in md
+
+
+@pytest.mark.asyncio
 async def test_native_draft_uses_official_rich_draft_payload_with_can_stop():
     adapter, api = make_adapter(native_progress=True)  # rich_drafts left at its default (off)
     adapter._native_stop_ready = True
@@ -167,7 +196,7 @@ async def test_native_draft_escapes_markup_and_preserves_unicode():
     assert md.endswith("</tg-thinking>")
     assert "&lt;b&gt;x&lt;/b&gt; &amp;" in md
     assert "&lt;/tg-thinking&gt;" in md and "&lt;tg-emoji" in md
-    assert "<tg-emoji" not in md and "<b>" not in md
+    assert md.count("<b>") == 2 and md.count("</b>") == 2
     assert "你好 🚀" in md
 
 
@@ -223,10 +252,10 @@ import asyncio  # noqa: E402
 
 from telegram.error import BadRequest, RetryAfter  # noqa: E402
 
-# Deliberately NOT the docs sample id: ids must come from the runtime lookup.
-ID_THINK, ID_RUN, ID_OK, ID_FAIL = (
-    "7700000000000001", "7700000000000002", "7700000000000003", "7700000000000004",
-)
+# Real current-set IDs, validated by the read-only getStickerSet response and
+# rendered artwork. The pack's metadata emoji is 🙂 for both entries.
+ID_THINK = "5537353471893700616"
+ID_RUN = "5537581341383589905"
 
 
 def _sticker(emoji, custom_id, *, animated=True, video=False, kind="custom_emoji"):
@@ -243,8 +272,7 @@ def _aiactions(stickers=None):
     return SimpleNamespace(
         name="AIActions", title="AI Actions", sticker_type="custom_emoji",
         stickers=stickers if stickers is not None else [
-            _sticker("🧠", ID_THINK), _sticker("⚙️", ID_RUN),
-            _sticker("✅", ID_OK), _sticker("❌", ID_FAIL),
+            _sticker("🙂", ID_THINK), _sticker("🙂", ID_RUN),
         ],
     )
 
@@ -280,6 +308,22 @@ def _markdowns(api):
     return [f["rich_message"]["markdown"] for f in api.rich_drafts()]
 
 
+def test_real_aiactions_shape_selects_visually_verified_roles_not_metadata_emoji():
+    adapter, _ = native_adapter()
+    real_set = _aiactions([
+        _sticker("🙂", "5535457114983497745"),  # rendered cell 11: outlined brain
+        _sticker("🙂", "5537581341383589905"),  # cell 42: wrench/tool with play mark
+    ])
+
+    icons = adapter._select_native_icons(real_set)
+
+    assert icons["thinking"].custom_emoji_id == "5535457114983497745"
+    assert icons["thinking"].emoji == "🧠"
+    assert icons["running"].custom_emoji_id == "5537581341383589905"
+    assert icons["running"].emoji == "🔧"
+    assert "succeeded" not in icons and "failed" not in icons
+
+
 def test_icon_lookup_budgets_match_the_plan():
     assert TelegramAdapter.NATIVE_ICON_LOOKUP_TIMEOUT == 5.0
     assert TelegramAdapter.NATIVE_ICON_POSITIVE_TTL == 24 * 3600
@@ -302,7 +346,7 @@ async def test_first_frame_never_waits_for_icon_lookup_and_later_frames_use_runt
     await _settle_lookup(adapter)
     await _frame(adapter)
     md = _markdowns(api)[-1]
-    assert f'<tg-emoji emoji-id="{ID_RUN}">⚙️</tg-emoji>' in md
+    assert f'<tg-emoji emoji-id="{ID_RUN}">🔧</tg-emoji>' in md
     assert "5368324170671202286" not in md  # docs sample id is never product data
     assert len(api.methods("get_sticker_set")) == 1
     assert api.methods("get_sticker_set")[0]["name"] == "AIActions"
@@ -398,7 +442,7 @@ async def test_retry_after_suppresses_lookups_without_a_retry_loop():
         [],                                                                  # empty set
         [_sticker("⚙️", ID_RUN, animated=False, video=False)],               # static only
         [_sticker("⚙️", ID_RUN, kind="regular")],                            # not custom emoji
-        [_sticker("🐟", ID_RUN)],                                            # no role match
+        [_sticker("🐟", "7700000000000002")],                                # unknown verified id
         [SimpleNamespace(is_animated=True, is_video=False, type="custom_emoji", emoji="⚙️", custom_emoji_id=None)],
     ],
 )
@@ -441,7 +485,7 @@ async def test_entitlement_rejection_degrades_icons_only():
 
     assert result.success is True               # the frame still landed, immediately
     last = _markdowns(api)[-1]
-    assert "<tg-emoji" not in last and "⚙️" in last   # real sticker emoji, no custom tag
+    assert "<tg-emoji" not in last and "🔧" in last   # semantic text fallback, no custom tag
     assert adapter._native_progress_disabled is False   # native display + Stop untouched
     await _frame(adapter)
     assert all("<tg-emoji" not in md for md in _markdowns(api)[-2:])
@@ -780,12 +824,12 @@ async def test_tool_outcomes_are_only_claimed_when_justified(monkeypatch):
     consumer.on_tool_complete("read_file", duration=0.1, is_error=False)
     assert await until(lambda: any("Failed" in m for m in _markdowns(api)))
     mid = thinking_of(_markdowns(api)[-1])[0]
-    assert "one — Failed · 1s" in mid
-    assert "two A — Executing" in mid and "two B — Executing" in mid   # ambiguous: no guess
+    assert "one <i>— Failed · 1s</i>" in mid
+    assert "two A <i>— Executing</i>" in mid and "two B <i>— Executing</i>" in mid   # ambiguous: no guess
     consumer.on_tool_complete("read_file", duration=0.2, is_error=False)
-    assert await until(lambda: "two A — Completed" in thinking_of(_markdowns(api)[-1])[0])
+    assert await until(lambda: "two A <i>— Completed</i>" in thinking_of(_markdowns(api)[-1])[0])
     end = thinking_of(_markdowns(api)[-1])[0]
-    assert "two B — Completed" in end and "Succeeded" not in end
+    assert "two B <i>— Completed</i>" in end and "Succeeded" not in end
     consumer.finish("")
     await asyncio.wait_for(task, 3)
 

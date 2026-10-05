@@ -151,22 +151,50 @@ def _header_label(running: Any) -> str:
     return "Working"
 
 
+def _tool_display_label(tool: Optional[str]) -> str:
+    if tool:
+        try:
+            from agent.display import get_tool_verb
+
+            verb = get_tool_verb(tool)
+        except Exception:
+            verb = None
+        if verb:
+            return verb
+    return "Tool action"
+
+
 def render_row(row: Any, icons: Optional[Mapping[str, NativeIcon]] = None) -> str:
     text = _inline_markup(str(getattr(row, "text", "") or ""))
-    repeat = int(getattr(row, "repeat", 1) or 1)
-    if repeat > 1 and getattr(row, "kind", "") == "tool":
-        # The existing dedup display appends the counter to the line itself;
-        # the row text already carries it, so nothing is added here.
-        pass
+    kind = getattr(row, "kind", "")
     state = getattr(row, "state", STATE_INFO)
-    label = _STATE_LABEL.get(state)
+    if kind == "tool":
+        label = escape_text(_tool_display_label(getattr(row, "tool", None)))
+        tool = str(getattr(row, "tool", "") or "")
+        if tool in {"execute_code", "terminal"}:
+            detail = f"<code>{text}</code>" if text else ""
+        else:
+            detail = text
+        content = f"{_icon_for(row, icons)}<b>{label}</b>"
+        if detail:
+            content += f"<br>{detail}"
+    elif kind in {"thought", "commentary"}:
+        label = "Thought" if kind == "thought" else "Commentary"
+        content = f"<i>{label}</i>"
+        if text:
+            content += f"<br><i>{text}</i>"
+    else:
+        content = f"{_icon_for(row, icons)}{text}"
+
     suffix = ""
-    if getattr(row, "kind", "") == "tool" and label:
-        suffix = f" — {label}"
+    label = _STATE_LABEL.get(state)
+    if kind == "tool" and label:
+        suffix = f"<i>— {escape_text(label)}"
         duration = getattr(row, "duration", None)
         if duration is not None and state in (STATE_SUCCEEDED, STATE_FAILED):
             suffix += f" · {format_elapsed(duration)}"
-    return f"{_icon_for(row, icons)}{text}{suffix}"
+        suffix += "</i>"
+    return f"{content} {suffix}".strip()
 
 
 def render_thinking_block(
@@ -186,11 +214,9 @@ def render_thinking_block(
         started = idle_since
     else:
         started = float(getattr(rows[0], "started_at", now) or now)
-    current = running if running is not None else rows[-1]
     head_icon = _icon_tag((icons or {}).get("thinking")) if icons else ""
-    summary = _inline_markup(str(getattr(current, "text", "") or "")).split("<br>")[0]
-    header = f"{head_icon}{escape_text(_header_label(running))} · {format_elapsed(now - started)} — {summary}"
-    body = "<br>".join([header] + [render_row(r, icons) for r in rows])
+    header = f"<b>{head_icon}{escape_text(_header_label(running))} · {format_elapsed(now - started)}</b>"
+    body = "<br><br>".join([header] + [render_row(r, icons) for r in rows])
     return f"{THINKING_OPEN}{body}{THINKING_CLOSE}"
 
 
