@@ -14,6 +14,7 @@ import pytest
 
 from agent import delegation_checkpoint as dc
 from run_agent import AIAgent
+from tests.agent.test_delegation_checkpoint import sync_spawn
 
 
 def _agent(**overrides) -> Any:
@@ -253,7 +254,20 @@ def test_accepted_async_child_credits_the_declaration(child_runs):
     assert _state(agent)['state'] == dc.DELEGATED_STARTED
 
 
-def test_inline_child_start_credits_the_declaration(child_runs):
+def test_explicit_synchronous_child_start_credits_the_declaration(child_runs):
+    agent = _agent()
+    _declare(agent, 'delegate')
+
+    out = sync_spawn(agent, goal='inline lane')
+
+    assert 'results' in out and out.get('status') != 'dispatched'
+    assert child_runs == ['inline lane'], 'the child must have run before delegate_task returned'
+    assert _state(agent)['state'] == dc.DELEGATED_STARTED
+
+
+def test_unsupported_async_delivery_rejects_and_credits_nothing(child_runs):
+    """A root that asked for a handoff the session cannot deliver is told so;
+    the work is not run inline and the declaration stays unsatisfied."""
     from gateway.session_context import clear_session_vars, set_session_vars
 
     tokens = set_session_vars(platform='batch', chat_id='', session_key='s', async_delivery=False)
@@ -264,9 +278,10 @@ def test_inline_child_start_credits_the_declaration(child_runs):
     finally:
         clear_session_vars(tokens)
 
-    assert 'results' in out and out.get('status') != 'dispatched', 'expected the inline fallback, not async'
-    assert child_runs == ['inline lane'], 'the child must have run before delegate_task returned'
-    assert _state(agent)['state'] == dc.DELEGATED_STARTED
+    assert out['status'] == 'rejected' and out['started'] is False
+    assert out['reason'] == 'delivery_unsupported'
+    assert child_runs == []
+    assert _state(agent)['state'] == dc.SPAWN_REQUIRED
 
 
 def test_stale_ticket_cannot_credit_a_newer_declaration():

@@ -180,6 +180,19 @@ def _spawn(goal='audit lane A'):
     return ('delegate_task', {'goal': goal})
 
 
+def sync_spawn(agent, **args):
+    """Explicitly synchronous dispatch from a root.
+
+    The model-facing path always backgrounds a root's delegation, so the only
+    way a conversational root's child starts inline is a direct caller that
+    passes ``background=False``. That is the path the inline start boundary
+    tests exercise.
+    """
+    import tools.delegate_tool as dt
+
+    return json.loads(dt.delegate_task(parent_agent=agent, background=False, **args))
+
+
 def test_delegate_intent_alone_does_not_unlock_work(tmp_path):
     agent = _agent()
     target = tmp_path / 'out.txt'
@@ -220,21 +233,17 @@ def test_real_async_dispatch_unlocks_work_in_the_same_batch(tmp_path, child_runs
     assert target.read_text() == 'after'
 
 
-def test_inline_child_start_when_async_delivery_is_unsupported_also_unlocks(tmp_path, child_runs):
-    from gateway.session_context import clear_session_vars, set_session_vars
+def test_explicit_synchronous_child_start_also_unlocks(tmp_path, child_runs):
+    agent = _agent()
+    target = tmp_path / 'out.txt'
 
-    tokens = set_session_vars(platform='batch', chat_id='', session_key='s', async_delivery=False)
-    try:
-        agent = _agent()
-        target = tmp_path / 'out.txt'
+    run_batch(agent, [_delegate()])
+    ran = sync_spawn(agent, goal='inline lane')
+    run_batch(agent, [_write(target, 'after')])
 
-        _, ran, _ = run_batch(agent, [_delegate(), _spawn('inline lane'), _write(target, 'after')])
-
-        assert 'results' in ran and ran.get('status') != 'dispatched', 'expected the inline fallback, not async'
-        assert child_runs == ['inline lane'], 'the child must have run before delegate_task returned'
-        assert target.read_text() == 'after'
-    finally:
-        clear_session_vars(tokens)
+    assert 'results' in ran and ran.get('status') != 'dispatched'
+    assert child_runs == ['inline lane'], 'the child must have run before delegate_task returned'
+    assert target.read_text() == 'after'
 
 
 def test_a_child_started_before_the_declaration_cannot_satisfy_it(tmp_path, child_runs):
@@ -656,13 +665,9 @@ def test_orchestrator_child_is_never_gated(tmp_path, monkeypatch):
                 'api_calls': 1, 'duration_seconds': 0.0, 'model': 'm', 'exit_reason': 'completed'}
 
     monkeypatch.setattr(dt, '_run_single_child', capture)
-    from gateway.session_context import clear_session_vars, set_session_vars
-    tokens = set_session_vars(platform='batch', chat_id='', session_key='s', async_delivery=False)
-    try:
-        parent = _agent()
-        run_batch(parent, [_direct(), ('delegate_task', {'goal': 'orchestrate', 'role': 'orchestrator'})])
-    finally:
-        clear_session_vars(tokens)
+    parent = _agent()
+    run_batch(parent, [_direct()])
+    sync_spawn(parent, goal='orchestrate', role='orchestrator')
 
     (child,) = children
     assert {'todo', 'delegate_task'} <= set(child.valid_tool_names), 'precondition: orchestrator has both tools'

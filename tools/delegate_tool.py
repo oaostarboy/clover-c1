@@ -3606,45 +3606,155 @@ def _run_single_child(
         if isinstance(saved_tool_names, list):
             model_tools._last_resolved_tool_names = list(saved_tool_names)
 
-        # Remove child from active tracking
+        _release_child_resources(child, parent_agent)
 
-        # Unregister child from interrupt propagation
-        if hasattr(parent_agent, "_active_children"):
-            try:
-                lock = getattr(parent_agent, "_active_children_lock", None)
-                if lock:
-                    with lock:
-                        parent_agent._active_children.remove(child)
-                else:
+
+def _release_child_resources(child, parent_agent) -> None:
+    """Detach, close and Relay-unregister a child that is done (or never ran).
+
+    Shared tail of ``_run_single_child`` and the strict-background rejection
+    path, so a child that was built but never started is torn down exactly the
+    way a finished one is.
+    """
+    # Unregister child from interrupt propagation
+    if hasattr(parent_agent, "_active_children"):
+        try:
+            lock = getattr(parent_agent, "_active_children_lock", None)
+            if lock:
+                with lock:
                     parent_agent._active_children.remove(child)
-            except (ValueError, UnboundLocalError) as e:
-                logger.debug("Could not remove child from active_children: %s", e)
+            else:
+                parent_agent._active_children.remove(child)
+        except (ValueError, UnboundLocalError) as e:
+            logger.debug("Could not remove child from active_children: %s", e)
 
-        # Close tool resources (terminal sandboxes, browser daemons,
-        # background processes, httpx clients) so subagent subprocesses
-        # don't outlive the delegation.
-        try:
-            if hasattr(child, "close"):
-                child.close()
-        except Exception:
-            logger.debug("Failed to close child agent after delegation")
+    # Close tool resources (terminal sandboxes, browser daemons,
+    # background processes, httpx clients) so subagent subprocesses
+    # don't outlive the delegation.
+    try:
+        if hasattr(child, "close"):
+            child.close()
+    except Exception:
+        logger.debug("Failed to close child agent after delegation")
 
-        # The AIAgent turn boundary normally closes the child scope itself. This
-        # fallback covers failures before that boundary starts, but must not pop
-        # a scope while a timed-out child worker is still unwinding.
-        try:
-            from agent import relay_runtime
+    # The AIAgent turn boundary normally closes the child scope itself. This
+    # fallback covers failures before that boundary starts, but must not pop
+    # a scope while a timed-out child worker is still unwinding.
+    try:
+        from agent import relay_runtime
 
-            runtime = relay_runtime.get_runtime(create=False)
-            child_session_id = str(getattr(child, "session_id", "") or "")
-            child_turn_is_active = relay_runtime.SESSION_COORDINATOR.has_active_turn(
-                profile_key=relay_runtime.current_profile_key(),
-                session_id=child_session_id,
-            )
-            if runtime is not None and child_session_id and not child_turn_is_active:
-                runtime.unregister_subagent({"child_session_id": child_session_id})
-        except Exception:
-            logger.debug("Failed to close child Relay session after delegation")
+        runtime = relay_runtime.get_runtime(create=False)
+        child_session_id = str(getattr(child, "session_id", "") or "")
+        child_turn_is_active = relay_runtime.SESSION_COORDINATOR.has_active_turn(
+            profile_key=relay_runtime.current_profile_key(),
+            session_id=child_session_id,
+        )
+        if runtime is not None and child_session_id and not child_turn_is_active:
+            runtime.unregister_subagent({"child_session_id": child_session_id})
+    except Exception:
+        logger.debug("Failed to close child Relay session after delegation")
+
+
+_STRICT_REJECTION_NOTES = {
+    "capacity": (
+        "Background capacity is full. No subagent was started and nothing was "
+        "queued. Wait for a running background job to finish (its result "
+        "returns to this conversation) or tell the user the work cannot be "
+        "handed off right now."
+    ),
+    "persistence": (
+        "The background job could not be recorded durably, so it was not "
+        "started and nothing was queued. Tell the user, or retry once."
+    ),
+    "schedule": (
+        "The background job could not be scheduled, so it was not started and "
+        "nothing was queued. Tell the user, or retry once."
+    ),
+    "delivery_unsupported": (
+        "This session cannot receive a detached result after the turn ends, "
+        "so no background job was started and the work was NOT run inline. "
+        "Tell the user the work cannot be handed off from this session."
+    ),
+    "construction": (
+        "The subagent could not be constructed, so nothing was started and "
+        "nothing was queued. Fix the reported problem or tell the user."
+    ),
+}
+
+
+def _strict_background_rejection(
+    reason: str,
+    error: str,
+    *,
+    children: List[tuple[int, Dict[str, Any], Any]],
+    parent_agent,
+    live_writers: List[Any],
+    live_deleg_id: Optional[str],
+    n_tasks: int,
+) -> str:
+    """Honest ``rejected`` result for a conversational root's background call.
+
+    Releases every child that was built but never started, closes the live
+    transcripts as ``rejected`` and returns the one rejection shape. Nothing
+    runs inline, nothing is queued and no checkpoint credit is given.
+    """
+    for _i, _t, child in children:
+        _release_child_resources(child, parent_agent)
+        sid = getattr(child, "_subagent_id", None)
+        if isinstance(sid, str) and sid:
+            _unregister_subagent(sid, agent=child)
+    for writer in live_writers:
+        if writer is not None:
+            try:
+                writer.finalize({"status": "rejected", "error": reason})
+            except Exception:
+                logger.debug("Live transcript finalize failed", exc_info=True)
+    from tools.delegation_live_log import update_manifest_statuses
+
+    update_manifest_statuses(
+        live_deleg_id,
+        [{"task_index": i, "status": "rejected"} for i in range(n_tasks)],
+    )
+    return json.dumps(
+        {
+            "status": "rejected",
+            "mode": "background",
+            "started": False,
+            "reason": reason,
+            "error": error,
+            "note": _STRICT_REJECTION_NOTES.get(reason, ""),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _background_delivery_available(origin_wake_sid: str) -> tuple[bool, str]:
+    """Whether a detached result can find its way back, and the wake id to use.
+
+    Finite sessions (stateless HTTP, one-shot runners, cron, Kanban workers)
+    cannot route a detached result after their turn ends; the API server can
+    still be woken through a bound raw session id. ``origin_wake_sid`` is the
+    id captured before any child was constructed.
+    """
+    try:
+        from gateway.session_context import async_delivery_supported
+
+        supported = async_delivery_supported()
+    except Exception:
+        supported = True
+    if supported:
+        return True, ""
+    if origin_wake_sid:
+        logger.info(
+            "delegate_task: async delivery unsupported on this "
+            "session, but a session id is bound (%s) — dispatching "
+            "in the background and waking the session via self-post "
+            "when it completes instead of forcing synchronous "
+            "execution.",
+            origin_wake_sid,
+        )
+        return True, origin_wake_sid
+    return False, ""
 
 
 _PARENT_FINALIZATION_LOCK_GUARD = threading.Lock()
@@ -4142,6 +4252,40 @@ def delegate_task(
 
     _checkpoint_ticket = _checkpoint_ticket_for(parent_agent)
 
+    # Strict background: a conversational root (the checkpoint applies to it)
+    # asked for a detached job. If one cannot be had, say so; never run the
+    # batch inline instead. Other callers keep the historical fallbacks.
+    from agent.delegation_checkpoint import checkpoint_applies as _checkpoint_applies
+
+    _strict_background = bool(background) and _checkpoint_applies(parent_agent)
+
+    def _reject_background(reason: str, error: str, built=()) -> str:
+        return _strict_background_rejection(
+            reason, error,
+            children=list(built),
+            parent_agent=parent_agent,
+            live_writers=live_writers,
+            live_deleg_id=live_deleg_id,
+            n_tasks=n_tasks,
+        )
+
+    # Everything that can already be known is checked before any child agent
+    # is constructed, so a strict rejection builds (and leaks) nothing.
+    _bg_delivery: Optional[tuple[bool, str]] = None
+    if _strict_background:
+        from tools.async_delegation import has_async_capacity
+
+        _bg_delivery = _background_delivery_available(_origin_wake_sid)
+        if not _bg_delivery[0]:
+            return _reject_background(
+                "delivery_unsupported",
+                "Background delegation is not available on this session.",
+            )
+        if not has_async_capacity(_get_max_async_children()):
+            return _reject_background(
+                "capacity", "Async delegation capacity reached."
+            )
+
     # Build all child agents on the main thread (thread-safe construction).
     # _build_child_preserving_parent_tools saves/restores the parent's
     # resolved tool names around each construction under a lock, so child
@@ -4213,7 +4357,12 @@ def delegate_task(
             )
         except ValueError as exc:
             # Explicit-pin preflight failures (e.g. pinned delegation.command
-            # missing from PATH) refuse the spawn loudly (#80450).
+            # missing from PATH) refuse the spawn loudly (#80450). Children
+            # already built for earlier tasks will never run: release them.
+            if _strict_background:
+                return _reject_background("construction", str(exc), children)
+            for _bi, _bt, _built in children:
+                _release_child_resources(_built, parent_agent)
             return tool_error(str(exc))
         if task_tier_fallback:
             child._delegate_tier_fallback = task_tier_fallback
@@ -4482,38 +4631,18 @@ def delegate_task(
 
         # Finite sessions cannot route a detached subagent result back to the
         # agent after their turn/process ends. This includes stateless HTTP
-        # requests (#10760) and one-shot Kanban workers (#63169). Fall back to
-        # SYNCHRONOUS execution so the result returns in this same turn instead
-        # of handing out a handle with no durable consumer. Mirrors the
-        # pool-at-capacity inline fallback below.
-        try:
-            from gateway.session_context import async_delivery_supported
-            _async_ok = async_delivery_supported()
-        except Exception:
-            _async_ok = True
-
-        _wake_sid = ""
-        if not _async_ok:
-            # The adapter itself cannot push, but if a raw session id is
-            # bound (the API server always binds one — see
-            # ApiServerAdapter._bind_api_server_session), gateway.wake can
-            # still reach the session by self-POSTing /v1/chat/completions
-            # with that id in X-Clover-Session-Id once the batch completes.
-            # Only fall back to forced-sync execution when there is truly no
-            # session id to wake. Uses the origin captured before child
-            # construction (see _origin_wake_sid above) — reading
-            # CLOVER_SESSION_ID here would return the subagent's internal id.
-            _wake_sid = _origin_wake_sid
-            if _wake_sid:
-                logger.info(
-                    "delegate_task: async delivery unsupported on this "
-                    "session, but a session id is bound (%s) — dispatching "
-                    "in the background and waking the session via self-post "
-                    "when it completes instead of forcing synchronous "
-                    "execution.",
-                    _wake_sid,
-                )
-                _async_ok = True
+        # requests (#10760) and one-shot Kanban workers (#63169). Non-strict
+        # callers fall back to SYNCHRONOUS execution so the result returns in
+        # this same turn instead of handing out a handle with no durable
+        # consumer; strict callers were already rejected above. Uses the
+        # origin captured before child construction (see _origin_wake_sid
+        # above) — reading CLOVER_SESSION_ID here would return the subagent's
+        # internal id.
+        _async_ok, _wake_sid = (
+            _bg_delivery
+            if _bg_delivery is not None
+            else _background_delivery_available(_origin_wake_sid)
+        )
 
         if not _async_ok:
             logger.info(
@@ -4722,6 +4851,15 @@ def delegate_task(
                     "a child work while it runs."
                 )
             return json.dumps(payload, ensure_ascii=False)
+
+        if _strict_background:
+            # The async unit was never accepted: nothing is running, so
+            # release the children built for it and report why.
+            return _reject_background(
+                str(dispatch.get("reason") or "capacity"),
+                str(dispatch.get("error") or "Background dispatch rejected."),
+                children,
+            )
 
         # Pool at capacity / schedule failure — children are still attached
         # (we detach above only on the parent list, but the async unit was
