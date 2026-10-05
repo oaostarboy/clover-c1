@@ -4021,6 +4021,7 @@ def delegate_task(
     action: Optional[str] = None,
     subagent_id: Optional[str] = None,
     message: Optional[str] = None,
+    handoff: Optional[Dict[str, Any]] = None,
     parent_agent=None,
     credentials_cfg: Optional[Dict[str, Any]] = None,
 ) -> str:
@@ -4852,6 +4853,7 @@ def delegate_task(
                     delegation_id=dispatch["delegation_id"],
                     goals=_goals,
                     subagent_ids=[s for s in _sids if isinstance(s, str) and s],
+                    handoff=handoff,
                 )
             if any(isinstance(s, str) and s for s in _sids):
                 payload["subagent_ids"] = _sids
@@ -5719,6 +5721,24 @@ DELEGATE_TASK_SCHEMA = {
                     "specific."
                 ),
             },
+            "handoff": {
+                "type": "object",
+                "description": (
+                    "Optional short user-facing handoff summary for a new "
+                    "background spawn. Describe the whole accepted batch, not "
+                    "private context. Use plain work and outcome text, plus "
+                    "a realistic positive time range in minutes only when "
+                    "you have a sound basis. Estimates are approximate, not "
+                    "promises. Omit the range when you cannot support it."
+                ),
+                "properties": {
+                    "work": {"type": "string", "description": "Short active phrase ending in -ing, such as 'making your video'."},
+                    "outcome": {"type": "string", "description": "Short description of the intended result."},
+                    "estimated_minutes_min": {"type": "number", "exclusiveMinimum": 0},
+                    "estimated_minutes_max": {"type": "number", "exclusiveMinimum": 0},
+                },
+                "required": ["work", "outcome"],
+            },
         },
         "required": [],
     },
@@ -5783,6 +5803,7 @@ registry.register(
         action=args.get("action"),
         subagent_id=args.get("subagent_id"),
         message=args.get("message"),
+        handoff=args.get("handoff"),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,

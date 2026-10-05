@@ -37,6 +37,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
 import uuid
@@ -72,6 +73,62 @@ _CLOSING_CODES = frozenset({
 })
 _MAX_OWNED_HANDOFFS = 64
 _MAX_GOAL_CHARS = 160
+_HANDOFF_TEXT_RE = re.compile(r"^[\w .,!?()'’–-]+$", re.UNICODE)
+_HANDOFF_ID_RE = re.compile(r"\b(?:async|deleg|subagent|child|job)[_-][\w-]+", re.IGNORECASE)
+
+
+def _safe_public_text(text: str) -> bool:
+    return bool(_HANDOFF_TEXT_RE.fullmatch(text)) and not _HANDOFF_ID_RE.search(text)
+
+
+def _safe_goal_summary(value: str) -> Optional[str]:
+    """Use only a short complete task sentence; never expose paths or raw context."""
+    text = value.strip()
+    if len(text) > 120 or not text or not _safe_public_text(text):
+        return None
+    if text[-1] not in ".!?":
+        return None
+    return text[:-1]
+
+
+def _clean_handoff(value: Any) -> Optional[dict]:
+    """Keep only short, plain user-facing labels and a qualified numeric range."""
+    if not isinstance(value, dict):
+        return None
+    fields = {}
+    for key, limit in (("work", 120), ("outcome", 180)):
+        text = value.get(key)
+        if (
+            not isinstance(text, str) or not text or len(text) > limit
+            or text.strip() != text or not _safe_public_text(text)
+        ):
+            return None
+        fields[key] = text
+    low, high = value.get("estimated_minutes_min"), value.get("estimated_minutes_max")
+    estimate = None
+    if (
+        not isinstance(low, bool) and not isinstance(high, bool)
+        and isinstance(low, (int, float)) and isinstance(high, (int, float))
+    ):
+        try:
+            low_num, high_num = float(low), float(high)
+            if (
+                math.isfinite(low_num) and math.isfinite(high_num)
+                and low_num > 0 and high_num >= low_num
+            ):
+                estimate = (low_num, high_num)
+        except (OverflowError, TypeError, ValueError):
+            pass
+    fields["estimate"] = estimate
+    return fields
+
+
+def _with_period(value: str) -> str:
+    return value if value.endswith((".", "!", "?")) else value + "."
+
+
+def _format_minutes(value: float) -> str:
+    return f"{value:g}"
 
 DEFAULT_MAX_WORK_TOOLS = 5
 DEFAULT_MAX_FOREGROUND_SECONDS = 120.0
@@ -248,6 +305,7 @@ class OwnedHandoff:
     subagent_ids: tuple
     declared_reason: str
     receipt_ids: tuple
+    handoff: Optional[dict] = None
     consumed_receipts: set = field(default_factory=set, compare=False, repr=False)
 
 
@@ -285,7 +343,7 @@ class DispatchTicket:
         return self.checkpoint._credit_dispatch(self.generation, kind)
 
     def accept_handoff(
-        self, *, delegation_id: str, goals: Any, subagent_ids: Any = ()
+        self, *, delegation_id: str, goals: Any, subagent_ids: Any = (), handoff: Any = None
     ) -> bool:
         """A background dispatch was really accepted: it owns the rest.
 
@@ -299,6 +357,7 @@ class DispatchTicket:
             delegation_id=delegation_id,
             goals=goals,
             subagent_ids=subagent_ids,
+            handoff=handoff,
         )
 
 
@@ -701,7 +760,8 @@ class DelegationCheckpoint:
             return credited
 
     def _accept_handoff(
-        self, generation: int, *, delegation_id: str, goals: Any, subagent_ids: Any
+        self, generation: int, *, delegation_id: str, goals: Any, subagent_ids: Any,
+        handoff: Any = None,
     ) -> bool:
         with self._lock:
             # Rollback (delegation.checkpoint.enabled: false) means the whole
@@ -728,6 +788,7 @@ class DelegationCheckpoint:
                 subagent_ids=tuple(str(s) for s in (subagent_ids or ())),
                 declared_reason=(self.decision or {}).get("reason", ""),
                 receipt_ids=receipt_ids,
+                handoff=_clean_handoff(handoff),
             )
             while len(self._owned) > _MAX_OWNED_HANDOFFS:
                 self._evict_owned_locked()
@@ -787,18 +848,34 @@ class DelegationCheckpoint:
     def _handoff_text_locked(self) -> str:
         handoffs = self._live_handoffs_locked(self.request_id)
         if not handoffs:
-            return "I handed the remaining work to a background job."
+            return "A worker is handling the task.\nEstimated time: no reliable estimate yet.\nYou can keep chatting."
         handoff = max(handoffs, key=lambda h: h.accepted_at)
-        goals = "; ".join(f"\u201c{g}\u201d" for g in handoff.goals[:3])
-        if len(handoff.goals) > 3:
-            goals += f"; and {len(handoff.goals) - 3} more"
         count = len(handoff.goals)
-        what = f"{count} parallel jobs" if count > 1 else "a background job"
+        details = handoff.handoff
+        if details:
+            subject = "A worker is" if count == 1 else "Workers are"
+            first = f"{subject} {_with_period(details['work'])}"
+            goal = _with_period(details["outcome"])
+            estimate = details["estimate"]
+        else:
+            subject = "A worker is" if count == 1 else "Workers are"
+            first = f"{subject} working on the delegated task{'' if count == 1 else 's'}."
+            goal = _safe_goal_summary(handoff.goals[0]) if count == 1 else None
+            goal = goal or (
+                "the result described in the task" if count == 1
+                else "the results described in the tasks"
+            )
+            estimate = None
+        if estimate is None:
+            estimate_text = "Estimated time: no reliable estimate yet."
+        else:
+            low, high = estimate
+            estimate_text = (
+                f"Estimated time: about {_format_minutes(low)}–"
+                f"{_format_minutes(high)} minutes."
+            )
         return (
-            f"I handed the work to {what} ({handoff.delegation_id}): {goals}. "
-            "It runs independently, and its result will come back into this "
-            "conversation when it finishes; nothing from it is verified yet. "
-            "You can keep talking to me in the meantime."
+            f"{first}\nGoal: {_with_period(goal)}\n{estimate_text}\nYou can keep chatting."
         )
 
     def _exhausted_text_locked(self) -> str:
