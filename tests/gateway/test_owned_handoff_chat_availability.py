@@ -235,7 +235,7 @@ def test_ending_the_root_never_interrupts_the_detached_job(harness, artifact):  
     agent = _root(_hand_off_script())
 
     _run_turn(agent, "Make me a reusable explainer.")
-    agent.close() if hasattr(agent, "close") else None
+    agent.close()
 
     assert ad.active_count() == 1
     assert all(
