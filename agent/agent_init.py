@@ -1056,6 +1056,13 @@ def init_agent(
     # Set on internal forks (e.g. background_review) that must keep ``tools[]``
     # byte-identical to a parent for provider cache parity.
     agent._skip_mcp_refresh = False
+    # Delegation checkpoint (agent/delegation_checkpoint.py): runtime
+    # authorization is created lazily on the first gated call. These explicit,
+    # caller-owned markers exempt the real background-review fork and
+    # noninteractive roots (cron, one-shot, batch, curator); never inferred
+    # from message text.
+    agent._is_background_review_fork = False
+    agent._delegation_checkpoint_exempt = None
     # Registry generation the current tool snapshot was derived from. Lets a
     # late/concurrent refresh reject a stale (older-generation) rebuild instead
     # of clobbering a newer one. Set adjacent to the tool snapshot below.

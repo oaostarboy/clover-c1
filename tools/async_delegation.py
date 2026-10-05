@@ -44,7 +44,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
 
 from clover_constants import get_clover_home
 from tools.daemon_pool import DaemonThreadPoolExecutor
@@ -841,6 +841,35 @@ def get_durable_delegation(delegation_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def owned_receipts_ready(receipt_ids: Iterable[str]) -> tuple:
+    """The subset of ``receipt_ids`` whose durable row is a claimed terminal result.
+
+    Reads the durable table only, never the in-memory record: a job flips to
+    ``finalizing`` in memory before its result is committed, so only a terminal
+    row proves a committed result. The delivery claim (or a completed delivery)
+    proves the text was handed to a consumer. Missing rows, unknown states,
+    unclaimed or dropped rows, and any database error yield nothing (fail
+    closed).
+    """
+    ids = [str(r) for r in receipt_ids if r]
+    if not ids:
+        return ()
+    try:
+        marks = ",".join("?" for _ in ids)
+        with _DB_LOCK, _transaction() as conn:
+            rows = conn.execute(
+                f"""SELECT delegation_id FROM async_delegations
+                    WHERE delegation_id IN ({marks})
+                      AND state NOT IN ('running', 'finalizing')
+                      AND (delivery_claim IS NOT NULL OR delivery_state='delivered')""",
+                ids,
+            ).fetchall()
+    except Exception:
+        logger.debug("owned_receipts_ready failed closed", exc_info=True)
+        return ()
+    return tuple(row[0] for row in rows)
+
+
 def _get_executor(max_workers: int) -> ThreadPoolExecutor:
     """Lazily create (or grow) the shared daemon executor.
 
@@ -1140,7 +1169,7 @@ def dispatch_async_delegation(
             "error": f"Failed to schedule async delegation: {exc}",
         }
     if progress_fn is not None:
-        _ensure_stale_monitor()
+        _ensure_stale_monitor_best_effort(delegation_id)
 
     logger.info(
         "Dispatched async delegation %s (session_key=%s): %s",
@@ -1338,6 +1367,66 @@ def publish_batch_child_completion(
         process_registry.completion_queue.put(evt)
 
 
+def has_async_capacity(max_async_children: int) -> bool:
+    """Whether one more async unit would currently fit.
+
+    Advisory only: the authoritative check is the atomic one inside
+    ``dispatch_async_delegation_batch``. Callers use this to refuse before
+    building child agents they would only have to tear down again.
+    """
+    with _records_lock:
+        running = sum(
+            1 for r in _records.values()
+            if r.get("status") in ("running", "stalling")
+        )
+    return running < max_async_children
+
+
+class _AdmissionGate:
+    """Execution fence between ``executor.submit`` and the dispatch decision.
+
+    ``ThreadPoolExecutor.submit`` enqueues the work item *before* it starts or
+    wakes a worker, so a ``submit`` that raises does not prove the item cannot
+    run: a later (or already-busy) worker will still pick it up.  The queued
+    wrapper therefore waits here for the dispatcher's verdict and only a
+    verdict of "accepted" lets the runner start.  The first verdict wins.
+    """
+
+    def __init__(self) -> None:
+        self._decided = threading.Event()
+        self._lock = threading.Lock()
+        self._accepted = False
+
+    def _decide(self, accepted: bool) -> None:
+        with self._lock:
+            if not self._decided.is_set():
+                self._accepted = accepted
+                self._decided.set()
+
+    def accept(self) -> None:
+        self._decide(True)
+
+    def abort(self) -> None:
+        self._decide(False)
+
+    def wait_accepted(self) -> bool:
+        self._decided.wait()
+        return self._accepted
+
+
+def _withdraw_unscheduled_batch(delegation_id: str) -> None:
+    """Undo a dispatch whose worker was never scheduled."""
+    with _records_lock:
+        _records.pop(delegation_id, None)
+    try:
+        _delete_durable_delegation(delegation_id)
+    except Exception:
+        logger.debug(
+            "Could not delete durable row for unscheduled batch %s",
+            delegation_id, exc_info=True,
+        )
+
+
 def dispatch_async_delegation_batch(
     *,
     goals: List[str],
@@ -1401,6 +1490,7 @@ def dispatch_async_delegation_batch(
         if running >= max_async_children:
             return {
                 "status": "rejected",
+                "reason": "capacity",
                 "error": (
                     f"Async delegation capacity reached ({max_async_children} "
                     f"running). Wait for one to finish (its result will re-enter "
@@ -1410,8 +1500,27 @@ def dispatch_async_delegation_batch(
             }
         _records[delegation_id] = record
 
-    _persist_dispatch(record)
-    executor = _get_executor(max_async_children)
+    # The record is visible (and counts against capacity) from here on, so any
+    # failure before the worker is scheduled must withdraw it again; otherwise
+    # a phantom "running" unit would hold a slot until the process exits.
+    try:
+        _persist_dispatch(record)
+    except Exception as exc:
+        _withdraw_unscheduled_batch(delegation_id)
+        return {
+            "status": "rejected",
+            "reason": "persistence",
+            "error": f"Failed to persist async delegation batch: {exc}",
+        }
+    try:
+        executor = _get_executor(max_async_children)
+    except Exception as exc:
+        _withdraw_unscheduled_batch(delegation_id)
+        return {
+            "status": "rejected",
+            "reason": "schedule",
+            "error": f"Failed to start the async delegation executor: {exc}",
+        }
 
     def _worker() -> None:
         combined: Dict[str, Any] = {}
@@ -1438,19 +1547,34 @@ def dispatch_async_delegation_batch(
         finally:
             _finalize_batch(delegation_id, combined, status)
 
+    # A raising ``submit`` can leave the item queued (see _AdmissionGate), so
+    # the queued wrapper may only start the runner once the dispatch is
+    # accepted; every exit below resolves the verdict.
+    gate = _AdmissionGate()
+
+    def _admitted_worker() -> None:
+        if gate.wait_accepted():
+            _worker()
+
+    submitted = False
     try:
         # Propagate the dispatching profile to the detached batch children.
-        executor.submit(propagate_context_to_thread(_worker))
-    except Exception as exc:  # pragma: no cover
-        with _records_lock:
-            _records.pop(delegation_id, None)
-        _delete_durable_delegation(delegation_id)
+        executor.submit(propagate_context_to_thread(_admitted_worker))
+        submitted = True
+    except Exception as exc:
+        _withdraw_unscheduled_batch(delegation_id)
         return {
             "status": "rejected",
+            "reason": "schedule",
             "error": f"Failed to schedule async delegation batch: {exc}",
         }
+    finally:
+        if submitted:
+            gate.accept()
+        else:
+            gate.abort()
     if progress_fn is not None:
-        _ensure_stale_monitor()
+        _ensure_stale_monitor_best_effort(delegation_id)
 
     logger.info(
         "Dispatched async delegation batch %s (%d task(s), session_key=%s)",
@@ -1576,6 +1700,24 @@ def _push_batch_completion_event(
             "Async delegation batch %s: failed to enqueue completion event; "
             "result lost: %s",
             event_record.get("delegation_id"), exc,
+        )
+
+
+def _ensure_stale_monitor_best_effort(delegation_id: str) -> None:
+    """Start the stale monitor for a job that is already scheduled.
+
+    Once ``submit`` has succeeded the job is running and owned, so a failure to
+    start the monitoring thread (thread exhaustion) must not escape the
+    dispatcher: the caller would see an exception for a live job and never
+    record the handoff. The job simply runs without stall detection.
+    """
+    try:
+        _ensure_stale_monitor()
+    except Exception:
+        logger.warning(
+            "Async delegation %s is running but its stale monitor could not "
+            "be started; stall detection is off for it.",
+            delegation_id, exc_info=True,
         )
 
 

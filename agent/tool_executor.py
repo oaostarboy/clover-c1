@@ -581,7 +581,21 @@ def _run_tool_activity_heartbeat(
         pass
 
 
-def _run_agent_tool_execution_middleware(
+def _run_agent_tool_execution_middleware(agent, **kwargs) -> "_ManagedToolResult":
+    """Run the executor-owned pipeline inside the private executor context.
+
+    The context is set INSIDE the worker that runs the middleware / plugin hooks
+    / dispatch, so a nested or mismatched legacy ``invoke_tool`` call made from
+    that pipeline can never reacquire declaration authority (it defers to the
+    foreground root, which registers after accepting a normal completion).
+    """
+    from agent.delegation_checkpoint import executor_context
+
+    with executor_context():
+        return _run_agent_tool_execution_middleware_impl(agent, **kwargs)
+
+
+def _run_agent_tool_execution_middleware_impl(
     agent,
     *,
     function_name: str,
@@ -708,12 +722,50 @@ def _run_agent_tool_execution_middleware(
             )
             return result
 
+        # Mandatory delegation checkpoint. Admission runs inside the ordered
+        # start so concurrent work reserves its budget in emission order, and
+        # before any side effect. A block leaves memory/skill nudge counters
+        # and the start order exactly as a guardrail block does.
+        checkpoint_state: dict[str, Any] = {"verdict": None}
+
+        def _admit_then_begin() -> None:
+            from agent import delegation_checkpoint
+
+            verdict = delegation_checkpoint.admit(
+                agent, function_name, final_args, tool_call_id
+            )
+            checkpoint_state["verdict"] = verdict
+            if not verdict.blocked:
+                try:
+                    _begin()
+                except BaseException:
+                    if verdict.admission is not None:
+                        verdict.admission.checkpoint.refund(verdict.admission)
+                    raise
+
+        _advance_start_order(_admit_then_begin)
+        checkpoint_verdict = checkpoint_state["verdict"]
+        if checkpoint_verdict is not None and checkpoint_verdict.blocked:
+            state["blocked"] = True
+            _emit_terminal_post_tool_call(
+                agent,
+                function_name=function_name,
+                function_args=final_args,
+                result=checkpoint_verdict.block_result,
+                effective_task_id=effective_task_id,
+                tool_call_id=tool_call_id,
+                status="blocked",
+                error_type=checkpoint_verdict.block_code or "delegation_checkpoint",
+                error_message=checkpoint_verdict.block_message,
+                middleware_trace=list(state["middleware_trace"]),
+            )
+            return checkpoint_verdict.block_result
+        admission = checkpoint_verdict.admission if checkpoint_verdict is not None else None
+
         if function_name == "memory":
             agent._turns_since_memory = 0
         elif function_name == "skill_manage":
             agent._iters_since_skill = 0
-
-        _advance_start_order(_begin)
 
         # Keep the gateway turn-inactivity watchdog from abandoning a turn
         # whose tool call runs silently for longer than the inactivity
@@ -731,7 +783,10 @@ def _run_agent_tool_execution_middleware(
         )
         _hb_thread.start()
         try:
-            return execute(final_args)
+            from agent.delegation_checkpoint import admitted
+
+            with admitted(admission):
+                return execute(final_args)
         finally:
             _hb_stop.set()
             _hb_thread.join(timeout=2.0)
@@ -829,6 +884,7 @@ def _run_sequential_tool_execution_middleware(
     scope_block: str | None = None,
     display_index: int | None = None,
     middleware_trace: list[dict[str, Any]] | None = None,
+    declaration_owner=None,
 ) -> _ManagedToolResult:
     """Run one sequential call with the concurrent executor's deadline.
 
@@ -862,9 +918,18 @@ def _run_sequential_tool_execution_middleware(
         with agent._tool_worker_threads_lock:
             agent._tool_worker_threads.add(tid)
         try:
-            return _run_agent_tool_execution_middleware(
+            outcome = _run_agent_tool_execution_middleware(
                 agent, authorization_gate=authorization_gate, **kwargs
             )
+            # Worker-written completion bit: DATA only, never authority. Set
+            # only after a normal managed return; exceptions leave it False.
+            if (
+                declaration_owner is not None
+                and outcome.dispatched
+                and not outcome.blocked
+            ):
+                declaration_owner.slot.completed = True
+            return outcome
         finally:
             with agent._tool_worker_threads_lock:
                 agent._tool_worker_threads.discard(tid)
@@ -1002,6 +1067,68 @@ def _run_sequential_tool_execution_middleware(
         # Never join a wedged worker. DaemonThreadPoolExecutor also keeps it out
         # of the stdlib atexit join, matching the concurrent timeout path.
         executor.shutdown(wait=not timed_out, cancel_futures=timed_out)
+
+
+def _make_todo_execute(agent, owner):
+    """Per-invocation ``execute`` callable; ``owner`` is bound BY VALUE.
+
+    A closure over a loop-local variable would be rebound by later ``todo``
+    iterations while an abandoned worker is still alive.
+    """
+
+    def _execute(next_args: dict) -> Any:
+        from tools.todo_tool import todo_for_agent
+
+        return todo_for_agent(agent, next_args, owner)
+
+    return _execute
+
+
+def _accept_sequential_declaration(agent, owner, tool_call_id, managed) -> bool:
+    """Foreground acceptance of a sequential ``todo`` completion.
+
+    Registers only a normal managed completion: dispatched, not blocked, and
+    NOT a synthesized timeout/cancel marker (those report dispatched=True too).
+    """
+    if owner is None:
+        return False
+    if managed.blocked or not managed.dispatched:
+        return False
+    if isinstance(managed.result, (_ToolTimeoutResult, _ToolCancelledResult)):
+        return False
+    if not owner.slot.completed:
+        return False
+    from agent.delegation_checkpoint import register_accepted_declaration
+
+    return register_accepted_declaration(agent, owner, tool_call_id)
+
+
+def _freeze_accepted_declarations(declaration_owners, future_to_index, timed_out_indices):
+    """Freeze, at the wait/grace boundary, which concurrent todo calls count.
+
+    Accepted only if the future is actually done, not cancelled, raised
+    nothing, is not a timed-out index, and its worker reported a normal
+    managed completion. Done-state is read first, then the slot data is
+    snapshotted; anything the worker does later is invisible to eligibility.
+    """
+    accepted = []
+    for future, index in future_to_index.items():
+        owner = declaration_owners.get(index)
+        if owner is None or index in timed_out_indices:
+            continue
+        try:
+            if not future.done() or future.cancelled() or future.exception() is not None:
+                continue
+        except Exception:
+            continue
+        if not owner.slot.completed:
+            continue
+        decision = owner.slot.decision
+        if decision is None:
+            continue
+        accepted.append((index, owner, dict(decision)))
+    accepted.sort(key=lambda item: item[0])
+    return accepted
 
 
 def _begin_tool_execution(
@@ -1307,6 +1434,10 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     agent._current_tool = tool_names_str
     agent._touch_activity(f"executing {num_tools} tools concurrently: {tool_names_str}")
 
+    # Declaration receipts for todo calls, captured on THIS (calling) thread
+    # before any worker is submitted; see agent/delegation_checkpoint.py.
+    declaration_owners: dict[int, Any] = {}
+
     def _run_tool(
         index,
         tool_call,
@@ -1385,6 +1516,9 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                         skip_tool_request_middleware=True,
                         skip_tool_execution_middleware=True,
                         tool_request_middleware_trace=list(middleware_trace),
+                        # Receipt captured before this worker was submitted
+                        # (explicit None = grant nothing).
+                        declaration_owner=declaration_owners.get(index),
                     )
 
                 managed = _run_agent_tool_execution_middleware(
@@ -1405,6 +1539,10 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                 middleware_trace = managed.middleware_trace
                 blocked = managed.blocked
                 dispatched = managed.dispatched
+                _declaration_owner = declaration_owners.get(index)
+                if _declaration_owner is not None and dispatched and not blocked:
+                    # Worker-written completion bit: data, never authority.
+                    _declaration_owner.slot.completed = True
             except _BatchAbandoned:
                 # The batch was abandoned while we were parked at the start-order
                 # gate. The main thread already synthesized this tool's result
@@ -1511,6 +1649,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
         futures = []
         future_to_index = {}
         timed_out_indices: set[int] = set()
+        accepted_declarations: list = []
         deadline = time.monotonic() + timeout_s if timeout_s is not None else None
         if runnable_calls:
             max_workers = _max_workers_for_tool_batch(runnable_calls)
@@ -1522,6 +1661,13 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
             from tools.daemon_pool import DaemonThreadPoolExecutor
             executor = DaemonThreadPoolExecutor(max_workers=max_workers)
             abandon_executor = False
+            from agent.delegation_checkpoint import claim_declaration
+
+            for _i, _tc, _name, _args, _sb in runnable_calls:
+                if _name == "todo":
+                    declaration_owners[_i] = claim_declaration(
+                        agent, _pairing_tool_call_id(_tc)
+                    )
             try:
                 for submit_index, (i, tc, name, args, scope_block) in enumerate(
                     runnable_calls
@@ -1679,6 +1825,16 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
                             f"{len(not_done)} remaining: {', '.join(_still_running[:3])})"
                         )
             finally:
+                # Freeze which todo declarations the foreground accepts, at the
+                # existing wait/grace boundary and BEFORE any display or
+                # late-result preference: futures that are not done, were
+                # cancelled, raised, or timed out never count.
+                try:
+                    accepted_declarations = _freeze_accepted_declarations(
+                        declaration_owners, future_to_index, timed_out_indices
+                    )
+                except Exception:
+                    accepted_declarations = []
                 # Belt-and-braces: any exit from the wait loop that abandoned
                 # the batch must release gate-parked workers, including the
                 # exception path that never reaches the branches above.
@@ -1699,6 +1855,16 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
             completed = sum(1 for r in results if r is not None)
             total_dur = sum(r[3] for r in results if r is not None)
             spinner.stop(f"⚡ {completed}/{num_tools} tools completed in {total_dur:.1f}s total")
+
+    # Foreground registration of accepted declarations, from the frozen
+    # snapshot (never from what a worker did after the boundary).
+    if accepted_declarations:
+        from agent.delegation_checkpoint import register_accepted_declaration
+
+        for _idx, _owner, _decision in accepted_declarations:
+            register_accepted_declaration(
+                agent, _owner, _pairing_tool_call_id(parsed_calls[_idx][0]), _decision
+            )
 
     # ── Post-execution: display per-tool results ─────────────────────
     for i, (tc, name, args, middleware_trace, _parse_error, _scope_block) in enumerate(
@@ -2085,17 +2251,15 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
         tool_start_time = time.time()
 
         if function_name == "todo":
-            def _execute(next_args: dict) -> Any:
-                from tools.todo_tool import todo_tool as _todo_tool
-                from tools.todo_tool import delegation_check_for_agent
-                return _todo_tool(
-                    todos=next_args.get("todos"),
-                    merge=next_args.get("merge", False),
-                    store=agent._todo_store,
-                    delegation=next_args.get("delegation"),
-                    delegation_check=delegation_check_for_agent(agent),
-                )
-            function_result, function_args, middleware_trace, _execution_blocked, _execution_dispatched = _managed_values(_run_agent_tool_execution_middleware(
+            # Allocate this invocation's receipt + private slot HERE, on the
+            # calling thread, before the call is handed to a worker where
+            # middleware or a pre_tool_call hook may hold it past a deadline.
+            # It is bound by value; later todo iterations cannot rebind it.
+            from agent.delegation_checkpoint import claim_declaration
+
+            _declaration_owner = claim_declaration(agent, tool_call_id)
+            _execute = _make_todo_execute(agent, _declaration_owner)
+            _managed = _run_agent_tool_execution_middleware(
                 agent,
                 function_name=function_name,
                 function_args=function_args,
@@ -2104,7 +2268,11 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 execute=_execute,
                 scope_block=_ts_scope_block,
                 display_index=i,
-            ))
+                declaration_owner=_declaration_owner,
+            )
+            function_result, function_args, middleware_trace, _execution_blocked, _execution_dispatched = _managed_values(_managed)
+            # Foreground acceptance, before the next call can be admitted.
+            _accept_sequential_declaration(agent, _declaration_owner, tool_call_id, _managed)
             tool_duration = time.time() - tool_start_time
             if agent._should_emit_quiet_tool_messages():
                 agent._vprint(f"  {_get_cute_tool_message_impl('todo', function_args, tool_duration, result=function_result)}")

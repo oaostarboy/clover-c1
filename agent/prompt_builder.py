@@ -511,10 +511,22 @@ PLAN_FIRST_DELEGATION_GUIDANCE = (
 )
 
 TODO_DELEGATION_DECISION_GUIDANCE = (
-    "For a substantial plan, record todo delegation mode 'delegate' or "
-    "'direct' with a brief operational reason. Quick tasks stay direct; "
-    "respect explicit no-subagent instructions. This records intent only: "
-    "it does not require spawning a worker or prove one ran."
+    "Delegation checkpoint, for the foreground conversational agent only. It "
+    "does not apply to a background memory/skill review, a side-question "
+    "helper, a delegated worker, a scheduled run, or any run without the todo "
+    "tool; if you are one of those, ignore this paragraph. When you are the "
+    "foreground agent talking with the user: before the first work tool of a "
+    "task (file, terminal, browser, code, memory or any tool other than todo, "
+    "skill/tool lookup, clarify and delegate_task), record todo delegation "
+    "mode 'direct' with a brief operational reason, or mode 'delegate' with a "
+    "reason followed by an actual delegate_task call. A decision-only todo "
+    "call is enough; no checklist is needed. Work tools are blocked until you "
+    "do. A choice covers only a handful of work calls or a couple of minutes "
+    "for the user's request, and declaring again does not extend it: once it "
+    "is spent, or once a background worker is dispatched, work tools stay "
+    "blocked until the user's next message. Quick tasks stay direct; respect "
+    "explicit no-subagent instructions. After dispatching background workers, "
+    "end your turn with a short acknowledgement."
 )
 
 PARALLEL_TOOL_CALL_GUIDANCE = (

@@ -2167,6 +2167,18 @@ DEFAULT_CONFIG = {
         # Set to true to restore delivery of child process notifications
         # (with subagent attribution lines).
         "surface_child_process_notifications": False,
+        # Mandatory delegation checkpoint for conversational roots that have
+        # both `todo` and `delegate_task`: before the first work tool of a task
+        # the model must record todo `delegation` direct(reason) or
+        # delegate(reason) + an actual child start. A decision covers at most
+        # `max_work_tools` parent work calls or `max_foreground_seconds` since
+        # its first one, then must be renewed. Invalid or non-positive values
+        # fall back to these defaults. `enabled: false` is the rollback.
+        "checkpoint": {
+            "enabled": True,
+            "max_work_tools": 5,
+            "max_foreground_seconds": 120,
+        },
     },
 
     # Ephemeral prefill messages file — JSON list of {role, content} dicts

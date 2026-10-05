@@ -7529,6 +7529,26 @@ def run_conversation(
                     failed = True
                     break
 
+                from agent.delegation_checkpoint import completion_directive as _completion_directive
+                _directive = _completion_directive(agent)
+                if _directive is not None:
+                    # An accepted background handoff (or a spent allowance the
+                    # model keeps pushing against) ends the root's turn through
+                    # the normal exit. Nothing is cancelled and no provider is
+                    # called: the detached job owns the rest, and finalize_turn
+                    # still persists and learns as usual.
+                    _turn_exit_reason = _directive.reason
+                    final_response = _directive.text
+                    append_message(messages, {"role": "assistant", "content": final_response})
+                    agent._safe_print(f"\n{final_response}\n")
+                    if agent.stream_delta_callback:
+                        try:
+                            agent.stream_delta_callback(final_response)
+                            agent.stream_delta_callback(None)
+                        except Exception:
+                            pass
+                    break
+
                 if agent._tool_guardrail_halt_decision is not None:
                     decision = agent._tool_guardrail_halt_decision
                     _turn_exit_reason = "guardrail_halt"

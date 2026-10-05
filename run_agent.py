@@ -115,6 +115,7 @@ from agent.process_bootstrap import (
     _get_proxy_for_base_url,
 )
 from agent.iteration_budget import IterationBudget
+from agent.delegation_checkpoint import RECEIPT_UNSET as _RECEIPT_UNSET
 from agent.interrupt_compat import request_hard_interrupt
 
 
@@ -8345,7 +8346,8 @@ class AIAgent:
                      pre_tool_block_checked: bool = False,
                      skip_tool_request_middleware: bool = False,
                      tool_request_middleware_trace: Optional[list[dict[str, Any]]] = None,
-                     skip_tool_execution_middleware: bool = False) -> str:
+                     skip_tool_execution_middleware: bool = False,
+                     declaration_owner: Any = _RECEIPT_UNSET) -> str:
         """Forwarder — see ``agent.agent_runtime_helpers.invoke_tool``."""
         from agent.agent_runtime_helpers import invoke_tool
         return invoke_tool(
@@ -8359,6 +8361,7 @@ class AIAgent:
             skip_tool_request_middleware,
             tool_request_middleware_trace,
             skip_tool_execution_middleware,
+            declaration_owner,
         )
 
     @staticmethod

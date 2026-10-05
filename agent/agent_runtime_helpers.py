@@ -32,6 +32,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from agent.delegation_checkpoint import RECEIPT_UNSET as _RECEIPT_UNSET
+
 from clover_cli.timeouts import get_provider_request_timeout
 from agent.message_sanitization import (
     _FULL_ARGS_LOG_BOUND,
@@ -3413,8 +3415,14 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                  pre_tool_block_checked: bool = False,
                  skip_tool_request_middleware: bool = False,
                  tool_request_middleware_trace: Optional[List[Dict[str, Any]]] = None,
-                 skip_tool_execution_middleware: bool = False) -> str:
+                 skip_tool_execution_middleware: bool = False,
+                 declaration_owner: Any = _RECEIPT_UNSET) -> str:
     """Invoke a single tool and return the result string. No display logic.
+
+    ``declaration_owner`` is the todo declaration receipt captured by the
+    caller before any worker handoff. When the caller says nothing (the default
+    sentinel) a direct synchronous legacy caller IS the boundary, so the
+    receipt is captured at this entry; an explicit ``None`` grants nothing.
 
     Handles both agent-level tools (todo, memory, etc.) and registry-dispatched
     tools. Used by the concurrent execution path; the sequential path retains
@@ -3422,6 +3430,24 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
     """
     if not isinstance(function_args, dict):
         function_args = {}
+
+    # Declaration ownership. ``declaration_owner`` unset = a genuinely
+    # synchronous legacy caller: it is its own boundary, so it captures a
+    # private receipt HERE (before request middleware / plugin hooks can delay
+    # it) and registers it only on its own normal return below. Inside the
+    # executor-owned pipeline an unset owner is a nested/mismatched call and
+    # fails closed. An explicit ``None`` grants nothing; an explicit owner
+    # comes from the executor, whose foreground root registers it.
+    _legacy_owner = None
+    if declaration_owner is _RECEIPT_UNSET:
+        declaration_owner = None
+        if function_name == "todo":
+            from agent.delegation_checkpoint import claim_declaration, in_executor_context
+
+            if not in_executor_context():
+                _legacy_owner = declaration_owner = claim_declaration(
+                    agent, tool_call_id or ""
+                )
 
     _tool_middleware_trace = list(tool_request_middleware_trace or [])
     try:
@@ -3505,17 +3531,9 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
 
     if function_name == "todo":
         def _execute(next_args: dict) -> Any:
-            from tools.todo_tool import todo_tool as _todo_tool
-            from tools.todo_tool import delegation_check_for_agent
+            from tools.todo_tool import todo_for_agent
             return _finish_agent_tool(
-                _todo_tool(
-                    todos=next_args.get("todos"),
-                    merge=next_args.get("merge", False),
-                    store=agent._todo_store,
-                    delegation=next_args.get("delegation"),
-                    delegation_check=delegation_check_for_agent(agent),
-                ),
-                next_args,
+                todo_for_agent(agent, next_args, declaration_owner), next_args
             )
     elif function_name == "session_search":
         def _execute(next_args: dict) -> Any:
@@ -3703,22 +3721,68 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
                 **dispatch_kwargs,
             )
 
-    if skip_tool_execution_middleware:
-        return _execute(function_args)
+    # Delegation checkpoint for registered/legacy invocation. The executor's
+    # funnel already admitted its own calls and hands that admission over via a
+    # private ContextVar; `skip_tool_execution_middleware` alone is never
+    # authorization. A call with no matching admission is gated here, once.
+    from agent import delegation_checkpoint as _checkpoint
 
-    from clover_cli.middleware import run_tool_execution_middleware
+    _owned_admission = None
+    if _checkpoint.current_admission_for(
+        agent,
+        _checkpoint.resolve_work_name(function_name, function_args),
+        tool_call_id or "",
+    ) is None:
+        _verdict = _checkpoint.admit(
+            agent, function_name, function_args, tool_call_id or ""
+        )
+        if _verdict.blocked:
+            try:
+                from model_tools import _emit_post_tool_call_hook
+                _emit_post_tool_call_hook(
+                    function_name=function_name,
+                    function_args=function_args,
+                    result=_verdict.block_result,
+                    task_id=effective_task_id or "",
+                    session_id=getattr(agent, "session_id", "") or "",
+                    tool_call_id=tool_call_id or "",
+                    turn_id=getattr(agent, "_current_turn_id", "") or "",
+                    api_request_id=getattr(agent, "_current_api_request_id", "") or "",
+                    status="blocked",
+                    error_type=_verdict.block_code or "delegation_checkpoint",
+                    error_message=_verdict.block_message,
+                    middleware_trace=list(_tool_middleware_trace),
+                )
+            except Exception:
+                pass
+            return _verdict.block_result
+        _owned_admission = _verdict.admission
 
-    return run_tool_execution_middleware(
-        function_name,
-        function_args,
-        lambda next_args: _execute(next_args if isinstance(next_args, dict) else function_args),
-        original_args=function_args,
-        task_id=effective_task_id or "",
-        session_id=getattr(agent, "session_id", "") or "",
-        tool_call_id=tool_call_id or "",
-        turn_id=getattr(agent, "_current_turn_id", "") or "",
-        api_request_id=getattr(agent, "_current_api_request_id", "") or "",
-    )
+    with _checkpoint.admitted(_owned_admission):
+        if skip_tool_execution_middleware:
+            _result = _execute(function_args)
+        else:
+            from clover_cli.middleware import run_tool_execution_middleware
+
+            _result = run_tool_execution_middleware(
+                function_name,
+                function_args,
+                lambda next_args: _execute(next_args if isinstance(next_args, dict) else function_args),
+                original_args=function_args,
+                task_id=effective_task_id or "",
+                session_id=getattr(agent, "session_id", "") or "",
+                tool_call_id=tool_call_id or "",
+                turn_id=getattr(agent, "_current_turn_id", "") or "",
+                api_request_id=getattr(agent, "_current_api_request_id", "") or "",
+            )
+    # Synchronous legacy acceptance: this call's own normal return (an
+    # exception propagates above and registers nothing; a plugin block or a
+    # middleware that never ran the tool leaves the slot empty).
+    if _legacy_owner is not None:
+        from agent.delegation_checkpoint import register_accepted_declaration
+
+        register_accepted_declaration(agent, _legacy_owner, tool_call_id or "")
+    return _result
 
 
 

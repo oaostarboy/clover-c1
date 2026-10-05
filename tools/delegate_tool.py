@@ -2688,11 +2688,17 @@ def _run_single_child(
     owner_session_id: Optional[str] = None,
     owner_transport: Any = None,
     owner_session_record: Any = None,
+    checkpoint_ticket: Any = None,
     **_kwargs,
 ) -> Dict[str, Any]:
     """
     Run a pre-built child agent. Called from within a thread.
     Returns a structured result dict.
+
+    ``checkpoint_ticket`` (inline callers only) is the parent's delegation
+    checkpoint right to credit a REAL child start. It is spent at the point the
+    child conversation actually begins, after credential leasing and every
+    other pre-start step succeeded.
     """
     child_start = time.monotonic()
 
@@ -3040,6 +3046,10 @@ def _run_single_child(
             from agent.delegation_context import delegated_child_context
 
             with delegated_child_context(str(getattr(child, "session_id", "") or "")):
+                if checkpoint_ticket is not None:
+                    # The conversation-start boundary: nothing earlier (pool
+                    # construction, submission, credential lease) counts.
+                    checkpoint_ticket.credit("inline")
                 return child.run_conversation(
                     user_message=goal,
                     task_id=child_task_id,
@@ -3596,45 +3606,155 @@ def _run_single_child(
         if isinstance(saved_tool_names, list):
             model_tools._last_resolved_tool_names = list(saved_tool_names)
 
-        # Remove child from active tracking
+        _release_child_resources(child, parent_agent)
 
-        # Unregister child from interrupt propagation
-        if hasattr(parent_agent, "_active_children"):
-            try:
-                lock = getattr(parent_agent, "_active_children_lock", None)
-                if lock:
-                    with lock:
-                        parent_agent._active_children.remove(child)
-                else:
+
+def _release_child_resources(child, parent_agent) -> None:
+    """Detach, close and Relay-unregister a child that is done (or never ran).
+
+    Shared tail of ``_run_single_child`` and the strict-background rejection
+    path, so a child that was built but never started is torn down exactly the
+    way a finished one is.
+    """
+    # Unregister child from interrupt propagation
+    if hasattr(parent_agent, "_active_children"):
+        try:
+            lock = getattr(parent_agent, "_active_children_lock", None)
+            if lock:
+                with lock:
                     parent_agent._active_children.remove(child)
-            except (ValueError, UnboundLocalError) as e:
-                logger.debug("Could not remove child from active_children: %s", e)
+            else:
+                parent_agent._active_children.remove(child)
+        except (ValueError, UnboundLocalError) as e:
+            logger.debug("Could not remove child from active_children: %s", e)
 
-        # Close tool resources (terminal sandboxes, browser daemons,
-        # background processes, httpx clients) so subagent subprocesses
-        # don't outlive the delegation.
-        try:
-            if hasattr(child, "close"):
-                child.close()
-        except Exception:
-            logger.debug("Failed to close child agent after delegation")
+    # Close tool resources (terminal sandboxes, browser daemons,
+    # background processes, httpx clients) so subagent subprocesses
+    # don't outlive the delegation.
+    try:
+        if hasattr(child, "close"):
+            child.close()
+    except Exception:
+        logger.debug("Failed to close child agent after delegation")
 
-        # The AIAgent turn boundary normally closes the child scope itself. This
-        # fallback covers failures before that boundary starts, but must not pop
-        # a scope while a timed-out child worker is still unwinding.
-        try:
-            from agent import relay_runtime
+    # The AIAgent turn boundary normally closes the child scope itself. This
+    # fallback covers failures before that boundary starts, but must not pop
+    # a scope while a timed-out child worker is still unwinding.
+    try:
+        from agent import relay_runtime
 
-            runtime = relay_runtime.get_runtime(create=False)
-            child_session_id = str(getattr(child, "session_id", "") or "")
-            child_turn_is_active = relay_runtime.SESSION_COORDINATOR.has_active_turn(
-                profile_key=relay_runtime.current_profile_key(),
-                session_id=child_session_id,
-            )
-            if runtime is not None and child_session_id and not child_turn_is_active:
-                runtime.unregister_subagent({"child_session_id": child_session_id})
-        except Exception:
-            logger.debug("Failed to close child Relay session after delegation")
+        runtime = relay_runtime.get_runtime(create=False)
+        child_session_id = str(getattr(child, "session_id", "") or "")
+        child_turn_is_active = relay_runtime.SESSION_COORDINATOR.has_active_turn(
+            profile_key=relay_runtime.current_profile_key(),
+            session_id=child_session_id,
+        )
+        if runtime is not None and child_session_id and not child_turn_is_active:
+            runtime.unregister_subagent({"child_session_id": child_session_id})
+    except Exception:
+        logger.debug("Failed to close child Relay session after delegation")
+
+
+_STRICT_REJECTION_NOTES = {
+    "capacity": (
+        "Background capacity is full. No subagent was started and nothing was "
+        "queued. Wait for a running background job to finish (its result "
+        "returns to this conversation) or tell the user the work cannot be "
+        "handed off right now."
+    ),
+    "persistence": (
+        "The background job could not be recorded durably, so it was not "
+        "started and nothing was queued. Tell the user, or retry once."
+    ),
+    "schedule": (
+        "The background job could not be scheduled, so it was not started and "
+        "nothing was queued. Tell the user, or retry once."
+    ),
+    "delivery_unsupported": (
+        "This session cannot receive a detached result after the turn ends, "
+        "so no background job was started and the work was NOT run inline. "
+        "Tell the user the work cannot be handed off from this session."
+    ),
+    "construction": (
+        "The subagent could not be constructed, so nothing was started and "
+        "nothing was queued. Fix the reported problem or tell the user."
+    ),
+}
+
+
+def _strict_background_rejection(
+    reason: str,
+    error: str,
+    *,
+    children: List[tuple[int, Dict[str, Any], Any]],
+    parent_agent,
+    live_writers: List[Any],
+    live_deleg_id: Optional[str],
+    n_tasks: int,
+) -> str:
+    """Honest ``rejected`` result for a conversational root's background call.
+
+    Releases every child that was built but never started, closes the live
+    transcripts as ``rejected`` and returns the one rejection shape. Nothing
+    runs inline, nothing is queued and no checkpoint credit is given.
+    """
+    for _i, _t, child in children:
+        _release_child_resources(child, parent_agent)
+        sid = getattr(child, "_subagent_id", None)
+        if isinstance(sid, str) and sid:
+            _unregister_subagent(sid, agent=child)
+    for writer in live_writers:
+        if writer is not None:
+            try:
+                writer.finalize({"status": "rejected", "error": reason})
+            except Exception:
+                logger.debug("Live transcript finalize failed", exc_info=True)
+    from tools.delegation_live_log import update_manifest_statuses
+
+    update_manifest_statuses(
+        live_deleg_id,
+        [{"task_index": i, "status": "rejected"} for i in range(n_tasks)],
+    )
+    return json.dumps(
+        {
+            "status": "rejected",
+            "mode": "background",
+            "started": False,
+            "reason": reason,
+            "error": error,
+            "note": _STRICT_REJECTION_NOTES.get(reason, ""),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _background_delivery_available(origin_wake_sid: str) -> tuple[bool, str]:
+    """Whether a detached result can find its way back, and the wake id to use.
+
+    Finite sessions (stateless HTTP, one-shot runners, cron, Kanban workers)
+    cannot route a detached result after their turn ends; the API server can
+    still be woken through a bound raw session id. ``origin_wake_sid`` is the
+    id captured before any child was constructed.
+    """
+    try:
+        from gateway.session_context import async_delivery_supported
+
+        supported = async_delivery_supported()
+    except Exception:
+        supported = True
+    if supported:
+        return True, ""
+    if origin_wake_sid:
+        logger.info(
+            "delegate_task: async delivery unsupported on this "
+            "session, but a session id is bound (%s) — dispatching "
+            "in the background and waking the session via self-post "
+            "when it completes instead of forcing synchronous "
+            "execution.",
+            origin_wake_sid,
+        )
+        return True, origin_wake_sid
+    return False, ""
 
 
 _PARENT_FINALIZATION_LOCK_GUARD = threading.Lock()
@@ -4125,111 +4245,170 @@ def delegate_task(
         _capture_gateway_steer_authority(_origin_ui_session_id)
     )
 
+    # Delegation checkpoint: a generation-bound right to credit a REAL child
+    # start for a root that declared `delegate`. Captured here, on the calling
+    # thread, so a late async child can never satisfy a newer declaration.
+    from agent.delegation_checkpoint import ticket_for as _checkpoint_ticket_for
+
+    _checkpoint_ticket = _checkpoint_ticket_for(parent_agent)
+
+    # Strict background: a conversational root (the checkpoint applies to it)
+    # asked for a detached job. If one cannot be had, say so; never run the
+    # batch inline instead. Other callers keep the historical fallbacks.
+    from agent.delegation_checkpoint import checkpoint_applies as _checkpoint_applies
+
+    _strict_background = bool(background) and _checkpoint_applies(parent_agent)
+
+    def _reject_background(reason: str, error: str, built=()) -> str:
+        return _strict_background_rejection(
+            reason, error,
+            children=list(built),
+            parent_agent=parent_agent,
+            live_writers=live_writers,
+            live_deleg_id=live_deleg_id,
+            n_tasks=n_tasks,
+        )
+
+    # Everything that can already be known is checked before any child agent
+    # is constructed, so a strict rejection builds (and leaks) nothing.
+    _bg_delivery: Optional[tuple[bool, str]] = None
+    if _strict_background:
+        from tools.async_delegation import has_async_capacity
+
+        _bg_delivery = _background_delivery_available(_origin_wake_sid)
+        if not _bg_delivery[0]:
+            return _reject_background(
+                "delivery_unsupported",
+                "Background delegation is not available on this session.",
+            )
+        if not has_async_capacity(_get_max_async_children()):
+            return _reject_background(
+                "capacity", "Async delegation capacity reached."
+            )
+
     # Build all child agents on the main thread (thread-safe construction).
     # _build_child_preserving_parent_tools saves/restores the parent's
     # resolved tool names around each construction under a lock, so child
     # toolset resolution never leaks into the parent (shared with the plugin
     # subagent-lifecycle API).
     children = []
-    for i, t in enumerate(task_list):
-        # Per-task role beats top-level; normalise again so unknown
-        # per-task values warn and degrade to leaf uniformly.
-        effective_role = _normalize_role(t.get("role") or top_role)
-        # T1-24: schema'd tasks get the contract appended to their context
-        # so the child knows the expected output shape before it starts.
-        _task_schema = task_schemas[i] if i < len(task_schemas) else None
-        _child_context = t.get("context")
-        if _task_schema is not None:
-            from tools.delegation_output_schema import append_output_contract
+    try:
+        for i, t in enumerate(task_list):
+            # Per-task role beats top-level; normalise again so unknown
+            # per-task values warn and degrade to leaf uniformly.
+            effective_role = _normalize_role(t.get("role") or top_role)
+            # T1-24: schema'd tasks get the contract appended to their context
+            # so the child knows the expected output shape before it starts.
+            _task_schema = task_schemas[i] if i < len(task_schemas) else None
+            _child_context = t.get("context")
+            if _task_schema is not None:
+                from tools.delegation_output_schema import append_output_contract
 
-            _child_context = append_output_contract(_child_context, _task_schema)
+                _child_context = append_output_contract(_child_context, _task_schema)
 
-        # Per-task model tier (value routing): resolves to the first
-        # authenticated candidate for t["tier"], shaped like a delegation
-        # credential cfg and fed through the SAME _resolve_delegation_credentials
-        # path a delegation.provider/model pin uses. Precedence: task.tier
-        # (if it resolves) > delegation.provider/model pin > inherit parent.
-        # A tier that doesn't resolve, or whose credential resolution raises,
-        # falls back to the batch-level `creds` (the pin-or-inherit result
-        # already computed above) instead of failing the whole batch.
-        task_creds = creds
-        task_tier_fallback: Optional[str] = None
-        requested_tier = t.get("tier")
-        if isinstance(requested_tier, str) and requested_tier.strip():
-            tier_name = requested_tier.strip()
-            tier_match = _resolve_tier(tier_name, cfg, parent_agent)
-            if tier_match is None:
-                task_tier_fallback = (
-                    f"tier '{tier_name}' has no authenticated candidate; "
-                    "using the default model."
-                )
-            else:
-                try:
-                    task_creds = _resolve_delegation_credentials(tier_match, parent_agent)
-                except ValueError as exc:
+            # Per-task model tier (value routing): resolves to the first
+            # authenticated candidate for t["tier"], shaped like a delegation
+            # credential cfg and fed through the SAME _resolve_delegation_credentials
+            # path a delegation.provider/model pin uses. Precedence: task.tier
+            # (if it resolves) > delegation.provider/model pin > inherit parent.
+            # A tier that doesn't resolve, or whose credential resolution raises,
+            # falls back to the batch-level `creds` (the pin-or-inherit result
+            # already computed above) instead of failing the whole batch.
+            task_creds = creds
+            task_tier_fallback: Optional[str] = None
+            requested_tier = t.get("tier")
+            if isinstance(requested_tier, str) and requested_tier.strip():
+                tier_name = requested_tier.strip()
+                tier_match = _resolve_tier(tier_name, cfg, parent_agent)
+                if tier_match is None:
                     task_tier_fallback = (
-                        f"tier '{tier_name}' credential resolution failed "
-                        f"({exc}); using the default model."
+                        f"tier '{tier_name}' has no authenticated candidate; "
+                        "using the default model."
                     )
+                else:
+                    try:
+                        task_creds = _resolve_delegation_credentials(tier_match, parent_agent)
+                    except ValueError as exc:
+                        task_tier_fallback = (
+                            f"tier '{tier_name}' credential resolution failed "
+                            f"({exc}); using the default model."
+                        )
 
-        try:
-            child = _build_child_preserving_parent_tools(
-                task_index=i,
-                goal=t["goal"],
-                context=_child_context,
-                # Subagents always inherit the parent's toolsets; the model
-                # cannot choose or narrow them (no model-facing toolsets arg).
-                toolsets=None,
-                model=task_creds["model"],
-                max_iterations=effective_max_iter,
-                task_count=n_tasks,
-                parent_agent=parent_agent,
-                override_provider=task_creds["provider"],
-                override_base_url=task_creds["base_url"],
-                override_api_key=task_creds["api_key"],
-                override_api_mode=task_creds["api_mode"],
-                override_request_overrides=task_creds.get("request_overrides"),
-                override_max_tokens=task_creds.get("max_output_tokens"),
-                override_acp_command=task_creds.get("command"),
-                override_acp_args=task_creds.get("args"),
-                role=effective_role,
-            )
-        except ValueError as exc:
-            # Explicit-pin preflight failures (e.g. pinned delegation.command
-            # missing from PATH) refuse the spawn loudly (#80450).
-            return tool_error(str(exc))
-        if task_tier_fallback:
-            child._delegate_tier_fallback = task_tier_fallback
-        # Attach the validated schema for the completion-side validation
-        # hook in _run_single_child. Absent (None) on schema-less tasks.
-        if _task_schema is not None:
             try:
-                child._delegate_output_schema = _task_schema
-            except Exception:
-                logger.debug("Could not attach output schema to child %d", i)
-        # Tee the child's progress events into its live transcript log.
-        # wrap_progress_callback preserves the inner callback contract
-        # (including the _flush attribute) and never lets writer failures
-        # reach the agent loop. When no parent display exists the inner
-        # callback is None and the wrapper still records events.
-        _writer = live_writers[i] if i < len(live_writers) else None
-        if _writer is not None:
-            child.tool_progress_callback = wrap_progress_callback(
-                getattr(child, "tool_progress_callback", None), _writer
-            )
-            child._live_transcript_path = str(_writer.path)
-        # Delegation identity for the live registry + process-notification
-        # attribution (child-started background processes report under it).
-        if live_deleg_id:
-            setattr(child, "_delegation_id", live_deleg_id)
-        _identity_ref = getattr(child, "_progress_identity_ref", None)
-        if isinstance(_identity_ref, dict):
-            from agent.delegation_activity import derive_task_title
-
-            _identity_ref["title"] = derive_task_title(t.get("goal"), t.get("title"))
+                child = _build_child_preserving_parent_tools(
+                    task_index=i,
+                    goal=t["goal"],
+                    context=_child_context,
+                    # Subagents always inherit the parent's toolsets; the model
+                    # cannot choose or narrow them (no model-facing toolsets arg).
+                    toolsets=None,
+                    model=task_creds["model"],
+                    max_iterations=effective_max_iter,
+                    task_count=n_tasks,
+                    parent_agent=parent_agent,
+                    override_provider=task_creds["provider"],
+                    override_base_url=task_creds["base_url"],
+                    override_api_key=task_creds["api_key"],
+                    override_api_mode=task_creds["api_mode"],
+                    override_request_overrides=task_creds.get("request_overrides"),
+                    override_max_tokens=task_creds.get("max_output_tokens"),
+                    override_acp_command=task_creds.get("command"),
+                    override_acp_args=task_creds.get("args"),
+                    role=effective_role,
+                )
+            except ValueError as exc:
+                # Explicit-pin preflight failures (e.g. pinned delegation.command
+                # missing from PATH) refuse the spawn loudly (#80450). Children
+                # already built for earlier tasks will never run: release them.
+                if _strict_background:
+                    return _reject_background("construction", str(exc), children)
+                for _bi, _bt, _built in children:
+                    _release_child_resources(_built, parent_agent)
+                return tool_error(str(exc))
+            # From here the child is owned by `children`, so a failure while wiring
+            # it up releases it with the rest.
+            children.append((i, t, child))
+            if task_tier_fallback:
+                child._delegate_tier_fallback = task_tier_fallback
+            # Attach the validated schema for the completion-side validation
+            # hook in _run_single_child. Absent (None) on schema-less tasks.
+            if _task_schema is not None:
+                try:
+                    child._delegate_output_schema = _task_schema
+                except Exception:
+                    logger.debug("Could not attach output schema to child %d", i)
+            # Tee the child's progress events into its live transcript log.
+            # wrap_progress_callback preserves the inner callback contract
+            # (including the _flush attribute) and never lets writer failures
+            # reach the agent loop. When no parent display exists the inner
+            # callback is None and the wrapper still records events.
+            _writer = live_writers[i] if i < len(live_writers) else None
+            if _writer is not None:
+                child.tool_progress_callback = wrap_progress_callback(
+                    getattr(child, "tool_progress_callback", None), _writer
+                )
+                child._live_transcript_path = str(_writer.path)
+            # Delegation identity for the live registry + process-notification
+            # attribution (child-started background processes report under it).
             if live_deleg_id:
-                _identity_ref["delegation_id"] = live_deleg_id
-        children.append((i, t, child))
+                setattr(child, "_delegation_id", live_deleg_id)
+            _identity_ref = getattr(child, "_progress_identity_ref", None)
+            if isinstance(_identity_ref, dict):
+                from agent.delegation_activity import derive_task_title
+
+                _identity_ref["title"] = derive_task_title(t.get("goal"), t.get("title"))
+                if live_deleg_id:
+                    _identity_ref["delegation_id"] = live_deleg_id
+    except Exception as exc:
+        # Any other construction/wiring failure: the children built so far
+        # will never run, whoever the caller is.
+        if _strict_background:
+            return _reject_background(
+                "construction", f"{type(exc).__name__}: {exc}", children
+            )
+        for _bi, _bt, _built in children:
+            _release_child_resources(_built, parent_agent)
+        raise
 
     # Announce every built child as queued before any runs, so progress
     # surfaces can show the whole roster (children beyond the concurrency cap
@@ -4243,7 +4422,10 @@ def delegate_task(
                 logger.debug("Progress callback queued relay failed: %s", e)
 
     def _execute_and_aggregate(
-        *, honor_parent_interrupt: bool = True, on_child_complete=None
+        *,
+        honor_parent_interrupt: bool = True,
+        on_child_complete=None,
+        credit_inline_start: bool = False,
     ) -> dict:
         """Run all built children (1 or N), join on them, aggregate results,
         fire subagent_stop hooks + cost rollup, and return the combined result
@@ -4252,7 +4434,15 @@ def delegate_task(
         the parent turn isn't blocked. Background fan-outs publish each
         completed child before the join; synchronous callers still receive
         the combined results after all children finish.
+
+        ``credit_inline_start`` is set only by the foreground/inline callers:
+        their children really start here, which is what the delegation
+        checkpoint credits. The detached background runner never sets it (its
+        acceptance was already credited at dispatch).
         """
+        # Only foreground/inline callers hand the ticket to the real child
+        # runner, which spends it when the child conversation actually starts.
+        _start_ticket = _checkpoint_ticket if credit_inline_start else None
         if n_tasks == 1:
             # Single task -- run directly (no thread pool overhead)
             _i, _t, child = children[0]
@@ -4264,6 +4454,7 @@ def delegate_task(
                 owner_session_id=_origin_ui_session_id or None,
                 owner_transport=_origin_owner_transport,
                 owner_session_record=_origin_owner_session_record,
+                checkpoint_ticket=_start_ticket,
             )
             results.append(result)
         else:
@@ -4289,6 +4480,7 @@ def delegate_task(
                         owner_session_id=_origin_ui_session_id or None,
                         owner_transport=_origin_owner_transport,
                         owner_session_record=_origin_owner_session_record,
+                        checkpoint_ticket=_start_ticket,
                     )
                     futures[future] = i
 
@@ -4452,45 +4644,25 @@ def delegate_task(
 
         # Finite sessions cannot route a detached subagent result back to the
         # agent after their turn/process ends. This includes stateless HTTP
-        # requests (#10760) and one-shot Kanban workers (#63169). Fall back to
-        # SYNCHRONOUS execution so the result returns in this same turn instead
-        # of handing out a handle with no durable consumer. Mirrors the
-        # pool-at-capacity inline fallback below.
-        try:
-            from gateway.session_context import async_delivery_supported
-            _async_ok = async_delivery_supported()
-        except Exception:
-            _async_ok = True
-
-        _wake_sid = ""
-        if not _async_ok:
-            # The adapter itself cannot push, but if a raw session id is
-            # bound (the API server always binds one — see
-            # ApiServerAdapter._bind_api_server_session), gateway.wake can
-            # still reach the session by self-POSTing /v1/chat/completions
-            # with that id in X-Clover-Session-Id once the batch completes.
-            # Only fall back to forced-sync execution when there is truly no
-            # session id to wake. Uses the origin captured before child
-            # construction (see _origin_wake_sid above) — reading
-            # CLOVER_SESSION_ID here would return the subagent's internal id.
-            _wake_sid = _origin_wake_sid
-            if _wake_sid:
-                logger.info(
-                    "delegate_task: async delivery unsupported on this "
-                    "session, but a session id is bound (%s) — dispatching "
-                    "in the background and waking the session via self-post "
-                    "when it completes instead of forcing synchronous "
-                    "execution.",
-                    _wake_sid,
-                )
-                _async_ok = True
+        # requests (#10760) and one-shot Kanban workers (#63169). Non-strict
+        # callers fall back to SYNCHRONOUS execution so the result returns in
+        # this same turn instead of handing out a handle with no durable
+        # consumer; strict callers were already rejected above. Uses the
+        # origin captured before child construction (see _origin_wake_sid
+        # above) — reading CLOVER_SESSION_ID here would return the subagent's
+        # internal id.
+        _async_ok, _wake_sid = (
+            _bg_delivery
+            if _bg_delivery is not None
+            else _background_delivery_available(_origin_wake_sid)
+        )
 
         if not _async_ok:
             logger.info(
                 "delegate_task: async delivery unsupported on this session "
                 "runtime; running the batch synchronously instead."
             )
-            _sync_result = _execute_and_aggregate()
+            _sync_result = _execute_and_aggregate(credit_inline_start=True)
             if isinstance(_sync_result, dict):
                 _sync_result["note"] = (
                     "background=true is not available in this session — it cannot "
@@ -4672,6 +4844,15 @@ def delegate_task(
             _sids = [
                 getattr(_c, "_subagent_id", None) for _c in _child_agents
             ]
+            if _checkpoint_ticket is not None:
+                # The accepted job owns this request's remaining phase. A
+                # ticket that no longer has the authority gets False and the
+                # job simply runs on; nothing here ever cancels it.
+                _checkpoint_ticket.accept_handoff(
+                    delegation_id=dispatch["delegation_id"],
+                    goals=_goals,
+                    subagent_ids=[s for s in _sids if isinstance(s, str) and s],
+                )
             if any(isinstance(s, str) and s for s in _sids):
                 payload["subagent_ids"] = _sids
                 payload["control_hint"] = (
@@ -4691,6 +4872,15 @@ def delegate_task(
                 )
             return json.dumps(payload, ensure_ascii=False)
 
+        if _strict_background:
+            # The async unit was never accepted: nothing is running, so
+            # release the children built for it and report why.
+            return _reject_background(
+                str(dispatch.get("reason") or "capacity"),
+                str(dispatch.get("error") or "Background dispatch rejected."),
+                children,
+            )
+
         # Pool at capacity / schedule failure — children are still attached
         # (we detach above only on the parent list, but the async unit was
         # never accepted, so re-attaching isn't needed: we just run inline).
@@ -4699,7 +4889,7 @@ def delegate_task(
             "batch synchronously instead.",
             dispatch.get("error", "rejected"),
         )
-        _cap_result = _execute_and_aggregate()
+        _cap_result = _execute_and_aggregate(credit_inline_start=True)
         if isinstance(_cap_result, dict):
             _cap_result["note"] = (
                 "The background delegation pool was at capacity "
@@ -4711,7 +4901,9 @@ def delegate_task(
         return json.dumps(_cap_result, ensure_ascii=False)
 
     # ----- Synchronous path -----
-    return json.dumps(_execute_and_aggregate(), ensure_ascii=False)
+    return json.dumps(
+        _execute_and_aggregate(credit_inline_start=True), ensure_ascii=False
+    )
 
 
 def _resolve_child_credential_pool(
