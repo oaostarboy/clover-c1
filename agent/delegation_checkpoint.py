@@ -73,6 +73,9 @@ _CLOSING_CODES = frozenset({
 })
 _MAX_OWNED_HANDOFFS = 64
 _MAX_GOAL_CHARS = 160
+# The handoff line is a short-horizon estimate, not a promise about total task
+# duration.
+_MAX_HANDOFF_ETA_MINUTES = 24 * 60
 _HANDOFF_TEXT_RE = re.compile(r"^[\w .,!?()'’–-]+$", re.UNICODE)
 _HANDOFF_ID_RE = re.compile(r"\b(?:async|deleg|subagent|child|job)[_-][\w-]+", re.IGNORECASE)
 
@@ -114,7 +117,7 @@ def _clean_handoff(value: Any) -> Optional[dict]:
             low_num, high_num = float(low), float(high)
             if (
                 math.isfinite(low_num) and math.isfinite(high_num)
-                and low_num > 0 and high_num >= low_num
+                and 1 <= low_num <= high_num <= _MAX_HANDOFF_ETA_MINUTES
             ):
                 estimate = (low_num, high_num)
         except (OverflowError, TypeError, ValueError):
@@ -128,7 +131,7 @@ def _with_period(value: str) -> str:
 
 
 def _format_minutes(value: float) -> str:
-    return f"{value:g}"
+    return str(math.floor(value + 0.5))
 
 DEFAULT_MAX_WORK_TOOLS = 5
 DEFAULT_MAX_FOREGROUND_SECONDS = 120.0
@@ -870,10 +873,13 @@ class DelegationCheckpoint:
             estimate_text = "Estimated time: no reliable estimate yet."
         else:
             low, high = estimate
-            estimate_text = (
-                f"Estimated time: about {_format_minutes(low)}–"
-                f"{_format_minutes(high)} minutes."
-            )
+            low_text, high_text = _format_minutes(low), _format_minutes(high)
+            if low_text == high_text:
+                estimate_text = f"Estimated time: about {low_text} minutes."
+            else:
+                estimate_text = (
+                    f"Estimated time: about {low_text}–{high_text} minutes."
+                )
         return (
             f"{first}\nGoal: {_with_period(goal)}\n{estimate_text}\nYou can keep chatting."
         )
