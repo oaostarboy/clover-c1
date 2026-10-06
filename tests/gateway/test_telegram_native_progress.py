@@ -120,6 +120,28 @@ def test_native_progress_requires_rich_capable_bot():
 # ── Official payload ────────────────────────────────────────────────────────
 
 
+def test_tool_row_renders_action_once_and_only_fenced_code_as_code():
+    from plugins.platforms.telegram.native_progress import render_row
+
+    prose = row("Running code from pathlib import Path W=Path('/home/…')", tool="execute_code")
+    rendered = render_row(prose)
+    assert rendered.count("Running code") == 1
+    assert "<code>" not in rendered
+    assert "from pathlib import Path W=Path('/home/…')" in rendered
+    assert prose.text == "Running code from pathlib import Path W=Path('/home/…')"
+
+    fenced = row("Running command\n```bash\nls -la\n```", tool="terminal")
+    rendered_fence = render_row(fenced)
+    assert rendered_fence.count("Running") == 1
+    assert "<b>Running</b><br>command" in rendered_fence
+    assert "<code>ls -la</code>" in rendered_fence
+    assert "<code><code>" not in rendered_fence
+    assert "<code>command<br>" not in rendered_fence
+
+    nonmatching = row("Running codebase diagnostics 🧪", tool="execute_code")
+    assert "Running codebase diagnostics 🧪" in render_row(nonmatching)
+
+
 @pytest.mark.asyncio
 async def test_screenshot_activity_rows_render_with_hierarchy_without_losing_repeated_details():
     adapter, api = native_adapter()
@@ -141,11 +163,12 @@ async def test_screenshot_activity_rows_render_with_hierarchy_without_losing_rep
 
     assert "<b>Running · 6s</b>" in header
     assert "Running code from pathlib" not in header
-    assert "<b>Running code</b>" in md and "<code>Running code from pathlib import Path" in md
+    assert "<b>Running code</b>" in md
+    assert "<code>Running code from pathlib import Path" not in md
     assert "<i>Thought</i><br><i>Thinking through the task</i>" in md
     assert "<b>Updating tasks</b>" in md
     assert "— Succeeded · 0s" in md
-    assert md.count("Running code from pathlib import Path") == 3
+    assert md.count("from pathlib import Path") == 3
     assert "<br><br>" in md
 
 
@@ -254,7 +277,7 @@ from telegram.error import BadRequest, RetryAfter  # noqa: E402
 
 # Real current-set IDs, validated by the read-only getStickerSet response and
 # rendered artwork. The pack's metadata emoji is 🙂 for both entries.
-ID_THINK = "5537353471893700616"
+ID_THINK = "5535457114983497745"
 ID_RUN = "5537581341383589905"
 
 
@@ -346,6 +369,7 @@ async def test_first_frame_never_waits_for_icon_lookup_and_later_frames_use_runt
     await _settle_lookup(adapter)
     await _frame(adapter)
     md = _markdowns(api)[-1]
+    assert f'<tg-emoji emoji-id="{ID_THINK}">🧠</tg-emoji>' in md
     assert f'<tg-emoji emoji-id="{ID_RUN}">🔧</tg-emoji>' in md
     assert "5368324170671202286" not in md  # docs sample id is never product data
     assert len(api.methods("get_sticker_set")) == 1

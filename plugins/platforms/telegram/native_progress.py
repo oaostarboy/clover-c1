@@ -164,17 +164,22 @@ def _tool_display_label(tool: Optional[str]) -> str:
     return "Tool action"
 
 
+def _tool_detail_text(text: str, label: str) -> str:
+    """Remove only a verb repeated verbatim at the start of legacy detail."""
+    if text.startswith(label) and len(text) > len(label) and text[len(label)].isspace():
+        return text[len(label):].lstrip()
+    return text
+
+
 def render_row(row: Any, icons: Optional[Mapping[str, NativeIcon]] = None) -> str:
-    text = _inline_markup(str(getattr(row, "text", "") or ""))
+    raw_text = str(getattr(row, "text", "") or "")
+    text = _inline_markup(raw_text)
     kind = getattr(row, "kind", "")
     state = getattr(row, "state", STATE_INFO)
     if kind == "tool":
-        label = escape_text(_tool_display_label(getattr(row, "tool", None)))
-        tool = str(getattr(row, "tool", "") or "")
-        if tool in {"execute_code", "terminal"}:
-            detail = f"<code>{text}</code>" if text else ""
-        else:
-            detail = text
+        raw_label = _tool_display_label(getattr(row, "tool", None))
+        label = escape_text(raw_label)
+        detail = _inline_markup(_tool_detail_text(raw_text, raw_label))
         content = f"{_icon_for(row, icons)}<b>{label}</b>"
         if detail:
             content += f"<br>{detail}"
