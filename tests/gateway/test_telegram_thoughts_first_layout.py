@@ -107,7 +107,7 @@ def test_tool_action_is_one_line_with_a_friendly_label_and_concise_state():
     assert rendered == "Searching the web for local time · <i>Done · 2s</i>"
 
 
-def test_multiline_command_stays_on_one_row_with_every_line_kept():
+def test_short_multiline_command_folds_onto_one_row_intact():
     ledger = ActivityLedger()
     emoji = get_tool_emoji("terminal", default="⚙️")
     ledger.add_line(
@@ -176,6 +176,147 @@ def test_unknown_outcome_claims_neither_success_nor_a_duration():
         assert rendered.endswith(" · <i>Completed</i>")
         assert "Done" not in rendered and "3s" not in rendered and "4s" not in rendered
     assert "a.md" in first and "b.md" in second
+
+
+# ── Tool detail is a bounded preview ────────────────────────────────────────
+
+DETAIL_BUDGET = 80          # visible characters, omission mark included
+
+
+def detail_of(rendered, label, state):
+    """Visible detail between a row's action label and its trailing state."""
+    text = visible(rendered)
+    assert text.startswith(f"{label} ") and text.endswith(f" · {state}"), text
+    return text[len(label) + 1:len(text) - len(f" · {state}")]
+
+
+def terminal_fence(lines, lang="bash"):
+    emoji = get_tool_emoji("terminal", default="⚙️")
+    body = "\n".join(lines)
+    return f"{emoji} Running command\n```{lang}\n{body}\n```"
+
+
+def test_long_multiline_command_is_one_bounded_preview_with_state_still_visible():
+    ledger = ActivityLedger()
+    commands = [f"print({'configuration-check-' + str(i) + '-' + 'x' * 45!r})" for i in range(8)]
+    raw = terminal_fence(commands, "python")
+    ledger.add_line(raw, tool="terminal", now=1001.0)
+    rendered = render_row(ledger.snapshot()[0], now=1003.0)
+    detail = detail_of(rendered, "Terminal", "2s")
+
+    assert "<br>" not in rendered and "\n" not in rendered
+    assert len(detail) <= DETAIL_BUDGET and detail.endswith("…")
+    assert detail.startswith("print('configuration-check-0-")
+    assert "configuration-check-7-" not in rendered
+    assert rendered.endswith(" · <i>2s</i>")
+    # Only the visible preview is bounded; the ledger keeps the raw detail.
+    assert ledger.rows[0].text == raw
+
+
+def test_detail_at_the_budget_is_intact_and_one_character_over_is_marked_omitted():
+    ledger = ActivityLedger()
+    started(ledger, "terminal", "command " + "a" * DETAIL_BUDGET, now=10.0)
+    started(ledger, "terminal", "command " + "a" * (DETAIL_BUDGET + 1), now=10.0)
+    at_budget, over = (render_row(r, now=15.0) for r in ledger.snapshot())
+
+    assert detail_of(at_budget, "Terminal", "5s") == "a" * DETAIL_BUDGET
+    assert detail_of(over, "Terminal", "5s") == "a" * (DETAIL_BUDGET - 1) + "…"
+
+
+def test_long_prose_detail_is_bounded_in_reading_order():
+    ledger = ActivityLedger()
+    query = " ".join(f"term{i:03d}" for i in range(60))
+    started(ledger, "web_search", query, now=0.0)
+    ledger.complete_tool("web_search", duration=2.0, is_error=False)
+    rendered = render_row(ledger.snapshot()[0], now=9.0)
+    detail = detail_of(rendered, "Searching the web", "Done · 2s")
+
+    assert len(detail) <= DETAIL_BUDGET and detail.endswith("…")
+    assert f"for {query}".startswith(detail[:-1])
+
+
+def test_bounded_preview_counts_visible_characters_and_keeps_markup_safe():
+    ledger = ActivityLedger()
+    nasty = "echo '<b>&</b>' \"</tg-thinking>\" " * 12
+    started(ledger, "terminal", f"command {nasty}", now=10.0)
+    rendered = render_row(ledger.snapshot()[0], now=11.5)
+    detail = detail_of(rendered, "Terminal", "1s")
+
+    # Entities are single visible characters: the budget is spent on text.
+    assert len(detail) == DETAIL_BUDGET and detail.endswith("…")
+    assert nasty.startswith(detail[:-1])
+    assert re.findall(r"</?[a-z-]+", rendered) == ["<code", "</code", "<i", "</i"]
+
+
+def test_bounded_preview_keeps_whole_unicode_characters():
+    ledger = ActivityLedger()
+    preview = "检查配置 🚀 naïve café " * 20
+    started(ledger, "read_file", preview, now=0.0)
+    ledger.complete_tool("read_file", duration=0.2, is_error=False)
+    rendered = render_row(ledger.snapshot()[0], now=1.0)
+    detail = detail_of(rendered, "Reading", "Done")
+
+    assert len(detail) <= DETAIL_BUDGET and detail.endswith("…")
+    assert preview.startswith(detail[:-1])
+    assert rendered.encode("utf-8").decode("utf-8") == rendered
+
+
+def test_failed_tool_with_a_long_detail_keeps_its_failure_visible():
+    ledger = ActivityLedger()
+    started(ledger, "web_search", "q" * 400, now=0.0)
+    ledger.complete_tool("web_search", duration=3.2, is_error=True)
+    rendered = render_row(ledger.snapshot()[0], now=9.0)
+
+    assert rendered.endswith("… · <b>Failed · 3s</b>")
+    assert len(detail_of(rendered, "Searching the web", "Failed · 3s")) == DETAIL_BUDGET
+
+
+def test_unlabelled_tool_line_is_bounded_too():
+    ledger = ActivityLedger()
+    ledger.add_line('⚙️ mcp_probe: "' + "z" * 300 + '"', tool="mcp_probe", now=10.0)
+    rendered = render_row(ledger.snapshot()[0], now=14.0)
+    detail = detail_of(rendered, "Mcp probe", "4s")
+
+    assert len(detail) == DETAIL_BUDGET and detail.endswith("…")
+    assert detail.startswith('⚙️ mcp_probe: "zzz')
+
+
+def test_distinct_long_calls_stay_distinct_bounded_rows():
+    ledger = ActivityLedger()
+    shared = "s" * 120
+    started(ledger, "terminal", f"command {shared} --first", now=0.0)
+    ledger.complete_tool("terminal", duration=0.1, is_error=False)
+    started(ledger, "terminal", f"command {shared} --second", now=1.0)
+    ledger.complete_tool("terminal", duration=2.0, is_error=True)
+    block = render_thinking_block(ledger.snapshot(), now=4.0)
+    body = block.removeprefix("<tg-thinking>").removesuffix("</tg-thinking>")
+    first, second = body.split("<br><br>")[1].split("<br>")
+
+    assert len(detail_of(first, "Terminal", "Done")) == DETAIL_BUDGET
+    assert len(detail_of(second, "Terminal", "Failed · 2s")) == DETAIL_BUDGET
+    assert [r.text for r in ledger.rows] == [
+        gateway_line("terminal", f"command {shared} --first"),
+        gateway_line("terminal", f"command {shared} --second"),
+    ]
+
+
+def test_tool_without_detail_shows_label_and_state_with_no_omission_mark():
+    ledger = ActivityLedger()
+    emoji = get_tool_emoji("terminal", default="⚙️")
+    ledger.add_line(f"{emoji} Running command", tool="terminal", now=10.0)
+
+    assert render_row(ledger.snapshot()[0], now=13.0) == "Terminal · <i>3s</i>"
+
+
+def test_long_public_thought_is_never_clipped():
+    ledger = ActivityLedger()
+    words = " ".join(f"word{i:03d}" for i in range(80))
+    ledger.add_line(f"{words} `code {'c' * 120}`", kind="commentary", now=0.0)
+    rendered = render_row(ledger.snapshot()[0])
+
+    assert visible(rendered) == f"{words} code {'c' * 120}"
+    assert "…" not in rendered
+    assert rendered.startswith(f"<b>{words} </b><code>")
 
 
 # ── Block layout ────────────────────────────────────────────────────────────

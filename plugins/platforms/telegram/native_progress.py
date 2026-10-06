@@ -35,6 +35,13 @@ _INLINE_CODE_RE = re.compile(r"(?<!\\)(`+)(.+?)(?<!`)\1(?!`)")
 _BOLD_RE = re.compile(r"(?<!\\)\*\*([^*\n]+)\*\*(?!\*)")
 _THOUGHT_PREFIX = "\U0001F4AD "
 
+# A tool row's detail is a preview, not the record: at most this many visible
+# characters, the omission mark included.  The raw detail stays in the ledger.
+_DETAIL_PREVIEW_CHARS = 80
+_DETAIL_OMITTED = "\u2026"
+# A further folded line is only started when it can show at least this much.
+_DETAIL_MIN_TAIL = 8
+
 # Row states the consumer can justify (see gateway.native_progress).
 STATE_RUNNING = "running"
 STATE_SUCCEEDED = "succeeded"
@@ -190,26 +197,42 @@ def _bold_run(text: str) -> str:
     return f"<b>{escape_text(plain)}</b>"
 
 
-def _one_line_markup(text: str, *, code: bool = False) -> str:
-    """Escaped single-line HTML: line breaks fold to spaces, fences to code runs."""
-    parts: list[str] = []
-    pos = 0
+def _detail_lines(text: str, *, code: bool = False) -> list[tuple[bool, str]]:
+    """The nonblank lines of a tool detail as ``(is_code, text)``, in order."""
+    lines: list[tuple[bool, str]] = []
 
     def prose(segment: str) -> None:
-        for line in segment.split("\n"):
-            line = line.strip()
-            if line:
-                parts.append(f"<code>{escape_text(line)}</code>" if code else _text_lines(line))
+        lines.extend((code, line.strip()) for line in segment.split("\n") if line.strip())
 
+    pos = 0
     for match in _FENCE_RE.finditer(text):
         prose(text[pos:match.start()])
-        parts.extend(
-            f"<code>{escape_text(line.strip())}</code>"
-            for line in match.group(1).split("\n") if line.strip()
-        )
+        lines.extend((True, line.strip()) for line in match.group(1).split("\n") if line.strip())
         pos = match.end()
     prose(text[pos:])
-    return " ".join(parts)
+    return lines
+
+
+def _one_line_markup(text: str, *, code: bool = False) -> str:
+    """Escaped single-line preview: lines fold to spaces, fences to code runs.
+
+    A detail longer than the preview budget is cut in reading order and ends
+    with an omission mark placed outside any code run.
+    """
+    lines = _detail_lines(text, code=code)
+    omitted = sum(len(line) for _, line in lines) + len(lines) - 1 > _DETAIL_PREVIEW_CHARS
+    room = _DETAIL_PREVIEW_CHARS - len(_DETAIL_OMITTED)
+    parts: list[str] = []
+    for is_code, line in lines:
+        if omitted:
+            room -= 1 if parts else 0
+            if room < (_DETAIL_MIN_TAIL if parts else 1):
+                break
+            # Never end a preview on a dangling joiner or half a pair.
+            line = line[:room].rstrip().rstrip("\u200d")
+            room -= len(line)
+        parts.append(f"<code>{escape_text(line)}</code>" if is_code else _text_lines(line))
+    return " ".join(parts) + (_DETAIL_OMITTED if omitted else "")
 
 
 def _natural_commentary(text: str, *, add_thought_marker: bool = False) -> str:

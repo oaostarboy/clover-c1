@@ -244,6 +244,49 @@ async def test_screenshot_activity_rows_render_with_hierarchy_without_losing_rep
 
 
 @pytest.mark.asyncio
+async def test_long_fenced_terminal_detail_reaches_the_wire_as_a_bounded_preview():
+    import html
+    import re
+
+    from agent.display import get_tool_emoji
+    from gateway.native_progress import ActivityLedger
+
+    def seen(markup):
+        return html.unescape(re.sub(r"<[^>]+>", "", markup))
+
+    adapter, api = native_adapter()
+    ledger = ActivityLedger()
+    ledger.add_line("💭 _Checking the configuration._", kind="commentary", now=1000.0)
+    commands = "\n".join(
+        "print(" + repr("configuration-check-" + str(i) + "-" + "x" * 45) + ")" for i in range(8)
+    )
+    raw = f"{get_tool_emoji('terminal', default='⚙️')} Running command\n```python\n{commands}\n```"
+    ledger.add_line(raw, tool="terminal", now=1001.0)
+
+    result = await adapter.send_native_progress_draft("1", 91, ledger.snapshot(), "", now=1003.0)
+
+    assert result.success is True
+    [frame] = api.rich_drafts()
+    assert frame["can_stop"] is True
+    block = api.rich_text(frame)
+    assert "\n" not in block
+    header, thought, tool_row = (
+        block.removeprefix("<tg-thinking>").removesuffix("</tg-thinking>").split("<br><br>")
+    )
+    assert thought == "<b>💭 Checking the configuration.</b>"
+    assert "<br>" not in tool_row
+    row_text = seen(tool_row)
+    assert row_text.startswith("Terminal print('configuration-check-0-")
+    assert row_text.endswith("… · 2s")
+    detail = row_text.removeprefix("Terminal ").removesuffix(" · 2s")
+    assert len(detail) <= 80, (len(detail), len(row_text))
+    assert len(row_text) <= 100
+    assert "configuration-check-7-" not in block
+    # The wire preview is bounded; the ledger's raw detail is not.
+    assert ledger.rows[1].text == raw and raw.count("configuration-check-") == 8
+
+
+@pytest.mark.asyncio
 async def test_native_draft_uses_official_rich_draft_payload_with_can_stop():
     adapter, api = make_adapter(native_progress=True)  # rich_drafts left at its default (off)
     adapter._native_stop_ready = True
