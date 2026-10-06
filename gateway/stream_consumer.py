@@ -1618,20 +1618,11 @@ class GatewayStreamConsumer:
                     self._np_idle_since = self._np_first_at
                     self._np_dirty = True
                     await self._np_pump()
-                    # _np_pump deliberately dispatches sends in tracked tasks.
-                    # For the request seed only, wait for the Bot API result so
-                    # the provider cannot outrun the visible activity bubble.
-                    _seed_task = self._np_task
-                    if _seed_task is not None:
-                        try:
-                            await asyncio.wait_for(_seed_task, timeout=10.0)
-                        except asyncio.TimeoutError:
-                            self._np_task = None
-                            await self._np_fallback("initial_seed_timeout")
-                        else:
-                            if self._np_task is _seed_task:
-                                self._np_task = None
-                            await self._np_reap(_seed_task)
+                    # _np_pump dispatches the seed in a tracked task. Yield once
+                    # so that task enters the Bot API call before the provider
+                    # starts, without waiting for a slow network response.
+                    if self._np_task is not None:
+                        await asyncio.sleep(0)
             finally:
                 # The executor may now start the provider: initial seed either
                 # landed or native progress failed over safely.
