@@ -192,14 +192,16 @@ def test_tool_row_renders_action_once_on_one_line_with_its_detail_as_code():
     prose = row(f"{code_emoji} Running code from pathlib import Path W=Path('/home/…')", tool="execute_code")
     rendered = render_row(prose)
     assert rendered.startswith("Execute code <code>from pathlib import Path W=Path('/home/…')</code>")
-    assert "Running" not in rendered and "<br>" not in rendered
+    # No clock was supplied, so the only "Running" is the row's own state.
+    assert rendered.endswith(" · <i>Running</i>") and rendered.count("Running") == 1
+    assert "<br>" not in rendered
     assert code_emoji not in rendered
     assert prose.text == f"{code_emoji} Running code from pathlib import Path W=Path('/home/…')"
 
     terminal_emoji = get_tool_emoji("terminal", default="⚙️")
     fenced = row(f"{terminal_emoji} Running command\n```bash\nls -la\n```", tool="terminal")
     rendered_fence = render_row(fenced)
-    assert "Running" not in rendered_fence
+    assert rendered_fence.count("Running") == 1
     assert rendered_fence.startswith("Terminal <code>ls -la</code>")
     assert terminal_emoji not in rendered_fence
     assert "<code>ls -la</code>" in rendered_fence
