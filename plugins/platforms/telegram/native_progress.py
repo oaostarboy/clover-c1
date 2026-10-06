@@ -4,13 +4,18 @@ Pure functions: turn the consumer's activity rows into the Rich Markdown that
 ``sendRichMessageDraft`` accepts.  Official evidence (Bot API "Rich Markdown
 style"): Rich Markdown "can contain arbitrary HTML" and sendRichMessageDraft
 additionally accepts ``<tg-thinking>``.  Only the *presentation* of the
-currently visible activity lines changes here; the line text itself is the
-exact string the gateway already shows today, HTML-escaped.
+currently visible activity lines changes here; the words are the ones the
+gateway already shows today, HTML-escaped.
+
+The layout is thoughts-first: public thoughts/commentary are the emphasized
+primary text, tool actions are compact one-line secondary rows grouped between
+them, and one quiet phase header counts from the turn start.
 
 Two invariants keep the block well-formed:
 
 * The whole thinking block is a single physical line.  A blank line would end
-  a Markdown HTML block, so every newline inside a row becomes ``<br>``.
+  a Markdown HTML block, so every newline inside a row becomes ``<br>`` (or a
+  space inside a one-line tool row).
 * Row text is HTML-escaped, so user/tool text can never open or close tags.
 """
 
@@ -29,6 +34,13 @@ _FENCE_RE = re.compile(r"```[^\n`]*\n(.*?)\n?```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"(?<!\\)(`+)(.+?)(?<!`)\1(?!`)")
 _BOLD_RE = re.compile(r"(?<!\\)\*\*([^*\n]+)\*\*(?!\*)")
 _THOUGHT_PREFIX = "\U0001F4AD "
+
+# A tool row's detail is a preview, not the record: at most this many visible
+# characters, the omission mark included.  The raw detail stays in the ledger.
+_DETAIL_PREVIEW_CHARS = 80
+_DETAIL_OMITTED = "\u2026"
+# A further folded line is only started when it can show at least this much.
+_DETAIL_MIN_TAIL = 8
 
 # Row states the consumer can justify (see gateway.native_progress).
 STATE_RUNNING = "running"
@@ -60,7 +72,13 @@ def escape_text(text: str) -> str:
 
 
 def format_elapsed(seconds: float) -> str:
+    """Whole elapsed seconds; under one second is ``<1s``, never a fake ``0s``.
+
+    The result is plain text — escape it before placing it in markup.
+    """
     total = max(0, int(seconds))
+    if total < 1:
+        return "<1s"
     if total < 60:
         return f"{total}s"
     minutes, secs = divmod(total, 60)
@@ -132,6 +150,89 @@ def _text_lines(text: str) -> str:
             pieces.append(escape_text(after[after_cursor:]))
             rendered.append(escape_text(lead) + "".join(pieces))
     return "<br>".join(rendered)
+
+
+def _emphasized_markup(text: str) -> str:
+    """Bold public commentary line by line, keeping its words and order.
+
+    Telegram code entities cannot nest inside other entities, so inline code
+    and fenced lines stay ``<code>`` runs between the bold runs, and no tag
+    ever spans a ``<br>``.
+    """
+    out: list[str] = []
+    pos = 0
+    for match in _FENCE_RE.finditer(text):
+        out.append(_emphasized_lines(text[pos:match.start()]))
+        out.append("<br>".join(
+            f"<code>{escape_text(line)}</code>" if line else ""
+            for line in match.group(1).split("\n")
+        ))
+        pos = match.end()
+    out.append(_emphasized_lines(text[pos:]))
+    return "".join(out)
+
+
+def _emphasized_lines(text: str) -> str:
+    if not text:
+        return ""
+    rendered = []
+    for line in text.split("\n"):
+        pieces = []
+        cursor = 0
+        for code_match in _INLINE_CODE_RE.finditer(line):
+            pieces.append(_bold_run(line[cursor:code_match.start()]))
+            pieces.append(f"<code>{escape_text(code_match.group(2))}</code>")
+            cursor = code_match.end()
+        pieces.append(_bold_run(line[cursor:]))
+        rendered.append("".join(pieces))
+    return "<br>".join(rendered)
+
+
+def _bold_run(text: str) -> str:
+    # The whole run is emphasized, so the author's own balanced ** markers
+    # are dropped rather than nested.
+    plain = _BOLD_RE.sub(r"\1", text)
+    if not plain.strip():
+        return escape_text(plain)
+    return f"<b>{escape_text(plain)}</b>"
+
+
+def _detail_lines(text: str, *, code: bool = False) -> list[tuple[bool, str]]:
+    """The nonblank lines of a tool detail as ``(is_code, text)``, in order."""
+    lines: list[tuple[bool, str]] = []
+
+    def prose(segment: str) -> None:
+        lines.extend((code, line.strip()) for line in segment.split("\n") if line.strip())
+
+    pos = 0
+    for match in _FENCE_RE.finditer(text):
+        prose(text[pos:match.start()])
+        lines.extend((True, line.strip()) for line in match.group(1).split("\n") if line.strip())
+        pos = match.end()
+    prose(text[pos:])
+    return lines
+
+
+def _one_line_markup(text: str, *, code: bool = False) -> str:
+    """Escaped single-line preview: lines fold to spaces, fences to code runs.
+
+    A detail longer than the preview budget is cut in reading order and ends
+    with an omission mark placed outside any code run.
+    """
+    lines = _detail_lines(text, code=code)
+    omitted = sum(len(line) for _, line in lines) + len(lines) - 1 > _DETAIL_PREVIEW_CHARS
+    room = _DETAIL_PREVIEW_CHARS - len(_DETAIL_OMITTED)
+    parts: list[str] = []
+    for is_code, line in lines:
+        if omitted:
+            room -= 1 if parts else 0
+            if room < (_DETAIL_MIN_TAIL if parts else 1):
+                break
+            # Never end a preview on a dangling joiner or half a pair.
+            line = line[:room].rstrip().rstrip("\u200d")
+            room -= len(line)
+        parts.append(f"<code>{escape_text(line)}</code>" if is_code else _text_lines(line))
+    return " ".join(parts) + (_DETAIL_OMITTED if omitted else "")
 
 
 def _natural_commentary(text: str, *, add_thought_marker: bool = False) -> str:
@@ -232,8 +333,22 @@ def _tool_display_label(tool: Optional[str], state: str = "") -> str:
     return "Tool action"
 
 
-def _tool_detail_text(text: str, label: str, tool: Optional[str]) -> str:
-    """Remove only a recognized decorative emoji plus repeated opening verb."""
+def _is_command_tool(tool: Optional[str]) -> bool:
+    """Tools whose preview is a command or source text rather than prose."""
+    try:
+        from agent.display import get_tool_verb
+
+        verb = get_tool_verb(tool) if tool else None
+    except Exception:
+        verb = None
+    return bool(verb) and verb.lower().startswith(("running", "executing"))
+
+
+def _tool_detail_text(text: str, label: str, tool: Optional[str]) -> tuple[str, bool]:
+    """Remove only a recognized decorative emoji plus repeated opening verb.
+
+    Returns the detail and whether the gateway's verb heading was recognized.
+    """
     try:
         from agent.display import get_tool_emoji
 
@@ -256,10 +371,28 @@ def _tool_detail_text(text: str, label: str, tool: Optional[str]) -> str:
             pass
     for heading in sorted(recognized, key=len, reverse=True):
         if candidate == heading:
-            return ""
+            return "", True
         if candidate.startswith(heading) and len(candidate) > len(heading) and candidate[len(heading)].isspace():
-            return candidate[len(heading):].lstrip()
-    return text
+            return candidate[len(heading):].lstrip(), True
+    return text, False
+
+
+def _tool_state_markup(row: Any, state: str, now: Optional[float]) -> str:
+    """Concise state: a live timer while running, a word once it is known."""
+    if state == STATE_RUNNING:
+        if now is None:
+            return f"<i>{_STATE_LABEL[STATE_RUNNING]}</i>"
+        started = float(getattr(row, "started_at", now) or now)
+        return f"<i>{escape_text(format_elapsed(now - started))}</i>"
+    text = _STATE_LABEL.get(state)
+    if not text:
+        return ""
+    duration = getattr(row, "duration", None)
+    # Tiny completed calls stay quiet; raw durations live in the history.
+    if state in (STATE_SUCCEEDED, STATE_FAILED) and duration is not None and duration >= 1:
+        text += f" · {format_elapsed(duration)}"
+    tag = "b" if state == STATE_FAILED else "i"
+    return f"<{tag}>{escape_text(text)}</{tag}>"
 
 
 def render_row(
@@ -271,39 +404,27 @@ def render_row(
     raw_text = str(getattr(row, "text", "") or "")
     kind = getattr(row, "kind", "")
     state = getattr(row, "state", STATE_INFO)
-    text = _inline_markup(
-        _natural_commentary(raw_text, add_thought_marker=kind == "thought")
-        if kind in {"thought", "commentary"} else raw_text
-    )
     if kind == "tool":
-        raw_label = _tool_display_label(getattr(row, "tool", None), state)
-        label = escape_text(raw_label)
+        # One compact line: friendly action label, its detail, concise state.
         tool = str(getattr(row, "tool", "") or "")
-        detail = _inline_markup(_tool_detail_text(raw_text, raw_label, tool))
-        content = f"{_icon_for(row, icons)}<b>{label}</b>"
-        if detail:
-            content += f"<br>{detail}"
+        raw_label = _tool_display_label(getattr(row, "tool", None), state)
+        detail, recognized = _tool_detail_text(raw_text, raw_label, tool)
+        action = " ".join(filter(None, (
+            escape_text(raw_label),
+            _one_line_markup(detail, code=recognized and _is_command_tool(tool)),
+        )))
+        content = f"{_icon_for(row, icons)}{action}"
+        state_markup = _tool_state_markup(row, state, now)
+        if state_markup:
+            content += f" · {state_markup}"
     elif kind in {"thought", "commentary"}:
-        # Keep public updates in their original words and order. The native
-        # block already provides hierarchy; don't add a section heading or
-        # blanket italic styling around ordinary commentary.
-        content = text
+        # Public updates are the primary text: their original words and
+        # order, emphasized, with no section heading or blanket italics.
+        content = _emphasized_markup(
+            _natural_commentary(raw_text, add_thought_marker=kind == "thought")
+        )
     else:
-        content = f"{_icon_for(row, icons)}{text}"
-
-    suffix = ""
-    state_label = _STATE_LABEL.get(state)
-    if kind == "tool" and state_label:
-        suffix = f"<i>{escape_text(state_label)}"
-        duration = getattr(row, "duration", None)
-        if state == STATE_RUNNING and now is not None:
-            started = float(getattr(row, "started_at", now) or now)
-            duration = max(0.0, now - started)
-        if duration is not None and state in (STATE_RUNNING, STATE_SUCCEEDED, STATE_FAILED):
-            suffix += f" · {format_elapsed(duration)}"
-        suffix += "</i>"
-    if suffix:
-        content += f"<br>{suffix}"
+        content = f"{_icon_for(row, icons)}{_inline_markup(raw_text)}"
     return content.strip()
 
 
@@ -313,10 +434,18 @@ def render_thinking_block(
     now: float,
     idle_since: Optional[float] = None,
     icons: Optional[Mapping[str, NativeIcon]] = None,
+    turn_started_at: Optional[float] = None,
 ) -> str:
-    """``<tg-thinking>…</tg-thinking>`` for the current rows (one physical line)."""
+    """``<tg-thinking>…</tg-thinking>`` for the current rows (one physical line).
+
+    ``turn_started_at`` is the turn's immutable origin on the same clock as
+    ``now``; with it the header never restarts on a new tool or idle gap.
+    Callers that do not supply it keep the per-activity origin.
+    """
     running = next((r for r in reversed(rows) if getattr(r, "state", "") == STATE_RUNNING), None)
-    if running is not None:
+    if turn_started_at is not None:
+        started = turn_started_at
+    elif running is not None:
         started = float(getattr(running, "started_at", now) or now)
     elif idle_since is not None:
         started = idle_since
@@ -324,8 +453,21 @@ def render_thinking_block(
         started = float(getattr(rows[0], "started_at", now) or now) if rows else now
     head_icon = _icon_tag((icons or {}).get("thinking")) if icons else ""
     title = escape_text(_header_label(running, icons))
-    header = f"<b>{head_icon}{title} · {format_elapsed(now - started)}</b>"
-    blocks = [header] + [render_row(r, icons, now=now) for r in rows]
+    blocks = [f"{head_icon}{title} · {escape_text(format_elapsed(now - started))}"]
+    compact: list[str] = []
+    for row in rows:
+        rendered = render_row(row, icons, now=now)
+        if not rendered:
+            continue
+        if getattr(row, "kind", "") in {"thought", "commentary"}:
+            if compact:
+                blocks.append("<br>".join(compact))
+                compact = []
+            blocks.append(rendered)
+        else:
+            compact.append(rendered)
+    if compact:
+        blocks.append("<br>".join(compact))
     body = "<br><br>".join(blocks)
     return f"{THINKING_OPEN}{body}{THINKING_CLOSE}"
 
@@ -337,8 +479,11 @@ def compose_markdown(
     now: float,
     idle_since: Optional[float] = None,
     icons: Optional[Mapping[str, NativeIcon]] = None,
+    turn_started_at: Optional[float] = None,
 ) -> str:
-    block = render_thinking_block(rows, now=now, idle_since=idle_since, icons=icons)
+    block = render_thinking_block(
+        rows, now=now, idle_since=idle_since, icons=icons, turn_started_at=turn_started_at,
+    )
     if block and answer:
         return f"{block}\n\n{answer}"
     return block or answer
