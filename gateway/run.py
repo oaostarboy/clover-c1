@@ -32330,6 +32330,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     not _silent_cleanup
                     and _pub is not None
                     and getattr(_pub, "combined", False)
+                    and not getattr(turn_ctx, "_native_progress_summary_sent", False)
                     and _card_edit is not None
                 ):
                     try:
@@ -32356,6 +32357,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
                 def _cleanup_temp_bubbles() -> None:
                     async def _delete_all() -> None:
+                        # The native path already sent its activity summary above
+                        # the final answer. Do not absorb worker cards into a
+                        # second post-answer summary; only remove any tracked
+                        # temporary progress/carrier bubbles.
+                        if getattr(turn_ctx, "_native_progress_summary_sent", False):
+                            await _collapse_or_delete_bubbles(
+                                _adapter_snapshot,
+                                _chat_id_snapshot,
+                                [],
+                                card_text="",
+                                can_card=False,
+                                extra_ids=list(_cleanup_msg_ids),
+                            )
+                            return
                         # A successful native composer has no temporary legacy
                         # bubble to turn into the summary card. Post the same
                         # card directly after final delivery instead of showing

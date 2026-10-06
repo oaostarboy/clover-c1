@@ -255,9 +255,18 @@ async def test_native_display_shows_the_same_visible_lines_as_today_and_persists
     for text in bubbles(old.api):
         for line in text.split("\n"):
             core = unmd(line).replace("```", "").strip()
-            # today's italic wrapper around a thought ("💭 _text_") renders as <i>text</i>
-            core = re.sub(r"^(\U0001F4AD\s*)[_*]", r"\1", core).strip("_* ")
+            legacy_thought = core.startswith("💭 ")
+            if legacy_thought:
+                # Preserve the public words, but the native design omits the
+                # legacy decorative emoji and outer blanket-italic wrapper.
+                core = core.removeprefix("💭 ").strip("_*")
+            else:
+                core = core.strip("_*")
             if not core:
+                continue
+            if legacy_thought:
+                assert core in shown, (case, core)
+                assert "💭" not in shown, (case, "decorative thought icon leaked")
                 continue
             matched_action = False
             for tool in ("terminal", "web_search", "read_file"):

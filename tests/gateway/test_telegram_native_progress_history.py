@@ -211,6 +211,45 @@ async def test_successful_native_cleanup_skips_transient_legacy_tool_bubble(monk
 
 
 @pytest.mark.asyncio
+async def test_native_summary_leaves_detached_worker_cards_unabsorbed(monkeypatch, tmp_path):
+    from gateway import delegation_activity
+
+    class DetachedWorkers:
+        combined = True
+
+        def __init__(self):
+            self.absorb_calls = 0
+
+        def observe(self, *args, **kwargs):
+            pass
+
+        def adopt_inbox(self):
+            return False
+
+        def absorb_finished(self):
+            self.absorb_calls += 1
+            return ([object()], ["detached-worker-card"])
+
+        def end_turn(self):
+            pass
+
+    publisher = DetachedWorkers()
+    monkeypatch.setattr(delegation_activity, "build_turn_publisher", lambda *args: publisher)
+    turn = await run_turn(
+        monkeypatch, tmp_path, [T, NAP, S, NAP], native=True, cleanup=True,
+        session="sess-detached-worker-cards",
+    )
+    assert publisher.absorb_calls == 0, "the pre-final main summary must not consume a detached worker card"
+    await fire_cleanup(turn)
+    assert sum("tool call" in kw.get("text", "") for kw in turn.api.methods("send_message")) == 1
+    assert not any(
+        kw.get("message_id") == "detached-worker-card"
+        for method, kw in turn.api.calls
+        if method in {"edit_message_text", "delete_message"}
+    ), "cleanup must leave detached worker cards separate and persistent"
+
+
+@pytest.mark.asyncio
 async def test_cleanup_does_not_create_a_card_for_log_only_legacy_turn(monkeypatch, tmp_path):
     turn = await run_turn(
         monkeypatch, tmp_path, [T, NAP, S, NAP, R, NAP],
