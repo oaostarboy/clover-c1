@@ -6526,6 +6526,7 @@ class TelegramAdapter(BasePlatformAdapter):
         *,
         now: Optional[float] = None,
         idle_since: Optional[float] = None,
+        turn_started_at: Optional[float] = None,
         icons: Optional[Mapping[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
@@ -6551,8 +6552,13 @@ class TelegramAdapter(BasePlatformAdapter):
         when = time.monotonic() if now is None else now
 
         def _markdown(icon_map):
+            # Older isolated renderers retain their existing fallback. Integration
+            # supplies the optional keyword on the REAL compose_markdown seam.
+            import inspect
+            params = inspect.signature(compose_markdown).parameters
+            clock_kw = {"turn_started_at": turn_started_at} if "turn_started_at" in params else {}
             return compose_markdown(
-                rows, answer_md, now=when, idle_since=idle_since, icons=icon_map,
+                rows, answer_md, now=when, idle_since=idle_since, icons=icon_map, **clock_kw,
             )
 
         markdown = _markdown(icons)
@@ -8879,7 +8885,11 @@ class TelegramAdapter(BasePlatformAdapter):
             )
 
             with open(file_path, "rb") as f:
-                msg = await self._send_with_dm_topic_reply_anchor_retry(
+                native_activity = kwargs.get("_native_activity_document") is True
+                async def _document_once(send, payload, *unused, **unused_kw):
+                    return await send(**payload)
+                deliver = _document_once if native_activity else self._send_with_dm_topic_reply_anchor_retry
+                msg = await deliver(
                     self._bot.send_document,
                     {
                         "chat_id": normalize_telegram_chat_id(chat_id),
@@ -8902,6 +8912,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 "[%s] Failed to send document: %s",
                 self.name, _redact_telegram_error_text(e),
             )
+            if kwargs.get("_native_activity_document") is True:
+                return SendResult(success=False, error="activity_document_unavailable")
             return await super().send_document(chat_id, file_path, caption, file_name, reply_to, metadata=metadata)
 
     async def send_video(

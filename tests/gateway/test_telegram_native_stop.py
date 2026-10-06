@@ -77,9 +77,13 @@ class BlockingAgent:
             cb = self.tool_progress_callback
             if cb:
                 cb("tool.started", "web_search", "sony reviews", {"query": "sony reviews"})
+                if getattr(self, "tool_start_callback", None):
+                    self.tool_start_callback("stop-search", "web_search", {"query": "sony reviews"})
                 if "burst" in message:             # a flood of tool events
                     for i in range(300):
                         cb("tool.started", f"burst_tool_{i}", f"item {i}", {"i": i})
+                        if getattr(self, "tool_start_callback", None):
+                            self.tool_start_callback(f"burst-{i}", f"burst_tool_{i}", {"i": i})
             if self.stream_delta_callback:
                 self.stream_delta_callback("partial answer so far ")
             time.sleep(0.3)   # a turn that outlives the consumer's first pump (frames can go out)

@@ -4613,6 +4613,16 @@ class TurnRunner:
         if not ctx.progress_queue or not ctx._run_still_current():
             return
 
+        _native_sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+        _native_id_events = bool(getattr(ctx, "_native_activity_id_events", False) and _native_sc is not None and _native_sc.owns_progress_routing)
+        if _native_id_events and event_type == "tool.completed":
+            # Both concrete agent producers emit diagnostics on this worker
+            # immediately before their existing ID-bearing completion hook.
+            _sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+            if _sc is not None:
+                _sc._np_tls.completion = (tool_name, kwargs.get("duration"), kwargs.get("is_error"))
+            return
+
         # Native activity composer: a finished tool updates its row's state
         # (outcome/time are only claimed when the pairing is honest).  The
         # result payload is never read — only duration and the error flag.
@@ -4724,6 +4734,10 @@ class TurnRunner:
         except Exception:
             pass
 
+        if _native_id_events:
+            _native_sc._np_tls.start_preview = (tool_name, preview)
+            return  # authoritative start hook owns this call's row, not a clipped duplicate
+
         # "new" mode: only report when tool changes
         if ctx.progress_mode == "new" and tool_name == ctx.last_tool[0]:
             return
@@ -4732,7 +4746,7 @@ class TurnRunner:
         # a later completion can be paired (consumed by the queue router).
         _sc_note = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
         if _sc_note is not None and getattr(_sc_note, "native_activity_active", False) is True:
-            _sc_note.note_tool(tool_name)
+            _sc_note.note_tool(tool_name, arguments=args, preview=preview or "")
 
         # Build progress message with primary argument preview
         from agent.display import get_tool_emoji
@@ -5098,6 +5112,13 @@ class TurnRunner:
         adapter = self._runner._adapter_for_source(ctx.source)
         if not adapter or not lines:
             return
+        sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+        diagnostics = sc._np_ledger.diagnostic_lines() if sc is not None else list(lines)
+        native_reply_to = ctx.event_message_id or ctx._progress_reply_to
+        native_metadata = dict(ctx._progress_metadata or {})
+        if native_reply_to:
+            native_metadata["reply_to_message_id"] = native_reply_to
+        preserve_history = False
         # The successful native draft already displayed the activity. Create the
         # same collapsed artifact before final delivery so it stays above the
         # answer and no legacy tool stream flashes in between. If this send fails,
@@ -5105,22 +5126,73 @@ class TurnRunner:
         if ctx._cleanup_progress and reason == "done" and getattr(ctx, "_progress_completed_ok", False):
             try:
                 from agent.turn_summary import format_collapsed_turn_card
+                # The existing fold is bounded readable display, not lossless storage.
+                budget = 2600
+                readable = []
+                used = 0
+                lossy = False
+                for detail in diagnostics:
+                    flat = str(detail).replace("\n", " ").replace("||", "¦¦").strip()
+                    lossy = lossy or flat != detail
+                    remaining = max(0, budget - used)
+                    if len(flat) > remaining:
+                        lossy = True
+                    clipped = flat[:remaining]
+                    if clipped:
+                        readable.append(clipped)
+                        used += len(clipped) + 1
+                if lossy:
+                    # Native eligibility is private-only; defend persistence independently.
+                    private = ctx.source.chat_type == "dm" and str(ctx.source.chat_id).isdigit() and int(ctx.source.chat_id) > 0
+                    delivered = False
+                    if private and not getattr(ctx, "_native_activity_document_attempted", False):
+                        import uuid
+                        from clover_constants import get_clover_home
+                        directory = get_clover_home() / "workspace" / "native-activity"
+                        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+                        path = directory / (uuid.uuid4().hex + ".txt")
+                        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                        with os.fdopen(fd, "w", encoding="utf-8") as document:
+                            document.write("\n\n".join(diagnostics) + "\n")
+                        ctx._native_activity_document_path = str(path)
+                        ctx._native_activity_document_attempted = True
+                        delivery = await adapter.send_document(
+                            chat_id=ctx.source.chat_id, file_path=str(path),
+                            file_name="activity-details.txt", reply_to=native_reply_to,
+                            metadata=native_metadata, _native_activity_document=True,
+                        )
+                        delivered = bool(getattr(delivery, "success", False))
+                        ctx._native_activity_document_delivered = delivered
+                    else:
+                        delivered = bool(getattr(ctx, "_native_activity_document_delivered", False))
+                    if delivered:
+                        readable.append("Full details attached: activity-details.txt")
+                    else:
+                        readable.append("Full details attachment unavailable; persistent activity history follows.")
+                        preserve_history = True
                 card = format_collapsed_turn_card(
                     ctx._summary_thoughts,
                     ctx._summary_tools,
                     time.monotonic() - ctx._summary_t0,
+                    detail_lines=readable,
                 )
                 if card:
                     result = await adapter.send(
                         chat_id=ctx.source.chat_id,
                         content=card,
-                        reply_to=ctx._progress_reply_to,
-                        metadata=ctx._progress_metadata,
+                        reply_to=native_reply_to,
+                        metadata=native_metadata,
                     )
                     if getattr(result, "success", False) and getattr(result, "message_id", None):
                         setattr(ctx, "_native_progress_history_suppressed", True)
                         setattr(ctx, "_native_progress_summary_sent", True)
-                        return
+                        logger.debug(
+                            "native_progress history card=delivered document=%s fallback=%s",
+                            "delivered" if getattr(ctx, "_native_activity_document_delivered", False) else "failed" if getattr(ctx, "_native_activity_document_attempted", False) else "not_needed",
+                            preserve_history,
+                        )
+                        if not preserve_history:
+                            return
             except Exception:
                 logger.debug("Native summary pre-delivery send failed; preserving activity history", exc_info=True)
         len_fn = adapter.message_len_fn if isinstance(adapter, BasePlatformAdapter) else len
@@ -5136,6 +5208,9 @@ class TurnRunner:
                 pass
         limit = max(1, raw_limit - (64 if raw_limit > 128 else 0))
 
+        # Retain raw diagnostics even if the count card succeeded. Document
+        # failure fallback is durable history, never a transient cleanup carrier.
+        lines = diagnostics
         groups: List[List[str]] = []
         if ctx.progress_grouping == "separate":
             groups = [[str(line)] for line in lines]
@@ -5154,15 +5229,16 @@ class TurnRunner:
             result = await adapter.send(
                 chat_id=ctx.source.chat_id,
                 content="\n".join(group),
-                reply_to=ctx._progress_reply_to,
-                metadata=ctx._progress_metadata,
+                reply_to=native_reply_to,
+                metadata=native_metadata,
             )
             if (
                 ctx._cleanup_progress
                 and getattr(result, "success", False)
                 and getattr(result, "message_id", None)
             ):
-                ctx._cleanup_msg_ids.append(str(result.message_id))
+                if not preserve_history:
+                    ctx._cleanup_msg_ids.append(str(result.message_id))
 
     async def send_progress_messages(self):
         ctx = self._ctx
@@ -5564,16 +5640,23 @@ class TurnRunner:
         except Exception:
             pass
         from agent.display import build_tool_preview
+        from gateway.native_progress import ActivityLedger
+        native = getattr(ctx, "_native_activity_id_events", False)
+        sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+        if native and (sc is None or not sc.native_activity_active or not ctx.tool_progress_enabled or tool_name == "clarify"):
+            return
+        pending = getattr(sc._np_tls, "start_preview", None) if native else None
+        if native:
+            sc._np_tls.start_preview = None
+        preview = build_tool_preview(str(tool_name or "tool"), args or {}, max_len=64) or (pending[1] if pending and pending[0] == tool_name else "")
 
         ctx.progress_queue.put(
             {
                 "type": "tool.started",
                 "tool_call_id": str(call_id or ""),
                 "tool_name": str(tool_name or "tool"),
-                "preview": build_tool_preview(
-                    str(tool_name or "tool"), args or {}, max_len=64
-                )
-                or "",
+                "preview": ActivityLedger.sanitize_detail(None, preview) if native else preview,
+                **({"arguments": args or {}} if native else {}),
             }
         )
 
@@ -5591,12 +5674,22 @@ class TurnRunner:
         from agent.display import _detect_tool_failure
 
         is_error, _ = _detect_tool_failure(str(tool_name or "tool"), result)
+        native = getattr(ctx, "_native_activity_id_events", False)
+        diagnostics = None
+        if native:
+            sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+            if sc is None or not sc.native_activity_active:
+                return
+            diagnostics = getattr(sc._np_tls, "completion", None) if sc else None
+            if sc:
+                sc._np_tls.completion = None
         ctx.progress_queue.put(
             {
                 "type": "tool.completed",
                 "tool_call_id": str(call_id or ""),
                 "tool_name": str(tool_name or "tool"),
-                "is_error": bool(is_error),
+                "is_error": diagnostics[2] if diagnostics and diagnostics[0] == tool_name else bool(is_error),
+                **({"duration": diagnostics[1]} if diagnostics and diagnostics[0] == tool_name else {}),
             }
         )
 
@@ -5605,7 +5698,7 @@ class TurnRunner:
         ctx = self._ctx
         if ctx._voice_ack_guild[0] is not None:
             self.voice_ack_callback(call_id, tool_name, args)
-        if ctx._native_slack_task_cards:
+        if ctx._native_slack_task_cards or getattr(ctx, "_native_activity_id_events", False):
             self.native_tool_start_callback(call_id, tool_name, args)
 
     def _step_callback_sync(self, iteration: int, prev_tools: list) -> None:
@@ -5897,6 +5990,7 @@ class TurnRunner:
                         initial_reply_to_id=ctx.event_message_id,
                         run_still_current=ctx._run_still_current,
                         on_native_history=self.persist_native_activity,
+                        native_turn_started_at=ctx._summary_t0,
                         native_scope=NativeProgressScope(
                             session_key=ctx.session_key or "",
                             run_generation=ctx.run_generation,
@@ -6268,18 +6362,22 @@ class TurnRunner:
         # Compose ID-bearing lifecycle consumers: Discord's one-time voice
         # ack and Slack's native task cards both ride the authoritative
         # start callback, so neither has to infer identity from tool names.
+        ctx._native_activity_id_events = bool(
+            _stream_consumer is not None and _stream_consumer.native_activity_active
+        )
         _combined_start_cb = ctx.native_tool_start_callback or ctx.voice_ack_callback
         agent.tool_start_callback = (
             _combined_start_cb
             if (
                 ctx._voice_ack_guild[0] is not None
                 or ctx._native_slack_task_cards
+                or ctx._native_activity_id_events
             )
             else None
         )
         agent.tool_complete_callback = (
             ctx.native_tool_complete_callback
-            if ctx._native_slack_task_cards
+            if (ctx._native_slack_task_cards or ctx._native_activity_id_events)
             and ctx.native_tool_complete_callback is not None
             else None
         )

@@ -57,6 +57,8 @@ class ScriptedAgent:
         ScriptedAgent.callback_owner = getattr(
             getattr(self.tool_progress_callback, "__func__", None), "__qualname__", None,
         )
+        pending = collections.defaultdict(list)
+        call_number = 0
         for op in type(self).script:
             kind = op[0]
             if kind == "sleep":
@@ -64,12 +66,20 @@ class ScriptedAgent:
             elif kind == "tool":
                 _, name, preview, args = op
                 cb("tool.started", name, preview, args)
+                call_number += 1
+                cid = f"script-{call_number}"
+                pending[name].append((cid, args))
+                if getattr(self, "tool_start_callback", None):
+                    self.tool_start_callback(cid, name, args)
             elif kind == "done":
                 _, name, duration, is_error = op
                 cb(
                     "tool.completed", name, None, None,
                     duration=duration, is_error=is_error, result="SECRET-RESULT-PAYLOAD",
                 )
+                if pending[name] and getattr(self, "tool_complete_callback", None):
+                    cid, args = pending[name].pop(0)
+                    self.tool_complete_callback(cid, name, args, {"error": "failed"} if is_error else {"success": True})
             elif kind == "thought":
                 cb("reasoning.available", "_thinking", op[1], None)
             elif kind == "reasoning":
@@ -126,7 +136,7 @@ DEFAULT_DISPLAY = {
 async def run_turn(
     monkeypatch, tmp_path, script, *, native, display=None, interim=False, cleanup=False,
     chat_type="dm", adapter_extra=None, api_setup=None, session="sess-np",
-    send_final_delta=True, streaming_enabled=True,
+    send_final_delta=True, streaming_enabled=True, event_message_id=None,
 ):
     monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_MIN_SEND_INTERVAL", 0.0)
     fake_dotenv = types.ModuleType("dotenv")
@@ -165,7 +175,7 @@ async def run_turn(
     session_key = f"agent:main:telegram:{chat_type}:12345"
     result = await runner._run_agent(
         message="hello", context_prompt="", history=[], source=source,
-        session_id=session, session_key=session_key,
+        session_id=session, session_key=session_key, event_message_id=event_message_id,
     )
     await asyncio.sleep(0.05)
     return SimpleNamespace(
@@ -242,12 +252,21 @@ async def test_native_display_shows_the_same_visible_lines_as_today_and_persists
 
     old_lines = line_multiset(bubbles(old.api))
     new_lines = line_multiset(bubbles(new.api))
-    # actual persisted artifact after the turn == what today's display leaves behind
-    assert new_lines == old_lines
-    if case != "tools_hidden":
-        assert sum(old_lines.values()) >= 1          # the oracle is not vacuous (dedup folds 3 calls into 1 line)
-    if case in {"all", "new", "verbose", "preview40", "dedup", "thoughts", "live_reasoning"}:
-        assert bubbles(new.api) == bubbles(old.api)  # identical text, order and formatting
+    # Approved raw history supersedes legacy clipped-preview/dedup equality.
+    persisted = unmd("\n".join(bubbles(new.api)))
+    tools = [op for op in script if op[0] == "tool"]
+    if case == "tools_hidden":
+        assert not new_lines and not old_lines
+    else:
+        assert sum(old_lines.values()) >= 1  # legacy control is exercised
+        assert persisted.count("unknown duration") == len(tools)
+        for i, op in enumerate(tools, 1):
+            assert f"{op[1]} [script-{i}]" in persisted
+            if op[3]:
+                for value in op[3].values():
+                    assert str(value) in persisted
+            else:
+                assert op[2] in persisted
 
     # during the turn: no separate progress bubble — native draft + one artifact + one final
     # NEW streams through sendRichMessageDraft (the legacy plain sendMessageDraft would carry
@@ -263,42 +282,12 @@ async def test_native_display_shows_the_same_visible_lines_as_today_and_persists
 
     # every shown line was visible inside the native block while the turn ran
     shown = frames_text(new.api)
-    from agent.display import get_tool_emoji, get_tool_verb
-
-    # Native rows preserve the legacy tool detail while presenting the action once.
-    for text in bubbles(old.api):
-        for line in text.split("\n"):
-            core = unmd(line).replace("```", "").strip()
-            legacy_thought = core.startswith("💭 ")
-            if legacy_thought:
-                # Preserve the thought marker and public words, but remove only
-                # the generated outer italic wrapper.
-                core = core.removeprefix("💭 ").strip("_*")
-            else:
-                core = core.strip("_*")
-            if not core:
-                continue
-            if legacy_thought:
-                draft_markup = "".join(
-                    frame.get("rich_message", {}).get("markdown", "")
-                    for frame in new.api.rich_drafts()
-                )
-                assert f"💭 {core}" in shown, (case, core)
-                assert "💭 <i>" not in draft_markup
-                continue
-            matched_action = False
-            for tool in ("terminal", "web_search", "read_file"):
-                verb = get_tool_verb(tool)
-                emoji = get_tool_emoji(tool, default="⚙️")
-                prefix = f"{emoji} {verb}"
-                if core == prefix or core.startswith(prefix + " "):
-                    detail = core[len(prefix):].lstrip()
-                    assert verb in shown, (case, verb)
-                    assert detail in shown, (case, detail)
-                    matched_action = True
-                    break
-            if not matched_action:
-                assert core in shown, (case, core)
+    for op in script:
+        if op[0] in {"thought", "commentary", "reasoning"}:
+            assert op[1].strip() in shown
+        elif op[0] == "tool" and case != "tools_hidden":
+            # Live previews are bounded; raw full arguments live in persistent history.
+            assert op[1].replace("_", " ").split()[0].lower() in shown.lower() or op[2][:20] in shown
     # secrets/results/args beyond today's display never leak
     assert "SECRET-RESULT-PAYLOAD" not in shown
     assert all(f["can_stop"] is True for f in new.api.rich_drafts())

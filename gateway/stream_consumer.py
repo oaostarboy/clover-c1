@@ -405,6 +405,7 @@ class GatewayStreamConsumer:
         run_still_current: Optional[Callable[[], bool]] = None,
         on_native_history: Optional[Callable[[Sequence[str], str], Awaitable[Any]]] = None,
         native_scope: Optional[NativeProgressScope] = None,
+        native_turn_started_at: Optional[float] = None,
     ):
         self.adapter = adapter
         self.chat_id = chat_id
@@ -606,7 +607,7 @@ class GatewayStreamConsumer:
         self._np_task: Optional["asyncio.Task"] = None
         self._np_answer = ""
         self._np_dirty = False
-        self._np_first_at: Optional[float] = None
+        self._np_first_at: Optional[float] = native_turn_started_at
         self._np_last_started: Optional[float] = None
         self._np_last_accepted: Optional[float] = None
         self._np_last_content_snapshot = None
@@ -669,13 +670,14 @@ class GatewayStreamConsumer:
         """Active, or stopped by the user (late lines are suppressed, not re-routed)."""
         return self._np_state in ("active", "stopped")
 
-    def note_tool(self, tool_name: Optional[str]) -> None:
+    def note_tool(self, tool_name: Optional[str], *, arguments: Any = None, preview: str = "") -> None:
         """Tag the NEXT progress line from this thread with its tool name.
 
         The gateway builds the visible line and puts it on the progress queue
         in the same call; the tag lets the composer pair a later completion.
         """
         self._np_tls.tool = tool_name or None
+        self._np_tls.raw_detail = ActivityLedger.sanitize_detail(arguments, preview) if arguments is not None or preview else None
 
     def on_tool_progress(
         self,
@@ -693,12 +695,17 @@ class GatewayStreamConsumer:
         display this returns False so the caller routes the line through
         today's progress queue instead (nothing is dropped).
         """
+        raw_detail = getattr(self._np_tls, "raw_detail", None)
+        self._np_tls.raw_detail = None
         self._np_tls.tool = None      # a pending note_tool() tag is consumed by this line
         if not line:
             return False
         if self._np_state == "stopped":
             return True               # post-Stop suppression, same as today's display
         if self._np_state != "off":
+            line = ActivityLedger.sanitize_detail(None, line)
+            if tool:
+                return self._np_submit(("call", line, tool, None, raw_detail))
             return self._np_submit(("replace" if replace_last else "line", line, tool))
         self._queue.put((_TOOL_PROGRESS, line))
         return True
@@ -718,6 +725,16 @@ class GatewayStreamConsumer:
     def route_progress_item(self, item: Any) -> bool:
         """Consume one of today's progress-queue items; False = use the queue."""
         tool = getattr(self._np_tls, "tool", None)
+        if isinstance(item, dict) and item.get("type") in {"tool.started", "tool.completed"}:
+            if self._np_state == "stopped":
+                return True
+            if self._np_state != "active":
+                return False
+            if item["type"] == "tool.completed":
+                return self._np_submit(("complete", item.get("tool_name"), item.get("duration"), item.get("is_error"), item.get("tool_call_id")))
+            from gateway.native_progress import ActivityLedger
+            raw = ActivityLedger.sanitize_detail(item.get("arguments"), item.get("preview", ""))
+            return self._np_submit(("call", item.get("preview") or item.get("tool_name") or "tool", item.get("tool_name"), item.get("tool_call_id"), raw))
         if self._np_state == "stopped":
             self._np_tls.tool = None
             return True
@@ -727,7 +744,7 @@ class GatewayStreamConsumer:
         if isinstance(item, tuple) and len(item) == 3 and item[0] == "__dedup__":
             self._np_tls.tool = None
             return self.on_tool_progress(
-                f"{item[1]} (×{item[2] + 1})", tool=tool, replace_last=True,
+                str(item[1]), tool=tool, replace_last=False,
             )
         if isinstance(item, tuple) and item[:1] == ("__reset__",):
             return True        # content bubble landed; the composer keeps the whole turn
@@ -749,8 +766,10 @@ class GatewayStreamConsumer:
                 return
             kind = event[0]
             if kind == "complete":
-                self._np_ledger.complete_tool(event[1], duration=event[2], is_error=event[3])
+                self._np_ledger.complete_tool(event[1], duration=event[2], is_error=event[3], call_id=event[4] if len(event) > 4 else None)
                 self._np_idle_since = at
+            elif kind == "call":
+                self._np_ledger.add_line(event[1], tool=event[2], now=at, call_id=event[3], raw_detail=event[4])
             elif kind == "replace":
                 self._np_ledger.replace_last(event[1], tool=event[2], now=at)
             else:
@@ -1614,7 +1633,8 @@ class GatewayStreamConsumer:
                 if self._np_state == "active" and self._run_still_current():
                     # Open a nonempty, stoppable preview before tools or tokens.
                     # This is a lifecycle status, not a synthetic activity row.
-                    self._np_first_at = self._np_clock()
+                    if self._np_first_at is None:
+                        self._np_first_at = self._np_clock()
                     self._np_idle_since = self._np_first_at
                     self._np_dirty = True
                     await self._np_pump()
@@ -1774,8 +1794,17 @@ class GatewayStreamConsumer:
                 # pump the next paced frame / refresh / keepalive.
                 if self._np_state == "active":
                     if got_done:
-                        await self._np_finish("done")
+                        self._flush_think_buffer()
+                        silent = _is_intentional_silence_response(self._clean_for_display(self._accumulated))
+                        await self._np_finish("silent" if silent else "done")
                     else:
+                        # Native answer continuity is independent of legacy edit
+                        # thresholds/buffer-only delivery. Only real answer deltas
+                        # enter this buffer; commentary has its own ledger events.
+                        answer = self._clean_for_display(self._accumulated)
+                        if answer != self._np_answer:
+                            self._np_answer = answer
+                            self._np_dirty = True
                         await self._np_pump()
 
                 # Handle approval boundary: close current stream, reset for new turn.
@@ -3086,6 +3115,9 @@ class GatewayStreamConsumer:
         """Hand every visible line to today's persistent artifact path, once."""
         if self._np_history_done:
             return
+        if reason == "silent":
+            self._np_history_done = True
+            return
         lines = self._np_ledger.lines()
         if not lines or self._on_native_history is None:
             return
@@ -3121,7 +3153,7 @@ class GatewayStreamConsumer:
         try:
             result = await self.adapter.send_native_progress_draft(
                 self.chat_id, draft_id, rows, answer,
-                now=self._np_clock(), idle_since=idle_since,
+                now=self._np_clock(), idle_since=idle_since, turn_started_at=self._np_first_at,
             )
         except asyncio.CancelledError:
             raise
@@ -3205,11 +3237,20 @@ class GatewayStreamConsumer:
         )
         if kind == "content" and content_snapshot == self._np_last_content_snapshot:
             self._np_dirty = False
-            return
+            # Duplicate events must not starve expiry refresh.
+            if self._np_last_accepted is None or now - self._np_last_accepted < self.NATIVE_KEEPALIVE_INTERVAL:
+                return
+            kind = "keepalive"
         if self._np_first_at is None:
             self._np_first_at = now
         self._np_dirty = False
         self._np_last_started = now
+        import hashlib
+        fingerprint = hashlib.sha256(repr(content_snapshot).encode("utf-8")).hexdigest()[:16]
+        logger.debug(
+            "native_progress frame kind=%s elapsed=%.3f rows=%d answer_chars=%d fingerprint=%s",
+            kind, max(0.0, now - self._np_first_at), len(rows), len(answer), fingerprint,
+        )
         task = asyncio.ensure_future(self._np_send(
             self._np_owner, self._draft_id, rows, answer, idle_since,
         ))
