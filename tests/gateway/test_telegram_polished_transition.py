@@ -158,7 +158,7 @@ async def test_short_success_expands_diagnostics_in_existing_card_without_docume
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_document", [False, True])
-async def test_lossy_or_large_details_are_retrievable_once_with_truthful_history(monkeypatch, tmp_path, fail_document):
+async def test_lossy_or_large_details_are_retrievable_once_with_truthful_history(monkeypatch, tmp_path, fail_document, request):
     from tests.gateway.test_telegram_native_progress_runner import run_turn, FINAL, unmd
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
     command = "printf '<b> ||'\n  " + "argument " * 700 + "tail"
@@ -174,6 +174,10 @@ async def test_lossy_or_large_details_are_retrievable_once_with_truthful_history
     assert len(docs) == 1, "exactly one upload attempt, never duplicate retry"
     doc = docs[0]
     payload = doc["document_bytes"].decode("utf-8")
+    record_property = lambda name, value: request.node.user_properties.append((name, value))
+    record_property("fake_wire_document_content_utf8", payload)
+    record_property("fake_wire_document_route", str({k: doc.get(k) for k in ("chat_id", "reply_to_message_id", "message_thread_id", "filename", "document_mode")}))
+    record_property("fake_wire_upload_failed", str(fail_document))
     assert command in payload and "failed" in payload and "2.25" in payload
     assert "SECRET-RESULT-PAYLOAD" not in payload
     assert doc["document_mode"] == 0o600
@@ -270,3 +274,23 @@ async def test_status_only_keepalive_is_quiet_and_fenced_without_fake_answer(mon
     await pump()
     assert len(c.adapter._bot.rich_drafts()) == 2
     assert not c.adapter._bot.methods("send_document")
+
+
+def test_id_bearing_row_cannot_be_completed_by_unidentified_callback():
+    c = consumer()
+    c.route_progress_item({"type": "tool.started", "tool_name": "terminal", "tool_call_id": "known", "preview": "pwd", "arguments": {"command": "pwd"}})
+    c.on_tool_complete("terminal", duration=1.0, is_error=False)
+    c._np_apply_events()
+    [row] = c._np_ledger.rows
+    assert row.state == "running" and row.duration is None
+
+
+def test_raw_diagnostics_redact_credentials_and_any_host_path_before_persistence():
+    c = consumer()
+    c.route_progress_item({"type": "tool.started", "tool_name": "terminal", "tool_call_id": "known",
+        "preview": "safe preview", "arguments": {"command": "read /srv/private/client.csv\n  cat /home/person/secret", "password": "not-permitted"}})
+    c._np_apply_events()
+    raw = c._np_ledger.rows[0].raw_detail
+    assert raw is not None
+    assert "not-permitted" not in raw and "/srv/private" not in raw and "/home/person" not in raw
+    assert "[host-path]" in raw and "[REDACTED]" in raw

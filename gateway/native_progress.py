@@ -98,17 +98,18 @@ class ActivityLedger:
             row.state = STATE_COMPLETED if is_error is None else STATE_FAILED if is_error else STATE_SUCCEEDED
             self._tool_outstanding[tool] = max(0, self._tool_outstanding.get(tool, 0) - 1)
             return
-        total = self._tool_outstanding.get(tool, 0)
+        known = sum(r.outstanding for r in self.rows if r.tool == tool and r.call_id)
+        total = self._tool_outstanding.get(tool, 0) - known
         if total <= 0:
             return                      # no row was shown for this call (hidden / deduped)
-        running = [r for r in self.rows if r.kind == "tool" and r.tool == tool and r.state == STATE_RUNNING]
+        running = [r for r in self.rows if r.kind == "tool" and r.tool == tool and not r.call_id and r.state == STATE_RUNNING]
         precise = (
             total == 1
             and not self._ambiguous.get(tool)
             and len(running) == 1
             and running[0].repeat == 1
         )
-        self._tool_outstanding[tool] = total - 1
+        self._tool_outstanding[tool] = max(0, self._tool_outstanding.get(tool, 0) - 1)
         if precise:
             row = running[0]
             row.outstanding = 0
@@ -125,7 +126,7 @@ class ActivityLedger:
         for row in running:
             row.aggregate_error = self._aggregate_error[tool]
             row.correlation = "aggregate_unknown"
-        if self._tool_outstanding[tool] == 0:
+        if total == 1:
             for row in running:
                 row.outstanding = 0
                 row.state = STATE_FAILED if self._aggregate_error[tool] else STATE_COMPLETED
@@ -148,7 +149,7 @@ class ActivityLedger:
             if isinstance(value, str):
                 value = redact_sensitive_text(value, force=True)
                 # Diagnostics are public UI data, not a host filesystem disclosure.
-                value = re.sub(r"(?<![\w:])(?:/(?:home|Users|mnt|tmp|etc|var|root|opt)/|[A-Za-z]:[\\/])[^\s\"'<>|]*", "[host-path]", value)
+                value = re.sub(r"(?<![\w:/])(?:/(?!/)|[A-Za-z]:[\\/])[^\s\"'<>|]*", "[host-path]", value)
                 return value
             return value
 
@@ -156,7 +157,7 @@ class ActivityLedger:
         if isinstance(permitted, dict) and set(permitted) == {"command"}:
             return str(permitted["command"])
         if permitted:
-            return json.dumps(permitted, ensure_ascii=False, indent=2, default=str)
+            return json.dumps(permitted, ensure_ascii=False, default=str)
         return str(safe(preview))
 
     def diagnostic_lines(self) -> List[str]:

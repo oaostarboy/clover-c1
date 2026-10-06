@@ -4613,7 +4613,8 @@ class TurnRunner:
         if not ctx.progress_queue or not ctx._run_still_current():
             return
 
-        _native_id_events = getattr(ctx, "_native_activity_id_events", False)
+        _native_sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+        _native_id_events = bool(getattr(ctx, "_native_activity_id_events", False) and _native_sc is not None and _native_sc.owns_progress_routing)
         if _native_id_events and event_type == "tool.completed":
             # Both concrete agent producers emit diagnostics on this worker
             # immediately before their existing ID-bearing completion hook.
@@ -4734,6 +4735,7 @@ class TurnRunner:
             pass
 
         if _native_id_events:
+            _native_sc._np_tls.start_preview = (tool_name, preview)
             return  # authoritative start hook owns this call's row, not a clipped duplicate
 
         # "new" mode: only report when tool changes
@@ -5631,17 +5633,20 @@ class TurnRunner:
         from agent.display import build_tool_preview
         from gateway.native_progress import ActivityLedger
         native = getattr(ctx, "_native_activity_id_events", False)
-        if native and (not ctx.tool_progress_enabled or tool_name == "clarify"):
+        sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+        if native and (sc is None or not sc.native_activity_active or not ctx.tool_progress_enabled or tool_name == "clarify"):
             return
+        pending = getattr(sc._np_tls, "start_preview", None) if native else None
+        if native:
+            sc._np_tls.start_preview = None
+        preview = build_tool_preview(str(tool_name or "tool"), args or {}, max_len=64) or (pending[1] if pending and pending[0] == tool_name else "")
 
         ctx.progress_queue.put(
             {
                 "type": "tool.started",
                 "tool_call_id": str(call_id or ""),
                 "tool_name": str(tool_name or "tool"),
-                "preview": ActivityLedger.sanitize_detail(None, build_tool_preview(
-                    str(tool_name or "tool"), args or {}, max_len=64
-                ) or "") if native else build_tool_preview(str(tool_name or "tool"), args or {}, max_len=64) or "",
+                "preview": ActivityLedger.sanitize_detail(None, preview) if native else preview,
                 **({"arguments": args or {}} if native else {}),
             }
         )
@@ -5664,6 +5669,8 @@ class TurnRunner:
         diagnostics = None
         if native:
             sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+            if sc is None or not sc.native_activity_active:
+                return
             diagnostics = getattr(sc._np_tls, "completion", None) if sc else None
             if sc:
                 sc._np_tls.completion = None

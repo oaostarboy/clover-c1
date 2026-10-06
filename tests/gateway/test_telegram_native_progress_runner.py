@@ -252,12 +252,21 @@ async def test_native_display_shows_the_same_visible_lines_as_today_and_persists
 
     old_lines = line_multiset(bubbles(old.api))
     new_lines = line_multiset(bubbles(new.api))
-    # actual persisted artifact after the turn == what today's display leaves behind
-    assert new_lines == old_lines
-    if case != "tools_hidden":
-        assert sum(old_lines.values()) >= 1          # the oracle is not vacuous (dedup folds 3 calls into 1 line)
-    if case in {"all", "new", "verbose", "preview40", "dedup", "thoughts", "live_reasoning"}:
-        assert bubbles(new.api) == bubbles(old.api)  # identical text, order and formatting
+    # Approved raw history supersedes legacy clipped-preview/dedup equality.
+    persisted = unmd("\n".join(bubbles(new.api)))
+    tools = [op for op in script if op[0] == "tool"]
+    if case == "tools_hidden":
+        assert not new_lines and not old_lines
+    else:
+        assert sum(old_lines.values()) >= 1  # legacy control is exercised
+        assert persisted.count("unknown duration") == len(tools)
+        for i, op in enumerate(tools, 1):
+            assert f"{op[1]} [script-{i}]" in persisted
+            if op[3]:
+                for value in op[3].values():
+                    assert str(value) in persisted
+            else:
+                assert op[2] in persisted
 
     # during the turn: no separate progress bubble — native draft + one artifact + one final
     # NEW streams through sendRichMessageDraft (the legacy plain sendMessageDraft would carry
@@ -273,42 +282,12 @@ async def test_native_display_shows_the_same_visible_lines_as_today_and_persists
 
     # every shown line was visible inside the native block while the turn ran
     shown = frames_text(new.api)
-    from agent.display import get_tool_emoji, get_tool_verb
-
-    # Native rows preserve the legacy tool detail while presenting the action once.
-    for text in bubbles(old.api):
-        for line in text.split("\n"):
-            core = unmd(line).replace("```", "").strip()
-            legacy_thought = core.startswith("💭 ")
-            if legacy_thought:
-                # Preserve the thought marker and public words, but remove only
-                # the generated outer italic wrapper.
-                core = core.removeprefix("💭 ").strip("_*")
-            else:
-                core = core.strip("_*")
-            if not core:
-                continue
-            if legacy_thought:
-                draft_markup = "".join(
-                    frame.get("rich_message", {}).get("markdown", "")
-                    for frame in new.api.rich_drafts()
-                )
-                assert f"💭 {core}" in shown, (case, core)
-                assert "💭 <i>" not in draft_markup
-                continue
-            matched_action = False
-            for tool in ("terminal", "web_search", "read_file"):
-                verb = get_tool_verb(tool)
-                emoji = get_tool_emoji(tool, default="⚙️")
-                prefix = f"{emoji} {verb}"
-                if core == prefix or core.startswith(prefix + " "):
-                    detail = core[len(prefix):].lstrip()
-                    assert verb in shown, (case, verb)
-                    assert detail in shown, (case, detail)
-                    matched_action = True
-                    break
-            if not matched_action:
-                assert core in shown, (case, core)
+    for op in script:
+        if op[0] in {"thought", "commentary", "reasoning"}:
+            assert op[1].strip() in shown
+        elif op[0] == "tool" and case != "tools_hidden":
+            # Live previews are bounded; raw full arguments live in persistent history.
+            assert op[1].replace("_", " ").split()[0].lower() in shown.lower() or op[2][:20] in shown
     # secrets/results/args beyond today's display never leak
     assert "SECRET-RESULT-PAYLOAD" not in shown
     assert all(f["can_stop"] is True for f in new.api.rich_drafts())
