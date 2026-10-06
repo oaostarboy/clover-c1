@@ -40,6 +40,10 @@ class ActivityRow:
     duration: Optional[float] = None
     repeat: int = 1
     outstanding: int = 0               # tool starts not yet matched by a completion
+    call_id: Optional[str] = None
+    raw_detail: Optional[str] = None
+    correlation: str = "unknown"
+    aggregate_error: bool = False
 
 
 class ActivityLedger:
@@ -49,17 +53,20 @@ class ActivityLedger:
         self.rows: List[ActivityRow] = []
         self._tool_outstanding: Dict[str, int] = {}
         self._ambiguous: Dict[str, bool] = {}
+        self._aggregate_error: Dict[str, bool] = {}
 
     def __len__(self) -> int:
         return len(self.rows)
 
-    def add_line(self, text: str, *, kind: str = "line", tool: Optional[str] = None, now: float = 0.0) -> ActivityRow:
+    def add_line(self, text: str, *, kind: str = "line", tool: Optional[str] = None, now: float = 0.0, call_id: Optional[str] = None, raw_detail: Optional[str] = None) -> ActivityRow:
         if tool:
             kind = "tool"
         row = ActivityRow(
             text=text, kind=kind, tool=tool,
             state=STATE_RUNNING if tool else STATE_INFO,
             started_at=now, outstanding=1 if tool else 0,
+            call_id=call_id or None, raw_detail=raw_detail,
+            correlation="call_id" if call_id else "unknown",
         )
         self.rows.append(row)
         if tool:
@@ -80,7 +87,17 @@ class ActivityLedger:
             self._tool_outstanding[row.tool] = self._tool_outstanding.get(row.tool, 0) + 1
         return row
 
-    def complete_tool(self, tool: str, *, duration: Optional[float], is_error: Optional[bool]) -> None:
+    def complete_tool(self, tool: str, *, duration: Optional[float], is_error: Optional[bool], call_id: Optional[str] = None) -> None:
+        if call_id:
+            matches = [r for r in self.rows if r.tool == tool and r.call_id == call_id and r.outstanding]
+            if len(matches) != 1:
+                return  # unknown/duplicate identity is never name-correlated
+            row = matches[0]
+            row.outstanding = 0
+            row.duration = duration
+            row.state = STATE_COMPLETED if is_error is None else STATE_FAILED if is_error else STATE_SUCCEEDED
+            self._tool_outstanding[tool] = max(0, self._tool_outstanding.get(tool, 0) - 1)
+            return
         total = self._tool_outstanding.get(tool, 0)
         if total <= 0:
             return                      # no row was shown for this call (hidden / deduped)
@@ -104,11 +121,43 @@ class ActivityLedger:
         # Several same-name calls overlap (or one row stands for several
         # calls): the callback carries no call id, so claim nothing per call.
         self._ambiguous[tool] = True
+        self._aggregate_error[tool] = self._aggregate_error.get(tool, False) or is_error is True
+        for row in running:
+            row.aggregate_error = self._aggregate_error[tool]
+            row.correlation = "aggregate_unknown"
         if self._tool_outstanding[tool] == 0:
             for row in running:
                 row.outstanding = 0
-                row.state, row.duration = STATE_COMPLETED, None
+                row.state = STATE_FAILED if self._aggregate_error[tool] else STATE_COMPLETED
+                row.duration = None
             self._ambiguous[tool] = False
+            self._aggregate_error[tool] = False
+
+    @staticmethod
+    def sanitize_detail(arguments: Any, preview: str = "") -> str:
+        """Retain permitted arguments, never results; force existing secret redaction."""
+        import json
+        import re
+        from agent.redact import redact_sensitive_text, _key_has_secret_keyword
+
+        def safe(value):
+            if isinstance(value, dict):
+                return {str(k): "[REDACTED]" if _key_has_secret_keyword(str(k)) else safe(v) for k, v in value.items()}
+            if isinstance(value, (list, tuple)):
+                return [safe(v) for v in value]
+            if isinstance(value, str):
+                value = redact_sensitive_text(value, force=True)
+                # Diagnostics are public UI data, not a host filesystem disclosure.
+                value = re.sub(r"(?<![\w:])(?:/(?:home|Users|mnt|tmp|etc|var|root|opt)/|[A-Za-z]:[\\/])[^\s\"'<>|]*", "[host-path]", value)
+                return value
+            return value
+
+        permitted = safe(arguments)
+        if isinstance(permitted, dict) and set(permitted) == {"command"}:
+            return str(permitted["command"])
+        if permitted:
+            return json.dumps(permitted, ensure_ascii=False, indent=2, default=str)
+        return str(safe(preview))
 
     def lines(self) -> List[str]:
         return [row.text for row in self.rows]

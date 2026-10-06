@@ -718,6 +718,16 @@ class GatewayStreamConsumer:
     def route_progress_item(self, item: Any) -> bool:
         """Consume one of today's progress-queue items; False = use the queue."""
         tool = getattr(self._np_tls, "tool", None)
+        if isinstance(item, dict) and item.get("type") in {"tool.started", "tool.completed"}:
+            if self._np_state == "stopped":
+                return True
+            if self._np_state != "active":
+                return False
+            if item["type"] == "tool.completed":
+                return self._np_submit(("complete", item.get("tool_name"), item.get("duration"), item.get("is_error"), item.get("tool_call_id")))
+            from gateway.native_progress import ActivityLedger
+            raw = ActivityLedger.sanitize_detail(item.get("arguments"), item.get("preview", ""))
+            return self._np_submit(("call", item.get("preview") or item.get("tool_name") or "tool", item.get("tool_name"), item.get("tool_call_id"), raw))
         if self._np_state == "stopped":
             self._np_tls.tool = None
             return True
@@ -727,7 +737,7 @@ class GatewayStreamConsumer:
         if isinstance(item, tuple) and len(item) == 3 and item[0] == "__dedup__":
             self._np_tls.tool = None
             return self.on_tool_progress(
-                f"{item[1]} (×{item[2] + 1})", tool=tool, replace_last=True,
+                str(item[1]), tool=tool, replace_last=False,
             )
         if isinstance(item, tuple) and item[:1] == ("__reset__",):
             return True        # content bubble landed; the composer keeps the whole turn
@@ -749,8 +759,10 @@ class GatewayStreamConsumer:
                 return
             kind = event[0]
             if kind == "complete":
-                self._np_ledger.complete_tool(event[1], duration=event[2], is_error=event[3])
+                self._np_ledger.complete_tool(event[1], duration=event[2], is_error=event[3], call_id=event[4] if len(event) > 4 else None)
                 self._np_idle_since = at
+            elif kind == "call":
+                self._np_ledger.add_line(event[1], tool=event[2], now=at, call_id=event[3], raw_detail=event[4])
             elif kind == "replace":
                 self._np_ledger.replace_last(event[1], tool=event[2], now=at)
             else:
