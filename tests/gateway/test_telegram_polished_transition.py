@@ -169,7 +169,7 @@ async def test_lossy_or_large_details_are_retrievable_once_with_truthful_history
     turn = await run_turn(monkeypatch, tmp_path, [
         ("tool", "terminal", command[:40], {"command": command}),
         ("done", "terminal", 2.25, True),
-    ], native=True, cleanup=True, api_setup=setup, session="doc-lossless")
+    ], native=True, cleanup=True, api_setup=setup, session="doc-lossless", event_message_id="9002")
     docs = turn.api.methods("send_document")
     assert len(docs) == 1, "exactly one upload attempt, never duplicate retry"
     doc = docs[0]
@@ -182,6 +182,9 @@ async def test_lossy_or_large_details_are_retrievable_once_with_truthful_history
     assert "SECRET-RESULT-PAYLOAD" not in payload
     assert doc["document_mode"] == 0o600
     assert doc["filename"] == "activity-details.txt" and doc["chat_id"] == 12345
+    assert doc["reply_to_message_id"] == 9002
+    final = [m for m in turn.api.persistent_messages() if FINAL in m["text"]]
+    assert len(final) == 1 and final[0]["reply_to_message_id"] == 9002
     persistent = [unmd(m["text"]) for m in turn.api.persistent_messages()]
     assert sum("tool call" in t for t in persistent) == 1
     assert ("Full details attached" in "\n".join(persistent)) is not fail_document
@@ -294,3 +297,106 @@ def test_raw_diagnostics_redact_credentials_and_any_host_path_before_persistence
     assert raw is not None
     assert "not-permitted" not in raw and "/srv/private" not in raw and "/home/person" not in raw
     assert "[host-path]" in raw and "[REDACTED]" in raw
+
+
+@pytest.mark.asyncio
+async def test_legacy_gateway_callback_captures_arguments_before_clip_and_dedup(monkeypatch, tmp_path):
+    from gateway.run import TurnRunner
+    from tests.gateway.test_telegram_native_progress_runner import run_turn
+    original = TurnRunner.progress_callback
+    def legacy(self, *a, **kw):
+        self._ctx._native_activity_id_events = False  # exercise the supported legacy producer shape
+        return original(self, *a, **kw)
+    monkeypatch.setattr(TurnRunner, "progress_callback", legacy)
+    captured = []
+    old = GatewayStreamConsumer._np_persist
+    async def persist(c, reason):
+        captured.extend(c._np_ledger.snapshot())
+        await old(c, reason)
+    monkeypatch.setattr(GatewayStreamConsumer, "_np_persist", persist)
+    command = "same clipped prefix " * 10 + "\n  full || detail"
+    await run_turn(monkeypatch, tmp_path, [
+        ("tool", "terminal", command, {"command": command}),
+        ("tool", "terminal", command, {"command": command}),
+    ], native=True, cleanup=True, api_setup=document_wire)
+    assert len(captured) == 2 and all(row.raw_detail == command for row in captured)
+    assert all(row.call_id is None for row in captured)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transport", ["rich", "plain", "rich-fallback"])
+async def test_one_persistent_final_with_newest_reply_and_correct_delivery_ledger(transport):
+    c = consumer()
+    c._initial_reply_to_id = "9002"
+    if transport == "plain":
+        c.adapter._rich_send_disabled = True
+    elif transport == "rich-fallback":
+        c.adapter._bot.fail["sendRichMessage"] = RuntimeError("Endpoint 'sendRichMessage' not found in Bot API")
+    task = asyncio.create_task(c.run())
+    await asyncio.sleep(0.08)
+    c.on_delta("actual answer")
+    await asyncio.sleep(0.08)
+    c.finish("actual answer complete")
+    await task
+    final = [m for m in c.adapter._bot.persistent_messages() if "_message_id" in m and "actual answer complete" in m["text"]]
+    assert len(final) == 1 and final[0]["reply_to_message_id"] == 9002
+    assert c.delivered_final_matches("actual answer complete") is True
+    assert c.delivered_final_matches("actual answer") is False
+    before = len(c.adapter._bot.calls)
+    c.on_delta("late writer must be fenced")
+    c.on_tool_progress("late tool", tool="terminal")
+    await c._np_pump()
+    assert len(c.adapter._bot.calls) == before
+
+
+@pytest.mark.asyncio
+async def test_native_frame_trace_contains_only_timing_counts_and_fingerprint(caplog):
+    import logging
+    caplog.set_level(logging.DEBUG, logger="gateway.stream_consumer")
+    c = consumer()
+    c._draft_id = 7
+    c._np_answer = "private answer text must not appear in trace"
+    c._np_dirty = True
+    await c._np_pump()
+    await c._np_task
+    await c._np_pump()
+    traces = [r.message for r in caplog.records if "native_progress frame" in r.message]
+    assert traces and all("fingerprint=" in t and "elapsed=" in t for t in traces)
+    assert all("private answer" not in t and "/home/" not in t for t in traces)
+    c.native_stop_claim()
+    await c.native_stop_finish()
+
+
+@pytest.mark.asyncio
+async def test_multiline_command_with_other_arguments_remains_losslessly_retrievable(monkeypatch, tmp_path):
+    from tests.gateway.test_telegram_native_progress_runner import run_turn
+    command = "first line\n  second line"
+    turn = await run_turn(monkeypatch, tmp_path, [
+        ("tool", "terminal", "first line", {"command": command, "cwd": "."}),
+        ("done", "terminal", 0.75, False),
+    ], native=True, cleanup=True, api_setup=document_wire)
+    docs = turn.api.methods("send_document")
+    assert len(docs) == 1
+    assert command in docs[0]["document_bytes"].decode()
+    assert '"cwd": "."' in docs[0]["document_bytes"].decode()
+
+
+@pytest.mark.asyncio
+async def test_native_stop_followup_final_replies_once_to_newest_pending_message(monkeypatch, tmp_path):
+    from tests.gateway.test_telegram_native_stop import Env, stop_update, until, FOLLOWUP, BlockingAgent
+    from gateway.platforms.base import MessageEvent, MessageType
+    env = Env(monkeypatch, tmp_path)
+    await env.start("12345", pending="second question", pending_id="4242")
+    assert await until(lambda: env.draft_id(12345))
+    # Existing pending queue now contains a later user message. Stop must preserve
+    # its real inbound identity, not reply to the foreground or older queued turn.
+    env.adapter._pending_messages[env.key(12345)] = MessageEvent(
+        text="newest second question", message_type=MessageType.TEXT,
+        source=env.source(12345), message_id="9002",
+    )
+    await env.adapter._on_stopped_message_generation(stop_update(12345, env.draft_id(12345)), None)
+    await env.idle(12345)
+    [final] = env.replies(12345, FOLLOWUP)
+    assert final["reply_to_message_id"] == 9002
+    assert sum("newest second question" in m for m in BlockingAgent.started) == 1
+    assert not env.api.methods("send_document")

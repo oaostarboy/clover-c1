@@ -670,13 +670,14 @@ class GatewayStreamConsumer:
         """Active, or stopped by the user (late lines are suppressed, not re-routed)."""
         return self._np_state in ("active", "stopped")
 
-    def note_tool(self, tool_name: Optional[str]) -> None:
+    def note_tool(self, tool_name: Optional[str], *, arguments: Any = None, preview: str = "") -> None:
         """Tag the NEXT progress line from this thread with its tool name.
 
         The gateway builds the visible line and puts it on the progress queue
         in the same call; the tag lets the composer pair a later completion.
         """
         self._np_tls.tool = tool_name or None
+        self._np_tls.raw_detail = ActivityLedger.sanitize_detail(arguments, preview) if arguments is not None or preview else None
 
     def on_tool_progress(
         self,
@@ -694,12 +695,17 @@ class GatewayStreamConsumer:
         display this returns False so the caller routes the line through
         today's progress queue instead (nothing is dropped).
         """
+        raw_detail = getattr(self._np_tls, "raw_detail", None)
+        self._np_tls.raw_detail = None
         self._np_tls.tool = None      # a pending note_tool() tag is consumed by this line
         if not line:
             return False
         if self._np_state == "stopped":
             return True               # post-Stop suppression, same as today's display
         if self._np_state != "off":
+            line = ActivityLedger.sanitize_detail(None, line)
+            if tool:
+                return self._np_submit(("call", line, tool, None, raw_detail))
             return self._np_submit(("replace" if replace_last else "line", line, tool))
         self._queue.put((_TOOL_PROGRESS, line))
         return True
@@ -3239,6 +3245,12 @@ class GatewayStreamConsumer:
             self._np_first_at = now
         self._np_dirty = False
         self._np_last_started = now
+        import hashlib
+        fingerprint = hashlib.sha256(repr(content_snapshot).encode("utf-8")).hexdigest()[:16]
+        logger.debug(
+            "native_progress frame kind=%s elapsed=%.3f rows=%d answer_chars=%d fingerprint=%s",
+            kind, max(0.0, now - self._np_first_at), len(rows), len(answer), fingerprint,
+        )
         task = asyncio.ensure_future(self._np_send(
             self._np_owner, self._draft_id, rows, answer, idle_since,
         ))

@@ -154,8 +154,10 @@ class ActivityLedger:
             return value
 
         permitted = safe(arguments)
-        if isinstance(permitted, dict) and set(permitted) == {"command"}:
-            return str(permitted["command"])
+        if isinstance(permitted, dict) and isinstance(permitted.get("command"), str):
+            command = permitted["command"]
+            other = {k: v for k, v in permitted.items() if k != "command"}
+            return command + (" · arguments: " + json.dumps(other, ensure_ascii=False, default=str) if other else "")
         if permitted:
             return json.dumps(permitted, ensure_ascii=False, default=str)
         return str(safe(preview))

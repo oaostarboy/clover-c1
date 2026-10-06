@@ -4746,7 +4746,7 @@ class TurnRunner:
         # a later completion can be paired (consumed by the queue router).
         _sc_note = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
         if _sc_note is not None and getattr(_sc_note, "native_activity_active", False) is True:
-            _sc_note.note_tool(tool_name)
+            _sc_note.note_tool(tool_name, arguments=args, preview=preview or "")
 
         # Build progress message with primary argument preview
         from agent.display import get_tool_emoji
@@ -5114,6 +5114,10 @@ class TurnRunner:
             return
         sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
         diagnostics = sc._np_ledger.diagnostic_lines() if sc is not None else list(lines)
+        native_reply_to = ctx.event_message_id or ctx._progress_reply_to
+        native_metadata = dict(ctx._progress_metadata or {})
+        if native_reply_to:
+            native_metadata["reply_to_message_id"] = native_reply_to
         preserve_history = False
         # The successful native draft already displayed the activity. Create the
         # same collapsed artifact before final delivery so it stays above the
@@ -5154,8 +5158,8 @@ class TurnRunner:
                         ctx._native_activity_document_attempted = True
                         delivery = await adapter.send_document(
                             chat_id=ctx.source.chat_id, file_path=str(path),
-                            file_name="activity-details.txt", reply_to=ctx._progress_reply_to,
-                            metadata=ctx._progress_metadata, _native_activity_document=True,
+                            file_name="activity-details.txt", reply_to=native_reply_to,
+                            metadata=native_metadata, _native_activity_document=True,
                         )
                         delivered = bool(getattr(delivery, "success", False))
                         ctx._native_activity_document_delivered = delivered
@@ -5176,12 +5180,17 @@ class TurnRunner:
                     result = await adapter.send(
                         chat_id=ctx.source.chat_id,
                         content=card,
-                        reply_to=ctx._progress_reply_to,
-                        metadata=ctx._progress_metadata,
+                        reply_to=native_reply_to,
+                        metadata=native_metadata,
                     )
                     if getattr(result, "success", False) and getattr(result, "message_id", None):
                         setattr(ctx, "_native_progress_history_suppressed", True)
                         setattr(ctx, "_native_progress_summary_sent", True)
+                        logger.debug(
+                            "native_progress history card=delivered document=%s fallback=%s",
+                            "delivered" if getattr(ctx, "_native_activity_document_delivered", False) else "failed" if getattr(ctx, "_native_activity_document_attempted", False) else "not_needed",
+                            preserve_history,
+                        )
                         if not preserve_history:
                             return
             except Exception:
@@ -5220,8 +5229,8 @@ class TurnRunner:
             result = await adapter.send(
                 chat_id=ctx.source.chat_id,
                 content="\n".join(group),
-                reply_to=ctx._progress_reply_to,
-                metadata=ctx._progress_metadata,
+                reply_to=native_reply_to,
+                metadata=native_metadata,
             )
             if (
                 ctx._cleanup_progress

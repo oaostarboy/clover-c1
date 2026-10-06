@@ -136,7 +136,7 @@ DEFAULT_DISPLAY = {
 async def run_turn(
     monkeypatch, tmp_path, script, *, native, display=None, interim=False, cleanup=False,
     chat_type="dm", adapter_extra=None, api_setup=None, session="sess-np",
-    send_final_delta=True, streaming_enabled=True,
+    send_final_delta=True, streaming_enabled=True, event_message_id=None,
 ):
     monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_MIN_SEND_INTERVAL", 0.0)
     fake_dotenv = types.ModuleType("dotenv")
@@ -175,7 +175,7 @@ async def run_turn(
     session_key = f"agent:main:telegram:{chat_type}:12345"
     result = await runner._run_agent(
         message="hello", context_prompt="", history=[], source=source,
-        session_id=session, session_key=session_key,
+        session_id=session, session_key=session_key, event_message_id=event_message_id,
     )
     await asyncio.sleep(0.05)
     return SimpleNamespace(
