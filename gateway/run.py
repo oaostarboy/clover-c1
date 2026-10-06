@@ -5098,15 +5098,31 @@ class TurnRunner:
         adapter = self._runner._adapter_for_source(ctx.source)
         if not adapter or not lines:
             return
-        # Successful native activity already appeared in the live composer. If
-        # cleanup_progress will replace its artifact with a summary card, don't
-        # flash a second, legacy progress bubble immediately before the final.
-        # The post-delivery cleanup callback creates the summary card directly
-        # when there is no legacy bubble to edit. Failure/Stop/fallback keep the
-        # established persistent activity artifact.
+        # The successful native draft already displayed the activity. Create the
+        # same collapsed artifact before final delivery so it stays above the
+        # answer and no legacy tool stream flashes in between. If this send fails,
+        # fall through to the existing persistent activity history instead.
         if ctx._cleanup_progress and reason == "done" and getattr(ctx, "_progress_completed_ok", False):
-            setattr(ctx, "_native_progress_history_suppressed", True)
-            return
+            try:
+                from agent.turn_summary import format_collapsed_turn_card
+                card = format_collapsed_turn_card(
+                    ctx._summary_thoughts,
+                    ctx._summary_tools,
+                    time.monotonic() - ctx._summary_t0,
+                )
+                if card:
+                    result = await adapter.send(
+                        chat_id=ctx.source.chat_id,
+                        content=card,
+                        reply_to=ctx._progress_reply_to,
+                        metadata=ctx._progress_metadata,
+                    )
+                    if getattr(result, "success", False) and getattr(result, "message_id", None):
+                        setattr(ctx, "_native_progress_history_suppressed", True)
+                        setattr(ctx, "_native_progress_summary_sent", True)
+                        return
+            except Exception:
+                logger.debug("Native summary pre-delivery send failed; preserving activity history", exc_info=True)
         len_fn = adapter.message_len_fn if isinstance(adapter, BasePlatformAdapter) else len
         try:
             raw_limit = int(getattr(adapter, "MAX_MESSAGE_LENGTH", 4000) or 4000)
@@ -32346,6 +32362,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         # a legacy tool-stream bubble for one frame.
                         if not _ids_snapshot:
                             if not getattr(turn_ctx, "_native_progress_history_suppressed", False):
+                                return
+                            if getattr(turn_ctx, "_native_progress_summary_sent", False):
                                 return
                             if _can_card:
                                 _send_card = getattr(_adapter_snapshot, "send", None)

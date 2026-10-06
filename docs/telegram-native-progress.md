@@ -27,13 +27,14 @@ No environment variable. Turning it off restores today's display exactly: the sa
   `interim_assistant_messages`, `cleanup_progress`) goes through the single composer in
   its original order with its existing redaction. Hidden lines stay hidden; no
   setting is changed; hidden provider reasoning is never enabled or shown.
-- **History is kept.** A 30-second draft is not history. At turn end the existing
-  progress path is used once before the final reply when cleanup is off, or on
-  failure/Stop/fallback; those artifacts remain visible as before. With
-  `cleanup_progress: true` on a successful native turn, the old transient tool bubble
-  is not emitted before the final answer; the existing post-delivery callback posts
-  the same collapsed summary card directly. The final answer remains the usual
-  separate message, sent once, without thinking/emoji markup.
+- **History is kept.** A 30-second draft is not history. On a successful turn
+  with `cleanup_progress: true`, the existing collapsed summary is sent after the
+  native draft finishes but **before** the separate final answer. The old
+  transient tool-progress bubble is not sent, so there is no legacy flash before
+  conversion. If the summary send fails, the existing persistent activity-history
+  fallback is used; failed, stopped, and genuine-fallback turns keep their prior
+  history behavior. The final answer remains the usual separate message, sent
+  once, without thinking/emoji markup.
 - **It does not touch** `rich_messages`, `rich_drafts`, the final message format or any
   other setting. `native_progress` only lets its own composer use the draft endpoint.
 

@@ -134,6 +134,24 @@ def _text_lines(text: str) -> str:
     return "<br>".join(rendered)
 
 
+def _natural_commentary(text: str) -> str:
+    """Remove only the exact wrapper emitted by the legacy thought formatter."""
+    if not text.startswith(_THOUGHT_PREFIX):
+        return text
+    lines = text[len(_THOUGHT_PREFIX):].split("\n")
+    result = []
+    for line in lines:
+        stripped = line.strip()
+        if (
+            len(stripped) > 2
+            and ((stripped.startswith("*") and not stripped.startswith("**") and stripped.endswith("*"))
+                 or (stripped.startswith("_") and not stripped.startswith("__") and stripped.endswith("_")))
+        ):
+            stripped = stripped[1:-1]
+        result.append(stripped)
+    return "\n".join(result)
+
+
 def _icon_tag(icon: Optional[NativeIcon]) -> str:
     if icon is None or not icon.emoji:
         return ""
@@ -168,7 +186,7 @@ def _header_label(running: Any, icons: Optional[Mapping[str, NativeIcon]] = None
         try:
             from agent.display import get_tool_emoji, get_tool_verb
 
-            emoji = get_tool_emoji(tool, default="⚙️") if icons and icons.get("running") else ""
+            emoji = get_tool_emoji(tool, default="⚙️")
             verb = get_tool_verb(tool)
         except Exception:
             emoji = ""
@@ -177,6 +195,8 @@ def _header_label(running: Any, icons: Optional[Mapping[str, NativeIcon]] = None
             raw = raw[len(emoji) + 1:]
         title = next((line.strip() for line in raw.splitlines() if line.strip()), "")
         if verb and title.startswith(verb):
+            if tool == "terminal" and verb.lower() in {"running", "executing"}:
+                return f"{verb} command"
             if verb.lower() in {"running", "executing"}:
                 if title.startswith(f"{verb} "):
                     return " ".join(title.split()[:2])
@@ -246,9 +266,9 @@ def render_row(
     now: Optional[float] = None,
 ) -> str:
     raw_text = str(getattr(row, "text", "") or "")
-    text = _inline_markup(raw_text)
     kind = getattr(row, "kind", "")
     state = getattr(row, "state", STATE_INFO)
+    text = _inline_markup(_natural_commentary(raw_text) if kind == "thought" else raw_text)
     if kind == "tool":
         raw_label = _tool_display_label(getattr(row, "tool", None), state)
         label = escape_text(raw_label)
@@ -276,7 +296,9 @@ def render_row(
         if duration is not None and state in (STATE_RUNNING, STATE_SUCCEEDED, STATE_FAILED):
             suffix += f" · {format_elapsed(duration)}"
         suffix += "</i>"
-    return f"{content} {suffix}".strip()
+    if suffix:
+        content += f"<br>{suffix}"
+    return content.strip()
 
 
 def render_thinking_block(
@@ -299,7 +321,8 @@ def render_thinking_block(
     head_icon = _icon_tag((icons or {}).get("thinking")) if icons else ""
     title = escape_text(_header_label(running, icons))
     header = f"<b>{head_icon}{title} · {format_elapsed(now - started)}</b>"
-    body = "<br>".join([header] + [render_row(r, icons, now=now) for r in rows])
+    blocks = [header] + [render_row(r, icons, now=now) for r in rows]
+    body = "<br><br>".join(blocks)
     return f"{THINKING_OPEN}{body}{THINKING_CLOSE}"
 
 

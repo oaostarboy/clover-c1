@@ -611,6 +611,7 @@ class GatewayStreamConsumer:
         self._np_first_at: Optional[float] = None
         self._np_last_started: Optional[float] = None
         self._np_last_accepted: Optional[float] = None
+        self._np_last_content_snapshot = None
         self._np_keepalives = 0
         self._np_not_before = 0.0
         self._np_history_done = False
@@ -3077,6 +3078,9 @@ class GatewayStreamConsumer:
             return False        # retired owner: a late accepted send is ignored
         if getattr(result, "success", False):
             self._np_last_accepted = self._np_acked_at
+            content_snapshot = getattr(task, "_np_content_snapshot", None)
+            if content_snapshot is not None:
+                self._np_last_content_snapshot = content_snapshot
             return True
         error = getattr(result, "error", "") or ""
         if error == "empty_frame":
@@ -3135,15 +3139,26 @@ class GatewayStreamConsumer:
                 await self._np_fallback("cap")
                 return
             self._np_keepalives += 1
+        rows = self._np_ledger.snapshot()
+        answer = self._np_answer
+        idle_since = self._np_ledger_idle_since()
+        content_snapshot = (
+            tuple((r.text, r.kind, r.tool, r.state, r.started_at, r.duration, r.repeat, r.outstanding) for r in rows),
+            answer,
+            idle_since,
+        )
+        if kind == "content" and content_snapshot == self._np_last_content_snapshot:
+            self._np_dirty = False
+            return
         if self._np_first_at is None:
             self._np_first_at = now
         self._np_dirty = False
         self._np_last_started = now
         task = asyncio.ensure_future(self._np_send(
-            self._np_owner, self._draft_id, self._np_ledger.snapshot(),
-            self._np_answer, self._np_ledger_idle_since(),
+            self._np_owner, self._draft_id, rows, answer, idle_since,
         ))
         task._np_owner = self._np_owner
+        task._np_content_snapshot = content_snapshot if kind == "content" else None
         self._np_task = task
 
     def _np_ledger_idle_since(self) -> Optional[float]:

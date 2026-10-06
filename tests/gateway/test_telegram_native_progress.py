@@ -217,7 +217,7 @@ async def test_screenshot_activity_rows_render_with_hierarchy_without_losing_rep
     header = md.partition("<br>")[0]
 
     assert "<b>Running code · 6s</b>" in header
-    assert "<br><br>" not in md
+    assert md.count("<br><br>") == len(rows)
     assert "<b>Execute code</b>" in md
     assert md.count("<b>Execute code</b>") == 3
     assert md.count("Running code") == 1  # only the current action header retains the raw title
@@ -226,7 +226,7 @@ async def test_screenshot_activity_rows_render_with_hierarchy_without_losing_rep
     assert "<b>Updating tasks</b>" in md
     assert "<i>Done · 0s</i>" in md
     assert md.count("from pathlib import Path") == 3
-    assert "<br><br>" not in md
+    assert "<b>Execute code</b><br>from pathlib import Path" in md
 
 
 @pytest.mark.asyncio
@@ -825,6 +825,25 @@ async def test_frames_are_locally_paced(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_unchanged_dirty_snapshot_does_not_resend_the_same_content_frame(monkeypatch):
+    fast(monkeypatch, refresh=100.0, keepalive=100.0)
+    adapter, api = native_adapter()
+    consumer = make_consumer(adapter)
+    task = asyncio.create_task(consumer.run())
+    consumer.on_tool_progress("🔍 stable lookup", tool="web_search")
+    assert await until(lambda: api.rich_drafts())
+    assert await until(lambda: consumer._np_task is None)
+
+    consumer._np_dirty = True  # A dirty notification with no ledger/answer change.
+    await consumer._np_pump()
+    await asyncio.sleep(0.1)
+    assert len(api.rich_drafts()) == 1, "identical content must not trigger avoidable layout churn"
+
+    consumer.finish("")
+    await asyncio.wait_for(task, 3)
+
+
+@pytest.mark.asyncio
 async def test_stalled_draft_send_never_delays_final_beyond_the_drain_bound(monkeypatch):
     fast(monkeypatch, drain=0.3)
     adapter, api = native_adapter()
@@ -930,12 +949,13 @@ async def test_tool_outcomes_are_only_claimed_when_justified(monkeypatch):
     consumer.on_tool_complete("read_file", duration=0.1, is_error=False)
     assert await until(lambda: any("Failed" in m for m in _markdowns(api)))
     mid = thinking_of(_markdowns(api)[-1])[0]
-    assert "🔍 one <i>Failed · 1s</i>" in mid
-    assert "📄 two A <i>Running · 0s</i>" in mid and "📄 two B <i>Running · 0s</i>" in mid  # ambiguous: no guess
+    assert "<b>Searching the web</b><br>🔍 one<br><i>Failed · 1s</i>" in mid
+    assert "<b>Read file</b><br>📄 two A<br><i>Running · 0s</i>" in mid
+    assert "<b>Read file</b><br>📄 two B<br><i>Running · 0s</i>" in mid  # ambiguous: no guess
     consumer.on_tool_complete("read_file", duration=0.2, is_error=False)
-    assert await until(lambda: "📄 two A <i>Completed" in thinking_of(_markdowns(api)[-1])[0])
+    assert await until(lambda: "<i>Completed</i>" in thinking_of(_markdowns(api)[-1])[0])
     end = thinking_of(_markdowns(api)[-1])[0]
-    assert "📄 two B <i>Completed" in end and "Done" not in end
+    assert end.count("<i>Completed</i>") == 2 and "Done" not in end
     consumer.finish("")
     await asyncio.wait_for(task, 3)
 

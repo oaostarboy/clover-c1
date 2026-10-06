@@ -26,6 +26,7 @@ async def fire_cleanup(turn):
         await asyncio.sleep(0.02)
         if any("tool call" in kw["text"] for kw in turn.api.methods("edit_message_text")):
             break
+    return cb
 
 
 def card_edits(api):
@@ -55,6 +56,127 @@ async def test_cleanup_progress_collapses_the_native_artifact_into_the_same_card
     assert any(FINAL in kw["text"] for kw in live) and len(live) == 2
 
 
+@pytest.mark.asyncio
+async def test_gateway_thought_prefix_renders_as_natural_commentary_in_real_native_frames(monkeypatch, tmp_path):
+    turn = await run_turn(
+        monkeypatch, tmp_path,
+        [("thought", "The time source is consistent."), NAP, S, NAP],
+        native=True, session="sess-real-thought-wrapper",
+    )
+    frames = [frame["rich_message"]["markdown"] for frame in turn.api.rich_drafts()]
+    assert frames, "the production gateway-to-Telegram native path did not emit a frame"
+    frame = frames[-1]
+    assert "The time source is consistent." in frame
+    assert "💭" not in frame
+    assert "<i>The time source is consistent.</i>" not in frame
+
+
+@pytest.mark.asyncio
+async def test_native_activity_blocks_have_clear_spacing_and_one_terminal_identity(monkeypatch, tmp_path):
+    turn = await run_turn(
+        monkeypatch, tmp_path,
+        [("thought", "Checking the source."), NAP, T, NAP],
+        native=True, session="sess-native-visual-hierarchy",
+    )
+    frames = [frame["rich_message"]["markdown"] for frame in turn.api.rich_drafts()]
+    assert frames
+    frame = frames[-1]
+    assert "Running command ·" in frame
+    assert frame.count("Terminal") == 1
+    assert "pwd" in frame
+    assert "<br><br>" in frame, "separate activity blocks need a visible gap"
+
+
+@pytest.mark.asyncio
+async def test_native_summary_is_sent_before_final_answer_without_legacy_flash(monkeypatch, tmp_path):
+    turn = await run_turn(
+        monkeypatch, tmp_path, [T, NAP, S, NAP, R, NAP], native=True,
+        cleanup=True, session="sess-summary-before-final",
+    )
+    calls = turn.api.calls
+    summary_i = next(
+        (i for i, (method, kw) in enumerate(calls)
+         if method == "send_message" and "tool call" in kw.get("text", "")),
+        None,
+    )
+    final_i = next(
+        i for i, (method, kw) in enumerate(calls)
+        if method == "send_message" and FINAL in kw.get("text", "")
+    )
+    draft_indices = [
+        i for i, (method, _) in enumerate(calls)
+        if method == "do_api_request:sendRichMessageDraft"
+    ]
+    assert draft_indices, "the production rich-draft transport was not exercised"
+    assert summary_i is not None
+    assert draft_indices[0] < summary_i < final_i
+    assert not any(
+        method == "send_message" and FINAL not in kw.get("text", "")
+        and "tool call" not in kw.get("text", "")
+        for method, kw in calls[:summary_i]
+    )
+    callback = await fire_cleanup(turn)
+    assert callable(callback)
+    repeated = callback()
+    if inspect.isawaitable(repeated):
+        await repeated
+    await asyncio.sleep(0.1)
+    assert sum(
+        method == "send_message" and "tool call" in kw.get("text", "")
+        for method, kw in turn.api.calls
+    ) == 1, "re-running delayed cleanup must not send the summary twice"
+
+
+@pytest.mark.asyncio
+async def test_pre_final_summary_survives_final_delivery_failure(monkeypatch, tmp_path):
+    def fail_final(api):
+        api.fail["send_message"] = lambda kw: RuntimeError("final transport unavailable") if FINAL in kw.get("text", "") else None
+
+    turn = await run_turn(
+        monkeypatch, tmp_path, [T, NAP, S, NAP], native=True, cleanup=True,
+        api_setup=fail_final, session="sess-summary-final-failure",
+    )
+    await fire_cleanup(turn)
+    summaries = [
+        kw for kw in turn.api.methods("send_message")
+        if "tool call" in kw.get("text", "")
+    ]
+    failures = [
+        kw for kw in turn.api.methods("send_message")
+        if FINAL in kw.get("text", "")
+    ]
+    assert summaries, "history must persist even when final delivery fails"
+    assert len(summaries) == 1, "cleanup must not duplicate the pre-delivery summary"
+    assert failures, "the injected final-delivery failure was not exercised"
+    summary_i = turn.api.calls.index(("send_message", summaries[0]))
+    failure_i = turn.api.calls.index(("send_message", failures[0]))
+    assert summary_i < failure_i, "the persisted history must precede the failed final attempt"
+
+
+@pytest.mark.asyncio
+async def test_pre_delivery_summary_failure_uses_existing_persistent_history_fallback(monkeypatch, tmp_path):
+    def fail_summary(api):
+        api.fail["send_message"] = lambda kw: RuntimeError("summary transport unavailable") if "tool call" in kw.get("text", "") else None
+
+    turn = await run_turn(
+        monkeypatch, tmp_path, [T, NAP, S, NAP], native=True, cleanup=True,
+        api_setup=fail_summary, session="sess-summary-fallback",
+    )
+    final_i = next(
+        i for i, (method, kw) in enumerate(turn.api.calls)
+        if method == "send_message" and FINAL in kw.get("text", "")
+    )
+    assert any(
+        method == "send_message" and FINAL not in kw.get("text", "")
+        for method, kw in turn.api.calls[:final_i]
+    ), "failed summary delivery must retain the old persistent activity fallback"
+    await fire_cleanup(turn)
+    assert sum(
+        method == "send_message" and "tool call" in kw.get("text", "")
+        for method, kw in turn.api.calls
+    ) == 1
+
+
 
 
 @pytest.mark.asyncio
@@ -68,11 +190,18 @@ async def test_successful_native_cleanup_skips_transient_legacy_tool_bubble(monk
         i for i, (method, kw) in enumerate(turn.api.calls)
         if method == "send_message" and FINAL in kw.get("text", "")
     )
+    summaries = [
+        (method, kw.get("text", ""))
+        for method, kw in turn.api.calls[:final_index]
+        if method == "send_message" and "tool call" in kw.get("text", "")
+    ]
     legacy_activity = [
         (method, kw.get("text", ""))
         for method, kw in turn.api.calls[:final_index]
         if method == "send_message" and FINAL not in kw.get("text", "")
+        and "tool call" not in kw.get("text", "")
     ]
+    assert len(summaries) == 1
     assert legacy_activity == []
 
     await fire_cleanup(turn)
