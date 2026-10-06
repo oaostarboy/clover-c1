@@ -159,6 +159,20 @@ class ActivityLedger:
             return json.dumps(permitted, ensure_ascii=False, indent=2, default=str)
         return str(safe(preview))
 
+    def diagnostic_lines(self) -> List[str]:
+        """Ordered permitted raw diagnostics; aggregate outcomes are explicitly unknown."""
+        lines = []
+        for row in self.rows:
+            if row.kind != "tool":
+                lines.append(row.text)  # already-public commentary stays distinct
+                continue
+            duration = "unknown duration" if row.duration is None else f"{row.duration:.3f}s"
+            identity = row.call_id or "unknown"
+            provenance = "aggregate failure; unknown pairing" if row.aggregate_error else row.correlation
+            detail = row.raw_detail if row.raw_detail is not None else row.text
+            lines.append(f"{row.tool} [{identity}] · {row.state} · {duration} · start={row.started_at:.6f} · {provenance}: {detail}")
+        return lines
+
     def lines(self) -> List[str]:
         return [row.text for row in self.rows]
 

@@ -1788,7 +1788,9 @@ class GatewayStreamConsumer:
                 # pump the next paced frame / refresh / keepalive.
                 if self._np_state == "active":
                     if got_done:
-                        await self._np_finish("done")
+                        self._flush_think_buffer()
+                        silent = _is_intentional_silence_response(self._clean_for_display(self._accumulated))
+                        await self._np_finish("silent" if silent else "done")
                     else:
                         await self._np_pump()
 
@@ -3099,6 +3101,9 @@ class GatewayStreamConsumer:
     async def _np_persist(self, reason: str) -> None:
         """Hand every visible line to today's persistent artifact path, once."""
         if self._np_history_done:
+            return
+        if reason == "silent":
+            self._np_history_done = True
             return
         lines = self._np_ledger.lines()
         if not lines or self._on_native_history is None:

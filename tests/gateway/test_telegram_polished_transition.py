@@ -125,3 +125,91 @@ async def test_clock_from_real_context_reaches_real_adapter_compose_seam(monkeyp
     turn = await run_turn(monkeypatch, tmp_path, [T, NAP], native=True, cleanup=True)
     assert turn.api.rich_drafts()
     assert observed and all(start == expected[0] and start <= now for start, now in observed)
+
+
+class DocumentApi(FakeTelegramApi):
+    async def send_document(self, **kwargs):
+        # Consume the actual open file at the wire edge, not a stored DB assertion.
+        record = {k: v for k, v in kwargs.items() if k != "document"}
+        record["document_bytes"] = kwargs["document"].read()
+        record["document_mode"] = __import__("os").fstat(kwargs["document"].fileno()).st_mode & 0o777
+        await self._enter("send_document", record)
+        record["_message_id"] = next(self._ids)
+        return SimpleNamespace(message_id=record["_message_id"])
+
+
+def document_wire(api):
+    api.send_document = DocumentApi.send_document.__get__(api)
+
+
+@pytest.mark.asyncio
+async def test_short_success_expands_diagnostics_in_existing_card_without_document(monkeypatch, tmp_path):
+    from tests.gateway.test_telegram_native_progress_runner import run_turn, FINAL, unmd
+    turn = await run_turn(monkeypatch, tmp_path, [
+        ("tool", "terminal", "pwd", {"command": "pwd"}),
+        ("done", "terminal", 0.125, False),
+    ], native=True, cleanup=True, api_setup=document_wire)
+    cards = [unmd(kw["text"]) for kw in turn.api.methods("send_message") if "tool call" in kw["text"]]
+    assert len(cards) == 1
+    assert "pwd" in cards[0] and "0.125" in cards[0] and "succeeded" in cards[0]
+    assert not turn.api.methods("send_document")
+    assert cards[0] in unmd(turn.api.methods("send_message")[0]["text"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_document", [False, True])
+async def test_lossy_or_large_details_are_retrievable_once_with_truthful_history(monkeypatch, tmp_path, fail_document):
+    from tests.gateway.test_telegram_native_progress_runner import run_turn, FINAL, unmd
+    monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
+    command = "printf '<b> ||'\n  " + "argument " * 700 + "tail"
+    def setup(api):
+        document_wire(api)
+        if fail_document:
+            api.fail["send_document"] = RuntimeError("offline")
+    turn = await run_turn(monkeypatch, tmp_path, [
+        ("tool", "terminal", command[:40], {"command": command}),
+        ("done", "terminal", 2.25, True),
+    ], native=True, cleanup=True, api_setup=setup, session="doc-lossless")
+    docs = turn.api.methods("send_document")
+    assert len(docs) == 1, "exactly one upload attempt, never duplicate retry"
+    doc = docs[0]
+    payload = doc["document_bytes"].decode("utf-8")
+    assert command in payload and "failed" in payload and "2.25" in payload
+    assert "SECRET-RESULT-PAYLOAD" not in payload
+    assert doc["document_mode"] == 0o600
+    assert doc["filename"] == "activity-details.txt" and doc["chat_id"] == 12345
+    persistent = [unmd(m["text"]) for m in turn.api.persistent_messages()]
+    assert sum("tool call" in t for t in persistent) == 1
+    assert ("Full details attached" in "\n".join(persistent)) is not fail_document
+    assert not any(str(tmp_path) in t for t in persistent)
+    files = list((tmp_path / "workspace" / "native-activity").glob("*.txt"))
+    assert len(files) == 1 and command in files[0].read_text()
+    if fail_document:
+        assert "tail" in "\n".join(persistent), "document failure must preserve persistent history, not suppress on count-card success"
+    calls = turn.api.calls
+    document_i = next(i for i, (m, _) in enumerate(calls) if m == "send_document")
+    card_i = next(i for i, (m, kw) in enumerate(calls) if m == "send_message" and "tool call" in kw.get("text", ""))
+    final_i = next(i for i, (m, kw) in enumerate(calls) if turn.api.is_answer_call(m, kw, FINAL))
+    assert document_i < card_i < final_i
+    from tests.gateway.test_telegram_native_progress_history import fire_cleanup
+    cb = await fire_cleanup(turn)
+    result = cb()
+    if __import__("inspect").isawaitable(result):
+        await result
+    await asyncio.sleep(0.05)
+    assert len(turn.api.methods("send_document")) == 1
+
+
+@pytest.mark.asyncio
+async def test_silent_turn_never_delivers_diagnostic_document(monkeypatch, tmp_path):
+    from tests.gateway.test_telegram_native_progress_runner import run_turn, ScriptedAgent
+    original = ScriptedAgent.run_conversation
+    def run(self, *a, **kw):
+        original(self, *a, **kw)
+        return {"final_response": "[SILENT]", "messages": [], "api_calls": 1}
+    monkeypatch.setattr(ScriptedAgent, "run_conversation", run)
+    turn = await run_turn(monkeypatch, tmp_path, [
+        ("tool", "terminal", "long", {"command": "one\n  two"}),
+    ], native=True, cleanup=True, api_setup=document_wire, send_final_delta=False)
+    assert not turn.api.methods("send_document")
+    assert not any("tool call" in m["text"] for m in turn.api.persistent_messages()), "SILENT must not post a success card"
