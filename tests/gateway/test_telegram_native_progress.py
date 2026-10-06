@@ -121,18 +121,23 @@ def test_native_progress_requires_rich_capable_bot():
 
 
 def test_tool_row_renders_action_once_and_only_fenced_code_as_code():
+    from agent.display import get_tool_emoji
     from plugins.platforms.telegram.native_progress import render_row
 
-    prose = row("Running code from pathlib import Path W=Path('/home/…')", tool="execute_code")
+    code_emoji = get_tool_emoji("execute_code", default="⚙️")
+    prose = row(f"{code_emoji} Running code from pathlib import Path W=Path('/home/…')", tool="execute_code")
     rendered = render_row(prose)
     assert rendered.count("Running code") == 1
+    assert code_emoji not in rendered
     assert "<code>" not in rendered
     assert "from pathlib import Path W=Path('/home/…')" in rendered
-    assert prose.text == "Running code from pathlib import Path W=Path('/home/…')"
+    assert prose.text == f"{code_emoji} Running code from pathlib import Path W=Path('/home/…')"
 
-    fenced = row("Running command\n```bash\nls -la\n```", tool="terminal")
+    terminal_emoji = get_tool_emoji("terminal", default="⚙️")
+    fenced = row(f"{terminal_emoji} Running command\n```bash\nls -la\n```", tool="terminal")
     rendered_fence = render_row(fenced)
     assert rendered_fence.count("Running") == 1
+    assert terminal_emoji not in rendered_fence
     assert "<b>Running</b><br>command" in rendered_fence
     assert "<code>ls -la</code>" in rendered_fence
     assert "<code><code>" not in rendered_fence

@@ -164,10 +164,20 @@ def _tool_display_label(tool: Optional[str]) -> str:
     return "Tool action"
 
 
-def _tool_detail_text(text: str, label: str) -> str:
-    """Remove only a verb repeated verbatim at the start of legacy detail."""
-    if text.startswith(label) and len(text) > len(label) and text[len(label)].isspace():
-        return text[len(label):].lstrip()
+def _tool_detail_text(text: str, label: str, tool: Optional[str]) -> str:
+    """Remove only a recognized decorative emoji plus repeated opening verb."""
+    try:
+        from agent.display import get_tool_emoji
+
+        emoji = get_tool_emoji(tool, default="⚙️") if tool else ""
+    except Exception:
+        emoji = ""
+    prefix = f"{emoji} " if emoji and text.startswith(f"{emoji} ") else ""
+    candidate = text[len(prefix):]
+    if candidate == label:
+        return ""
+    if candidate.startswith(label) and len(candidate) > len(label) and candidate[len(label)].isspace():
+        return candidate[len(label):].lstrip()
     return text
 
 
@@ -179,7 +189,8 @@ def render_row(row: Any, icons: Optional[Mapping[str, NativeIcon]] = None) -> st
     if kind == "tool":
         raw_label = _tool_display_label(getattr(row, "tool", None))
         label = escape_text(raw_label)
-        detail = _inline_markup(_tool_detail_text(raw_text, raw_label))
+        tool = str(getattr(row, "tool", "") or "")
+        detail = _inline_markup(_tool_detail_text(raw_text, raw_label, tool))
         content = f"{_icon_for(row, icons)}<b>{label}</b>"
         if detail:
             content += f"<br>{detail}"
