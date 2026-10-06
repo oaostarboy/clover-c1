@@ -158,7 +158,7 @@ async def test_short_success_expands_diagnostics_in_existing_card_without_docume
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_document", [False, True])
-async def test_lossy_or_large_details_are_retrievable_once_with_truthful_history(monkeypatch, tmp_path, fail_document, request):
+async def test_lossy_or_large_details_are_retrievable_once_with_truthful_history(monkeypatch, tmp_path, fail_document):
     from tests.gateway.test_telegram_native_progress_runner import run_turn, FINAL, unmd
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
     command = "printf '<b> ||'\n  " + "argument " * 700 + "tail"
@@ -170,41 +170,33 @@ async def test_lossy_or_large_details_are_retrievable_once_with_truthful_history
         ("tool", "terminal", command[:40], {"command": command}),
         ("done", "terminal", 2.25123456789, True),
     ], native=True, cleanup=True, api_setup=setup, session="doc-lossless", event_message_id="9002")
-    docs = turn.api.methods("send_document")
-    assert len(docs) == 1, "exactly one upload attempt, never duplicate retry"
-    doc = docs[0]
-    payload = doc["document_bytes"].decode("utf-8")
-    record_property = lambda name, value: request.node.user_properties.append((name, value))
-    record_property("fake_wire_document_content_utf8", payload)
-    record_property("fake_wire_document_route", str({k: doc.get(k) for k in ("chat_id", "reply_to_message_id", "message_thread_id", "filename", "document_mode")}))
-    record_property("fake_wire_upload_failed", str(fail_document))
+    # Full details are retained privately; nothing is uploaded or announced,
+    # whether or not the document API would have worked.
+    assert not turn.api.methods("send_document")
+    files = list((tmp_path / "workspace" / "native-activity").glob("*.txt"))
+    assert len(files) == 1 and files[0].stat().st_mode & 0o777 == 0o600
+    payload = files[0].read_text(encoding="utf-8")
     assert command in payload and "failed" in payload and "2.25123456789" in payload
     assert "SECRET-RESULT-PAYLOAD" not in payload
-    assert doc["document_mode"] == 0o600
-    assert doc["filename"] == "activity-details.txt" and doc["chat_id"] == 12345
-    assert doc["reply_to_message_id"] == 9002
     final = [m for m in turn.api.persistent_messages() if FINAL in m["text"]]
     assert len(final) == 1 and final[0]["reply_to_message_id"] == 9002
     persistent = [unmd(m["text"]) for m in turn.api.persistent_messages()]
     assert sum("tool call" in t for t in persistent) == 1
-    assert ("Full details attached" in "\n".join(persistent)) is not fail_document
+    shown = "\n".join(persistent)
+    assert "attached" not in shown and "unavailable" not in shown and "activity-details" not in shown
+    assert "tail" not in shown, "the overflow stays private, never a raw-log fallback"
     assert not any(str(tmp_path) in t for t in persistent)
-    files = list((tmp_path / "workspace" / "native-activity").glob("*.txt"))
-    assert len(files) == 1 and command in files[0].read_text()
-    if fail_document:
-        assert "tail" in "\n".join(persistent), "document failure must preserve persistent history, not suppress on count-card success"
     calls = turn.api.calls
-    document_i = next(i for i, (m, _) in enumerate(calls) if m == "send_document")
     card_i = next(i for i, (m, kw) in enumerate(calls) if m == "send_message" and "tool call" in kw.get("text", ""))
     final_i = next(i for i, (m, kw) in enumerate(calls) if turn.api.is_answer_call(m, kw, FINAL))
-    assert document_i < card_i < final_i
+    assert card_i < final_i
     from tests.gateway.test_telegram_native_progress_history import fire_cleanup
     cb = await fire_cleanup(turn)
     result = cb()
     if __import__("inspect").isawaitable(result):
         await result
     await asyncio.sleep(0.05)
-    assert len(turn.api.methods("send_document")) == 1
+    assert not turn.api.methods("send_document")
 
 
 @pytest.mark.asyncio
@@ -414,10 +406,10 @@ async def test_multiline_command_with_other_arguments_remains_losslessly_retriev
         ("tool", "terminal", "first line", {"command": command, "cwd": "."}),
         ("done", "terminal", 0.75, False),
     ], native=True, cleanup=True, api_setup=document_wire)
-    docs = turn.api.methods("send_document")
-    assert len(docs) == 1
-    assert command in docs[0]["document_bytes"].decode()
-    assert '"cwd": "."' in docs[0]["document_bytes"].decode()
+    from tests.gateway.test_telegram_native_progress_runner import private_diagnostics
+    assert not turn.api.methods("send_document")
+    retained = list(private_diagnostics().values())
+    assert len(retained) == 1 and command in retained[0] and '"cwd": "."' in retained[0]
 
 
 @pytest.mark.asyncio

@@ -18,9 +18,12 @@ This module holds the pure pieces:
 
 from __future__ import annotations
 
+import os
 import queue
+import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional
 
 STATE_RUNNING = "running"
 STATE_SUCCEEDED = "succeeded"
@@ -238,3 +241,47 @@ class NativeAwareProgressQueue(queue.Queue):
             except Exception:
                 pass
         super().put(item, block, timeout)
+
+
+NATIVE_DIAGNOSTICS_KEEP = 200
+
+
+def retain_private_diagnostics(
+    lines: Iterable[Any], *, keep: int = NATIVE_DIAGNOSTICS_KEEP,
+) -> Optional[Path]:
+    """Save one turn's full diagnostics privately; return the file, or None.
+
+    The file is the retention primitive for what the bounded summary card
+    cannot hold: owner-only (0600 in a 0700 directory) under the profile's
+    workspace, never sent to the chat.  Only the newest ``keep`` files stay.
+    """
+    text = "\n\n".join(str(line) for line in lines if str(line).strip())
+    if not text:
+        return None
+    from clover_constants import get_clover_home
+
+    directory = get_clover_home() / "workspace" / "native-activity"
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(directory, 0o700)
+    except OSError:
+        pass
+    path = directory / (uuid.uuid4().hex + ".txt")
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as document:
+        document.write(text + "\n")
+    stamped = []
+    for candidate in directory.glob("*.txt"):
+        try:
+            stamped.append((candidate.stat().st_mtime, candidate))
+        except OSError:
+            continue
+    stamped.sort(key=lambda item: item[0], reverse=True)
+    for _, stale in stamped[max(1, keep):]:
+        if stale == path:
+            continue
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    return path

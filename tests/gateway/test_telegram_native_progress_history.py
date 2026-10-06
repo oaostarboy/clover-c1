@@ -323,8 +323,11 @@ async def test_failed_turn_keeps_the_full_artifact_and_skips_cleanup(monkeypatch
     assert new.api.rich_drafts() != []                  # the native display really ran
     assert bubbles(new.api) and bubbles(old.api)
     raw = unmd("\n".join(bubbles(new.api)))
-    assert "terminal [script-1]" in raw and "web_search [script-2]" in raw
-    assert "pwd" in raw and "sony reviews" in raw
+    assert "pwd" in raw and "sony reviews" in raw      # the lines the draft showed stay
+    assert "[script-" not in raw                        # raw diagnostics are never posted
+    from tests.gateway.test_telegram_native_progress_runner import private_diagnostics
+    private = "\n".join(private_diagnostics().values())
+    assert "terminal [script-1]" in private and "web_search [script-2]" in private
     cb = new.adapter.pop_post_delivery_callback(new.session_key)
     if callable(cb):
         r = cb()
@@ -339,9 +342,13 @@ async def test_more_than_128_events_and_long_lines_lose_nothing(monkeypatch, tmp
     many = [("tool", f"tool_{i}", f"item {i}", {"i": i}) for i in range(140)] + [NAP, NAP]
     old = await run_turn(monkeypatch, tmp_path, many, native=False, session="sess-many-old")
     new = await run_turn(monkeypatch, tmp_path, many, native=True, session="sess-many-new")
-    raw = unmd("\n".join(bubbles(new.api)))
+    from tests.gateway.test_telegram_native_progress_runner import private_diagnostics
+    first = private_diagnostics()
+    raw = "\n".join(first.values())
     assert raw.count("unknown duration") == 140
     assert all(f"tool_{i} [script-{i+1}]" in raw for i in range(140))
+    shown = unmd("\n".join(bubbles(new.api)))
+    assert all(f"item {i}" in shown for i in range(140)) and "[script-" not in shown
     assert bubbles(old.api)  # legacy control is still exercised
     assert "item 139" in frames_text(new.api)
 
@@ -350,8 +357,9 @@ async def test_more_than_128_events_and_long_lines_lose_nothing(monkeypatch, tmp
     config = {"tool_preview_length": 0, "tool_progress": "verbose"}
     old2 = await run_turn(monkeypatch, tmp_path, huge, native=False, display=config, session="sess-big-old")
     new2 = await run_turn(monkeypatch, tmp_path, huge, native=True, display=config, session="sess-big-new")
-    raw2 = unmd("\n".join(bubbles(new2.api)))
+    raw2 = "\n".join(text for name, text in private_diagnostics().items() if name not in first)
     assert raw2.count("unknown duration") == 6
+    assert unmd("\n".join(bubbles(new2.api))).count("z" * 100) >= 6     # visible lines still handed over
     assert all(f'"i": {i}' in raw2 for i in range(6))
     assert bubbles(old2.api)
     assert new2.adapter._native_progress_disabled is False      # size is not a capability failure

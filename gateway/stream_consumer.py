@@ -606,6 +606,8 @@ class GatewayStreamConsumer:
         self._np_owner = object()
         self._np_task: Optional["asyncio.Task"] = None
         self._np_answer = ""
+        # Render clock pinned while an answer is visible (see _np_set_answer).
+        self._np_answer_clock: Optional[float] = None
         self._np_dirty = False
         self._np_first_at: Optional[float] = native_turn_started_at
         self._np_last_started: Optional[float] = None
@@ -1234,7 +1236,7 @@ class GatewayStreamConsumer:
                 if self._np_state == "active":
                     # New draft identity: its first frame re-sends the whole
                     # turn's activity (rows survive segment resets).
-                    self._np_answer = ""
+                    self._np_set_answer("")
                     self._np_dirty = bool(len(self._np_ledger) or self._np_events)
                     self._np_bind()
 
@@ -1783,7 +1785,7 @@ class GatewayStreamConsumer:
                         self._np_submit(("commentary", shown, None))
                     self._accumulated = ""
                     self._stream_ledger = ""
-                    self._np_answer = ""
+                    self._np_set_answer("")
                     self._last_sent_text = ""
                     self._np_dirty = True
                     await self._np_pump()
@@ -1807,7 +1809,7 @@ class GatewayStreamConsumer:
                         # enter this buffer; commentary has its own ledger events.
                         answer = self._clean_for_display(self._accumulated)
                         if answer != self._np_answer:
-                            self._np_answer = answer
+                            self._np_set_answer(answer)
                             self._np_dirty = True
                         await self._np_pump()
 
@@ -3150,14 +3152,30 @@ class GatewayStreamConsumer:
         self._last_sent_text = ""
         await self._np_persist(f"fallback:{reason}")
 
+    def _np_set_answer(self, text: str) -> None:
+        """Set the answer shown under the activity block.
+
+        While an answer is visible the block is rendered at the moment the
+        answer first appeared, so answer growth changes only the answer: the
+        header and row timers do not tick under it.  Clearing the answer (a
+        tool boundary) returns the block to the live clock.  Pacing, keepalive
+        and acknowledgement clocks are never pinned.
+        """
+        if not text:
+            self._np_answer_clock = None
+        elif not self._np_answer or self._np_answer_clock is None:
+            self._np_answer_clock = self._np_clock()
+        self._np_answer = text
+
     async def _np_send(self, owner: object, draft_id: int, rows: list, answer: str,
-                       idle_since: Optional[float]):
+                       idle_since: Optional[float], render_at: Optional[float] = None):
         from gateway.platforms.base import SendResult
 
         try:
             result = await self.adapter.send_native_progress_draft(
                 self.chat_id, draft_id, rows, answer,
-                now=self._np_clock(), idle_since=idle_since, turn_started_at=self._np_first_at,
+                now=self._np_clock() if render_at is None else render_at,
+                idle_since=idle_since, turn_started_at=self._np_first_at,
             )
         except asyncio.CancelledError:
             raise
@@ -3255,8 +3273,10 @@ class GatewayStreamConsumer:
             "native_progress frame kind=%s elapsed=%.3f rows=%d answer_chars=%d fingerprint=%s",
             kind, max(0.0, now - self._np_first_at), len(rows), len(answer), fingerprint,
         )
+        # Snapshot the pinned render clock with the rows/answer it belongs to.
+        render_at = self._np_answer_clock if answer else None
         task = asyncio.ensure_future(self._np_send(
-            self._np_owner, self._draft_id, rows, answer, idle_since,
+            self._np_owner, self._draft_id, rows, answer, idle_since, render_at,
         ))
         task._np_owner = self._np_owner
         task._np_content_snapshot = content_snapshot if kind == "content" else None
@@ -3282,7 +3302,7 @@ class GatewayStreamConsumer:
         if self._np_state == "active":
             # Native composer: hand the partial answer to the pump (which owns
             # pacing and the in-flight send); never await the network here.
-            self._np_answer = text
+            self._np_set_answer(text)
             self._np_dirty = True
             self._last_sent_text = text
             return True

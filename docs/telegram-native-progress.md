@@ -31,10 +31,17 @@ No environment variable. Turning it off restores today's display exactly: the sa
   with `cleanup_progress: true`, the existing collapsed summary is sent after the
   native draft finishes but **before** the separate final answer. The old
   transient tool-progress bubble is not sent, so there is no legacy flash before
-  conversion. If the summary send fails, the existing persistent activity-history
-  fallback is used; failed, stopped, and genuine-fallback turns keep their prior
-  history behavior. The final answer remains the usual separate message, sent
-  once, without thinking/emoji markup.
+  conversion. When no summary is sent (the summary send fails, or the turn failed,
+  was stopped, or genuinely fell back) the lines the draft showed are kept as the
+  usual persistent activity history. The final answer remains the usual separate
+  message, sent once, without thinking/emoji markup.
+- **Full diagnostics stay private.** Each turn's full per-call diagnostics (whole
+  commands, arguments, exact durations, with the existing redaction) are saved
+  once to an owner-only file (`0600`, directory `0700`) under
+  `workspace/native-activity/` in the profile home; the newest 200 are kept.
+  Nothing is uploaded or announced in the chat: no `activity-details` document,
+  no attachment notice, no raw-log fallback. Ask the agent for them when you
+  want them.
 - **It does not touch** `rich_messages`, `rich_drafts`, the final message format or any
   other setting. `native_progress` only lets its own composer use the draft endpoint.
 
@@ -43,7 +50,7 @@ No environment variable. Turning it off restores today's display exactly: the sa
 A live activity frame uses a specific title from the visible event text when available,
 with the selected AIActions role icon and elapsed time. Unknown or underspecified tools
 use a safe readable fallback; the renderer does not infer a command's purpose from its
-arguments. Public commentary stays in original order as normal text. Thought rows keep one tasteful `💭` marker beside the sentence; exact legacy single-paragraph italics are removed while wording remains intact. Each tool row
+arguments. Public commentary stays in original order; only the newest update is bold, earlier ones keep their words at normal weight. Thought rows keep one tasteful `💭` marker beside the sentence; exact legacy single-paragraph italics are removed while wording remains intact. Each tool row
 keeps one friendly tool label, its permitted detail, and one local status/time. Active
 rows read `Running`; successful completion reads `Done`; uncertain completion remains
 `Completed`. Supported Markdown emphasis is converted safely; raw code and literal
@@ -73,9 +80,11 @@ turn.
 ## Budgets (local pacing, not Telegram quotas)
 
 At least 1 s between frames; elapsed refresh every 5 s while a tool runs; idle
-keepalive every 15 s (before the official 30 s expiry), at most 15 keepalives or 5
-minutes per turn — then everything shown so far is flushed once to the normal progress
-message. Final delivery waits at most 2 s for an in-flight draft send; a late accepted
+keepalive every 15 s (before the official 30 s expiry) for as long as the turn runs.
+While an answer is streaming the activity block is held still: its header and row
+timers stop ticking, so each frame differs only by the appended answer text; a tool
+boundary returns it to the live clock.
+Final delivery waits at most 2 s for an in-flight draft send; a late accepted
 frame cannot revive the draft. Frames are capped at the official 32768-character rich
 limit; a larger frame hands the whole activity to the normal progress message instead of
 dropping anything.

@@ -13,7 +13,7 @@ import re
 
 import pytest
 
-from tests.gateway.test_telegram_native_progress_runner import FINAL, run_turn
+from tests.gateway.test_telegram_native_progress_runner import FINAL, private_diagnostics, run_turn
 
 T = ("tool", "terminal", "pwd", {"command": "pwd"})
 S = ("tool", "web_search", "sony reviews", {"query": "sony reviews"})
@@ -49,6 +49,11 @@ def seconds(header):
 
 def persisted(api):
     return [kw["text"] for kw in api.persistent_messages()]
+
+
+def diagnostics():
+    """Full per-call diagnostics: retained privately, never posted to the chat."""
+    return "\n".join(private_diagnostics().values())
 
 
 def record(request, name, value):
@@ -96,8 +101,8 @@ async def test_identical_calls_are_distinct_rows_without_a_legacy_repeat_counter
     assert len(rows) == 3 and all("sony reviews" in row for row in rows)
     assert "(×" not in "\n".join(blocks(turn.api))
     history = html.unescape("\n".join(persisted(turn.api))).replace("\\", "")
-    assert [i for i in (1, 2, 3) if f"web_search [script-{i}]" in history] == [1, 2, 3]
-    assert "(×" not in history
+    assert [i for i in (1, 2, 3) if f"web_search [script-{i}]" in diagnostics()] == [1, 2, 3]
+    assert "(×" not in history and "[script-" not in history
 
 
 @pytest.mark.asyncio
@@ -117,10 +122,11 @@ async def test_long_command_is_a_bounded_preview_live_and_whole_in_the_diagnosti
     assert rows[0].endswith(" · Done · 2s")
     assert "configuration-check-7" not in "\n".join(blocks(turn.api))
 
-    history = html.unescape("\n".join(persisted(turn.api))).replace("\\", "")
+    history = diagnostics()
     for i in range(8):
         assert f"configuration-check-{i}" in history
     assert "terminal [script-1]" in history and "2.25s" in history
+    assert "[script-" not in html.unescape("\n".join(persisted(turn.api)))
 
 
 @pytest.mark.asyncio
@@ -145,7 +151,8 @@ async def test_credentials_and_gateway_private_artifacts_never_reach_the_wire(mo
     assert "0123abcd" not in everything and "native-activity" not in everything
     assert "SECRET-RESULT-PAYLOAD" not in everything
     assert "Failed" in blocks(turn.api)[-1]
-    history = html.unescape("\n".join(persisted(turn.api))).replace("\\", "")
+    history = diagnostics()
+    assert "sk-live-abcdef0123456789abcdef" not in history and "SECRET-RESULT-PAYLOAD" not in history
     assert "terminal [script-1] · failed" in history
     # the operand the command itself named is the permitted raw detail
     assert "> /srv/reports/out.txt; cat [gateway-private]" in history

@@ -400,6 +400,7 @@ def render_row(
     icons: Optional[Mapping[str, NativeIcon]] = None,
     *,
     now: Optional[float] = None,
+    emphasize: bool = True,
 ) -> str:
     raw_text = str(getattr(row, "text", "") or "")
     kind = getattr(row, "kind", "")
@@ -419,10 +420,14 @@ def render_row(
             content += f" · {state_markup}"
     elif kind in {"thought", "commentary"}:
         # Public updates are the primary text: their original words and
-        # order, emphasized, with no section heading or blanket italics.
+        # order, with no section heading or blanket italics.  ``emphasize``
+        # is off for all but the newest one, so a long turn is not a wall of
+        # bold: same words, marker and spacing at normal weight.
         content = _emphasized_markup(
             _natural_commentary(raw_text, add_thought_marker=kind == "thought")
         )
+        if not emphasize:
+            content = content.replace("<b>", "").replace("</b>", "")
     else:
         content = f"{_icon_for(row, icons)}{_inline_markup(raw_text)}"
     return content.strip()
@@ -455,11 +460,13 @@ def render_thinking_block(
     title = escape_text(_header_label(running, icons))
     blocks = [f"{head_icon}{title} · {escape_text(format_elapsed(now - started))}"]
     compact: list[str] = []
+    public = {"thought", "commentary"}
+    newest = next((r for r in reversed(rows) if getattr(r, "kind", "") in public), None)
     for row in rows:
-        rendered = render_row(row, icons, now=now)
+        rendered = render_row(row, icons, now=now, emphasize=row is newest)
         if not rendered:
             continue
-        if getattr(row, "kind", "") in {"thought", "commentary"}:
+        if getattr(row, "kind", "") in public:
             if compact:
                 blocks.append("<br>".join(compact))
                 compact = []

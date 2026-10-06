@@ -197,6 +197,17 @@ def bubbles(api):
     return [texts[i] for i in order if FINAL not in texts[i]]
 
 
+def private_diagnostics():
+    """``{file name: text}`` of the privately retained per-turn diagnostics.
+
+    Full diagnostics never reach the chat; they live owner-only in the profile
+    workspace (``CLOVER_HOME`` is the per-test temp home)."""
+    from clover_constants import get_clover_home
+
+    directory = get_clover_home() / "workspace" / "native-activity"
+    return {p.name: p.read_text(encoding="utf-8") for p in sorted(directory.glob("*.txt"))}
+
+
 def line_multiset(texts):
     return collections.Counter(line for t in texts for line in t.split("\n") if line.strip())
 
@@ -252,8 +263,10 @@ async def test_native_display_shows_the_same_visible_lines_as_today_and_persists
 
     old_lines = line_multiset(bubbles(old.api))
     new_lines = line_multiset(bubbles(new.api))
-    # Approved raw history supersedes legacy clipped-preview/dedup equality.
-    persisted = unmd("\n".join(bubbles(new.api)))
+    # The chat keeps the lines the draft showed; raw per-call diagnostics are
+    # retained privately and never posted.
+    persisted = "\n".join(private_diagnostics().values())
+    assert "[script-" not in unmd("\n".join(bubbles(new.api)))
     tools = [op for op in script if op[0] == "tool"]
     if case == "tools_hidden":
         assert not new_lines and not old_lines

@@ -5118,7 +5118,18 @@ class TurnRunner:
         native_metadata = dict(ctx._progress_metadata or {})
         if native_reply_to:
             native_metadata["reply_to_message_id"] = native_reply_to
-        preserve_history = False
+        # Full diagnostics are retained privately once per turn (owner-only
+        # file in the profile workspace) and are never sent to the chat: no
+        # document, no notice, no raw-log fallback.  The bounded card and the
+        # visible lines below are all the chat ever receives.
+        if diagnostics and not getattr(ctx, "_native_activity_document_path", None):
+            try:
+                from gateway import native_progress as _native_progress
+                saved = _native_progress.retain_private_diagnostics(diagnostics)
+                if saved is not None:
+                    ctx._native_activity_document_path = str(saved)
+            except Exception:
+                logger.debug("native activity diagnostics were not retained", exc_info=True)
         # The successful native draft already displayed the activity. Create the
         # same collapsed artifact before final delivery so it stays above the
         # answer and no legacy tool stream flashes in between. If this send fails,
@@ -5130,46 +5141,12 @@ class TurnRunner:
                 budget = 2600
                 readable = []
                 used = 0
-                lossy = False
                 for detail in diagnostics:
                     flat = str(detail).replace("\n", " ").replace("||", "¦¦").strip()
-                    lossy = lossy or flat != detail
-                    remaining = max(0, budget - used)
-                    if len(flat) > remaining:
-                        lossy = True
-                    clipped = flat[:remaining]
+                    clipped = flat[:max(0, budget - used)]
                     if clipped:
                         readable.append(clipped)
                         used += len(clipped) + 1
-                if lossy:
-                    # Native eligibility is private-only; defend persistence independently.
-                    private = ctx.source.chat_type == "dm" and str(ctx.source.chat_id).isdigit() and int(ctx.source.chat_id) > 0
-                    delivered = False
-                    if private and not getattr(ctx, "_native_activity_document_attempted", False):
-                        import uuid
-                        from clover_constants import get_clover_home
-                        directory = get_clover_home() / "workspace" / "native-activity"
-                        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-                        path = directory / (uuid.uuid4().hex + ".txt")
-                        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                        with os.fdopen(fd, "w", encoding="utf-8") as document:
-                            document.write("\n\n".join(diagnostics) + "\n")
-                        ctx._native_activity_document_path = str(path)
-                        ctx._native_activity_document_attempted = True
-                        delivery = await adapter.send_document(
-                            chat_id=ctx.source.chat_id, file_path=str(path),
-                            file_name="activity-details.txt", reply_to=native_reply_to,
-                            metadata=native_metadata, _native_activity_document=True,
-                        )
-                        delivered = bool(getattr(delivery, "success", False))
-                        ctx._native_activity_document_delivered = delivered
-                    else:
-                        delivered = bool(getattr(ctx, "_native_activity_document_delivered", False))
-                    if delivered:
-                        readable.append("Full details attached: activity-details.txt")
-                    else:
-                        readable.append("Full details attachment unavailable; persistent activity history follows.")
-                        preserve_history = True
                 card = format_collapsed_turn_card(
                     ctx._summary_thoughts,
                     ctx._summary_tools,
@@ -5186,13 +5163,8 @@ class TurnRunner:
                     if getattr(result, "success", False) and getattr(result, "message_id", None):
                         setattr(ctx, "_native_progress_history_suppressed", True)
                         setattr(ctx, "_native_progress_summary_sent", True)
-                        logger.debug(
-                            "native_progress history card=delivered document=%s fallback=%s",
-                            "delivered" if getattr(ctx, "_native_activity_document_delivered", False) else "failed" if getattr(ctx, "_native_activity_document_attempted", False) else "not_needed",
-                            preserve_history,
-                        )
-                        if not preserve_history:
-                            return
+                        logger.debug("native_progress history card=delivered")
+                        return
             except Exception:
                 logger.debug("Native summary pre-delivery send failed; preserving activity history", exc_info=True)
         len_fn = adapter.message_len_fn if isinstance(adapter, BasePlatformAdapter) else len
@@ -5208,9 +5180,8 @@ class TurnRunner:
                 pass
         limit = max(1, raw_limit - (64 if raw_limit > 128 else 0))
 
-        # Retain raw diagnostics even if the count card succeeded. Document
-        # failure fallback is durable history, never a transient cleanup carrier.
-        lines = diagnostics
+        # No summary card went out: keep the lines the draft already showed.
+        # Raw diagnostics stay in the private file, never in the chat.
         groups: List[List[str]] = []
         if ctx.progress_grouping == "separate":
             groups = [[str(line)] for line in lines]
@@ -5237,8 +5208,7 @@ class TurnRunner:
                 and getattr(result, "success", False)
                 and getattr(result, "message_id", None)
             ):
-                if not preserve_history:
-                    ctx._cleanup_msg_ids.append(str(result.message_id))
+                ctx._cleanup_msg_ids.append(str(result.message_id))
 
     async def send_progress_messages(self):
         ctx = self._ctx
