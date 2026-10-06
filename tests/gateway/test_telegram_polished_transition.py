@@ -213,3 +213,60 @@ async def test_silent_turn_never_delivers_diagnostic_document(monkeypatch, tmp_p
     ], native=True, cleanup=True, api_setup=document_wire, send_final_delta=False)
     assert not turn.api.methods("send_document")
     assert not any("tool call" in m["text"] for m in turn.api.persistent_messages()), "SILENT must not post a success card"
+
+
+@pytest.mark.asyncio
+async def test_real_answer_deltas_grow_in_one_native_draft_even_with_legacy_buffer_only(monkeypatch):
+    c = consumer()
+    c.cfg.buffer_only = True
+    c.NATIVE_MIN_SEND_INTERVAL = 0
+    task = asyncio.create_task(c.run())
+    await asyncio.sleep(0.08)
+    c.on_commentary("public commentary, not answer")
+    await asyncio.sleep(0.08)
+    c.on_delta("real answer")
+    await asyncio.sleep(0.12)
+    c.on_delta(" grows")
+    await asyncio.sleep(0.12)
+    c.finish("real answer grows")
+    await task
+    drafts = c.adapter._bot.rich_drafts()
+    answers = [f["rich_message"].get("markdown", "").split("</tg-thinking>")[-1] for f in drafts]
+    assert any("real answer" in a for a in answers), "native answer cannot inherit buffer-only legacy suppression"
+    assert any("real answer grows" in a for a in answers)
+    assert all("public commentary" not in a for a in answers)
+    assert len({f["draft_id"] for f in drafts}) == 1
+    finals = c.adapter._bot.persistent_messages()
+    assert len(finals) == 1 and "real answer grows" in finals[0]["text"]
+    assert c.delivered_final_matches("real answer grows")
+
+
+@pytest.mark.asyncio
+async def test_status_only_keepalive_is_quiet_and_fenced_without_fake_answer(monkeypatch):
+    c = consumer()
+    c._draft_id = 7
+    clock = [100.0]
+    c._np_clock = lambda: clock[0]
+    c._np_dirty = True
+    async def pump():
+        await c._np_pump()
+        if c._np_task:
+            await c._np_task
+        await c._np_pump()
+    await pump()
+    assert len(c.adapter._bot.rich_drafts()) == 1
+    for _ in range(10):
+        clock[0] += 0.1
+        c._np_dirty = True
+        await pump()
+    assert len(c.adapter._bot.rich_drafts()) == 1, "unchanged status must not churn frames"
+    clock[0] = 115.1
+    await pump()
+    assert len(c.adapter._bot.rich_drafts()) == 2
+    assert all("markdown" not in f["rich_message"] for f in c.adapter._bot.rich_drafts())
+    assert c.native_stop_claim()
+    clock[0] = 200
+    await c.native_stop_finish()
+    await pump()
+    assert len(c.adapter._bot.rich_drafts()) == 2
+    assert not c.adapter._bot.methods("send_document")

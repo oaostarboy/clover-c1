@@ -1792,6 +1792,13 @@ class GatewayStreamConsumer:
                         silent = _is_intentional_silence_response(self._clean_for_display(self._accumulated))
                         await self._np_finish("silent" if silent else "done")
                     else:
+                        # Native answer continuity is independent of legacy edit
+                        # thresholds/buffer-only delivery. Only real answer deltas
+                        # enter this buffer; commentary has its own ledger events.
+                        answer = self._clean_for_display(self._accumulated)
+                        if answer != self._np_answer:
+                            self._np_answer = answer
+                            self._np_dirty = True
                         await self._np_pump()
 
                 # Handle approval boundary: close current stream, reset for new turn.
@@ -3224,7 +3231,10 @@ class GatewayStreamConsumer:
         )
         if kind == "content" and content_snapshot == self._np_last_content_snapshot:
             self._np_dirty = False
-            return
+            # Duplicate events must not starve expiry refresh.
+            if self._np_last_accepted is None or now - self._np_last_accepted < self.NATIVE_KEEPALIVE_INTERVAL:
+                return
+            kind = "keepalive"
         if self._np_first_at is None:
             self._np_first_at = now
         self._np_dirty = False
