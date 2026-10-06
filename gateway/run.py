@@ -11615,6 +11615,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # If not in queue/steer mode, interrupt the running agent immediately.
         # This aborts in-flight tool calls and causes the agent loop to exit
         # at the next check point.
+        interrupt_delivered = False
         if (
             effective_mode == "interrupt"
             and not redirected
@@ -11635,8 +11636,37 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 elif not _interrupt_text and _media_urls:
                     _interrupt_text = _build_media_placeholder(event)
                 running_agent.interrupt(_interrupt_text)
+                interrupt_delivered = True
             except Exception:
                 pass  # don't let interrupt failure block the ack
+
+        # The notice follows the outcome, not the mode. Interrupt mode only
+        # interrupts a live agent: while the turn is still being prepared
+        # (pending sentinel) there is nothing to stop, so the follow-up is
+        # queued behind it and must be acknowledged as queued.
+        queued_without_interrupt = (
+            effective_mode == "interrupt"
+            and not redirected
+            and not interrupt_delivered
+        )
+        # Ids and state only — never the message text or media paths.
+        logger.info(
+            "Busy follow-up for session %s: outcome=%s mode=%s agent=%s "
+            "type=%s media=%d message_id=%s album=%s",
+            session_key,
+            "steered" if steered
+            else "redirected" if redirected
+            else "interrupted" if interrupt_delivered
+            else "queued",
+            effective_mode,
+            "none" if running_agent is None
+            else "pending" if running_agent is _AGENT_PENDING_SENTINEL
+            else "live",
+            getattr(event.message_type, "value", event.message_type),
+            len(getattr(event, "media_urls", None) or []),
+            event.message_id or "-",
+            (getattr(event, "metadata", None) or {}).get("telegram_media_group_id") or "-",
+        )
 
         # Check if busy ack is disabled — skip sending but still process the input.
         # Placed before debounce so we don't stamp a "last ack" timestamp that was
@@ -11725,7 +11755,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 "Your message is queued for when it finishes "
                 "(use /stop to cancel everything)."
             )
-        elif is_queue_mode:
+        elif is_queue_mode or queued_without_interrupt:
             _ack_kind, _ack_text = "queued", "I'll respond once the current task finishes."
         else:
             _ack_kind, _ack_text = "interrupt", "I'll respond to your message shortly."
@@ -11755,7 +11785,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 f"⏳ Compressing context{status_detail} — your message is queued for "
                 f"when it finishes (use /stop to cancel everything)."
             )
-        elif is_queue_mode:
+        elif is_queue_mode or queued_without_interrupt:
             message = (
                 f"⏳ Queued for the next turn{status_detail}. "
                 f"I'll respond once the current task finishes."
@@ -11769,7 +11799,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # First-touch onboarding: the very first time a user sends a message
         # while the agent is busy, append a one-time hint explaining the
         # queue/interrupt knob.  Flag is persisted to config.yaml so it never
-        # fires again on this install.
+        # fires again on this install.  The hint describes the configured
+        # mode in action, so it waits for a follow-up where the outcome
+        # matched the mode rather than being spent on a queued-by-timing one.
         try:
             from agent.onboarding import (
                 BUSY_INPUT_FLAG,
@@ -11778,7 +11810,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 mark_seen,
             )
             _user_cfg = _load_gateway_config()
-            if not is_seen(_user_cfg, BUSY_INPUT_FLAG):
+            if not queued_without_interrupt and not is_seen(_user_cfg, BUSY_INPUT_FLAG):
                 if is_steer_mode:
                     _hint_mode = "steer"
                 elif is_queue_mode:

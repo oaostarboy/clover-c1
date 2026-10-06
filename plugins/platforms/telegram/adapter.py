@@ -10765,20 +10765,6 @@ class TelegramAdapter(BasePlatformAdapter):
     # Photo batching
     # ------------------------------------------------------------------
 
-    def _photo_batch_key(self, event: MessageEvent, msg: Message) -> str:
-        """Return a batching key for Telegram photos/albums."""
-        from gateway.session import build_session_key
-        session_key = build_session_key(
-            event.source,
-            group_sessions_per_user=self.config.extra.get("group_sessions_per_user", True),
-            thread_sessions_per_user=self.config.extra.get("thread_sessions_per_user", False),
-            profile=self._session_key_profile(event.source),
-        )
-        media_group_id = getattr(msg, "media_group_id", None)
-        if media_group_id:
-            return f"{session_key}:album:{media_group_id}"
-        return f"{session_key}:photo-burst"
-
     async def _flush_photo_batch(self, batch_key: str) -> None:
         """Send a buffered photo burst/album as a single MessageEvent."""
         current_task = asyncio.current_task()
@@ -10894,8 +10880,9 @@ class TelegramAdapter(BasePlatformAdapter):
                 if media_group_id:
                     await self._queue_media_group_event(str(media_group_id), event)
                 else:
-                    batch_key = self._photo_batch_key(event, msg)
-                    self._enqueue_photo_event(batch_key, event)
+                    # No media_group_id, no proof of a batch: each photo is
+                    # its own request and is never merged by arrival timing.
+                    await self.handle_message(event)
                 return
 
             except Exception as e:
@@ -11023,8 +11010,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     if media_group_id:
                         await self._queue_media_group_event(str(media_group_id), event)
                     else:
-                        batch_key = self._photo_batch_key(event, msg)
-                        self._enqueue_photo_event(batch_key, event)
+                        await self.handle_message(event)
                     return
 
                 if not ext and doc.mime_type:
@@ -11136,6 +11122,10 @@ class TelegramAdapter(BasePlatformAdapter):
             self._hold_inbound_event(event, where="media-group-enqueue")
             return
 
+        # Album identity is Telegram's own id, carried so a part that arrives
+        # after its album was already dispatched is still recognisable.
+        event.metadata["telegram_media_group_id"] = media_group_id
+
         existing = self._media_group_events.get(media_group_id)
         if existing is None:
             self._media_group_events[media_group_id] = event
@@ -11145,8 +11135,11 @@ class TelegramAdapter(BasePlatformAdapter):
             if event.text:
                 existing.text = self._merge_caption(existing.text, event.text)
 
+        # Only a flush still waiting out its window is re-armed. A flush that
+        # already claimed its event (nothing was buffered for this album) owns
+        # that delivery: cancelling it mid-dispatch re-delivers that part.
         prior_task = self._media_group_tasks.get(media_group_id)
-        if prior_task:
+        if prior_task and not prior_task.done() and existing is not None:
             prior_task.cancel()
 
         self._media_group_tasks[media_group_id] = asyncio.create_task(
@@ -11165,6 +11158,11 @@ class TelegramAdapter(BasePlatformAdapter):
                 self._hold_inbound_event(event, where="media-group-flush")
                 event = None
                 return
+            logger.info(
+                "[Telegram] Flushing media group %s with %d item(s)",
+                media_group_id,
+                len(event.media_urls),
+            )
             await self.handle_message(event)
             event = None
         except asyncio.CancelledError:

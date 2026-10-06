@@ -301,7 +301,8 @@ class TestVideoDownloadBlock:
 
 class TestMediaGroups:
     @pytest.mark.asyncio
-    async def test_non_album_photo_burst_is_buffered_and_combined(self, adapter):
+    async def test_non_album_photos_are_delivered_separately(self, adapter):
+        """Without a media_group_id nothing proves a batch; timing merges nothing."""
         first_photo = _make_photo(_make_file_obj(b"first"))
         second_photo = _make_photo(_make_file_obj(b"second"))
 
@@ -311,14 +312,13 @@ class TestMediaGroups:
         with patch("plugins.platforms.telegram.adapter.cache_image_from_bytes", side_effect=["/tmp/burst-one.jpg", "/tmp/burst-two.jpg"]):
             await adapter._handle_media_message(_make_update(msg1), MagicMock())
             await adapter._handle_media_message(_make_update(msg2), MagicMock())
-            assert adapter.handle_message.await_count == 0
-            await asyncio.sleep(adapter.MEDIA_GROUP_WAIT_SECONDS + 0.05)
 
-        adapter.handle_message.assert_awaited_once()
-        event = adapter.handle_message.await_args.args[0]
-        assert event.text == "two images"
-        assert event.media_urls == ["/tmp/burst-one.jpg", "/tmp/burst-two.jpg"]
-        assert len(event.media_types) == 2
+        assert adapter.handle_message.await_count == 2
+        first, second = (call.args[0] for call in adapter.handle_message.await_args_list)
+        assert first.text == "two images"
+        assert first.media_urls == ["/tmp/burst-one.jpg"]
+        assert second.text == ""
+        assert second.media_urls == ["/tmp/burst-two.jpg"]
 
 
 # ---------------------------------------------------------------------------
