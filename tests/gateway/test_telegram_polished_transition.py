@@ -71,3 +71,57 @@ def test_gateway_id_events_correlate_raw_arguments_and_durations():
     assert (b.call_id, b.state, b.duration) == ("b", "succeeded", 0.5)
     assert a.raw_detail == "first\n  || <tag>"
     assert "SECRET-RESULT-BODY" not in repr(c._np_ledger.snapshot())
+
+
+@pytest.mark.asyncio
+async def test_real_runner_enables_existing_id_producer_before_clipping(monkeypatch, tmp_path):
+    from tests.gateway.test_telegram_native_progress_runner import run_turn, ScriptedAgent, FINAL
+    def run(self, *a, **kw):
+        progress = self.tool_progress_callback
+        start = getattr(self, "tool_start_callback", None)
+        complete = getattr(self, "tool_complete_callback", None)
+        for cid, command in [("a", "same prefix " * 10 + "one\n  || <tag>"), ("b", "same prefix " * 10 + "two")]:
+            args = {"command": command}
+            progress("tool.started", "terminal", command, args)
+            if start:
+                start(cid, "terminal", args)
+        for cid, error, duration in [("b", False, 0.25), ("a", True, 1.25)]:
+            progress("tool.completed", "terminal", duration=duration, is_error=error, result="SECRET-RESULT")
+            if complete:
+                complete(cid, "terminal", {}, {"error": "failed"} if error else {"success": True})
+        return {"final_response": FINAL, "messages": [], "api_calls": 1}
+    monkeypatch.setattr(ScriptedAgent, "run_conversation", run)
+    captured = []
+    original = GatewayStreamConsumer._np_persist
+    async def persist(c, reason):
+        captured.extend(c._np_ledger.snapshot())
+        await original(c, reason)
+    monkeypatch.setattr(GatewayStreamConsumer, "_np_persist", persist)
+    await run_turn(monkeypatch, tmp_path, [], native=True, cleanup=True, session="id-producer")
+    assert len(captured) == 2
+    assert [r.call_id for r in captured] == ["a", "b"], "real ID hooks must reach Telegram"
+    assert [(r.state, r.duration) for r in captured] == [("failed", 1.25), ("succeeded", 0.25)]
+    assert captured[0].raw_detail.endswith("one\n  || <tag>")
+
+
+@pytest.mark.asyncio
+async def test_clock_from_real_context_reaches_real_adapter_compose_seam(monkeypatch, tmp_path):
+    from tests.gateway.test_telegram_native_progress_runner import run_turn, T, NAP
+    from plugins.platforms.telegram import native_progress as renderer
+    from gateway.run import TurnRunner
+    expected = []
+    observed = []
+    original_init = TurnRunner.__init__
+    def init(self, runner, ctx):
+        expected.append(ctx._summary_t0)
+        original_init(self, runner, ctx)
+    monkeypatch.setattr(TurnRunner, "__init__", init)
+    original_compose = renderer.compose_markdown
+    def boundary(rows, answer="", *, turn_started_at=None, **kwargs):
+        # Boundary shim only accepts Opus's upcoming keyword; base formatting remains real.
+        observed.append((turn_started_at, kwargs["now"]))
+        return original_compose(rows, answer, **kwargs)
+    monkeypatch.setattr(renderer, "compose_markdown", boundary)
+    turn = await run_turn(monkeypatch, tmp_path, [T, NAP], native=True, cleanup=True)
+    assert turn.api.rich_drafts()
+    assert observed and all(start == expected[0] and start <= now for start, now in observed)

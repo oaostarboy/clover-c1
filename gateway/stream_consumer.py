@@ -405,6 +405,7 @@ class GatewayStreamConsumer:
         run_still_current: Optional[Callable[[], bool]] = None,
         on_native_history: Optional[Callable[[Sequence[str], str], Awaitable[Any]]] = None,
         native_scope: Optional[NativeProgressScope] = None,
+        native_turn_started_at: Optional[float] = None,
     ):
         self.adapter = adapter
         self.chat_id = chat_id
@@ -606,7 +607,7 @@ class GatewayStreamConsumer:
         self._np_task: Optional["asyncio.Task"] = None
         self._np_answer = ""
         self._np_dirty = False
-        self._np_first_at: Optional[float] = None
+        self._np_first_at: Optional[float] = native_turn_started_at
         self._np_last_started: Optional[float] = None
         self._np_last_accepted: Optional[float] = None
         self._np_last_content_snapshot = None
@@ -1626,7 +1627,8 @@ class GatewayStreamConsumer:
                 if self._np_state == "active" and self._run_still_current():
                     # Open a nonempty, stoppable preview before tools or tokens.
                     # This is a lifecycle status, not a synthetic activity row.
-                    self._np_first_at = self._np_clock()
+                    if self._np_first_at is None:
+                        self._np_first_at = self._np_clock()
                     self._np_idle_since = self._np_first_at
                     self._np_dirty = True
                     await self._np_pump()
@@ -3133,7 +3135,7 @@ class GatewayStreamConsumer:
         try:
             result = await self.adapter.send_native_progress_draft(
                 self.chat_id, draft_id, rows, answer,
-                now=self._np_clock(), idle_since=idle_since,
+                now=self._np_clock(), idle_since=idle_since, turn_started_at=self._np_first_at,
             )
         except asyncio.CancelledError:
             raise

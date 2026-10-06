@@ -57,6 +57,8 @@ class ScriptedAgent:
         ScriptedAgent.callback_owner = getattr(
             getattr(self.tool_progress_callback, "__func__", None), "__qualname__", None,
         )
+        pending = collections.defaultdict(list)
+        call_number = 0
         for op in type(self).script:
             kind = op[0]
             if kind == "sleep":
@@ -64,12 +66,20 @@ class ScriptedAgent:
             elif kind == "tool":
                 _, name, preview, args = op
                 cb("tool.started", name, preview, args)
+                call_number += 1
+                cid = f"script-{call_number}"
+                pending[name].append((cid, args))
+                if getattr(self, "tool_start_callback", None):
+                    self.tool_start_callback(cid, name, args)
             elif kind == "done":
                 _, name, duration, is_error = op
                 cb(
                     "tool.completed", name, None, None,
                     duration=duration, is_error=is_error, result="SECRET-RESULT-PAYLOAD",
                 )
+                if pending[name] and getattr(self, "tool_complete_callback", None):
+                    cid, args = pending[name].pop(0)
+                    self.tool_complete_callback(cid, name, args, {"error": "failed"} if is_error else {"success": True})
             elif kind == "thought":
                 cb("reasoning.available", "_thinking", op[1], None)
             elif kind == "reasoning":

@@ -4613,6 +4613,15 @@ class TurnRunner:
         if not ctx.progress_queue or not ctx._run_still_current():
             return
 
+        _native_id_events = getattr(ctx, "_native_activity_id_events", False)
+        if _native_id_events and event_type == "tool.completed":
+            # Both concrete agent producers emit diagnostics on this worker
+            # immediately before their existing ID-bearing completion hook.
+            _sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+            if _sc is not None:
+                _sc._np_tls.completion = (tool_name, kwargs.get("duration"), kwargs.get("is_error"))
+            return
+
         # Native activity composer: a finished tool updates its row's state
         # (outcome/time are only claimed when the pairing is honest).  The
         # result payload is never read — only duration and the error flag.
@@ -4723,6 +4732,9 @@ class TurnRunner:
                 return
         except Exception:
             pass
+
+        if _native_id_events:
+            return  # authoritative start hook owns this call's row, not a clipped duplicate
 
         # "new" mode: only report when tool changes
         if ctx.progress_mode == "new" and tool_name == ctx.last_tool[0]:
@@ -5564,16 +5576,20 @@ class TurnRunner:
         except Exception:
             pass
         from agent.display import build_tool_preview
+        from gateway.native_progress import ActivityLedger
+        native = getattr(ctx, "_native_activity_id_events", False)
+        if native and (not ctx.tool_progress_enabled or tool_name == "clarify"):
+            return
 
         ctx.progress_queue.put(
             {
                 "type": "tool.started",
                 "tool_call_id": str(call_id or ""),
                 "tool_name": str(tool_name or "tool"),
-                "preview": build_tool_preview(
+                "preview": ActivityLedger.sanitize_detail(None, build_tool_preview(
                     str(tool_name or "tool"), args or {}, max_len=64
-                )
-                or "",
+                ) or "") if native else build_tool_preview(str(tool_name or "tool"), args or {}, max_len=64) or "",
+                **({"arguments": args or {}} if native else {}),
             }
         )
 
@@ -5591,12 +5607,20 @@ class TurnRunner:
         from agent.display import _detect_tool_failure
 
         is_error, _ = _detect_tool_failure(str(tool_name or "tool"), result)
+        native = getattr(ctx, "_native_activity_id_events", False)
+        diagnostics = None
+        if native:
+            sc = ctx.stream_consumer_holder[0] if ctx.stream_consumer_holder else None
+            diagnostics = getattr(sc._np_tls, "completion", None) if sc else None
+            if sc:
+                sc._np_tls.completion = None
         ctx.progress_queue.put(
             {
                 "type": "tool.completed",
                 "tool_call_id": str(call_id or ""),
                 "tool_name": str(tool_name or "tool"),
-                "is_error": bool(is_error),
+                "is_error": diagnostics[2] if diagnostics and diagnostics[0] == tool_name else bool(is_error),
+                **({"duration": diagnostics[1]} if diagnostics and diagnostics[0] == tool_name else {}),
             }
         )
 
@@ -5605,7 +5629,7 @@ class TurnRunner:
         ctx = self._ctx
         if ctx._voice_ack_guild[0] is not None:
             self.voice_ack_callback(call_id, tool_name, args)
-        if ctx._native_slack_task_cards:
+        if ctx._native_slack_task_cards or getattr(ctx, "_native_activity_id_events", False):
             self.native_tool_start_callback(call_id, tool_name, args)
 
     def _step_callback_sync(self, iteration: int, prev_tools: list) -> None:
@@ -5897,6 +5921,7 @@ class TurnRunner:
                         initial_reply_to_id=ctx.event_message_id,
                         run_still_current=ctx._run_still_current,
                         on_native_history=self.persist_native_activity,
+                        native_turn_started_at=ctx._summary_t0,
                         native_scope=NativeProgressScope(
                             session_key=ctx.session_key or "",
                             run_generation=ctx.run_generation,
@@ -6268,18 +6293,22 @@ class TurnRunner:
         # Compose ID-bearing lifecycle consumers: Discord's one-time voice
         # ack and Slack's native task cards both ride the authoritative
         # start callback, so neither has to infer identity from tool names.
+        ctx._native_activity_id_events = bool(
+            _stream_consumer is not None and _stream_consumer.native_activity_active
+        )
         _combined_start_cb = ctx.native_tool_start_callback or ctx.voice_ack_callback
         agent.tool_start_callback = (
             _combined_start_cb
             if (
                 ctx._voice_ack_guild[0] is not None
                 or ctx._native_slack_task_cards
+                or ctx._native_activity_id_events
             )
             else None
         )
         agent.tool_complete_callback = (
             ctx.native_tool_complete_callback
-            if ctx._native_slack_task_cards
+            if (ctx._native_slack_task_cards or ctx._native_activity_id_events)
             and ctx.native_tool_complete_callback is not None
             else None
         )

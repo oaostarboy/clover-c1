@@ -6526,6 +6526,7 @@ class TelegramAdapter(BasePlatformAdapter):
         *,
         now: Optional[float] = None,
         idle_since: Optional[float] = None,
+        turn_started_at: Optional[float] = None,
         icons: Optional[Mapping[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> SendResult:
@@ -6551,8 +6552,13 @@ class TelegramAdapter(BasePlatformAdapter):
         when = time.monotonic() if now is None else now
 
         def _markdown(icon_map):
+            # Older isolated renderers retain their existing fallback. Integration
+            # supplies the optional keyword on the REAL compose_markdown seam.
+            import inspect
+            params = inspect.signature(compose_markdown).parameters
+            clock_kw = {"turn_started_at": turn_started_at} if "turn_started_at" in params else {}
             return compose_markdown(
-                rows, answer_md, now=when, idle_since=idle_since, icons=icon_map,
+                rows, answer_md, now=when, idle_since=idle_since, icons=icon_map, **clock_kw,
             )
 
         markdown = _markdown(icons)
