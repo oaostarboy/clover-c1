@@ -254,16 +254,43 @@ class Env:
         )
 
     def finals(self):
-        """Bot API ``sendMessage`` calls that delivered the final answer bubble.
+        """Final Bot API answers, regardless of legacy or native transport.
 
-        Progress artifacts (``💭 …`` thought lines) may mirror streamed text;
-        only the bubble whose whole text is the final marker counts.
+        Draft frames and thought bubbles do not count. Only a persistent
+        sendMessage or sendRichMessage whose whole payload is the final marker
+        is accepted, with its reply anchor preserved in the normalized record.
         """
-        return [
-            kw for kw in self.api.methods("send_message")
-            if (kw.get("text") or "").replace("\\", "").strip() == FINAL
-            and kw["chat_id"] == int(CHAT)
-        ]
+        finals = []
+        for method, payload in self.api.calls:
+            if method == "send_message":
+                chat_id = payload.get("chat_id")
+                text = (payload.get("text") or "").replace(chr(92), "").strip()
+                reply_to = payload.get("reply_to_message_id")
+                thread_id = payload.get("message_thread_id")
+            elif method == "do_api_request:sendRichMessage":
+                api_kwargs = payload.get("api_kwargs", {})
+                rich = api_kwargs.get("rich_message", {})
+                chat_id = api_kwargs.get("chat_id")
+                text = (rich.get("markdown") or rich.get("html") or "").strip()
+                reply_params = api_kwargs.get("reply_parameters") or {}
+                reply_to = reply_params.get("message_id")
+                thread_id = api_kwargs.get("message_thread_id")
+            else:
+                continue
+            if text != FINAL or chat_id != int(CHAT):
+                continue
+            try:
+                reply_to = int(reply_to) if reply_to is not None else None
+            except (TypeError, ValueError):
+                pass
+            finals.append({
+                "chat_id": chat_id,
+                "text": text,
+                "reply_to_message_id": reply_to,
+                "message_thread_id": thread_id,
+                "transport": method,
+            })
+        return finals
 
 
 async def until(predicate, timeout=5.0, step=0.02):

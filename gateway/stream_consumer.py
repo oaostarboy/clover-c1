@@ -615,6 +615,7 @@ class GatewayStreamConsumer:
         self._np_idle_since: Optional[float] = None
         self._np_acked_at = 0.0
         self._np_state = "active" if self._resolve_native_progress() else "off"
+        self._native_seed_ready = threading.Event()
 
 
     def _stream_is_message(self) -> bool:
@@ -648,6 +649,20 @@ class GatewayStreamConsumer:
     def native_activity_active(self) -> bool:
         """True while this consumer owns the native activity composer."""
         return self._np_state == "active"
+
+    @property
+    def native_activity_state(self) -> str:
+        """Current native-composer state, including its terminal/Stop fence.
+
+        Callers that decide whether a separate final send is needed must
+        distinguish ``off`` (native progress never owned the turn) from
+        ``terminal``/``stopped`` (native progress already ended the turn).
+        """
+        return self._np_state
+
+    def wait_for_initial_native_seed(self, timeout: float = 10.0) -> bool:
+        """Block an executor thread until the initial native seed attempt settles."""
+        return self._native_seed_ready.wait(timeout)
 
     @property
     def owns_progress_routing(self) -> bool:
@@ -1521,6 +1536,7 @@ class GatewayStreamConsumer:
 
     async def run(self) -> None:
         """Async task that drains the queue and edits the platform message."""
+        self._native_seed_ready.clear()
         # Platform message length limit — leave room for cursor + formatting.
         # Use the adapter's length function (e.g. utf16_len for Telegram) so
         # overflow detection matches what the platform actually enforces.
@@ -1594,13 +1610,32 @@ class GatewayStreamConsumer:
         self._np_bind()
 
         try:
-            if self._np_state == "active" and self._run_still_current():
-                # Open a nonempty, stoppable preview before tools or tokens.
-                # This is a lifecycle status, not a synthetic activity row.
-                self._np_first_at = self._np_clock()
-                self._np_idle_since = self._np_first_at
-                self._np_dirty = True
-                await self._np_pump()
+            try:
+                if self._np_state == "active" and self._run_still_current():
+                    # Open a nonempty, stoppable preview before tools or tokens.
+                    # This is a lifecycle status, not a synthetic activity row.
+                    self._np_first_at = self._np_clock()
+                    self._np_idle_since = self._np_first_at
+                    self._np_dirty = True
+                    await self._np_pump()
+                    # _np_pump deliberately dispatches sends in tracked tasks.
+                    # For the request seed only, wait for the Bot API result so
+                    # the provider cannot outrun the visible activity bubble.
+                    _seed_task = self._np_task
+                    if _seed_task is not None:
+                        try:
+                            await asyncio.wait_for(_seed_task, timeout=10.0)
+                        except asyncio.TimeoutError:
+                            self._np_task = None
+                            await self._np_fallback("initial_seed_timeout")
+                        else:
+                            if self._np_task is _seed_task:
+                                self._np_task = None
+                            await self._np_reap(_seed_task)
+            finally:
+                # The executor may now start the provider: initial seed either
+                # landed or native progress failed over safely.
+                self._native_seed_ready.set()
             while True:
                 # Abandon the stream early if the session has been reset
                 # (e.g. /new or /stop). Prevents stale deltas from being

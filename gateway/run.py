@@ -5842,10 +5842,35 @@ class TurnRunner:
         _want_stream_deltas = _streaming_enabled
         _want_interim_messages = ctx.interim_assistant_messages_enabled
         _want_interim_consumer = _want_interim_messages
-        if _want_stream_deltas or _want_interim_consumer:
+        _adapter = None
+        _native_activity_consumer = False
+        try:
+            _adapter = self._runner._adapter_for_source(ctx.source)
+            if (
+                _adapter
+                and str(getattr(_adapter, "name", "")).casefold() == "telegram"
+            ):
+                _supports_native_progress = getattr(
+                    _adapter, "supports_native_progress", None
+                )
+                if callable(_supports_native_progress):
+                    _native_activity_consumer = bool(
+                        _supports_native_progress(
+                            chat_type=ctx.source.chat_type,
+                            metadata=ctx._status_thread_metadata,
+                            chat_id=ctx.source.chat_id,
+                        )
+                    )
+        except Exception as _native_probe_error:
+            logger.debug(
+                "Could not probe Telegram native progress eligibility: %s",
+                _native_probe_error,
+            )
+            _native_activity_consumer = False
+
+        if _want_stream_deltas or _want_interim_consumer or _native_activity_consumer:
             try:
                 from gateway.stream_consumer import GatewayStreamConsumer
-                _adapter = self._runner._adapter_for_source(ctx.source)
                 if _adapter:
                     _consumer_cfg, _pause_typing_before_finalize = (
                         self._runner._build_stream_consumer_config(
@@ -6980,6 +7005,26 @@ class TurnRunner:
                 _conversation_kwargs["moa_config"] = ctx.moa_config
             if _persist_user_timestamp_override is not None:
                 _conversation_kwargs["persist_user_timestamp"] = _persist_user_timestamp_override
+            if (
+                _native_activity_consumer
+                and _stream_consumer is not None
+                and _stream_consumer.native_activity_state == "active"
+                and not _stream_consumer.wait_for_initial_native_seed(timeout=12.0)
+            ):
+                logger.warning(
+                    "Telegram native progress seed did not settle before provider start; "
+                    "continuing after the bounded wait"
+                )
+            if not ctx._run_still_current():
+                return {
+                    "final_response": "",
+                    "messages": [],
+                    "api_calls": 0,
+                    "tools": [],
+                    "history_offset": len(agent_history),
+                    "session_id": ctx.session_id,
+                    "response_previewed": False,
+                }
             result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
         finally:
             unregister_gateway_notify(_approval_session_key)
@@ -32089,7 +32134,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         async def _start_stream_consumer():
             """Wait for the stream consumer to be created, then run it."""
             for _ in range(200):  # Up to 10s wait
-                if stream_consumer_holder[0] is not None:
+                if (
+                    session_key
+                    and run_generation is not None
+                    and not self._is_session_run_current(session_key, run_generation)
+                ):
+                    return
+                _agent = agent_holder[0]
+                _agent_registered = (
+                    _agent is not None
+                    and (
+                        not session_key
+                        or self._session_state(session_key).turn.agent is _agent
+                    )
+                )
+                if stream_consumer_holder[0] is not None and _agent_registered:
                     await stream_consumer_holder[0].run()
                     return
                 await asyncio.sleep(0.05)
@@ -32339,7 +32398,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return (
                 str(getattr(adapter, "name", "")).casefold() == "telegram"
                 and bool(extra.get("native_progress"))
-                and getattr(consumer, "native_activity_active", False) is not True
+                and getattr(consumer, "native_activity_state", "off") == "off"
             )
 
         def _stream_confirmed_final_delivery(

@@ -16,6 +16,7 @@ import sys
 import time
 import types
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -33,6 +34,9 @@ class ScriptedAgent:
 
     script: list = []
     callback_owner = None   # qualname of the gateway callback that was actually attached
+    api: Any = None
+    provider_start_frames: list = []
+    send_final_delta = True
 
     def __init__(self, **kwargs):
         self.tools = []
@@ -43,6 +47,11 @@ class ScriptedAgent:
         self.session_id = kwargs.get("session_id")
 
     def run_conversation(self, message, conversation_history=None, task_id=None):
+        api = type(self).api
+        if api is not None:
+            type(self).provider_start_frames.append(
+                [api.rich_text(frame) for frame in api.rich_drafts()]
+            )
         # Like the real agent: a callback the gateway did not attach is skipped.
         cb = self.tool_progress_callback or (lambda *a, **k: None)
         ScriptedAgent.callback_owner = getattr(
@@ -76,14 +85,15 @@ class ScriptedAgent:
                     "final_response": "", "failed": True, "error": "simulated provider failure",
                     "messages": [], "api_calls": 1,
                 }
-        if self.stream_delta_callback:
+        if self.stream_delta_callback and type(self).send_final_delta:
             self.stream_delta_callback(FINAL)
         return {
-            "final_response": FINAL, "response_previewed": True, "messages": [], "api_calls": 1,
+            "final_response": FINAL, "response_previewed": type(self).send_final_delta,
+            "messages": [], "api_calls": 1,
         }
 
 
-def make_runner(adapter):
+def make_runner(adapter, *, streaming_enabled=True):
     gateway_run = importlib.import_module("gateway.run")
     runner = object.__new__(gateway_run.GatewayRunner)
     runner.adapters = {adapter.platform: adapter}
@@ -101,7 +111,7 @@ def make_runner(adapter):
     runner.config = SimpleNamespace(
         thread_sessions_per_user=False, group_sessions_per_user=False, stt_enabled=False,
         streaming=StreamingConfig(
-            enabled=True, transport="draft", edit_interval=0.05, buffer_threshold=5, cursor="",
+            enabled=streaming_enabled, transport="draft", edit_interval=0.05, buffer_threshold=5, cursor="",
         ),
     )
     return runner
@@ -116,12 +126,16 @@ DEFAULT_DISPLAY = {
 async def run_turn(
     monkeypatch, tmp_path, script, *, native, display=None, interim=False, cleanup=False,
     chat_type="dm", adapter_extra=None, api_setup=None, session="sess-np",
+    send_final_delta=True, streaming_enabled=True,
 ):
     monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_MIN_SEND_INTERVAL", 0.0)
     fake_dotenv = types.ModuleType("dotenv")
     fake_dotenv.load_dotenv = lambda *a, **k: None
     monkeypatch.setitem(sys.modules, "dotenv", fake_dotenv)
     ScriptedAgent.script = script
+    ScriptedAgent.send_final_delta = send_final_delta
+    ScriptedAgent.provider_start_frames = []
+    ScriptedAgent.api = None
     fake_run_agent = types.ModuleType("run_agent")
     fake_run_agent.AIAgent = ScriptedAgent
     monkeypatch.setitem(sys.modules, "run_agent", fake_run_agent)
@@ -139,11 +153,12 @@ async def run_turn(
     extra = {"rich_messages": True, "native_progress": native, **(adapter_extra or {})}
     adapter = TelegramAdapter(PlatformConfig(enabled=True, token="fake-token", extra=extra))
     api = FakeTelegramApi()
+    ScriptedAgent.api = api
     adapter._bot = api
     adapter._native_stop_ready = True
     if api_setup:
         api_setup(api)
-    runner = make_runner(adapter)
+    runner = make_runner(adapter, streaming_enabled=streaming_enabled)
     source = SessionSource(
         platform=Platform.TELEGRAM, chat_id="12345", chat_type=chat_type, user_id="12345",
     )
@@ -156,6 +171,7 @@ async def run_turn(
     return SimpleNamespace(
         adapter=adapter, api=api, result=result, session_key=session_key, runner=runner,
         callback_owner=ScriptedAgent.callback_owner,
+        provider_start_frames=list(ScriptedAgent.provider_start_frames),
     )
 
 
@@ -336,3 +352,34 @@ async def test_unsupported_routes_run_exactly_todays_display(monkeypatch, tmp_pa
     )
     assert bubbles(new.api) == bubbles(old.api)
     assert new.api.rich_drafts() == [] and new.api.methods("get_sticker_set") == []
+
+
+@pytest.mark.asyncio
+async def test_status_only_native_activity_is_seeded_before_provider_and_survives_until_final(
+    monkeypatch, tmp_path,
+):
+    turn = await run_turn(
+        monkeypatch, tmp_path, [NAP], native=True, send_final_delta=False,
+        streaming_enabled=False,
+    )
+
+    # No tool, thought, commentary, or provider delta ran before this snapshot.
+    assert len(turn.provider_start_frames) == 1
+    seeded = turn.provider_start_frames[0]
+    assert any("<tg-thinking>" in frame and "Thinking" in visible(frame) for frame in seeded)
+
+    seed_indices = [
+        i for i, (method, _payload) in enumerate(turn.api.calls)
+        if method == "do_api_request:sendRichMessageDraft"
+    ]
+    final_indices = [
+        i for i, (method, payload) in enumerate(turn.api.calls)
+        if (
+            method == "send_message" and payload.get("text") == FINAL
+        ) or (
+            method == "do_api_request:sendRichMessage"
+            and turn.api.rich_text(payload["api_kwargs"]).replace(chr(92), "").strip() == FINAL
+        )
+    ]
+    assert seed_indices and final_indices and seed_indices[0] < final_indices[-1]
+    assert len(final_indices) == 1
