@@ -247,12 +247,30 @@ async def test_native_display_shows_the_same_visible_lines_as_today_and_persists
 
     # every shown line was visible inside the native block while the turn ran
     shown = frames_text(new.api)
+    from agent.display import get_tool_emoji, get_tool_verb
+
+    # Native rows split the legacy progress line into a bold action label and
+    # subordinate detail. Verify both parts while preserving the full persisted
+    # legacy line above; only its decorative emoji/duplicate verb move.
     for text in bubbles(old.api):
         for line in text.split("\n"):
             core = unmd(line).replace("```", "").strip()
             # today's italic wrapper around a thought ("💭 _text_") renders as <i>text</i>
             core = re.sub(r"^(\U0001F4AD\s*)[_*]", r"\1", core).strip("_* ")
-            if core:
+            if not core:
+                continue
+            matched_action = False
+            for tool in ("terminal", "web_search", "read_file"):
+                verb = get_tool_verb(tool)
+                emoji = get_tool_emoji(tool, default="⚙️")
+                prefix = f"{emoji} {verb}"
+                if core == prefix or core.startswith(prefix + " "):
+                    detail = core[len(prefix):].lstrip()
+                    assert verb in shown, (case, verb)
+                    assert detail in shown, (case, detail)
+                    matched_action = True
+                    break
+            if not matched_action:
                 assert core in shown, (case, core)
     # secrets/results/args beyond today's display never leak
     assert "SECRET-RESULT-PAYLOAD" not in shown
