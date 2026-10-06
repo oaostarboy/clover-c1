@@ -705,6 +705,10 @@ class GatewayStreamConsumer:
         if self._np_state != "off":
             line = ActivityLedger.sanitize_detail(None, line)
             if tool:
+                if replace_last:
+                    # Each call is its own row here; the legacy bubble's
+                    # "(×N)" fold counter would miscount beside them.
+                    line = re.sub(r" \(×\d+\)$", "", line)
                 return self._np_submit(("call", line, tool, None, raw_detail))
             return self._np_submit(("replace" if replace_last else "line", line, tool))
         self._queue.put((_TOOL_PROGRESS, line))

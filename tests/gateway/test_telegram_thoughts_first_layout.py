@@ -164,18 +164,37 @@ def test_running_tool_under_a_second_is_reported_honestly():
     assert "0s" not in rendered
 
 
-def test_unknown_outcome_claims_neither_success_nor_a_duration():
+def overlapping_reads(*outcomes):
     ledger = ActivityLedger()
     started(ledger, "read_file", "a.md", now=0.0)
     started(ledger, "read_file", "b.md", now=0.1)        # same name, overlapping
-    ledger.complete_tool("read_file", duration=3.0, is_error=False)
-    ledger.complete_tool("read_file", duration=4.0, is_error=True)
-    first, second = (render_row(r, now=9.0) for r in ledger.snapshot())
+    for duration, is_error in zip((3.0, 4.0), outcomes):
+        ledger.complete_tool("read_file", duration=duration, is_error=is_error)
+    return ledger
+
+
+def test_unknown_outcome_claims_neither_success_nor_a_duration():
+    first, second = (render_row(r, now=9.0) for r in overlapping_reads(False, False).snapshot())
 
     for rendered in (first, second):
         assert rendered.endswith(" · <i>Completed</i>")
         assert "Done" not in rendered and "3s" not in rendered and "4s" not in rendered
     assert "a.md" in first and "b.md" in second
+
+
+def test_unpaired_failure_stays_visible_without_inventing_a_success_or_a_duration():
+    ledger = overlapping_reads(False, True)
+    first, second = (render_row(r, now=9.0) for r in ledger.snapshot())
+
+    # Which of the two calls failed is unknown: the error is never hidden and
+    # neither row is given a success or a time it cannot prove.
+    for rendered in (first, second):
+        assert rendered.endswith(" · <b>Failed</b>")
+        assert "Done" not in rendered and "Completed" not in rendered
+        assert "3s" not in rendered and "4s" not in rendered
+    assert "a.md" in first and "b.md" in second
+    for line in ledger.diagnostic_lines():
+        assert "aggregate failure; unknown pairing" in line and "unknown duration" in line
 
 
 # ── Tool detail is a bounded preview ────────────────────────────────────────

@@ -1042,7 +1042,8 @@ async def test_visible_lines_are_handed_to_the_persistent_artifact_before_the_fi
 
 
 @pytest.mark.asyncio
-async def test_dedup_replaces_the_last_row_like_the_legacy_bubble(monkeypatch):
+async def test_repeated_identical_calls_stay_distinct_rows_with_honest_diagnostics(monkeypatch):
+    """The legacy bubble folds repeats into one ``(×N)`` line; native keeps every call."""
     fast(monkeypatch)
     adapter, api = native_adapter()
     history = History(api)
@@ -1051,9 +1052,29 @@ async def test_dedup_replaces_the_last_row_like_the_legacy_bubble(monkeypatch):
     consumer.on_tool_progress("⚙️ run", tool="execute_code")
     consumer.on_tool_progress("⚙️ run (×2)", tool="execute_code", replace_last=True)
     consumer.on_tool_progress("⚙️ run (×3)", tool="execute_code", replace_last=True)
+    assert await until(lambda: len(consumer._np_ledger.rows) == 3)
+    consumer.on_tool_complete("execute_code", duration=1.5, is_error=False)
+    consumer.on_tool_complete("execute_code", duration=2.5, is_error=False)
+    consumer.on_tool_complete("execute_code", duration=3.5, is_error=False)
     consumer.finish("")
     await asyncio.wait_for(task, 3)
-    assert history.calls[0][0] == ["⚙️ run (×3)"]
+
+    # three calls are three rows; a row never carries the legacy bubble's counter
+    assert history.calls[0][0] == ["⚙️ run", "⚙️ run", "⚙️ run"]
+    rows = consumer._np_ledger.rows
+    assert [r.repeat for r in rows] == [1, 1, 1]
+    # this callback carries no call id, so no id, per-call outcome or time is invented
+    assert [r.call_id for r in rows] == [None, None, None]
+    assert {r.state for r in rows} == {"completed"}
+    assert [r.duration for r in rows] == [None, None, None]
+    starts = [r.started_at for r in rows]
+    assert starts == sorted(starts)
+    diagnostics = consumer._np_ledger.diagnostic_lines()
+    assert len(diagnostics) == 3
+    for line, row in zip(diagnostics, rows):
+        assert line.startswith("execute_code [unknown] · completed · unknown duration · ")
+        assert f"start={row.started_at!r}" in line
+        assert line.endswith("aggregate_unknown: ⚙️ run")
 
 
 @pytest.mark.asyncio
