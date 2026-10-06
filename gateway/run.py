@@ -22773,6 +22773,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 message_type=event.message_type,
             )
             self._apply_correction_reply_source(session_key, event)
+            if isinstance(agent_result, dict):
+                _followup_reply_anchor = agent_result.pop(
+                    "_final_reply_anchor_message_id", None,
+                )
+                if _followup_reply_anchor is not None:
+                    # Recursive queued turns return their final response through
+                    # the outer handler. Preserve the triggering follow-up's
+                    # anchor without changing the original event identity.
+                    event.correction_reply_to = str(_followup_reply_anchor)
             _turn_seconds = time.monotonic() - _turn_started_monotonic
 
             # Stop persistent typing indicator now that the agent is done.
@@ -32323,6 +32332,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         _notify_task = asyncio.create_task(_notify_long_running())
 
+        def _telegram_native_fallback_requires_final(consumer) -> bool:
+            adapter = getattr(consumer, "adapter", None)
+            config = getattr(adapter, "config", None)
+            extra = getattr(config, "extra", {}) or {}
+            return (
+                str(getattr(adapter, "name", "")).casefold() == "telegram"
+                and bool(extra.get("native_progress"))
+                and getattr(consumer, "native_activity_active", False) is not True
+            )
+
         def _stream_confirmed_final_delivery(
             consumer,
             final_text: str,
@@ -32333,6 +32352,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if consumer is None:
                 return False
             if getattr(consumer, "final_response_sent", False):
+                if _telegram_native_fallback_requires_final(consumer):
+                    # An opted-in native-progress turn that never entered the
+                    # native lifecycle still needs a persistent, reply-anchored
+                    # final; generic streamed text is not sufficient.
+                    return False
                 # A successful finalize call is not proof the *content* was
                 # final: the edit may have carried only the last preview
                 # snapshot while the tail generated between that snapshot and
@@ -33229,6 +33253,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     channel_prompt=next_channel_prompt,
                     message_type=next_message_type,
                 )
+                if (
+                    pending_event is not None
+                    and getattr(next_source, "platform", None) == Platform.TELEGRAM
+                    and next_message_id is not None
+                    and isinstance(followup_result, dict)
+                ):
+                    followup_result["_final_reply_anchor_message_id"] = str(next_message_id)
                 return _preserve_queued_followup_history_offset(result, followup_result)
         finally:
             # Stop progress sender, interrupt monitor, and notification task
@@ -33335,6 +33366,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _content_delivered = bool(
                 _sc and getattr(_sc, "final_content_delivered", False)
             )
+            if _content_delivered and _telegram_native_fallback_requires_final(_sc):
+                # Do not let a generic streamed progress bubble suppress the
+                # normal final when native activity was opted in but not used.
+                _content_delivered = False
             # #71643: a *successful* finalize edit can still carry only the
             # last preview snapshot — deltas generated between that edit and
             # stream completion never reach any API call, and both suppression
