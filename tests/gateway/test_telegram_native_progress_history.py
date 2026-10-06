@@ -52,7 +52,7 @@ async def test_cleanup_progress_collapses_the_native_artifact_into_the_same_card
     assert "3 tool call" in native_cards[-1]
     # nothing but the one collapsed card + the final remains visible from the progress lane
     deleted = {kw["message_id"] for kw in new.api.methods("delete_message")}
-    live = [kw for kw in new.api.methods("send_message") if kw["_message_id"] not in deleted]
+    live = [kw for kw in new.api.persistent_messages() if kw["_message_id"] not in deleted]
     assert any(FINAL in kw["text"] for kw in live) and len(live) == 2
 
 
@@ -63,7 +63,7 @@ async def test_gateway_thought_prefix_renders_as_natural_commentary_in_real_nati
         [("thought", "The time source is consistent."), NAP, S, NAP],
         native=True, session="sess-real-thought-wrapper",
     )
-    frames = [frame["rich_message"]["markdown"] for frame in turn.api.rich_drafts()]
+    frames = [turn.api.rich_text(frame) for frame in turn.api.rich_drafts()]
     assert frames, "the production gateway-to-Telegram native path did not emit a frame"
     frame = frames[-1]
     assert "💭 The time source is consistent." in frame
@@ -77,7 +77,7 @@ async def test_native_activity_blocks_have_clear_spacing_and_one_terminal_identi
         [("thought", "Checking the source."), NAP, T, NAP],
         native=True, session="sess-native-visual-hierarchy",
     )
-    frames = [frame["rich_message"]["markdown"] for frame in turn.api.rich_drafts()]
+    frames = [turn.api.rich_text(frame) for frame in turn.api.rich_drafts()]
     assert frames
     frame = frames[-1]
     assert "Running command ·" in frame
@@ -100,7 +100,7 @@ async def test_native_summary_is_sent_before_final_answer_without_legacy_flash(m
     )
     final_i = next(
         i for i, (method, kw) in enumerate(calls)
-        if method == "send_message" and FINAL in kw.get("text", "")
+        if turn.api.is_answer_call(method, kw, FINAL)
     )
     draft_indices = [
         i for i, (method, _) in enumerate(calls)
@@ -130,6 +130,7 @@ async def test_native_summary_is_sent_before_final_answer_without_legacy_flash(m
 async def test_pre_final_summary_survives_final_delivery_failure(monkeypatch, tmp_path):
     def fail_final(api):
         api.fail["send_message"] = lambda kw: RuntimeError("final transport unavailable") if FINAL in kw.get("text", "") else None
+        api.fail["sendRichMessage"] = lambda kw: RuntimeError("final transport unavailable") if FINAL in api.rich_text(kw["api_kwargs"]) else None
 
     turn = await run_turn(
         monkeypatch, tmp_path, [T, NAP, S, NAP], native=True, cleanup=True,
@@ -141,14 +142,14 @@ async def test_pre_final_summary_survives_final_delivery_failure(monkeypatch, tm
         if "tool call" in kw.get("text", "")
     ]
     failures = [
-        kw for kw in turn.api.methods("send_message")
+        kw for kw in turn.api.persistent_messages()
         if FINAL in kw.get("text", "")
     ]
     assert summaries, "history must persist even when final delivery fails"
     assert len(summaries) == 1, "cleanup must not duplicate the pre-delivery summary"
     assert failures, "the injected final-delivery failure was not exercised"
     summary_i = turn.api.calls.index(("send_message", summaries[0]))
-    failure_i = turn.api.calls.index(("send_message", failures[0]))
+    failure_i = next(i for i, (method, kw) in enumerate(turn.api.calls) if turn.api.is_answer_call(method, kw, FINAL))
     assert summary_i < failure_i, "the persisted history must precede the failed final attempt"
 
 
@@ -163,7 +164,7 @@ async def test_pre_delivery_summary_failure_uses_existing_persistent_history_fal
     )
     final_i = next(
         i for i, (method, kw) in enumerate(turn.api.calls)
-        if method == "send_message" and FINAL in kw.get("text", "")
+        if turn.api.is_answer_call(method, kw, FINAL)
     )
     assert any(
         method == "send_message" and FINAL not in kw.get("text", "")
@@ -187,7 +188,7 @@ async def test_successful_native_cleanup_skips_transient_legacy_tool_bubble(monk
     assert turn.api.rich_drafts()  # fixture exercised the actual native draft path
     final_index = next(
         i for i, (method, kw) in enumerate(turn.api.calls)
-        if method == "send_message" and FINAL in kw.get("text", "")
+        if turn.api.is_answer_call(method, kw, FINAL)
     )
     summaries = [
         (method, kw.get("text", ""))
@@ -204,7 +205,7 @@ async def test_successful_native_cleanup_skips_transient_legacy_tool_bubble(monk
     assert legacy_activity == []
 
     await fire_cleanup(turn)
-    visible_messages = [kw["text"] for kw in turn.api.methods("send_message")]
+    visible_messages = [kw["text"] for kw in turn.api.persistent_messages()]
     assert any("tool call" in text for text in visible_messages)
     assert any(FINAL in text for text in visible_messages)
 
@@ -284,7 +285,7 @@ async def test_pre_final_summary_deletes_tracked_carrier_without_second_card(mon
     )
     final_i = next(
         i for i, (method, kw) in enumerate(turn.api.calls)
-        if method == "send_message" and FINAL in kw.get("text", "")
+        if turn.api.is_answer_call(method, kw, FINAL)
     )
     assert summary_i < final_i
     await fire_cleanup(turn)
@@ -354,8 +355,8 @@ async def test_final_reply_anchor_and_exactly_once_match_todays_display(monkeypa
     new = await run_turn(monkeypatch, tmp_path, script, native=True)
     assert new.api.rich_drafts() != []                  # the native display really ran
     [old_final] = [kw for kw in old.api.methods("send_message") if FINAL in kw["text"]]
-    [new_final] = [kw for kw in new.api.methods("send_message") if FINAL in kw["text"]]
-    for key in ("reply_to_message_id", "message_thread_id", "parse_mode", "chat_id"):
+    [new_final] = [kw for kw in new.api.persistent_messages() if FINAL in kw["text"]]
+    for key in ("reply_to_message_id", "message_thread_id", "chat_id"):
         assert new_final.get(key) == old_final.get(key)
     assert "tg-thinking" not in new_final["text"] and "tg-emoji" not in new_final["text"]
 
@@ -372,13 +373,14 @@ async def test_transient_final_send_failure_never_duplicates_the_final(monkeypat
             return None
 
         api.fail["send_message"] = fail
+        api.fail["sendRichMessage"] = lambda kw: fail({"text": api.rich_text(kw["api_kwargs"])})
 
     script = [S, NAP]
     old = await run_turn(monkeypatch, tmp_path, script, native=False, api_setup=flaky, session="sess-flaky-old")
     new = await run_turn(monkeypatch, tmp_path, script, native=True, api_setup=flaky, session="sess-flaky-new")
 
     def delivered(turn):
-        return [kw for kw in turn.api.methods("send_message") if FINAL in kw["text"]]
+        return [kw for kw in turn.api.persistent_messages() if FINAL in kw["text"]]
 
     # attempts that reached the (in-memory) API are the same in both modes
     assert len(delivered(new)) == len(delivered(old))

@@ -62,7 +62,7 @@ async def test_disconnect_forgets_every_draft_and_disables_native(monkeypatch, t
 
 
 @pytest.mark.asyncio
-async def test_every_draft_id_of_a_turn_is_registered_and_dropped_at_terminal(monkeypatch):
+async def test_one_draft_id_of_a_turn_is_registered_and_dropped_at_terminal(monkeypatch):
     adapter, api = native_adapter()
     GatewayConsumer = type(make_consumer(adapter))
     monkeypatch.setattr(GatewayConsumer, "NATIVE_MIN_SEND_INTERVAL", 0.0)
@@ -75,9 +75,9 @@ async def test_every_draft_id_of_a_turn_is_registered_and_dropped_at_terminal(mo
     first = {k[2] for k in adapter._native_drafts}
     consumer.on_segment_break()
     consumer.on_delta("second segment")
-    assert await until(lambda: len({k[2] for k in adapter._native_drafts}) == 2)
+    assert await until(lambda: any("second segment" in api.rich_text(f) for f in api.rich_drafts()))
     ids = {k[2] for k in adapter._native_drafts}
-    assert first < ids and all(v.scope is scope for v in adapter._native_drafts.values())
+    assert first == ids and all(v.scope is scope for v in adapter._native_drafts.values())
     assert all(k[1] is None for k in adapter._native_drafts)      # DM only: never a thread route
     consumer.finish("second segment")
     await asyncio.wait_for(task, 3)

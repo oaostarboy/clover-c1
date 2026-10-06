@@ -2128,7 +2128,7 @@ class TelegramAdapter(BasePlatformAdapter):
         """Whether rich delivery is allowed (``rich_messages`` opt-in)."""
         return bool(getattr(self, "_rich_messages_enabled", True))
 
-    def _rich_eligible(self, content: str) -> bool:
+    def _rich_eligible(self, content: str, *, native_final: bool = False) -> bool:
         """Capability/content eligibility for rich, ignoring ``expect_edits``.
 
         Shared core of :meth:`_should_attempt_rich` minus the per-call
@@ -2142,7 +2142,7 @@ class TelegramAdapter(BasePlatformAdapter):
             and not getattr(self, "_rich_send_disabled", False)
             and content
             and content.strip()
-            and self._needs_rich_rendering(content)
+            and (native_final or self._needs_rich_rendering(content))
             and not self._has_telegram_desktop_details_math_crash_shape(content)
             and not self._has_telegram_desktop_cjk_rich_garble_shape(content)
             and self._content_fits_rich_limits(content)
@@ -2154,7 +2154,11 @@ class TelegramAdapter(BasePlatformAdapter):
     ) -> bool:
         return bool(
             not (metadata or {}).get("expect_edits")
-            and self._rich_eligible(content)
+            and self._rich_eligible(
+                content,
+                native_final=(metadata or {}).get("_native_progress_final") is True
+                and self._native_progress_enabled,
+            )
         )
 
     def prefers_fresh_final_streaming(
@@ -6359,6 +6363,7 @@ class TelegramAdapter(BasePlatformAdapter):
 
     async def _run_native_stop(self, stop_current, scope, consumer) -> None:
         try:
+            await consumer.native_stop_close()
             await stop_current(scope, consumer)
         except asyncio.CancelledError:
             raise
@@ -6560,7 +6565,10 @@ class TelegramAdapter(BasePlatformAdapter):
             return {
                 "chat_id": normalize_telegram_chat_id(chat_id),
                 "draft_id": int(draft_id),
-                "rich_message": {"markdown": text},
+                # Status is literal rich HTML. When answer Markdown coexists,
+                # Rich Markdown accepts the same HTML block without degrading
+                # the answer's tables/links/code to a home-grown HTML subset.
+                "rich_message": {"markdown" if answer_md else "html": text},
                 "can_stop": True,
             }
 

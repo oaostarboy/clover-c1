@@ -183,7 +183,7 @@ def visible(markdown):
 
 
 def frames_text(api):
-    return "\n".join(visible(f["rich_message"]["markdown"]) for f in api.rich_drafts())
+    return "\n".join(visible(api.rich_text(f)) for f in api.rich_drafts())
 
 
 def unmd(text):
@@ -242,7 +242,7 @@ async def test_native_display_shows_the_same_visible_lines_as_today_and_persists
         assert new.callback_owner == "TurnRunner.progress_callback"
     assert new.api.methods("send_message_draft") == []
     assert old.api.rich_drafts() == [] and old.api.methods("get_sticker_set") == []
-    final_sends = [kw for kw in new.api.methods("send_message") if FINAL in kw["text"]]
+    final_sends = [kw for kw in new.api.persistent_messages() if FINAL in kw["text"]]
     assert len(final_sends) == 1 and "tg-thinking" not in final_sends[0]["text"]
 
     # every shown line was visible inside the native block while the turn ran
@@ -323,7 +323,7 @@ async def test_native_capability_loss_flushes_everything_through_todays_path(mon
     assert new.api.rich_drafts() != []           # native was attempted, then fell back
     assert line_multiset(bubbles(new.api)) == line_multiset(bubbles(old.api))
     assert new.adapter._native_progress_disabled is True
-    assert len([kw for kw in new.api.methods("send_message") if FINAL in kw["text"]]) == 1
+    assert len([kw for kw in new.api.persistent_messages() if FINAL in kw["text"]]) == 1
 
 
 @pytest.mark.asyncio

@@ -285,7 +285,7 @@ async def test_native_draft_escapes_markup_and_preserves_unicode():
 
     await adapter.send_native_progress_draft("1", 5, [row(nasty)], "", now=1.0)
 
-    md = api.rich_drafts()[0]["rich_message"]["markdown"]
+    md = api.rich_text(api.rich_drafts()[0])
     # User text can never terminate (or open) the real block: one real pair only.
     assert md.startswith("<tg-thinking>")
     assert md.count("<tg-thinking>") == 1 and md.count("</tg-thinking>") == 1
@@ -426,7 +426,7 @@ def test_terminal_running_header_keeps_source_title_and_not_dangling_command():
 
 
 def _markdowns(api):
-    return [f["rich_message"]["markdown"] for f in api.rich_drafts()]
+    return [api.rich_text(f) for f in api.rich_drafts()]
 
 
 def test_real_aiactions_shape_selects_visually_verified_roles_not_metadata_emoji():
@@ -601,7 +601,7 @@ async def test_entitlement_rejection_degrades_icons_only():
 
     api.fail["sendRichMessageDraft"] = lambda kw: (
         BadRequest("Bad Request: can't parse entities: custom emoji can't be used")
-        if "<tg-emoji" in kw["api_kwargs"]["rich_message"]["markdown"] else None
+        if "<tg-emoji" in api.rich_text(kw["api_kwargs"]) else None
     )
     result = await _frame(adapter)
 
@@ -690,7 +690,7 @@ async def test_native_composer_is_ineligible_without_a_persistent_history_path()
     assert consumer.native_activity_active is False
 
 
-def fast(monkeypatch, *, spacing=0.0, drain=None, refresh=None, keepalive=None, max_keepalives=None):
+def fast(monkeypatch, *, spacing=0.0, drain=None, refresh=None, keepalive=None):
     monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_MIN_SEND_INTERVAL", spacing)
     if drain is not None:
         monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_FINAL_DRAIN", drain)
@@ -698,8 +698,6 @@ def fast(monkeypatch, *, spacing=0.0, drain=None, refresh=None, keepalive=None, 
         monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_REFRESH_INTERVAL", refresh)
     if keepalive is not None:
         monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_KEEPALIVE_INTERVAL", keepalive)
-    if max_keepalives is not None:
-        monkeypatch.setattr(GatewayStreamConsumer, "NATIVE_MAX_KEEPALIVES", max_keepalives)
 
 
 def final_sends(api):
@@ -719,8 +717,6 @@ def test_consumer_budgets_match_the_plan():
     assert c.NATIVE_MIN_SEND_INTERVAL == 1.0
     assert c.NATIVE_REFRESH_INTERVAL == 5.0
     assert c.NATIVE_KEEPALIVE_INTERVAL <= 20.0
-    assert c.NATIVE_MAX_KEEPALIVES == 15
-    assert c.NATIVE_MAX_AGE == 300.0
     assert c.NATIVE_FINAL_DRAIN == 2.0
 
 
@@ -797,7 +793,7 @@ async def test_unsupported_routes_keep_todays_display(chat_type, metadata, extra
 
 
 @pytest.mark.asyncio
-async def test_segment_break_allocates_new_draft_and_repopulates_the_activity(monkeypatch):
+async def test_segment_break_keeps_same_draft_and_repopulates_the_activity(monkeypatch):
     fast(monkeypatch)
     adapter, api = native_adapter()
     consumer = make_consumer(adapter)
@@ -814,9 +810,9 @@ async def test_segment_break_allocates_new_draft_and_repopulates_the_activity(mo
     consumer.finish("segment two text")
     await asyncio.wait_for(task, 3)
 
-    second = [d for d in api.rich_drafts() if "segment two text" in thinking_of(d["rich_message"]["markdown"])[1]]
-    assert second and second[0]["draft_id"] != first_id and second[0]["draft_id"] > 0
-    head = thinking_of(second[0]["rich_message"]["markdown"])[0]
+    second = [d for d in api.rich_drafts() if "segment two text" in thinking_of(api.rich_text(d))[1]]
+    assert second and second[0]["draft_id"] == first_id and second[0]["draft_id"] > 0
+    head = thinking_of(api.rich_text(second[0]))[0]
     assert "first lookup" in head and "second step" in head   # whole-turn activity survives
 
 
@@ -889,30 +885,31 @@ async def test_stalled_draft_send_never_delays_final_beyond_the_drain_bound(monk
 
 
 @pytest.mark.asyncio
-async def test_idle_keepalive_is_bounded_then_flushes_to_the_legacy_artifact(monkeypatch):
-    fast(monkeypatch, keepalive=0.1, refresh=100.0, max_keepalives=3)
+async def test_idle_keepalive_continues_until_turn_end_then_keeps_history(monkeypatch):
+    fast(monkeypatch, keepalive=0.1, refresh=100.0)
     adapter, api = native_adapter()
     history = History(api)
     consumer = make_consumer(adapter, history=history)
     task = asyncio.create_task(consumer.run())
 
     consumer.on_tool_progress("🔍 long running", tool="web_search")
-    assert await until(lambda: history.calls, timeout=4)
+    assert await until(lambda: len(api.rich_drafts()) >= 5, timeout=4)
     frames = api.rich_drafts()
-    assert 2 <= len(frames) <= 5                              # first frame + <= 3 keepalives
+    assert len(frames) >= 5
     assert all(f["can_stop"] is True for f in frames)
-    assert history.calls[0][0] == ["🔍 long running"] and history.calls[0][1].startswith("fallback")
-    assert consumer.accepts_tool_progress is False            # later lines use the existing queue
-    settled = len(api.rich_drafts())
-    await asyncio.sleep(0.4)
-    assert len(api.rich_drafts()) == settled                  # nothing keeps writing
+    assert history.calls == []
+    assert consumer.accepts_tool_progress is True
     consumer.finish("")
     await asyncio.wait_for(task, 3)
-    assert len(history.calls) == 1                            # flushed exactly once
+    assert len(history.calls) == 1
+    assert history.calls[0][0] == ["🔍 long running"] and history.calls[0][1] == "done"
+    settled = len(api.rich_drafts())
+    await asyncio.sleep(0.3)
+    assert len(api.rich_drafts()) == settled
 
 
 @pytest.mark.asyncio
-async def test_wall_clock_cap_flushes_even_when_content_keeps_changing(monkeypatch):
+async def test_long_turn_content_keeps_same_native_draft_without_age_fallback(monkeypatch):
     fast(monkeypatch)
     adapter, api = native_adapter()
     history = History(api)
@@ -925,10 +922,12 @@ async def test_wall_clock_cap_flushes_even_when_content_keeps_changing(monkeypat
     assert await until(lambda: api.rich_drafts())
     clock.t += 301
     consumer.on_tool_progress("🔍 later", tool="web_search2")
-    assert await until(lambda: history.calls)
-    assert history.calls[0][0] == ["🔍 early", "🔍 later"]
+    assert await until(lambda: "later" in _markdowns(api)[-1])
+    assert history.calls == [] and consumer.native_activity_active
+    assert len({f["draft_id"] for f in api.rich_drafts()}) == 1
     consumer.finish("")
     await asyncio.wait_for(task, 3)
+    assert history.calls[0][0] == ["🔍 early", "🔍 later"]
 
 
 @pytest.mark.asyncio
@@ -995,7 +994,7 @@ async def test_visible_lines_are_handed_to_the_persistent_artifact_before_the_fi
     [(lines, reason, calls_before)] = history.calls
     assert lines == ["🔍 Searching", format_thought("checking the second source"), "💻 terminal"]
     assert reason == "done"
-    final_index = next(i for i, (m, kw) in enumerate(api.calls) if m == "send_message")
+    final_index = next(i for i, (m, kw) in enumerate(api.calls) if m == "do_api_request:sendRichMessage")
     assert calls_before <= final_index                       # artifact first, final after
     # commentary rode the composer, not a separate bubble
     assert not any("checking the second source" in str(kw) for kw in api.methods("send_message"))

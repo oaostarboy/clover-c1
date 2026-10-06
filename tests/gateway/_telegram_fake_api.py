@@ -39,7 +39,37 @@ class FakeTelegramApi:
             if m == "do_api_request:sendRichMessageDraft"
         ]
 
+    @staticmethod
+    def rich_text(frame: Dict[str, Any]) -> str:
+        """Both official input forms carry the same native status HTML."""
+        rich = frame["rich_message"]
+        return rich.get("html", rich.get("markdown", ""))
+
+    def persistent_messages(self) -> List[Dict[str, Any]]:
+        """Normalize successful/failed persistent attempts; retain raw calls separately."""
+        messages = []
+        for method, call in self.calls:
+            if method == "send_message":
+                messages.append(call)
+            elif method == "do_api_request:sendRichMessage":
+                wire = call["api_kwargs"]
+                messages.append({
+                    **wire,
+                    "text": self.rich_text(wire),
+                    "reply_to_message_id": wire.get("reply_parameters", {}).get("message_id"),
+                    **({"_message_id": call["_message_id"]} if "_message_id" in call else {}),
+                })
+        return messages
+
+    def is_answer_call(self, method: str, call: Dict[str, Any], answer: str) -> bool:
+        return (
+            method == "send_message" and answer in call.get("text", "")
+            or method == "do_api_request:sendRichMessage"
+            and answer in self.rich_text(call["api_kwargs"])
+        )
+
     async def _enter(self, key: str, kwargs: Dict[str, Any]) -> None:
+        # Calls are transport attempts, not assertions about Telegram rendering.
         self.calls.append((key, kwargs))
         self.call_times.append(time.monotonic())
         method = key.split(":")[-1]
@@ -58,11 +88,14 @@ class FakeTelegramApi:
 
     # ── telegram.Bot surface used by the adapter ───────────────────────────
     async def do_api_request(self, endpoint: str, api_kwargs: Optional[dict] = None, **kw):
-        await self._enter(f"do_api_request:{endpoint}", {"api_kwargs": dict(api_kwargs or {}), **kw})
+        recorded = {"api_kwargs": dict(api_kwargs or {}), **kw}
+        await self._enter(f"do_api_request:{endpoint}", recorded)
         if endpoint == "sendRichMessageDraft":
             self.accepted_draft_frames.append(dict(api_kwargs or {}))
             return True
-        return SimpleNamespace(message_id=next(self._ids))
+        message_id = next(self._ids)
+        recorded["_message_id"] = message_id
+        return SimpleNamespace(message_id=message_id)
 
     async def send_message(self, **kwargs):
         recorded = dict(kwargs)

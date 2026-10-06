@@ -315,15 +315,13 @@ def render_thinking_block(
     icons: Optional[Mapping[str, NativeIcon]] = None,
 ) -> str:
     """``<tg-thinking>…</tg-thinking>`` for the current rows (one physical line)."""
-    if not rows:
-        return ""
     running = next((r for r in reversed(rows) if getattr(r, "state", "") == STATE_RUNNING), None)
     if running is not None:
         started = float(getattr(running, "started_at", now) or now)
     elif idle_since is not None:
         started = idle_since
     else:
-        started = float(getattr(rows[0], "started_at", now) or now)
+        started = float(getattr(rows[0], "started_at", now) or now) if rows else now
     head_icon = _icon_tag((icons or {}).get("thinking")) if icons else ""
     title = escape_text(_header_label(running, icons))
     header = f"<b>{head_icon}{title} · {format_elapsed(now - started)}</b>"

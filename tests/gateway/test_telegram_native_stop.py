@@ -245,7 +245,7 @@ class Env:
 
     def replies(self, chat_id, marker):
         return [
-            kw for kw in self.api.methods("send_message")
+            kw for kw in self.api.persistent_messages()
             if marker in kw["text"] and kw["chat_id"] == int(chat_id)
         ]
 
@@ -333,7 +333,7 @@ async def test_queued_followup_is_anchored_like_a_normal_queued_turn(monkeypatch
     [normal_reply] = control.replies(12345, FOLLOWUP)
 
     assert stop_reply["reply_to_message_id"] == normal_reply["reply_to_message_id"]
-    assert stop_reply["message_thread_id"] == normal_reply["message_thread_id"]
+    assert stop_reply.get("message_thread_id") == normal_reply.get("message_thread_id")
 
 
 @pytest.mark.asyncio
@@ -345,7 +345,7 @@ async def test_default_stop_still_reaps_and_discards_while_native_stop_does_not(
         key, env.source(12345), interrupt_reason="Stop requested", invalidation_reason="stop_command",
     )
     await env.idle(12345)
-    await asyncio.sleep(0.2)                                     # the reaper runs on its own thread
+    assert await until(lambda: len(env.reaps) == 1)               # wait for the independent reaper
     assert len(env.reaps) == 1                                   # existing /stop semantics unchanged
     assert sum("second question" in m for m in BlockingAgent.started) == 0   # queued text discarded
 

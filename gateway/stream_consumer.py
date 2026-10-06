@@ -390,8 +390,6 @@ class GatewayStreamConsumer:
     NATIVE_MIN_SEND_INTERVAL = 1.0
     NATIVE_REFRESH_INTERVAL = 5.0       # elapsed refresh while a tool runs
     NATIVE_KEEPALIVE_INTERVAL = 15.0    # idle keepalive, <= 20 s after last accepted frame
-    NATIVE_MAX_KEEPALIVES = 15
-    NATIVE_MAX_AGE = 300.0
     NATIVE_FINAL_DRAIN = 2.0
 
     def __init__(
@@ -612,7 +610,6 @@ class GatewayStreamConsumer:
         self._np_last_started: Optional[float] = None
         self._np_last_accepted: Optional[float] = None
         self._np_last_content_snapshot = None
-        self._np_keepalives = 0
         self._np_not_before = 0.0
         self._np_history_done = False
         self._np_idle_since: Optional[float] = None
@@ -794,6 +791,8 @@ class GatewayStreamConsumer:
             meta["expect_edits"] = True
         if final:
             meta["notify"] = True
+            if self._np_state == "terminal" and self._np_first_at is not None:
+                meta["_native_progress_final"] = True
         return meta or None
 
     @property
@@ -1595,10 +1594,22 @@ class GatewayStreamConsumer:
         self._np_bind()
 
         try:
+            if self._np_state == "active" and self._run_still_current():
+                # Open a nonempty, stoppable preview before tools or tokens.
+                # This is a lifecycle status, not a synthetic activity row.
+                self._np_first_at = self._np_clock()
+                self._np_idle_since = self._np_first_at
+                self._np_dirty = True
+                await self._np_pump()
             while True:
                 # Abandon the stream early if the session has been reset
                 # (e.g. /new or /stop). Prevents stale deltas from being
                 # delivered after the user has already moved on.
+                if self._np_state == "stopped":
+                    # Claim is synchronous; cancellation may still be queued.
+                    # Never let those late callbacks switch to legacy delivery.
+                    await self.native_stop_finish()
+                    return
                 if not self._run_still_current():
                     await self._np_finish("abandoned")
                     await self._abandon_native_stream()
@@ -1646,6 +1657,7 @@ class GatewayStreamConsumer:
                                 self._accumulated
                                 or self._message_id
                                 or self._last_sent_text
+                                or self._np_state == "active"
                             )
                             if _streamed_something and not self._turn_split_delivery:
                                 _final_payload = self._clean_for_display(item[1])
@@ -1710,6 +1722,25 @@ class GatewayStreamConsumer:
                         self._filter_and_accumulate(item)
                     except queue.Empty:
                         break
+
+                if self._np_state == "active" and got_segment_break:
+                    # A tool boundary is not a Telegram message boundary.
+                    # Keep public pre-tool prose in the existing history ledger,
+                    # retire only the provisional answer, and reuse this draft.
+                    self._flush_think_buffer()
+                    shown = format_thought(self._clean_for_display(self._accumulated))
+                    if shown:
+                        self._np_submit(("commentary", shown, None))
+                    self._accumulated = ""
+                    self._stream_ledger = ""
+                    self._np_answer = ""
+                    self._last_sent_text = ""
+                    self._np_dirty = True
+                    await self._np_pump()
+                    if got_flush:
+                        self._signal_flush(flush_event)
+                    await asyncio.sleep(0.05)
+                    continue
 
                 # Native composer: on turn end fence the writer, drain the
                 # in-flight send (bounded) and hand the visible lines to the
@@ -2990,6 +3021,15 @@ class GatewayStreamConsumer:
         """
         return self._np_fence("stopped")
 
+    async def native_stop_close(self) -> None:
+        """Retire the network writer before the adapter requests cancellation.
+
+        No history/network wait here: a stalled draft cannot delay Stop intake.
+        Yield once to deliver cancellation to the already-fenced send task.
+        """
+        await self._np_retire_send(0)
+        await asyncio.sleep(0)
+
     async def native_stop_finish(self) -> None:
         """After a claimed Stop: cancel any in-flight frame and keep the history."""
         await self._np_retire_send(0)
@@ -3111,11 +3151,6 @@ class GatewayStreamConsumer:
         now = self._np_clock()
         if now < self._np_not_before:
             return
-        if not (len(self._np_ledger) or self._np_answer.strip()):
-            return
-        if self._np_first_at is not None and now - self._np_first_at > self.NATIVE_MAX_AGE:
-            await self._np_fallback("cap")
-            return
         spaced = (
             self._np_last_started is None
             or now - self._np_last_started >= self.NATIVE_MIN_SEND_INTERVAL
@@ -3134,11 +3169,6 @@ class GatewayStreamConsumer:
                 kind = "keepalive"
         if kind is None:
             return
-        if kind != "content":
-            if self._np_keepalives >= self.NATIVE_MAX_KEEPALIVES:
-                await self._np_fallback("cap")
-                return
-            self._np_keepalives += 1
         rows = self._np_ledger.snapshot()
         answer = self._np_answer
         idle_since = self._np_ledger_idle_since()
