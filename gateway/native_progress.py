@@ -169,11 +169,11 @@ class ActivityLedger:
             if row.kind != "tool":
                 lines.append(row.text)  # already-public commentary stays distinct
                 continue
-            duration = "unknown duration" if row.duration is None else f"{row.duration:.3f}s"
+            duration = "unknown duration" if row.duration is None else f"{row.duration!r}s"
             identity = row.call_id or "unknown"
             provenance = "aggregate failure; unknown pairing" if row.aggregate_error else row.correlation
             detail = row.raw_detail if row.raw_detail is not None else row.text
-            lines.append(f"{row.tool} [{identity}] · {row.state} · {duration} · start={row.started_at:.6f} · {provenance}: {detail}")
+            lines.append(f"{row.tool} [{identity}] · {row.state} · {duration} · start={row.started_at!r} · {provenance}: {detail}")
         return lines
 
     def lines(self) -> List[str]:

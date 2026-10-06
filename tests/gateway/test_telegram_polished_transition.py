@@ -168,7 +168,7 @@ async def test_lossy_or_large_details_are_retrievable_once_with_truthful_history
             api.fail["send_document"] = RuntimeError("offline")
     turn = await run_turn(monkeypatch, tmp_path, [
         ("tool", "terminal", command[:40], {"command": command}),
-        ("done", "terminal", 2.25, True),
+        ("done", "terminal", 2.25123456789, True),
     ], native=True, cleanup=True, api_setup=setup, session="doc-lossless", event_message_id="9002")
     docs = turn.api.methods("send_document")
     assert len(docs) == 1, "exactly one upload attempt, never duplicate retry"
@@ -178,7 +178,7 @@ async def test_lossy_or_large_details_are_retrievable_once_with_truthful_history
     record_property("fake_wire_document_content_utf8", payload)
     record_property("fake_wire_document_route", str({k: doc.get(k) for k in ("chat_id", "reply_to_message_id", "message_thread_id", "filename", "document_mode")}))
     record_property("fake_wire_upload_failed", str(fail_document))
-    assert command in payload and "failed" in payload and "2.25" in payload
+    assert command in payload and "failed" in payload and "2.25123456789" in payload
     assert "SECRET-RESULT-PAYLOAD" not in payload
     assert doc["document_mode"] == 0o600
     assert doc["filename"] == "activity-details.txt" and doc["chat_id"] == 12345
