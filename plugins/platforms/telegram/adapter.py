@@ -611,6 +611,10 @@ class TelegramAdapter(BasePlatformAdapter):
     # Bot API 10.1 Rich Messages cap the raw markdown/html text at 32,768
     # UTF-8 characters. Content above this is sent via the legacy chunking path.
     # AIActions icon lookup budgets (see _native_icons_nowait).
+    # Off until __init__ reads the config: an adapter that was only partly
+    # constructed must read the native activity display as disabled.
+    _native_progress_enabled: bool = False
+    _native_progress_disabled: bool = False
     NATIVE_ICON_SET_NAME = "AIActions"
     NATIVE_ICON_LOOKUP_TIMEOUT = 5.0
     NATIVE_ICON_POSITIVE_TTL = 24 * 3600
@@ -5236,7 +5240,9 @@ class TelegramAdapter(BasePlatformAdapter):
         # Forget every draft (restart/reconnect ids are unknown to a new
         # process anyway), cancel in-flight Stop work and the icon lookup.
         self._native_stop_ready = False
-        self._native_drafts.clear()
+        native_drafts = getattr(self, "_native_drafts", None)
+        if native_drafts:
+            native_drafts.clear()
         for stop_task in list(getattr(self, "_native_stop_tasks", ())):
             stop_task.cancel()
         icon_task = getattr(self, "_native_icon_task", None)

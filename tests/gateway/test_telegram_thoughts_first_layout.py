@@ -354,9 +354,9 @@ def test_tools_group_compactly_and_thoughts_get_clear_space_in_event_order():
     body = block.removeprefix("<tg-thinking>").removesuffix("</tg-thinking>")
     tool = "Reading same preview… · <i>Done</i>"
     assert body.split("<br><br>")[1:] == [
-        "<b>💭 Checking both clocks.</b>",
+        "💭 Checking both clocks.",          # earlier update: same words, normal weight
         f"{tool}<br>{tool}",
-        "<b>💭 They agree.</b>",
+        "<b>💭 They agree.</b>",              # only the newest update is bold
     ]
 
 
