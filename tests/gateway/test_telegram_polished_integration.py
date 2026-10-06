@@ -124,8 +124,14 @@ async def test_long_command_is_a_bounded_preview_live_and_whole_in_the_diagnosti
 
 
 @pytest.mark.asyncio
-async def test_credentials_and_host_paths_never_reach_the_wire(monkeypatch, tmp_path, request):
-    command = "curl -H 'Authorization: Bearer sk-live-abcdef0123456789abcdef' https://example.test > /home/starboy/.clover/out.txt"
+async def test_credentials_and_gateway_private_artifacts_never_reach_the_wire(monkeypatch, tmp_path, request):
+    from clover_constants import get_clover_home
+
+    private = get_clover_home() / "workspace" / "native-activity" / "0123abcd.txt"
+    command = (
+        "curl -H 'Authorization: Bearer sk-live-abcdef0123456789abcdef' https://example.test"
+        f" > /srv/reports/out.txt; cat {private}"
+    )
     args = {"command": command, "api_key": "sk-live-abcdef0123456789abcdef"}
     turn = await run_turn(
         monkeypatch, tmp_path,
@@ -136,10 +142,13 @@ async def test_credentials_and_host_paths_never_reach_the_wire(monkeypatch, tmp_
     everything = json.dumps([kw for _, kw in turn.api.calls], default=str)
 
     assert "sk-live-abcdef0123456789abcdef" not in everything
-    assert "/home/starboy" not in everything
+    assert "0123abcd" not in everything and "native-activity" not in everything
     assert "SECRET-RESULT-PAYLOAD" not in everything
     assert "Failed" in blocks(turn.api)[-1]
-    assert "terminal [script-1] · failed" in html.unescape("\n".join(persisted(turn.api))).replace("\\", "")
+    history = html.unescape("\n".join(persisted(turn.api))).replace("\\", "")
+    assert "terminal [script-1] · failed" in history
+    # the operand the command itself named is the permitted raw detail
+    assert "> /srv/reports/out.txt; cat [gateway-private]" in history
 
 
 @pytest.mark.asyncio

@@ -288,15 +288,54 @@ def test_id_bearing_row_cannot_be_completed_by_unidentified_callback():
     assert row.state == "running" and row.duration is None
 
 
-def test_raw_diagnostics_redact_credentials_and_any_host_path_before_persistence():
+def test_raw_diagnostics_redact_credentials_and_gateway_private_artifacts_before_persistence():
+    from clover_constants import get_clover_home
+
+    home = get_clover_home()
+    document = home / "workspace" / "native-activity" / "0123abcd.txt"
+    command = (
+        "read /srv/private/client.csv\n  cat /home/person/notes.md\n"
+        f"  cat {document} {home / 'auth.json'} {home / '.env'}\n"
+        "  curl -H 'Authorization: Bearer sk-live-abcdef0123456789abcdef' https://example.test"
+    )
     c = consumer()
     c.route_progress_item({"type": "tool.started", "tool_name": "terminal", "tool_call_id": "known",
-        "preview": "safe preview", "arguments": {"command": "read /srv/private/client.csv\n  cat /home/person/secret", "password": "not-permitted"}})
+        "preview": "safe preview", "arguments": {"command": command, "password": "not-permitted"}})
     c._np_apply_events()
     raw = c._np_ledger.rows[0].raw_detail
     assert raw is not None
-    assert "not-permitted" not in raw and "/srv/private" not in raw and "/home/person" not in raw
-    assert "[host-path]" in raw and "[REDACTED]" in raw
+    # credentials and the gateway's own private artifacts never persist
+    assert "not-permitted" not in raw and "[REDACTED]" in raw
+    assert "sk-live-abcdef0123456789abcdef" not in raw
+    assert "native-activity" not in raw and "0123abcd" not in raw
+    assert "auth.json" not in raw and str(home / ".env") not in raw
+    assert raw.count("[gateway-private]") == 3
+    # the operands the user's own command named are the permitted raw detail
+    assert "read /srv/private/client.csv\n  cat /home/person/notes.md\n" in raw
+
+
+@pytest.mark.parametrize("text", [
+    "progress 3 / 4 done",
+    "echo $((3 / 4))",
+    "sed -E 's/a|b/c/g' in.txt",
+    "grep -E '^/[a-z]+/' list.txt",
+    "cat /etc/hosts",
+    "type C:\\Users\\me\\notes.txt",
+    "ffmpeg -i /home/me/Videos/clip one.mp4 /tmp/out.gif",
+])
+def test_public_detail_keeps_slashes_and_the_paths_a_command_names(text):
+    from gateway.native_progress import ActivityLedger
+
+    assert ActivityLedger.sanitize_detail(None, text) == text
+    assert ActivityLedger.sanitize_detail({"command": text}) == text
+
+
+def test_live_native_rows_keep_the_operand_the_tool_was_given():
+    c = consumer()
+    c.on_tool_progress("📄 /home/me/notes.md", tool="read_file")
+    c.on_tool_progress("💻 echo $((3 / 4))", tool="terminal")
+    c._np_apply_events()
+    assert [r.text for r in c._np_ledger.rows] == ["📄 /home/me/notes.md", "💻 echo $((3 / 4))"]
 
 
 @pytest.mark.asyncio

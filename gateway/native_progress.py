@@ -46,6 +46,32 @@ class ActivityRow:
     aggregate_error: bool = False
 
 
+# The gateway's own secret-bearing files and private per-turn diagnostics,
+# relative to the profile home.  Paths a tool call itself names are the
+# permitted raw detail and stay exactly as written.
+_GATEWAY_PRIVATE_ARTIFACTS = ("workspace/native-activity", "auth.json", ".env")
+
+
+def _redact_gateway_private_paths(text: str) -> str:
+    import re
+    from clover_constants import get_clover_home
+
+    home = get_clover_home()
+    roots = {str(home)}
+    try:
+        roots.add(str(home.resolve()))
+    except OSError:
+        pass
+    for root in sorted(roots, key=len, reverse=True):
+        for name in _GATEWAY_PRIVATE_ARTIFACTS:
+            relative = r"[\\/]+".join(re.escape(part) for part in name.split("/"))
+            text = re.sub(
+                re.escape(root) + r"[\\/]+" + relative + r"(?![\w-])[^\s\"'<>|]*",
+                "[gateway-private]", text,
+            )
+    return text
+
+
 class ActivityLedger:
     """Whole-turn activity rows, in the order the gateway would show them."""
 
@@ -138,7 +164,6 @@ class ActivityLedger:
     def sanitize_detail(arguments: Any, preview: str = "") -> str:
         """Retain permitted arguments, never results; force existing secret redaction."""
         import json
-        import re
         from agent.redact import redact_sensitive_text, _key_has_secret_keyword
 
         def safe(value):
@@ -148,9 +173,7 @@ class ActivityLedger:
                 return [safe(v) for v in value]
             if isinstance(value, str):
                 value = redact_sensitive_text(value, force=True)
-                # Diagnostics are public UI data, not a host filesystem disclosure.
-                value = re.sub(r"(?<![\w:/])(?:/(?!/)|[A-Za-z]:[\\/])[^\s\"'<>|]*", "[host-path]", value)
-                return value
+                return _redact_gateway_private_paths(value)
             return value
 
         permitted = safe(arguments)

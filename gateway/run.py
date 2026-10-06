@@ -6363,7 +6363,7 @@ class TurnRunner:
         # ack and Slack's native task cards both ride the authoritative
         # start callback, so neither has to infer identity from tool names.
         ctx._native_activity_id_events = bool(
-            _stream_consumer is not None and _stream_consumer.native_activity_active
+            _stream_consumer is not None and getattr(_stream_consumer, "native_activity_active", False) is True
         )
         _combined_start_cb = ctx.native_tool_start_callback or ctx.voice_ack_callback
         agent.tool_start_callback = (
