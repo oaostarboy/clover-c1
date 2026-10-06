@@ -99,7 +99,7 @@ async def test_real_runner_enables_existing_id_producer_before_clipping(monkeypa
     monkeypatch.setattr(GatewayStreamConsumer, "_np_persist", persist)
     await run_turn(monkeypatch, tmp_path, [], native=True, cleanup=True, session="id-producer")
     assert len(captured) == 2
-    assert [r.call_id for r in captured] == ["a", "b"], "real ID hooks must reach Telegram"
+    assert [getattr(r, "call_id", None) for r in captured] == ["a", "b"], "real ID hooks must reach Telegram"
     assert [(r.state, r.duration) for r in captured] == [("failed", 1.25), ("succeeded", 0.25)]
     assert captured[0].raw_detail.endswith("one\n  || <tag>")
 
