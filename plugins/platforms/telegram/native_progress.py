@@ -26,6 +26,8 @@ THINKING_CLOSE = "</tg-thinking>"
 
 _EMOJI_ID_RE = re.compile(r"^[0-9]{1,32}$")
 _FENCE_RE = re.compile(r"```[^\n`]*\n(.*?)\n?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"(?<!\\)(`+)(.+?)(?<!`)\1(?!`)")
+_BOLD_RE = re.compile(r"(?<!\\)\*\*([^*\n]+)\*\*(?!\*)")
 _THOUGHT_PREFIX = "\U0001F4AD "
 
 # Row states the consumer can justify (see gateway.native_progress).
@@ -37,8 +39,8 @@ STATE_STOPPED = "stopped"
 STATE_INFO = "info"
 
 _STATE_LABEL = {
-    STATE_RUNNING: "Executing",
-    STATE_SUCCEEDED: "Succeeded",
+    STATE_RUNNING: "Running",
+    STATE_SUCCEEDED: "Done",
     STATE_FAILED: "Failed",
     STATE_COMPLETED: "Completed",
     STATE_STOPPED: "Stopped",
@@ -107,7 +109,28 @@ def _text_lines(text: str) -> str:
         if italic:
             rendered.append(f"{escape_text(lead)}<i>{escape_text(body[1:-1])}</i>")
         else:
-            rendered.append(escape_text(line if not lead else lead + body))
+            # Only balanced, single-line standard Markdown bold is interpreted.
+            # Unmatched/untrusted delimiters stay escaped literal text.
+            cursor = 0
+            pieces = []
+            for code_match in _INLINE_CODE_RE.finditer(body):
+                before = body[cursor:code_match.start()]
+                before_cursor = 0
+                for match in _BOLD_RE.finditer(before):
+                    pieces.append(escape_text(before[before_cursor:match.start()]))
+                    pieces.append(f"<b>{escape_text(match.group(1))}</b>")
+                    before_cursor = match.end()
+                pieces.append(escape_text(before[before_cursor:]))
+                pieces.append(f"<code>{escape_text(code_match.group(2))}</code>")
+                cursor = code_match.end()
+            after = body[cursor:]
+            after_cursor = 0
+            for match in _BOLD_RE.finditer(after):
+                pieces.append(escape_text(after[after_cursor:match.start()]))
+                pieces.append(f"<b>{escape_text(match.group(1))}</b>")
+                after_cursor = match.end()
+            pieces.append(escape_text(after[after_cursor:]))
+            rendered.append(escape_text(lead) + "".join(pieces))
     return "<br>".join(rendered)
 
 
@@ -135,32 +158,54 @@ def _icon_for(row: Any, icons: Optional[Mapping[str, NativeIcon]]) -> str:
     return _icon_tag(icons.get("thinking")) if getattr(row, "kind", "") != "tool" else ""
 
 
-def _header_label(running: Any) -> str:
+def _header_label(running: Any, icons: Optional[Mapping[str, NativeIcon]] = None) -> str:
+    """Use the safe action title, not arguments or a duplicated full row."""
     if running is None:
         return "Thinking"
     tool = getattr(running, "tool", None)
+    raw = str(getattr(running, "text", "") or "")
     if tool:
         try:
-            from agent.display import get_tool_verb
+            from agent.display import get_tool_emoji, get_tool_verb
 
+            emoji = get_tool_emoji(tool, default="⚙️") if icons and icons.get("running") else ""
             verb = get_tool_verb(tool)
         except Exception:
+            emoji = ""
             verb = None
-        if verb:
-            return verb.split()[0]
-    return "Working"
-
-
-def _tool_display_label(tool: Optional[str]) -> str:
-    if tool:
-        try:
-            from agent.display import get_tool_verb
-
-            verb = get_tool_verb(tool)
-        except Exception:
-            verb = None
-        if verb:
+        if emoji and raw.startswith(f"{emoji} "):
+            raw = raw[len(emoji) + 1:]
+        title = next((line.strip() for line in raw.splitlines() if line.strip()), "")
+        if verb and title.startswith(verb):
+            if verb.lower() in {"running", "executing"}:
+                if title.startswith(f"{verb} "):
+                    return " ".join(title.split()[:2])
+                return _tool_display_label(tool, STATE_RUNNING)
             return verb
+        if title.lower().startswith(("running ", "executing ")):
+            words = title.split()
+            if len(words) > 1:
+                return " ".join(words[:2])
+            return _tool_display_label(tool, STATE_RUNNING)
+        return title or _tool_display_label(tool)
+    title = next((line.strip() for line in raw.splitlines() if line.strip()), "")
+    return title or "Working"
+
+
+def _tool_display_label(tool: Optional[str], state: str = "") -> str:
+    if tool:
+        if state != STATE_RUNNING:
+            try:
+                from agent.display import get_tool_verb
+
+                verb = get_tool_verb(tool)
+            except Exception:
+                verb = None
+            if verb and not verb.lower().startswith(("running", "executing")):
+                return verb
+        # Active state is shown in its own status field. Use the tool identity,
+        # not an action verb that would repeat "Running" beside that status.
+        return str(tool).replace("_", " ").strip().capitalize()
     return "Tool action"
 
 
@@ -174,20 +219,38 @@ def _tool_detail_text(text: str, label: str, tool: Optional[str]) -> str:
         emoji = ""
     prefix = f"{emoji} " if emoji and text.startswith(f"{emoji} ") else ""
     candidate = text[len(prefix):]
-    if candidate == label:
-        return ""
-    if candidate.startswith(label) and len(candidate) > len(label) and candidate[len(label)].isspace():
-        return candidate[len(label):].lstrip()
+    recognized = [label]
+    if tool:
+        try:
+            from agent.display import get_tool_verb
+
+            verb = get_tool_verb(tool)
+            if tool == "terminal" and verb and verb.lower() in {"running", "executing"}:
+                recognized.append(f"{verb} command")
+            if verb:
+                recognized.append(verb)
+        except Exception:
+            pass
+    for heading in sorted(recognized, key=len, reverse=True):
+        if candidate == heading:
+            return ""
+        if candidate.startswith(heading) and len(candidate) > len(heading) and candidate[len(heading)].isspace():
+            return candidate[len(heading):].lstrip()
     return text
 
 
-def render_row(row: Any, icons: Optional[Mapping[str, NativeIcon]] = None) -> str:
+def render_row(
+    row: Any,
+    icons: Optional[Mapping[str, NativeIcon]] = None,
+    *,
+    now: Optional[float] = None,
+) -> str:
     raw_text = str(getattr(row, "text", "") or "")
     text = _inline_markup(raw_text)
     kind = getattr(row, "kind", "")
     state = getattr(row, "state", STATE_INFO)
     if kind == "tool":
-        raw_label = _tool_display_label(getattr(row, "tool", None))
+        raw_label = _tool_display_label(getattr(row, "tool", None), state)
         label = escape_text(raw_label)
         tool = str(getattr(row, "tool", "") or "")
         detail = _inline_markup(_tool_detail_text(raw_text, raw_label, tool))
@@ -195,19 +258,22 @@ def render_row(row: Any, icons: Optional[Mapping[str, NativeIcon]] = None) -> st
         if detail:
             content += f"<br>{detail}"
     elif kind in {"thought", "commentary"}:
-        label = "Thought" if kind == "thought" else "Commentary"
-        content = f"<i>{label}</i>"
-        if text:
-            content += f"<br><i>{text}</i>"
+        # Keep public updates in their original words and order. The native
+        # block already provides hierarchy; don't add a section heading or
+        # blanket italic styling around ordinary commentary.
+        content = text
     else:
         content = f"{_icon_for(row, icons)}{text}"
 
     suffix = ""
-    label = _STATE_LABEL.get(state)
-    if kind == "tool" and label:
-        suffix = f"<i>— {escape_text(label)}"
+    state_label = _STATE_LABEL.get(state)
+    if kind == "tool" and state_label:
+        suffix = f"<i>{escape_text(state_label)}"
         duration = getattr(row, "duration", None)
-        if duration is not None and state in (STATE_SUCCEEDED, STATE_FAILED):
+        if state == STATE_RUNNING and now is not None:
+            started = float(getattr(row, "started_at", now) or now)
+            duration = max(0.0, now - started)
+        if duration is not None and state in (STATE_RUNNING, STATE_SUCCEEDED, STATE_FAILED):
             suffix += f" · {format_elapsed(duration)}"
         suffix += "</i>"
     return f"{content} {suffix}".strip()
@@ -231,8 +297,9 @@ def render_thinking_block(
     else:
         started = float(getattr(rows[0], "started_at", now) or now)
     head_icon = _icon_tag((icons or {}).get("thinking")) if icons else ""
-    header = f"<b>{head_icon}{escape_text(_header_label(running))} · {format_elapsed(now - started)}</b>"
-    body = "<br><br>".join([header] + [render_row(r, icons) for r in rows])
+    title = escape_text(_header_label(running, icons))
+    header = f"<b>{head_icon}{title} · {format_elapsed(now - started)}</b>"
+    body = "<br>".join([header] + [render_row(r, icons, now=now) for r in rows])
     return f"{THINKING_OPEN}{body}{THINKING_CLOSE}"
 
 

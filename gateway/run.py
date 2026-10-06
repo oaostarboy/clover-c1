@@ -5098,6 +5098,15 @@ class TurnRunner:
         adapter = self._runner._adapter_for_source(ctx.source)
         if not adapter or not lines:
             return
+        # Successful native activity already appeared in the live composer. If
+        # cleanup_progress will replace its artifact with a summary card, don't
+        # flash a second, legacy progress bubble immediately before the final.
+        # The post-delivery cleanup callback creates the summary card directly
+        # when there is no legacy bubble to edit. Failure/Stop/fallback keep the
+        # established persistent activity artifact.
+        if ctx._cleanup_progress and reason == "done" and getattr(ctx, "_progress_completed_ok", False):
+            setattr(ctx, "_native_progress_history_suppressed", True)
+            return
         len_fn = adapter.message_len_fn if isinstance(adapter, BasePlatformAdapter) else len
         try:
             raw_limit = int(getattr(adapter, "MAX_MESSAGE_LENGTH", 4000) or 4000)
@@ -7001,6 +7010,14 @@ class TurnRunner:
             # delivered_final_matches reconcile, suppressing the gateway's
             # own error-delivery path. Writers of these shapes:
             # agent/conversation_loop.py interrupt/retry-abort returns.
+            if isinstance(result, dict):
+                setattr(
+                    ctx,
+                    "_progress_completed_ok",
+                    not result.get("failed")
+                    and not result.get("interrupted")
+                    and result.get("completed") is not False,
+                )
             if (
                 isinstance(result, dict)
                 and not result.get("failed")
@@ -32275,7 +32292,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # was in flight when the turn ended) is deleted directly
                 # rather than tracked for a callback that already ran.
                 _cleanup_armed[0] = True
-            if _cleanup_eligible and _cleanup_msg_ids:
+            if _cleanup_eligible:
                 _ids_snapshot = list(_cleanup_msg_ids)
                 _chat_id_snapshot = source.chat_id
                 _adapter_snapshot = _cleanup_adapter
@@ -32323,6 +32340,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
                 def _cleanup_temp_bubbles() -> None:
                     async def _delete_all() -> None:
+                        # A successful native composer has no temporary legacy
+                        # bubble to turn into the summary card. Post the same
+                        # card directly after final delivery instead of showing
+                        # a legacy tool-stream bubble for one frame.
+                        if not _ids_snapshot:
+                            if not getattr(turn_ctx, "_native_progress_history_suppressed", False):
+                                return
+                            if _can_card:
+                                _send_card = getattr(_adapter_snapshot, "send", None)
+                                if callable(_send_card):
+                                    _result = _send_card(
+                                        chat_id=_chat_id_snapshot,
+                                        content=_card_text,
+                                        reply_to=turn_ctx._progress_reply_to,
+                                        metadata=turn_ctx._progress_metadata,
+                                    )
+                                    if inspect.isawaitable(_result):
+                                        await _result
+                            return
                         # Re-read the live list: a heartbeat send that was in
                         # flight at turn end can land after the snapshot above.
                         await _collapse_or_delete_bubbles(

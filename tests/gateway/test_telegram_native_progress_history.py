@@ -41,12 +41,56 @@ async def test_cleanup_progress_collapses_the_native_artifact_into_the_same_card
     await fire_cleanup(old)
     await fire_cleanup(new)
 
-    assert card_edits(new.api) and card_edits(new.api)[-1] == card_edits(old.api)[-1]
-    assert "3 tool call" in card_edits(new.api)[-1]
+    old_card = card_edits(old.api)[-1]
+    native_cards = [
+        unmd(kw["text"])
+        for kw in new.api.methods("send_message")
+        if "tool call" in kw["text"] and FINAL not in kw["text"]
+    ]
+    assert native_cards and native_cards[-1] == old_card
+    assert "3 tool call" in native_cards[-1]
     # nothing but the one collapsed card + the final remains visible from the progress lane
     deleted = {kw["message_id"] for kw in new.api.methods("delete_message")}
     live = [kw for kw in new.api.methods("send_message") if kw["_message_id"] not in deleted]
     assert any(FINAL in kw["text"] for kw in live) and len(live) == 2
+
+
+
+
+@pytest.mark.asyncio
+async def test_successful_native_cleanup_skips_transient_legacy_tool_bubble(monkeypatch, tmp_path):
+    turn = await run_turn(
+        monkeypatch, tmp_path, [T, NAP, S, NAP, R, NAP], native=True, cleanup=True,
+        session="sess-native-cleanup-no-flash",
+    )
+    assert turn.api.rich_drafts()  # fixture exercised the actual native draft path
+    final_index = next(
+        i for i, (method, kw) in enumerate(turn.api.calls)
+        if method == "send_message" and FINAL in kw.get("text", "")
+    )
+    legacy_activity = [
+        (method, kw.get("text", ""))
+        for method, kw in turn.api.calls[:final_index]
+        if method == "send_message" and FINAL not in kw.get("text", "")
+    ]
+    assert legacy_activity == []
+
+    await fire_cleanup(turn)
+    visible_messages = [kw["text"] for kw in turn.api.methods("send_message")]
+    assert any("tool call" in text for text in visible_messages)
+    assert any(FINAL in text for text in visible_messages)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_does_not_create_a_card_for_log_only_legacy_turn(monkeypatch, tmp_path):
+    turn = await run_turn(
+        monkeypatch, tmp_path, [T, NAP, S, NAP, R, NAP],
+        native=False, cleanup=True, display={"tool_progress": "log"},
+        session="sess-log-only-cleanup",
+    )
+    await fire_cleanup(turn)
+    assert bubbles(turn.api) == []
+    assert sum(FINAL in kw["text"] for kw in turn.api.methods("send_message")) == 1
 
 
 @pytest.mark.asyncio

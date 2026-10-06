@@ -117,7 +117,56 @@ def test_native_progress_requires_rich_capable_bot():
     assert adapter.supports_native_progress(chat_type="dm") is False
 
 
-# ── Official payload ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_clean_feed_frame_preserves_content_with_specific_header_natural_commentary_and_single_status():
+    from agent.display import get_tool_emoji
+    from plugins.platforms.telegram.native_progress import NativeIcon
+
+    adapter, api = native_adapter()
+    icons = {
+        "thinking": NativeIcon("5535457114983497745", "🧠"),
+        "running": NativeIcon("5537581341383589905", "🔧"),
+    }
+    rows = [
+        row(f"{get_tool_emoji('web_search', default='⚙️')} Searching the web for local time", tool="web_search", state="running", started_at=1.0),
+        row("**I found two likely clocks.**", kind="commentary", tool="", state="info"),
+        row("Reading /tmp/clock report\n```text\n*utc* 09:30\n```", tool="read_file",
+            state="succeeded", started_at=4.0, duration=0.2),
+        row("same call identity A", tool="read_file", state="succeeded", started_at=4.0, duration=0.1),
+        row("same call identity B", tool="read_file", state="succeeded", started_at=4.5, duration=0.2),
+    ]
+    await adapter.send_native_progress_draft("1", 81, rows, "", now=6.0, icons=icons)
+    md = _markdowns(api)[-1]
+
+    assert '<tg-emoji emoji-id="5535457114983497745">🧠</tg-emoji>' in md
+    assert "Searching the web · 5s" in md
+    assert "<i>Commentary</i>" not in md and "<i>I found two likely clocks.</i>" not in md
+    assert "**" not in md and "I found two likely clocks." in md
+    assert "<i>Running · 5s</i>" in md and "Executing" not in md
+    assert "<i>Done · 0s</i>" in md
+    assert "<b>Reading</b><br>/tmp/clock report" in md and "<code>*utc* 09:30</code>" in md
+    assert "same call identity A" in md and "same call identity B" in md
+    assert md.index("Searching the web · 5s") < md.index("I found two likely clocks.") < md.index("<b>Reading</b>")
+    assert "for local time" in md
+    assert md.count("5537581341383589905") == 1
+
+
+def test_bold_formatter_preserves_stars_inside_inline_code():
+    from plugins.platforms.telegram.native_progress import _inline_markup
+
+    rendered = _inline_markup("Use `x ** y` literally, and **make this bold**.")
+    assert "<code>x ** y</code>" in rendered
+    assert "<b>make this bold</b>" in rendered
+
+
+def test_completed_unpaired_tool_row_does_not_claim_an_unknown_duration():
+    from plugins.platforms.telegram.native_progress import render_row
+
+    rendered = render_row(row("same-name call was ambiguous", state="completed", duration=8.0))
+    assert "<i>Completed</i>" in rendered
+    assert "8s" not in rendered
 
 
 def test_tool_row_renders_action_once_and_only_fenced_code_as_code():
@@ -127,7 +176,8 @@ def test_tool_row_renders_action_once_and_only_fenced_code_as_code():
     code_emoji = get_tool_emoji("execute_code", default="⚙️")
     prose = row(f"{code_emoji} Running code from pathlib import Path W=Path('/home/…')", tool="execute_code")
     rendered = render_row(prose)
-    assert rendered.count("Running code") == 1
+    assert "<b>Execute code</b>" in rendered
+    assert rendered.count("Running") == 1
     assert code_emoji not in rendered
     assert "<code>" not in rendered
     assert "from pathlib import Path W=Path('/home/…')" in rendered
@@ -137,8 +187,8 @@ def test_tool_row_renders_action_once_and_only_fenced_code_as_code():
     fenced = row(f"{terminal_emoji} Running command\n```bash\nls -la\n```", tool="terminal")
     rendered_fence = render_row(fenced)
     assert rendered_fence.count("Running") == 1
+    assert "<b>Terminal</b><br><code>ls -la</code>" in rendered_fence
     assert terminal_emoji not in rendered_fence
-    assert "<b>Running</b><br>command" in rendered_fence
     assert "<code>ls -la</code>" in rendered_fence
     assert "<code><code>" not in rendered_fence
     assert "<code>command<br>" not in rendered_fence
@@ -164,17 +214,19 @@ async def test_screenshot_activity_rows_render_with_hierarchy_without_losing_rep
 
     await adapter.send_native_progress_draft("1", 81, rows, "", now=6.4)
     md = _markdowns(api)[-1]
-    header = md.partition("<br><br>")[0]
+    header = md.partition("<br>")[0]
 
-    assert "<b>Running · 6s</b>" in header
-    assert "Running code from pathlib" not in header
-    assert "<b>Running code</b>" in md
-    assert "<code>Running code from pathlib import Path" not in md
-    assert "<i>Thought</i><br><i>Thinking through the task</i>" in md
+    assert "<b>Running code · 6s</b>" in header
+    assert "<br><br>" not in md
+    assert "<b>Execute code</b>" in md
+    assert md.count("<b>Execute code</b>") == 3
+    assert md.count("Running code") == 1  # only the current action header retains the raw title
+    assert "<code>Running code from pathlib" not in md
+    assert "<i>Thought</i>" not in md and "Thinking through the task" in md
     assert "<b>Updating tasks</b>" in md
-    assert "— Succeeded · 0s" in md
+    assert "<i>Done · 0s</i>" in md
     assert md.count("from pathlib import Path") == 3
-    assert "<br><br>" in md
+    assert "<br><br>" not in md
 
 
 @pytest.mark.asyncio
@@ -199,7 +251,7 @@ async def test_native_draft_uses_official_rich_draft_payload_with_can_stop():
     md = frame["rich_message"]["markdown"]
     assert md.startswith("<tg-thinking>") and md.count("<tg-thinking>") == 1
     head, _, tail = md.partition("</tg-thinking>")
-    assert "Searching the web for sony reviews" in head
+    assert "Searching the web" in head
     assert tail.strip() == "partial **answer**"
     # Only the ephemeral composer opted into the draft endpoint; flags untouched.
     assert adapter._rich_drafts_enabled is False
@@ -330,6 +382,31 @@ async def _frame(adapter, draft_id=1):
     return await adapter.send_native_progress_draft(
         "1", draft_id, [row("🔍 Searching", started_at=0.0)], "", now=3.0,
     )
+
+
+def test_terminal_running_header_keeps_source_title_and_not_dangling_command():
+    import asyncio
+
+    from agent.display import get_tool_emoji
+
+    async def render():
+        adapter, api = native_adapter()
+        api.sticker_sets["AIActions"] = _aiactions()
+        terminal = get_tool_emoji("terminal", default="⚙️")
+        entry = row(
+            f"{terminal} Running command sleep 10; date '+%I:%M:%S %p %Z'",
+            tool="terminal", state="running", started_at=996.0,
+        )
+        await adapter.send_native_progress_draft("1", 73, [entry], "", now=1001.0)
+        await _settle_lookup(adapter)
+        await adapter.send_native_progress_draft("1", 73, [entry], "", now=1001.0)
+        return _markdowns(api)[-1]
+
+    markdown = asyncio.run(render())
+    assert "Running command · 5s</b>" in markdown
+    assert "<b>Terminal</b>" in markdown
+    assert "sleep 10; date '+%I:%M:%S %p %Z'" in markdown
+    assert "command sleep" not in markdown
 
 
 def _markdowns(api):
@@ -645,7 +722,7 @@ async def test_one_composer_shows_rows_and_partial_answer_on_one_draft_and_final
     assert await until(lambda: any("Here is the" in thinking_of(m)[1] for m in _markdowns(api)))
     consumer.on_tool_complete("web_search", duration=2.0, is_error=False)
     consumer.on_delta("answer.")
-    assert await until(lambda: any("Succeeded" in m for m in _markdowns(api)))
+    assert await until(lambda: any("Done" in m for m in _markdowns(api)))
     consumer.finish("Here is the answer.")
     await asyncio.wait_for(task, 3)
 
@@ -653,8 +730,8 @@ async def test_one_composer_shows_rows_and_partial_answer_on_one_draft_and_final
     assert len({d["draft_id"] for d in drafts}) == 1 and drafts[0]["draft_id"] > 0
     assert all(d["can_stop"] is True and d["chat_id"] == 12345 for d in drafts)
     mds = _markdowns(api)
-    assert any("Executing" in m and "Searching the web for sony reviews" in m for m in mds)
-    assert any("Succeeded" in m and "· 2s" in m for m in mds)
+    assert any("Running · 0s" in m and "Searching the web for sony reviews" in m for m in mds)
+    assert any("Done · 2s" in m for m in mds)
     # No second progress bubble, no legacy draft/edit: the only persistent send is the final.
     assert api.methods("send_message_draft") == [] and api.methods("edit_message_text") == []
     sent = final_sends(api)
@@ -834,7 +911,7 @@ async def test_running_tool_refreshes_elapsed_time(monkeypatch):
     clock.t += 12
     assert await until(lambda: len(api.rich_drafts()) > before)
     head = thinking_of(_markdowns(api)[-1])[0]
-    assert "Searching · 12s" in head and "Executing" in head
+    assert "🔍 slow search · 12s" in head and "Running · 12s" in head
     consumer.finish("")
     await asyncio.wait_for(task, 3)
 
@@ -853,12 +930,12 @@ async def test_tool_outcomes_are_only_claimed_when_justified(monkeypatch):
     consumer.on_tool_complete("read_file", duration=0.1, is_error=False)
     assert await until(lambda: any("Failed" in m for m in _markdowns(api)))
     mid = thinking_of(_markdowns(api)[-1])[0]
-    assert "one <i>— Failed · 1s</i>" in mid
-    assert "two A <i>— Executing</i>" in mid and "two B <i>— Executing</i>" in mid   # ambiguous: no guess
+    assert "🔍 one <i>Failed · 1s</i>" in mid
+    assert "📄 two A <i>Running · 0s</i>" in mid and "📄 two B <i>Running · 0s</i>" in mid  # ambiguous: no guess
     consumer.on_tool_complete("read_file", duration=0.2, is_error=False)
-    assert await until(lambda: "two A <i>— Completed</i>" in thinking_of(_markdowns(api)[-1])[0])
+    assert await until(lambda: "📄 two A <i>Completed" in thinking_of(_markdowns(api)[-1])[0])
     end = thinking_of(_markdowns(api)[-1])[0]
-    assert "two B <i>— Completed</i>" in end and "Succeeded" not in end
+    assert "📄 two B <i>Completed" in end and "Done" not in end
     consumer.finish("")
     await asyncio.wait_for(task, 3)
 
