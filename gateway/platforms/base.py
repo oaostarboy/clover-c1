@@ -195,6 +195,10 @@ def _reply_anchor_for_event(event) -> str | None:
     platform = _platform_name(getattr(source, "platform", None))
     thread_id = getattr(source, "thread_id", None)
     raw_message = getattr(event, "raw_message", None)
+    # A run redirected by a mid-turn correction answers that correction: the
+    # gateway stamps its id on the turn's event (``correction_reply_to``) so
+    # the reply attaches to it instead of the older message that opened the turn.
+    message_id = getattr(event, "correction_reply_to", None) or getattr(event, "message_id", None)
     if (
         platform == "slack"
         and isinstance(raw_message, dict)
@@ -209,12 +213,12 @@ def _reply_anchor_for_event(event) -> str | None:
     if platform == "telegram" and thread_id and getattr(source, "chat_type", None) == "dm":
         # Reply to the triggering user message. Replying to Telegram's earlier
         # topic seed/anchor can render the bot response outside the active lane.
-        return getattr(event, "message_id", None) or getattr(event, "reply_to_message_id", None)
+        return message_id or getattr(event, "reply_to_message_id", None)
     if platform == "telegram" and thread_id:
         return None
     if platform == "feishu" and thread_id and getattr(event, "reply_to_message_id", None):
         return getattr(event, "reply_to_message_id", None)
-    return getattr(event, "message_id", None)
+    return message_id
 
 
 def should_send_media_as_audio(platform, ext: str, is_voice: bool = False) -> bool:

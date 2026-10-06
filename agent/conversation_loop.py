@@ -125,6 +125,135 @@ def _clo_status(agent: Any, kind: str, stock: str, tail: str = "", **kw: Any) ->
 # in the api_messages loop. Module-level so both sites can never drift.
 _INTERRUPT_SCAFFOLD_MARKER = "[This response was interrupted by a user correction.]"
 
+# Header of the provider-replay sidecar stamped on a mid-turn user correction.
+# Also how a later correction in the same turn recognizes an earlier one.
+_CORRECTION_CONTEXT_HEADER = "[Context from the interrupted assistant response]"
+
+# Obligation state appended at the correction boundary (sidecar only): the
+# earlier user messages of this turn that never got a final answer.
+_CORRECTION_OPEN_REQUESTS_HEADER = "[Still open from earlier in this turn]"
+_CORRECTION_OPEN_REQUESTS_LEAD = (
+    "The interrupted response never reached a final answer for these earlier "
+    "user messages, and interim commentary does not count as answering them:"
+)
+_CORRECTION_OPEN_REQUESTS_RULE = (
+    "The new message below wins wherever it changes, replaces or cancels "
+    "earlier work - do not resume anything it supersedes. Whatever it leaves "
+    "untouched is still owed: answer it in the same final reply as the new "
+    "message."
+)
+_CORRECTION_OPEN_REQUEST_MAX_CHARS = 400
+_CORRECTION_OPEN_REQUEST_MAX_ITEMS = 5
+
+# Explicit cancellation. Unambiguous phrases match anywhere; bare verbs only
+# as an imperative at the start of a clause, so "keep the Stop button" is not
+# a cancellation. A match never revives anything: it only means no earlier
+# request is carried forward as still open.
+_CORRECTION_CANCEL_RE = re.compile(
+    r"\b(?:never\s*mind|nvm|forget\s+(?:it|that|this|about)|scrap\s+(?:it|that|this)"
+    r"|don[\u2019']?t\s+bother|disregard|no\s+need\s+to)\b"
+    r"|(?:^|[.!?;:\n]\s*|,\s*)"
+    r"(?:(?:please|pls|ok|okay|no|actually|just|wait|hey)[,\s]+)*"
+    r"(?:stop|cancel|abort|halt|drop\s+(?:it|that|this)|skip\s+(?:it|that|this)"
+    r"|ignore\s+(?:it|that|this|the\s+above|my\s+(?:last|previous)))\b",
+    re.IGNORECASE,
+)
+
+
+def _correction_cancels_earlier_work(text: Any) -> bool:
+    """Return True when a user message explicitly cancels what came before."""
+    return isinstance(text, str) and bool(_CORRECTION_CANCEL_RE.search(text))
+
+
+def _visible_user_text(message: Dict[str, Any]) -> str:
+    """The user's own words from a transcript row (text parts only, never media)."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [
+            part.get("text")
+            for part in content
+            if isinstance(part, dict)
+            and part.get("type") in ("text", "input_text")
+            and isinstance(part.get("text"), str)
+        ]
+        return "\n".join(part.strip() for part in parts if part.strip())
+    return ""
+
+
+def _is_turn_correction_row(message: Dict[str, Any]) -> bool:
+    api_content = message.get("api_content")
+    return (
+        message.get("role") == "user"
+        and isinstance(api_content, str)
+        and api_content.startswith(_CORRECTION_CONTEXT_HEADER)
+    )
+
+
+def _open_turn_requests(
+    messages: List[Dict[str, Any]],
+    text: str,
+    turn_start_idx: Optional[int] = None,
+) -> List[str]:
+    """Earlier user messages of the live turn that are still owed an answer.
+
+    The turn has not produced a final answer (it is being corrected mid-flight),
+    so its opening request and any earlier corrections are still open - unless
+    one of them, or the new message itself, explicitly cancels what came before.
+    Only real user rows with visible text count; placeholders, tool results and
+    empty rows are never obligations.
+    """
+    if not text or not text.strip() or _correction_cancels_earlier_work(text):
+        return []
+
+    start: Optional[int] = None
+    if (
+        isinstance(turn_start_idx, int)
+        and 0 <= turn_start_idx < len(messages)
+        and messages[turn_start_idx].get("role") == "user"
+    ):
+        start = turn_start_idx
+    else:
+        # Callers without the turn anchor: the opener is the nearest user row
+        # that is not itself a mid-turn correction.
+        for idx in range(len(messages) - 1, -1, -1):
+            if messages[idx].get("role") == "user" and not _is_turn_correction_row(messages[idx]):
+                start = idx
+                break
+    if start is None:
+        return []
+
+    open_requests: List[str] = []
+    for idx in range(start, len(messages)):
+        row = messages[idx]
+        if idx != start and not _is_turn_correction_row(row):
+            continue
+        earlier = _visible_user_text(row)
+        if not earlier:
+            continue
+        if _correction_cancels_earlier_work(earlier):
+            open_requests = []
+            continue
+        open_requests.append(earlier)
+    return open_requests
+
+
+def _format_open_turn_requests(open_requests: List[str]) -> str:
+    """Render the still-open requests as a bounded sidecar block ('' when none)."""
+    if not open_requests:
+        return ""
+    if len(open_requests) > _CORRECTION_OPEN_REQUEST_MAX_ITEMS:
+        open_requests = [open_requests[0]] + open_requests[1 - _CORRECTION_OPEN_REQUEST_MAX_ITEMS:]
+    lines = [_CORRECTION_OPEN_REQUESTS_HEADER, _CORRECTION_OPEN_REQUESTS_LEAD]
+    for number, request in enumerate(open_requests, 1):
+        excerpt = " ".join(request.split())
+        if len(excerpt) > _CORRECTION_OPEN_REQUEST_MAX_CHARS:
+            excerpt = excerpt[: _CORRECTION_OPEN_REQUEST_MAX_CHARS - 1].rstrip() + "\u2026"
+        lines.append(f"{number}. {json.dumps(excerpt, ensure_ascii=False)}")
+    lines.append(_CORRECTION_OPEN_REQUESTS_RULE)
+    return "\n".join(lines)
+
 
 # One-time wrap-up notice appended when a wall-clock run budget crosses its
 # 80% threshold (agent.run_budget_seconds / --run-budget). Mirrors the Codex
@@ -431,7 +560,12 @@ def _moa_reference_metrics_for_hook(agent: Any) -> Any:
         return None
 
 
-def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text: str) -> None:
+def _apply_active_turn_redirect(
+    agent: Any,
+    messages: List[Dict[str, Any]],
+    text: str,
+    turn_start_idx: Optional[int] = None,
+) -> None:
     """Append a provider-safe checkpoint and correction to the live turn.
 
     Incomplete provider reasoning blocks are not valid replay items (Anthropic
@@ -467,6 +601,14 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
     screen the placeholder is marked ``display_kind="hidden"`` (empty
     content) so every transcript surface drops it, exactly like
     compaction-reference rows.
+
+    INVARIANT — a correction narrows the turn, it does not reset it. The turn
+    being corrected has no final answer yet, so the user messages that opened
+    it are still owed one unless the correction (or an earlier one) cancels
+    them. That obligation state rides the same sidecar, between the checkpoint
+    and the user's words: new bytes at the new boundary only, so no earlier
+    row, system prompt or cached prefix changes. ``turn_start_idx`` is the
+    live turn's opening user row; without it the opener is inferred.
     """
     visible = agent._strip_think_blocks(
         getattr(agent, "_current_streamed_assistant_text", "") or ""
@@ -478,8 +620,13 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
             ["Visible response before the interruption:", visible]
         )
     checkpoint = "\n\n".join(checkpoint_parts)
+    open_requests = _format_open_turn_requests(
+        _open_turn_requests(messages, text, turn_start_idx)
+    )
+    if open_requests:
+        checkpoint = f"{checkpoint}\n\n{open_requests}"
     correction = (
-        "[Context from the interrupted assistant response]\n"
+        f"{_CORRECTION_CONTEXT_HEADER}\n"
         f"{checkpoint}\n\n"
         f"{text}"
     )
@@ -2030,7 +2177,9 @@ def run_conversation(
     while (api_call_count < agent.max_iterations and agent.iteration_budget.remaining > 0) or agent._budget_grace_call:
         _redirect_text = agent._drain_pending_redirect()
         if _redirect_text:
-            _apply_active_turn_redirect(agent, messages, _redirect_text)
+            _apply_active_turn_redirect(
+                agent, messages, _redirect_text, turn_start_idx=current_turn_user_idx
+            )
             if isinstance(original_user_message, str):
                 original_user_message = (
                     f"{original_user_message}\n\n"

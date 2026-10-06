@@ -11584,6 +11584,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             except Exception as exc:
                 logger.warning("Gateway redirect failed for session %s: %s", session_key, exc)
                 redirected = False
+            if redirected:
+                self._note_correction_reply_source(session_key, event)
 
         # Store the message so it's processed as the next turn after the
         # current run finishes (or is interrupted).  Skip this for a
@@ -19533,6 +19535,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 try:
                     if running_agent.redirect((event.text or "").strip()):
                         logger.debug("PRIORITY redirect for session %s", _quick_key)
+                        self._note_correction_reply_source(_quick_key, event)
                         return None
                 except Exception as exc:
                     logger.warning(
@@ -22769,6 +22772,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_display_kind=persist_user_display_kind,
                 message_type=event.message_type,
             )
+            self._apply_correction_reply_source(session_key, event)
             _turn_seconds = time.monotonic() - _turn_started_monotonic
 
             # Stop persistent typing indicator now that the agent is done.
@@ -26416,6 +26420,70 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     def _reply_anchor_for_event(event: MessageEvent) -> Optional[str]:
         """Return the platform-specific reply anchor for GatewayRunner sends."""
         return _reply_anchor_for_event(event)
+
+    # ── Correction reply source ────────────────────────────────────────────
+    # A mid-turn correction that redirects the live run (instead of queueing a
+    # new turn) is answered by that same run, so the run's final reply belongs
+    # to the correction, not to the older message that opened the turn. This
+    # is reply ownership only; which questions the answer must cover is the
+    # agent loop's concern (see _apply_active_turn_redirect).
+
+    def _correction_reply_records(self) -> Dict[str, Dict[str, Any]]:
+        # Runners are also built via object.__new__ in tests; create lazily.
+        records = self.__dict__.get("_correction_reply_sources")
+        if records is None:
+            records = self.__dict__["_correction_reply_sources"] = {}
+        return records
+
+    def _begin_correction_reply_scope(
+        self, session_key: Optional[str], stream_consumer_holder: Optional[list] = None,
+    ) -> None:
+        """Each (re)entered run answers its own triggering message until corrected."""
+        if session_key:
+            self._correction_reply_records()[session_key] = {
+                "anchor": None,
+                "consumer_holder": stream_consumer_holder,
+            }
+
+    def _correction_reply_source(self, session_key: Optional[str]) -> Optional[str]:
+        """Reply anchor of the newest correction the live run accepted, if any."""
+        record = self._correction_reply_records().get(session_key) if session_key else None
+        return record.get("anchor") if record else None
+
+    def _note_correction_reply_source(self, session_key: Optional[str], event: MessageEvent) -> None:
+        """Record that the live run now answers ``event`` (an accepted redirect)."""
+        if not session_key or not str(getattr(event, "text", "") or "").strip():
+            return
+        anchor = self._reply_anchor_for_event(event)
+        if anchor is None:
+            return  # platform/topic does not reply-anchor; nothing to retarget
+        anchor = str(anchor)
+        record = self._correction_reply_records().setdefault(
+            session_key, {"anchor": None, "consumer_holder": None},
+        )
+        record["anchor"] = anchor
+        # A streamed final is sent by the live consumer: point it at the
+        # correction now so every later bubble of this run replies to it.
+        holder = record.get("consumer_holder")
+        consumer = holder[0] if holder else None
+        if consumer is not None and getattr(consumer, "_initial_reply_to_id", None):
+            consumer._initial_reply_to_id = anchor
+            metadata = getattr(consumer, "metadata", None)
+            if isinstance(metadata, dict) and metadata.get("telegram_reply_to_message_id") is not None:
+                metadata["telegram_reply_to_message_id"] = anchor
+
+    def _apply_correction_reply_source(self, session_key: Optional[str], event: MessageEvent) -> None:
+        """Close the run's scope; hand an unstreamed final the corrected anchor.
+
+        The adapter's final send resolves its reply anchor from ``event``
+        (``_reply_anchor_for_event``), so the correction's id is carried on
+        the event without touching ``message_id`` (reactions, delivery ledger
+        and dedup keep the turn's real id).
+        """
+        record = self._correction_reply_records().pop(session_key, None) if session_key else None
+        anchor = record.get("anchor") if record else None
+        if anchor:
+            event.correction_reply_to = anchor
 
 
     # ------------------------------------------------------------------
@@ -31564,6 +31632,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # activity composer (when it owns the display) can take today's
         # progress items; otherwise this is an ordinary queue.Queue.
         stream_consumer_holder = [None]  # Mutable container for stream consumer
+        self._begin_correction_reply_scope(session_key, stream_consumer_holder)
         progress_queue = (
             NativeAwareProgressQueue(stream_consumer_holder) if needs_progress_queue else None
         )
@@ -33017,7 +33086,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                 source=source,
                                 adapter=adapter,
                                 metadata=_status_thread_metadata,
-                                event_message_id=event_message_id,
+                                event_message_id=(
+                                    self._correction_reply_source(session_key)
+                                    or event_message_id
+                                ),
                                 text_already_delivered=_already_streamed,
                                 deliver_media=not _delivery_result.get("failed"),
                                 stream_consumer=_sc,
