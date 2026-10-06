@@ -43,7 +43,7 @@ No environment variable. Turning it off restores today's display exactly: the sa
 A live activity frame uses a specific title from the visible event text when available,
 with the selected AIActions role icon and elapsed time. Unknown or underspecified tools
 use a safe readable fallback; the renderer does not infer a command's purpose from its
-arguments. Public commentary stays in original order as normal text, and each tool row
+arguments. Public commentary stays in original order as normal text. Thought rows keep one tasteful `💭` marker beside the sentence; exact legacy single-paragraph italics are removed while wording remains intact. Each tool row
 keeps one friendly tool label, its permitted detail, and one local status/time. Active
 rows read `Running`; successful completion reads `Done`; uncertain completion remains
 `Completed`. Supported Markdown emphasis is converted safely; raw code and literal

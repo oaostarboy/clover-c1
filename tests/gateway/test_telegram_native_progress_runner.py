@@ -249,24 +249,26 @@ async def test_native_display_shows_the_same_visible_lines_as_today_and_persists
     shown = frames_text(new.api)
     from agent.display import get_tool_emoji, get_tool_verb
 
-    # Native rows split the legacy progress line into a bold action label and
-    # subordinate detail. Verify both parts while preserving the full persisted
-    # legacy line above; only its decorative emoji/duplicate verb move.
+    # Native rows preserve the legacy tool detail while presenting the action once.
     for text in bubbles(old.api):
         for line in text.split("\n"):
             core = unmd(line).replace("```", "").strip()
             legacy_thought = core.startswith("💭 ")
             if legacy_thought:
-                # Preserve the public words, but the native design omits the
-                # legacy decorative emoji and outer blanket-italic wrapper.
+                # Preserve the thought marker and public words, but remove only
+                # the generated outer italic wrapper.
                 core = core.removeprefix("💭 ").strip("_*")
             else:
                 core = core.strip("_*")
             if not core:
                 continue
             if legacy_thought:
-                assert core in shown, (case, core)
-                assert "💭" not in shown, (case, "decorative thought icon leaked")
+                draft_markup = "".join(
+                    frame.get("rich_message", {}).get("markdown", "")
+                    for frame in new.api.rich_drafts()
+                )
+                assert f"💭 {core}" in shown, (case, core)
+                assert "💭 <i>" not in draft_markup
                 continue
             matched_action = False
             for tool in ("terminal", "web_search", "read_file"):

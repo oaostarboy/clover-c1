@@ -66,9 +66,8 @@ async def test_gateway_thought_prefix_renders_as_natural_commentary_in_real_nati
     frames = [frame["rich_message"]["markdown"] for frame in turn.api.rich_drafts()]
     assert frames, "the production gateway-to-Telegram native path did not emit a frame"
     frame = frames[-1]
-    assert "The time source is consistent." in frame
-    assert "💭" not in frame
-    assert "<i>The time source is consistent.</i>" not in frame
+    assert "💭 The time source is consistent." in frame
+    assert "💭 <i>The time source is consistent.</i>" not in frame
 
 
 @pytest.mark.asyncio
@@ -247,6 +246,59 @@ async def test_native_summary_leaves_detached_worker_cards_unabsorbed(monkeypatc
         for method, kw in turn.api.calls
         if method in {"edit_message_text", "delete_message"}
     ), "cleanup must leave detached worker cards separate and persistent"
+
+
+@pytest.mark.asyncio
+async def test_pre_final_summary_deletes_tracked_carrier_without_second_card(monkeypatch, tmp_path):
+    from gateway import delegation_activity
+
+    class AdoptedWorkers:
+        combined = True
+        def __init__(self):
+            self.absorbed = 0
+        def adopt_inbox(self):
+            return True
+        def adopted_preview(self):
+            return 1, []
+        def absorb_finished(self):
+            self.absorbed += 1
+            return [], []
+        def end_turn(self):
+            return None
+
+    pub = AdoptedWorkers()
+    monkeypatch.setattr(delegation_activity, "build_turn_publisher", lambda *args: pub)
+    turn = await run_turn(
+        monkeypatch, tmp_path, [T, NAP, S, NAP], native=True, cleanup=True,
+        session="sess-summary-tracked-carrier",
+    )
+    carrier = next(kw for method, kw in turn.api.calls if method == "send_message" and "finished" in kw.get("text", ""))
+    summary_count_before = sum(
+        method == "send_message" and "tool call" in kw.get("text", "")
+        for method, kw in turn.api.calls
+    )
+    assert summary_count_before == 1
+    summary_i = next(
+        i for i, (method, kw) in enumerate(turn.api.calls)
+        if method == "send_message" and "tool call" in kw.get("text", "")
+    )
+    final_i = next(
+        i for i, (method, kw) in enumerate(turn.api.calls)
+        if method == "send_message" and FINAL in kw.get("text", "")
+    )
+    assert summary_i < final_i
+    await fire_cleanup(turn)
+
+    summaries = [
+        (method, kw) for method, kw in turn.api.calls
+        if "tool call" in kw.get("text", "")
+    ]
+    assert len(summaries) == 1, "tracked temporary IDs must not create a second collapsed summary"
+    assert not card_edits(turn.api), "the adopted carrier must be deleted, not rewritten as another card"
+    assert carrier["_message_id"] in {
+        kw["message_id"] for kw in turn.api.methods("delete_message")
+    }
+    assert pub.absorbed == 0
 
 
 @pytest.mark.asyncio

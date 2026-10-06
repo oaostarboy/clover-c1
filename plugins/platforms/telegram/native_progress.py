@@ -134,11 +134,11 @@ def _text_lines(text: str) -> str:
     return "<br>".join(rendered)
 
 
-def _natural_commentary(text: str) -> str:
-    """Remove only the exact wrapper emitted by the legacy thought formatter."""
-    if not text.startswith(_THOUGHT_PREFIX):
-        return text
-    lines = text[len(_THOUGHT_PREFIX):].split("\n")
+def _natural_commentary(text: str, *, add_thought_marker: bool = False) -> str:
+    """Keep the recognized thought marker but remove only its legacy italics."""
+    has_marker = text.startswith(_THOUGHT_PREFIX)
+    body = text[len(_THOUGHT_PREFIX):] if has_marker else text
+    lines = body.split("\n")
     result = []
     for line in lines:
         stripped = line.strip()
@@ -149,7 +149,10 @@ def _natural_commentary(text: str) -> str:
         ):
             stripped = stripped[1:-1]
         result.append(stripped)
-    return "\n".join(result)
+    normalized = "\n".join(result)
+    if has_marker or add_thought_marker:
+        return f"{_THOUGHT_PREFIX}{normalized}"
+    return normalized
 
 
 def _icon_tag(icon: Optional[NativeIcon]) -> str:
@@ -268,7 +271,10 @@ def render_row(
     raw_text = str(getattr(row, "text", "") or "")
     kind = getattr(row, "kind", "")
     state = getattr(row, "state", STATE_INFO)
-    text = _inline_markup(_natural_commentary(raw_text) if kind == "thought" else raw_text)
+    text = _inline_markup(
+        _natural_commentary(raw_text, add_thought_marker=kind == "thought")
+        if kind in {"thought", "commentary"} else raw_text
+    )
     if kind == "tool":
         raw_label = _tool_display_label(getattr(row, "tool", None), state)
         label = escape_text(raw_label)

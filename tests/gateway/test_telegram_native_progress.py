@@ -153,6 +153,22 @@ async def test_clean_feed_frame_preserves_content_with_specific_header_natural_c
     assert md.count("5537581341383589905") == 1
 
 
+def test_thought_rows_keep_one_marker_without_blanket_italics():
+    from plugins.platforms.telegram.native_progress import render_row
+
+    thought = render_row(row("Inspecting the request.", kind="thought"))
+    assert thought == "💭 Inspecting the request."
+    assert "<i>" not in thought
+
+
+def test_legacy_commentary_keeps_marker_and_words_without_blanket_italics():
+    from plugins.platforms.telegram.native_progress import render_row
+
+    legacy = render_row(row("💭 _Looking at one more item._", kind="commentary"))
+    assert legacy == "💭 Looking at one more item."
+    assert "<i>" not in legacy
+
+
 def test_bold_formatter_preserves_stars_inside_inline_code():
     from plugins.platforms.telegram.native_progress import _inline_markup
 
