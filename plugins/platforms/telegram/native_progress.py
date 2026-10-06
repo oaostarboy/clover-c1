@@ -434,12 +434,14 @@ def render_thinking_block(
     compact: list[str] = []
     for row in rows:
         rendered = render_row(row, icons, now=now)
+        if not rendered:
+            continue
         if getattr(row, "kind", "") in {"thought", "commentary"}:
             if compact:
                 blocks.append("<br>".join(compact))
                 compact = []
             blocks.append(rendered)
-        elif rendered:
+        else:
             compact.append(rendered)
     if compact:
         blocks.append("<br>".join(compact))

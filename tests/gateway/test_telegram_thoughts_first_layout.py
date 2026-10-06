@@ -200,6 +200,17 @@ def test_tools_group_compactly_and_thoughts_get_clear_space_in_event_order():
     ]
 
 
+def test_blank_commentary_adds_no_empty_gap_between_tool_rows():
+    ledger = ActivityLedger()
+    started(ledger, "read_file", "a.md", now=0.0)
+    ledger.add_line("   ", kind="commentary", now=1.0)
+    started(ledger, "web_search", "b", now=2.0)
+    block = render_thinking_block(ledger.snapshot(), now=2.5)
+
+    assert "<br><br><br>" not in block
+    assert block.count("<br><br>") == 1
+
+
 def test_phase_header_is_quiet_so_thoughts_carry_the_emphasis():
     ledger = ActivityLedger()
     ledger.add_line("Checking both clocks.", kind="thought", now=0.0)
