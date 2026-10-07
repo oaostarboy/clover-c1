@@ -1,0 +1,166 @@
+name: Windows update supervisor proof (manual)
+
+# Proves, on real GitHub-hosted Windows runners, that `clover update` /
+# chat `/update` never treats a Windows system service (Task Scheduler's
+# `Schedule`, hosted by svchost.exe) as a gateway supervisor.
+#
+# Two setups, each with the gateway RUNNING when the update starts:
+#   troy  gateway registered and started as a Windows Scheduled Task running
+#         <venv>\pythonw.exe -m clover_cli.main gateway run, so its parent
+#         chain passes through the Schedule service host.
+#   zyra  default install: Startup-folder VBS launcher, no Task Scheduler.
+# Two update paths: `cli` (terminal `clover update --yes`) and `chat` (/update
+# sent to the running gateway over a local IRC server, i.e. the gateway's own
+# handler runs `clover update --gateway`). No Telegram, no real tokens.
+#
+# Two phases:
+#   old2new   install OLD_REF (the shipped bug), update to the branch head.
+#             The OLD updater does the work, so troy must REPRODUCE
+#             "Could not stop Windows gateway service Schedule"; zyra must pass.
+#   new2next  install the branch head, update to a newer commit. The FIXED
+#             updater does the work; troy and zyra must both pass.
+#
+# On-demand only: it runs on pushes to ci/win-update-proof/** helper branches
+# (a helper branch is created at the PR head, so the run is the PR head), and
+# never on pull_request/main.
+
+on:
+  push:
+    branches:
+      - "ci/win-update-proof/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: win-update-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    name: ${{ matrix.setup }} / ${{ matrix.path }} / ${{ matrix.phase }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        setup: [troy, zyra]
+        path: [cli, chat]
+        phase: [old2new, new2next]
+    env:
+      OLD_REF: 846650671931ae92982570d00d207a844a084d65
+      NEXT_BRANCH: ci/win-update-proof-next
+      HEAD_SHA: ${{ github.sha }}
+      HEAD_BRANCH: ${{ github.ref_name }}
+      SETUP: ${{ matrix.setup }}
+      UPDATE_PATH: ${{ matrix.path }}
+      PHASE: ${{ matrix.phase }}
+      API_PORT: "8791"
+      IRC_PORT: "6667"
+    steps:
+      - name: Checkout e2e helpers
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/win-e2e
+          path: e2e
+
+      - name: a. Install Clover via scripts/install.ps1 at the starting commit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $from = if ($env:PHASE -eq 'old2new') { $env:OLD_REF } else { $env:HEAD_SHA }
+          $cloverHome = "$env:LOCALAPPDATA\clover"
+          $installDir = "$cloverHome\clover-c1"
+          git config --global core.autocrlf false
+          New-Item -ItemType Directory -Force -Path (Split-Path $installDir) | Out-Null
+          git clone --branch main https://github.com/oaostarboy/clover-c1.git $installDir
+          git -C $installDir checkout --detach $from
+          if ($LASTEXITCODE -ne 0) { throw "pre-clone checkout of $from failed" }
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/$env:HEAD_SHA/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
+          & "$env:TEMP\install.ps1" -Branch main -Commit $from -NonInteractive -SkipComputerUse -CloverHome $cloverHome -InstallDir $installDir
+          "FROM_REF=$from" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CLOVER_HOME=$cloverHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALL_DIR=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CLOVER_BIN=$installDir\venv\Scripts\clover.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "E2E=$env:GITHUB_WORKSPACE\e2e\.github\win-e2e" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "installed $from; Windows: $((Get-CimInstance Win32_OperatingSystem).Caption)"
+
+      - name: b. Config as the installer made it + api_server (+ IRC for chat /update); dummy tokens only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cfg = "$env:CLOVER_HOME\config.yaml"
+          if (-not (Test-Path $cfg)) { Copy-Item "$env:INSTALL_DIR\cli-config.yaml.example" $cfg }
+          $lines = @("API_SERVER_ENABLED=true", "API_SERVER_KEY=win-update-proof-key-0123456789", "API_SERVER_PORT=$env:API_PORT", "API_SERVER_HOST=127.0.0.1")
+          if ($env:UPDATE_PATH -eq 'chat') {
+            $lines += @("IRC_SERVER=127.0.0.1", "IRC_PORT=$env:IRC_PORT", "IRC_USE_TLS=false", "IRC_CHANNEL=#clover", "IRC_NICKNAME=cloverbot", "IRC_ALLOWED_USERS=ant", "GATEWAY_ALLOW_ALL_USERS=true")
+          }
+          Add-Content -Path "$env:CLOVER_HOME\.env" -Value ($lines -join "`n")
+
+      - name: c. Start the gateway the setup's way and show who owns it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:E2E\supervisor-proof.ps1"
+          if ($env:UPDATE_PATH -eq 'chat') {
+            $py = (Get-Command python).Source  # system Python, never the Clover venv
+            Start-Process -FilePath $py -ArgumentList @("$env:E2E\fake_ircd.py", "$env:RUNNER_TEMP\irc.log", "$env:RUNNER_TEMP\irc.trigger", $env:IRC_PORT) -WindowStyle Hidden
+          }
+          if ($env:SETUP -eq 'troy') { Start-TroyGateway } else { Start-ZyraGateway }
+          Wait-GatewayUp 150
+          if ($env:UPDATE_PATH -eq 'chat') {
+            $deadline = (Get-Date).AddSeconds(90)
+            while ((Get-Date) -lt $deadline -and -not (Select-String -Path "$env:RUNNER_TEMP\irc.log" -Pattern '<< JOIN' -Quiet -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 2 }
+            if (-not (Select-String -Path "$env:RUNNER_TEMP\irc.log" -Pattern '<< JOIN' -Quiet)) { Get-LogLines | Select-Object -Last 60; throw "gateway never joined the IRC server" }
+          }
+          $own = Show-GatewayOwnership "pre-update $env:SETUP"
+          "OLD_GATEWAY_PID=$($own.Pid)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if ($env:SETUP -eq 'troy' -and -not $own.ViaSchedule) { throw "troy gateway does not descend from the Schedule service host; the scenario is not Troy-like" }
+          if ($env:SETUP -eq 'zyra' -and $own.ViaSchedule) { throw "zyra gateway unexpectedly descends from the Schedule service host" }
+
+      - name: d. Update with the gateway running (the path's exact command) + pass criteria
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:E2E\supervisor-proof.ps1"
+          $target = if ($env:PHASE -eq 'old2new') { $env:HEAD_BRANCH } else { $env:NEXT_BRANCH }
+          Set-MainIsTarget $target
+          $logStart = (Get-LogLines).Count
+          $label = "$env:SETUP $env:UPDATE_PATH $env:PHASE"
+          $exitCode = Invoke-PathUpdate $label
+          Write-Host "[$label] update exit=$exitCode"
+          if ($env:SETUP -eq 'troy' -and $env:PHASE -eq 'old2new') {
+            # The OLD updater runs here: this is the reported bug.
+            Assert-ScheduleStopReproduced $label $exitCode
+            "SCHEDULE_REPRODUCED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          } else {
+            Assert-UpdateSucceeded $label $logStart $exitCode ([int]$env:OLD_GATEWAY_PID)
+          }
+          exit 0
+
+      - name: d2. (troy old2new) state after the reproduced failure; Schedule service untouched
+        if: env.SCHEDULE_REPRODUCED == '1'
+        shell: pwsh
+        run: |
+          . "$env:E2E\supervisor-proof.ps1"
+          Write-Host "Schedule service after the failed old-commit update: $((Get-ScheduleServiceInfo).State)"
+          Write-Host "gateways alive after the failed update: $((Get-GatewayRoots).Count)"
+          Write-Host "HEAD after the failed update: $(git -C $env:INSTALL_DIR log --oneline -1)"
+
+      - name: e. Stage logs
+        if: always()
+        shell: pwsh
+        run: |
+          $dst = "$env:RUNNER_TEMP\artifacts"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          foreach ($p in @("$env:CLOVER_HOME\logs", "$env:CLOVER_HOME\gateway_state.json", "$env:CLOVER_HOME\.clover-last-update", "$env:CLOVER_HOME\config.yaml", "$env:RUNNER_TEMP\irc.log", "$env:RUNNER_TEMP\update-output.txt")) {
+            if (Test-Path $p) { Copy-Item -Recurse -Force $p $dst -ErrorAction SilentlyContinue }
+          }
+
+      - name: f. Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: win-update-proof-${{ matrix.setup }}-${{ matrix.path }}-${{ matrix.phase }}
+          path: ${{ runner.temp }}\artifacts
+          if-no-files-found: ignore
