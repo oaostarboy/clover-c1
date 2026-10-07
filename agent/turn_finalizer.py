@@ -537,6 +537,17 @@ def finalize_turn(
         try:
             _failed = getattr(agent, "_turn_failed_file_mutations", None) or {}
             if _failed and agent._file_mutation_verifier_enabled():
+                # Re-stat/re-hash every failed path against the snapshot
+                # taken at failure time. A tool-level failure doesn't mean
+                # the file is untouched for the whole turn — the model (or
+                # the user) may have changed it anyway through another
+                # route (terminal command, `clover config set`,
+                # execute_code, ...). Drop any entry the disk now
+                # contradicts before rendering, so the footer only reports
+                # paths that are genuinely unchanged.
+                agent._reconcile_file_mutation_failures_with_disk()
+                _failed = getattr(agent, "_turn_failed_file_mutations", None) or {}
+            if _failed and agent._file_mutation_verifier_enabled():
                 footer = agent._format_file_mutation_failure_footer(_failed)
                 if footer:
                     final_response = final_response.rstrip() + "\n\n" + footer
