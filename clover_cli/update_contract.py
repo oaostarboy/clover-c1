@@ -152,6 +152,60 @@ def record_refusal_receipt(refusal: UpdateRefusal) -> None:
 # failure -- doing so sends people to hunt a breakage that never happened.
 UPDATE_EXIT_REFUSED = 2
 
+
+def parse_update_exit_code(
+    raw: str,
+    clover_home: Path,
+    marker_paths: "tuple[Path, ...] | list[Path]" = (),
+) -> int:
+    """Exit code from the text of ``.update_exit_code``; never raises.
+
+    A well-formed value is returned as is.  A malformed one (an old updater's
+    ``<pid>rc``, a truncated write, ...) is logged and then resolved from the
+    update receipt of THIS run (started after the pending marker was written):
+    ``success`` is 0, ``refused`` is :data:`UPDATE_EXIT_REFUSED`, anything else
+    -- including no usable receipt -- is 1, which is exactly what a failed
+    update reports.  So a garbled marker can never turn a failure into a
+    success, and can never swallow the completion message of a success.
+    """
+    text = (raw or "").strip() or "1"
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    code = 1
+    basis = "no receipt for this run"
+    try:
+        import datetime as _dt
+        import json as _json
+
+        marker_mtime = 0.0
+        for path in marker_paths:
+            try:
+                marker_mtime = Path(path).stat().st_mtime
+                break
+            except OSError:
+                continue
+        receipt = _json.loads(
+            (Path(clover_home) / "logs" / "update_receipts" / "latest.json")
+            .read_text(encoding="utf-8")
+        )
+        started = _dt.datetime.fromisoformat(str(receipt.get("started_at") or "")).timestamp()
+        if marker_mtime > 0.0 and started >= marker_mtime - 120:
+            outcome = str(receipt.get("outcome") or "")
+            basis = f"receipt outcome={outcome!r}"
+            if outcome == "success":
+                code = 0
+            elif outcome == "refused":
+                code = UPDATE_EXIT_REFUSED
+    except Exception:
+        pass
+    logger.warning(
+        "Malformed .update_exit_code value %r; treating as exit %s (%s)",
+        text[:64], code, basis,
+    )
+    return code
+
 UPDATE_REFUSED_HEADLINE = "\u26a0\ufe0f Update skipped \u2014 nothing was changed."
 
 def update_refused_detail(refusal: dict | None) -> str:
@@ -216,6 +270,59 @@ _scope_probe_lock = threading.Lock()
 _scope_probe_result: Optional[bool] = None
 
 
+_scope_dollar_lock = threading.Lock()
+# None = not probed yet; True = this systemd-run collapses ``$$`` to ``$`` in
+# --scope mode; False = it passes arguments through untouched.
+_scope_expands_dollar: Optional[bool] = None
+
+
+def _systemd_run_expands_dollar(systemd_run: str) -> bool:
+    """Whether *systemd_run* applies ``$`` expansion to ``--scope`` arguments.
+
+    This is version dependent.  systemd 261 collapses ``$$`` to ``$`` (and
+    substitutes ``$VAR`` / ``$?``) in ``--scope`` mode; systemd 257 (Debian 13,
+    the Raspberry Pi) execs the arguments untouched.  Blindly doubling every
+    ``$`` is therefore right on one and wrong on the other: on 257 the updater
+    wrapper ``rc=$?; printf '%s' "$rc"`` arrived as ``rc=$$?; printf '%s'
+    "$$rc"`` and wrote ``<bash pid>rc`` into ``.update_exit_code`` (Oracle,
+    2026-10-07).  Ask the installed binary instead of assuming; cached.
+    Unknown (probe failed) keeps the historical doubling.
+    """
+    global _scope_expands_dollar
+    with _scope_dollar_lock:
+        if _scope_expands_dollar is not None:
+            return _scope_expands_dollar
+        verdict = True
+        try:
+            proc = subprocess.run(
+                [systemd_run, *_SYSTEMD_RUN_SCOPE_FLAGS, "printf", "%s", "$$"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True, encoding="utf-8", errors="replace",
+                env=_with_user_bus_env(dict(os.environ)),
+                timeout=_SCOPE_PROBE_TIMEOUT_SECONDS,
+                check=False,
+            )
+            out = (proc.stdout or "").strip()
+            if proc.returncode == 0 and out == "$":
+                verdict = True
+            elif proc.returncode == 0 and out == "$$":
+                verdict = False
+            else:
+                logger.warning(
+                    "systemd-run $-expansion probe was inconclusive "
+                    "(exit %s, stdout %r); assuming it expands",
+                    proc.returncode, out,
+                )
+                # Do not cache an inconclusive answer.
+                return True
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.warning("systemd-run $-expansion probe failed: %s", exc)
+            return True
+        _scope_expands_dollar = verdict
+        return verdict
+
+
 def systemd_user_scope_argv(
     command: list[str], *, systemd_run: Optional[str] = None
 ) -> Optional[list[str]]:
@@ -224,19 +331,22 @@ def systemd_user_scope_argv(
     ``None`` when ``systemd-run`` is not installed, so each caller decides
     whether to fail closed or fall back.
 
-    ``systemd-run`` runs systemd's own ``$`` expansion over its arguments
-    (``$$`` becomes ``$``, ``${VAR}`` and a whole-word ``$VAR``/``$?`` are
-    substituted, unset ones with an empty string).  Every ``$`` is doubled so
-    the program receives each argument exactly as written; this matters to a
-    ``bash -c`` command that uses ``$?`` or ``$$``.
+    Some ``systemd-run`` versions (261) run systemd's own ``$`` expansion over
+    ``--scope`` arguments (``$$`` becomes ``$``, ``${VAR}`` and a whole-word
+    ``$VAR``/``$?`` are substituted, unset ones with an empty string); others
+    (257) do not.  ``$`` is doubled only where the installed binary expands it,
+    so the program receives each argument exactly as written either way; this
+    matters to a ``bash -c`` command that uses ``$?`` or ``$$``.
     """
     systemd_run = systemd_run or shutil.which("systemd-run")
     if not systemd_run:
         return None
+    if any("$" in arg for arg in command) and _systemd_run_expands_dollar(systemd_run):
+        command = [arg.replace("$", "$$") for arg in command]
     return [
         systemd_run,
         *_SYSTEMD_RUN_SCOPE_FLAGS,
-        *(arg.replace("$", "$$") for arg in command),
+        *command,
     ]
 
 

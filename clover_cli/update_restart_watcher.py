@@ -50,6 +50,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Optional
 
+logger = logging.getLogger(__name__)
+
 # How often the watcher looks at the beacon.
 POLL_SECONDS = 5.0
 
@@ -104,6 +106,19 @@ def _core_imports_healthy(root: Path, python: Path | None = None) -> bool:
         return False
 
 
+def _beacon_pid(data: dict[str, Any]) -> int:
+    """The beacon's ``updater_pid`` as an int; 0 (unknown) if it is malformed.
+
+    A garbled value must read as "no known updater", never raise out of the
+    watcher loop or the beacon-clearing path.
+    """
+    try:
+        return int(data.get("updater_pid") or 0)
+    except (TypeError, ValueError):
+        logger.warning("Malformed updater_pid in update beacon: %r", data.get("updater_pid"))
+        return 0
+
+
 def _process_create_time(pid: int) -> float | None:
     try:
         import psutil  # type: ignore
@@ -120,7 +135,7 @@ def _updater_identity_alive(data: dict[str, Any]) -> bool | None:
     so callers fall back to the legacy pid + staleness rule.
     """
     recorded = data.get("updater_create_time")
-    pid = int(data.get("updater_pid") or 0)
+    pid = _beacon_pid(data)
     if not recorded or pid <= 0:
         return None
     try:
@@ -481,7 +496,7 @@ def clear_beacon(*, clover_home: Optional[Path] = None) -> None:
             # The separate watcher must survive normal updater exit as well:
             # the freshly restarted gateway can still crash after atexit.
             return
-        owner = int(data.get("updater_pid") or 0)
+        owner = _beacon_pid(data)
         if owner and owner != os.getpid():
             # Handed off (Windows shim -> venv child): the child owns the
             # update now and clears the beacon when IT finishes.
@@ -660,7 +675,7 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
             time.sleep(poll)
             continue
 
-        updater_pid = int(data.get("updater_pid") or 0)
+        updater_pid = _beacon_pid(data)
         refreshed_at = float(data.get("refreshed_at") or 0.0)
         age = time.time() - refreshed_at
 
