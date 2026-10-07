@@ -151,10 +151,14 @@ class TestLinuxUserUnitEscapesCgroup:
         await _run_update(env, which=_which(), probe=probe)
         await _run_update(env, which=_which(), probe=probe)
 
-        assert probe.call_count == 1, "the scope pre-check is cached per process"
-        probe_argv = probe.call_args[0][0]
+        # The updater wrapper contains ``$?``, so the builder also asks the
+        # installed systemd-run whether it expands ``$`` (257 does not, 261
+        # does); that is a different probe. Only the ``true`` pre-check counts.
+        scope_checks = [c for c in probe.call_args_list if c[0][0][-1] == "true"]
+        assert len(scope_checks) == 1, "the scope pre-check is cached per process"
+        probe_argv = scope_checks[0][0][0]
         assert probe_argv == ["/usr/bin/systemd-run", *SCOPE_PREFIX, "true"]
-        assert probe.call_args.kwargs.get("timeout"), "the pre-check must be bounded"
+        assert scope_checks[0].kwargs.get("timeout"), "the pre-check must be bounded"
 
     @pytest.mark.asyncio
     async def test_missing_systemd_run_falls_back_and_warns(self, env, monkeypatch, caplog):

@@ -26544,8 +26544,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # Send final status
                 exit_code = 1
                 try:
-                    exit_code_raw = exit_code_path.read_text(encoding="utf-8").strip() or "1"
-                    exit_code = int(exit_code_raw)
+                    from clover_cli.update_contract import parse_update_exit_code
+                    exit_code = parse_update_exit_code(
+                        exit_code_path.read_text(encoding="utf-8"),
+                        _clover_home, (claimed_path, pending_path),
+                    )
                     if update_action == "repair" and exit_code == 0:
                         pass  # run_repair already sent the plain-language result
                     elif update_action == "repair":
@@ -26925,8 +26928,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 claimed_path.replace(pending_path)
                 return False
 
-            exit_code_raw = exit_code_path.read_text(encoding="utf-8").strip() or "1"
-            exit_code = int(exit_code_raw)
+            from clover_cli.update_contract import parse_update_exit_code
+            exit_code = parse_update_exit_code(
+                exit_code_path.read_text(encoding="utf-8"),
+                _clover_home, (claimed_path, pending_path),
+            )
 
             # Read the captured update output
             output = ""
