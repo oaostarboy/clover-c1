@@ -121,6 +121,7 @@ jobs:
           $ErrorActionPreference = "Stop"
           . "$env:E2E\supervisor-proof.ps1"
           . "$env:E2E\whats-new-proof.ps1"
+          $env:PYTHONUTF8 = "1"
           $py = (Get-Command python).Source
           $hasFeature = Test-Path "$env:INSTALL_DIR\clover_cli\release_notes.py"
           Write-Host "installed starting version has the what's-new feature: $hasFeature (phase $env:PHASE)"

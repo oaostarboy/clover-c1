@@ -46,6 +46,12 @@ def completion_lines(lines: list[str]) -> tuple[int, list[str]]:
 
 
 def main() -> int:
+    # Windows consoles default to cp1252; the message has emoji and bullets.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     ap = argparse.ArgumentParser()
     ap.add_argument("log")
     ap.add_argument("start", type=int)
