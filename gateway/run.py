@@ -4013,6 +4013,22 @@ def _get_channel_override(
     return None
 
 
+def _update_whats_new_text(*marker_paths: Path) -> str:
+    """Version name + "what's new" for a SUCCESSFUL /update's completion message.
+
+    Rendered by whichever gateway sends the completion message; after a chat
+    ``/update`` that is the restarted gateway, i.e. the NEW code, so even a
+    first hop from an older release shows it. Read before the pending markers
+    are deleted. Returns "" on any problem (the message is then unchanged).
+    """
+    try:
+        from clover_cli.release_notes import section_for_update_markers
+
+        return section_for_update_markers(_clover_home, marker_paths)
+    except Exception:
+        return ""
+
+
 def _retire_update_output(output_path: Path, keep: int = 3) -> None:
     """Keep a chat-run update's transcript instead of deleting it.
 
@@ -26535,9 +26551,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     elif update_action == "repair":
                         await adapter.send(chat_id, "Repair failed. Run clover doctor.", metadata=_non_conversational_metadata(metadata, platform=platform))
                     elif exit_code == 0:
+                        _done_text = "✅ Clover update finished."
+                        _whats_new = _update_whats_new_text(claimed_path, pending_path)
+                        if _whats_new:
+                            _done_text += "\n\n" + _whats_new
                         await adapter.send(
                             chat_id,
-                            "✅ Clover update finished.",
+                            _done_text,
                             metadata=_non_conversational_metadata(metadata, platform=platform),
                         )
                     else:
@@ -26812,6 +26832,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
             if detail:
                 text += f" Now at {detail}."
+            _whats_new = _update_whats_new_text(claimed_path, pending_path)
+            if _whats_new:
+                text += "\n\n" + _whats_new
         elif verdict == "failed":
             text = (
                 f"❌ Clover update did not complete (updater died; last "
@@ -26950,17 +26973,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     UPDATE_REFUSED_HEADLINE,
                 )
 
+                _whats_new = (
+                    _update_whats_new_text(claimed_path, pending_path)
+                    if exit_code == 0 else ""
+                )
+                _whats_new_block = f"\n\n{_whats_new}" if _whats_new else ""
                 if output:
                     if len(output) > 3500:
                         output = "…" + output[-3500:]
                     if exit_code == 0:
-                        msg = f"✅ Clover update finished.\n\n```\n{output}\n```"
+                        msg = f"✅ Clover update finished.{_whats_new_block}\n\n```\n{output}\n```"
                     elif exit_code == UPDATE_EXIT_REFUSED:
                         msg = f"{UPDATE_REFUSED_HEADLINE}\n\n```\n{output}\n```"
                     else:
                         msg = f"❌ Clover update failed.\n\n```\n{output}\n```"
                 elif exit_code == 0:
-                    msg = "✅ Clover update finished successfully."
+                    msg = f"✅ Clover update finished successfully.{_whats_new_block}"
                 elif exit_code == UPDATE_EXIT_REFUSED:
                     # A refusal is a safe no-op, not a breakage. Saying
                     # "failed" here sends the user hunting for damage that

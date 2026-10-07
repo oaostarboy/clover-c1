@@ -1328,6 +1328,17 @@ plan → snapshot → apply → restart-per-kind → verify → report
   `sys.exit` paths (preflight refusals, fetch failures) still persist
   a receipt with the real exit code. A begun-but-unwritten receipt is
   a bug: the refused/failed runs are the ones receipts exist for.
+- **What's new in the completion message**: a successful chat `/update`
+  appends the release name + version and a short list of what changed, from
+  `RELEASE_NOTES.md` (repo root, hand-edited; one `## version | name | date`
+  section per release, newest first). `clover_cli/release_notes.py` parses
+  it and is called by the gateway at the three places it reports success.
+  The *restarted* gateway renders it, so an update from an older release
+  shows it too; the starting version comes from the `/update` pending marker
+  (`from_version`/`from_sha`) or, for an older gateway, from THIS run's
+  receipt (never an earlier one). Filling in the notes entry for the version
+  you are shipping is part of the release step; a test fails while it is
+  still a draft.
 
 Architecture direction: process-scan-based coordination between the
 updater, serve/dashboard, and the gateway is being replaced by a
