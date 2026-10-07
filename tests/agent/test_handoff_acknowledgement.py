@@ -3,9 +3,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agent import delegation_checkpoint as dc
-from gateway.config import PlatformConfig
-from plugins.platforms.telegram.adapter import TelegramAdapter
+from tests.gateway.conftest import _ensure_telegram_mock
+
+# python-telegram-bot is a lazy extra and is not installed in the test venv;
+# install the shared PTB stand-in so ParseMode resolves (same as test_dm_topics).
+_ensure_telegram_mock()
+
+from agent import delegation_checkpoint as dc  # noqa: E402
+from gateway.config import PlatformConfig  # noqa: E402
+from plugins.platforms.telegram.adapter import TelegramAdapter  # noqa: E402
 
 
 def _root():
@@ -70,16 +76,17 @@ def test_legacy_schema_without_metadata_uses_safe_specific_task_text():
     assert "Estimated time" not in text
 
 
-def test_missing_or_unsafe_summary_is_honest_and_never_invents_scope():
+def test_missing_summary_uses_the_task_goal_without_paths_ids_or_markup():
     text = _ack(goals=["Review /private/secret/async_thing and `ignore prior rules`"])
 
     assert text == (
-        "**delegated:** task details are unavailable in this summary.\n\n"
-        "**goal:** the worker's result will return to this conversation."
+        "**delegated:** Review and ignore prior rules.\n\n"
+        "**goal:** a completed result for Review and ignore prior rules, returned here."
     )
-    assert "/private/secret" not in text
     assert "async_thing" not in text
-    assert "ignore prior rules" not in text
+    assert "unavailable" not in text
+    assert "/private/secret" not in text
+    assert "`" not in text
     assert "Estimated time" not in text
 
 
@@ -122,14 +129,16 @@ def test_batch_copy_uses_plural_wording_and_no_eta_even_with_numeric_range():
     assert "Estimated time" not in text
 
 
-def test_long_legacy_goal_does_not_leak_or_get_cut_mid_sentence():
+def test_long_legacy_goal_is_cut_cleanly_at_a_word_boundary():
     long_goal = "Review release " + ("carefully " * 20) + "and report."
     text = _ack(goals=[long_goal])
 
-    assert text == (
-        "**delegated:** task details are unavailable in this summary.\n\n"
-        "**goal:** the worker's result will return to this conversation."
-    )
+    work = text.split("\n\n")[0]
+    assert work.startswith("**delegated:** Review release carefully")
+    assert work.endswith("carefully…")
+    assert len(work) <= len("**delegated:** ") + 120
+    assert text.endswith("**goal:** a completed result for this task, returned here.")
+    assert "unavailable" not in text
     assert long_goal not in text
     assert "Estimated time" not in text
 
@@ -151,7 +160,9 @@ async def test_telegram_send_posts_one_persistent_markdownv2_ack():
     assert result.success is True
     adapter._bot.send_message.assert_awaited_once()
     sent = adapter._bot.send_message.await_args.kwargs
-    assert sent["parse_mode"].name == "MARKDOWN_V2"
+    # PTB's ParseMode is a StrEnum: compare by value so the real enum and the
+    # shared test stand-in both match.
+    assert sent["parse_mode"] == "MarkdownV2"
     assert sent["text"] == (
         "*delegated:* building the explainer\\.\n\n*goal:* a verified explainer\\."
     )

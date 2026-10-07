@@ -82,7 +82,14 @@ An accepted handoff ends the root's turn through the normal conversation-loop
 exit: the loop appends one deterministic assistant message (it names the job and
 its goals, says it runs independently and that the result returns here, and
 claims nothing is done), makes no further provider call, cancels nothing, and
-still runs the usual turn-end persistence and learning. The gateway releases the
+still runs the usual turn-end persistence and learning. That message is the
+handoff card: `delegated:` shows the model's `handoff.work` and `goal:` its
+`handoff.outcome`, lightly normalized (first line only, markdown markers,
+control characters, absolute path prefixes and internal job ids removed, long
+text cut at a word boundary with an ellipsis). Ordinary punctuation such as
+`;`, `/`, `:` or quotes is kept as written. When a field is missing, the card
+uses the task goal's first sentence instead; it never shows generic "details
+unavailable" copy for an accepted dispatch. The gateway releases the
 busy slot as it always does, so the next human message is handled normally while
 the detached job keeps running. If the allowance is spent and the model keeps
 asking for blocked calls, the first blocked assistant message gets one more

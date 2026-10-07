@@ -370,7 +370,7 @@ def test_handoff_directive_is_consumed_once_and_names_the_job():
     assert dc.completion_directive(root) is None, "consumed once"
 
 
-def test_handoff_rejects_bad_public_text_and_unknowns_invalid_eta():
+def test_handoff_strips_ids_and_paths_and_unknowns_invalid_eta():
     root = _unit_root()
     cp = root._delegation_checkpoint
     cp.declare("delegate", "Long phase.")
@@ -385,10 +385,13 @@ def test_handoff_rejects_bad_public_text_and_unknowns_invalid_eta():
         },
     )
     text = dc.completion_directive(root).text
+    # The summary is normalized (internal id and path prefix removed), never
+    # replaced wholesale by generic copy.
     assert text == (
-        "**delegated:** task details are unavailable in this summary.\n\n"
-        "**goal:** the workers' results will return to this conversation."
+        "**delegated:** Workers are reviewing.\n\n"
+        "**goal:** a report from files."
     )
+    assert "unavailable" not in text
     assert "Estimated time" not in text
     assert "internal-job-token" not in text
     assert "async_private-id" not in text

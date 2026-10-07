@@ -76,37 +76,91 @@ _MAX_GOAL_CHARS = 160
 # The handoff line is a short-horizon estimate, not a promise about total task
 # duration.
 _MAX_HANDOFF_ETA_MINUTES = 24 * 60
-_HANDOFF_TEXT_RE = re.compile(r"^[\w .,!?()'’&–-]+$", re.UNICODE)
-_HANDOFF_ID_RE = re.compile(r"\b(?:async|deleg|subagent|child|job)[_-][\w-]+", re.IGNORECASE)
 
 
-def _safe_public_text(text: str) -> bool:
-    return bool(_HANDOFF_TEXT_RE.fullmatch(text)) and not _HANDOFF_ID_RE.search(text)
+# Card text is shown to the user, so it is normalized rather than validated:
+# a model-written handoff with ordinary punctuation (";", "/", ":", quotes) is
+# shown as written. Only things that never belong on the card are removed:
+# control characters, markdown emphasis/code markers, absolute filesystem
+# paths (kept as their last segment) and internal job/child identifiers.
+_HANDOFF_WORK_CHARS = 120
+_HANDOFF_OUTCOME_CHARS = 180
+_GOAL_TITLE_CHARS = 120
+_CARD_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f\u200b-\u200f\u2028-\u202e\u2066-\u2069\ufeff]")
+_CARD_MARKUP_RE = re.compile(r"[*`]+|_{2,}|~{2,}|^#+\s*|^\s*(?:[-+>]|\d+[.)])\s+")
+_CARD_ABS_PATH_RE = re.compile(
+    r"(?<![\w:/\\])(?:~|[A-Za-z]:)?[\\/](?:[\w.@-]+[\\/])+([\w.@-]+)[\\/]?"
+)
+_CARD_ID_RE = re.compile(
+    r"\b(?:async|deleg|subagent|child|job)(?:_[\w-]+|-[\w-]*\d[\w-]*)", re.IGNORECASE
+)
+_CARD_SPACE_BEFORE_PUNCT_RE = re.compile(r"\s+([,;:.!?)])")
+_CARD_DANGLING_RE = re.compile(r"(?:^[\s,;:.!?)]+|[\s,;:(]+$)")
 
 
-def _safe_goal_summary(value: str) -> Optional[str]:
-    """Use only a short complete task sentence; never expose paths or raw context."""
-    text = value.strip()
-    if len(text) > 120 or not text or not _safe_public_text(text):
+def _normalize_card_text(value: Any, limit: int) -> Optional[str]:
+    """Lightly normalize model/task text for the handoff card, or ``None``.
+
+    Never rejects text for ordinary punctuation, case or length: overlong text
+    is cut at a word boundary and marked with an ellipsis.
+    """
+    if not isinstance(value, str):
         return None
-    if text[-1] not in ".!?":
+    lines = [ln.strip() for ln in value.replace("\r", "\n").split("\n")]
+    text = next((ln for ln in lines if ln), "")
+    text = _CARD_CONTROL_RE.sub(" ", text)
+    text = _CARD_MARKUP_RE.sub("", text)
+    text = _CARD_ABS_PATH_RE.sub(lambda m: m.group(1), text)
+    text = _CARD_ID_RE.sub("", text)
+    text = re.sub(r"\(\s*\)", "", text)
+    text = re.sub(r"\s+", " ", text)
+    text = _CARD_SPACE_BEFORE_PUNCT_RE.sub(r"\1", text)
+    text = _CARD_DANGLING_RE.sub("", text).strip()
+    if not any(ch.isalnum() for ch in text):
         return None
-    return text[:-1]
+    if len(text) > limit:
+        cut = text[: limit - 1]
+        space = cut.rfind(" ")
+        if space >= limit // 2:
+            cut = cut[:space]
+        text = cut.rstrip(" ,;:.!?-–(") + "…"
+    return text
+
+
+def _lower_lead(text: str) -> str:
+    """Lowercase a capitalized first word for mid-sentence use; keep acronyms."""
+    if len(text) > 1 and text[0].isupper() and text[1].islower():
+        return text[0].lower() + text[1:]
+    return text
+
+
+def _goal_title(value: Any) -> Optional[str]:
+    """The task goal as a clean one-line card title (first sentence/line)."""
+    text = _normalize_card_text(value, 10_000)
+    if not text:
+        return None
+    # Prefer the first sentence when the goal is a longer brief.
+    match = re.match(r"(.+?[.!?])(?:\s|$)", text)
+    if match and len(match.group(1)) >= 12:
+        text = match.group(1)
+    return _normalize_card_text(text, _GOAL_TITLE_CHARS)
 
 
 def _clean_handoff(value: Any) -> Optional[dict]:
-    """Keep only short, plain user-facing labels and a qualified numeric range."""
+    """Normalize the model's handoff summary and keep a qualified numeric range.
+
+    A field that is missing or empty after normalization is ``None``; the card
+    then fills it from the task goal. Nothing here rejects the whole summary
+    because of punctuation or wording.
+    """
     if not isinstance(value, dict):
         return None
-    fields = {}
-    for key, limit in (("work", 120), ("outcome", 180)):
-        text = value.get(key)
-        if (
-            not isinstance(text, str) or not text or len(text) > limit
-            or text.strip() != text or not _safe_public_text(text)
-        ):
-            return None
-        fields[key] = text
+    fields: Dict[str, Any] = {
+        "work": _normalize_card_text(value.get("work"), _HANDOFF_WORK_CHARS),
+        "outcome": _normalize_card_text(value.get("outcome"), _HANDOFF_OUTCOME_CHARS),
+    }
+    if fields["work"] is None and fields["outcome"] is None:
+        return None
     low, high = value.get("estimated_minutes_min"), value.get("estimated_minutes_max")
     estimate = None
     if (
@@ -127,7 +181,7 @@ def _clean_handoff(value: Any) -> Optional[dict]:
 
 
 def _with_period(value: str) -> str:
-    return value if value.endswith((".", "!", "?")) else value + "."
+    return value if value.endswith((".", "!", "?", "…")) else value + "."
 
 
 def _format_minutes(value: float) -> str:
@@ -857,36 +911,40 @@ class DelegationCheckpoint:
             )
         handoff = max(handoffs, key=lambda h: h.accepted_at)
         count = len(handoff.goals)
-        details = handoff.handoff
-        if details:
-            work = details["work"]
-            outcome = details["outcome"]
-            if count > 1:
-                work = f"Workers are {work}"
-        else:
-            summaries = [
-                summary for goal_text in handoff.goals
-                if (summary := _safe_goal_summary(goal_text)) is not None
-            ]
-            if count == 1 and summaries:
-                work = summaries[0]
-                outcome = f"a completed result for {summaries[0]}, returned here"
-            elif (
-                count > 1 and len(summaries) == count and count <= 3
-                and len(" and ".join(summaries)) <= 150
-            ):
-                work = "Workers are handling " + " and ".join(summaries)
-                outcome = "completed results for those tasks, returned here"
+        details = handoff.handoff or {}
+        titles = [t for t in (_goal_title(g) for g in handoff.goals) if t]
+        work = details.get("work")
+        outcome = details.get("outcome")
+        if work is None:
+            work = self._goal_work_text(count, titles)
+        elif count > 1:
+            work = f"Workers are {_lower_lead(work)}"
+        if outcome is None:
+            title = titles[0].rstrip(".!?") if count == 1 and titles else ""
+            if title and not title.endswith("…") and len(title) <= 90:
+                outcome = f"a completed result for {title}, returned here"
             else:
-                work = "task details are unavailable in this summary"
                 outcome = (
-                    "the worker's result will return to this conversation"
-                    if count == 1 else "the workers' results will return to this conversation"
+                    "completed results for those tasks, returned here" if count > 1
+                    else "a completed result for this task, returned here"
                 )
         return (
             f"**delegated:** {_with_period(work)}\n\n"
             f"**goal:** {_with_period(outcome)}"
         )
+
+    @staticmethod
+    def _goal_work_text(count: int, titles: list) -> str:
+        """Card work line from the task goals when the model gave no summary."""
+        if count <= 1:
+            return titles[0] if titles else "handling the background task you asked for"
+        if titles and len(titles) == count and count <= 3:
+            joined = " and ".join(_lower_lead(t.rstrip(".!?")) for t in titles)
+            if len(joined) <= 150:
+                return f"Workers are handling {joined}"
+        lead = _lower_lead(titles[0].rstrip(".!?…")) if titles else ""
+        text = f"Workers are handling {count} tasks" + (f", starting with {lead}" if lead else "")
+        return _normalize_card_text(text, 160) or f"Workers are handling {count} tasks"
 
     def _exhausted_text_locked(self) -> str:
         base = (
