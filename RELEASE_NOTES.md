@@ -15,9 +15,12 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
-## 1.1.1 | Clover C1.1.1 | TBD
-<!-- draft -->
-- TODO(release): replace these placeholder lines with 3-6 user-facing bullets.
+## 1.1.1 | Clover C1.1.1 | 2026-10-07
+- Long jobs now move to a background helper, so your agent stays free to chat while it works.
+- Helper cards show what the helper is doing and what it's aiming for.
+- After /update, you now see the version you're on and what's new.
+- Fixed: /update on Windows failing when Clover is started by a Scheduled Task.
+- Fixed: a false warning saying a file wasn't changed when it was.
 
 ## 1.1.0 | Clover C1.1 | 2026-10-07
 - This is the first named release: Clover C1.1.
