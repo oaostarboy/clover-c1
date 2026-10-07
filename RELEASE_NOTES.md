@@ -15,6 +15,11 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.1.2 | Clover C1.1.2 | 2026-10-07
+- Fixed: the what's-new message could go missing after /update when you had local changes.
+- Fixed: on some Linux setups (like a Raspberry Pi) /update could finish without telling you.
+- If the update result file is ever garbled, you now still get the finished message instead of silence.
+
 ## 1.1.1 | Clover C1.1.1 | 2026-10-07
 - Long jobs now move to a background helper, so your agent stays free to chat while it works.
 - Helper cards show what the helper is doing and what it's aiming for.
