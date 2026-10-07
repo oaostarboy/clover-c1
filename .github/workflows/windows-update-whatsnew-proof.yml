@@ -9,7 +9,8 @@ name: Windows update what's-new proof (manual)
 # The update target is a "release candidate" commit built on the runner on top of
 # the branch head: version 1.1.1 and a filled-in 1.1.1 section in RELEASE_NOTES.md.
 #
-# Two phases:
+# Two phases (OLD_REF = the PR #71 head: v1.1.0, no what's-new feature, and not the
+# tip of main, so the replaced-main trick below cannot also rewrite HEAD):
 #   old2new   install OLD_REF (v1.1.0 WITHOUT this feature) and update to the
 #             candidate. The OLD updater and OLD gateway start the update; the
 #             message must still carry version + notes, because the restarted
@@ -46,7 +47,7 @@ jobs:
         setup: [troy, zyra]
         phase: [old2new, new2next]
     env:
-      OLD_REF: 4b02d869f0ff45e9a55c54527e0cb29434b1c7e6
+      OLD_REF: 997ea9e7ab8b0fece1d5f0d23d4754f7e9d6f687
       HEAD_SHA: ${{ github.sha }}
       HEAD_BRANCH: ${{ github.ref_name }}
       SETUP: ${{ matrix.setup }}
@@ -144,6 +145,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Get-LogLines | Select-Object -Last 80 | Out-Host; throw "[$label] final message check failed" }
 
           # Second /update: nothing new to pull. Must say so, without repeating the notes.
+          # (Re-pin first: real origin/main may have moved since the first update.)
+          Pin-MainToCommit $cand
+          $ver = (& "$env:INSTALL_DIR\venv\Scripts\python.exe" -c 'import clover_cli;print(clover_cli.__version__)').Trim()
+          Write-Host "installed version after the first update: $ver"
+          if ($ver -ne '1.1.1') { throw "install is not on the 1.1.1 candidate after the first update (got $ver)" }
           $logStart2 = (Get-LogLines).Count
           $ircStart2 = Get-IrcLineCount
           Send-ChatUpdate

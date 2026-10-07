@@ -65,6 +65,12 @@ function Set-MainIsCommit([string]$targetSha) {
   Write-Host "main $mainSha now reads as candidate $targetSha; local main at $(git -C $d rev-parse --short HEAD)"
 }
 
+function Pin-MainToCommit([string]$sha) {
+  # Real origin/main can move while a run is in flight (it did, mid-proof). Point
+  # whatever main is NOW back at the candidate so "nothing new" really is nothing.
+  Set-MainIsCommit $sha
+}
+
 function Get-IrcLineCount {
   $p = "$env:RUNNER_TEMP\irc.log"
   if (Test-Path $p) { return @(Get-Content $p).Count } else { return 0 }
