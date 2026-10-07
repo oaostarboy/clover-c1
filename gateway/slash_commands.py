@@ -6853,6 +6853,15 @@ class GatewaySlashCommandsMixin:
             pending["thread_id"] = event.source.thread_id
         if event.message_id:
             pending["message_id"] = event.message_id
+        if action == "update":
+            # Remember which version this gateway is running right now, so the
+            # restarted gateway can show "what's new" since THIS version.
+            try:
+                from clover_cli.release_notes import pending_marker_origin
+
+                pending.update(pending_marker_origin())
+            except Exception:
+                pass
         _tmp_pending = pending_path.with_suffix(".tmp")
         _tmp_pending.write_text(json.dumps(pending), encoding="utf-8")
         _tmp_pending.replace(pending_path)

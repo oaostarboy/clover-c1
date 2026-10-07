@@ -1,0 +1,183 @@
+name: Windows update what's-new proof (manual)
+
+# Proves, on real GitHub-hosted Windows runners, that a chat `/update` ends with
+# ONE completion message that names the new release and lists what's new.
+#
+# A gateway is RUNNING (started the way real users' are), a local fake IRC server
+# stands in for Telegram (no real tokens, nobody is messaged), and the chat user
+# sends `/update`; the gateway's own handler spawns `clover update --gateway`.
+# The update target is a "release candidate" commit built on the runner on top of
+# the branch head: version 1.1.1 and a filled-in 1.1.1 section in RELEASE_NOTES.md.
+#
+# Two phases (OLD_REF = the PR #71 head: v1.1.0, no what's-new feature, and not the
+# tip of main, so the replaced-main trick below cannot also rewrite HEAD):
+#   old2new   install OLD_REF (v1.1.0 WITHOUT this feature) and update to the
+#             candidate. The OLD updater and OLD gateway start the update; the
+#             message must still carry version + notes, because the restarted
+#             (new-code) gateway renders it. This is the first hop.
+#   new2next  install the branch head (feature present, v1.1.0) and update to the
+#             candidate.
+# Then a second `/update` with nothing new: the message must say it is already up
+# to date and must NOT repeat the notes.
+# Setups: zyra (Startup-folder VBS) and troy (Scheduled Task).
+#
+# On-demand only: it runs on pushes to ci/win-whatsnew/** helper branches (a
+# helper branch is created at the PR head), never on pull_request/main.
+
+on:
+  push:
+    branches:
+      - "ci/win-whatsnew/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: win-whatsnew-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    name: ${{ matrix.setup }} / chat / ${{ matrix.phase }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        setup: [troy, zyra]
+        phase: [old2new, new2next]
+    env:
+      OLD_REF: 997ea9e7ab8b0fece1d5f0d23d4754f7e9d6f687
+      HEAD_SHA: ${{ github.sha }}
+      HEAD_BRANCH: ${{ github.ref_name }}
+      SETUP: ${{ matrix.setup }}
+      UPDATE_PATH: chat
+      PHASE: ${{ matrix.phase }}
+      API_PORT: "8791"
+      IRC_PORT: "6667"
+    steps:
+      - name: Checkout e2e helpers
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/win-e2e
+          path: e2e
+
+      - name: a. Install Clover via scripts/install.ps1 at the starting commit
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $from = if ($env:PHASE -eq 'old2new') { $env:OLD_REF } else { $env:HEAD_SHA }
+          $cloverHome = "$env:LOCALAPPDATA\clover"
+          $installDir = "$cloverHome\clover-c1"
+          git config --global core.autocrlf false
+          New-Item -ItemType Directory -Force -Path (Split-Path $installDir) | Out-Null
+          git clone --branch main https://github.com/oaostarboy/clover-c1.git $installDir
+          git -C $installDir checkout --detach $from
+          if ($LASTEXITCODE -ne 0) { throw "pre-clone checkout of $from failed" }
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/$env:HEAD_SHA/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
+          & "$env:TEMP\install.ps1" -Branch main -Commit $from -NonInteractive -SkipComputerUse -CloverHome $cloverHome -InstallDir $installDir
+          "FROM_REF=$from" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CLOVER_HOME=$cloverHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALL_DIR=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CLOVER_BIN=$installDir\venv\Scripts\clover.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "E2E=$env:GITHUB_WORKSPACE\e2e\.github\win-e2e" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "installed $from; Windows: $((Get-CimInstance Win32_OperatingSystem).Caption)"
+
+      - name: b. Config as the installer made it + api_server (+ IRC for chat /update); dummy tokens only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cfg = "$env:CLOVER_HOME\config.yaml"
+          if (-not (Test-Path $cfg)) { Copy-Item "$env:INSTALL_DIR\cli-config.yaml.example" $cfg }
+          $lines = @("API_SERVER_ENABLED=true", "API_SERVER_KEY=win-update-proof-key-0123456789", "API_SERVER_PORT=$env:API_PORT", "API_SERVER_HOST=127.0.0.1")
+          if ($true) {
+            $lines += @("IRC_SERVER=127.0.0.1", "IRC_PORT=$env:IRC_PORT", "IRC_USE_TLS=false", "IRC_CHANNEL=#clover", "IRC_NICKNAME=cloverbot", "IRC_ALLOWED_USERS=ant", "GATEWAY_ALLOW_ALL_USERS=true")
+          }
+          Add-Content -Path "$env:CLOVER_HOME\.env" -Value ($lines -join "`n")
+
+      - name: c. Start the gateway the setup's way and show who owns it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:E2E\supervisor-proof.ps1"
+          if ($env:UPDATE_PATH -eq 'chat') {
+            $py = (Get-Command python).Source  # system Python, never the Clover venv
+            Start-Process -FilePath $py -ArgumentList @("$env:E2E\fake_ircd.py", "$env:RUNNER_TEMP\irc.log", "$env:RUNNER_TEMP\irc.trigger", $env:IRC_PORT) -WindowStyle Hidden
+          }
+          if ($env:SETUP -eq 'troy') { Start-TroyGateway } else { Start-ZyraGateway }
+          Wait-GatewayUp 150
+          if ($env:UPDATE_PATH -eq 'chat') {
+            $deadline = (Get-Date).AddSeconds(90)
+            while ((Get-Date) -lt $deadline -and -not (Select-String -Path "$env:RUNNER_TEMP\irc.log" -Pattern '<< JOIN' -Quiet -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 2 }
+            if (-not (Select-String -Path "$env:RUNNER_TEMP\irc.log" -Pattern '<< JOIN' -Quiet)) { Get-LogLines | Select-Object -Last 60; throw "gateway never joined the IRC server" }
+          }
+          $own = Show-GatewayOwnership "pre-update $env:SETUP"
+          "OLD_GATEWAY_PID=$($own.Pid)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if ($env:SETUP -eq 'troy' -and -not $own.ViaSchedule) { throw "troy gateway does not descend from the Schedule service host; the scenario is not Troy-like" }
+          if ($env:SETUP -eq 'zyra' -and $own.ViaSchedule) { throw "zyra gateway unexpectedly descends from the Schedule service host" }
+
+      - name: d. /update from chat, then a second /update with nothing new
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:E2E\supervisor-proof.ps1"
+          . "$env:E2E\whats-new-proof.ps1"
+          $env:PYTHONUTF8 = "1"
+          $py = (Get-Command python).Source
+          $hasFeature = Test-Path "$env:INSTALL_DIR\clover_cli\release_notes.py"
+          Write-Host "installed starting version has the what's-new feature: $hasFeature (phase $env:PHASE)"
+          if ($env:PHASE -eq 'old2new' -and $hasFeature) { throw "old2new must start from code WITHOUT the feature" }
+          if ($env:PHASE -eq 'new2next' -and -not $hasFeature) { throw "new2next must start from code WITH the feature" }
+          Write-Host "starting version: $((& "$env:INSTALL_DIR\venv\Scripts\python.exe" -c 'import clover_cli;print(clover_cli.__version__)'))"
+
+          $cand = New-ReleaseCandidate
+          Set-MainIsCommit $cand
+          $logStart = (Get-LogLines).Count
+          $ircStart = Get-IrcLineCount
+          $label = "$env:SETUP chat $env:PHASE"
+          $exitCode = Invoke-PathUpdate $label
+          Write-Host "[$label] update exit=$exitCode"
+          Assert-UpdateSucceeded $label $logStart $exitCode ([int]$env:OLD_GATEWAY_PID)
+          Show-UpdateNotificationLog $logStart
+
+          Write-Host "=== FINAL MESSAGE after the update that pulled 1.1.1 ==="
+          & $py "$env:E2E\whats_new_check.py" "$env:RUNNER_TEMP\irc.log" $ircStart notes --version 1.1.1 --name "Clover C1.1.1" --from 1.1.0 --bullet "Proof bullet one: the update message names the release." --bullet "Proof bullet two: it lists what is new." --bullet "Proof bullet three: nothing extra is sent." --wait 120 --out "$env:RUNNER_TEMP\final-message-update.txt"
+          if ($LASTEXITCODE -ne 0) { Get-LogLines | Select-Object -Last 80 | Out-Host; throw "[$label] final message check failed" }
+
+          # Second /update: nothing new to pull. Must say so, without repeating the notes.
+          # (Re-pin first: real origin/main may have moved since the first update.)
+          Pin-MainToCommit $cand
+          $ver = (& "$env:INSTALL_DIR\venv\Scripts\python.exe" -c 'import clover_cli;print(clover_cli.__version__)').Trim()
+          Write-Host "installed version after the first update: $ver"
+          if ($ver -ne '1.1.1') { throw "install is not on the 1.1.1 candidate after the first update (got $ver)" }
+          $logStart2 = (Get-LogLines).Count
+          $ircStart2 = Get-IrcLineCount
+          Send-ChatUpdate
+          Write-Host "=== FINAL MESSAGE after a second /update with nothing new ==="
+          & $py "$env:E2E\whats_new_check.py" "$env:RUNNER_TEMP\irc.log" $ircStart2 uptodate --version 1.1.1 --name "Clover C1.1.1" --wait 600 --out "$env:RUNNER_TEMP\final-message-uptodate.txt"
+          $rc2 = $LASTEXITCODE
+          Show-UpdateNotificationLog $logStart2
+          if ($rc2 -ne 0) { Get-LogLines | Select-Object -Last 80 | Out-Host; throw "[$label] up-to-date message check failed" }
+          Wait-UpdateChainDone 600
+          $roots = @(Get-GatewayRoots).Count
+          Write-Host "[$label] gateways alive after the second /update: $roots; api port bound: $(Test-ApiPort)"
+          if ($roots -ne 1 -or -not (Test-ApiPort)) { throw "[$label] gateway not healthy after the second /update" }
+          exit 0
+
+      - name: e. Stage logs
+        if: always()
+        shell: pwsh
+        run: |
+          $dst = "$env:RUNNER_TEMP\artifacts"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          foreach ($p in @("$env:CLOVER_HOME\logs", "$env:CLOVER_HOME\gateway_state.json", "$env:CLOVER_HOME\.clover-last-update", "$env:CLOVER_HOME\config.yaml", "$env:RUNNER_TEMP\irc.log", "$env:RUNNER_TEMP\update-output.txt", "$env:RUNNER_TEMP\final-message-update.txt", "$env:RUNNER_TEMP\final-message-uptodate.txt")) {
+            if (Test-Path $p) { Copy-Item -Recurse -Force $p $dst -ErrorAction SilentlyContinue }
+          }
+
+      - name: f. Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: win-whatsnew-proof-${{ matrix.setup }}-${{ matrix.phase }}
+          path: ${{ runner.temp }}\artifacts
+          if-no-files-found: ignore
