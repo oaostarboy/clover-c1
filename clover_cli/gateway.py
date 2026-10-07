@@ -1130,6 +1130,106 @@ def find_profile_gateway_processes(
     return processes
 
 
+_WINDOWS_PYTHON_LAUNCHERS = frozenset({"python.exe", "pythonw.exe", "py.exe", "pyw.exe"})
+
+
+def _windows_service_attr(service: object, field: str) -> str:
+    """Read a psutil WindowsService field (method or as_dict key); '' if unreadable."""
+    try:
+        getter = getattr(service, field, None)
+        if callable(getter):
+            return str(getter() or "")
+        as_dict = getattr(service, "as_dict", None)
+        if callable(as_dict):
+            return str((as_dict() or {}).get(field) or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _windows_exe_path(command: object) -> str:
+    """Lower-case executable path from an exe path or an SCM binpath."""
+    text = str(command or "").strip()
+    if text.startswith('"'):
+        text = text[1:].split('"', 1)[0]
+    elif ".exe" in text.lower():
+        text = text[: text.lower().index(".exe") + 4]
+    return text.replace("/", "\\").lower()
+
+
+def _windows_service_host_paths(
+    psutil_module, service_pid: int, services: list[object]
+) -> list[str]:
+    paths = [
+        _windows_exe_path(_windows_service_attr(service, "binpath"))
+        for service in services
+    ]
+    try:
+        paths.append(_windows_exe_path(psutil_module.Process(service_pid).exe()))
+    except Exception:
+        pass
+    return [path for path in paths if path]
+
+
+def _is_windows_system_service_host(host_paths: list[str]) -> bool:
+    """True when an SCM host binary is Windows-owned (``svchost.exe`` or under
+    ``%SystemRoot%``).
+
+    A gateway launched by a Scheduled Task descends from the svchost hosting
+    Task Scheduler's ``Schedule`` service but is not supervised by it;
+    ``sc.exe stop`` on it is denied to non-admins and wrong even for admins.
+    """
+    roots = {"c:\\windows\\"}
+    for var in ("SystemRoot", "WINDIR"):
+        value = os.environ.get(var)
+        if value:
+            roots.add(value.replace("/", "\\").lower().rstrip("\\") + "\\")
+    return any(
+        path.rsplit("\\", 1)[-1] == "svchost.exe" or path.startswith(tuple(roots))
+        for path in host_paths
+    )
+
+
+def _is_clover_gateway_service(
+    psutil_module,
+    service_name: str,
+    services: list[object],
+    service_pid: int,
+    intermediate_pids: list[int],
+) -> bool:
+    """True only for an SCM service that is actually a Clover gateway service.
+
+    Clover does not register a native service itself (users wrap it with
+    WinSW/NSSM/``sc.exe create``). Ownership therefore needs positive proof:
+    Clover identity on the service (name, display name, binpath, host command
+    line), or a readable, non-Windows wrapper binary whose only processes
+    between it and the gateway are Python launchers. Unreadable evidence is
+    not proof.
+    """
+    host_paths = _windows_service_host_paths(psutil_module, service_pid, services)
+    if _is_windows_system_service_host(host_paths):
+        return False
+    fields = [service_name, *host_paths]
+    for service in services:
+        fields.append(_windows_service_attr(service, "display_name"))
+    try:
+        fields.append(" ".join(psutil_module.Process(service_pid).cmdline() or []))
+    except Exception:
+        pass
+    if any("clover" in field.lower() for field in fields):
+        return True
+    if not host_paths:
+        return False
+    try:
+        return all(
+            _windows_exe_path(psutil_module.Process(pid).exe()).rsplit("\\", 1)[-1]
+            in _WINDOWS_PYTHON_LAUNCHERS
+            for pid in intermediate_pids
+        )
+    except Exception:
+        return False
+
+
 def find_windows_gateway_services(
     *,
     psutil_module=None,
@@ -1153,6 +1253,7 @@ def find_windows_gateway_services(
             profile_processes = find_profile_gateway_processes(strict=True)
         service_names_by_pid: dict[int, set[str]] = {}
         indeterminate_services_by_pid: dict[int, list[tuple[str, object]]] = {}
+        service_objects_by_pid: dict[int, list[object]] = {}
         for service in psutil_module.win_service_iter():
             try:
                 if all(
@@ -1177,6 +1278,8 @@ def find_windows_gateway_services(
                 raise RuntimeError("SCM service has an empty name")
             if service_status == "stopped":
                 continue
+            if service_pid > 0:
+                service_objects_by_pid.setdefault(service_pid, []).append(service)
             if service_status != "running":
                 if service_pid > 0:
                     indeterminate_services_by_pid.setdefault(service_pid, []).append(
@@ -1188,6 +1291,17 @@ def find_windows_gateway_services(
                     f"Running SCM service {service_name} has no valid process ID"
                 )
             service_names_by_pid.setdefault(service_pid, set()).add(service_name)
+        # Windows-owned hosts (svchost: Schedule, ...) are never gateway
+        # supervisors. A Scheduled-Task gateway descends from one; it must
+        # fall through to the ordinary gateway pause/respawn path instead of
+        # the updater trying to ``sc.exe stop`` an OS service.
+        system_host_pids = {
+            pid
+            for pid, services in service_objects_by_pid.items()
+            if _is_windows_system_service_host(
+                _windows_service_host_paths(psutil_module, pid, services)
+            )
+        }
     except Exception as exc:
         raise RuntimeError("SCM service enumeration failed") from exc
 
@@ -1200,7 +1314,10 @@ def find_windows_gateway_services(
                 gateway_create_time - profile_process.create_time
             ) > 0.001:
                 raise RuntimeError("Gateway process identity changed during SCM discovery")
-            ancestor_pids = [int(parent.pid) for parent in gateway_process.parents()]
+            all_ancestor_pids = [int(parent.pid) for parent in gateway_process.parents()]
+            ancestor_pids = [
+                pid for pid in all_ancestor_pids if pid not in system_host_pids
+            ]
             for pid in ancestor_pids:
                 indeterminate_services = indeterminate_services_by_pid.get(pid, [])
                 if indeterminate_services:
@@ -1224,6 +1341,13 @@ def find_windows_gateway_services(
                     pid
                     for pid in ancestor_pids
                     if len(service_names_by_pid.get(pid, set())) == 1
+                    and _is_clover_gateway_service(
+                        psutil_module,
+                        next(iter(service_names_by_pid[pid])),
+                        service_objects_by_pid.get(pid, []),
+                        pid,
+                        all_ancestor_pids[: all_ancestor_pids.index(pid)],
+                    )
                 ),
                 None,
             )

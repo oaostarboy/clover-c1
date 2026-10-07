@@ -1174,6 +1174,211 @@ def test_find_windows_gateway_services_fails_closed_when_scm_scan_is_indetermina
         )
 
 
+# --- Windows system services must never be selected as gateway supervisors ---
+#
+# A gateway launched by a Scheduled Task descends from the svchost.exe that
+# hosts Task Scheduler's ``Schedule`` service. That service is not a Clover
+# gateway service: ``sc.exe stop Schedule`` is denied to non-admins and
+# aborted the whole update ("Could not stop Windows gateway service Schedule").
+
+_SVCHOST = r"C:\Windows\System32\svchost.exe"
+
+
+class _FakeWinService:
+    def __init__(self, name, pid, binpath="", display_name="", status="running"):
+        self._d = {
+            "name": name,
+            "pid": pid,
+            "status": status,
+            "binpath": binpath,
+            "display_name": display_name or name,
+        }
+
+    def as_dict(self):
+        return dict(self._d)
+
+
+class _FakeWinProcess:
+    """Process table: pid -> (parent_pid, exe, cmdline)."""
+
+    table: dict = {}
+
+    def __init__(self, pid):
+        if pid not in self.table:
+            raise ProcessLookupError(pid)
+        self.pid = pid
+
+    def parents(self):
+        out, pid = [], self.table[self.pid][0]
+        while pid in self.table:
+            out.append(type(self)(pid))
+            pid = self.table[pid][0]
+        return out
+
+    def children(self, recursive=False):
+        kids = [type(self)(p) for p, row in self.table.items() if row[0] == self.pid]
+        if recursive:
+            for kid in list(kids):
+                kids.extend(kid.children(recursive=True))
+        return kids
+
+    def create_time(self):
+        return float(self.pid)
+
+    def exe(self):
+        return self.table[self.pid][1]
+
+    def cmdline(self):
+        return list(self.table[self.pid][2])
+
+
+def _fake_psutil_for(table, services):
+    proc_cls = type("FakeProc", (_FakeWinProcess,), {"table": table})
+    return SimpleNamespace(win_service_iter=lambda: list(services), Process=proc_cls)
+
+
+_GATEWAY_PROFILE = SimpleNamespace(profile="default", pid=300, create_time=300.0)
+_PYTHON_GATEWAY = (r"C:\clover\venv\Scripts\pythonw.exe", ["pythonw.exe", "-m", "clover_cli.main", "gateway", "run"])
+
+
+def test_find_windows_gateway_services_ignores_task_scheduler_svchost(monkeypatch):
+    """Scheduled-Task gateway under the single-service Schedule svchost is not SCM-supervised."""
+    monkeypatch.setattr(gateway.sys, "platform", "win32")
+    table = {
+        100: (4, _SVCHOST, [_SVCHOST, "-k", "netsvcs", "-p", "-s", "Schedule"]),
+        200: (100, r"C:\Windows\System32\taskhostw.exe", ["taskhostw.exe"]),
+        300: (200, *_PYTHON_GATEWAY),
+    }
+    services = [
+        _FakeWinService(
+            "Schedule", 100, binpath=_SVCHOST + " -k netsvcs -p", display_name="Task Scheduler"
+        ),
+        _FakeWinService("Dnscache", 900, binpath=_SVCHOST + " -k NetworkService -p"),
+    ]
+
+    result = gateway.find_windows_gateway_services(
+        psutil_module=_fake_psutil_for(table, services),
+        profile_processes=[_GATEWAY_PROFILE],
+    )
+
+    assert result == []
+
+
+def test_find_windows_gateway_services_ignores_shared_system_service_host(monkeypatch):
+    """A shared svchost (several services) is a system host, not an 'ambiguous' abort."""
+    monkeypatch.setattr(gateway.sys, "platform", "win32")
+    table = {
+        100: (4, _SVCHOST, [_SVCHOST, "-k", "netsvcs", "-p"]),
+        200: (100, r"C:\Windows\System32\taskhostw.exe", ["taskhostw.exe"]),
+        300: (200, *_PYTHON_GATEWAY),
+    }
+    services = [
+        _FakeWinService("Schedule", 100, binpath=_SVCHOST + " -k netsvcs -p"),
+        _FakeWinService("Themes", 100, binpath=_SVCHOST + " -k netsvcs -p"),
+    ]
+
+    assert (
+        gateway.find_windows_gateway_services(
+            psutil_module=_fake_psutil_for(table, services),
+            profile_processes=[_GATEWAY_PROFILE],
+        )
+        == []
+    )
+
+
+def test_find_windows_gateway_services_ignores_non_clover_third_party_service(monkeypatch):
+    """Any non-Clover ancestor service (not a Python-launcher wrapper) is not selected."""
+    monkeypatch.setattr(gateway.sys, "platform", "win32")
+    table = {
+        100: (4, r"C:\Vendor\agentd.exe", [r"C:\Vendor\agentd.exe"]),
+        200: (100, r"C:\Windows\System32\cmd.exe", ["cmd.exe", "/c", "run.bat"]),
+        300: (200, *_PYTHON_GATEWAY),
+    }
+    services = [_FakeWinService("VendorAgent", 100, binpath=r"C:\Vendor\agentd.exe")]
+
+    assert (
+        gateway.find_windows_gateway_services(
+            psutil_module=_fake_psutil_for(table, services),
+            profile_processes=[_GATEWAY_PROFILE],
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("service", "wrapper_exe", "intermediates"),
+    [
+        # Clover identity on the service itself.
+        (_FakeWinService("CloverGateway", 100, binpath=r"C:\svc\winsw.exe"), r"C:\svc\winsw.exe", False),
+        # NSSM/WinSW wrapper with a neutral name, gateway under a python launcher.
+        (_FakeWinService("MyAgent", 100, binpath=r"C:\svc\nssm.exe"), r"C:\svc\nssm.exe", True),
+    ],
+)
+def test_find_windows_gateway_services_still_returns_real_clover_service(
+    monkeypatch, service, wrapper_exe, intermediates
+):
+    monkeypatch.setattr(gateway.sys, "platform", "win32")
+    table = {100: (4, wrapper_exe, [wrapper_exe])}
+    if intermediates:
+        table[200] = (100, r"C:\clover\venv\Scripts\python.exe", ["python.exe"])
+        table[300] = (200, *_PYTHON_GATEWAY)
+    else:
+        table[300] = (100, *_PYTHON_GATEWAY)
+
+    result = gateway.find_windows_gateway_services(
+        psutil_module=_fake_psutil_for(table, [service]),
+        profile_processes=[_GATEWAY_PROFILE],
+    )
+
+    assert [(svc.name, svc.service_pid, svc.gateway_pid) for svc in result] == [
+        (service._d["name"], 100, 300)
+    ]
+
+
+def test_update_pause_never_stops_task_scheduler_service(monkeypatch, tmp_path):
+    """End to end through the updater pause: no ``sc.exe stop Schedule``; the
+    gateway takes the ordinary (profile-mapped) pause path instead."""
+    import clover_cli.gateway as gateway  # fresh module: update_cmd imports from sys.modules
+    import clover_cli.main as cli_main
+    import clover_cli.update_cmd as update_cmd
+
+    monkeypatch.setattr(gateway.sys, "platform", "win32")
+    monkeypatch.setattr(cli_main, "_is_windows", lambda: True)
+    home = tmp_path / "profiles" / "default"
+    home.mkdir(parents=True)
+    profile = SimpleNamespace(profile="default", path=home, pid=300, create_time=300.0)
+    table = {
+        100: (4, _SVCHOST, [_SVCHOST, "-k", "netsvcs", "-p", "-s", "Schedule"]),
+        200: (100, r"C:\Windows\System32\taskhostw.exe", ["taskhostw.exe"]),
+        300: (200, *_PYTHON_GATEWAY),
+    }
+    fake_psutil = _fake_psutil_for(
+        table, [_FakeWinService("Schedule", 100, binpath=_SVCHOST + " -k netsvcs -p")]
+    )
+    real_find = gateway.find_windows_gateway_services
+    monkeypatch.setattr(gateway, "find_gateway_pids", lambda **_k: [300])
+    monkeypatch.setattr(gateway, "find_profile_gateway_processes", lambda **_k: [profile])
+    monkeypatch.setattr(
+        gateway,
+        "find_windows_gateway_services",
+        lambda **k: real_find(psutil_module=fake_psutil, **k),
+    )
+    monkeypatch.setattr(gateway, "_get_restart_drain_timeout", lambda: 0.1)
+    monkeypatch.setattr(cli_main, "_wait_for_windows_update_gateway_exit", lambda pids, *, timeout: set())
+    monkeypatch.setattr(cli_main, "_venv_launcher_ancestors", lambda pids: [])
+    monkeypatch.setattr(update_cmd, "_write_update_planned_stop_marker", lambda *a, **k: None)
+    stopped = []
+    monkeypatch.setattr(
+        update_cmd, "_stop_windows_gateway_service", lambda name, **_k: stopped.append(name)
+    )
+
+    token = cli_main._pause_windows_gateways_for_update()
+
+    assert stopped == []
+    assert token["profiles"] == {"default": 300}
+    assert "services" not in token
+
+
 def test_find_profile_gateway_processes_strict_propagates_profile_listing_failure(
     monkeypatch,
 ):
