@@ -516,9 +516,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     from tools.todo_tool import delegation_check_for_agent
 
     if delegation_check_for_agent(agent):
+        from agent.delegation_checkpoint import checkpoint_applies
         from agent.prompt_builder import TODO_DELEGATION_DECISION_GUIDANCE
 
-        stable_parts.append(TODO_DELEGATION_DECISION_GUIDANCE)
+        # Teach the mandatory checkpoint only to agents it will actually gate
+        # (exempt roots keep the optional wording out of their prompt).
+        if checkpoint_applies(agent):
+            stable_parts.append(TODO_DELEGATION_DECISION_GUIDANCE)
 
     # Universal parallel-tool-call guidance.  Tells the model to batch
     # independent tool calls into one assistant turn rather than emitting one

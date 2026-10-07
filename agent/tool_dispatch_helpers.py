@@ -25,6 +25,7 @@ working unchanged.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -526,6 +527,89 @@ def _extract_landed_file_mutation_paths(
         return [str(resolved)]
 
     return targets
+
+
+# Above this size, snapshot by size+mtime only — hashing a multi-GB file on
+# every failed mutation attempt (and again at turn-end) would be a real cost
+# for a feature that only needs to detect "did anything change".
+_MUTATION_SNAPSHOT_HASH_MAX_BYTES = 8 * 1024 * 1024  # 8 MiB
+
+
+def _snapshot_file_mutation_target(path: str) -> Dict[str, Any]:
+    """Capture a cheap on-disk fingerprint of ``path`` for later comparison.
+
+    Used by the file-mutation verifier: when a ``write_file``/``patch`` call
+    fails, we snapshot the target's current on-disk state so that, at
+    turn-end, we can tell whether some OTHER route (terminal command,
+    ``clover config set``, execute_code, a second agent, ...) changed the
+    file anyway during the same turn. If so, the failure is stale and
+    should not be reported to the user as "NOT modified".
+
+    Returns a dict with ``exists``, and when the file exists and is
+    readable: ``size``, ``mtime_ns``, and (for files at or under
+    ``_MUTATION_SNAPSHOT_HASH_MAX_BYTES``) a ``sha256`` content hash.
+    Any stat/read failure (permissions, race, non-regular file) degrades
+    gracefully to ``{\"exists\": None}`` — a "snapshot unavailable" sentinel
+    the caller must treat as "cannot tell, keep current behavior".
+    """
+    try:
+        expanded = os.path.expanduser(path)
+        st = os.stat(expanded)
+    except FileNotFoundError:
+        return {"exists": False}
+    except OSError:
+        # Permission denied, race, broken symlink, etc. — unknown state.
+        return {"exists": None}
+    snap: Dict[str, Any] = {
+        "exists": True,
+        "size": st.st_size,
+        "mtime_ns": st.st_mtime_ns,
+    }
+    if st.st_size <= _MUTATION_SNAPSHOT_HASH_MAX_BYTES:
+        try:
+            h = hashlib.sha256()
+            with open(expanded, "rb") as fh:
+                for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                    h.update(chunk)
+            snap["sha256"] = h.hexdigest()
+        except OSError:
+            # Can stat but not read (permissions raced, deleted mid-read,
+            # directory, device file, ...) — keep the stat fields, no hash.
+            pass
+    return snap
+
+
+def _file_mutation_target_changed(path: str, snapshot: Optional[Dict[str, Any]]) -> bool:
+    """Return True iff ``path`` differs on disk from a prior ``snapshot``.
+
+    ``snapshot`` is the dict a previous ``_snapshot_file_mutation_target``
+    call returned at the moment a mutation attempt failed. If the snapshot
+    is unavailable (``exists`` is ``None``, or missing entirely), we cannot
+    tell whether the file changed — return False so the caller falls back
+    to current (pre-fix) behavior rather than guessing.
+    """
+    if not snapshot or snapshot.get("exists") is None:
+        return False
+    current = _snapshot_file_mutation_target(path)
+    if current.get("exists") is None:
+        # Can't re-read now either — stay conservative, assume unchanged.
+        return False
+    if current.get("exists") != snapshot.get("exists"):
+        return True
+    if not current.get("exists"):
+        # Both snapshots agree the file doesn't exist — no change.
+        return False
+    # Both exist: prefer content hash when both snapshots have one (handles
+    # same-size-and-mtime edits, e.g. a fast rewrite within one mtime tick).
+    old_hash = snapshot.get("sha256")
+    new_hash = current.get("sha256")
+    if old_hash is not None and new_hash is not None:
+        return old_hash != new_hash
+    # Large files (or an unreadable one) fall back to size+mtime_ns.
+    return (
+        current.get("size") != snapshot.get("size")
+        or current.get("mtime_ns") != snapshot.get("mtime_ns")
+    )
 
 
 def _extract_error_preview(result: Any, max_len: int = 180) -> str:

@@ -376,6 +376,7 @@ def todo_tool(
     store: Optional[TodoStore] = None,
     delegation: Optional[Dict[str, Any]] = None,
     delegation_check: bool = False,
+    applied_delegation: Optional[List[Dict[str, str]]] = None,
 ) -> str:
     """
     Single entry point for the todo tool. Reads or writes depending on params.
@@ -384,6 +385,9 @@ def todo_tool(
         todos: if provided, write these items. If None, read current list.
         merge: if True, update by id. If False (default), replace entire list.
         store: the TodoStore instance from the AIAgent.
+        applied_delegation: internal out-list. When a valid ``delegation`` was
+            really applied, the normalized decision is appended to it so the
+            runtime checkpoint never has to parse this tool's output.
 
     Returns:
         JSON string with the full current list and summary metadata.
@@ -416,6 +420,9 @@ def todo_tool(
             store.set_delegation(normalized_delegation)
         items = store.read()
 
+    if normalized_delegation is not None and applied_delegation is not None:
+        applied_delegation.append(dict(normalized_delegation))
+
     # Build summary counts
     pending = sum(1 for i in items if i["status"] == "pending")
     in_progress = sum(1 for i in items if i["status"] == "in_progress")
@@ -441,6 +448,33 @@ def todo_tool(
             "cancelled": cancelled,
         },
     }, ensure_ascii=False)
+
+
+def todo_for_agent(agent: Any, args: Dict[str, Any], owner: Any = None) -> str:
+    """Run ``todo`` for ``agent``; fill the invocation's private slot.
+
+    ``owner`` is this invocation's receipt, allocated by the CALLER
+    (``agent.delegation_checkpoint.claim_declaration``) before any worker
+    handoff. This helper only updates the TodoStore and writes the normalized
+    applied declaration into the receipt's private slot. It NEVER grants
+    runtime authority: that belongs to the foreground root, which registers
+    the declaration after it has accepted a normal completion. A late, stale,
+    abandoned or ownerless call can therefore still update plan metadata but
+    can never authorize work.
+    """
+    applied: List[Dict[str, str]] = []
+    result = todo_tool(
+        todos=args.get("todos"),
+        merge=args.get("merge", False),
+        store=agent._todo_store,
+        delegation=args.get("delegation"),
+        delegation_check=delegation_check_for_agent(agent),
+        applied_delegation=applied,
+    )
+    slot = getattr(owner, "slot", None)
+    if applied and slot is not None and slot.decision is None:
+        slot.decision = dict(applied[-1])
+    return result
 
 
 def _normalize_delegation(value: Any) -> Optional[Dict[str, str]]:
@@ -541,7 +575,7 @@ TODO_SCHEMA = {
             },
             "delegation": {
                 "type": "object",
-                "description": "Optional plan-level delegation decision. Give a brief operational rationale, not private reasoning.",
+                "description": "Delegation decision. A root that can delegate must record one before its first work tool (decision-only calls without todos are fine): direct, or delegate followed by delegate_task. Give a brief operational rationale, not private reasoning.",
                 "properties": {
                     "mode": {"type": "string", "enum": ["delegate", "direct"]},
                     "reason": {"type": "string", "maxLength": MAX_DELEGATION_REASON_CHARS}

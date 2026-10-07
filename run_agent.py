@@ -115,6 +115,7 @@ from agent.process_bootstrap import (
     _get_proxy_for_base_url,
 )
 from agent.iteration_budget import IterationBudget
+from agent.delegation_checkpoint import RECEIPT_UNSET as _RECEIPT_UNSET
 from agent.interrupt_compat import request_hard_interrupt
 
 
@@ -219,6 +220,8 @@ from agent.tool_dispatch_helpers import (
     _extract_file_mutation_targets,
     _extract_landed_file_mutation_paths,
     _extract_error_preview,
+    _snapshot_file_mutation_target,  # noqa: F401  # re-exported for tests that `from run_agent import _snapshot_file_mutation_target`
+    _file_mutation_target_changed,  # noqa: F401  # re-exported for tests that `from run_agent import _file_mutation_target_changed`
     _trajectory_normalize_msg,  # noqa: F401  # re-exported for tests that `from run_agent import _trajectory_normalize_msg`
 )
 from utils import atomic_json_write, base_url_host_matches, base_url_hostname, env_float, is_truthy_value, model_forces_max_completion_tokens
@@ -3746,9 +3749,43 @@ class AIAgent:
                     state[path] = {
                         "tool": tool_name,
                         "error_preview": preview,
+                        # Snapshot the on-disk state RIGHT NOW so turn-end
+                        # reconciliation can tell whether some other route
+                        # (terminal, `clover config set`, execute_code, a
+                        # second agent, ...) changed the file anyway later
+                        # in the same turn — in which case the failure is
+                        # stale and should not be reported to the user.
+                        "snapshot": _snapshot_file_mutation_target(path),
                     }
         else:
             for path in targets:
+                state.pop(path, None)
+
+    def _reconcile_file_mutation_failures_with_disk(self) -> None:
+        """Drop failures whose target changed on disk via another route.
+
+        Called at turn-end, right before the footer is rendered. A failed
+        ``write_file``/``patch`` call only means that ONE tool call didn't
+        land — it says nothing about whether the model (or the user, or a
+        cron job) then changed the same file through the terminal tool, a
+        CLI command like ``clover config set``, ``execute_code``, or any
+        other route the verifier doesn't instrument. If the on-disk state
+        no longer matches the snapshot taken at failure time, the file WAS
+        modified this turn, so the entry is stale and must not be reported
+        as "NOT modified". Paths with no usable snapshot are left as-is —
+        same as current (pre-fix) behavior.
+        """
+        state = getattr(self, "_turn_failed_file_mutations", None)
+        if not state:
+            return
+        for path in list(state.keys()):
+            info = state.get(path) or {}
+            snapshot = info.get("snapshot")
+            try:
+                changed = _file_mutation_target_changed(path, snapshot)
+            except Exception:
+                changed = False
+            if changed:
                 state.pop(path, None)
 
     def _file_mutation_verifier_enabled(self) -> bool:
@@ -8337,6 +8374,7 @@ class AIAgent:
             action=function_args.get("action"),
             subagent_id=function_args.get("subagent_id"),
             message=function_args.get("message"),
+            handoff=function_args.get("handoff"),
             parent_agent=self,
         )
 
@@ -8345,7 +8383,8 @@ class AIAgent:
                      pre_tool_block_checked: bool = False,
                      skip_tool_request_middleware: bool = False,
                      tool_request_middleware_trace: Optional[list[dict[str, Any]]] = None,
-                     skip_tool_execution_middleware: bool = False) -> str:
+                     skip_tool_execution_middleware: bool = False,
+                     declaration_owner: Any = _RECEIPT_UNSET) -> str:
         """Forwarder — see ``agent.agent_runtime_helpers.invoke_tool``."""
         from agent.agent_runtime_helpers import invoke_tool
         return invoke_tool(
@@ -8359,6 +8398,7 @@ class AIAgent:
             skip_tool_request_middleware,
             tool_request_middleware_trace,
             skip_tool_execution_middleware,
+            declaration_owner,
         )
 
     @staticmethod

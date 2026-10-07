@@ -649,6 +649,10 @@ def _run_agent(
             clarify_callback=_oneshot_clarify_callback,
         )
 
+        # One-shot runs have no human to answer; no delegation checkpoint
+        # (agent/delegation_checkpoint.py).
+        agent._delegation_checkpoint_exempt = "oneshot"
+
         # Belt-and-braces: make sure AIAgent doesn't invoke any streaming
         # display callbacks that would bypass our stdout capture.
         agent.suppress_status_output = True

@@ -637,6 +637,11 @@ def build_turn_context(
         )
     agent._relay_pending_turn_id = None
     agent._current_turn_id = turn_id
+    # Fresh root entry = new work episode: the delegation choice starts
+    # undecided, except a trusted gateway internal_notification delivery,
+    # which keeps the live in-memory choice (never restored from history).
+    from agent.delegation_checkpoint import begin_turn as _checkpoint_begin_turn
+    _checkpoint_begin_turn(agent, persist_user_display_kind)
     agent._current_api_request_id = ""
     # Tripwire: warn (with both turn ids) when this turn starts before the
     # previous turn's turn-end persist — concurrent turns on one session

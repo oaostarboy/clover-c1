@@ -15,6 +15,17 @@ batched parallel patches, half failed, and the model summarised the
 turn claiming every file was edited.  This verifier makes over-claiming
 structurally impossible past the model: the user always sees the real
 list of files that did NOT change.
+
+Second regression target: an agent's ``patch`` call to
+``~/.clover/config.yaml`` was refused by the write guardrail, so the
+model fell back to the terminal tool (``clover config set ...``), which
+DID change the file. The verifier still reported the path as "NOT
+modified" because it only tracked the file-tool call, not the disk.
+``_snapshot_file_mutation_target`` / ``_file_mutation_target_changed`` /
+``AIAgent._reconcile_file_mutation_failures_with_disk`` close that gap:
+a failed path is re-stat/re-hashed against its failure-time snapshot
+right before the footer renders, and any path the disk proves wrong is
+dropped from the failure list.
 """
 
 from __future__ import annotations
@@ -29,6 +40,8 @@ from run_agent import (
     _extract_error_preview,
     _extract_file_mutation_targets,
     _extract_landed_file_mutation_paths,
+    _file_mutation_target_changed,
+    _snapshot_file_mutation_target,
 )
 
 
@@ -229,6 +242,150 @@ class TestRecordFileMutationResult:
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# File changed via another route (terminal / CLI / execute_code) — #C1 bug
+# ---------------------------------------------------------------------------
+
+
+class TestReconcileFileMutationFailuresWithDisk:
+    """Covers `_snapshot_file_mutation_target` / `_file_mutation_target_changed`
+    / `AIAgent._reconcile_file_mutation_failures_with_disk` — the turn-end
+    re-stat that drops a failure the disk has since contradicted."""
+
+    def test_snapshot_then_out_of_band_change_clears_failure(self, tmp_path):
+        """(1) failed patch, then an out-of-band on-disk change → no footer entry."""
+        target = tmp_path / "config.yaml"
+        target.write_text("model:\n  default: old-model\n")
+
+        agent = _bare_agent()
+        agent._record_file_mutation_result(
+            "patch",
+            {"mode": "replace", "path": str(target), "old_string": "x", "new_string": "y"},
+            json.dumps({"error": "Refusing to write to Clover config file"}),
+            is_error=True,
+        )
+        assert str(target) in agent._turn_failed_file_mutations
+
+        # Simulate the terminal tool running `clover config set ...` —
+        # a completely different code path writes the file directly.
+        target.write_text("model:\n  default: claude-opus-5-5\n")
+
+        agent._reconcile_file_mutation_failures_with_disk()
+        assert agent._turn_failed_file_mutations == {}
+
+    def test_untouched_file_still_reported(self, tmp_path):
+        """(2) failed patch, file genuinely untouched → footer still reported."""
+        target = tmp_path / "untouched.md"
+        target.write_text("original content\n")
+
+        agent = _bare_agent()
+        agent._record_file_mutation_result(
+            "patch",
+            {"mode": "replace", "path": str(target), "old_string": "x", "new_string": "y"},
+            json.dumps({"error": "Could not find old_string"}),
+            is_error=True,
+        )
+        assert str(target) in agent._turn_failed_file_mutations
+
+        # Nothing touches the file between the failure and turn-end.
+        agent._reconcile_file_mutation_failures_with_disk()
+        assert str(target) in agent._turn_failed_file_mutations
+
+    def test_nonexistent_file_later_created_clears_failure(self, tmp_path):
+        """(3) failed write to a non-existent file that another route later
+        creates → cleared."""
+        target = tmp_path / "new_file.txt"
+        assert not target.exists()
+
+        agent = _bare_agent()
+        agent._record_file_mutation_result(
+            "write_file",
+            {"path": str(target), "content": "data"},
+            json.dumps({"error": "permission denied"}),
+            is_error=True,
+        )
+        assert str(target) in agent._turn_failed_file_mutations
+        snap = agent._turn_failed_file_mutations[str(target)]["snapshot"]
+        assert snap == {"exists": False}
+
+        # execute_code / terminal creates the file via another route.
+        target.write_text("created out of band\n")
+
+        agent._reconcile_file_mutation_failures_with_disk()
+        assert agent._turn_failed_file_mutations == {}
+
+    def test_failed_then_successful_file_tool_write_clears(self, tmp_path):
+        """(4) failed then successful file-tool write → cleared (pre-existing
+        behavior, still holds after reconciliation runs)."""
+        target = tmp_path / "a.md"
+        target.write_text("x\n")
+
+        agent = _bare_agent()
+        agent._record_file_mutation_result(
+            "patch",
+            {"mode": "replace", "path": str(target), "old_string": "nope", "new_string": "y"},
+            json.dumps({"error": "not found"}),
+            is_error=True,
+        )
+        assert str(target) in agent._turn_failed_file_mutations
+
+        target.write_text("y\n")
+        agent._record_file_mutation_result(
+            "patch",
+            {"mode": "replace", "path": str(target), "old_string": "x", "new_string": "y"},
+            json.dumps({"success": True, "diff": "..."}),
+            is_error=False,
+        )
+        assert agent._turn_failed_file_mutations == {}
+
+        # Reconciliation on an already-empty dict is a no-op.
+        agent._reconcile_file_mutation_failures_with_disk()
+        assert agent._turn_failed_file_mutations == {}
+
+    def test_missing_snapshot_keeps_current_behavior(self):
+        """A path with no snapshot (e.g. recorded by old in-memory state,
+        or the file lives somewhere unstattable) is left exactly as-is —
+        reconciliation never invents a change it can't prove."""
+        agent = _bare_agent()
+        agent._turn_failed_file_mutations["/no/snapshot/here.md"] = {
+            "tool": "patch",
+            "error_preview": "boom",
+        }
+        agent._reconcile_file_mutation_failures_with_disk()
+        assert "/no/snapshot/here.md" in agent._turn_failed_file_mutations
+
+    def test_snapshot_unavailable_sentinel_is_conservative(self):
+        """`_file_mutation_target_changed` returns False (no claim of
+        change) when the snapshot itself is the 'unavailable' sentinel."""
+        assert _file_mutation_target_changed("/tmp/whatever", {"exists": None}) is False
+        assert _file_mutation_target_changed("/tmp/whatever", None) is False
+
+    def test_snapshot_missing_file_round_trip(self, tmp_path):
+        missing = tmp_path / "ghost.txt"
+        snap = _snapshot_file_mutation_target(str(missing))
+        assert snap == {"exists": False}
+        assert _file_mutation_target_changed(str(missing), snap) is False
+        missing.write_text("now it exists\n")
+        assert _file_mutation_target_changed(str(missing), snap) is True
+
+    def test_snapshot_content_hash_detects_same_size_edit(self, tmp_path):
+        """A same-size, same-second edit must still be caught via sha256
+        (size + mtime alone can't distinguish this case)."""
+        target = tmp_path / "same_size.txt"
+        target.write_text("aaaa")
+        snap = _snapshot_file_mutation_target(str(target))
+        assert "sha256" in snap
+
+        # Force identical mtime_ns to simulate a same-tick rewrite, only
+        # the content differs.
+        import os as _os
+        st = _os.stat(target)
+        target.write_text("bbbb")
+        _os.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns))
+
+        assert _file_mutation_target_changed(str(target), snap) is True
 
 
 # ---------------------------------------------------------------------------

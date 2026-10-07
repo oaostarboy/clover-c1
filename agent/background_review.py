@@ -1384,6 +1384,10 @@ def build_cache_parity_fork(
     )
     review_agent._memory_write_origin = write_origin
     review_agent._memory_write_context = write_origin
+    # The fork inherits the parent's platform and toolsets (cache parity), so
+    # it looks like a root with todo + delegate_task. It is not a conversation
+    # and must never be gated by the delegation checkpoint.
+    review_agent._is_background_review_fork = True
     # The review fork pins the parent's cached system prompt and keeps
     # ``tools[]`` byte-identical to the parent so its outbound request
     # hits the same provider cache prefix (see the toolset-parity note

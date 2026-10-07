@@ -17,8 +17,9 @@ name: Windows update supervisor proof (manual)
 #   old2new   install OLD_REF (the shipped bug), update to the branch head.
 #             The OLD updater does the work, so troy must REPRODUCE
 #             "Could not stop Windows gateway service Schedule"; zyra must pass.
-#   new2next  install the branch head, update to a newer commit. The FIXED
-#             updater does the work; troy and zyra must both pass.
+#   new2next  install the branch head, update to a newer commit (the helper's
+#             ci/win-update-next/<name> branch: head + 1 marker commit). The
+#             FIXED updater does the work; troy and zyra must both pass.
 #
 # On-demand only: it runs on pushes to ci/win-update-proof/** helper branches
 # (a helper branch is created at the PR head, so the run is the PR head), and
@@ -49,7 +50,6 @@ jobs:
         phase: [old2new, new2next]
     env:
       OLD_REF: 846650671931ae92982570d00d207a844a084d65
-      NEXT_BRANCH: ci/win-update-proof-next
       HEAD_SHA: ${{ github.sha }}
       HEAD_BRANCH: ${{ github.ref_name }}
       SETUP: ${{ matrix.setup }}
@@ -123,7 +123,13 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           . "$env:E2E\supervisor-proof.ps1"
-          $target = if ($env:PHASE -eq 'old2new') { $env:HEAD_BRANCH } else { $env:NEXT_BRANCH }
+          # new2next target: the helper's own "next" branch, i.e. helper head +
+          # one marker commit at ci/win-update-next/<name> for helper
+          # ci/win-update-proof/<name> (outside the trigger pattern, so pushing
+          # it starts no run). PR #71's original pair keeps its old name.
+          $suffix = $env:HEAD_BRANCH -replace '^ci/win-update-proof/', ''
+          $next = if ($suffix -eq 'pr-head') { 'ci/win-update-proof-next' } else { "ci/win-update-next/$suffix" }
+          $target = if ($env:PHASE -eq 'old2new') { $env:HEAD_BRANCH } else { $next }
           Set-MainIsTarget $target
           $logStart = (Get-LogLines).Count
           $label = "$env:SETUP $env:UPDATE_PATH $env:PHASE"
