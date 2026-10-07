@@ -76,7 +76,7 @@ _MAX_GOAL_CHARS = 160
 # The handoff line is a short-horizon estimate, not a promise about total task
 # duration.
 _MAX_HANDOFF_ETA_MINUTES = 24 * 60
-_HANDOFF_TEXT_RE = re.compile(r"^[\w .,!?()'’–-]+$", re.UNICODE)
+_HANDOFF_TEXT_RE = re.compile(r"^[\w .,!?()'’&–-]+$", re.UNICODE)
 _HANDOFF_ID_RE = re.compile(r"\b(?:async|deleg|subagent|child|job)[_-][\w-]+", re.IGNORECASE)
 
 
@@ -851,37 +851,41 @@ class DelegationCheckpoint:
     def _handoff_text_locked(self) -> str:
         handoffs = self._live_handoffs_locked(self.request_id)
         if not handoffs:
-            return "A worker is handling the task.\nEstimated time: no reliable estimate yet.\nYou can keep chatting."
+            return (
+                "**delegated:** accepted background work has no readable summary here.\n\n"
+                "**goal:** its result will return to this conversation."
+            )
         handoff = max(handoffs, key=lambda h: h.accepted_at)
         count = len(handoff.goals)
         details = handoff.handoff
         if details:
-            subject = "A worker is" if count == 1 else "Workers are"
-            first = f"{subject} {_with_period(details['work'])}"
-            goal = _with_period(details["outcome"])
-            estimate = details["estimate"]
+            work = details["work"]
+            outcome = details["outcome"]
+            if count > 1:
+                work = f"Workers are {work}"
         else:
-            subject = "A worker is" if count == 1 else "Workers are"
-            first = f"{subject} working on the delegated task{'' if count == 1 else 's'}."
-            goal = _safe_goal_summary(handoff.goals[0]) if count == 1 else None
-            goal = goal or (
-                "the result described in the task" if count == 1
-                else "the results described in the tasks"
-            )
-            estimate = None
-        if estimate is None:
-            estimate_text = "Estimated time: no reliable estimate yet."
-        else:
-            low, high = estimate
-            low_text, high_text = _format_minutes(low), _format_minutes(high)
-            if low_text == high_text:
-                estimate_text = f"Estimated time: about {low_text} minutes."
+            summaries = [
+                summary for goal_text in handoff.goals
+                if (summary := _safe_goal_summary(goal_text)) is not None
+            ]
+            if count == 1 and summaries:
+                work = summaries[0]
+                outcome = f"a completed result for {summaries[0]}, returned here"
+            elif (
+                count > 1 and len(summaries) == count and count <= 3
+                and len(" and ".join(summaries)) <= 150
+            ):
+                work = "Workers are handling " + " and ".join(summaries)
+                outcome = "completed results for those tasks, returned here"
             else:
-                estimate_text = (
-                    f"Estimated time: about {low_text}–{high_text} minutes."
+                work = "task details are unavailable in this summary"
+                outcome = (
+                    "the worker's result will return to this conversation"
+                    if count == 1 else "the workers' results will return to this conversation"
                 )
         return (
-            f"{first}\nGoal: {_with_period(goal)}\n{estimate_text}\nYou can keep chatting."
+            f"**delegated:** {_with_period(work)}\n\n"
+            f"**goal:** {_with_period(outcome)}"
         )
 
     def _exhausted_text_locked(self) -> str:

@@ -104,9 +104,11 @@ def test_accepted_handoff_ends_turn_without_a_second_provider_call(harness, tmp_
         dispatch = json.loads(_tool_rows(result)[-1]["content"])
         delegation_id = dispatch["delegation_id"]
         assert result["final_response"] != "SHOULD NOT BE REACHED"
-        assert "A worker is making your video." in result["final_response"]
-        assert "Goal: a verified 30-second narrated MP4." in result["final_response"]
-        assert "Estimated time: about 5–10 minutes." in result["final_response"]
+        assert result["final_response"] == (
+            "**delegated:** making your video.\n\n"
+            "**goal:** a verified 30-second narrated MP4."
+        )
+        assert "Estimated time" not in result["final_response"]
         assert "async-" not in result["final_response"]
         roles = [m["role"] for m in result["messages"]]
         assert roles[-3:] == ["assistant", "tool", "assistant"], "role alternation intact"
@@ -124,22 +126,22 @@ def test_accepted_handoff_ends_turn_without_a_second_provider_call(harness, tmp_
 
 
 @pytest.mark.parametrize(
-    ("low", "high", "expected"),
+    ("low", "high"),
     [
-        (5, 10, "Estimated time: about 5–10 minutes."),
-        (1_000_000, 10_000_000, "Estimated time: no reliable estimate yet."),
-        (1e-9, 2e-9, "Estimated time: no reliable estimate yet."),
-        (float("inf"), 10, "Estimated time: no reliable estimate yet."),
-        (float("nan"), 10, "Estimated time: no reliable estimate yet."),
-        (True, 10, "Estimated time: no reliable estimate yet."),
-        (10, 5, "Estimated time: no reliable estimate yet."),
-        (5, 5, "Estimated time: about 5 minutes."),
-        (2.5, 7.3333333, "Estimated time: about 3–7 minutes."),
-        (1440, 1440, "Estimated time: about 1440 minutes."),
-        (1441, 1441, "Estimated time: no reliable estimate yet."),
+        (5, 10),
+        (1_000_000, 10_000_000),
+        (1e-9, 2e-9),
+        (float("inf"), 10),
+        (float("nan"), 10),
+        (True, 10),
+        (10, 5),
+        (5, 5),
+        (2.5, 7.3333333),
+        (1440, 1440),
+        (1441, 1441),
     ],
 )
-def test_accepted_handoff_renders_only_readable_ordered_eta(harness, low, high, expected):
+def test_accepted_handoff_never_renders_eta_even_with_numeric_metadata(harness, low, high):
     harness.hold = threading.Event()
     agent = _root([
         _tools(_declare("delegate")),
@@ -157,14 +159,16 @@ def test_accepted_handoff_renders_only_readable_ordered_eta(harness, low, high, 
     try:
         result, _ = _run(agent)
         assert result["turn_exit_reason"] == "delegation_handoff"
-        assert expected in result["final_response"]
+        assert "**delegated:** making your video." in result["final_response"]
+        assert "**goal:** a verified 30-second narrated MP4." in result["final_response"]
+        assert "Estimated time" not in result["final_response"]
         assert "e+" not in result["final_response"]
         assert agent.client.chat.completions.create.call_count == 2
     finally:
         harness.hold.set()
 
 
-def test_accepted_batch_handoff_formats_readable_eta_for_multiple_workers(harness):
+def test_accepted_batch_handoff_never_renders_eta_for_multiple_workers(harness):
     harness.hold = threading.Event()
     tasks = [
         {"goal": f"Review release {name}.", "title": f"Release {name}"}
@@ -185,8 +189,14 @@ def test_accepted_batch_handoff_formats_readable_eta_for_multiple_workers(harnes
     ])
     try:
         result, _ = _run(agent)
-        assert result["final_response"].startswith("Workers are reviewing three releases.")
-        assert "Estimated time: about 12–19 minutes." in result["final_response"]
+        assert result["final_response"].startswith(
+            "**delegated:** Workers are reviewing three releases.\n\n"
+        )
+        assert result["final_response"] == (
+            "**delegated:** Workers are reviewing three releases.\n\n"
+            "**goal:** three checked release reports."
+        )
+        assert "Estimated time" not in result["final_response"]
         assert agent.client.chat.completions.create.call_count == 2
     finally:
         harness.hold.set()
@@ -212,15 +222,39 @@ def test_accepted_batch_handoff_uses_plural_copy_and_keeps_children_running(harn
     try:
         result, _ = _run(agent)
         text = result["final_response"]
-        assert text.startswith("Workers are reviewing three releases.")
-        assert "Goal: three checked release reports." in text
-        assert "Estimated time: no reliable estimate yet." in text
+        assert text.startswith("**delegated:** Workers are reviewing three releases.\n\n")
+        assert "**goal:** three checked release reports." in text
+        assert "Estimated time" not in text
         assert "release reports" in text
         assert agent.client.chat.completions.create.call_count == 2
         dispatch = json.loads(_tool_rows(result)[-1]["content"])
         assert dispatch["count"] == 3
         assert ad.get_durable_delegation(dispatch["delegation_id"])["state"] == "running"
         assert all(not child.interrupted for child in harness.built)
+    finally:
+        harness.hold.set()
+
+
+def test_legacy_schema_dispatch_uses_task_summary_without_extra_model_call(harness):
+    harness.hold = threading.Event()
+    agent = _root([
+        _tools(_declare("delegate")),
+        _tools(_call("delegate_task", {
+            "goal": "Audit Nice & Tidy’s Google Ads for the Montréal market.",
+        })),
+        _text("SHOULD NOT BE REACHED"),
+    ])
+    try:
+        result, _ = _run(agent)
+
+        assert result["turn_exit_reason"] == "delegation_handoff"
+        assert result["final_response"] == (
+            "**delegated:** Audit Nice & Tidy’s Google Ads for the Montréal market.\n\n"
+            "**goal:** a completed result for Audit Nice & Tidy’s Google Ads for the Montréal market, returned here."
+        )
+        assert "Estimated time" not in result["final_response"]
+        assert agent.client.chat.completions.create.call_count == 2
+        assert ad.active_count() == 1
     finally:
         harness.hold.set()
 
@@ -329,10 +363,8 @@ def test_handoff_directive_is_consumed_once_and_names_the_job():
 
     assert directive.reason == "delegation_handoff"
     assert directive.text == (
-        "A worker is working on the delegated task.\n"
-        "Goal: Build the explainer.\n"
-        "Estimated time: no reliable estimate yet.\n"
-        "You can keep chatting."
+        "**delegated:** Build the explainer.\n\n"
+        "**goal:** a completed result for Build the explainer, returned here."
     )
     assert "async-abc" not in directive.text
     assert dc.completion_directive(root) is None, "consumed once"
@@ -353,9 +385,11 @@ def test_handoff_rejects_bad_public_text_and_unknowns_invalid_eta():
         },
     )
     text = dc.completion_directive(root).text
-    assert text.startswith("Workers are working on the delegated tasks.")
-    assert "Goal: the results described in the tasks." in text
-    assert "Estimated time: no reliable estimate yet." in text
+    assert text == (
+        "**delegated:** task details are unavailable in this summary.\n\n"
+        "**goal:** the workers' results will return to this conversation."
+    )
+    assert "Estimated time" not in text
     assert "internal-job-token" not in text
     assert "async_private-id" not in text
     assert "/secret/files" not in text
