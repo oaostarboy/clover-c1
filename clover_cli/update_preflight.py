@@ -688,7 +688,8 @@ def installed_checkout() -> Optional[Path]:
                 dist = metadata.distribution(name)
             except metadata.PackageNotFoundError:
                 continue
-            path = editable_dir_from_direct_url(dist.read_text("direct_url.json") or "")
+            # importlib.metadata.Distribution.read_text (UTF-8 internally), not Path.
+            path = editable_dir_from_direct_url(dist.read_text("direct_url.json") or "")  # windows-footgun: ok
             if path is not None and (path / "clover_cli" / "__init__.py").is_file() and (path / ".git").exists():
                 return path
             return None

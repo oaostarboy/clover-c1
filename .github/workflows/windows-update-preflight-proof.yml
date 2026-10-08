@@ -1,0 +1,244 @@
+name: Windows update pre-check proof (manual)
+
+# Proves, on real GitHub-hosted Windows runners, the read-only update
+# pre-check (clover_cli/update_preflight.py) on the path real users take:
+# a gateway RUNNING (started the way real users' are), and /update sent from
+# chat over a local fake IRC server (no real tokens, nobody is messaged), so
+# the gateway's own /update handler runs the pre-check and spawns
+# `clover update --gateway`.
+#
+# Install = the branch head (pre-check present). Two scenarios per setup:
+#   update   `/update check` only reports (nothing spawned, gateway untouched),
+#            then a normal chat `/update` to a newer commit (the helper's
+#            ci/win-preflight-next/<name> branch: head + 1 marker commit) must
+#            still succeed exactly as before: exit 0, gateway respawned,
+#            exactly one gateway for 90 s, port bound, state running, no stale
+#            restart_requested, Schedule service still Running.
+#   blocked  the install is made dirty on a non-main branch (the shape that
+#            refused Clover's own update on 2026-10-07). Chat `/update` must
+#            answer with ONE plain-English "Update not started" message naming
+#            the reason and the fix, spawn no updater, write no pending marker,
+#            and leave the SAME gateway process up and the checkout unchanged.
+#            `clover update` and `clover update --check` from a terminal must
+#            refuse the same way (exit 2) without pausing the gateway.
+# Setups: zyra (Startup-folder VBS) and troy (Scheduled Task).
+#
+# On-demand only: it runs on pushes to ci/win-preflight/** helper branches (a
+# helper branch is created at the PR head), never on pull_request/main.
+
+on:
+  push:
+    branches:
+      - "ci/win-preflight/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: win-preflight-proof-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  proof:
+    name: ${{ matrix.setup }} / chat / ${{ matrix.scenario }}
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        setup: [troy, zyra]
+        scenario: [update, blocked]
+    env:
+      HEAD_SHA: ${{ github.sha }}
+      HEAD_BRANCH: ${{ github.ref_name }}
+      SETUP: ${{ matrix.setup }}
+      SCENARIO: ${{ matrix.scenario }}
+      UPDATE_PATH: chat
+      API_PORT: "8791"
+      IRC_PORT: "6667"
+    steps:
+      - name: Checkout e2e helpers
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/win-e2e
+          path: e2e
+
+      - name: a. Install Clover via scripts/install.ps1 at the branch head
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $from = $env:HEAD_SHA
+          $cloverHome = "$env:LOCALAPPDATA\clover"
+          $installDir = "$cloverHome\clover-c1"
+          git config --global core.autocrlf false
+          New-Item -ItemType Directory -Force -Path (Split-Path $installDir) | Out-Null
+          git clone --branch main https://github.com/oaostarboy/clover-c1.git $installDir
+          git -C $installDir fetch -q origin "+refs/heads/$($env:HEAD_BRANCH):refs/remotes/origin/$($env:HEAD_BRANCH)"
+          git -C $installDir checkout --detach $from
+          if ($LASTEXITCODE -ne 0) { throw "pre-clone checkout of $from failed" }
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/$env:HEAD_SHA/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
+          & "$env:TEMP\install.ps1" -Branch main -Commit $from -NonInteractive -SkipComputerUse -CloverHome $cloverHome -InstallDir $installDir
+          "CLOVER_HOME=$cloverHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INSTALL_DIR=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "CLOVER_BIN=$installDir\venv\Scripts\clover.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "E2E=$env:GITHUB_WORKSPACE\e2e\.github\win-e2e" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if (-not (Test-Path "$installDir\clover_cli\update_preflight.py")) { throw "installed code has no pre-check" }
+          Write-Host "installed $from; Windows: $((Get-CimInstance Win32_OperatingSystem).Caption)"
+
+      - name: b. Config as the installer made it + api_server + IRC; dummy tokens only
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cfg = "$env:CLOVER_HOME\config.yaml"
+          if (-not (Test-Path $cfg)) { Copy-Item "$env:INSTALL_DIR\cli-config.yaml.example" $cfg }
+          $lines = @("API_SERVER_ENABLED=true", "API_SERVER_KEY=win-update-proof-key-0123456789", "API_SERVER_PORT=$env:API_PORT", "API_SERVER_HOST=127.0.0.1")
+          $lines += @("IRC_SERVER=127.0.0.1", "IRC_PORT=$env:IRC_PORT", "IRC_USE_TLS=false", "IRC_CHANNEL=#clover", "IRC_NICKNAME=cloverbot", "IRC_ALLOWED_USERS=ant", "GATEWAY_ALLOW_ALL_USERS=true")
+          Add-Content -Path "$env:CLOVER_HOME\.env" -Value ($lines -join "`n")
+
+      - name: c. Start the gateway the setup's way and show who owns it
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:E2E\supervisor-proof.ps1"
+          $py = (Get-Command python).Source  # system Python, never the Clover venv
+          Start-Process -FilePath $py -ArgumentList @("$env:E2E\fake_ircd.py", "$env:RUNNER_TEMP\irc.log", "$env:RUNNER_TEMP\irc.trigger", $env:IRC_PORT) -WindowStyle Hidden
+          if ($env:SETUP -eq 'troy') { Start-TroyGateway } else { Start-ZyraGateway }
+          Wait-GatewayUp 150
+          $deadline = (Get-Date).AddSeconds(90)
+          while ((Get-Date) -lt $deadline -and -not (Select-String -Path "$env:RUNNER_TEMP\irc.log" -Pattern '<< JOIN' -Quiet -ErrorAction SilentlyContinue)) { Start-Sleep -Seconds 2 }
+          if (-not (Select-String -Path "$env:RUNNER_TEMP\irc.log" -Pattern '<< JOIN' -Quiet)) { Get-LogLines | Select-Object -Last 60; throw "gateway never joined the IRC server" }
+          $own = Show-GatewayOwnership "pre-update $env:SETUP"
+          "OLD_GATEWAY_PID=$($own.Pid)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if ($env:SETUP -eq 'troy' -and -not $own.ViaSchedule) { throw "troy gateway does not descend from the Schedule service host; the scenario is not Troy-like" }
+          if ($env:SETUP -eq 'zyra' -and $own.ViaSchedule) { throw "zyra gateway unexpectedly descends from the Schedule service host" }
+
+      - name: d1. (update) /update check reports only, then a normal chat /update succeeds
+        if: env.SCENARIO == 'update'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:E2E\supervisor-proof.ps1"
+          . "$env:E2E\whats-new-proof.ps1"
+          . "$env:E2E\preflight-proof.ps1"
+          $suffix = $env:HEAD_BRANCH -replace '^ci/win-preflight/', ''
+          Set-MainIsTarget "ci/win-preflight-next/$suffix"
+          $label = "$env:SETUP chat update"
+          $gw = [int]$env:OLD_GATEWAY_PID
+
+          Write-Host "=== /update check (report only) ==="
+          $irc0 = Get-IrcLineCount
+          Send-ChatText "/update check"
+          $reply = Wait-BotText $irc0 'Update pre-check'
+          $reply | Out-File -FilePath "$env:RUNNER_TEMP\chat-update-check.txt" -Encoding utf8
+          $reply | ForEach-Object { Write-Host "[bot] $_" }
+          if (-not ($reply -match 'ready to update')) { throw "[$label] /update check did not report ready" }
+          $bad = Assert-GatewayUnchanged "$label after /update check" $gw 20
+          if ($bad.Count) { $bad | Out-Host; throw "[$label] /update check disturbed the gateway" }
+
+          Write-Host "=== /update (normal) ==="
+          $logStart = (Get-LogLines).Count
+          $irc1 = Get-IrcLineCount
+          $exitCode = Invoke-PathUpdate $label
+          Write-Host "[$label] update exit=$exitCode"
+          Assert-UpdateSucceeded $label $logStart $exitCode $gw
+          $passed = @(Get-LogLines | Select-Object -Skip $logStart | Select-String -Pattern 'Update pre-check passed')
+          $passed | ForEach-Object { Write-Host "[gateway-log] $($_.Line)" }
+          if ($passed.Count -lt 1) { throw "[$label] gateway.log has no 'Update pre-check passed' line: the pre-check did not run" }
+          $done = Wait-BotText $irc1 'Clover update finished' 300
+          $done | Out-File -FilePath "$env:RUNNER_TEMP\chat-update-final.txt" -Encoding utf8
+          $done | ForEach-Object { Write-Host "[bot] $_" }
+          if ($done -match 'Update not started') { throw "[$label] the pre-check blocked a healthy install" }
+          $head = (git -C $env:INSTALL_DIR rev-parse HEAD).Trim()
+          $want = (git -C $env:INSTALL_DIR rev-parse "refs/remotes/origin/ci/win-preflight-next/$suffix").Trim()
+          Write-Host "[$label] HEAD after update=$head target=$want"
+          if ($head -ne $want) { throw "[$label] install is not on the target commit after /update" }
+          exit 0
+
+      - name: d2. (blocked) dirty non-main install - plain block message, nothing changes
+        if: env.SCENARIO == 'blocked'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          . "$env:E2E\supervisor-proof.ps1"
+          . "$env:E2E\preflight-proof.ps1"
+          $label = "$env:SETUP chat blocked"
+          $gw = [int]$env:OLD_GATEWAY_PID
+          Make-DirtyWrongBranch
+          $before = Get-InstallFingerprint
+          $logStart = (Get-LogLines).Count
+
+          Write-Host "=== chat /update on the dirty install ==="
+          $irc0 = Get-IrcLineCount
+          Send-ChatText "/update"
+          $reply = Wait-BotText $irc0 'Update not started'
+          $reply | Out-File -FilePath "$env:RUNNER_TEMP\chat-blocked-message.txt" -Encoding utf8
+          Write-Host "----- the block message as delivered (one line per IRC PRIVMSG) -----"
+          $reply | ForEach-Object { Write-Host "[bot] $_" }
+          Write-Host "---------------------------------------------------------------------"
+          $text = $reply -join "`n"
+          foreach ($need in @('nothing was changed', 'local-work', 'unsaved change', 'Fix:', 'parked_branch_dirty')) {
+            if ($text -notmatch [regex]::Escape($need)) { throw "[$label] block message is missing '$need'" }
+          }
+          if ($text -match 'Traceback|Exception') { throw "[$label] block message leaked a traceback" }
+          if (@($reply | Where-Object { $_ -match 'Update not started' }).Count -ne 1) { throw "[$label] expected exactly one block message" }
+          if ($text -match 'Starting Clover update') { throw "[$label] the update still started" }
+
+          Write-Host "=== chat /update check on the dirty install ==="
+          $irc1 = Get-IrcLineCount
+          Send-ChatText "/update check"
+          $check = Wait-BotText $irc1 'Update pre-check'
+          $check | Out-File -FilePath "$env:RUNNER_TEMP\chat-blocked-check.txt" -Encoding utf8
+          $check | ForEach-Object { Write-Host "[bot] $_" }
+          if (-not ($check -match "can't update right now")) { throw "[$label] /update check did not report the block" }
+
+          Write-Host "=== terminal: clover update --yes ==="
+          $cliOut = & "$env:CLOVER_BIN" update --yes 2>&1 | Out-String
+          $cliRc = $LASTEXITCODE
+          $cliOut | Out-File -FilePath "$env:RUNNER_TEMP\cli-blocked-update.txt" -Encoding utf8
+          Write-Host $cliOut
+          Write-Host "[$label] clover update exit=$cliRc"
+          if ($cliRc -ne 2) { throw "[$label] clover update exited $cliRc, expected 2 (declined, nothing changed)" }
+          if ($cliOut -notmatch 'Update not started') { throw "[$label] clover update did not print the block message" }
+          if ($cliOut -match 'Fetching updates|Pre-update snapshot|stashing') { throw "[$label] clover update went past the pre-check" }
+
+          Write-Host "=== terminal: clover update --check ==="
+          $chkOut = & "$env:CLOVER_BIN" update --check 2>&1 | Out-String
+          $chkRc = $LASTEXITCODE
+          $chkOut | Out-File -FilePath "$env:RUNNER_TEMP\cli-blocked-check.txt" -Encoding utf8
+          Write-Host $chkOut
+          if ($chkRc -ne 2 -or $chkOut -notmatch '\[parked_branch_dirty\]') { throw "[$label] clover update --check exit=$chkRc / missing code" }
+
+          Write-Host "=== the gateway and the install are unchanged ==="
+          $bad = Assert-GatewayUnchanged $label $gw 60
+          $after = Get-InstallFingerprint
+          Write-Host "before: $($before | ConvertTo-Json -Compress)"
+          Write-Host "after:  $($after | ConvertTo-Json -Compress)"
+          foreach ($k in 'Head', 'Branch', 'Status', 'Readme') { if ($before.$k -ne $after.$k) { $bad += "install $k changed: '$($before.$k)' -> '$($after.$k)'" } }
+          $stashes = (git -C $env:INSTALL_DIR stash list | Out-String).Trim()
+          if ($stashes) { $bad += "a stash was created: $stashes" }
+          $sched = (Get-ScheduleServiceInfo).State
+          if ($sched -ne 'Running') { $bad += "Schedule service is $sched" }
+          $refused = @(Get-LogLines | Select-Object -Skip $logStart | Select-String -Pattern '/update refused by pre-check')
+          $refused | ForEach-Object { Write-Host "[gateway-log] $($_.Line)" }
+          if ($refused.Count -lt 1) { $bad += "gateway.log has no '/update refused by pre-check' line" }
+          if ($bad.Count) { Write-Host "FAIL [$label]:"; $bad | ForEach-Object { Write-Host "  $_" }; throw "[$label] failed $($bad.Count) criteria" }
+          Write-Host "PASS [$label]: one plain block message, no updater spawned, no pending marker, same gateway pid $gw for 60s, port bound, state running, checkout byte-identical, no stash, Schedule Running; terminal update/--check exit 2"
+          exit 0
+
+      - name: e. Stage logs
+        if: always()
+        shell: pwsh
+        run: |
+          $dst = "$env:RUNNER_TEMP\artifacts"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          foreach ($p in @("$env:CLOVER_HOME\logs", "$env:CLOVER_HOME\gateway_state.json", "$env:CLOVER_HOME\.clover-last-update", "$env:CLOVER_HOME\config.yaml", "$env:RUNNER_TEMP\irc.log", "$env:RUNNER_TEMP\update-output.txt", "$env:RUNNER_TEMP\chat-update-check.txt", "$env:RUNNER_TEMP\chat-update-final.txt", "$env:RUNNER_TEMP\chat-blocked-message.txt", "$env:RUNNER_TEMP\chat-blocked-check.txt", "$env:RUNNER_TEMP\cli-blocked-update.txt", "$env:RUNNER_TEMP\cli-blocked-check.txt")) {
+            if (Test-Path $p) { Copy-Item -Recurse -Force $p $dst -ErrorAction SilentlyContinue }
+          }
+
+      - name: f. Upload logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: win-preflight-proof-${{ matrix.setup }}-${{ matrix.scenario }}
+          path: ${{ runner.temp }}\artifacts
+          if-no-files-found: ignore

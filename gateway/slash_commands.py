@@ -6851,6 +6851,12 @@ class GatewaySlashCommandsMixin:
                     )
                     if _check_only:
                         return _preflight.format_chat_report(_pf_report)
+                    if not _pf_report.blocked:
+                        logger.info(
+                            "Update pre-check passed in %.1fs (warnings: %s)",
+                            _pf_report.duration_s,
+                            ",".join(_pf_report.codes("warn")) or "none",
+                        )
                     if _pf_report.blocked:
                         logger.info(
                             "/update refused by pre-check: %s",

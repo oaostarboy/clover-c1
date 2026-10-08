@@ -90,7 +90,14 @@ def trigger_loop() -> None:
         if not live:
             continue
         target = live[-1]
-        send(target, f":ant!ant@localhost PRIVMSG {target['nick']} :/update")
+        # An empty trigger file sends "/update" (what the existing proofs
+        # rely on); a non-empty one sends its first line, e.g. "/update check".
+        try:
+            with open(TRIGGER, encoding="utf-8") as fh:
+                text = fh.readline().strip()
+        except OSError:
+            text = ""
+        send(target, f":ant!ant@localhost PRIVMSG {target['nick']} :{text or '/update'}")
         os.replace(TRIGGER, TRIGGER + ".sent")
 
 
