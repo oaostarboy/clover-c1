@@ -10631,6 +10631,25 @@ def cmd_update(args):
         # --check honors --branch so the "any new commits?" answer matches
         # what a subsequent `clover update --branch=<x>` would actually pull.
         branch = _resolve_update_branch(args)
+        # Read-only pre-check report first: "can this install update, and if
+        # not, why" — the same checks the apply path runs before changing
+        # anything. Report only: the existing availability check below still
+        # runs and owns the exit code, so scripts reading --check's status
+        # see exactly what they did before.
+        if not getattr(args, "skip_preflight", False):
+            from clover_cli import update_preflight as _preflight
+
+            _pf_settings = _preflight.preflight_settings()
+            if _pf_settings.get("enabled", True):
+                _pf_report = _preflight.run_update_preflight(
+                    branch=branch,
+                    force=bool(getattr(args, "force", False)),
+                    force_venv=bool(getattr(args, "force_venv", False)),
+                    switch_branch=bool(getattr(args, "switch_branch", False)),
+                    settings=_pf_settings,
+                )
+                print(_preflight.format_cli_report(_pf_report))
+                print()
         _self()._cmd_update_check(
             branch=branch,
             branch_explicit=bool(getattr(args, "branch", None)),
@@ -10668,6 +10687,16 @@ def cmd_update(args):
     # normal raise path so their traceback still prints.
     _update_handoff_exit_code: int | None = None
     try:
+        # Read-only pre-check BEFORE the updater changes anything (no pause,
+        # backup, stash or pull has happened yet): on a block, explain why in
+        # plain words and exit 2 ("declined, nothing changed"). Skipped in the
+        # Windows hand-off child, which continues an update already under way.
+        if os.environ.get(_UPDATE_REEXEC_ENV) != "1":
+            from clover_cli import update_preflight as _preflight
+
+            _pf_report = _preflight.gate_cli_update(args, gateway_mode=gateway_mode)
+            if _pf_report is not None and _pf_report.blocked:
+                sys.exit(_preflight.PREFLIGHT_EXIT_BLOCKED)
         _self()._cmd_update_impl(args, gateway_mode=gateway_mode)
     except SystemExit as _update_exit:
         # Receipt boundary (#91283 review): the impl has many early

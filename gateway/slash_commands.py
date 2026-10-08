@@ -6830,6 +6830,45 @@ class GatewaySlashCommandsMixin:
         if action == "update" and is_managed():
             return f"✗ {format_managed_message('update Clover Cognition')}"
 
+        # Read-only pre-check (clover_cli.update_preflight) BEFORE anything is
+        # written or spawned: when this install can't update, say why in one
+        # message and leave everything exactly as it is. `/update check` only
+        # reports. The spawned updater re-runs the same checks (and prints any
+        # warnings into the streamed output), so a pass here changes nothing
+        # about the normal flow or its messages.
+        if action == "update":
+            try:
+                from clover_cli import update_preflight as _preflight
+
+                _check_only = _preflight.chat_check_requested(event.get_command_args())
+                _pf_settings = _preflight.preflight_settings()
+                if _check_only or _pf_settings.get("enabled", True):
+                    _pf_report = await asyncio.get_running_loop().run_in_executor(
+                        None,
+                        lambda: _preflight.run_update_preflight(
+                            gateway_mode=True, settings=_pf_settings
+                        ),
+                    )
+                    if _check_only:
+                        return _preflight.format_chat_report(_pf_report)
+                    if not _pf_report.blocked:
+                        logger.info(
+                            "Update pre-check passed in %.1fs (warnings: %s)",
+                            _pf_report.duration_s,
+                            ",".join(_pf_report.codes("warn")) or "none",
+                        )
+                    if _pf_report.blocked:
+                        logger.info(
+                            "/update refused by pre-check: %s",
+                            ",".join(_pf_report.codes("block")),
+                        )
+                        _preflight.record_block_receipt(_pf_report)
+                        return _preflight.format_chat_block(_pf_report)
+            except Exception as _pf_exc:
+                # The pre-check can only ever stop an update with positive
+                # evidence; if it cannot run, the update proceeds as before.
+                logger.warning("Update pre-check could not run: %s", _pf_exc)
+
         # No .git guard: the spawned `clover update` adopts a copied/zipped
         # (non-git) install into git before updating.
         clover_cmd = _resolve_clover_bin()

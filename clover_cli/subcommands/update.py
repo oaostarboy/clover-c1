@@ -29,7 +29,21 @@ def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
         "--check",
         action="store_true",
         default=False,
-        help="Check whether an update is available without installing anything",
+        help=(
+            "Report whether this install can update (the read-only pre-check, "
+            "with the reason and fix for anything that would stop it), then "
+            "whether an update is available, without installing anything"
+        ),
+    )
+    update_parser.add_argument(
+        "--skip-preflight",
+        action="store_true",
+        default=False,
+        help=(
+            "Emergency use: skip the read-only pre-check that normally stops an "
+            "update before anything changes when the install can't update "
+            "(see updates.preflight in config.yaml)"
+        ),
     )
     update_parser.add_argument(
         "--plan",

@@ -1811,6 +1811,29 @@ def _moa_caches_isolated():
 
 
 @pytest.fixture(autouse=True)
+def _stub_update_preflight(request, monkeypatch):
+    """Default the read-only update pre-check to "all clear" for every test.
+
+    ``clover update`` and chat ``/update`` run ``update_preflight`` before
+    anything else. Left live, every existing update test would run real git
+    probes (and a network ``ls-remote``) against the developer's checkout,
+    whose branch/dirtiness is arbitrary, and its verdict would leak into
+    tests about other stages. Tests of the pre-check itself, and wiring
+    tests, opt out with ``@pytest.mark.real_update_preflight``.
+    """
+    if request.node.get_closest_marker("real_update_preflight"):
+        yield
+        return
+    try:
+        import clover_cli.update_preflight as _pf
+    except Exception:
+        yield
+        return
+    monkeypatch.setattr(_pf, "run_update_preflight", lambda **_kw: _pf.PreflightReport())
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_delegation_card_registries():
     """Per-chat card registries (live publishers, boards, last outbound id)
     are module globals keyed by id(adapter); a recycled id from an earlier

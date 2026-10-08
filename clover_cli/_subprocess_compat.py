@@ -497,6 +497,7 @@ def bounded_probe_run(
     timeout: float,
     errors: str = "replace",
     encoding: "str | None" = None,
+    env: "Mapping[str, str] | None" = None,
 ) -> "subprocess.CompletedProcess[str] | None":
     """Deadlock-safe ``subprocess.run(argv, capture_output=True, timeout=...)``
     for fail-open probe call sites. Returns a ``CompletedProcess`` when the
@@ -523,8 +524,13 @@ def bounded_probe_run(
     POSIX the child is placed in its own process group (``process_group=0``,
     Python ≥3.11) so timeout cleanup can take down descendants with the
     launcher instead of orphaning them.
+
+    *env*, when given, replaces the inherited environment for the child (pass
+    :func:`noninteractive_git_env` for git probes that may touch a remote).
     """
     _popen_kwargs: dict = {"creationflags": windows_hide_flags()} if IS_WINDOWS else {"process_group": 0}
+    if env is not None:
+        _popen_kwargs["env"] = dict(env)
     try:
         proc = subprocess.Popen(
             list(argv),
