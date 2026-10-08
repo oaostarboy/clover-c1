@@ -1251,6 +1251,9 @@ _GONE_MARKERS = (
     "message_id_invalid",
     "deleted",
     "404",
+    # The adapter this card was bound to was disconnected/replaced (e.g. a
+    # Telegram reconnect) and cannot edit anymore: re-post on the live one.
+    "not connected",
 )
 
 

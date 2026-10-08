@@ -5746,6 +5746,15 @@ class TelegramAdapter(BasePlatformAdapter):
         edits target the most recent visible message.
         """
         if not self._bot:
+            # Replaced by the reconnect watcher: long-lived callers (worker
+            # progress cards, stream editors) still hold this instance, and
+            # their message ids are valid on the replacement's bot.
+            live = self._replacement_telegram_adapter()
+            if live is not None:
+                return await live.edit_message(
+                    chat_id, message_id, content,
+                    finalize=finalize, metadata=metadata,
+                )
             return SendResult(success=False, error="Not connected")
 
         # Rich finalize (Bot API 10.1): when the completed content has
@@ -6157,6 +6166,9 @@ class TelegramAdapter(BasePlatformAdapter):
         caller leaves the preview in place and logs at debug level.
         """
         if not self._bot:
+            live = self._replacement_telegram_adapter()
+            if live is not None:
+                return await live.delete_message(chat_id, message_id)
             return False
         try:
             await self._bot.delete_message(
