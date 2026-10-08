@@ -2275,8 +2275,8 @@ export const zhHant = defineLocale({
   },
 
   onboarding: {
-    headerTitle: '開始設定 Clover Cognition',
-    headerDesc: '連線模型提供方即可開始聊天。大多數選項只需一次點擊。',
+    headerTitle: '開始設定 Clover',
+    headerDesc: '選擇 Clover 要使用的 AI 服務。大多數選項只需一次點擊。',
     preparingInstall: 'Clover 正在完成安裝。首次執行通常不到一分鐘。',
     starting: '正在啟動 Clover…',
     lookingUpProviders: '正在查詢提供方...',
@@ -2440,15 +2440,15 @@ export const zhHant = defineLocale({
       openCommandCenter: '開啟命令中心',
       showTerminal: '顯示終端機',
       hideTerminal: '隱藏終端機',
-      gateway: '閘道',
+      gateway: '連線',
       gatewayReady: '就緒',
       gatewayNeedsSetup: '需要設定',
-      gatewayUnavailable: '推論不可用',
+      gatewayUnavailable: '模型不可用',
       gatewayChecking: '檢查中',
       gatewayConnecting: '連線中',
       gatewayOffline: '離線',
       gatewayRestarting: '重新啟動中…',
-      gatewayTitle: '閘道',
+      gatewayTitle: '連線',
       agents: '代理',
       closeAgents: '關閉代理',
       openAgents: '開啟代理',
@@ -2958,6 +2958,32 @@ export const zhHant = defineLocale({
     boundaryDesc: '此檢視遇到意外錯誤。您的聊天和設定是安全的。',
     reloadWindow: '重新載入視窗',
     openLogs: '開啟記錄'
+  },
+
+  cloverHome: {
+    greetingMorning: '早安',
+    greetingAfternoon: '午安',
+    greetingEvening: '晚安',
+    greetingNight: '還在忙嗎？',
+    bodies: [
+      '提個問題、拖入檔案，或描述你的需求。剩下的交給我。',
+      '告訴我你在做什麼。我可以讀檔案、上網搜尋，並替你完成任務。',
+      '一句話就能開始。用平常的話說就行，有不清楚的我會問你。'
+    ],
+    startersLabel: '試試看',
+    starters: [
+      { label: '規劃今天', prompt: '幫我規劃今天。先問問我有哪些安排。' },
+      { label: '草擬訊息', prompt: '幫我寫一則簡短、友善的訊息。' },
+      { label: '解釋一下', prompt: '用淺白的話幫我解釋：' },
+      { label: '查一查', prompt: '幫我查一下最新消息：' }
+    ],
+    shortcutsLabel: '快捷鍵',
+    shortcutSearch: '搜尋全部',
+    shortcutModel: '更換模型',
+    shortcutSettings: '設定',
+    sidebarEmptyTitle: '還沒有對話',
+    sidebarEmptyBody: '你的對話會顯示在這裡。',
+    sidebarStartChat: '開始對話'
   },
 
   tips: {

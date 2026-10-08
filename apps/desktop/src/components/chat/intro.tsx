@@ -157,6 +157,16 @@ function resolveCopy(personality?: string, seed?: number): IntroCopy {
   return pickCopy(copies, seed)
 }
 
+/** True when the personality has no voice of its own (the default intro copy applies). */
+export function isNeutralPersonality(personality?: string): boolean {
+  return NEUTRAL_PERSONALITIES.has(normalizeKey(personality))
+}
+
+/** The intro body for a configured personality, shared with the Clover home screen. */
+export function introBodyFor(personality?: string, seed = 0): string {
+  return resolveCopy(personality, seed).body
+}
+
 export function Intro({ personality, seed }: IntroProps) {
   const [mountSeed] = useState(() => Math.floor(Math.random() * 100000))
   const copy = resolveCopy(personality, mountSeed + (seed ?? 0))

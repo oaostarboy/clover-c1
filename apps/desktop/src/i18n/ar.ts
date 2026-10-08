@@ -2099,8 +2099,8 @@ export const ar = defineLocale({
     reloadRetry: 'إعادة التحميل وإعادة المحاولة'
   },
   onboarding: {
-    headerTitle: 'لنُعِدّ لك Clover Cognition',
-    headerDesc: 'اربط مزوّد نماذج لبدء المحادثة. معظم الخيارات تتطلب نقرة واحدة.',
+    headerTitle: 'لنُعِدّ Clover',
+    headerDesc: 'اختر خدمة الذكاء الاصطناعي التي سيستخدمها Clover. معظم الخيارات تتطلب نقرة واحدة.',
     preparingInstall: 'يُكمل Clover التثبيت. عادة ما يستغرق ذلك أقل من دقيقة في أول تشغيل.',
     starting: 'جار بدء Clover...',
     lookingUpProviders: 'جار البحث عن المزوّدين...',
@@ -2258,15 +2258,15 @@ export const ar = defineLocale({
       openCommandCenter: 'فتح مركز الأوامر',
       showTerminal: 'إظهار الطرفية',
       hideTerminal: 'إخفاء الطرفية',
-      gateway: 'البوابة',
+      gateway: 'الاتصال',
       gatewayReady: 'البوابة جاهزة',
       gatewayNeedsSetup: 'البوابة تحتاج إعدادا',
-      gatewayUnavailable: 'الاستدلال غير متاح',
+      gatewayUnavailable: 'النموذج غير متاح',
       gatewayChecking: 'جار فحص البوابة',
       gatewayConnecting: 'جار اتصال البوابة',
       gatewayOffline: 'البوابة غير متصلة',
       gatewayRestarting: 'جار إعادة التشغيل...',
-      gatewayTitle: 'البوابة',
+      gatewayTitle: 'الاتصال',
       agents: 'الوكلاء',
       closeAgents: 'إغلاق الوكلاء',
       openAgents: 'فتح الوكلاء',
@@ -2834,6 +2834,32 @@ export const ar = defineLocale({
     reloadWindow: 'إعادة تحميل النافذة',
     openLogs: 'فتح السجلات'
   },
+  cloverHome: {
+    greetingMorning: 'صباح الخير',
+    greetingAfternoon: 'نهارك سعيد',
+    greetingEvening: 'مساء الخير',
+    greetingNight: 'تعمل لوقت متأخر؟',
+    bodies: [
+      'اطرح سؤالًا أو أضف ملفًا أو صف ما تحتاجه، وسأتولى الباقي.',
+      'أخبرني بما تعمل عليه. يمكنني قراءة الملفات والبحث في الويب وإنجاز المهام نيابةً عنك.',
+      'ابدأ بجملة واحدة. الكلمات البسيطة تكفي، وسأسألك إن احتجت توضيحًا.'
+    ],
+    startersLabel: 'جرّب',
+    starters: [
+      { label: 'خطط ليومي', prompt: 'ساعدني في التخطيط ليومي. اسألني أولًا عمّا لدي.' },
+      { label: 'صياغة رسالة', prompt: 'ساعدني في كتابة رسالة قصيرة وودية.' },
+      { label: 'اشرح لي', prompt: 'اشرح لي هذا بكلمات بسيطة:' },
+      { label: 'ابحث عن شيء', prompt: 'ابحث عن آخر الأخبار حول' }
+    ],
+    shortcutsLabel: 'الاختصارات',
+    shortcutSearch: 'البحث في كل شيء',
+    shortcutModel: 'تغيير النموذج',
+    shortcutSettings: 'الإعدادات',
+    sidebarEmptyTitle: 'لا توجد محادثات بعد',
+    sidebarEmptyBody: 'ستظهر محادثاتك هنا.',
+    sidebarStartChat: 'ابدأ محادثة'
+  },
+
   tips: {
     close: 'لا تعرض هذه النصيحة مرة أخرى',
     items: {

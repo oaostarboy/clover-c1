@@ -257,6 +257,33 @@ Sizes: `default`, `xs`, `overlay` (titlebar glyph counts).
   It replaced scattered Sparkles glyphs in updates / onboarding / about. Use it
   for hero/brand moments; don't reintroduce decorative star/sparkle icons.
 
+## Theme decor (Clover)
+
+A theme may opt into a decorative layer with `decor` on `DesktopTheme`
+(`src/themes/types.ts`). Today there is one value, `'clover'`, carried only by
+the default `clover` skin. Every other built-in, user and backend skin renders
+plain; `src/themes/clover-decor.test.ts` pins that.
+
+- **How it paints.** `applyTheme` sets `:root[data-clover-decor="clover"]` and
+  removes the attribute for a plain theme. CSS scopes to that attribute
+  (`src/clover-decor.css`); React reads `useRootDecor()` (`src/themes/root-decor.ts`), which follows the
+  attribute and keeps leaf surfaces free of the ThemeProvider import graph. Never test the skin
+  *name* to decide on decor.
+- **What it adds.** The fresh-chat home screen (`CloverHome`: mascot,
+  time-of-day greeting, plain-words line, starter chips that fill the box but
+  never send, visible shortcut hints), the decorated sidebar empty state with a
+  "Start a chat" action, the onboarding header mascot, a faint mascot watermark
+  on the chat surface, the glass primary button (`[data-composer-primary]`), and
+  28/30px composer targets.
+- **`CloverMascot`** (`src/components/chat/clover-home.tsx`) is the animated
+  mascot from `public/clover-twinkle.webp`. It twinkles once every few seconds,
+  holds still under reduced motion or `still`, and pauses with the window.
+  `BrandMark` stays the static brand tile.
+- **Color.** The accent is the theme's own `--theme-primary`. The mascot gold
+  (`--clover-gold`, `#e9b835`) is decoration only; it never carries text, where it fails
+  contrast on white.
+- **The old blue** ships as the `clover-blue` theme.
+
 ## Motion
 
 - Quick, functional transitions (~100ms on controls). Respect

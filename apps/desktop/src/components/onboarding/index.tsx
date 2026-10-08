@@ -2,6 +2,7 @@ import { useStore } from '@nanostores/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { getGlobalModelOptions } from '@/clover'
+import { CloverMascot } from '@/components/chat/clover-mascot'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
 import { Input } from '@/components/ui/input'
@@ -26,6 +27,7 @@ import {
   setOnboardingMode,
   startProviderOAuth
 } from '@/store/onboarding'
+import { useRootDecor } from '@/themes/root-decor'
 import type { ModelOptionProvider, OAuthProvider } from '@/types/clover'
 
 import { DocsLink, FlowPanel, Status } from './flow'
@@ -387,11 +389,15 @@ function Preparing({ boot }: { boot: DesktopBootState }) {
 
 function Header() {
   const { t } = useI18n()
+  const decor = useRootDecor()
 
   return (
-    <div className="bg-(--ui-chat-bubble-background) px-5 pt-5 pb-1">
-      <h2 className="text-[0.9375rem] font-semibold tracking-tight">{t.onboarding.headerTitle}</h2>
-      <p className="mt-1 max-w-xl text-[0.8125rem] leading-5 text-(--ui-text-tertiary)">{t.onboarding.headerDesc}</p>
+    <div className="flex items-center gap-3 bg-(--ui-chat-bubble-background) px-5 pt-5 pb-1">
+      {decor === 'clover' ? <CloverMascot className="-my-1 -ml-1" size={48} /> : null}
+      <div className="min-w-0">
+        <h2 className="text-[0.9375rem] font-semibold tracking-tight">{t.onboarding.headerTitle}</h2>
+        <p className="mt-1 max-w-xl text-[0.8125rem] leading-5 text-(--ui-text-tertiary)">{t.onboarding.headerDesc}</p>
+      </div>
     </div>
   )
 }

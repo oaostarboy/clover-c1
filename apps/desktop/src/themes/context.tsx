@@ -212,6 +212,14 @@ function applyTheme(theme: DesktopTheme, mode: 'light' | 'dark') {
   root.dataset.cloverMode = rendered
   root.classList.toggle('dark', isDark)
 
+  // Decor is opt-in per theme. Removed (not emptied) when absent so a
+  // `[data-clover-decor]` selector can never match a plain theme.
+  if (theme.decor) {
+    root.dataset.cloverDecor = theme.decor
+  } else {
+    delete root.dataset.cloverDecor
+  }
+
   // Translucency is tuned per appearance, and "appearance" means the palette
   // actually painted — a skin that keeps a bright surface in "dark" wants
   // light's tint. Publishing from here covers the boot paint too, so the very

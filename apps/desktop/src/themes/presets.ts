@@ -8,7 +8,8 @@
  * takes, so each is identical to installing the extension by hand and costs the
  * user neither the download nor the install step.
  *
- *   clover       ← github.github-vscode-theme   (Light Default / Dark Default)
+ *   clover-blue  ← github.github-vscode-theme   (Light Default / Dark Default)
+ *   clover       ← clover-blue with the accent re-seeded to the mascot amethyst
  *   catppuccin ← Catppuccin.catppuccin-vsc    (Latte / Mocha)
  *   everforest ← sainnhe.everforest
  *   solarized  ← ryanolsonx.solarized
@@ -161,8 +162,9 @@ export const githubTheme: DesktopTheme = {
 /** Catppuccin — Latte in light, Mocha in dark (Catppuccin.catppuccin-vsc). */
 
 /**
- * Clover — the canonical Clover desktop identity: GitHub's chrome carrying Clover
- * blue. Forked from github.github-vscode-theme (Light Default / Dark Default),
+ * Clover Blue — the Clover identity before the mascot palette (C1.1.4 and
+ * earlier): GitHub's chrome carrying Clover blue. Kept so anyone who liked it
+ * can pick it again in Appearance or with `/skin clover-blue`. Forked from github.github-vscode-theme (Light Default / Dark Default),
  * with only the accent family re-seeded; every neutral is upstream's.
  *
  * Two seeds, one blue. `#0053FD` is the brand color and reads at 5.4:1 on the
@@ -171,9 +173,9 @@ export const githubTheme: DesktopTheme = {
  * surfaces below are mixed from those seeds in OKLab, which is what keeps a
  * saturated blue from drifting violet on its way to white.
  */
-export const cloverTheme: DesktopTheme = {
-  name: 'clover',
-  label: 'Clover',
+export const cloverBlueTheme: DesktopTheme = {
+  name: 'clover-blue',
+  label: 'Clover Blue',
   description: 'GitHub chrome, Clover blue accent',
   colors: {
     background: '#ffffff',
@@ -274,6 +276,90 @@ export const cloverTheme: DesktopTheme = {
     brightCyan: '#56d4dd',
     brightWhite: '#ffffff'
   }
+}
+
+/**
+ * Clover — the canonical Clover desktop identity: GitHub's chrome carrying the
+ * mascot's amethyst, plus the Clover decor layer (mascot home screen and empty
+ * states, soft brand glow, glass send button — see `DesktopThemeDecor`).
+ *
+ * Same construction as Clover Blue: only the accent family is re-seeded, every
+ * neutral is upstream GitHub's. Two seeds, one violet (OKLCH hue ~303°, taken
+ * from the purple leaves of `public/clover.png`):
+ *
+ *   light `#7b2fbe` — 6.6:1 on the light sidebar, white text on it 7.0:1.
+ *   dark  `#b37bfa` — the same hue lifted to 7.0:1 on the near-black sidebar,
+ *                     near-black text on it 6.1:1.
+ *
+ * The soft surfaces (secondary, accent, userBubble) come from `retintTheme`'s
+ * own OKLab mix ratios, so a retint at this accent is an identity and the dev
+ * accent picker still round-trips. The mascot's gold stays decor-only (the
+ * glow and the twinkle); it never carries text, where it fails contrast.
+ */
+export const cloverTheme: DesktopTheme = {
+  name: 'clover',
+  label: 'Clover',
+  description: 'Amethyst accent with the Clover mascot and decor',
+  decor: 'clover',
+  colors: {
+    background: '#ffffff',
+    foreground: '#1f2328',
+    card: '#f6f8fa',
+    cardForeground: '#1f2328',
+    muted: '#f6f6f6',
+    mutedForeground: '#656d76',
+    popover: '#ffffff',
+    popoverForeground: '#1f2328',
+    primary: '#7b2fbe',
+    primaryForeground: '#ffffff',
+    secondary: '#ebe3f8',
+    secondaryForeground: '#1f2328',
+    accent: '#eee7f9',
+    accentForeground: '#1f2328',
+    border: '#d0d7de',
+    input: '#ffffff',
+    ring: '#7b2fbe',
+    midground: '#7b2fbe',
+    midgroundForeground: '#ffffff',
+    composerRing: '#7b2fbe',
+    destructive: '#cf222e',
+    destructiveForeground: '#ffffff',
+    sidebarBackground: '#f6f8fa',
+    sidebarBorder: '#d0d7de',
+    userBubble: '#e6e1f5',
+    userBubbleBorder: '#d0d7de'
+  },
+  darkColors: {
+    background: '#0d1117',
+    foreground: '#e6edf3',
+    card: '#010409',
+    cardForeground: '#e6edf3',
+    muted: '#1a1e24',
+    mutedForeground: '#7d8590',
+    popover: '#161b22',
+    popoverForeground: '#e6edf3',
+    primary: '#b37bfa',
+    primaryForeground: '#161616',
+    secondary: '#362c4e',
+    secondaryForeground: '#e6edf3',
+    accent: '#262239',
+    accentForeground: '#e6edf3',
+    border: '#30363d',
+    input: '#0d1117',
+    ring: '#b37bfa',
+    midground: '#b37bfa',
+    midgroundForeground: '#161616',
+    composerRing: '#b37bfa',
+    destructive: '#f85149',
+    destructiveForeground: '#ffffff',
+    sidebarBackground: '#010409',
+    sidebarBorder: '#30363d',
+    userBubble: '#17152c',
+    userBubbleBorder: '#30363d'
+  },
+  typography: cloverBlueTheme.typography,
+  terminal: cloverBlueTheme.terminal,
+  darkTerminal: cloverBlueTheme.darkTerminal
 }
 
 /** Catppuccin — Latte in light, Mocha in dark (Catppuccin.catppuccin-vsc). */
@@ -847,6 +933,7 @@ export const slateTheme: DesktopTheme = {
 
 export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
   clover: cloverTheme,
+  'clover-blue': cloverBlueTheme,
   github: githubTheme,
   catppuccin: catppuccinTheme,
   everforest: everforestTheme,

@@ -85,10 +85,23 @@ export interface DesktopTerminalPalette {
   brightWhite?: string
 }
 
+/**
+ * Optional decorative layer a theme can opt into, on top of its palette.
+ *
+ *   clover — the mascot home screen, mascot empty states, the soft brand glow
+ *            behind an empty chat, and the glass send button.
+ *
+ * Painted as `:root[data-clover-decor]` so CSS can scope to it, and read in
+ * React through `useRootDecor()`. A theme without it renders plain, which is
+ * how every other built-in and user theme keeps its own look.
+ */
+export type DesktopThemeDecor = 'clover'
+
 export interface DesktopTheme {
   name: string
   label: string
   description: string
+  decor?: DesktopThemeDecor
   /** Light palette (also reused for dark when `darkColors` is omitted). */
   colors: DesktopThemeColors
   /** Hand-tuned dark palette. Skins like `clover` ship one. */

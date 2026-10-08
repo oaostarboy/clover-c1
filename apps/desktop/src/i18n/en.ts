@@ -2677,8 +2677,8 @@ export const en: Translations = {
   },
 
   onboarding: {
-    headerTitle: "Let's get you setup with Clover Cognition",
-    headerDesc: 'Connect a model provider to start chatting. Most options take one click.',
+    headerTitle: "Let's get Clover set up",
+    headerDesc: 'Pick the AI service Clover should use. Most options take one click.',
     preparingInstall: 'Clover is finishing install. This usually takes under a minute on first run.',
     starting: 'Starting Clover…',
     lookingUpProviders: 'Looking up providers...',
@@ -2851,15 +2851,15 @@ export const en: Translations = {
       openCommandCenter: 'Open Command Center',
       showTerminal: 'Show terminal',
       hideTerminal: 'Hide terminal',
-      gateway: 'Gateway',
+      gateway: 'Connection',
       gatewayReady: 'ready',
       gatewayNeedsSetup: 'needs setup',
-      gatewayUnavailable: 'inference unavailable',
+      gatewayUnavailable: 'model unavailable',
       gatewayChecking: 'checking',
       gatewayConnecting: 'connecting',
       gatewayOffline: 'offline',
       gatewayRestarting: 'restarting…',
-      gatewayTitle: 'Gateway',
+      gatewayTitle: 'Connection',
       customizeTitle: 'Show in status bar',
       hideStatusbar: 'Hide status bar',
       resetStatusbar: 'Reset to defaults',
@@ -3418,6 +3418,32 @@ export const en: Translations = {
       failed: error => `Handoff failed: ${error}`,
       timedOut: 'Timed out waiting for the gateway. Is `clover gateway` running?'
     }
+  },
+
+  cloverHome: {
+    greetingMorning: 'Good morning',
+    greetingAfternoon: 'Good afternoon',
+    greetingEvening: 'Good evening',
+    greetingNight: 'Working late?',
+    bodies: [
+      "Ask a question, drop in a file, or describe what you need. I'll take it from there.",
+      'Tell me what you are working on. I can read files, search the web, and run tasks for you.',
+      "Start with one sentence. Plain words are fine, and I'll ask if anything is unclear."
+    ],
+    startersLabel: 'Try one',
+    starters: [
+      { label: 'Plan my day', prompt: 'Help me plan my day. Ask me what I have on first.' },
+      { label: 'Draft a message', prompt: 'Help me write a short, friendly message.' },
+      { label: 'Explain something', prompt: 'Explain this to me in plain words:' },
+      { label: 'Look something up', prompt: 'Find the latest news about' }
+    ],
+    shortcutsLabel: 'Shortcuts',
+    shortcutSearch: 'Search everything',
+    shortcutModel: 'Change model',
+    shortcutSettings: 'Settings',
+    sidebarEmptyTitle: 'No chats yet',
+    sidebarEmptyBody: 'Your conversations will show up here.',
+    sidebarStartChat: 'Start a chat'
   },
 
   tips: {

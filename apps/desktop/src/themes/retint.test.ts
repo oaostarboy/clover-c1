@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
 import { contrastRatio, hexToOklch, withHue } from './color'
-import { cloverTheme, githubTheme } from './presets'
+import { cloverBlueTheme as cloverTheme, githubTheme } from './presets'
 import { retintTheme, themeHue } from './retint'
 import type { DesktopThemeColors } from './types'
 
+// These tests pin the properties of the Clover blue palette, which ships as
+// `clover-blue` since the default `clover` skin moved to the mascot amethyst
+// (covered in clover-decor.test.ts). Aliased so the assertions read as before.
 const HUES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330]
 
 // A retint seed for each hue, at the authored accent's lightness/chroma.

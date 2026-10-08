@@ -1,4 +1,5 @@
 import './styles.css'
+import './clover-decor.css'
 // Side-effect: reports in-flight turns to the main process for the quit guard.
 import './store/active-work'
 // Side-effect: mirrors the machine's AC/battery state for poll demotion.

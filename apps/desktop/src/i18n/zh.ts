@@ -2850,8 +2850,8 @@ export const zh: Translations = {
   },
 
   onboarding: {
-    headerTitle: '开始设置 Clover Cognition',
-    headerDesc: '连接模型提供方即可开始对话。大多数选项只需一次点击。',
+    headerTitle: '开始设置 Clover',
+    headerDesc: '选择 Clover 要使用的 AI 服务。大多数选项只需一次点击。',
     preparingInstall: 'Clover 正在完成安装。首次运行通常不到一分钟。',
     starting: '正在启动 Clover…',
     lookingUpProviders: '正在查找提供方...',
@@ -3016,15 +3016,15 @@ export const zh: Translations = {
       openCommandCenter: '打开命令中心',
       showTerminal: '显示终端',
       hideTerminal: '隐藏终端',
-      gateway: '网关',
+      gateway: '连接',
       gatewayReady: '就绪',
       gatewayNeedsSetup: '需要设置',
-      gatewayUnavailable: '推理不可用',
+      gatewayUnavailable: '模型不可用',
       gatewayChecking: '检查中',
       gatewayConnecting: '连接中',
       gatewayOffline: '离线',
       gatewayRestarting: '重启中…',
-      gatewayTitle: '网关',
+      gatewayTitle: '连接',
       customizeTitle: '在状态栏中显示',
       hideStatusbar: '隐藏状态栏',
       resetStatusbar: '恢复默认设置',
@@ -3563,6 +3563,32 @@ export const zh: Translations = {
       failed: error => `移交失败：${error}`,
       timedOut: '等待网关超时。`clover gateway` 是否正在运行？'
     }
+  },
+
+  cloverHome: {
+    greetingMorning: '早上好',
+    greetingAfternoon: '下午好',
+    greetingEvening: '晚上好',
+    greetingNight: '还在忙吗？',
+    bodies: [
+      '提个问题、拖入文件，或描述你的需求。剩下的交给我。',
+      '告诉我你在做什么。我可以读文件、上网搜索，并替你完成任务。',
+      '一句话就能开始。用平常的话说就行，有不清楚的我会问你。'
+    ],
+    startersLabel: '试试看',
+    starters: [
+      { label: '规划今天', prompt: '帮我规划今天。先问问我有哪些安排。' },
+      { label: '起草消息', prompt: '帮我写一条简短、友好的消息。' },
+      { label: '解释一下', prompt: '用通俗的话给我解释：' },
+      { label: '查一查', prompt: '帮我查一下最新消息：' }
+    ],
+    shortcutsLabel: '快捷键',
+    shortcutSearch: '搜索全部',
+    shortcutModel: '更换模型',
+    shortcutSettings: '设置',
+    sidebarEmptyTitle: '还没有对话',
+    sidebarEmptyBody: '你的对话会显示在这里。',
+    sidebarStartChat: '开始对话'
   },
 
   tips: {

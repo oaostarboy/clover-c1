@@ -2953,6 +2953,26 @@ export interface Translations {
     items: Record<TipId, { title: string; text: string }>
   }
 
+  /** The Clover decor home screen and empty states (themes with `decor: 'clover'`). */
+  cloverHome: {
+    greetingMorning: string
+    greetingAfternoon: string
+    greetingEvening: string
+    greetingNight: string
+    /** One is picked per mount for the neutral personality. Plain words, no jargon. */
+    bodies: string[]
+    startersLabel: string
+    /** Starter chips. `prompt` is put in the message box, never sent. */
+    starters: Array<{ label: string; prompt: string }>
+    shortcutsLabel: string
+    shortcutSearch: string
+    shortcutModel: string
+    shortcutSettings: string
+    sidebarEmptyTitle: string
+    sidebarEmptyBody: string
+    sidebarStartChat: string
+  }
+
   errors: {
     genericFailure: string
     boundaryTitle: string

@@ -2354,8 +2354,8 @@ export const ja = defineLocale({
   },
 
   onboarding: {
-    headerTitle: 'Clover Cognition のセットアップをしましょう',
-    headerDesc: 'チャットを始めるにはモデルプロバイダーを接続してください。ほとんどのオプションはワンクリックです。',
+    headerTitle: 'Clover をセットアップしましょう',
+    headerDesc: 'Clover が使う AI サービスを選んでください。ほとんどはワンクリックで完了します。',
     preparingInstall: 'Clover はインストールを完了中です。初回実行では通常 1 分以内に完了します。',
     starting: 'Clover を起動中…',
     lookingUpProviders: 'プロバイダーを検索中...',
@@ -2528,15 +2528,15 @@ export const ja = defineLocale({
       openCommandCenter: 'コマンドセンターを開く',
       showTerminal: 'ターミナルを表示',
       hideTerminal: 'ターミナルを非表示',
-      gateway: 'ゲートウェイ',
+      gateway: '接続',
       gatewayReady: '準備完了',
       gatewayNeedsSetup: '設定が必要',
-      gatewayUnavailable: '推論を利用できません',
+      gatewayUnavailable: 'モデルを利用できません',
       gatewayChecking: '確認中',
       gatewayConnecting: '接続中',
       gatewayOffline: 'オフライン',
       gatewayRestarting: '再起動中…',
-      gatewayTitle: 'ゲートウェイ',
+      gatewayTitle: '接続',
       agents: 'エージェント',
       closeAgents: 'エージェントを閉じる',
       openAgents: 'エージェントを開く',
@@ -3076,6 +3076,32 @@ export const ja = defineLocale({
       failed: error => `引き継ぎに失敗しました: ${error}`,
       timedOut: 'ゲートウェイの待機がタイムアウトしました。`clover gateway` は起動していますか？'
     }
+  },
+
+  cloverHome: {
+    greetingMorning: 'おはようございます',
+    greetingAfternoon: 'こんにちは',
+    greetingEvening: 'こんばんは',
+    greetingNight: '遅くまでお疲れさまです',
+    bodies: [
+      '質問したり、ファイルを渡したり、やりたいことを書いてください。あとは任せてください。',
+      '取り組んでいることを教えてください。ファイルを読んだり、ウェブを調べたり、作業を代わりに進めたりできます。',
+      'ひとことから始めて大丈夫です。わからない点があればこちらから聞きます。'
+    ],
+    startersLabel: '試してみる',
+    starters: [
+      { label: '今日の予定を立てる', prompt: '今日の予定を立てるのを手伝って。まず何があるか聞いて。' },
+      { label: 'メッセージの下書き', prompt: '短くて親しみやすいメッセージを書くのを手伝って。' },
+      { label: 'わかりやすく説明', prompt: 'これをわかりやすく説明して:' },
+      { label: '調べもの', prompt: '最新のニュースを調べて:' }
+    ],
+    shortcutsLabel: 'ショートカット',
+    shortcutSearch: 'すべてを検索',
+    shortcutModel: 'モデルを変更',
+    shortcutSettings: '設定',
+    sidebarEmptyTitle: 'チャットはまだありません',
+    sidebarEmptyBody: '会話はここに表示されます。',
+    sidebarStartChat: 'チャットを始める'
   },
 
   tips: {
