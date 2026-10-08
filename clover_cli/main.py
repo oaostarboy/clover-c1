@@ -10633,7 +10633,9 @@ def cmd_update(args):
         branch = _resolve_update_branch(args)
         # Read-only pre-check report first: "can this install update, and if
         # not, why" — the same checks the apply path runs before changing
-        # anything. A blocked install exits 2 without fetching.
+        # anything. Report only: the existing availability check below still
+        # runs and owns the exit code, so scripts reading --check's status
+        # see exactly what they did before.
         if not getattr(args, "skip_preflight", False):
             from clover_cli import update_preflight as _preflight
 
@@ -10648,8 +10650,6 @@ def cmd_update(args):
                 )
                 print(_preflight.format_cli_report(_pf_report))
                 print()
-                if _pf_report.blocked:
-                    sys.exit(_preflight.PREFLIGHT_EXIT_BLOCKED)
         _self()._cmd_update_check(
             branch=branch,
             branch_explicit=bool(getattr(args, "branch", None)),

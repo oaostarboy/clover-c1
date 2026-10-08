@@ -31,7 +31,7 @@ def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
         default=False,
         help=(
             "Report whether this install can update (the read-only pre-check, "
-            "with the reason and fix for anything that would stop it) and "
+            "with the reason and fix for anything that would stop it), then "
             "whether an update is available, without installing anything"
         ),
     )

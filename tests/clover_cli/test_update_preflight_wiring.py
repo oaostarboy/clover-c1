@@ -6,8 +6,8 @@
   checkout is byte-identical afterwards.
 * ``clover update --skip-preflight`` and ``updates.preflight.enabled: false``
   bypass it; warnings print and the update proceeds.
-* ``clover update --check`` prints the report and exits 2 on a block without
-  fetching.
+* ``clover update --check`` prints the report, then runs the usual
+  availability check, which keeps owning the exit code.
 * chat ``/update``: a block returns ONE plain message and writes/spawns
   nothing (no pending marker, no Popen); ``/update check`` only reports; an
   all-clear pre-check leaves the existing reply and spawn unchanged.
@@ -185,14 +185,15 @@ def test_cli_windows_handoff_child_does_not_rerun_preflight(isolated, cli, monke
     assert cli == [False]
 
 
-def test_cli_check_reports_and_exits_2_on_block_without_fetching(isolated, cli, capsys):
+def test_cli_check_reports_a_block_and_keeps_the_usual_check(isolated, cli, capsys):
+    """--check only reports: the block is shown, the availability check still
+    runs and owns the exit code (unchanged contract for scripts)."""
     _make_dirty_wrong_branch(isolated)
-    with pytest.raises(SystemExit) as exc:
-        main_mod.cmd_update(_cli_args(check=True))
+    main_mod.cmd_update(_cli_args(check=True))
     out = capsys.readouterr().out
-    assert exc.value.code == 2
-    assert cli == [], "--check fetched despite a block"
-    assert "Update pre-check" in out and "[parked_branch_dirty]" in out and "[git_checkout]" in out
+    assert "can't update right now" in out
+    assert "[parked_branch_dirty]" in out and "[git_checkout]" in out
+    assert cli and cli[0][0] == "check"
 
 
 def test_cli_check_reports_then_runs_the_usual_check_when_clear(isolated, cli, capsys):

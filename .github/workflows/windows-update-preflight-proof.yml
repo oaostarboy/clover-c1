@@ -19,8 +19,8 @@ name: Windows update pre-check proof (manual)
 #            answer with ONE plain-English "Update not started" message naming
 #            the reason and the fix, spawn no updater, write no pending marker,
 #            and leave the SAME gateway process up and the checkout unchanged.
-#            `clover update` and `clover update --check` from a terminal must
-#            refuse the same way (exit 2) without pausing the gateway.
+#            `clover update` from a terminal must refuse the same way (exit 2)
+#            without pausing the gateway; `clover update --check` must report it.
 # Setups: zyra (Startup-folder VBS) and troy (Scheduled Task).
 #
 # On-demand only: it runs on pushes to ci/win-preflight/** helper branches (a
@@ -209,7 +209,8 @@ jobs:
           $chkRc = $LASTEXITCODE
           $chkOut | Out-File -FilePath "$env:RUNNER_TEMP\cli-blocked-check.txt" -Encoding utf8
           Write-Host $chkOut
-          if ($chkRc -ne 2 -or $chkOut -notmatch '\[parked_branch_dirty\]') { throw "[$label] clover update --check exit=$chkRc / missing code" }
+          Write-Host "[$label] clover update --check exit=$chkRc (report only; the availability check owns the exit code)"
+          if ($chkOut -notmatch "can't update right now" -or $chkOut -notmatch '\[parked_branch_dirty\]') { throw "[$label] clover update --check did not report the block" }
 
           Write-Host "=== the gateway and the install are unchanged ==="
           $bad = Assert-GatewayUnchanged $label $gw 60
@@ -225,7 +226,7 @@ jobs:
           $refused | ForEach-Object { Write-Host "[gateway-log] $($_.Line)" }
           if ($refused.Count -lt 1) { $bad += "gateway.log has no '/update refused by pre-check' line" }
           if ($bad.Count) { Write-Host "FAIL [$label]:"; $bad | ForEach-Object { Write-Host "  $_" }; throw "[$label] failed $($bad.Count) criteria" }
-          Write-Host "PASS [$label]: one plain block message, no updater spawned, no pending marker, same gateway pid $gw for 60s, port bound, state running, checkout byte-identical, no stash, Schedule Running; terminal update/--check exit 2"
+          Write-Host "PASS [$label]: one plain block message, no updater spawned, no pending marker, same gateway pid $gw for 60s, port bound, state running, checkout byte-identical, no stash, Schedule Running; terminal update exit 2, --check reports the block"
           exit 0
 
       - name: e. Stage logs
