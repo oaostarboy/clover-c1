@@ -148,10 +148,12 @@ jobs:
           $done | Out-File -FilePath "$env:RUNNER_TEMP\chat-update-final.txt" -Encoding utf8
           $done | ForEach-Object { Write-Host "[bot] $_" }
           if (($done -join "`n") -match 'Update not started') { throw "[$label] the pre-check blocked a healthy install" }
-          $head = (git -C $env:INSTALL_DIR rev-parse HEAD).Trim()
-          $want = (git -C $env:INSTALL_DIR rev-parse "refs/remotes/origin/ci/win-preflight-next/$suffix").Trim()
-          Write-Host "[$label] HEAD after update=$head target=$want"
-          if ($head -ne $want) { throw "[$label] install is not on the target commit after /update" }
+          # Set-MainIsTarget uses `git replace`, so HEAD keeps main's sha while
+          # its content is the target's: compare trees, and check the marker file.
+          $head = (git -C $env:INSTALL_DIR rev-parse "HEAD^{tree}").Trim()
+          $want = (git -C $env:INSTALL_DIR rev-parse "refs/remotes/origin/ci/win-preflight-next/$suffix^{tree}").Trim()
+          Write-Host "[$label] HEAD tree after update=$head target tree=$want; marker present: $(Test-Path "$env:INSTALL_DIR\.ci-preflight-next-marker")"
+          if ($head -ne $want -or -not (Test-Path "$env:INSTALL_DIR\.ci-preflight-next-marker")) { throw "[$label] install is not on the target commit after /update" }
           exit 0
 
       - name: d2. (blocked) dirty non-main install - plain block message, nothing changes
