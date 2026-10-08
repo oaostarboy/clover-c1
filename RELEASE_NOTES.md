@@ -15,6 +15,10 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.1.3 | Clover C1.1.3 | 2026-10-08
+- Fixed: a helper's progress box could freeze or disappear after a short Telegram connection drop.
+- The box now moves to the new connection, or posts itself again, instead of getting stuck.
+
 ## 1.1.2 | Clover C1.1.2 | 2026-10-07
 - Fixed: the what's-new message could go missing after /update when you had local changes.
 - Fixed: on some Linux setups (like a Raspberry Pi) /update could finish without telling you.
