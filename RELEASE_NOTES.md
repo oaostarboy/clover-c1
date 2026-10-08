@@ -15,6 +15,11 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.1.4 | Clover C1.1.4 | 2026-10-08
+- Before an update starts, Clover now checks your setup and tells you in plain words if something would stop it, and changes nothing.
+- New: send /update check to see if you're ready to update, without updating.
+- Behind the scenes: new versions can now be released with one button.
+
 ## 1.1.3 | Clover C1.1.3 | 2026-10-08
 - Fixed: a helper's progress box could freeze or disappear after a short Telegram connection drop.
 - The box now moves to the new connection, or posts itself again, instead of getting stuck.
