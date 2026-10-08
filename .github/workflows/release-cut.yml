@@ -1,0 +1,184 @@
+name: Release cut
+
+# One dispatch turns a written RELEASE_NOTES.md entry into a released version:
+#
+#   scripts/release_cut.py        validate the entry, bump the four version spots
+#                                 (RELEASE_NOTES.md only if a draft is promoted,
+#                                 clover_cli/__init__.py, pyproject.toml, uv.lock)
+#                                 and run tests/clover_cli/test_release_notes.py
+#   scripts/ci/release_publish.py open the release PR from release/cX.Y.Z, wait for
+#                                 the required check to be green on THAT head SHA,
+#                                 merge with --match-head-commit, tag the merge
+#                                 commit (annotated "Clover CX.Y.Z"), create the
+#                                 GitHub release from the notes bullets.
+#
+# To release:  write the RELEASE_NOTES.md entry on main, then
+#     gh workflow run release-cut.yml -f version=X.Y.Z -f dry_run=false
+# (dry_run defaults to true: it validates and logs every write it WOULD do.)
+#
+# Security model (same shape as skills-index.yml / js-autofix.yml):
+#   * dry-run job: no environment, no secrets, read-only token. Safe from any branch.
+#   * release job: only on refs/heads/main, runs in the protected
+#     ``trusted-automation`` environment, needs an elevated token. Pushes and PRs
+#     made with the default GITHUB_TOKEN never trigger CI (and this repo bars
+#     Actions from creating PRs), so the release job refuses to run without a
+#     GitHub App token (APP_CLIENT_ID + APP_PRIVATE_KEY) or a RELEASE_CUT_TOKEN
+#     secret. See "One-time setup" in AGENTS.md (Releases).
+#   * Inputs reach the shell only through env vars, never by interpolation.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release: X.Y.Z, or the word patch / minor"
+        required: true
+        type: string
+      name:
+        description: "Release name (empty = the RELEASE_NOTES entry's name, e.g. 'Clover C1.1.4')"
+        required: false
+        default: ""
+        type: string
+      dry_run:
+        description: "Dry run: validate and log what would happen; push, merge, tag and publish nothing"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-cut
+  cancel-in-progress: false
+
+env:
+  PYTHONUTF8: "1"
+
+jobs:
+  dry-run:
+    name: Release cut (dry run)
+    if: inputs.dry_run
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      checks: read
+      statuses: read
+      pull-requests: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          command: uv python install 3.11 && uv sync --locked --python 3.11 --extra dev
+
+      - name: Bump versions (dry run)
+        env:
+          VERSION: ${{ inputs.version }}
+          RELEASE_NAME: ${{ inputs.name }}
+        run: |
+          set -euo pipefail
+          args=(--dry-run --summary-json "$RUNNER_TEMP/summary.json" --notes-out "$RUNNER_TEMP/notes.md")
+          if [ -n "$RELEASE_NAME" ]; then args+=(--name "$RELEASE_NAME"); fi
+          uv run --no-sync python scripts/release_cut.py "$VERSION" "${args[@]}" 2>&1 | tee "$RUNNER_TEMP/release_cut.log"
+
+      - name: Publish plan (dry run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # --probe-sha: run the real CI gate against this commit's live checks.
+          python3 scripts/ci/release_publish.py --dry-run \
+            --summary "$RUNNER_TEMP/summary.json" --notes-file "$RUNNER_TEMP/notes.md" \
+            --probe-sha "$GITHUB_SHA" 2>&1 | tee "$RUNNER_TEMP/release_publish.log"
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## Release cut: DRY RUN"
+            echo '```'
+            cat "$RUNNER_TEMP/release_cut.log" "$RUNNER_TEMP/release_publish.log" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release:
+    name: Release cut
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    # The protected environment holds the App key; main only.
+    environment: trusted-automation
+    permissions:
+      contents: read
+    steps:
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::A real release cut runs only from main (got $REF). Use dry_run=true elsewhere."
+            exit 1
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          # The default token must not be what pushes the release (its pushes and
+          # PRs never trigger CI); the elevated token is wired in below.
+          persist-credentials: false
+
+      # Local composite action: must come after checkout.
+      - name: Get GitHub App token
+        id: app-token
+        uses: ./.github/actions/get-app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+
+      - name: Install dependencies
+        uses: ./.github/actions/retry
+        with:
+          command: uv python install 3.11 && uv sync --locked --python 3.11 --extra dev
+
+      - name: Bump versions
+        env:
+          VERSION: ${{ inputs.version }}
+          RELEASE_NAME: ${{ inputs.name }}
+        run: |
+          set -euo pipefail
+          args=(--summary-json "$RUNNER_TEMP/summary.json" --notes-out "$RUNNER_TEMP/notes.md")
+          if [ -n "$RELEASE_NAME" ]; then args+=(--name "$RELEASE_NAME"); fi
+          uv run --no-sync python scripts/release_cut.py "$VERSION" "${args[@]}"
+
+      - name: PR, wait for green on the same SHA, merge, tag, publish
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_CUT_TOKEN || steps.app-token.outputs.token }}
+          DEFAULT_GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # git over HTTPS uses GH_TOKEN (the elevated token) via gh's credential helper.
+          gh auth setup-git
+          python3 scripts/ci/release_publish.py \
+            --summary "$RUNNER_TEMP/summary.json" --notes-file "$RUNNER_TEMP/notes.md"
