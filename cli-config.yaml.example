@@ -1943,6 +1943,21 @@ updates:
   #             installs where local source edits should not persist
   non_interactive_local_changes: "stash"
 
+  # Read-only pre-check that runs before `clover update` / chat `/update`
+  # change anything. When the install can't update (plain file copy without
+  # Git, wrong branch with unsaved edits, read-only folder, no network, low
+  # disk space, another update running, a trial build loaded via PYTHONPATH,
+  # ...) it says why in plain words, gives the fix, and nothing is touched.
+  # `clover update --check` (or `/update check` in chat) shows the report only;
+  # `clover update --skip-preflight` skips it for one run in an emergency.
+  # The defaults are shown commented out; uncomment to change them.
+  # preflight:
+  #   enabled: true
+  #   min_free_disk_mb: 500        # refuse below this much free space
+  #   warn_free_disk_mb: 1500      # proceed with a note below this
+  #   check_network: true          # one read-only `git ls-remote` to origin
+  #   network_timeout_seconds: 15
+
 
 # =============================================================================
 # Web Dashboard
