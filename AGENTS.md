@@ -1340,6 +1340,51 @@ plan → snapshot → apply → restart-per-kind → verify → report
   you are shipping is part of the release step; a test fails while it is
   still a draft.
 
+### Releasing
+
+To release: write the `RELEASE_NOTES.md` entry on `main`, then run the
+**Release cut** workflow (Actions tab, or
+`gh workflow run release-cut.yml -f version=X.Y.Z -f dry_run=false`).
+`dry_run` defaults to true: it validates, shows the diff and logs every write
+it would do, and pushes/merges/tags/publishes nothing. `version` also accepts
+`patch` or `minor`; `name` defaults to the entry's name.
+
+What it does, in order (any failed step stops the run; nothing is forced):
+
+1. `scripts/release_cut.py` checks the entry (non-draft or promotable draft,
+   1-6 bullets, no TODO, newest first), refuses an existing tag or a version
+   not greater than the current one, bumps `clover_cli/__init__.py`
+   (`__version__`, `__release_date__`), `pyproject.toml` and the
+   `clover-c1` entry in `uv.lock` (plus `RELEASE_NOTES.md` only when it
+   promotes a draft), and runs `tests/clover_cli/test_release_notes.py`. Run
+   it locally first with `python scripts/release_cut.py X.Y.Z --dry-run`.
+2. `scripts/ci/release_publish.py` pushes `release/cX.Y.Z` (one commit,
+   `release: Clover CX.Y.Z (vX.Y.Z)`), opens the PR, and waits for the
+   `All required checks pass` check to be green **on that exact head SHA**.
+3. It merges with `--merge --match-head-commit <sha>` (never if the head moved,
+   CI is red, or main moved), then tags the merge commit only after checking
+   its parents are the old main and the tested SHA. The annotated tag
+   `vX.Y.Z` carries the message `Clover CX.Y.Z`; `gh release create` uses the
+   notes bullets as the body. If it stops after the merge it prints the exact
+   recovery commands.
+
+One-time setup (the workflow refuses to do a real run without it):
+
+- Pushes and PRs made with the default `GITHUB_TOKEN` never start CI, and this
+  repo bars Actions from creating PRs, so a release PR could never go green.
+  Give the `trusted-automation` environment either a GitHub App
+  (`APP_CLIENT_ID` variable + `APP_PRIVATE_KEY` secret, same as
+  `skills-index.yml`) or a fine-grained PAT stored as the environment secret
+  `RELEASE_CUT_TOKEN` with `Contents: write` and `Pull requests: write` on this
+  repo only. The identity must be allowed to push `release/*` and tags, and to
+  merge to `main` (it must bypass any future required-review rule).
+- Restrict the `trusted-automation` environment to the `main` branch
+  (Settings > Environments > Deployment branches). The job also refuses any
+  other ref, but a workflow edited on a branch could skip that check; the
+  environment rule is the real gate.
+- Optional: a tag ruleset on `v*` that only the token's identity may create,
+  so releases cannot be tagged by hand without review.
+
 Architecture direction: process-scan-based coordination between the
 updater, serve/dashboard, and the gateway is being replaced by a
 gateway-owned control socket (#92091). Do not add new scan heuristics
