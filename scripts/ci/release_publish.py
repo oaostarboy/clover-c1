@@ -8,7 +8,8 @@ would).  This script turns that into the release, one gated step at a time::
     1. branch    release/cX.Y.Z from the exact main commit that was checked out
     2. commit    "release: <name> (vX.Y.Z)" -- the same four files as 253629ba
     3. PR        base main, body = the notes bullets
-    4. wait      for the required check on THE SAME head SHA that was pushed
+    4. wait      for the required check ('All required checks pass') on THE SAME head SHA
+                 that was pushed (--strict: also no failing advisory check)
     5. merge     --merge --match-head-commit <that SHA>  (never a moved head)
     6. tag       annotated vX.Y.Z "<name>" on the merge commit (only if 4 was green
                  and the merge commit's parents are the base and the tested SHA)
@@ -101,18 +102,19 @@ class Gate:
     detail: str
 
 
-def evaluate_checks(check_runs: Sequence[dict], statuses: Sequence[dict], required: str = REQUIRED_CHECK) -> Gate:
-    """Decide green/red/pending from the check runs + commit statuses of ONE sha.
+def evaluate_checks(check_runs: Sequence[dict], statuses: Sequence[dict], required: str = REQUIRED_CHECK, strict: bool = False) -> Gate:
+    """Decide green/red/pending/absent from the check runs + commit statuses of ONE sha.
 
-    Green needs the aggregate required check to exist AND be ``success``, and no
-    other completed check run or commit status to be failing.  Checks that are
-    still running after the aggregate finished (timing report, image build) do
-    not block; any failure among them does.
+    ``required`` is the repo's single declared gate (ci.yaml's ``all-checks-pass``,
+    which already aggregates every blocking lane).  Green needs it to exist AND be
+    ``success``.  Other failing checks are advisory by the repo's own design (the
+    slow docker image build, post-release install-e2e, ...): they are reported in
+    the detail but do not block, unless ``strict`` is set, in which case any
+    failing check or commit status is red.
     """
-    failed = [f"{c['name']}={c.get('conclusion')}" for c in check_runs if c.get("status") == "completed" and c.get("conclusion") in BAD]
+    failed = [f"{c['name']}={c.get('conclusion')}" for c in check_runs if c.get("status") == "completed" and c.get("conclusion") in BAD and c.get("name") != required]
     failed += [f"{s['context']}={s['state']}" for s in statuses if s.get("state") in ("failure", "error")]
-    if failed:
-        return Gate("red", "failing: " + ", ".join(sorted(failed)))
+    failed.sort()
     agg = [c for c in check_runs if c.get("name") == required]
     if not agg:
         return Gate("absent", f"required check {required!r} has not reported ({len(check_runs)} check runs so far)")
@@ -121,19 +123,25 @@ def evaluate_checks(check_runs: Sequence[dict], statuses: Sequence[dict], requir
         return Gate("pending", f"required check {required!r} is {best.get('status')}")
     if best.get("conclusion") != "success":
         return Gate("red", f"required check {required!r} concluded {best.get('conclusion')}")
+    if failed and strict:
+        return Gate("red", "strict mode, failing: " + ", ".join(failed))
+    notes = []
+    if failed:
+        notes.append(f"{len(failed)} non-required check(s) failing (advisory, not gating): {', '.join(failed[:4])}")
     pending = sorted(c["name"] for c in check_runs if c.get("status") != "completed")
-    note = f"; {len(pending)} advisory check(s) still running: {', '.join(pending[:4])}" if pending else ""
-    return Gate("green", f"{required!r} success on {len(check_runs)} check runs{note}")
+    if pending:
+        notes.append(f"{len(pending)} advisory check(s) still running: {', '.join(pending[:4])}")
+    return Gate("green", f"{required!r} success on {len(check_runs)} check runs" + "".join(f"; {n}" for n in notes))
 
 
-def fetch_gate(ctx: Ctx, sha: str, required: str) -> Gate:
+def fetch_gate(ctx: Ctx, sha: str, required: str, strict: bool = False) -> Gate:
     raw = ctx.out("gh", "api", f"repos/{ctx.repo}/commits/{sha}/check-runs?per_page=100", "--paginate", "--jq", ".check_runs[]")
     runs = [json.loads(line) for line in raw.splitlines() if line.strip()]
     status = ctx.api(f"repos/{ctx.repo}/commits/{sha}/status")
-    return evaluate_checks(runs, (status or {}).get("statuses", []), required)
+    return evaluate_checks(runs, (status or {}).get("statuses", []), required, strict)
 
 
-def wait_for_green(ctx: Ctx, pr: int, sha: str, required: str, timeout_s: int, poll_s: int, no_ci_timeout_s: int) -> None:
+def wait_for_green(ctx: Ctx, pr: int, sha: str, required: str, timeout_s: int, poll_s: int, no_ci_timeout_s: int, strict: bool = False) -> None:
     """Block until ``sha`` is green. Raises Abort on red, timeout, or a moved PR head."""
     start = ctx.clock()
     last = ""
@@ -141,7 +149,7 @@ def wait_for_green(ctx: Ctx, pr: int, sha: str, required: str, timeout_s: int, p
         head = ctx.out("gh", "pr", "view", str(pr), "-R", ctx.repo, "--json", "headRefOid", "-q", ".headRefOid")
         if head != sha:
             raise Abort(f"PR #{pr} head moved from {sha[:10]} to {head[:10]} while waiting; not merging. Nothing was tagged.")
-        gate = fetch_gate(ctx, sha, required)
+        gate = fetch_gate(ctx, sha, required, strict)
         line = f"{gate.state}: {gate.detail}"
         if line != last:
             ctx.log(f"    [{int(ctx.clock() - start)}s] {sha[:10]} {line}")
@@ -214,7 +222,7 @@ def describe_token(ctx: Ctx, github_token: Optional[str]) -> str:
 
 
 def cut(ctx: Ctx, summary: dict, notes_file: Path, *, base_branch: str, required: str, timeout_s: int,
-        poll_s: int, no_ci_timeout_s: int, github_token: Optional[str], probe_sha: Optional[str]) -> int:
+        poll_s: int, no_ci_timeout_s: int, github_token: Optional[str], probe_sha: Optional[str], strict: bool = False) -> int:
     version = summary["version"]
     tag = f"v{version}"
     branch = f"release/c{version}"
@@ -247,7 +255,7 @@ def cut(ctx: Ctx, summary: dict, notes_file: Path, *, base_branch: str, required
 
     if ctx.dry_run:
         sha = probe_sha or base_sha
-        gate = fetch_gate(ctx, sha, required)
+        gate = fetch_gate(ctx, sha, required, strict)
         ctx.log(f"gate probe on {sha[:10]} (the real gate function, live data): {gate.state}: {gate.detail}")
         if token_kind == "github-token":
             ctx.log("NOTE: this run uses the default GITHUB_TOKEN. A real run would refuse here: PRs/pushes made with it never trigger CI.")
@@ -295,7 +303,7 @@ def cut(ctx: Ctx, summary: dict, notes_file: Path, *, base_branch: str, required
 
     # -- 4 wait for green on THIS sha ---------------------------------------
     ctx.step(f"wait for {required!r} on {sha[:10]}")
-    wait_for_green(ctx, pr, sha, required, timeout_s, poll_s, no_ci_timeout_s)
+    wait_for_green(ctx, pr, sha, required, timeout_s, poll_s, no_ci_timeout_s, strict)
 
     # -- 5 merge --------------------------------------------------------------
     ctx.step("check the PR is still based on the tip of main")
@@ -352,6 +360,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     p.add_argument("--required-check", default=REQUIRED_CHECK)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--probe-sha", help="dry run only: evaluate the check gate against this commit")
+    p.add_argument("--strict", action="store_true", help="also require every other check run/status on the SHA to be non-failing")
     p.add_argument("--timeout-min", type=int, default=90)
     p.add_argument("--poll-s", type=int, default=30)
     p.add_argument("--no-ci-timeout-min", type=int, default=10, help="give up if no check reports at all within this time")
@@ -367,7 +376,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             ctx, load_summary(Path(args.summary)), Path(args.notes_file).resolve(),
             base_branch=args.base_branch, required=args.required_check, timeout_s=args.timeout_min * 60,
             poll_s=args.poll_s, no_ci_timeout_s=args.no_ci_timeout_min * 60,
-            github_token=os.environ.get(args.github_token_env) or None, probe_sha=args.probe_sha,
+            github_token=os.environ.get(args.github_token_env) or None, probe_sha=args.probe_sha, strict=args.strict,
         )
     except Abort as exc:
         print(f"::error::{exc}" if os.environ.get("GITHUB_ACTIONS") else f"ABORT: {exc}", file=sys.stderr)

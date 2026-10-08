@@ -57,13 +57,16 @@ def test_aggregate_failing_is_red(conclusion):
     assert rp.evaluate_checks([run(AGG, conclusion=conclusion)], []).state == "red"
 
 
-def test_any_other_failing_check_is_red_even_when_the_aggregate_passed():
+def test_other_failing_checks_are_advisory_by_default_but_reported():
     gate = rp.evaluate_checks([run(AGG), run("Docker build", conclusion="failure")], [])
-    assert gate.state == "red" and "Docker build" in gate.detail
+    assert gate.state == "green" and "Docker build=failure" in gate.detail and "not gating" in gate.detail
 
 
-def test_failing_commit_status_is_red():
-    assert rp.evaluate_checks([run(AGG)], [{"context": "legacy/ci", "state": "failure"}]).state == "red"
+def test_strict_mode_makes_any_failing_check_or_status_red():
+    runs = [run(AGG), run("Docker build", conclusion="failure")]
+    assert rp.evaluate_checks(runs, [], strict=True).state == "red"
+    assert rp.evaluate_checks([run(AGG)], [{"context": "legacy/ci", "state": "failure"}], strict=True).state == "red"
+    assert rp.evaluate_checks([run(AGG)], [{"context": "legacy/ci", "state": "failure"}]).state == "green"
 
 
 def test_skipped_checks_and_slow_advisory_jobs_do_not_block():

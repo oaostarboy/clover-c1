@@ -95,6 +95,7 @@ jobs:
       - name: Publish plan (dry run)
         env:
           GH_TOKEN: ${{ github.token }}
+          DEFAULT_GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
