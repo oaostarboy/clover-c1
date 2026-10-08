@@ -14,16 +14,17 @@ function Get-BotLines([int]$start) {
   # Lines the gateway sent over IRC since line $start of irc.log.
   $p = "$env:RUNNER_TEMP\irc.log"
   if (-not (Test-Path $p)) { return @() }
-  ,@(Get-Content $p | Select-Object -Skip $start | Where-Object { $_ -match ' << PRIVMSG \S+ :' } | ForEach-Object { ($_ -split ' << PRIVMSG \S+ :', 2)[1] })
+  # Plain pipeline output (no leading comma): callers collect with @(...).
+  Get-Content $p | Select-Object -Skip $start | Where-Object { $_ -match ' << PRIVMSG \S+ :' } | ForEach-Object { [string](($_ -split ' << PRIVMSG \S+ :', 2)[1]) }
 }
 
 function Wait-BotText([int]$start, [string]$pattern, [int]$timeoutS = 180) {
   $deadline = (Get-Date).AddSeconds($timeoutS)
   while ((Get-Date) -lt $deadline) {
-    $lines = Get-BotLines $start
+    $lines = @(Get-BotLines $start)
     if (@($lines | Where-Object { $_ -match $pattern }).Count -gt 0) {
       Start-Sleep -Seconds 4  # let the rest of a multi-line reply arrive
-      return ,@(Get-BotLines $start)
+      return @(Get-BotLines $start)
     }
     Start-Sleep -Seconds 2
   }

@@ -128,10 +128,10 @@ jobs:
           Write-Host "=== /update check (report only) ==="
           $irc0 = Get-IrcLineCount
           Send-ChatText "/update check"
-          $reply = Wait-BotText $irc0 'Update pre-check'
+          $reply = @(Wait-BotText $irc0 'Update pre-check')
           $reply | Out-File -FilePath "$env:RUNNER_TEMP\chat-update-check.txt" -Encoding utf8
           $reply | ForEach-Object { Write-Host "[bot] $_" }
-          if (-not ($reply -match 'ready to update')) { throw "[$label] /update check did not report ready" }
+          if (-not (($reply -join "`n") -match 'ready to update')) { throw "[$label] /update check did not report ready" }
           $bad = Assert-GatewayUnchanged "$label after /update check" $gw 20
           if ($bad.Count) { $bad | Out-Host; throw "[$label] /update check disturbed the gateway" }
 
@@ -144,10 +144,10 @@ jobs:
           $passed = @(Get-LogLines | Select-Object -Skip $logStart | Select-String -Pattern 'Update pre-check passed')
           $passed | ForEach-Object { Write-Host "[gateway-log] $($_.Line)" }
           if ($passed.Count -lt 1) { throw "[$label] gateway.log has no 'Update pre-check passed' line: the pre-check did not run" }
-          $done = Wait-BotText $irc1 'Clover update finished' 300
+          $done = @(Wait-BotText $irc1 'Clover update finished' 300)
           $done | Out-File -FilePath "$env:RUNNER_TEMP\chat-update-final.txt" -Encoding utf8
           $done | ForEach-Object { Write-Host "[bot] $_" }
-          if ($done -match 'Update not started') { throw "[$label] the pre-check blocked a healthy install" }
+          if (($done -join "`n") -match 'Update not started') { throw "[$label] the pre-check blocked a healthy install" }
           $head = (git -C $env:INSTALL_DIR rev-parse HEAD).Trim()
           $want = (git -C $env:INSTALL_DIR rev-parse "refs/remotes/origin/ci/win-preflight-next/$suffix").Trim()
           Write-Host "[$label] HEAD after update=$head target=$want"
@@ -171,7 +171,7 @@ jobs:
           Write-Host "=== chat /update on the dirty install ==="
           $irc0 = Get-IrcLineCount
           Send-ChatText "/update"
-          $reply = Wait-BotText $irc0 'Update not started'
+          $reply = @(Wait-BotText $irc0 'Update not started')
           $reply | Out-File -FilePath "$env:RUNNER_TEMP\chat-blocked-message.txt" -Encoding utf8
           Write-Host "----- the block message as delivered (one line per IRC PRIVMSG) -----"
           $reply | ForEach-Object { Write-Host "[bot] $_" }
@@ -187,10 +187,10 @@ jobs:
           Write-Host "=== chat /update check on the dirty install ==="
           $irc1 = Get-IrcLineCount
           Send-ChatText "/update check"
-          $check = Wait-BotText $irc1 'Update pre-check'
+          $check = @(Wait-BotText $irc1 'Update pre-check')
           $check | Out-File -FilePath "$env:RUNNER_TEMP\chat-blocked-check.txt" -Encoding utf8
           $check | ForEach-Object { Write-Host "[bot] $_" }
-          if (-not ($check -match "can't update right now")) { throw "[$label] /update check did not report the block" }
+          if (-not (($check -join "`n") -match "can't update right now")) { throw "[$label] /update check did not report the block" }
 
           Write-Host "=== terminal: clover update --yes ==="
           $cliOut = & "$env:CLOVER_BIN" update --yes 2>&1 | Out-String
