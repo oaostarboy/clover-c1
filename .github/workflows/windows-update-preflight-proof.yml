@@ -160,6 +160,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           . "$env:E2E\supervisor-proof.ps1"
+          . "$env:E2E\whats-new-proof.ps1"
           . "$env:E2E\preflight-proof.ps1"
           $label = "$env:SETUP chat blocked"
           $gw = [int]$env:OLD_GATEWAY_PID
