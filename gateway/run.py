@@ -33330,6 +33330,19 @@ def _start_gateway_housekeeping(stop_event: threading.Event, adapters=None, loop
     while not stop_event.is_set():
         tick_count += 1
 
+        # Local session kernels are process-owned children. The existing
+        # execute-entry sweep cannot reclaim an owner that never executes
+        # again, so the gateway housekeeper drives the same configured idle
+        # timeout without touching kernels whose cell lock is held.
+        try:
+            from tools.code_kernel import reap_idle_kernels
+
+            reaped = reap_idle_kernels()
+            if reaped:
+                logger.info("Kernel housekeeping: reaped %d idle session kernel(s)", reaped)
+        except Exception as e:
+            logger.debug("Kernel housekeeping error: %s", e)
+
         if tick_count % CHANNEL_DIR_EVERY == 0 and adapters:
             try:
                 from gateway.channel_directory import build_channel_directory

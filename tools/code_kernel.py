@@ -276,6 +276,10 @@ class SessionKernel:
 
 _KERNELS: Dict[Tuple, SessionKernel] = {}
 _KERNELS_LOCK = threading.Lock()
+# Keep a small, process-local notice so an owner who returns after an idle reap
+# is told that the persistent interpreter state was discarded.
+_IDLE_REAPED_KEYS = set()
+_IDLE_REAPED_KEY_LIMIT = 256
 
 # Bounded lifecycle defaults (config: code_execution.max_session_kernels /
 # code_execution.kernel_idle_timeout). A long-lived gateway must never
@@ -353,6 +357,7 @@ def shutdown_all_kernels() -> None:
     with _KERNELS_LOCK:
         kernels = list(_KERNELS.values())
         _KERNELS.clear()
+        _IDLE_REAPED_KEYS.clear()
     for kernel in kernels:
         _teardown(kernel)
 
@@ -369,6 +374,8 @@ def shutdown_kernels_for_owner(owner: str) -> None:
     with _KERNELS_LOCK:
         doomed = [key for key in _KERNELS if key[0] == owner]
         kernels = [_KERNELS.pop(key) for key in doomed]
+        for key in [key for key in _IDLE_REAPED_KEYS if key[0] == owner]:
+            _IDLE_REAPED_KEYS.discard(key)
     for kernel in kernels:
         _teardown(kernel)
 
@@ -380,9 +387,27 @@ def _reap_unlocked() -> List[SessionKernel]:
     doomed = [
         key
         for key, kernel in _KERNELS.items()
-        if now - kernel.last_used > idle_timeout
+        if now - kernel.last_used > idle_timeout and not kernel.lock.locked()
     ]
-    return [_KERNELS.pop(key) for key in doomed]
+    expired = [_KERNELS.pop(key) for key in doomed]
+    _IDLE_REAPED_KEYS.update(doomed)
+    while len(_IDLE_REAPED_KEYS) > _IDLE_REAPED_KEY_LIMIT:
+        _IDLE_REAPED_KEYS.pop()
+    return expired
+
+
+def reap_idle_kernels() -> int:
+    """Dispose idle-expired local kernels without waiting for another cell.
+
+    Gateway housekeeping calls this on its existing periodic cadence. Active
+    cells hold ``kernel.lock`` for their full execution, so they cannot be
+    reaped even when their start time is older than the idle timeout.
+    """
+    with _KERNELS_LOCK:
+        expired = _reap_unlocked()
+    for kernel in expired:
+        _teardown(kernel)
+    return len(expired)
 
 
 def _evict_over_cap_unlocked(keep: Tuple) -> List[SessionKernel]:
@@ -660,9 +685,12 @@ def execute_in_session_kernel(
     key = _kernel_key(owner, mode, child_python, child_cwd, sandbox_tools)
     exec_start = time.monotonic()
     state_reset = False
+    state_lost = False
 
     with _KERNELS_LOCK:
         expired = _reap_unlocked()
+        state_lost = key in _IDLE_REAPED_KEYS
+        _IDLE_REAPED_KEYS.discard(key)
         kernel = _KERNELS.get(key)
         if kernel is not None and (reset or not kernel.alive()):
             _KERNELS.pop(key, None)
@@ -762,8 +790,14 @@ def execute_in_session_kernel(
                     "reused": reused,
                     "execution_count": kernel.execution_count,
                     "state_reset": state_reset,
+                    "state_lost": state_lost,
                 },
             }
+            if state_lost:
+                result["kernel"]["note"] = (
+                    "The previous session kernel exceeded kernel_idle_timeout; "
+                    "its in-memory state was lost and this is a fresh kernel."
+                )
             result.update(stdout_metadata)
 
             # Cell-side spill (runner clipped before replying): surface the

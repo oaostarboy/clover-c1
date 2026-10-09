@@ -2950,8 +2950,11 @@ DEFAULT_CONFIG = {
         #     one conversation (the owner is the conversation's approval
         #     session key; delegated subagent sessions get their own).
         #     Kernels are disposed with their session (session clear/new),
-        #     reaped after kernel_idle_timeout seconds idle, and capped at
+        #     reaped after kernel_idle_timeout seconds idle by gateway
+        #     housekeeping (active cells are protected), and capped at
         #     max_session_kernels live children process-wide (LRU evicted).
+        #     If an idle-reaped owner returns, the next result reports
+        #     state_lost and that the persistent namespace was discarded.
         #     A timed-out or interrupted cell kills the kernel (state lost,
         #     next call starts fresh), and the child environment is frozen
         #     at kernel spawn — pass reset=true after changing env
