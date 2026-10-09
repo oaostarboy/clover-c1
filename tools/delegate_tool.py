@@ -550,6 +550,15 @@ def _handle_control_action(
         )
     with _active_subagents_lock:
         record = _active_subagents.get(sid)
+    if record is None and action == "stop":
+        # A completed child may still own an accepted, unspent next stage.
+        # Only this root's runtime ledger (not the supplied id) proves ownership.
+        from agent.delegation_checkpoint import get_checkpoint
+        checkpoint = get_checkpoint(parent_agent)
+        if checkpoint is not None and checkpoint.revoke_followthrough(sid):
+            return json.dumps({"action": "stop", "subagent_id": sid,
+                               "status": "continuation_cancelled",
+                               "note": "The child already ended; its remaining follow-through was cancelled."})
     if record is None or not _owns_subagent_record(record, parent_agent):
         return tool_error(
             f"No live subagent '{sid}' in this conversation's spawn tree. It "
@@ -558,14 +567,15 @@ def _handle_control_action(
         )
 
     if action == "stop":
+        revoked = False
+        try:
+            from agent.delegation_checkpoint import get_checkpoint
+            checkpoint = get_checkpoint(parent_agent)
+            if checkpoint is not None:
+                revoked = checkpoint.revoke_followthrough(sid)
+        except Exception:
+            logger.debug("explicit-stop continuation revocation failed", exc_info=True)
         if interrupt_subagent(sid):
-            try:
-                from agent.delegation_checkpoint import get_checkpoint
-                checkpoint = get_checkpoint(parent_agent)
-                if checkpoint is not None:
-                    checkpoint.revoke_followthrough(sid)
-            except Exception:
-                logger.debug("explicit-stop continuation revocation failed", exc_info=True)
             return json.dumps(
                 {
                     "action": "stop",
@@ -580,6 +590,10 @@ def _handle_control_action(
                 },
                 ensure_ascii=False,
             )
+        if revoked:
+            return json.dumps({"action": "stop", "subagent_id": sid,
+                               "status": "continuation_cancelled",
+                               "note": "The child ended during Stop; remaining follow-through was cancelled."})
         return tool_error(
             f"Could not interrupt '{sid}' — it likely finished in the last "
             "moment. Its result arrives as a normal completion message."

@@ -151,6 +151,25 @@ def test_durable_plan_must_keep_exact_runtime_binding(admitted,mutation):
     assert len(started)==before
 
 
+def test_stop_after_completion_revokes_pending_next_stage(admitted):
+    agent,stage,did,started,complete=admitted
+    sid=dc.get_checkpoint(agent)._owned[did].subagent_ids[0]
+    complete()
+    (stopped,)=run_batch(agent,[('delegate_task',{'action':'stop','subagent_id':sid})])
+    assert stopped.get('status')=='continuation_cancelled'
+    assert asyncd.get_continuation_plan(did)['cancelled'] is True
+    dc.begin_turn(agent,'internal_notification')
+    (result,)=run_batch(agent,[('delegate_task',stage)])
+    assert result['error_type']=='delegation_spawn_closed'
+
+
+def test_foreign_stop_cannot_revoke_owned_plan(admitted):
+    agent,stage,did,started,complete=admitted
+    (result,)=run_batch(agent,[('delegate_task',{'action':'stop','subagent_id':'foreign-child'})])
+    assert result.get('error')
+    assert not asyncd.get_continuation_plan(did).get('cancelled')
+
+
 def test_policy_drift_cannot_start_next_stage(admitted):
     agent,stage,did,started,complete=admitted
     complete()

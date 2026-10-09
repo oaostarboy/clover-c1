@@ -4169,15 +4169,15 @@ class AIAgent:
         # These labels originate at existing runtime call/wait/result seams.
         # Expose only fixed categories, never the potentially private desc.
         if desc.startswith("starting API call #"):
-            self._emit_public_status("requesting")
+            AIAgent._emit_public_status(self, "requesting")
         elif desc.startswith(("waiting for provider response", "waiting for non-streaming API response", "waiting for stream response", "⏳ waiting on")):
-            self._emit_public_status("waiting")
+            AIAgent._emit_public_status(self, "waiting")
         elif desc.startswith("API call #") and desc.endswith(" completed"):
-            self._emit_public_status("provider_result")
+            AIAgent._emit_public_status(self, "provider_result")
         elif desc == "retrying provider request":
-            self._emit_public_status("retrying")
+            AIAgent._emit_public_status(self, "retrying")
         elif desc == "executing tool: clarify" and callable(getattr(self, "clarify_callback", None)):
-            self._emit_public_status("awaiting_input")
+            AIAgent._emit_public_status(self, "awaiting_input")
         if os.environ.get("CLOVER_KANBAN_TASK"):
             try:
                 from tools.kanban_tools import (
