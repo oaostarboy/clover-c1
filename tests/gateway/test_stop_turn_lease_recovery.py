@@ -289,3 +289,183 @@ def test_late_old_cleanup_preserves_running_successor_and_serializes_third_turn(
         assert runner._turn_leases._leases[SESSION_ID].holder is None
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("successor_scope", ["override", "no-override"])
+def test_late_stopped_turn_cleanup_preserves_successor_model_scope(
+    tmp_path, monkeypatch, successor_scope
+):
+    """A stopped MoA turn cannot restore over a successor after its hook yields."""
+    from clover_cli import config as cli_config
+
+    monkeypatch.setattr(cli_config, "load_config", lambda: {})
+
+    async def scenario():
+        runner = _runner(tmp_path)
+        state = runner._session_state(KEY)
+        state.conversation.model_override = {
+            "provider": "openrouter",
+            "model": "old-prior",
+        }
+        old_provider_entered = asyncio.Event()
+        old_provider_release = asyncio.Event()
+        old_hook_entered = asyncio.Event()
+        old_hook_release = asyncio.Event()
+        successor_entered = asyncio.Event()
+        successor_release = asyncio.Event()
+        third_entered = asyncio.Event()
+        calls = []
+
+        async def provider(**kwargs):
+            message = kwargs["message"]
+            calls.append(message)
+            agent = MagicMock(name=f"agent-{len(calls)}")
+            agent._gateway_turn_process_task_id = ""
+            agent._gateway_turn_process_baseline = None
+            agent.get_activity_summary.return_value = {"seconds_since_activity": 0}
+            runner._session_state(KEY).turn.agent = agent
+            if message == "old MoA turn":
+                old_provider_entered.set()
+                await old_provider_release.wait()
+                return {
+                    "final_response": "old",
+                    "messages": [],
+                    "api_calls": 1,
+                    "interrupted": True,
+                }
+            if message == "successor turn":
+                state.conversation.model_override = (
+                    {
+                        "provider": "anthropic",
+                        "model": "successor-current",
+                    }
+                    if successor_scope == "override"
+                    else None
+                )
+                state.conversation.one_turn_restore = (
+                    {
+                        "had_override": True,
+                        "override": {
+                            "provider": "openrouter",
+                            "model": "successor-prior",
+                        },
+                    }
+                    if successor_scope == "override"
+                    else None
+                )
+                successor_entered.set()
+                await successor_release.wait()
+                return {"final_response": message, "messages": [], "api_calls": 1}
+            if message == "third turn":
+                third_entered.set()
+            return {"final_response": message, "messages": [], "api_calls": 1}
+
+        runner._run_agent = provider
+        original_hooks = runner._run_post_turn_hooks
+        first_hook = True
+
+        async def delayed_old_hook(*args, **kwargs):
+            nonlocal first_hook
+            if first_hook:
+                first_hook = False
+                old_hook_entered.set()
+                await old_hook_release.wait()
+                return None
+            return await original_hooks(*args, **kwargs)
+
+        runner._run_post_turn_hooks = delayed_old_hook
+        old = asyncio.create_task(
+            runner._handle_message(_event("/moa old MoA turn", "old-moa"))
+        )
+        await asyncio.wait_for(old_provider_entered.wait(), timeout=5)
+        assert state.conversation.model_override["provider"] == "moa"
+        await runner._busy_stop_command(_event("/stop", "stop-moa"), KEY, _source())
+        old_provider_release.set()
+        await asyncio.wait_for(old_hook_entered.wait(), timeout=5)
+
+        successor = asyncio.create_task(
+            runner._handle_message(_event("successor turn", "successor"))
+        )
+        await asyncio.wait_for(successor_entered.wait(), timeout=5)
+        expected_override = (
+            dict(state.conversation.model_override)
+            if state.conversation.model_override is not None
+            else None
+        )
+        expected_restore = (
+            dict(state.conversation.one_turn_restore)
+            if state.conversation.one_turn_restore is not None
+            else None
+        )
+        successor_agent = state.turn.agent
+        successor_holder = runner._turn_leases._leases[SESSION_ID].holder
+        successor_marker = runner._active_markers[KEY]
+        successor_generation = state.persistent.run_generation
+        assert successor_holder is not None
+        assert state.turn.lease_generation == successor_generation
+
+        old_hook_release.set()
+        await asyncio.wait_for(old, timeout=5)
+        assert state.conversation.model_override == expected_override
+        assert state.conversation.one_turn_restore == expected_restore
+        assert state.turn.agent is successor_agent
+        assert runner._turn_leases._leases[SESSION_ID].holder is successor_holder
+        assert runner._active_markers[KEY] == successor_marker
+
+        third = asyncio.create_task(
+            runner._handle_message(_event("third turn", "third"))
+        )
+        await asyncio.sleep(0.1)
+        assert not third_entered.is_set()
+        assert len(calls) == 2
+        successor_release.set()
+        await asyncio.wait_for(successor, timeout=5)
+        await asyncio.wait_for(third, timeout=5)
+        assert runner._turn_leases._leases[SESSION_ID].holder is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_one_turn_model_scope_restores_on_handler_exit(tmp_path, raises):
+    async def scenario():
+        runner = _runner(tmp_path)
+        state = runner._session_state(KEY)
+        prior = {"provider": "openrouter", "model": "normal-prior"}
+        temporary = {"provider": "anthropic", "model": "normal-once"}
+        state.conversation.model_override = dict(temporary)
+        state.conversation.one_turn_restore = {
+            "had_override": True,
+            "override": dict(prior),
+        }
+        seen_during_provider = []
+
+        async def provider(**kwargs):
+            seen_during_provider.append(dict(state.conversation.model_override))
+            agent = MagicMock()
+            agent._gateway_turn_process_task_id = ""
+            agent._gateway_turn_process_baseline = None
+            agent.get_activity_summary.return_value = {"seconds_since_activity": 0}
+            state.turn.agent = agent
+            if raises:
+                raise RuntimeError("controlled provider failure")
+            return {"final_response": "once complete", "messages": [], "api_calls": 1}
+
+        runner._run_agent = provider
+        if raises:
+            await asyncio.wait_for(
+                runner._handle_message(_event("normal one-turn", "normal-once")),
+                timeout=5,
+            )
+        else:
+            result = await asyncio.wait_for(
+                runner._handle_message(_event("normal one-turn", "normal-once")),
+                timeout=5,
+            )
+            assert result == "once complete"
+        assert seen_during_provider == [temporary]
+        assert state.conversation.model_override == prior
+        assert state.conversation.one_turn_restore is None
+        assert runner._turn_leases._leases[SESSION_ID].holder is None
+
+    asyncio.run(scenario())

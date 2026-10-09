@@ -20190,6 +20190,35 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _claim_state.turn.started_ts = time.time()
         self._persist_active_agents()
         _run_generation = self._begin_session_run_generation(_quick_key)
+        _model_scope_restored = False
+
+        def _restore_model_scope_while_owned() -> bool:
+            """Restore this turn's temporary model scope before it can be replaced."""
+            nonlocal _model_scope_restored
+            if _model_scope_restored:
+                return True
+            _scope_state = self._peek_session_state(_quick_key)
+            if _scope_state is None:
+                return False
+            _scope_turn = _scope_state.turn
+            # Prefer the exact lease owner. The generation can be advanced by
+            # /stop while this turn still owns its transcript lease.
+            owns_lease = (
+                _scope_turn.lease_token is not None
+                and _scope_turn.lease_generation == _run_generation
+            )
+            # A failed lease acquisition has no lease token to restore under;
+            # it may restore only while its run generation remains current.
+            owns_current_unleased_run = (
+                _scope_turn.lease_token is None
+                and _scope_state.persistent.run_generation == _run_generation
+            )
+            if not (owns_lease or owns_current_unleased_run):
+                return False
+            self._restore_moa_one_shot(event, _quick_key)
+            self._restore_pending_one_turn_model_override(_quick_key)
+            _model_scope_restored = True
+            return True
 
         try:
             try:
@@ -20213,11 +20242,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "Wait for the active turn to finish, then resend it."
                 )
             finally:
-                # The lease serializes the history-load / agent / transcript-
-                # flush region. Post-turn hooks and marker cleanup are outside
-                # that region and must not keep a later user turn queued.
-                # This token+generation release cannot unlock a newer turn.
-                self._release_turn_lease(_quick_key, _run_generation)
+                # Restore temporary model/MoA scope before releasing the
+                # transcript lease. A successor must never inherit cleanup
+                # from this turn after it has claimed the session.
+                try:
+                    _restore_model_scope_while_owned()
+                finally:
+                    self._release_turn_lease(_quick_key, _run_generation)
             try:
                 await self._run_post_turn_hooks(
                     agent_result=_agent_result,
@@ -20229,16 +20260,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.debug("post-turn hook failed: %s", _goal_exc)
             return _agent_result
         finally:
-            # MoA one-shot restore must run on EVERY exit path, not just
-            # success. The restore data lives on the per-turn event object
-            # (_moa_restore_override), which is discarded once the event goes
-            # out of scope — so if _handle_message_with_agent raises, a restore
-            # in the try block would be skipped and the MoA override would leak
-            # permanently (every later message silently fans out through MoA).
-            # Putting it in finally guarantees the revert on success, exception,
-            # and interrupt alike.
-            self._restore_moa_one_shot(event, _quick_key)
-            self._restore_pending_one_turn_model_override(_quick_key)
+            # Defensive fallback for exits that bypass the inner handler. It is
+            # safe only while this generation still owns the lease (or remains
+            # the current unleased run); the normal path restores before lease
+            # release and marks this exactly-once guard.
+            _restore_model_scope_while_owned()
             try:
                 # Normal completion/exception/interrupt owns and clears this exact
                 # durable marker. SIGKILL/OOM leaves it for startup recovery.
