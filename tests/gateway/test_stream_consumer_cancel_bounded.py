@@ -79,3 +79,51 @@ async def test_cancel_with_healthy_final_edit_still_finalizes(monkeypatch):
     task.cancel()
     await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=2)
     assert entered.is_set()
+
+
+@pytest.mark.asyncio
+async def test_stuck_teardown_task_is_recancelled_and_tracked():
+    """Released-but-stuck helpers get a second cancel and are tracked, not parked."""
+    from gateway import bounded_await
+
+    entered_handler = asyncio.Event()
+    second = asyncio.Event()
+
+    async def stubborn():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            entered_handler.set()
+            try:
+                await asyncio.sleep(3600)  # I/O inside the cancel handler
+            except asyncio.CancelledError:
+                second.set()
+                raise
+
+    task = asyncio.ensure_future(stubborn())
+    await asyncio.sleep(0)
+    before = bounded_await.stuck_task_count()
+    finished = await bounded_await.reap_task(task, grace=0.05, label="stubborn")
+    assert finished is False
+    assert entered_handler.is_set()
+    await asyncio.wait({task}, timeout=1.0)
+    assert task.done() and second.is_set()
+    assert bounded_await.stuck_task_count() == before
+
+
+@pytest.mark.asyncio
+async def test_caller_cancellation_propagates_from_drain_then_cancel():
+    from gateway import bounded_await
+
+    inner = asyncio.ensure_future(asyncio.sleep(3600))
+    outer = asyncio.ensure_future(
+        bounded_await.drain_then_cancel(inner, drain=30, grace=30, label="x")
+    )
+    await asyncio.sleep(0.05)
+    outer.cancel()
+    done, _ = await asyncio.wait({outer}, timeout=1.0)
+    assert done
+    with pytest.raises(asyncio.CancelledError):
+        outer.result()
+    await asyncio.wait({inner}, timeout=1.0)
+    assert inner.cancelled()

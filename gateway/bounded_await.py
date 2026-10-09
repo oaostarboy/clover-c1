@@ -31,6 +31,37 @@ def _consume_abandoned(task: "asyncio.Future[Any]") -> None:
         pass
 
 
+_STUCK_TASKS: "set[asyncio.Future[Any]]" = set()
+
+
+def stuck_task_count() -> int:
+    """Tasks released by a bounded teardown that are still unwinding."""
+    return len(_STUCK_TASKS)
+
+
+def _escalate(task: "asyncio.Future[Any]", label: str, grace: float) -> None:
+    """A cancelled task is still stuck after ``grace``: release the turn.
+
+    The task gets a SECOND cancellation, which interrupts whatever platform
+    await its cancellation handler is parked in (a handler is entered once
+    per cancel), so abandoned work is finite rather than parked forever.  It
+    is tracked only until it finishes, so a burst of hung turns is visible in
+    the log and in :func:`stuck_task_count` but cannot accumulate silently.
+    """
+    _STUCK_TASKS.add(task)
+    task.add_done_callback(_STUCK_TASKS.discard)
+    task.add_done_callback(_consume_abandoned)
+    logger.warning(
+        "Teardown: %s did not finish within %.1fs of cancellation; releasing "
+        "the turn, re-cancelling it, and letting it unwind in the background "
+        "(%d teardown task(s) unwinding)",
+        label,
+        grace,
+        len(_STUCK_TASKS),
+    )
+    task.cancel()
+
+
 def abandon(task: "asyncio.Future[Any]") -> None:
     """Cancel ``task`` without waiting for it; swallow its eventual outcome."""
     if task.done():
@@ -84,13 +115,7 @@ async def reap_task(
     if task.done():
         _consume_abandoned(task)
         return True
-    logger.warning(
-        "Teardown: %s did not finish within %.1fs of cancellation; "
-        "releasing the turn and letting it unwind in the background",
-        label,
-        grace,
-    )
-    task.add_done_callback(_consume_abandoned)
+    _escalate(task, label, grace)
     return False
 
 
@@ -112,13 +137,7 @@ async def reap_tasks(
         if task.done():
             _consume_abandoned(task)
         else:
-            logger.warning(
-                "Teardown: %s did not finish within %.1fs of cancellation; "
-                "releasing the turn and letting it unwind in the background",
-                name,
-                grace,
-            )
-            task.add_done_callback(_consume_abandoned)
+            _escalate(task, name, grace)
 
 
 async def drain_then_cancel(
