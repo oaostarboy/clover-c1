@@ -282,10 +282,23 @@ def _make_runner():
     runner._is_telegram_topic_root_lobby = lambda _source: False
     runner._should_send_telegram_lobby_reminder = lambda _source: False
     runner._check_slash_access = lambda _source, _command: None
-    runner._begin_session_run_generation = lambda _key: 1
-    runner._release_running_agent_state = (
-        lambda key: runner._running_agents.pop(key, None)
-    )
+    def _begin_session_run_generation(session_key: str) -> int:
+        runner._session_run_generation[session_key] = 1
+        return 1
+
+    def _release_running_agent_state(
+        session_key: str, *, run_generation: int | None = None
+    ) -> bool:
+        if (
+            run_generation is not None
+            and runner._session_run_generation.get(session_key) != run_generation
+        ):
+            return False
+        runner._running_agents.pop(session_key, None)
+        return True
+
+    runner._begin_session_run_generation = _begin_session_run_generation
+    runner._release_running_agent_state = _release_running_agent_state
     return runner, adapter
 
 
