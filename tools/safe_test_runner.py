@@ -33,6 +33,7 @@ SAFE_ENV = {
     "HOME": "/tmp/private-home",
     "CLOVER_HOME": "/tmp/private-home/.clover",
     "CLOVER_TEST_ISOLATION": "/tmp/private-home/.clover",
+    "CLOVER_TEST_GATEWAY_GUARD_CACHE": "/results/gateway-guard-cache",
     "TMPDIR": "/tmp/private-tmp",
     "PATH": "/usr/bin:/bin",
     "PYTHONPATH": "/work/src:/opt/site-packages:/results",
@@ -58,6 +59,7 @@ def tracked_diff_sha256() -> str:
 
 def env_guard_source() -> str:
     return """import builtins, json, os, re
+PHASE_OPEN = builtins.open
 # Only non-secret names with demonstrated import-time test defaults. The child
 # first proves its actual env names equal the safe whitelist; unknown names,
 # including any new credential-shaped name, remain a hard failure.
@@ -75,11 +77,11 @@ def pytest_sessionstart(session):
  global PHASE_PATH
  _check(); p=getattr(session.config.option,"xmlpath",None)
  PHASE_PATH=p.replace(".junit.xml",".phases.jsonl") if p else None
- if PHASE_PATH: open(PHASE_PATH,"w").close()
+ if PHASE_PATH: PHASE_OPEN(PHASE_PATH,"w").close()
 def pytest_collection_finish(session): _check()
 def pytest_runtest_logreport(report):
  if PHASE_PATH:
-  with open(PHASE_PATH,"a") as f: f.write(json.dumps({"nodeid":report.nodeid,"phase":report.when,"outcome":report.outcome,"duration":report.duration})+"\\n")
+  with PHASE_OPEN(PHASE_PATH,"a") as f: f.write(json.dumps({"nodeid":report.nodeid,"phase":report.when,"outcome":report.outcome,"duration":report.duration})+"\\n")
 """.replace("SAFE_ENV_NAMES", repr(sorted(SAFE_ENV)))
 
 
@@ -157,7 +159,7 @@ def preflight() -> dict:
     code = r'''import errno, fcntl, hashlib, importlib.util, json, os, re, socket, struct, sys, threading
 initial_env=sorted(os.environ)
 cred=[k for k in os.environ if re.search(r"(KEY|TOKEN|PASS|SECRET|CREDENTIAL)",k,re.I)]
-allowed={'HOME','CLOVER_HOME','CLOVER_TEST_ISOLATION','TMPDIR','PATH','PYTHONPATH','PYTHONDONTWRITEBYTECODE','PYTHONNOUSERSITE','LANG','LC_ALL','RUNNER_EXPECTED_GATEWAY_SHA256','PYTEST_PLUGINS','PWD'}
+allowed={'HOME','CLOVER_HOME','CLOVER_TEST_ISOLATION','CLOVER_TEST_GATEWAY_GUARD_CACHE','TMPDIR','PATH','PYTHONPATH','PYTHONDONTWRITEBYTECODE','PYTHONNOUSERSITE','LANG','LC_ALL','RUNNER_EXPECTED_GATEWAY_SHA256','PYTEST_PLUGINS','PWD'}
 assert set(os.environ) <= allowed, sorted(set(os.environ)-allowed)
 assert set(os.environ) >= allowed-{'PWD'}, 'explicit safe environment is incomplete'
 assert not cred, 'credential-name environment variables leaked: '+repr(cred)
