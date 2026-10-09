@@ -300,7 +300,7 @@ class Recorder:
   items=[]
   for item in session.items:
    items.append({'nodeid':item.nodeid,'path':str(item.path.relative_to('/work/src')) if str(item.path).startswith('/work/src/') else str(item.path),'markers':sorted(m.name for m in item.iter_markers())})
-  pathlib.Path('/results/DEFAULT-COLLECTION-{RUN_ID}.json').write_text(json.dumps({'nodeids':items},indent=2))
+  pathlib.Path('/results/DEFAULT-COLLECTION-RUN_ID.json').write_text(json.dumps({'nodeids':items},indent=2))
 rc=pytest.main(['/work/src/tests','--collect-only','-q','--basetemp=/tmp/collect-tmp','-o','cache_dir=/tmp/pytest-cache'],plugins=[Recorder()])
 raise SystemExit(rc)'''.replace('RUN_ID', RUN_ID)
         run = invoke(["-c", code], timeout=args.timeout)
