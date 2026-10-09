@@ -127,3 +127,108 @@ async def test_caller_cancellation_propagates_from_drain_then_cancel():
         outer.result()
     await asyncio.wait({inner}, timeout=1.0)
     assert inner.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_abandoned_final_edit_cannot_resume_delivery_late(monkeypatch):
+    """A timed-out cancel-time edit that wakes late (cancellation suppressed by
+    platform I/O) must not run fallback/continuation sends or further edits."""
+    monkeypatch.setattr(GatewayStreamConsumer, "_CANCEL_FINAL_EDIT_TIMEOUT", 0.05, raising=False)
+    release = asyncio.Event()
+    entered = asyncio.Event()
+    events = []
+    adapter = MagicMock()
+    adapter.MAX_MESSAGE_LENGTH = 4096
+    adapter.REQUIRES_EDIT_FINALIZE = True
+
+    async def send(*a, **k):
+        events.append("send")
+        return SimpleNamespace(success=True, message_id="late")
+
+    async def edit(*a, **k):
+        events.append("edit")
+        entered.set()
+        while not release.is_set():  # I/O that swallows cancellation
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                continue
+        return SimpleNamespace(success=False, error="timeout", retryable=True)
+
+    adapter.send = AsyncMock(side_effect=send)
+    adapter.edit_message = AsyncMock(side_effect=edit)
+    consumer = GatewayStreamConsumer(adapter, "synthetic-chat")
+    task = asyncio.create_task(consumer.run())
+    await asyncio.sleep(0.06)
+    consumer._accumulated = "synthetic completed handoff"
+    consumer._message_id = "probe"
+    consumer._last_sent_content = "previous partial text"
+    task.cancel()
+    done, _ = await asyncio.wait({task}, timeout=1.0)
+    assert done and entered.is_set()
+    assert consumer._abandoned
+    before = list(events)
+    release.set()  # stalled edit wakes up now, fails, and would fall back
+    await asyncio.sleep(0.3)
+    assert events == before, f"abandoned consumer touched the platform late: {events}"
+    assert not consumer._final_response_sent
+    assert not consumer._final_content_delivered
+
+
+@pytest.mark.asyncio
+async def test_caller_cancel_during_grace_still_escalates_helper():
+    """Stop landing while teardown waits on a stuck helper must not leave the
+    helper parked in its first cancellation handler."""
+    from gateway import bounded_await
+
+    second = asyncio.Event()
+
+    async def stubborn():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                second.set()
+                raise
+
+    helper = asyncio.ensure_future(stubborn())
+    await asyncio.sleep(0)
+    outer = asyncio.ensure_future(
+        bounded_await.reap_tasks([helper], grace=30.0, labels=["stubborn"])
+    )
+    helper.cancel()
+    await asyncio.sleep(0.05)  # helper now parked inside its cancel handler
+    outer.cancel()  # Stop arrives mid-grace
+    done, _ = await asyncio.wait({outer}, timeout=1.0)
+    assert done
+    with pytest.raises(asyncio.CancelledError):
+        outer.result()
+    await asyncio.wait({helper}, timeout=1.0)
+    assert helper.done() and second.is_set()
+    assert bounded_await.stuck_task_count() == 0
+
+
+@pytest.mark.asyncio
+async def test_await_bounded_timeout_tracks_and_recancels_suppressing_task():
+    from gateway import bounded_await
+
+    stage = []
+
+    async def swallow_once():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            stage.append("first")
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                stage.append("second")
+                raise
+
+    ok, _ = await bounded_await.await_bounded(swallow_once(), 0.05)
+    assert ok is False
+    await asyncio.sleep(0.2)
+    assert stage == ["first", "second"]
+    assert bounded_await.stuck_task_count() == 0

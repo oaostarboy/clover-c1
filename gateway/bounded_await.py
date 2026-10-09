@@ -48,6 +48,9 @@ def _escalate(task: "asyncio.Future[Any]", label: str, grace: float) -> None:
     is tracked only until it finishes, so a burst of hung turns is visible in
     the log and in :func:`stuck_task_count` but cannot accumulate silently.
     """
+    if task in _STUCK_TASKS:
+        task.cancel()
+        return
     _STUCK_TASKS.add(task)
     task.add_done_callback(_STUCK_TASKS.discard)
     task.add_done_callback(_consume_abandoned)
@@ -71,6 +74,21 @@ def abandon(task: "asyncio.Future[Any]") -> None:
     task.add_done_callback(_consume_abandoned)
 
 
+def _release(task: "asyncio.Future[Any]", label: str) -> None:
+    """Give up on ``task`` NOW: cancel, then re-cancel via the tracked path.
+
+    The first cancel lets a well-behaved task unwind; the second (issued on
+    the next loop iteration, i.e. after its cancellation handler has started)
+    interrupts a handler parked in platform I/O.  Always tracked until done.
+    """
+    if task.done():
+        _consume_abandoned(task)
+        return
+    task.cancel()
+    loop = task.get_loop()
+    loop.call_soon(lambda: None if task.done() else _escalate(task, label, 0.0))
+
+
 async def await_bounded(
     awaitable: Awaitable[Any], timeout: float
 ) -> Tuple[bool, Optional[Any]]:
@@ -85,11 +103,11 @@ async def await_bounded(
     try:
         done, _ = await asyncio.wait({fut}, timeout=max(0.0, timeout))
     except BaseException:
-        abandon(fut)
+        _release(fut, "bounded awaitable (caller cancelled)")
         raise
     if fut in done:
         return True, fut.result()
-    abandon(fut)
+    _release(fut, "bounded awaitable (timed out)")
     return False, None
 
 
@@ -111,7 +129,13 @@ async def reap_task(
     if cancel and not task.done():
         task.cancel()
     if not task.done():
-        await asyncio.wait({task}, timeout=max(0.0, grace))
+        try:
+            await asyncio.wait({task}, timeout=max(0.0, grace))
+        except asyncio.CancelledError:
+            # The CALLER was cancelled (Stop/reset/shutdown) while we waited:
+            # never leave the helper parked in its first cancellation handler.
+            _escalate(task, label, grace)
+            raise
     if task.done():
         _consume_abandoned(task)
         return True
@@ -132,7 +156,15 @@ async def reap_tasks(
         return
     live = [t for t in pending if not t.done()]
     if live:
-        await asyncio.wait(set(live), timeout=max(0.0, grace))
+        try:
+            await asyncio.wait(set(live), timeout=max(0.0, grace))
+        except asyncio.CancelledError:
+            for task, name in zip(pending, names):
+                if task.done():
+                    _consume_abandoned(task)
+                else:
+                    _escalate(task, name, grace)
+            raise
     for task, name in zip(pending, names):
         if task.done():
             _consume_abandoned(task)
