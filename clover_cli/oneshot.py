@@ -338,7 +338,9 @@ def run_oneshot(
 
                 if needs_continuation(result) is not None:
                     _status = "incomplete"
-        activity_writer.result(response if _status == "completed" else "", _status)
+                elif result.get("completed") is False:
+                    _status = "built_unverified"
+        activity_writer.result(response if _status in {"completed", "built_unverified"} else "", _status)
 
     if failure is not None:
         # Re-raise control-flow exceptions so the parent handles them as usual

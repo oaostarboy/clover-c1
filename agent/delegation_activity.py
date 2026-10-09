@@ -37,6 +37,14 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+PUBLIC_ACTIVITY_STATUS = {
+    "requesting": ("waiting", "requesting provider"),
+    "waiting": ("waiting", "waiting for provider"),
+    "retrying": ("waiting", "retrying provider"),
+    "provider_result": ("running", "provider result received"),
+    "awaiting_input": ("blocked", "awaiting input"),
+}
+
 STATES = (
     "queued",
     "starting",
@@ -541,6 +549,13 @@ class DelegationActivityTracker:
         now: float,
         alerts: List[str],
     ) -> bool:
+        if et == "subagent.progress" and kw.get("activity_status") in PUBLIC_ACTIVITY_STATUS:
+            state, reason = PUBLIC_ACTIVITY_STATUS[kw["activity_status"]]
+            if (child.state, child.reason) == (state, reason):
+                return False
+            self._start(child, now)
+            child.state, child.reason = state, reason
+            return True
         if et == "subagent.queued":
             return child.started_at is None and child.first_seen == now
         if et == "subagent.start":
@@ -670,7 +685,7 @@ class DelegationActivityTracker:
         elif state == "cancelled":
             child.reason = sanitize_text(kw.get("reason") or "", _REASON_MAX) or "stopped before finishing"
         elif state == "incomplete":
-            child.reason = "ran out of steps"
+            child.reason = sanitize_text(kw.get("reason") or "", _REASON_MAX) or "ran out of steps"
         elif status == "timeout":
             child.reason = f"timed out after {format_duration(dur)}"
         else:

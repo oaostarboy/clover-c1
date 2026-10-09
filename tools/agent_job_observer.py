@@ -270,6 +270,11 @@ class AgentJobObserver:
             self._apply_model_update(obj.get("model"))
         elif event == "model.fallback":
             self._apply_model_update(obj.get("to"))
+        elif event == "status":
+            from agent.delegation_activity import PUBLIC_ACTIVITY_STATUS
+            status = obj.get("status")
+            if status in PUBLIC_ACTIVITY_STATUS:
+                self._emit("subagent.progress", activity_status=status)
         elif event == "tool.started":
             self._emit(
                 "subagent.tool", obj.get("tool") or "tool", obj.get("summary"), None,
@@ -292,7 +297,7 @@ class AgentJobObserver:
             with self._lock:
                 self._result_text = text if isinstance(text, str) else None
                 self._terminal_status = status if isinstance(status, str) else ""
-                self._result_is_error = status not in (None, "completed", "incomplete")
+                self._result_is_error = status not in ("completed", "incomplete", "built_unverified")
                 if status == "incomplete":
                     self._result_subtype = "error_max_turns"  # unfinished, not crashed
 
@@ -332,6 +337,10 @@ class AgentJobObserver:
             # Hit its turn cap: unfinished, not crashed (never a red X).
             self._emit("subagent.complete", status="incomplete", duration_seconds=duration,
                        summary=result_text or "")
+            return
+        if exit_code == 0 and not result_error and (terminal_status == "built_unverified" or self._result_is_error is None):
+            self._emit("subagent.complete", status="incomplete", duration_seconds=duration,
+                       reason="finished; task completion not verified", summary=result_text or "")
             return
         if exit_code == 0 and not result_error:
             self._emit("subagent.complete", status="completed", duration_seconds=duration,

@@ -62,8 +62,13 @@ class ActivityEventWriter:
 
     def tool_progress_callback(self, event_type: str, tool_name: Any = None,
                                preview: Any = None, args: Any = None, **kw: Any) -> None:
-        from agent.delegation_activity import sanitize_text, summarize_tool_call
+        from agent.delegation_activity import sanitize_text, summarize_tool_call, PUBLIC_ACTIVITY_STATUS
 
+        if event_type == "agent.status":
+            status = kw.get("activity_status")
+            if status in PUBLIC_ACTIVITY_STATUS:
+                self._write("status", status=status)
+            return
         if not tool_name or tool_name == "_thinking":
             return  # scratch / reasoning relays are never written
         if event_type == "tool.started":

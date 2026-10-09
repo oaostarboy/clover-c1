@@ -4117,6 +4117,20 @@ class AIAgent:
         from agent.agent_runtime_helpers import apply_pending_steer_to_tool_results
         return apply_pending_steer_to_tool_results(self, messages, num_tool_msgs)
 
+    def _emit_public_status(self, status: str) -> None:
+        """Fixed runtime lifecycle labels only; never reasoning or tool output."""
+        from agent.delegation_activity import PUBLIC_ACTIVITY_STATUS
+        callback = getattr(self, "tool_progress_callback", None)
+        if status not in PUBLIC_ACTIVITY_STATUS or not callable(callback):
+            return
+        if getattr(self, "_last_public_status", None) == status:
+            return
+        self._last_public_status = status
+        try:
+            callback("agent.status", activity_status=status)
+        except Exception:
+            logger.debug("Public status observer unavailable", exc_info=True)
+
     def _touch_activity(
         self,
         desc: str,
@@ -4152,6 +4166,18 @@ class AIAgent:
         self._last_activity_ts = time.time()
         self._last_activity_desc = bound_activity_description(desc)
         self._last_activity_provenance = normalize_activity_provenance(provenance)
+        # These labels originate at existing runtime call/wait/result seams.
+        # Expose only fixed categories, never the potentially private desc.
+        if desc.startswith("starting API call #"):
+            self._emit_public_status("requesting")
+        elif desc.startswith(("waiting for provider response", "waiting for non-streaming API response", "waiting for stream response", "⏳ waiting on")):
+            self._emit_public_status("waiting")
+        elif desc.startswith("API call #") and desc.endswith(" completed"):
+            self._emit_public_status("provider_result")
+        elif desc == "retrying provider request":
+            self._emit_public_status("retrying")
+        elif desc == "executing tool: clarify" and callable(getattr(self, "clarify_callback", None)):
+            self._emit_public_status("awaiting_input")
         if os.environ.get("CLOVER_KANBAN_TASK"):
             try:
                 from tools.kanban_tools import (

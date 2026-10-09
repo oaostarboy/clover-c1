@@ -1498,6 +1498,9 @@ def _build_child_progress_callback(
     ):
         # Lifecycle events emitted by the orchestrator itself — handled
         # before enum normalisation since they are not part of DelegateEvent.
+        if event_type == "agent.status":
+            _relay("subagent.progress", activity_status=kwargs.get("activity_status"))
+            return
         if event_type == "subagent.start":
             if spinner and goal_label:
                 short = (

@@ -3494,6 +3494,7 @@ def run_conversation(
                     
                     # Backoff before retry — jittered exponential: 5s base, 120s cap
                     wait_time = jittered_backoff(retry_count, base_delay=5.0, max_delay=120.0)
+                    agent._touch_activity("retrying provider request")
                     agent._buffer_vprint(f"⏳ Retrying in {wait_time:.1f}s ({_failure_hint})...")
                     logger.warning("Invalid API response (retry %d/%d): %s | Provider: %s", retry_count, max_retries, ', '.join(error_details), provider_name)
                     
@@ -6647,6 +6648,7 @@ def run_conversation(
                         f"⏳ Retrying in {wait_time:.1f}s (attempt {retry_count}/{max_retries})...",
                         f"trying again in {wait_time:.1f}s (attempt {retry_count}/{max_retries})",
                     ))
+                agent._touch_activity("retrying provider request")
                 logger.warning(
                     "Retrying API call in %ss (attempt %s/%s) %s policy=%s error=%s",
                     wait_time,

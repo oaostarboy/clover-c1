@@ -288,7 +288,8 @@ def test_parser_is_bounded_and_fails_safe_on_malformed_and_private_input():
     obs.finish(0, "exited")
     obs.finish(1, "exited")
     completes = [e for e in sink.events if e[0] == "subagent.complete"]
-    assert len(completes) == 1 and completes[0][4]["status"] == "completed"
+    assert len(completes) == 1 and completes[0][4]["status"] == "incomplete"
+    assert "not verified" in completes[0][4]["reason"]
 
 
 def test_lifecycle_parser_never_reads_output():
