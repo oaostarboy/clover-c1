@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import threading
 import time
 
 import pytest
@@ -10,6 +11,7 @@ from gateway.browser_control_broker import (
     ControllerCancelled,
     ControllerRejected,
     ControllerScope,
+    ControllerUnavailable,
 )
 from gateway.config import PlatformConfig
 from gateway.platforms.api_server import (
@@ -71,6 +73,33 @@ def _app(adapter):
         "/v1/browser-control/ws", adapter._handle_browser_control_ws
     )
     return app
+
+
+async def _wait_for_controller_ready(
+    broker, *, session_id, principal_id, transport_family, capability, owner, timeout
+):
+    """Wait for real identity-bound broker selection, never for HTTP 101."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while True:
+        scope = broker.scope_for_session(
+            session_id=session_id,
+            task_id=None,
+            principal_id=principal_id,
+            transport_family=transport_family,
+        )
+        if (
+            scope is not None
+            and broker.select(scope, capability) is not None
+            and broker.is_owner(scope, owner)
+        ):
+            return scope
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"browser controller not ready for {transport_family}/{capability}"
+            )
+        await asyncio.sleep(min(0.01, remaining))
 
 
 def _registration_body(**overrides):
@@ -493,50 +522,168 @@ async def test_real_browser_action_routes_through_controller_without_legacy_fall
         )
         assert response.status == 201
         registration = await response.json()
+        attach_entered = threading.Event()
+        release_attach = threading.Event()
+        attach_finished = threading.Event()
+        attached_owner = None
+        pending_owner = None
+        real_attach = adapter._browser_control_broker.attach
+
+        def delayed_real_attach(scope, send, *, owner=None):
+            nonlocal attached_owner, pending_owner
+            attach_entered.set()
+            pending_owner = owner
+            try:
+                if not release_attach.wait(timeout=1.0):
+                    raise TimeoutError("test did not release broker attachment")
+                real_attach(scope, send, owner=owner)
+                attached_owner = owner
+            finally:
+                attach_finished.set()
+
+        monkeypatch.setattr(adapter._browser_control_broker, "attach", delayed_real_attach)
         ws = await client.ws_connect(
             "/v1/browser-control/ws",
             protocols=[CONTROL_PROTOCOL, _ticket_protocol(registration["ticket"])],
         )
 
-        legacy_calls = []
-        pending = asyncio.create_task(
-            asyncio.to_thread(
-                route_browser_tool,
-                "browser_snapshot",
-                {"include": "accessibility"},
-                fallback=lambda: legacy_calls.append(True) or "legacy-result",
-                broker=adapter._browser_control_broker,
-                enabled=True,
+        early_route = None
+        pending = None
+        primary_error = None
+        try:
+            legacy_calls = []
+            # HTTP 101 / ws_connect completion is not broker readiness: hold the
+            # actual attach body and prove the authenticated socket has upgraded.
+            assert await asyncio.wait_for(asyncio.to_thread(attach_entered.wait, 1.0), timeout=1.5)
+            assert not attach_finished.is_set()
+            with pytest.raises(TimeoutError, match="browser controller not ready"):
+                await _wait_for_controller_ready(
+                    adapter._browser_control_broker,
+                    session_id="session-fixture",
+                    principal_id=registration["scope"]["principal_id"],
+                    transport_family="local-api",
+                    capability="browser_snapshot",
+                    owner=pending_owner,
+                    timeout=0.05,
+                )
+
+            early_calls = []
+            early_route = asyncio.create_task(
+                asyncio.to_thread(
+                    route_browser_tool,
+                    "browser_snapshot",
+                    {"include": "accessibility"},
+                    fallback=lambda: early_calls.append(True) or "legacy-result",
+                    broker=adapter._browser_control_broker,
+                    enabled=True,
+                    session_id="session-fixture",
+                    principal_id=registration["scope"]["principal_id"],
+                    transport_family="local-api",
+                    tool_call_id="tool-call-before-attach",
+                )
+            )
+            try:
+                early_result = await asyncio.wait_for(early_route, timeout=0.5)
+            except ControllerUnavailable:
+                early_result = "controller-unavailable"
+            assert early_calls == [True] or early_result == "controller-unavailable"
+
+            release_attach.set()
+            ready_scope = await _wait_for_controller_ready(
+                adapter._browser_control_broker,
                 session_id="session-fixture",
                 principal_id=registration["scope"]["principal_id"],
                 transport_family="local-api",
-                tool_call_id="tool-call-real-action",
+                capability="browser_snapshot",
+                owner=pending_owner,
+                timeout=1.5,
             )
-        )
-        command = await ws.receive_json(timeout=2.0)
-        assert command["method"] == "browser.controller.command"
-        assert command["params"]["action"] == "browser_snapshot"
-        assert command["params"]["arguments"] == {"include": "accessibility"}
-        await ws.send_json(
-            {
-                "method": "browser.controller.result",
-                "params": {
-                    "command_id": command["params"]["command_id"],
-                    "ok": True,
-                    "result": {
-                        "title": "Example Domain",
-                        "url": "https://example.test/",
-                        "refs": [],
-                    },
-                },
-            }
-        )
+            assert await asyncio.wait_for(asyncio.to_thread(attach_finished.wait, 1.0), timeout=1.5)
+            assert attached_owner is pending_owner
+            assert adapter._browser_control_broker.is_owner(ready_scope, attached_owner)
+            assert adapter._browser_control_broker.select(ready_scope, "browser_snapshot") is not None
 
-        assert await asyncio.wait_for(pending, timeout=2.0) == (
-            '{"title": "Example Domain", "url": "https://example.test/", "refs": []}'
-        )
-        assert legacy_calls == []
-        await ws.close()
+            pending = asyncio.create_task(
+                asyncio.to_thread(
+                    route_browser_tool,
+                    "browser_snapshot",
+                    {"include": "accessibility"},
+                    fallback=lambda: legacy_calls.append(True) or "legacy-result",
+                    broker=adapter._browser_control_broker,
+                    enabled=True,
+                    session_id="session-fixture",
+                    principal_id=registration["scope"]["principal_id"],
+                    transport_family="local-api",
+                    tool_call_id="tool-call-real-action",
+                )
+            )
+            command = await ws.receive_json(timeout=2.0)
+            assert command["method"] == "browser.controller.command"
+            assert command["params"]["action"] == "browser_snapshot"
+            assert command["params"]["arguments"] == {"include": "accessibility"}
+            await ws.send_json(
+                {
+                    "method": "browser.controller.result",
+                    "params": {
+                        "command_id": command["params"]["command_id"],
+                        "ok": True,
+                        "result": {
+                            "title": "Example Domain",
+                            "url": "https://example.test/",
+                            "refs": [],
+                        },
+                    },
+                }
+            )
+
+            assert await asyncio.wait_for(pending, timeout=2.0) == (
+                '{"title": "Example Domain", "url": "https://example.test/", "refs": []}'
+            )
+            assert legacy_calls == []
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            cleanup_errors = []
+            # Let a started pre-ready to_thread route finish while the attach
+            # gate is still held. Cancelling its asyncio wrapper cannot stop
+            # the underlying worker thread.
+            if early_route is not None and not early_route.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(early_route), timeout=0.5)
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+            # Always unblock the real attach thread before waiting for it or
+            # closing the socket. The worker signals completion even on error.
+            release_attach.set()
+            if attach_entered.is_set():
+                try:
+                    assert await asyncio.wait_for(
+                        asyncio.to_thread(attach_finished.wait, 1.5), timeout=1.75
+                    )
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+            if not ws.closed:
+                try:
+                    await asyncio.wait_for(ws.close(), timeout=1.0)
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+            routes = [task for task in (early_route, pending) if task is not None]
+            if routes:
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(asyncio.gather(*routes, return_exceptions=True)), timeout=1.5
+                    )
+                except BaseException as exc:
+                    cleanup_errors.append(exc)
+            if cleanup_errors:
+                if primary_error is not None:
+                    primary_error.add_note(
+                        "browser fixture cleanup errors: " + "; ".join(map(str, cleanup_errors))
+                    )
+                else:
+                    raise cleanup_errors[0]
+
 
 
 @pytest.mark.asyncio
@@ -718,3 +865,108 @@ async def test_remote_api_uses_the_same_authenticated_noop_round_trip(monkeypatc
             "family": "remote-api"
         }
         await ws.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_boundary", ["before_route", "after_route_created"])
+async def test_readiness_test_cleans_up_actual_fixture_on_early_failure(monkeypatch, failure_boundary):
+    """Bridge injected setup faults through the real readiness test and cleanup."""
+    import pytest
+    from aiohttp.test_utils import TestClient
+    from tests.gateway import test_browser_control_api as browser_test
+
+    sentinel = RuntimeError(f"injected-{failure_boundary}")
+    observations = {"adapter": None, "ws": None, "close_calls": 0, "close_durations": [], "scope": None, "events": []}
+    real_adapter_factory = browser_test._adapter
+    real_ws_connect = TestClient.ws_connect
+    real_wait_for = asyncio.wait_for
+    real_event_factory = threading.Event
+    real_ready = browser_test._wait_for_controller_ready
+
+    class ObservedEvent:
+        def __init__(self):
+            self.event = real_event_factory()
+            import inspect
+            caller = inspect.currentframe().f_back
+            if caller and caller.f_code.co_name == "test_real_browser_action_routes_through_controller_without_legacy_fallback":
+                observations["events"].append(self)
+
+        def set(self):
+            self.event.set()
+
+        def wait(self, timeout=None):
+            return self.event.wait(timeout)
+
+        def is_set(self):
+            return self.event.is_set()
+
+    def adapter_factory():
+        adapter = real_adapter_factory()
+        observations["adapter"] = adapter
+        real_attach = adapter._browser_control_broker.attach
+
+        def attach(scope, send, *, owner=None):
+            observations["scope"] = scope
+            return real_attach(scope, send, owner=owner)
+
+        adapter._browser_control_broker.attach = attach
+        return adapter
+
+    async def ws_connect(client, *args, **kwargs):
+        ws = await real_ws_connect(client, *args, **kwargs)
+        observations["ws"] = ws
+        real_close = ws.close
+
+        async def close(*args, **kwargs):
+            import time
+            observations["close_calls"] += 1
+            started = time.monotonic()
+            try:
+                return await real_close(*args, **kwargs)
+            finally:
+                observations["close_durations"].append(time.monotonic() - started)
+
+        ws.close = close
+        return ws
+
+    async def ready(*args, **kwargs):
+        if failure_boundary == "before_route":
+            raise sentinel
+        return await real_ready(*args, **kwargs)
+
+    injected = False
+
+    async def wait_for(fut, *args, **kwargs):
+        nonlocal injected
+        if not injected and failure_boundary == "after_route_created" and isinstance(fut, asyncio.Task):
+            coro = fut.get_coro()
+            frame = getattr(coro, "cr_frame", None)
+            if frame and frame.f_locals.get("func") is route_browser_tool:
+                injected = True
+                raise sentinel
+        return await real_wait_for(fut, *args, **kwargs)
+
+    monkeypatch.setattr(browser_test, "_adapter", adapter_factory)
+    monkeypatch.setattr(TestClient, "ws_connect", ws_connect)
+    monkeypatch.setattr(browser_test.threading, "Event", ObservedEvent)
+    monkeypatch.setattr(browser_test, "_wait_for_controller_ready", ready)
+    monkeypatch.setattr(browser_test.asyncio, "wait_for", wait_for)
+    isolated_patch = pytest.MonkeyPatch()
+    try:
+        with pytest.raises(RuntimeError) as raised:
+            await browser_test.test_real_browser_action_routes_through_controller_without_legacy_fallback(isolated_patch)
+        assert raised.value is sentinel
+    finally:
+        isolated_patch.undo()
+
+    assert observations["ws"] is not None
+    assert observations["close_calls"] >= 1
+    assert observations["close_durations"][0] <= 1.0
+    assert observations["ws"].closed
+    # Event order is attach-entered, release gate, attach-finished.
+    entered, release, finished = observations["events"]
+    assert entered.is_set()
+    assert release.is_set()
+    assert finished.is_set()
+    adapter = observations["adapter"]
+    scope = observations["scope"]
+    assert scope is None or adapter._browser_control_broker.select(scope, "browser_snapshot") is None
