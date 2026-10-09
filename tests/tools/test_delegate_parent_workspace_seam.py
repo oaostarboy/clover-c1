@@ -79,7 +79,24 @@ def seam(tmp_path, monkeypatch):
         child._fallback_chain = []
         client = MagicMock()
         def respond(**kwargs):
-            calls.append(tt.get_session_cwd(child._subagent_id))
+            start_cwd = tt.get_session_cwd(child._subagent_id)
+            calls.append(start_cwd)
+            observed = json.loads(child._invoke_tool("terminal", {
+                "command": "pwd", "timeout": 10}, child._subagent_id))
+            assert observed["exit_code"] == 0, observed
+            if start_cwd:
+                assert start_cwd in observed["output"], observed
+            if getattr(state, "child_cd", None):
+                # Sync/nested execution can retain the root approval context.
+                # That authority must not select the child's cwd record.
+                inherited = approval.set_current_session_key(state.key)
+                try:
+                    result = json.loads(child._invoke_tool("terminal", {
+                        "command": "cd " + shlex.quote(str(state.child_cd)) + " && pwd",
+                        "timeout": 10}, child._subagent_id))
+                    assert result["exit_code"] == 0, result
+                finally:
+                    approval.reset_current_session_key(inherited)
             return SimpleNamespace(choices=[SimpleNamespace(
                 message=SimpleNamespace(content="test completed", tool_calls=None),
                 finish_reason="stop")], model="test/model", usage=None)
@@ -153,3 +170,126 @@ def test_gateway_observed_terminal_cd_reaches_detached_worktree_admission(seam):
     assert len(s.calls) == 1
     assert s.calls[0] != str(project)
     assert tt.get_session_cwd(s.key) == str(project)
+
+
+def test_child_cd_does_not_overwrite_parent_with_inherited_approval(seam):
+    s = seam
+    project = repo(s.tmp / "project")
+    s.child_cd = s.tmp / "child-directory"
+    s.child_cd.mkdir()
+    cd(s, project)
+    results = dispatch(s)
+    assert results[0]["workspace_isolation"]["status"] == "isolated", results
+    assert tt.get_session_cwd(s.key) == str(project)
+    assert tt.get_session_cwd(s.children[0]._subagent_id) == str(s.child_cd)
+
+
+def test_transient_workdir_does_not_redirect_delegate(seam):
+    s = seam
+    original, transient = repo(s.tmp / "original"), repo(s.tmp / "transient")
+    cd(s, original)
+    cd(s, transient, workdir=transient)
+    assert tt.get_session_cwd(s.key) == str(original)
+    results = dispatch(s)
+    assert s.selected == [str(original)], results
+
+
+def test_queued_job_keeps_original_workspace_after_parent_new_question(seam):
+    s = seam
+    original, later = repo(s.tmp / "original"), repo(s.tmp / "later")
+    cd(s, original)
+    queued, release = threading.Event(), threading.Event()
+    submit = s.executor.submit
+    def delayed(fn, *a, **kw):
+        def run():
+            queued.set()
+            assert release.wait(10)
+            return fn(*a, **kw)
+        return submit(run)
+    s.executor.submit = delayed
+    try:
+        output = json.loads(s.parent._invoke_tool("delegate_task", {"goal": "complete isolated test"}, s.task))
+        assert output["status"] == "dispatched", output
+        assert queued.wait(5)
+        cd(s, later)
+        s.parent.terminal_cwd = s.parent.cwd = str(later)
+        release.set()
+        assert s.done.wait(25)
+        results = s.finished[output["delegation_id"]]["results"]
+        assert s.selected == [str(original)], results
+        assert results[0]["workspace_isolation"]["status"] == "isolated", results
+        assert tt.get_session_cwd(s.key) == str(later)
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("required", [True, False])
+def test_missing_binding_never_uses_foreign_default_or_global_git(seam, monkeypatch, required):
+    s = seam
+    foreign = repo(s.tmp / "foreign")
+    tt.record_session_cwd("default", str(foreign))
+    tt.record_session_cwd("foreign-profile:foreign-route", str(foreign))
+    monkeypatch.setenv("TERMINAL_CWD", str(foreign))
+    s.parent.cwd = str(foreign)
+    if not required:
+        s.config.write_text(s.config.read_text().replace("worktree_isolation_required: true", "worktree_isolation_required: false"))
+    results = dispatch(s)
+    assert s.selected == [None], results
+    assert results[0]["workspace_isolation"]["status"] == ("blocked" if required else "shared")
+    assert bool(s.calls) is (not required)
+
+
+def test_cli_without_approval_key_uses_runtime_task_cwd(seam):
+    s = seam
+    from gateway.session_context import set_session_vars
+    s.parent.platform = "cli"
+    approval.set_current_session_key("")
+    set_session_vars(platform="cli", source="cli", session_id=s.task)
+    project = repo(s.tmp / "cli-project")
+    cd(s, project)
+    assert tt.get_session_cwd(s.task) == str(project)
+    results = dispatch(s)
+    assert s.selected == [str(project)], results
+    assert results[0]["workspace_isolation"]["status"] == "isolated"
+
+
+def test_two_actual_workers_have_distinct_branches(seam):
+    s = seam
+    project = repo(s.tmp / "project")
+    cd(s, project)
+    results = dispatch(s, tasks=[{"goal": "worker one"}, {"goal": "worker two"}])
+    assert len(results) == 2
+    assert all(r["workspace_isolation"]["status"] == "isolated" for r in results), results
+    assert len({r["workspace_isolation"]["branch"] for r in results}) == 2
+    assert len(set(s.calls)) == 2
+    assert tt.get_session_cwd(s.key) == str(project)
+
+
+@pytest.mark.parametrize("foreign_key", ["profile-b:telegram:dm:other", "profile-a:telegram:group:other"])
+def test_distinct_profile_and_route_record_never_redirects_original(seam, foreign_key):
+    s = seam
+    from gateway.session_context import set_session_vars
+    original, foreign = repo(s.tmp / "original"), repo(s.tmp / "foreign")
+    cd(s, original)
+    token = approval.set_current_session_key(foreign_key)
+    try:
+        set_session_vars(platform="telegram", source="telegram", profile="profile-b", session_key=foreign_key, session_id="foreign-raw-task")
+        cd(s, foreign)
+    finally:
+        approval.reset_current_session_key(token)
+        set_session_vars(platform="telegram", source="telegram", session_key=s.key, session_id=s.task)
+    assert tt.get_session_cwd(foreign_key) == str(foreign)
+    results = dispatch(s)
+    assert s.selected == [str(original)], results
+
+
+def test_model_workspace_authority_fields_are_not_forwarded(seam):
+    s = seam
+    project, foreign = repo(s.tmp / "project"), repo(s.tmp / "foreign")
+    cd(s, project)
+    output = json.loads(s.parent._invoke_tool("delegate_task", {
+        "goal": "complete isolated test", "parent_task_id": "foreign-task",
+        "parent_workspace": ["foreign-task", str(foreign)], "session_key": "foreign", "cwd": str(foreign)}, s.task))
+    assert output["status"] == "dispatched", output
+    assert s.done.wait(25)
+    assert s.selected == [str(project)]

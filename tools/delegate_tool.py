@@ -3006,7 +3006,6 @@ def _run_single_child(
         # the parent once readers flip to the record store).
         try:
             from tools.terminal_tool import (
-                get_session_cwd,
                 record_session_cwd,
                 register_container_alias,
             )

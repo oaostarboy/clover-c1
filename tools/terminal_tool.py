@@ -3040,7 +3040,12 @@ def terminal_tool(
         # stable, thread-safe anchor.
         from tools.approval import get_current_session_key
 
-        session_key = get_current_session_key(default="") or (task_id or "")
+        # Approval authority stays inherited, but a delegated child's cwd is
+        # owned by its runtime task id, never the root chat's approval key.
+        session_key = (
+            (task_id or "") if _in_delegated_child_context()
+            else get_current_session_key(default="") or (task_id or "")
+        )
 
         # Hard-block: gateway lifecycle commands (systemctl/launchctl/clover
         # restart|stop|uninstall targeting clover-gateway) must never run inside the
