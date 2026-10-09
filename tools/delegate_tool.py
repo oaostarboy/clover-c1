@@ -1334,6 +1334,34 @@ def _build_child_system_prompt(
     return "\n".join(parts)
 
 
+def _capture_parent_workspace(parent_agent, task_id: Optional[str] = None):
+    """Snapshot trusted terminal identity/cwd before constructing or queueing children.
+
+    The runtime task id is separate from gateway's approval/chat key. Never
+    consult another actor's default record or mutable global cwd for a bound
+    session. Legacy unbound CLI callers retain their startup-directory hint.
+    This tuple is internal dispatch metadata, not a model argument.
+    """
+    from tools.approval import get_current_session_key
+    from tools.terminal_tool import get_session_cwd
+
+    raw_task = task_id or getattr(parent_agent, "_current_task_id", None)
+    raw_task = raw_task if isinstance(raw_task, str) else ""
+    session_key = get_current_session_key(default="")
+    if getattr(parent_agent, "_delegate_depth", 0) > 0:
+        # A child owns its task cwd, not the root's inherited approval context.
+        session_key = raw_task
+    key = session_key or raw_task
+    cwd = get_session_cwd(key) if key else None
+    if cwd is None and not session_key:
+        platform = getattr(parent_agent, "platform", None)
+        if platform in (None, "", "cli"):
+            # Single-session CLI only; capture now, never inside queued work.
+            cwd = get_session_cwd("default") if not key else None
+            cwd = cwd or _resolve_workspace_hint(parent_agent)
+    return (raw_task or session_key or None, cwd)
+
+
 def _resolve_workspace_hint(parent_agent) -> Optional[str]:
     """Best-effort local workspace hint for child prompts.
 
@@ -2711,6 +2739,7 @@ def _run_single_child(
     owner_transport: Any = None,
     owner_session_record: Any = None,
     checkpoint_ticket: Any = None,
+    parent_workspace: Optional[tuple] = None,
     **_kwargs,
 ) -> Dict[str, Any]:
     """
@@ -2965,7 +2994,10 @@ def _run_single_child(
         import uuid as _uuid
 
         child_task_id = _subagent_id or f"subagent-{task_index}-{_uuid.uuid4().hex[:8]}"
-        parent_task_id = getattr(parent_agent, "_current_task_id", None)
+        parent_task_id, _parent_cwd = (
+            parent_workspace if parent_workspace is not None
+            else _capture_parent_workspace(parent_agent)
+        )
         # Seed the child's session-cwd record from the parent's (cwd rearch):
         # children share the parent's container, and today they inherit the
         # parent's live env.cwd implicitly. Seeding at spawn preserves that
@@ -2979,7 +3011,7 @@ def _run_single_child(
                 register_container_alias,
             )
 
-            record_session_cwd(child_task_id, get_session_cwd(parent_task_id))
+            record_session_cwd(child_task_id, _parent_cwd)
             # Per-session container isolation (docker + container_persistent:
             # false) keys containers by session task_id. The child must share
             # the PARENT's container — register the alias so the child's
@@ -3014,15 +3046,8 @@ def _run_single_child(
                 + _worktree_outcome["reason"]
             )
         if isolation_requested:
-            _parent_cwd = None
-            try:
-                from tools.terminal_tool import get_session_cwd as _gsc
-
-                _parent_cwd = _gsc(parent_task_id)
-            except Exception:
-                pass
             _worktree_outcome, _worktree_info = subagent_worktree.prepare_subagent_worktree(
-                _parent_cwd or _resolve_workspace_hint(parent_agent),
+                _parent_cwd,
                 _subagent_id,
                 enabled=True,
                 required=isolation_required,
@@ -4085,6 +4110,7 @@ def delegate_task(
     follow_through: Optional[List[Dict[str, Any]]] = None,
     parent_agent=None,
     credentials_cfg: Optional[Dict[str, Any]] = None,
+    parent_task_id: Optional[str] = None,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks, or control
@@ -4328,6 +4354,9 @@ def delegate_task(
     from agent.delegation_checkpoint import ticket_for as _checkpoint_ticket_for
 
     _checkpoint_ticket = _checkpoint_ticket_for(parent_agent)
+    # Capture on the trusted caller, before child construction and before any
+    # thread handoff. Queued work must not re-read a later turn's parent/cwd.
+    _parent_workspace = _capture_parent_workspace(parent_agent, parent_task_id)
 
     # Strict background: a conversational root (the checkpoint applies to it)
     # asked for a detached job. If one cannot be had, say so; never run the
@@ -4532,6 +4561,7 @@ def delegate_task(
                 owner_transport=_origin_owner_transport,
                 owner_session_record=_origin_owner_session_record,
                 checkpoint_ticket=_start_ticket,
+                parent_workspace=_parent_workspace,
             )
             results.append(result)
         else:
@@ -4558,6 +4588,7 @@ def delegate_task(
                         owner_transport=_origin_owner_transport,
                         owner_session_record=_origin_owner_session_record,
                         checkpoint_ticket=_start_ticket,
+                        parent_workspace=_parent_workspace,
                     )
                     futures[future] = i
 

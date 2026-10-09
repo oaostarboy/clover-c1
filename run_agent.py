@@ -8375,7 +8375,7 @@ class AIAgent:
         finally:
             self._executing_tools = False
 
-    def _dispatch_delegate_task(self, function_args: dict) -> str:
+    def _dispatch_delegate_task(self, function_args: dict, *, task_id: Optional[str] = None) -> str:
         """Single call site for delegate_task dispatch.
 
         New DELEGATE_TASK_SCHEMA fields only need to be added here to reach all
@@ -8410,6 +8410,7 @@ class AIAgent:
             handoff=function_args.get("handoff"),
             follow_through=function_args.get("follow_through"),
             parent_agent=self,
+            parent_task_id=task_id,
         )
 
     def _invoke_tool(self, function_name: str, function_args: dict, effective_task_id: str,

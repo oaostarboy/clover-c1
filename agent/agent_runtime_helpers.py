@@ -3697,7 +3697,9 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
             )
     elif function_name == "delegate_task":
         def _execute(next_args: dict) -> Any:
-            return _finish_agent_tool(agent._dispatch_delegate_task(next_args), next_args)
+            return _finish_agent_tool(
+                agent._dispatch_delegate_task(next_args, task_id=effective_task_id), next_args
+            )
     else:
         def _execute(next_args: dict) -> Any:
             dispatch_kwargs = dict(
