@@ -269,6 +269,81 @@ def pytest_runtest_logreport(report):
     return result
 
 
+def run_group(paths: list[str], timeout: int = 1200) -> dict:
+    """Run a deterministic file-coherent group in one fresh sandbox."""
+    sources = [p if p.startswith("/work/src/") else "/work/src/" + p for p in paths]
+    group_key = hashlib.sha256("\n".join(sources).encode()).hexdigest()[:12]
+    slug = f"group-{group_key}-{RUN_ID}"
+    junit = f"/results/{slug}.junit.xml"
+    targets = sources
+    argv = ["-m", "pytest", "--basetemp=/tmp/pytest-tmp", "-o", "cache_dir=/tmp/pytest-cache", f"--junitxml={junit}", *targets]
+    guard = """import json, os, re
+ALLOWED = set(SAFE_ENV_NAMES) | {"PYTEST_VERSION", "PYTEST_CURRENT_TEST"}
+PHASE_PATH = None
+CRED = re.compile(r"(KEY|TOKEN|PASS|SECRET|CREDENTIAL)", re.I)
+def _check():
+ bad=sorted(k for k in os.environ if CRED.search(k)); extra=sorted(set(os.environ)-ALLOWED)
+ assert not bad and not extra, {"credential_names":bad,"extra_names":extra}
+def pytest_sessionstart(session):
+ global PHASE_PATH
+ _check(); p=getattr(session.config.option,"xmlpath",None)
+ PHASE_PATH=p.replace(".junit.xml",".phases.jsonl") if p else None
+ if PHASE_PATH: open(PHASE_PATH,"w").close()
+def pytest_collection_finish(session): _check()
+def pytest_runtest_logreport(report):
+ if PHASE_PATH:
+  with open(PHASE_PATH,"a") as f: f.write(json.dumps({"nodeid":report.nodeid,"phase":report.when,"outcome":report.outcome,"duration":report.duration})+"\\n")
+""".replace("SAFE_ENV_NAMES", repr(sorted(SAFE_ENV)))
+    temp = RESULTS / f"safe_env_guard.{os.getpid()}.{threading.get_ident()}.tmp"
+    temp.write_text(guard)
+    temp.replace(RESULTS / "safe_env_guard.py")
+    bootstrap = (
+        "import gateway.run\nimport os, runpy, sys\n"
+        f"allowed = {SAFE_ENV!r}\n"
+        "os.environ.clear(); os.environ.update(allowed)\n"
+        f"sys.argv = ['pytest', *{argv[2:]!r}]\n"
+        "runpy.run_module('pytest', run_name='__main__')\n"
+    )
+    started = time.time()
+    try:
+        run = invoke(["-c", bootstrap], timeout=timeout)
+        code, output = run.returncode, run.stdout
+    except subprocess.TimeoutExpired as e:
+        code = 124
+        partial = e.stdout or ""
+        if isinstance(partial, bytes): partial = partial.decode("utf-8", errors="replace")
+        output = partial + "\nRUNNER_TIMEOUT\n"
+    log_path = RESULTS / f"{slug}.log"
+    log_path.write_text(output + f"\nEXIT_CODE={code}\n")
+    junit_host = RESULTS / f"{slug}.junit.xml"
+    cases=[]
+    if junit_host.exists():
+        try:
+            for case in ET.parse(junit_host).iter("testcase"):
+                phases=[x.tag for x in list(case) if x.tag in {"failure","error","skipped"}]
+                cases.append({"name":case.attrib.get("name",""),"classname":case.attrib.get("classname",""),"phase_outcomes":phases or ["passed"],"duration":float(case.attrib.get("time","0"))})
+        except (ET.ParseError,OSError): pass
+    phase_host=RESULTS / f"{slug}.phases.jsonl"
+    events=[]
+    if phase_host.exists():
+        for line in phase_host.read_text().splitlines():
+            if line.strip(): events.append(json.loads(line))
+    file_receipts=[]
+    for path in paths:
+        prefix=path+"::"
+        # Keep exact canonical node IDs from pytest's logreport stream; JUnit
+        # case names alone are not unique across the suite.
+        file_events=[e for e in events if e["nodeid"].startswith(prefix)]
+        node_ids=sorted({e["nodeid"] for e in file_events})
+        file_cases=[{"nodeid":node,"phase_outcomes":[e["outcome"] for e in file_events if e["nodeid"]==node],"duration_seconds":sum(e["duration"] for e in file_events if e["nodeid"]==node)} for node in node_ids]
+        item={"file":path,"group_junit":str(junit_host),"group_log":str(log_path),"phase_events":file_events,"testcases":file_cases,"source_sha256":GATEWAY_SHA,"runner_sha256":RUNNER_SHA,"candidate_git_head":subprocess.run(["git","-C",str(ROOT),"rev-parse","HEAD"],capture_output=True,text=True,check=True).stdout.strip(),"run_id":RUN_ID,"exit_code":code}
+        file_path=RESULTS/f"{slug}-{hashlib.sha256(path.encode()).hexdigest()[:10]}.json"
+        record(file_path.name,item); file_receipts.append(str(file_path))
+    result={"files":paths,"argv":argv,"exit_code":code,"elapsed_seconds":round(time.time()-started,3),"source_sha256":GATEWAY_SHA,"runner_sha256":RUNNER_SHA,"candidate_git_head":subprocess.run(["git","-C",str(ROOT),"rev-parse","HEAD"],capture_output=True,text=True,check=True).stdout.strip(),"tracked_diff_sha256":tracked_diff_sha256(),"run_id":RUN_ID,"junit":str(junit_host),"log":str(log_path),"phase_events_file":str(phase_host),"phase_events":events,"testcases":cases,"per_file_receipts":file_receipts,"output_tail":output[-3000:]}
+    record(f"{slug}.json",result)
+    return result
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=["preflight", "pytest", "shard", "collect"])
@@ -330,15 +405,17 @@ raise SystemExit(rc)'''.replace('RUN_ID', RUN_ID)
         print("REFUSING: shard mode accepts whole-file paths only")
         return 2
     selected = [p for i, p in enumerate(files) if i % args.shard_count == args.shard_index]
-    manifest = {"source_sha256": GATEWAY_SHA, "runner_sha256": RUNNER_SHA, "candidate_git_head": current_head, "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "files_input_sorted": files, "shard_index": args.shard_index, "shard_count": args.shard_count, "selected_files": selected, "workers_requested": args.workers, "worker_cap": 2, "resource_policy": "nice +10, per-file timeout, each test process in private user/net/PID/IPC namespaces", "default_selection": "pytest configuration and marker policy from candidate remain active"}
+    group_size = 24
+    groups = [selected[i:i+group_size] for i in range(0,len(selected),group_size)]
+    manifest = {"source_sha256": GATEWAY_SHA, "runner_sha256": RUNNER_SHA, "candidate_git_head": current_head, "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "files_input_sorted": files, "shard_index": args.shard_index, "shard_count": args.shard_count, "selected_files": selected, "selected_group_count": len(groups), "group_size_files": group_size, "groups": groups, "workers_requested": args.workers, "worker_cap": 2, "resource_policy": "nice +10, groups of sorted complete files, per-group timeout, each pytest group in a fresh private user/net/PID/IPC namespace", "default_selection": "pytest configuration and marker policy from candidate remain active"}
     manifest_name = f"SHARD-MANIFEST-{RUN_ID}.json"
     record(manifest_name, manifest)
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
-        futures = [executor.submit(run_file, f, args.timeout) for f in selected]
+        futures = [executor.submit(run_group, group, args.timeout) for group in groups]
         for future in futures:
             results.append(future.result())
-    outcomes = {"source_sha256": GATEWAY_SHA, "runner_sha256": RUNNER_SHA, "candidate_git_head": current_head, "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "manifest": manifest_name, "selected_file_count": len(selected), "completed_file_count": len(results), "exit_codes": [r["exit_code"] for r in results], "testcase_count": sum(len(r["testcases"]) for r in results), "results": results, "complete": len(results) == len(selected)}
+    outcomes = {"source_sha256": GATEWAY_SHA, "runner_sha256": RUNNER_SHA, "candidate_git_head": current_head, "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "manifest": manifest_name, "selected_file_count": len(selected), "completed_group_count": len(results), "selected_group_count": len(groups), "completed_file_count": sum(len(r["files"]) for r in results), "exit_codes": [r["exit_code"] for r in results], "testcase_count": sum(len({e["nodeid"] for e in r["phase_events"] if e["phase"] == "call"}) for r in results), "results": results, "complete": len(results) == len(groups)}
     record(f"SHARD-OUTCOMES-{RUN_ID}.json", outcomes)
     print(json.dumps(outcomes, indent=2))
     return 0 if outcomes["complete"] and all(c == 0 for c in outcomes["exit_codes"]) else 1
