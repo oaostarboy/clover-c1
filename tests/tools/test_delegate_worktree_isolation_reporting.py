@@ -86,3 +86,39 @@ def test_required_setting_is_opt_in_and_uses_delegation_config():
         "worktree_isolation": True, "worktree_isolation_required": True
     }):
         assert delegate_tool._get_worktree_isolation_required() is True
+
+    with patch.object(delegate_tool, "_load_config", return_value={
+        "worktree_isolation": False, "worktree_isolation_required": True
+    }):
+        assert delegate_tool._get_worktree_isolation() is False
+        assert delegate_tool._get_worktree_isolation_required() is True
+
+
+def test_required_isolation_blocks_real_child_runner_before_conversation(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from tools import delegate_tool
+
+    child = SimpleNamespace(
+        _subagent_id="required-isolation-child",
+        _delegate_saved_tool_names=[],
+        _credential_pool=None,
+        session_id="child-session",
+        _parent_session_id="parent-session",
+        _delegate_depth=1,
+        _parent_subagent_id=None,
+        tool_progress_callback=None,
+        run_conversation=lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("blocked child conversation must not run")
+        ),
+    )
+    parent = SimpleNamespace(session_id="parent-session", _current_task_id=None)
+    with patch.object(delegate_tool, "_get_worktree_isolation", return_value=True), \
+         patch.object(delegate_tool, "_get_worktree_isolation_required", return_value=True), \
+         patch.object(delegate_tool, "_resolve_workspace_hint", return_value=str(tmp_path)):
+        result = delegate_tool._run_single_child(0, "do work", child, parent)
+
+    assert result["status"] == "error"
+    assert "child was not started" in result["error"].lower()
+    assert result["workspace_isolation"]["status"] == "blocked"
