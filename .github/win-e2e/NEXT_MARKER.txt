@@ -1,0 +1,2 @@
+Clover C1.2 Windows update-proof next-target marker.
+This marker-only commit exists to exercise the candidate updater advancing from the exact candidate commit.
