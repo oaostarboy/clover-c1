@@ -660,6 +660,20 @@ def _drain_stderr(kernel: SessionKernel) -> str:
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 
+def _remove_kernel_if_current(key: Tuple, kernel: SessionKernel) -> bool:
+    """Remove a registry entry only when it still names this kernel instance.
+
+    A reset can replace a kernel while a caller still holds the retired
+    instance. Cleanup from that stale caller must never unregister its
+    replacement.
+    """
+    with _KERNELS_LOCK:
+        if _KERNELS.get(key) is not kernel:
+            return False
+        _KERNELS.pop(key)
+        return True
+
+
 @contextmanager
 def _reserved_cell_lock(kernel: SessionKernel):
     """Acquire a kernel reserved under _KERNELS_LOCK, then retire reservation."""
@@ -783,8 +797,7 @@ def execute_in_session_kernel(
             if status in ("timeout", "interrupted"):
                 # No safe way to interrupt one cell in place: kill the kernel,
                 # report the state loss, let the next call respawn.
-                with _KERNELS_LOCK:
-                    _KERNELS.pop(key, None)
+                _remove_kernel_if_current(key, kernel)
                 _teardown(kernel)
 
             duration = round(time.monotonic() - exec_start, 2)
@@ -868,8 +881,7 @@ def execute_in_session_kernel(
                     result["hint"] = hint
             elif cell_status == "exit":
                 # The cell called sys.exit(): honor it as end-of-kernel.
-                with _KERNELS_LOCK:
-                    _KERNELS.pop(key, None)
+                _remove_kernel_if_current(key, kernel)
                 _teardown(kernel)
                 result["kernel"]["ended"] = True
                 if cell_stderr:
@@ -880,8 +892,7 @@ def execute_in_session_kernel(
                     "The session kernel died while running the cell"
                     + (": " + stderr_raw.strip() if stderr_raw.strip() else ".")
                 )
-                with _KERNELS_LOCK:
-                    _KERNELS.pop(key, None)
+                _remove_kernel_if_current(key, kernel)
                 _teardown(kernel)
             elif cell_stderr:
                 result["output"] = stdout_text + "\n--- stderr ---\n" + cell_stderr
@@ -889,8 +900,7 @@ def execute_in_session_kernel(
             return json.dumps(result, ensure_ascii=False)
         except Exception as exc:  # pragma: no cover - defensive parity with per-call
             logger.error("session kernel failed: %s: %s", type(exc).__name__, exc, exc_info=True)
-            with _KERNELS_LOCK:
-                _KERNELS.pop(key, None)
+            _remove_kernel_if_current(key, kernel)
             _teardown(kernel)
             return json.dumps({
                 "status": "error",
