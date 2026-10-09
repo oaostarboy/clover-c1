@@ -105,16 +105,63 @@ def stage_digest(stage: dict) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+_SPAWN_TOP_LEVEL_KEYS = frozenset({"goal", "context", "action", "tasks", "handoff"})
+_HANDOFF_KEYS = frozenset(
+    {"work", "outcome", "estimated_minutes_min", "estimated_minutes_max"}
+)
+# Display-only task label; it never reaches the child's goal, tools or route.
+_TASK_DISPLAY_KEYS = frozenset({"title"})
+
+
+def _requested_stage(args: Any) -> Optional[dict]:
+    """The single {goal, context?} payload a spawn call would actually run.
+
+    A model repeats a stored stage in either of the two shapes every ordinary
+    dispatch uses: top-level ``goal``/``context`` or ``tasks=[{goal, context}]``
+    (optionally with the user-facing ``handoff`` card text and a task
+    ``title``). Both are normalised to the same payload. Anything else that
+    could widen what runs (a second task, a model/tier/toolsets/role override,
+    ``follow_through``, ``max_iterations``, unknown keys, a malformed handoff,
+    a goal given in both places) yields ``None`` so the caller fails closed.
+    """
+    if not isinstance(args, dict) or set(args) - _SPAWN_TOP_LEVEL_KEYS:
+        return None
+    if args.get("action") not in (None, "", "spawn"):
+        return None
+    handoff = args.get("handoff")
+    if handoff is not None:
+        if (
+            not isinstance(handoff, dict) or set(handoff) - _HANDOFF_KEYS
+            or any(isinstance(v, (dict, list)) for v in handoff.values())
+        ):
+            return None
+    tasks = args.get("tasks")
+    if tasks is None:
+        source = args
+    else:
+        # An empty/None ``tasks`` next to a top-level goal is the tolerated
+        # small-model shape; any non-empty tasks must be the only carrier.
+        if isinstance(tasks, list) and not tasks:
+            source = args
+        elif (
+            not isinstance(tasks, list) or len(tasks) != 1
+            or not isinstance(tasks[0], dict)
+            or args.get("goal") is not None or args.get("context") is not None
+            or set(tasks[0]) - ({"goal", "context"} | _TASK_DISPLAY_KEYS)
+        ):
+            return None
+        else:
+            source = tasks[0]
+    requested = {"goal": source.get("goal")}
+    if source.get("context") is not None:
+        requested["context"] = source.get("context")
+    return requested
+
+
 def matches_stage(args: Any, stage: dict) -> bool:
     """Require the tool request to name exactly the predeclared next payload."""
-    if not isinstance(args, dict) or set(args) - {"goal", "context", "action"}:
-        return False
-    if args.get("action") not in (None, "", "spawn"):
-        return False
-    requested = {"goal": args.get("goal")}
-    if args.get("context") is not None:
-        requested["context"] = args.get("context")
-    return stage_digest(requested) == stage_digest(stage)
+    requested = _requested_stage(args)
+    return requested is not None and stage_digest(requested) == stage_digest(stage)
 
 
 def persist_accepted_plan(

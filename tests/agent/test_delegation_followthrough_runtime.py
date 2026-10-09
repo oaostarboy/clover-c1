@@ -180,3 +180,67 @@ def test_policy_drift_cannot_start_next_stage(admitted):
     assert 'cannot change' in result['error']
     assert len(started)==before
     assert asyncd.get_continuation_plan(did)['consumed']==1
+
+
+# ── model-natural call shapes of the SAME stored stage ──────────────────────
+# The production incident (deleg_e2ad1329): the stored stage was {goal, context}
+# and the callback repeated exactly that text, but wrapped it the way every
+# ordinary spawn is wrapped: ``tasks=[{goal, context}]`` plus the user-facing
+# ``handoff``. The window guard compared raw argument keys and closed it.
+_HANDOFF = {'work': 'verifying results', 'outcome': 'independently checked results'}
+
+
+def _shape(stage, name):
+    if name == 'top_level': return dict(stage)
+    if name == 'top_level_handoff': return {**stage, 'handoff': _HANDOFF}
+    if name == 'tasks': return {'tasks': [dict(stage)]}
+    if name == 'tasks_handoff': return {'tasks': [dict(stage)], 'handoff': _HANDOFF}
+    if name == 'empty_tasks': return {'tasks': [], **stage}
+    if name == 'tasks_title': return {'tasks': [{**stage, 'title': 'Verify results'}], 'handoff': _HANDOFF}
+    raise AssertionError(name)
+
+
+@pytest.mark.parametrize('shape', ['top_level', 'top_level_handoff', 'tasks', 'tasks_handoff', 'empty_tasks', 'tasks_title'])
+def test_stored_stage_starts_once_in_every_natural_call_shape(admitted, shape):
+    agent, stage, did, started, complete = admitted
+    complete()
+    dc.begin_turn(agent, 'internal_notification')
+    before = len(started)
+    (result,) = run_batch(agent, [('delegate_task', _shape(stage, shape))])
+    assert result.get('status') == 'dispatched', result
+    assert asyncd.get_continuation_plan(did)['consumed'] == 1
+    deadline = time.monotonic() + 10
+    while len(started) == before and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert len(started) == before + 1
+    assert stage['goal'] in started[-1]
+    (duplicate,) = run_batch(agent, [('delegate_task', _shape(stage, shape))])
+    assert duplicate['error_type'] == 'delegation_spawn_closed'
+    assert asyncd.get_continuation_plan(did)['consumed'] == 1
+
+
+_G = {'goal': 'verify exact saved work', 'context': 'no additional permissions'}
+
+
+@pytest.mark.parametrize('bad', [
+    {'tasks': [{**_G, 'tier': 'code'}]},
+    {'tasks': [{**_G, 'model': 'x'}]},
+    {'tasks': [{**_G, 'toolsets': ['terminal']}]},
+    {'tasks': [{**_G, 'context': 'changed'}]},
+    {'tasks': [dict(_G), {'goal': 'extra'}]},
+    {'tasks': [dict(_G)], 'goal': _G['goal']},
+    {'tasks': dict(_G)},
+    {'tasks': [dict(_G)], 'handoff': 'not-an-object'},
+    {'tasks': [dict(_G)], 'follow_through': [{'goal': 'third'}]},
+    {'tasks': [dict(_G)], 'max_iterations': 99},
+    {**_G, 'handoff': {'work': 'x', 'extra': 'y'}},
+])
+def test_wrapped_shapes_still_fail_closed_before_construction(admitted, bad):
+    agent, stage, did, started, complete = admitted
+    complete()
+    dc.begin_turn(agent, 'internal_notification')
+    before = len(started)
+    (result,) = run_batch(agent, [('delegate_task', bad)])
+    assert result['error_type'] == 'delegation_spawn_closed'
+    assert len(started) == before
+    assert asyncd.get_continuation_plan(did)['consumed'] == 0
