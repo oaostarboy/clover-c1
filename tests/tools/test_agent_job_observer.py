@@ -417,6 +417,32 @@ def test_turn_cap_is_unfinished_not_failed():
     assert done and done[-1]["status"] == "incomplete"
 
 
+def test_clover_interruption_status_preserves_possible_effects():
+    seen = []
+
+    class Sink:
+        def observe(self, event_type, *a, **kw):
+            seen.append((event_type, kw))
+
+    obs = AgentJobObserver(
+        session_id="proc_interrupted", sink=Sink(), group_id="jobs_interrupted", index=0,
+        title="Edit files", model="gpt-6-luna", parser="clover-activity",
+    )
+    obs.feed(json.dumps({
+        "clover_activity": 1, "event": "tool.started", "tool": "terminal",
+        "summary": "apply a patch",
+    }) + "\n")
+    obs.feed(json.dumps({
+        "clover_activity": 1, "event": "result",
+        "status": "interrupted_possible_effects", "text": "",
+    }) + "\n")
+    obs.finish(0)
+    done = [kw for event, kw in seen if event == "subagent.complete"]
+    assert len(done) == 1
+    assert done[0]["status"] == "interrupted"
+    assert "effects may have occurred" in done[0]["reason"]
+
+
 def _clocked_job(pub, clock, *, parser="claude-stream-json", title="Queued worker"):
     group_id, index = pub.external_job_identity()
     obs = AgentJobObserver(session_id="proc_q", sink=pub, group_id=group_id, index=index,

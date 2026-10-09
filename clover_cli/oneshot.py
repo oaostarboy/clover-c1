@@ -321,16 +321,24 @@ def run_oneshot(
             pass
 
     if activity_writer is not None:
-        _ok = failure is None and bool((response or "").strip()) and not result.get("failed")
-        _status = "completed" if _ok else "failed"
-        if _ok:
-            # Still stopped early after every allowed resume: say so, so the
-            # parent's card shows "unfinished" instead of a false "done".
-            from agent.step_continuation import needs_continuation
+        # Report the actual terminal condition. An interrupted conversation can
+        # have produced side effects before interruption, so it must not be
+        # presented as a clean failure or as a completed result.
+        if failure is not None:
+            _status = "failed"
+        elif result.get("interrupted") is True:
+            _status = "interrupted_possible_effects"
+        else:
+            _ok = bool((response or "").strip()) and not result.get("failed")
+            _status = "completed" if _ok else "failed"
+            if _ok:
+                # Still stopped early after every allowed resume: say so, so the
+                # parent's card shows "unfinished" instead of a false "done".
+                from agent.step_continuation import needs_continuation
 
-            if needs_continuation(result) is not None:
-                _status = "incomplete"
-        activity_writer.result(response if _ok else "", _status)
+                if needs_continuation(result) is not None:
+                    _status = "incomplete"
+        activity_writer.result(response if _status == "completed" else "", _status)
 
     if failure is not None:
         # Re-raise control-flow exceptions so the parent handles them as usual
