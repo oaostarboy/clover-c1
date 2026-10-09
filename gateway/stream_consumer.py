@@ -27,6 +27,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from gateway.bounded_await import await_bounded
 from gateway.platforms.base import BasePlatformAdapter as _BasePlatformAdapter
 from gateway.platforms.base import _custom_unit_to_cp
 from gateway.platforms.base import MEDIA_TAG_CLEANUP_RE
@@ -382,6 +383,12 @@ class GatewayStreamConsumer:
     # probability negligible while keeping ids + realistic turn counts
     # comfortably inside the connector's JS number range (2^53).
     _draft_id_counter: int = secrets.randbits(49)
+
+    # Upper bound (seconds) on the best-effort platform I/O performed from the
+    # cancellation handler in :meth:`run`.  The gateway awaits the cancelled
+    # consumer during turn teardown; an unbounded edit here pinned a finished
+    # turn for as long as the platform request hung.
+    _CANCEL_FINAL_EDIT_TIMEOUT: float = 4.0
 
     def __init__(
         self,
@@ -2156,12 +2163,27 @@ class GatewayStreamConsumer:
             # _final_response_sent itself; this handler owns the flags.
             _best_effort_ok = False
             if self._accumulated and self._message_id:
+                # Hard-bounded: this runs inside cancellation, and the gateway
+                # awaits the cancelled consumer while tearing down a finished
+                # turn.  A stalled platform request here must not keep that
+                # turn (and so the session's busy guard) alive; a timed-out
+                # edit confirmed nothing, so no delivery flag is set below.
                 try:
-                    _best_effort_ok = bool(
-                        await self._send_or_edit(
+                    _finished, _ok = await await_bounded(
+                        self._send_or_edit(
                             self._accumulated, finalize=True, is_turn_final=False,
-                        )
+                        ),
+                        self._CANCEL_FINAL_EDIT_TIMEOUT,
                     )
+                    _best_effort_ok = bool(_ok) if _finished else False
+                    if not _finished:
+                        logger.warning(
+                            "Stream consumer: best-effort final edit did not "
+                            "finish within %.1fs of cancellation; abandoning it "
+                            "(chat=%s) — the normal final send will deliver.",
+                            self._CANCEL_FINAL_EDIT_TIMEOUT,
+                            self.chat_id,
+                        )
                 except Exception:
                     pass
             elif self._message_id is None:
@@ -2171,7 +2193,13 @@ class GatewayStreamConsumer:
                 # adapter kept armed interception state for the next turn
                 # to inherit (review B8). Seal in place with what's already
                 # on screen; sets no delivery flags.
-                await self._abandon_native_stream()
+                try:
+                    await await_bounded(
+                        self._abandon_native_stream(),
+                        self._CANCEL_FINAL_EDIT_TIMEOUT,
+                    )
+                except Exception:
+                    pass
             # Only confirm final delivery if the best-effort send above
             # actually succeeded OR if the final response was already
             # confirmed before we were cancelled.  Previously this

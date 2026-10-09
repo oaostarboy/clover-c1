@@ -2777,6 +2777,7 @@ from gateway.delivery import (
     looks_like_telegram_private_chat_id,
     resolve_delivery_transport,
 )
+from gateway.bounded_await import drain_then_cancel, reap_task, reap_tasks
 from gateway.turn_lease import (
     DEFAULT_LEASE_WAIT,
     SessionTurnLeaseRegistry,
@@ -4531,6 +4532,15 @@ def _needs_agent_progress_callback(ctx: TurnContext) -> bool:
         or ctx._live_status_adapter is not None
         or ctx.delegation_activity is not None
     )
+
+
+# Hard bounds (seconds) for tearing down a turn's helper tasks once the agent
+# has returned.  A hung platform request in a helper's cancellation handler
+# must never keep a finished turn -- and with it the session's busy guard --
+# alive: later human messages and background-worker completions would queue
+# behind a phantom turn.
+_TEARDOWN_STREAM_DRAIN_SECONDS = 5.0
+_TEARDOWN_TASK_GRACE_SECONDS = 5.0
 
 
 class TurnRunner:
@@ -30935,10 +30945,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if _stream_consumer:
                 _stream_consumer.finish()
             if stream_task:
-                try:
-                    await asyncio.wait_for(stream_task, timeout=5.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    stream_task.cancel()
+                await drain_then_cancel(
+                    stream_task,
+                    drain=_TEARDOWN_STREAM_DRAIN_SECONDS,
+                    grace=_TEARDOWN_TASK_GRACE_SECONDS,
+                    label="proxy stream consumer",
+                )
 
         _elapsed = time.time() - _start
         if not _run_still_current():
@@ -32742,13 +32754,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _sc = stream_consumer_holder[0]
                     if _sc and stream_task:
                         try:
-                            await asyncio.wait_for(stream_task, timeout=5.0)
-                        except (asyncio.TimeoutError, asyncio.CancelledError):
-                            stream_task.cancel()
-                            try:
-                                await stream_task
-                            except asyncio.CancelledError:
-                                pass
+                            await drain_then_cancel(
+                                stream_task,
+                                drain=_TEARDOWN_STREAM_DRAIN_SECONDS,
+                                grace=_TEARDOWN_TASK_GRACE_SECONDS,
+                                label="stream consumer (queued follow-up)",
+                            )
                         except Exception as e:
                             logger.debug("Stream consumer wait before queued message failed: %s", e)
                     # The queued branch needs raw ``result`` for interruption,
@@ -32946,6 +32957,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             interrupt_monitor.cancel()
             _notify_task.cancel()
 
+            # Teardown must be (a) hard-bounded -- a helper task whose
+            # cancellation handler is stuck in platform I/O may not keep a
+            # finished turn alive -- and (b) cancellation-transparent: if the
+            # caller was cancelled (/stop, /new, shutdown) the cancellation
+            # is remembered, the ownership cleanup below still runs, and the
+            # CancelledError is re-raised afterwards so a stopped turn never
+            # returns its stale result as a success.
+            _teardown_cancelled = False
+
+            async def _teardown_step(coro) -> None:
+                nonlocal _teardown_cancelled
+                try:
+                    await coro
+                except asyncio.CancelledError:
+                    _teardown_cancelled = True
+
             # Wait for stream consumer to finish its final edit
             if stream_task:
                 # If the agent never created a stream consumer (e.g. non-
@@ -32959,20 +32986,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     and stream_consumer_holder[0] is not None
                 )
                 if not _has_stream_consumer:
-                    stream_task.cancel()
-                    try:
-                        await stream_task
-                    except asyncio.CancelledError:
-                        pass
+                    await _teardown_step(
+                        reap_task(
+                            stream_task,
+                            grace=_TEARDOWN_TASK_GRACE_SECONDS,
+                            label="idle stream consumer poller",
+                        )
+                    )
                 else:
-                    try:
-                        await asyncio.wait_for(stream_task, timeout=5.0)
-                    except (asyncio.TimeoutError, asyncio.CancelledError):
-                        stream_task.cancel()
-                        try:
-                            await stream_task
-                        except asyncio.CancelledError:
-                            pass
+                    await _teardown_step(
+                        drain_then_cancel(
+                            stream_task,
+                            drain=_TEARDOWN_STREAM_DRAIN_SECONDS,
+                            grace=_TEARDOWN_TASK_GRACE_SECONDS,
+                            label="stream consumer",
+                        )
+                    )
             
             # Unconditional abort + bounded wait for the streaming-TTS
             # consumer (#60671 hardening).  Covers cancellation / exception
@@ -32982,6 +33011,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _stts_finally.abort("cleanup")
                 try:
                     await _stts_finally.wait_complete(timeout=2.0)
+                except asyncio.CancelledError:
+                    _teardown_cancelled = True
                 except Exception:
                     pass
 
@@ -32999,23 +33030,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if self._draining:
                 self._update_runtime_status("draining")
             
-            # Wait for cancelled tasks
-            for task in [progress_task, log_task, interrupt_monitor, tracking_task, _notify_task]:
-                if task:
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                    except Exception:
-                        # A background task that died of a non-cancellation
-                        # error (transport drop in a progress/card publish)
-                        # must not abort the cleanup path — everything after
-                        # this loop (final-delivery bookkeeping) still runs
-                        # (review B7).
-                        logger.debug(
-                            "background turn task failed during cleanup",
-                            exc_info=True,
-                        )
+            # Wait for cancelled tasks.
+            # One shared, hard-bounded window: the progress sender's
+            # cancellation handler flushes a final edit to the platform, and a
+            # hung request there must not pin the finished turn.  A task that
+            # fails with a non-cancellation error (transport drop in a
+            # progress/card publish) must not abort the cleanup path either --
+            # everything after this (final-delivery bookkeeping) still runs
+            # (review B7); reap_tasks consumes those errors.
+            await _teardown_step(
+                reap_tasks(
+                    [progress_task, log_task, interrupt_monitor, tracking_task, _notify_task],
+                    grace=_TEARDOWN_TASK_GRACE_SECONDS,
+                    labels=[
+                        "progress sender", "tool log writer", "interrupt monitor",
+                        "agent tracker", "long-running notifier",
+                    ],
+                )
+            )
+            if _teardown_cancelled:
+                raise asyncio.CancelledError()
 
         # If streaming already delivered the response, mark it so the
         # caller's send() is skipped (avoiding duplicate messages).
