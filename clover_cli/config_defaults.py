@@ -2262,6 +2262,9 @@ DEFAULT_CONFIG = {
     # always goes to ~/.clover/skills/.
     "skills": {
         "external_dirs": [],   # e.g. ["~/.agents/skills", "/shared/team-skills"]
+        # Category names whose skill descriptions are omitted from the system
+        # prompt index. Names remain discoverable/loadable through skill tools.
+        "compact_categories": [],
         # Project-local skill discovery: when a session starts inside a git
         # checkout, ``<root>/.clover/skills/`` and ``<root>/.agents/skills/``
         # are sourced as the highest-precedence skill tier — but ONLY when the
