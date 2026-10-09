@@ -33,6 +33,7 @@ incident.
 
 import ast
 import sys
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -497,7 +498,9 @@ def pytest_configure(config):
         return
 
     fp = _fingerprint_gateway_tests()
-    cache_dir = Path.cwd() / ".pytest-cache"
+    cache_dir = Path(
+        os.environ.get("CLOVER_TEST_GATEWAY_GUARD_CACHE", str(Path.cwd() / ".pytest-cache"))
+    )
     cache_file = cache_dir / f"gw-adapter-guard-{fp}"
     lock_file = cache_dir / f".gw-adapter-guard-{fp}.lock"
 
