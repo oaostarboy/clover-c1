@@ -1348,7 +1348,8 @@ def _capture_parent_workspace(parent_agent, task_id: Optional[str] = None):
     raw_task = task_id or getattr(parent_agent, "_current_task_id", None)
     raw_task = raw_task if isinstance(raw_task, str) else ""
     session_key = get_current_session_key(default="")
-    if getattr(parent_agent, "_delegate_depth", 0) > 0:
+    depth = getattr(parent_agent, "_delegate_depth", 0)
+    if isinstance(depth, int) and depth > 0:
         # A child owns its task cwd, not the root's inherited approval context.
         session_key = raw_task
     key = session_key or raw_task
