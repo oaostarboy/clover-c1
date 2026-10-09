@@ -132,7 +132,10 @@ async def reap_task(
     """
     if task is None:
         return True
-    if cancel and not task.done():
+    if cancel and not task.done() and task not in _STUCK_TASKS:
+        # An already-escalated task is finishing its own cleanup; a repeat
+        # teardown (queued follow-up, then the turn's finally) must not
+        # cancel it a third time.
         task.cancel()
     if not task.done():
         try:

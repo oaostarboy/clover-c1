@@ -344,3 +344,37 @@ async def test_escalation_cancels_a_task_at_most_once_more():
         bounded_await._escalate(t, "cleaner", 0.0)
     await asyncio.wait({t}, timeout=1.0)
     assert cancels == [1, 2, "cleanup-complete"], cancels
+
+
+@pytest.mark.asyncio
+async def test_repeat_drain_then_cancel_does_not_interrupt_escalated_cleanup():
+    from gateway import bounded_await
+
+    log = []
+
+    async def cleaner():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            log.append("first")
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                log.append("second")
+                try:
+                    await asyncio.sleep(0.3)
+                    log.append("cleanup-complete")
+                except asyncio.CancelledError:
+                    log.append("cleanup-interrupted")
+                    raise
+                raise
+
+    t = asyncio.ensure_future(cleaner())
+    await asyncio.sleep(0)
+    first = await bounded_await.drain_then_cancel(t, drain=0.02, grace=0.05, label="c")
+    assert first is False  # released, still unwinding
+    await asyncio.sleep(0.05)  # now inside its post-second-cancel cleanup
+    again = await bounded_await.drain_then_cancel(t, drain=0.0, grace=0.05, label="c")
+    assert again is False
+    await asyncio.wait({t}, timeout=1.0)
+    assert log == ["first", "second", "cleanup-complete"], log
