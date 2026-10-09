@@ -126,38 +126,109 @@ class TestRestoreStashWithInputFn:
 # ---------------------------------------------------------------------------
 
 
+class _PopenRecorder:
+    """Records each spawn; never starts a process."""
+
+    def __init__(self):
+        self.argvs = []
+
+    def __call__(self, argv, *args, **kwargs):
+        self.argvs.append(list(argv))
+        return MagicMock()
+
+    @property
+    def last(self):
+        return self.argvs[-1]
+
+
+def _updater_checkout(tmp_path):
+    fake_root = tmp_path / "project"
+    fake_root.mkdir()
+    (fake_root / ".git").mkdir()
+    (fake_root / "gateway").mkdir()
+    (fake_root / "gateway" / "run.py").touch()
+    clover_home = tmp_path / "clover"
+    clover_home.mkdir()
+    return str(fake_root / "gateway" / "run.py"), clover_home
+
+
+async def _run_update(tmp_path, *, in_user_unit, scope_usable=True):
+    """Drive the real ``_handle_update_command``; only the OS seams are faked.
+
+    The host this suite runs on may itself live inside a user systemd unit
+    (the production gateway does), so the cgroup / probe predicates are pinned
+    explicitly instead of inherited from the machine. ``subprocess.Popen`` is
+    recorded and never executes, and the read-only update pre-check is disabled
+    because it inspects real git state, which is not what is under test.
+    """
+    from clover_cli import update_contract
+
+    fake_file, clover_home = _updater_checkout(tmp_path)
+    popen = _PopenRecorder()
+    with patch("gateway.run._clover_home", clover_home), \
+         patch("gateway.run.__file__", fake_file), \
+         patch("shutil.which", side_effect=lambda x: f"/usr/bin/{x}"), \
+         patch("clover_cli.update_preflight.preflight_settings", return_value={"enabled": False}), \
+         patch.object(update_contract, "running_in_user_systemd_unit", return_value=in_user_unit), \
+         patch.object(update_contract, "_user_scope_usable", return_value=scope_usable), \
+         patch.object(update_contract, "_systemd_run_expands_dollar", return_value=True), \
+         patch("subprocess.Popen", popen):
+        result = await _make_runner()._handle_update_command(_make_event())
+    return result, popen
+
+
 class TestUpdateCommandGatewayFlag:
     """Verify the gateway spawns clover update --gateway."""
 
     @pytest.mark.asyncio
     async def test_spawns_with_gateway_flag(self, tmp_path):
-        """The spawned update command includes --gateway and PYTHONUNBUFFERED."""
-        runner = _make_runner()
-        event = _make_event()
+        """The spawned update command includes --gateway and PYTHONUNBUFFERED.
 
-        fake_root = tmp_path / "project"
-        fake_root.mkdir()
-        (fake_root / ".git").mkdir()
-        (fake_root / "gateway").mkdir()
-        (fake_root / "gateway" / "run.py").touch()
-        fake_file = str(fake_root / "gateway" / "run.py")
-        clover_home = tmp_path / "clover"
-        clover_home.mkdir()
+        Pinned to a host that is NOT in a user systemd unit, so the plain
+        ``setsid bash -c <script>`` assembly is what is asserted. (Previously
+        this ran un-pinned: inside the production gateway's own unit the scope
+        wrapper's ``true`` probe consumed the bare Popen mock and the updater
+        was never assembled.)
+        """
+        result, popen = await _run_update(tmp_path, in_user_unit=False)
 
-        mock_popen = MagicMock()
-        with patch("gateway.run._clover_home", clover_home), \
-             patch("gateway.run.__file__", fake_file), \
-             patch("shutil.which", side_effect=lambda x: f"/usr/bin/{x}"), \
-             patch("subprocess.Popen", mock_popen):
-            result = await runner._handle_update_command(event)
-
-        # Check the bash command string contains --gateway and PYTHONUNBUFFERED
-        call_args = mock_popen.call_args[0][0]
-        cmd_string = call_args[-1] if isinstance(call_args, list) else str(call_args)
+        assert len(popen.argvs) == 1, popen.argvs
+        call_args = popen.last
+        cmd_string = call_args[-1]
+        assert call_args[0].endswith("setsid")
         assert "--gateway" in cmd_string
         assert "PYTHONUNBUFFERED" in cmd_string
         assert "rc=$?" in cmd_string
         assert "status=$?" not in cmd_string
+        assert "stream progress" in result
+
+    @pytest.mark.asyncio
+    async def test_user_unit_wraps_same_script_in_a_scope(self, tmp_path):
+        """Inside a user unit the SAME script is wrapped in a systemd scope.
+
+        The wrapper must not drop ``--gateway``/``PYTHONUNBUFFERED`` and must
+        keep the exit-code capture intact: this systemd expands ``$``, so the
+        script reaches ``bash`` with ``$$?`` collapsing back to ``$?``.
+        """
+        result, popen = await _run_update(tmp_path, in_user_unit=True)
+
+        assert len(popen.argvs) == 1, popen.argvs
+        argv = popen.last
+        assert argv[:5] == ["/usr/bin/systemd-run", "--user", "--scope", "--quiet", "--collect"]
+        script = argv[-1]
+        assert "--gateway" in script and "PYTHONUNBUFFERED" in script
+        assert "rc=$$?" in script          # escaped for the systemd expansion
+        assert "status=$" not in script
+        assert "stream progress" in result
+
+    @pytest.mark.asyncio
+    async def test_unusable_scope_falls_back_to_plain_spawn_once(self, tmp_path):
+        """Dependency fault: scope creation fails -> plain setsid, no double launch."""
+        result, popen = await _run_update(tmp_path, in_user_unit=True, scope_usable=False)
+
+        assert len(popen.argvs) == 1, popen.argvs
+        assert popen.last[0].endswith("setsid")
+        assert "--gateway" in popen.last[-1] and "rc=$?" in popen.last[-1]
         assert "stream progress" in result
 
 
