@@ -20212,6 +20212,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "protect the transcript, this message was not processed. "
                     "Wait for the active turn to finish, then resend it."
                 )
+            finally:
+                # The lease serializes the history-load / agent / transcript-
+                # flush region. Post-turn hooks and marker cleanup are outside
+                # that region and must not keep a later user turn queued.
+                # This token+generation release cannot unlock a newer turn.
+                self._release_turn_lease(_quick_key, _run_generation)
             try:
                 await self._run_post_turn_hooks(
                     agent_result=_agent_result,
@@ -20233,22 +20239,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # and interrupt alike.
             self._restore_moa_one_shot(event, _quick_key)
             self._restore_pending_one_turn_model_override(_quick_key)
-            # Normal completion/exception/interrupt owns and clears this exact
-            # durable marker.  SIGKILL/OOM skips finally, leaving the marker for
-            # the next unclean startup's recovery pass.
-            await self._clear_durable_active_turn(event)
-            # Unconditional release covers every exit path. _release_running_agent_state
-            # is idempotent (pop-on-absent is harmless) and, called without a
-            # run_generation guard, always clears the slot regardless of which
-            # generation it holds. This evicts the zombie left when session_reset
-            # bumps the generation (N -> N+1) mid-flight: gen-N's guarded release
-            # inside _run_agent returns False, and the old sentinel-only check here
-            # missed the leftover real agent — locking the session out forever (#28686).
-            self._release_running_agent_state(_quick_key)
-            # Turn lease (#64934): release THIS turn's lease token — keyed by
-            # (routing key, run generation) so this unwind can only ever free
-            # the lease its own turn acquired, never a newer turn's.
-            self._release_turn_lease(_quick_key, _run_generation)
+            try:
+                # Normal completion/exception/interrupt owns and clears this exact
+                # durable marker. SIGKILL/OOM leaves it for startup recovery.
+                await self._clear_durable_active_turn(event)
+            finally:
+                # A cancellation or store error must not skip in-memory cleanup.
+                # Generation ownership prevents stale teardown after /new or a
+                # successor from erasing the newer turn's running-agent slot.
+                self._release_running_agent_state(
+                    _quick_key, run_generation=_run_generation
+                )
+                # Also safe when already released above; lease identity is checked.
+                self._release_turn_lease(_quick_key, _run_generation)
 
     def _restore_moa_one_shot(self, event: "MessageEvent", quick_key: str) -> None:
         """Revert a ``/moa <prompt>`` one-shot model override after its turn.
