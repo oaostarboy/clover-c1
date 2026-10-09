@@ -27,6 +27,8 @@ RUNTIME = PYTHON.parent.parent
 SITE = VENV / "lib/python3.13/site-packages"
 CRED_RE = re.compile(r"(KEY|TOKEN|PASS|SECRET|CREDENTIAL)", re.I)
 GATEWAY_SHA = hashlib.sha256((ROOT / "gateway/run.py").read_bytes()).hexdigest()
+RUNNER_SHA = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
+RUN_ID = f"{time.time_ns():x}"
 SAFE_ENV = {
     "HOME": "/tmp/private-home",
     "CLOVER_HOME": "/tmp/private-home/.clover",
@@ -47,6 +49,11 @@ SAFE_ENV = {
 def record(name: str, payload: dict) -> None:
     RESULTS.mkdir(parents=True, exist_ok=True)
     (RESULTS / name).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def tracked_diff_sha256() -> str:
+    diff = subprocess.run(["git", "-C", str(ROOT), "diff", "--binary", "HEAD"], capture_output=True, check=True).stdout
+    return hashlib.sha256(diff).hexdigest()
 
 
 def bwrap_prefix() -> list[str]:
@@ -74,6 +81,16 @@ def invoke(argv: list[str], timeout: int = 1200) -> subprocess.CompletedProcess:
     # Do not pass the agent/gateway environment. The whitelist above is rebuilt
     # for every child; `nice` is applied to test workers only.
     clean_host_env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    # Each bwrap invocation owns a fresh network namespace. Preflight's ioctl
+    # cannot bring loopback up for later pytest children, so do it in every
+    # child before running either the preflight or pytest bootstrap.
+    if len(argv) >= 2 and argv[0] == "-c":
+        loopback = (
+            "import fcntl,socket,struct; s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); "
+            "i=struct.pack('16sH',b'lo',0); f=struct.unpack('16sH',fcntl.ioctl(s.fileno(),0x8913,i))[1]; "
+            "fcntl.ioctl(s.fileno(),0x8914,struct.pack('16sH',b'lo',f|1)) if not f&1 else None; s.close(); "
+        )
+        argv = ["-c", loopback + argv[1]]
     return subprocess.run(
         bwrap_prefix() + [str(PYTHON), "-S", *argv], stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -83,8 +100,16 @@ def invoke(argv: list[str], timeout: int = 1200) -> subprocess.CompletedProcess:
 
 def preflight() -> dict:
     RESULTS.mkdir(parents=True, exist_ok=True)
-    sentinel = ART / "host-only-sentinel.txt"
+    # Keep this harmless sentinel outside every bind-mounted input/runtime
+    # directory. Never inspect or copy credential files.
+    sentinel = pathlib.Path("/tmp") / f"clover-safe-sentinel-{os.getpid()}-{time.monotonic_ns()}.txt"
     sentinel.write_text("synthetic harmless sandbox sentinel\n")
+    status = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "-uall"], capture_output=True, text=True, check=True).stdout.splitlines()
+    untracked_names = [line[3:] for line in status if line.startswith("?? ")]
+    unsafe_untracked = [name for name in untracked_names if CRED_RE.search(pathlib.Path(name).name)]
+    if unsafe_untracked:
+        sentinel.unlink(missing_ok=True)
+        raise RuntimeError("refusing untracked credential-named source inputs: " + repr(unsafe_untracked))
     host_netns = os.stat("/proc/self/ns/net").st_ino
     sentinel_guest_path = str(sentinel)
     code = r'''import errno, fcntl, hashlib, importlib.util, json, os, re, socket, struct, sys, threading
@@ -141,6 +166,12 @@ print(json.dumps({'initial_env_names':initial_env,'module_generated_env_names':g
         "host_uid": os.getuid(),
         "candidate_root": str(ROOT),
         "candidate_gateway_run_sha256": GATEWAY_SHA,
+        "runner_sha256": RUNNER_SHA,
+        "candidate_git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip(),
+        "tracked_diff_sha256": tracked_diff_sha256(),
+        "run_id": RUN_ID,
+        "untracked_path_names_audited": untracked_names,
+        "credential_named_untracked_paths": unsafe_untracked,
         "runtime": str(RUNTIME),
         "site_packages": str(SITE),
         "mount_policy": "RO /usr,/bin,/lib,/lib64,Python runtime,venv site-packages,candidate; writable results + tmpfs /tmp; no host /home,/run,/var/run,/etc,/tmp or service sockets; minimal /dev",
@@ -158,17 +189,18 @@ print(json.dumps({'initial_env_names':initial_env,'module_generated_env_names':g
     )
     record("PREFLIGHT.json", data)
     (RESULTS / "PREFLIGHT.log").write_text(run.stdout)
+    sentinel.unlink(missing_ok=True)
     return data
 
 
 def run_file(path: str, timeout: int = 1200) -> dict:
     source = path if path.startswith("/work/src/") else "/work/src/" + path
     base, separator, node = source.partition("::")
-    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", base).strip("_")[-100:]
+    stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", base).strip("_")[-80:]
+    slug = f"{stem}-{hashlib.sha256((source + chr(0) + (node if separator else '')).encode()).hexdigest()[:12]}-{RUN_ID}"
     junit = f"/results/{slug}.junit.xml"
-    argv = ["-m", "pytest", "--basetemp=/tmp/pytest-tmp", "-o", "cache_dir=/tmp/pytest-cache", f"--junitxml={junit}", base]
-    if separator:
-        argv.append("::" + node)
+    target = base + ("::" + node if separator else "")
+    argv = ["-m", "pytest", "--basetemp=/tmp/pytest-tmp", "-o", "cache_dir=/tmp/pytest-cache", f"--junitxml={junit}", target]
     guard = """import json, os, re
 ALLOWED = set(SAFE_ENV_NAMES) | {"PYTEST_VERSION", "PYTEST_CURRENT_TEST"}
 PHASE_PATH = None
@@ -207,7 +239,10 @@ def pytest_runtest_logreport(report):
         output = run.stdout
     except subprocess.TimeoutExpired as e:
         code = 124
-        output = (e.stdout or "") + "\nRUNNER_TIMEOUT\n"
+        partial = e.stdout or ""
+        if isinstance(partial, bytes):
+            partial = partial.decode("utf-8", errors="replace")
+        output = partial + "\nRUNNER_TIMEOUT\n"
     log_path = RESULTS / f"{slug}.log"
     log_path.write_text(output + f"\nEXIT_CODE={code}\n")
     cases = []
@@ -229,14 +264,14 @@ def pytest_runtest_logreport(report):
         for line in phase_host.read_text().splitlines():
             if line.strip():
                 phase_events.append(json.loads(line))
-    result = {"file": source, "argv": argv, "exit_code": code, "elapsed_seconds": round(time.time()-started, 3), "source_sha256": GATEWAY_SHA, "junit": str(junit_host), "log": str(log_path), "phase_events_file": str(phase_host), "phase_events": phase_events, "testcases": cases, "output_tail": output[-3000:]}
+    result = {"file": source, "argv": argv, "exit_code": code, "elapsed_seconds": round(time.time()-started, 3), "source_sha256": GATEWAY_SHA, "runner_sha256": RUNNER_SHA, "candidate_git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip(), "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "junit": str(junit_host), "log": str(log_path), "phase_events_file": str(phase_host), "phase_events": phase_events, "testcases": cases, "output_tail": output[-3000:]}
     record(f"{slug}.json", result)
     return result
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["preflight", "pytest", "shard"])
+    parser.add_argument("mode", choices=["preflight", "pytest", "shard", "collect"])
     parser.add_argument("args", nargs=argparse.REMAINDER)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--shard-index", type=int, default=0)
@@ -251,6 +286,28 @@ def main() -> int:
     if not receipt.exists() or not json.loads(receipt.read_text()).get("preflight_ok"):
         print("REFUSING: successful preflight receipt required")
         return 90
+    preflight_receipt = json.loads(receipt.read_text())
+    current_head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    if preflight_receipt.get("candidate_git_head") != current_head or preflight_receipt.get("runner_sha256") != RUNNER_SHA or preflight_receipt.get("candidate_gateway_run_sha256") != GATEWAY_SHA or preflight_receipt.get("tracked_diff_sha256") != tracked_diff_sha256():
+        print("REFUSING: stale preflight candidate/runner/gateway metadata; rerun preflight")
+        return 91
+    if args.mode == "collect":
+        result_path = RESULTS / f"DEFAULT-COLLECTION-{RUN_ID}.json"
+        code = r'''import json, os, pathlib, pytest
+os.environ['PYTEST_PLUGINS']=''
+class Recorder:
+ def pytest_collection_finish(self, session):
+  items=[]
+  for item in session.items:
+   items.append({'nodeid':item.nodeid,'path':str(item.path.relative_to('/work/src')) if str(item.path).startswith('/work/src/') else str(item.path),'markers':sorted(m.name for m in item.iter_markers())})
+  pathlib.Path('/results/DEFAULT-COLLECTION-{RUN_ID}.json').write_text(json.dumps({'nodeids':items},indent=2))
+rc=pytest.main(['/work/src/tests','--collect-only','-q','--basetemp=/tmp/collect-tmp','-o','cache_dir=/tmp/pytest-cache'],plugins=[Recorder()])
+raise SystemExit(rc)'''.replace('RUN_ID', RUN_ID)
+        run = invoke(["-c", code], timeout=args.timeout)
+        receipt = {"exit_code": run.returncode, "runner_sha256": RUNNER_SHA, "candidate_git_head": current_head, "candidate_gateway_run_sha256": GATEWAY_SHA, "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "collection_receipt": str(result_path), "output_tail": run.stdout[-3000:]}
+        record(f"COLLECTION-INVOCATION-{RUN_ID}.json", receipt)
+        print(json.dumps(receipt, indent=2))
+        return run.returncode if result_path.exists() else 1
     if args.mode == "pytest":
         forwarded = args.args
         if forwarded and forwarded[0] == "--":
@@ -273,15 +330,16 @@ def main() -> int:
         print("REFUSING: shard mode accepts whole-file paths only")
         return 2
     selected = [p for i, p in enumerate(files) if i % args.shard_count == args.shard_index]
-    manifest = {"source_sha256": GATEWAY_SHA, "files_input_sorted": files, "shard_index": args.shard_index, "shard_count": args.shard_count, "selected_files": selected, "workers_requested": args.workers, "worker_cap": 2, "resource_policy": "nice +10, per-file timeout, each test process in private user/net/PID/IPC namespaces", "default_selection": "pytest configuration and marker policy from candidate remain active"}
-    record("SHARD-MANIFEST.json", manifest)
+    manifest = {"source_sha256": GATEWAY_SHA, "runner_sha256": RUNNER_SHA, "candidate_git_head": current_head, "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "files_input_sorted": files, "shard_index": args.shard_index, "shard_count": args.shard_count, "selected_files": selected, "workers_requested": args.workers, "worker_cap": 2, "resource_policy": "nice +10, per-file timeout, each test process in private user/net/PID/IPC namespaces", "default_selection": "pytest configuration and marker policy from candidate remain active"}
+    manifest_name = f"SHARD-MANIFEST-{RUN_ID}.json"
+    record(manifest_name, manifest)
     results = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = [executor.submit(run_file, f, args.timeout) for f in selected]
         for future in futures:
             results.append(future.result())
-    outcomes = {"source_sha256": GATEWAY_SHA, "manifest": "SHARD-MANIFEST.json", "selected_file_count": len(selected), "completed_file_count": len(results), "exit_codes": [r["exit_code"] for r in results], "testcase_count": sum(len(r["testcases"]) for r in results), "results": results, "complete": len(results) == len(selected)}
-    record("SHARD-OUTCOMES.json", outcomes)
+    outcomes = {"source_sha256": GATEWAY_SHA, "runner_sha256": RUNNER_SHA, "candidate_git_head": current_head, "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "manifest": manifest_name, "selected_file_count": len(selected), "completed_file_count": len(results), "exit_codes": [r["exit_code"] for r in results], "testcase_count": sum(len(r["testcases"]) for r in results), "results": results, "complete": len(results) == len(selected)}
+    record(f"SHARD-OUTCOMES-{RUN_ID}.json", outcomes)
     print(json.dumps(outcomes, indent=2))
     return 0 if outcomes["complete"] and all(c == 0 for c in outcomes["exit_codes"]) else 1
 
