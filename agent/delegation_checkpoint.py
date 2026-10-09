@@ -344,7 +344,7 @@ class DeclarationOwner:
     slot: AppliedSlot = field(default_factory=AppliedSlot, compare=False, repr=False)
 
 
-@dataclass(frozen=True)
+@dataclass
 class OwnedHandoff:
     """The background job a request handed its remaining phase to.
 
@@ -363,6 +363,9 @@ class OwnedHandoff:
     declared_reason: str
     receipt_ids: tuple
     handoff: Optional[dict] = None
+    continuation_plan: tuple = ()
+    continuation_expires_at: Optional[float] = None
+    runtime_policy: Optional[dict] = None
     consumed_receipts: set = field(default_factory=set, compare=False, repr=False)
 
 
@@ -379,6 +382,13 @@ class IntegrationWindow:
     used: int = 0
     first_work_at: Optional[float] = None
     spent: bool = False
+    continuation_plan: tuple = ()
+    continuation_expires_at: Optional[float] = None
+    previous_delegation_id: str = ""
+    continuation_generation: Optional[int] = None
+    continuation_receipt_id: str = ""
+    continuation_policy: Optional[dict] = None
+    continuation_claimed: bool = False
 
 
 @dataclass(frozen=True)
@@ -400,7 +410,9 @@ class DispatchTicket:
         return self.checkpoint._credit_dispatch(self.generation, kind)
 
     def accept_handoff(
-        self, *, delegation_id: str, goals: Any, subagent_ids: Any = (), handoff: Any = None
+        self, *, delegation_id: str, goals: Any, subagent_ids: Any = (), handoff: Any = None,
+        continuation_plan: Any = None, accepted_task_data: Any = None,
+        runtime_policy: Any = None,
     ) -> bool:
         """A background dispatch was really accepted: it owns the rest.
 
@@ -415,6 +427,9 @@ class DispatchTicket:
             goals=goals,
             subagent_ids=subagent_ids,
             handoff=handoff,
+            continuation_plan=continuation_plan,
+            accepted_task_data=accepted_task_data,
+            runtime_policy=runtime_policy,
         )
 
 
@@ -535,9 +550,24 @@ class DelegationCheckpoint:
                 )
                 while len(self._windows_by_request) > _MAX_WINDOW_HISTORY:
                     del self._windows_by_request[next(iter(self._windows_by_request))]
+                owner = next(
+                    (candidates[r] for r in by_request[request_id]
+                     if candidates[r].continuation_plan),
+                    candidates[by_request[request_id][0]],
+                )
+                plan = owner.continuation_plan
+                expires = owner.continuation_expires_at
+                if expires is None or time.time() >= expires:
+                    plan = ()
                 self.window = IntegrationWindow(
                     request_id=request_id,
                     receipt_ids=tuple(by_request[request_id]),
+                    continuation_plan=tuple(plan),
+                    continuation_expires_at=expires if plan else None,
+                    previous_delegation_id=owner.delegation_id,
+                    continuation_generation=owner.generation if plan else None,
+                    continuation_receipt_id=(by_request[request_id][0] if plan else ""),
+                    continuation_policy=owner.runtime_policy if plan else None,
                 )
                 self.generation += 1
                 logger.debug("delegation checkpoint: integration window opened")
@@ -606,7 +636,7 @@ class DelegationCheckpoint:
                 return self._reserve_locked(tool_name, tool_call_id)
             return self._block(DECISION_REQUIRED, tool_name)
 
-    def admit_spawn(self, is_background: bool) -> Verdict:
+    def admit_spawn(self, is_background: bool, args: Any = None) -> Verdict:
         """Gate one ``delegate_task`` dispatch (not list/steer/stop).
 
         A background dispatch is the one way out of an exhausted request, and a
@@ -616,7 +646,32 @@ class DelegationCheckpoint:
         construction spends nothing and a started child is charged once.
         """
         with self._lock:
-            if self.window is not None or self.phase == PHASE_HANDED_OFF:
+            if self.window is not None:
+                window = self.window
+                from agent.delegation_followthrough import matches_stage
+
+                if (
+                    not is_background or window.spent or window.continuation_claimed
+                    or not window.continuation_plan
+                    or window.continuation_expires_at is None
+                    or time.time() >= window.continuation_expires_at
+                    or not matches_stage(args, window.continuation_plan[0])
+                ):
+                    return self._block(SPAWN_CLOSED, "delegate_task")
+                from tools.async_delegation import claim_continuation_stage
+                if not claim_continuation_stage(
+                    delegation_id=window.previous_delegation_id,
+                    request_id=window.request_id,
+                    generation=window.continuation_generation,
+                    receipt_id=window.continuation_receipt_id,
+                    stage=window.continuation_plan[0],
+                ):
+                    return self._block(SPAWN_CLOSED, "delegate_task")
+                # The durable one-shot claim is taken before dispatch; failures
+                # remain closed rather than risking a duplicate worker.
+                window.continuation_claimed = True
+                return ALLOWED
+            if self.phase == PHASE_HANDED_OFF:
                 return self._block(SPAWN_CLOSED, "delegate_task")
             if is_background:
                 return ALLOWED
@@ -818,27 +873,79 @@ class DelegationCheckpoint:
 
     def _accept_handoff(
         self, generation: int, *, delegation_id: str, goals: Any, subagent_ids: Any,
-        handoff: Any = None,
+        handoff: Any = None, continuation_plan: Any = None, accepted_task_data: Any = None,
+        runtime_policy: Any = None,
     ) -> bool:
+        from agent.delegation_followthrough import (
+            MAX_PLAN_AGE_SECONDS, MAX_STAGES, canonical_stages, persist_accepted_plan,
+        )
+
+        proposed_plan = canonical_stages(continuation_plan)
+        accepted_stages = proposed_plan or ()
+        clean_policy = None
+        if isinstance(runtime_policy, dict):
+            try:
+                clean_policy = json.loads(json.dumps(runtime_policy, sort_keys=True))
+            except (TypeError, ValueError):
+                clean_policy = None
         with self._lock:
-            # Rollback (delegation.checkpoint.enabled: false) means the whole
-            # feature: no ownership, no forced exit, baseline behaviour.
-            if not self.settings.enabled:
+            if not self.settings.enabled or generation != self.generation:
                 return False
-            if generation != self.generation or self.window is not None:
-                return False
-            if self.phase not in (PHASE_FOREGROUND, PHASE_EXHAUSTED):
-                return False
+            if self.window is not None:
+                window = self.window
+                if (
+                    window.spent or not window.continuation_claimed
+                    or not window.continuation_plan
+                    or window.continuation_expires_at is None
+                    or time.time() >= window.continuation_expires_at
+                    or len(window.continuation_plan) > MAX_STAGES
+                    or len(tuple(goals or ())) != 1
+                    or not isinstance(accepted_task_data, list)
+                    or len(accepted_task_data) != 1
+                    or accepted_task_data[0] != window.continuation_plan[0]
+                    or not clean_policy or clean_policy != window.continuation_policy
+                ):
+                    return False
+                # Consume before the next dispatch can acquire more authority.
+                # A failed persistence/update stays closed rather than replaying.
+                accepted_stages = window.continuation_plan[1:]
+                request_id = window.request_id
+                accepted_policy = window.continuation_policy
+                accepted_at = window.continuation_expires_at - MAX_PLAN_AGE_SECONDS
+                window.spent = True
+                self.window = None
+            else:
+                if self.phase not in (PHASE_FOREGROUND, PHASE_EXHAUSTED):
+                    return False
+                request_id = self.request_id
+                accepted_at = time.time()
+                accepted_policy = clean_policy
+                # A malformed/oversized proposal or ambiguous fan-out receipt
+                # adds no continuation authority.
+                accepted_stages = proposed_plan or ()
+                if len(tuple(goals or ())) != 1 or not accepted_policy:
+                    accepted_stages = ()
+
             goal_texts = tuple(str(g)[:_MAX_GOAL_CHARS] for g in (goals or ()))
             if len(goal_texts) <= 1:
                 receipt_ids = (delegation_id,)
             else:
-                receipt_ids = tuple(
-                    f"{delegation_id}:child:{i}" for i in range(len(goal_texts))
-                )
+                receipt_ids = tuple(f"{delegation_id}:child:{i}" for i in range(len(goal_texts)))
+
+            if accepted_stages and not persist_accepted_plan(
+                delegation_id=delegation_id,
+                request_id=request_id,
+                generation=generation,
+                receipt_ids=receipt_ids,
+                stages=accepted_stages,
+                accepted_at=accepted_at,
+                runtime_policy=accepted_policy,
+            ):
+                accepted_stages = ()
+            expires_at = accepted_at + MAX_PLAN_AGE_SECONDS if accepted_stages else None
             self._owned[delegation_id] = OwnedHandoff(
                 delegation_id=delegation_id,
-                request_id=self.request_id,
+                request_id=request_id,
                 generation=generation,
                 accepted_at=self._clock(),
                 goals=goal_texts,
@@ -846,6 +953,9 @@ class DelegationCheckpoint:
                 declared_reason=(self.decision or {}).get("reason", ""),
                 receipt_ids=receipt_ids,
                 handoff=_clean_handoff(handoff),
+                continuation_plan=tuple(accepted_stages),
+                continuation_expires_at=expires_at,
+                runtime_policy=accepted_policy if accepted_stages else None,
             )
             while len(self._owned) > _MAX_OWNED_HANDOFFS:
                 self._evict_owned_locked()
@@ -853,6 +963,41 @@ class DelegationCheckpoint:
             self.exit_armed = True
             logger.debug("delegation checkpoint: handoff accepted (%s)", delegation_id)
             return True
+
+    def expected_followthrough_policy(self) -> Optional[dict]:
+        """Return policy only while a claimed owned stage window is live."""
+        with self._lock:
+            window = self.window
+            if (
+                window is None or not window.continuation_plan
+                or window.continuation_expires_at is None
+                or time.time() >= window.continuation_expires_at
+            ):
+                return None
+            return dict(window.continuation_policy or {})
+
+    def revoke_followthrough(self, subagent_id: str) -> bool:
+        """Explicit stop revokes any unconsumed plan owned by that child."""
+        delegation_ids = []
+        with self._lock:
+            for owned in self._owned.values():
+                if subagent_id and subagent_id in owned.subagent_ids:
+                    owned.continuation_plan = ()
+                    owned.continuation_expires_at = None
+                    delegation_ids.append(owned.delegation_id)
+                    if self.window and self.window.previous_delegation_id == owned.delegation_id:
+                        self.window.continuation_plan = ()
+                        self.window.continuation_expires_at = None
+                        self.window.spent = True
+        if not delegation_ids:
+            return False
+        try:
+            from tools.async_delegation import revoke_continuation_plan
+            for delegation_id in delegation_ids:
+                revoke_continuation_plan(delegation_id)
+        except Exception:
+            logger.debug("continuation revocation persistence failed", exc_info=True)
+        return True
 
     def _evict_owned_locked(self) -> None:
         """Drop the oldest fully consumed handoff, else the oldest of all."""
@@ -1122,7 +1267,7 @@ def _admit_spawn(checkpoint: DelegationCheckpoint, agent: Any, args: Any) -> Ver
     # The dispatcher's own rule decides background; call arguments never do.
     from tools.delegate_tool import _model_background_value
 
-    return checkpoint.admit_spawn(_model_background_value(args, agent))
+    return checkpoint.admit_spawn(_model_background_value(args, agent), args)
 
 
 def admit(agent: Any, function_name: str, function_args: Any, tool_call_id: str) -> Verdict:

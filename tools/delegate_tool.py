@@ -559,6 +559,13 @@ def _handle_control_action(
 
     if action == "stop":
         if interrupt_subagent(sid):
+            try:
+                from agent.delegation_checkpoint import get_checkpoint
+                checkpoint = get_checkpoint(parent_agent)
+                if checkpoint is not None:
+                    checkpoint.revoke_followthrough(sid)
+            except Exception:
+                logger.debug("explicit-stop continuation revocation failed", exc_info=True)
             return json.dumps(
                 {
                     "action": "stop",
@@ -2976,6 +2983,19 @@ def _run_single_child(
             "required": isolation_required,
             "reason": "worktree isolation is disabled",
         }
+        if isolation_required and not isolation_requested:
+            _worktree_outcome = {
+                "status": "blocked",
+                "required": True,
+                "reason": (
+                    "worktree_isolation_required is true but worktree_isolation is "
+                    "disabled; enable isolation or disable the conflicting requirement"
+                ),
+            }
+            raise RuntimeError(
+                "Required workspace isolation was not available; child was not started: "
+                + _worktree_outcome["reason"]
+            )
         if isolation_requested:
             _parent_cwd = None
             try:
@@ -3009,15 +3029,18 @@ def _run_single_child(
                     _worktree_outcome
                 )
             if child_progress_cb:
-                child_progress_cb(
-                    "subagent.progress",
-                    preview=(
-                        "Workspace isolation: "
-                        + str(_worktree_outcome.get("status", "unknown"))
-                        + (" — " + str(_worktree_outcome.get("reason"))
-                           if _worktree_outcome.get("reason") else "")
-                    ),
-                )
+                try:
+                    child_progress_cb(
+                        "subagent.progress",
+                        preview=(
+                            "Workspace isolation: "
+                            + str(_worktree_outcome.get("status", "unknown"))
+                            + (" — " + str(_worktree_outcome.get("reason"))
+                               if _worktree_outcome.get("reason") else "")
+                        ),
+                    )
+                except Exception as exc:
+                    logger.debug("Progress callback update failed: %s", exc)
             if _worktree_outcome.get("status") == "blocked":
                 raise RuntimeError(
                     "Required workspace isolation was not available; child was not started: "
@@ -4042,6 +4065,7 @@ def delegate_task(
     subagent_id: Optional[str] = None,
     message: Optional[str] = None,
     handoff: Optional[Dict[str, Any]] = None,
+    follow_through: Optional[List[Dict[str, Any]]] = None,
     parent_agent=None,
     credentials_cfg: Optional[Dict[str, Any]] = None,
 ) -> str:
@@ -4146,6 +4170,21 @@ def delegate_task(
         )
     except ValueError as exc:
         return tool_error(str(exc))
+
+    # Bind later stages to the effective route and inherited tools, without
+    # persisting credentials or accepting model-requested pin changes.
+    from agent.delegation_followthrough import runtime_policy_for
+    runtime_policy = runtime_policy_for(creds, parent_agent)
+    try:
+        from agent.delegation_checkpoint import get_checkpoint
+        _checkpoint = get_checkpoint(parent_agent)
+        _expected_policy = (
+            _checkpoint.expected_followthrough_policy() if _checkpoint else None
+        )
+        if _expected_policy is not None and _expected_policy != runtime_policy:
+            return tool_error("The predeclared follow-through cannot change the admitted model, provider, endpoint, or inherited tools.")
+    except Exception:
+        return tool_error("Follow-through runtime policy could not be verified; no child was started.")
 
     # Normalize to task list
     max_children = _get_max_concurrent_children()
@@ -4874,6 +4913,12 @@ def delegate_task(
                     goals=_goals,
                     subagent_ids=[s for s in _sids if isinstance(s, str) and s],
                     handoff=handoff,
+                    continuation_plan=follow_through,
+                    accepted_task_data=[
+                        {"goal": t["goal"], **({"context": t["context"]} if t.get("context") is not None else {})}
+                        for t in task_list
+                    ],
+                    runtime_policy=runtime_policy,
                 )
             if any(isinstance(s, str) and s for s in _sids):
                 payload["subagent_ids"] = _sids
@@ -5741,6 +5786,29 @@ DELEGATE_TASK_SCHEMA = {
                     "specific."
                 ),
             },
+            "follow_through": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "description": (
+                    "Optional finite list of exact next-stage task payloads "
+                    "({goal, optional context}). These are proposed task data, "
+                    "not permission: the runtime binds them only if this "
+                    "background dispatch is actually accepted. A later stage "
+                    "can run only once after its owned terminal receipt is "
+                    "claimed, and only when delegate_task repeats the exact "
+                    "next payload. No model/provider/tool overrides are allowed."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "goal": {"type": "string", "minLength": 1, "maxLength": 2000},
+                        "context": {"type": "string", "maxLength": 8000},
+                    },
+                    "required": ["goal"],
+                    "additionalProperties": False,
+                },
+            },
             "handoff": {
                 "type": "object",
                 "description": (
@@ -5824,6 +5892,7 @@ registry.register(
         subagent_id=args.get("subagent_id"),
         message=args.get("message"),
         handoff=args.get("handoff"),
+        follow_through=args.get("follow_through"),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,

@@ -228,9 +228,14 @@ class TestKernelLifecycle(unittest.TestCase):
         worker.start()
         self.assertTrue(started.wait(timeout=1))
         deadline = time.monotonic() + 3
-        while not _KERNELS and time.monotonic() < deadline:
+        kernel = None
+        while time.monotonic() < deadline:
+            candidate = next(iter(_KERNELS.values()), None)
+            if candidate is not None and candidate.proc is not None:
+                kernel = candidate
+                break
             time.sleep(0.02)
-        kernel = next(iter(_KERNELS.values()))
+        self.assertIsNotNone(kernel)
         child = kernel.proc
         time.sleep(1.2)
         self.assertEqual(reap_idle_kernels(), 0)

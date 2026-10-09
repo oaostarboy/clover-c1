@@ -30,12 +30,14 @@ def test_reset_while_same_owner_cell_is_paused_keeps_all_children_tracked(monkey
         results, errors = {}, []
         original = code_kernel.CellAuthority
         caller = None
+        pause_once = [True]
 
         def paused(task_id):
             assert code_kernel._resolve_owner(task_id) == OWNER
             authority = original(task_id)
-            if threading.get_ident() == caller:
+            if threading.get_ident() == caller and pause_once[0]:
                 assert code_kernel._KERNELS.get(key) is old
+                pause_once[0] = False
                 entered.set()
                 assert release.wait(5)
             return authority
@@ -68,7 +70,10 @@ def test_reset_while_same_owner_cell_is_paused_keeps_all_children_tracked(monkey
             assert not worker.is_alive()
             assert code_kernel._KERNELS.get(key) is new_kernel
             assert new_kernel.proc.pid == new_pid and new_kernel.proc.poll() is None
-            assert results["stale"]["status"] != "success"
+            stale_result = results["stale"]
+            assert stale_result["status"] == "error"
+            assert "NameError" in json.dumps(stale_result)
+            assert stale_result["kernel"]["state_reset"] is True
             assert old.proc.poll() is not None
             assert errors == []
         finally:

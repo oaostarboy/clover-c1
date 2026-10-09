@@ -716,6 +716,10 @@ def _reserved_cell_lock(kernel: SessionKernel):
         kernel.lock.release()
 
 
+KERNEL_RESELECT_MAX_ATTEMPTS = 3
+KERNEL_RESELECT_DEADLINE_SECONDS = 3.0
+
+
 def execute_in_session_kernel(
     code: str,
     *,
@@ -737,7 +741,8 @@ def execute_in_session_kernel(
     does not reset it a second time.
     """
     carried = {"state_reset": False, "state_lost": False}
-    while True:
+    deadline = time.monotonic() + KERNEL_RESELECT_DEADLINE_SECONDS
+    for attempt in range(KERNEL_RESELECT_MAX_ATTEMPTS):
         result = _execute_on_selected_kernel(
             code,
             task_id=task_id,
@@ -754,6 +759,21 @@ def execute_in_session_kernel(
         if result is not None:
             return result
         reset = False
+        if attempt + 1 >= KERNEL_RESELECT_MAX_ATTEMPTS or time.monotonic() >= deadline:
+            return json.dumps({
+                "status": "error",
+                "stdout": "",
+                "stderr": "Kernel was repeatedly retired before execution; code did not run.",
+                "state_reset": bool(carried["state_reset"]),
+                "state_lost": bool(carried["state_lost"]),
+                "execution_count": 0,
+            })
+    return json.dumps({
+        "status": "error", "stdout": "",
+        "stderr": "Kernel could not be reserved; code did not run.",
+        "state_reset": bool(carried["state_reset"]),
+        "state_lost": bool(carried["state_lost"]), "execution_count": 0,
+    })
 
 
 def _execute_on_selected_kernel(
@@ -839,7 +859,7 @@ def _execute_on_selected_kernel(
                 # Retired while this caller waited for the kernel lock: never
                 # launch into a kernel the registry no longer tracks. Hand the
                 # caller back to the retry loop with the state seen so far.
-                carried["state_reset"] = state_reset
+                carried["state_reset"] = True
                 carried["state_lost"] = state_lost
                 return None
             assert kernel.proc is not None and kernel.proc.stdin is not None

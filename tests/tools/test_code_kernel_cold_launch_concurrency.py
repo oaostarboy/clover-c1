@@ -140,6 +140,37 @@ def test_retired_cold_kernel_does_not_spawn_untracked_runner(
     assert live_untracked == [], "live runner outside _KERNELS"
 
 
+@pytest.mark.parametrize(("deadline_seconds", "expected_attempts"), [(0.0, 1), (3.0, 3)])
+def test_repeated_retirement_stops_after_bounded_reselection(
+    isolated_kernels, monkeypatch, deadline_seconds, expected_attempts
+):
+    monkeypatch.setattr(code_kernel, "KERNEL_RESELECT_DEADLINE_SECONDS", deadline_seconds)
+    children = isolated_kernels
+    spawned = []
+    _install_fake_spawn(monkeypatch, children, spawned)
+    real_launch = code_kernel._launch_if_registered
+    attempts = []
+
+    def retire_repeatedly(key, kernel, **kwargs):
+        attempts.append(kernel)
+        if len(attempts) <= 3:
+            with code_kernel._KERNELS_LOCK:
+                if code_kernel._KERNELS.get(key) is kernel:
+                    code_kernel._KERNELS.pop(key)
+            return False
+        return real_launch(key, kernel, **kwargs)
+
+    monkeypatch.setattr(code_kernel, "_launch_if_registered", retire_repeatedly)
+    result = _run("repeat-retirement-owner", reset=False)
+
+    assert len(attempts) == expected_attempts, "reselection exceeded its attempt/deadline bound"
+    assert result["status"] == "error"
+    assert result["state_reset"] is True
+    assert "did not run" in result["stderr"]
+    assert spawned == [], "fail-closed retirement must not start a runner"
+
+
+
 def test_stale_cleanup_never_unregisters_replacement(isolated_kernels, monkeypatch):
     """Retired callers' cleanup must not remove the kernel that replaced them."""
     key = ("stale-owner", "session", sys.executable, "", ())
