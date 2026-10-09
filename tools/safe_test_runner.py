@@ -21,7 +21,21 @@ ART = ROOT / ".artifacts/safe-runner"
 RESULTS = ART / "results"
 BWRAP = shutil.which("bwrap") or "/usr/sbin/bwrap"
 UNSHARE = shutil.which("unshare") or "/usr/sbin/unshare"
-VENV = pathlib.Path("/home/starboy/agents/clover-c1/venv")
+def configured_venv() -> pathlib.Path:
+    """Resolve the private test runtime without a machine-specific path."""
+    configured = os.environ.get("CLOVER_TEST_RUNNER_VENV")
+    return pathlib.Path(configured).expanduser() if configured else pathlib.Path(sys.prefix)
+
+
+VENV = configured_venv()
+
+
+def configured_site_packages(venv: pathlib.Path) -> pathlib.Path:
+    """Use the installed versioned package directory when the venv has one."""
+    candidates = sorted((venv / "lib").glob("python*/site-packages"))
+    if candidates:
+        return candidates[-1]
+    return venv / f"lib/python{sys.version_info.major}.{sys.version_info.minor}/site-packages"
 
 
 def select_runtime_python(requested: pathlib.Path, runtime: pathlib.Path) -> pathlib.Path:
@@ -31,7 +45,7 @@ def select_runtime_python(requested: pathlib.Path, runtime: pathlib.Path) -> pat
 
 PYTHON = select_runtime_python(pathlib.Path(sys.executable), VENV / "bin" / "python")
 RUNTIME = PYTHON.parent.parent
-SITE = VENV / "lib/python3.13/site-packages"
+SITE = configured_site_packages(VENV)
 CRED_RE = re.compile(r"(KEY|TOKEN|PASS|SECRET|CREDENTIAL)", re.I)
 GATEWAY_SHA = hashlib.sha256((ROOT / "gateway/run.py").read_bytes()).hexdigest()
 RUNNER_SHA = hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest()
@@ -62,7 +76,7 @@ def record(name: str, payload: dict) -> None:
 
 
 def tracked_diff_sha256() -> str:
-    diff = subprocess.run(["git", "-C", str(ROOT), "diff", "--binary", "HEAD"], capture_output=True, check=True).stdout
+    diff = subprocess.run(["git", "-C", str(ROOT), "diff", "--binary", "HEAD"], stdin=subprocess.DEVNULL, capture_output=True, check=True).stdout
     return hashlib.sha256(diff).hexdigest()
 
 
@@ -157,7 +171,7 @@ def preflight() -> dict:
     # directory. Never inspect or copy credential files.
     sentinel = pathlib.Path("/tmp") / f"clover-safe-sentinel-{os.getpid()}-{time.monotonic_ns()}.txt"
     sentinel.write_text("synthetic harmless sandbox sentinel\n", encoding="utf-8")
-    status = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "-uall"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.splitlines()
+    status = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "-uall"], stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.splitlines()
     untracked_names = [line[3:] for line in status if line.startswith("?? ")]
     unsafe_untracked = [name for name in untracked_names if CRED_RE.search(pathlib.Path(name).name)]
     if unsafe_untracked:
@@ -220,7 +234,7 @@ print(json.dumps({'initial_env_names':initial_env,'module_generated_env_names':g
         "candidate_root": str(ROOT),
         "candidate_gateway_run_sha256": GATEWAY_SHA,
         "runner_sha256": RUNNER_SHA,
-        "candidate_git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip(),
+        "candidate_git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip(),
         "tracked_diff_sha256": tracked_diff_sha256(),
         "run_id": RUN_ID,
         "untracked_path_names_audited": untracked_names,
@@ -291,7 +305,7 @@ def run_file(path: str, timeout: int = 1200) -> dict:
         for line in phase_host.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 phase_events.append(json.loads(line))
-    result = {"file": source, "argv": argv, "exit_code": code, "elapsed_seconds": round(time.time()-started, 3), "source_sha256": GATEWAY_SHA, "runner_sha256": RUNNER_SHA, "candidate_git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip(), "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "junit": str(junit_host), "log": str(log_path), "phase_events_file": str(phase_host), "phase_events": phase_events, "testcases": cases, "output_tail": output[-3000:]}
+    result = {"file": source, "argv": argv, "exit_code": code, "elapsed_seconds": round(time.time()-started, 3), "source_sha256": GATEWAY_SHA, "runner_sha256": RUNNER_SHA, "candidate_git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip(), "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "junit": str(junit_host), "log": str(log_path), "phase_events_file": str(phase_host), "phase_events": phase_events, "testcases": cases, "output_tail": output[-3000:]}
     record(f"{slug}.json", result)
     return result
 
@@ -341,10 +355,10 @@ def run_group(paths: list[str], timeout: int = 1200) -> dict:
         file_events=[e for e in events if e["nodeid"].startswith(prefix)]
         node_ids=sorted({e["nodeid"] for e in file_events})
         file_cases=[{"nodeid":node,"phase_outcomes":[e["outcome"] for e in file_events if e["nodeid"]==node],"duration_seconds":sum(e["duration"] for e in file_events if e["nodeid"]==node)} for node in node_ids]
-        item={"file":path,"group_junit":str(junit_host),"group_log":str(log_path),"phase_events":file_events,"testcases":file_cases,"source_sha256":GATEWAY_SHA,"runner_sha256":RUNNER_SHA,"candidate_git_head":subprocess.run(["git","-C",str(ROOT),"rev-parse","HEAD"],capture_output=True,text=True, encoding="utf-8", errors="replace",check=True).stdout.strip(),"run_id":RUN_ID,"exit_code":code}
+        item={"file":path,"group_junit":str(junit_host),"group_log":str(log_path),"phase_events":file_events,"testcases":file_cases,"source_sha256":GATEWAY_SHA,"runner_sha256":RUNNER_SHA,"candidate_git_head":subprocess.run(["git","-C",str(ROOT),"rev-parse","HEAD"],stdin=subprocess.DEVNULL,capture_output=True,text=True, encoding="utf-8", errors="replace",check=True).stdout.strip(),"run_id":RUN_ID,"exit_code":code}
         file_path=RESULTS/f"{slug}-{hashlib.sha256(path.encode()).hexdigest()[:10]}.json"
         record(file_path.name,item); file_receipts.append(str(file_path))
-    result={"files":paths,"argv":argv,"exit_code":code,"elapsed_seconds":round(time.time()-started,3),"source_sha256":GATEWAY_SHA,"runner_sha256":RUNNER_SHA,"candidate_git_head":subprocess.run(["git","-C",str(ROOT),"rev-parse","HEAD"],capture_output=True,text=True, encoding="utf-8", errors="replace",check=True).stdout.strip(),"tracked_diff_sha256":tracked_diff_sha256(),"run_id":RUN_ID,"junit":str(junit_host),"log":str(log_path),"phase_events_file":str(phase_host),"phase_events":events,"testcases":cases,"per_file_receipts":file_receipts,"output_tail":output[-3000:]}
+    result={"files":paths,"argv":argv,"exit_code":code,"elapsed_seconds":round(time.time()-started,3),"source_sha256":GATEWAY_SHA,"runner_sha256":RUNNER_SHA,"candidate_git_head":subprocess.run(["git","-C",str(ROOT),"rev-parse","HEAD"],stdin=subprocess.DEVNULL,capture_output=True,text=True, encoding="utf-8", errors="replace",check=True).stdout.strip(),"tracked_diff_sha256":tracked_diff_sha256(),"run_id":RUN_ID,"junit":str(junit_host),"log":str(log_path),"phase_events_file":str(phase_host),"phase_events":events,"testcases":cases}
     record(f"{slug}.json",result)
     return result
 
@@ -367,7 +381,7 @@ def main() -> int:
         print("REFUSING: successful preflight receipt required")
         return 90
     preflight_receipt = json.loads(receipt.read_text(encoding="utf-8"))
-    current_head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip()
+    current_head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip()
     if preflight_receipt.get("candidate_git_head") != current_head or preflight_receipt.get("runner_sha256") != RUNNER_SHA or preflight_receipt.get("candidate_gateway_run_sha256") != GATEWAY_SHA or preflight_receipt.get("tracked_diff_sha256") != tracked_diff_sha256():
         print("REFUSING: stale preflight candidate/runner/gateway metadata; rerun preflight")
         return 91

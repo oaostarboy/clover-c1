@@ -23,6 +23,7 @@ import threading
 import time
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -261,7 +262,12 @@ class TestKernelLifecycle(unittest.TestCase):
         token = set_current_session_key("home-local")
         other_env = os.environ.copy()
         other_env["CLOVER_HOME"] = other_home.name
-        other_env["PYTHONPATH"] = os.getcwd()
+        inherited_pythonpath = os.environ.get("PYTHONPATH", "")
+        other_env["PYTHONPATH"] = os.pathsep.join(
+            part
+            for part in (str(Path(__file__).resolve().parents[2]), inherited_pythonpath)
+            if part
+        )
         other_script = (
             "import json, time\n"
             "from unittest.mock import patch\n"

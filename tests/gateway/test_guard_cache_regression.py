@@ -20,17 +20,34 @@ def _config():
 
 
 def test_guard_runs_from_read_only_project_with_private_cache(monkeypatch, tmp_path):
-    project = Path(__file__).parents[2]
-    assert not os.access(project, os.W_OK)
+    project = tmp_path / "readonly-project"
+    gateway_tests = project / "tests" / "gateway"
+    gateway_tests.mkdir(parents=True)
+    (gateway_tests / "test_clean_fixture.py").write_text(
+        "def test_placeholder():\n    pass\n", encoding="utf-8"
+    )
+    readonly_paths = (gateway_tests, gateway_tests.parent, project)
+    original_modes = {path: path.stat().st_mode for path in readonly_paths}
+    monkeypatch.setattr(_GUARD, "_GATEWAY_DIR", gateway_tests)
     monkeypatch.chdir(project)
+    if os.name != "nt":
+        for path in readonly_paths:
+            path.chmod(original_modes[path] & ~0o222)
+            assert path.stat().st_mode & 0o222 == 0
     private_cache = tmp_path / "guard-cache"
     monkeypatch.setenv("CLOVER_TEST_GATEWAY_GUARD_CACHE", str(private_cache))
 
-    _GUARD.pytest_configure(_config())
+    try:
+        _GUARD.pytest_configure(_config())
 
-    entries = list(private_cache.glob("gw-adapter-guard-*"))
-    assert len(entries) == 1
-    assert entries[0].read_text(encoding="utf-8") == "clean"
+        entries = list(private_cache.glob("gw-adapter-guard-*"))
+        assert len(entries) == 1
+        assert entries[0].read_text(encoding="utf-8") == "clean"
+        assert not list(project.rglob("gw-adapter-guard-*"))
+    finally:
+        if os.name != "nt":
+            for path, mode in original_modes.items():
+                path.chmod(mode)
 
 
 def test_guard_default_cache_remains_relative_to_working_directory(monkeypatch, tmp_path):
