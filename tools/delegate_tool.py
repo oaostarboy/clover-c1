@@ -4191,15 +4191,15 @@ def delegate_task(
     # Bind later stages to the effective route and inherited tools, without
     # persisting credentials or accepting model-requested pin changes.
     from agent.delegation_followthrough import runtime_policy_for
-    runtime_policy = runtime_policy_for(creds, parent_agent)
     try:
+        runtime_policy = runtime_policy_for(creds, parent_agent)
         from agent.delegation_checkpoint import get_checkpoint
         _checkpoint = get_checkpoint(parent_agent)
         _expected_policy = (
             _checkpoint.expected_followthrough_policy() if _checkpoint else None
         )
         if _expected_policy is not None and _expected_policy != runtime_policy:
-            return tool_error("The predeclared follow-through cannot change the admitted model, provider, endpoint, or inherited tools.")
+            return tool_error("The predeclared follow-through cannot change the admitted model, provider, endpoint, inherited tools, or approval restrictions.")
     except Exception:
         return tool_error("Follow-through runtime policy could not be verified; no child was started.")
 

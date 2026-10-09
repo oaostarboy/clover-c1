@@ -51,12 +51,52 @@ def runtime_policy_for(creds: Any, parent_agent: Any) -> dict:
         tool_names = getattr(parent_agent, "enabled_toolsets", ()) or ()
     if isinstance(tool_names, str):
         tool_names = [tool_names]
+    def names(value):
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, (list, tuple, set, frozenset, dict)):
+            return []
+        return sorted(str(name) for name in value)
+
+    # Enabled labels alone are not capabilities: child construction separately
+    # subtracts the parent's deny-list and resolves role/depth/MCP restrictions.
+    # Fence all those inputs, plus the actually loaded parent tool names.
+    from tools import approval, delegate_tool
+    depth = getattr(parent_agent, "_delegate_depth", 0)
+    depth = depth if isinstance(depth, int) else 0
+    from clover_cli.config import load_config_readonly
+    config = load_config_readonly()
+    session_key = approval.get_current_session_key(default="") or getattr(parent_agent, "session_id", "")
+    session_key = session_key if isinstance(session_key, str) else ""
+    with approval._lock:
+        approval_state = {
+            "config": approval._get_approval_config(),
+            "transport": (config.get("security") or {}).get("approval", {}),
+            "configured_allowlist": config.get("command_allowlist", []),
+            "process_yolo": approval._YOLO_MODE_FROZEN,
+            "session_yolo": session_key in approval._session_yolo,
+            "session_allowlist": names(approval._session_approved.get(session_key, ())),
+            "permanent_allowlist": names(approval._permanent_approved),
+        }
+    approval_digest = sha256(json.dumps(approval_state, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     return {
         "provider": creds.get("provider") or getattr(parent_agent, "provider", None),
         "model": creds.get("model") or getattr(parent_agent, "model", None),
         "api_mode": creds.get("api_mode") or getattr(parent_agent, "api_mode", None),
         "endpoint_sha256": sha256(str(endpoint).encode("utf-8")).hexdigest() if endpoint else None,
-        "tool_surface": sorted(str(name) for name in tool_names),
+        "tool_surface": names(tool_names),
+        "enabled_toolsets": (None if getattr(parent_agent, "enabled_toolsets", None) is None
+                             else names(getattr(parent_agent, "enabled_toolsets", None))),
+        "disabled_toolsets": names(getattr(parent_agent, "disabled_toolsets", None)),
+        "loaded_tool_names": names(getattr(parent_agent, "valid_tool_names", None)),
+        "child_restrictions": {
+            "parent_depth": depth,
+            "max_spawn_depth": delegate_tool._get_max_spawn_depth(),
+            "orchestrator_enabled": delegate_tool._get_orchestrator_enabled(),
+            "inherit_mcp": delegate_tool._get_inherit_mcp_toolsets(),
+            "blocked_tools": names(delegate_tool.DELEGATE_BLOCKED_TOOLS),
+        },
+        "approval_policy_sha256": approval_digest,
     }
 
 
