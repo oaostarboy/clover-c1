@@ -22,7 +22,14 @@ RESULTS = ART / "results"
 BWRAP = shutil.which("bwrap") or "/usr/sbin/bwrap"
 UNSHARE = shutil.which("unshare") or "/usr/sbin/unshare"
 VENV = pathlib.Path("/home/starboy/agents/clover-c1/venv")
-PYTHON = pathlib.Path(sys.executable).resolve()
+
+
+def select_runtime_python(requested: pathlib.Path, runtime: pathlib.Path) -> pathlib.Path:
+    """Use the interpreter that owns the mounted site-packages when available."""
+    return runtime.resolve() if runtime.is_file() else requested.resolve()
+
+
+PYTHON = select_runtime_python(pathlib.Path(sys.executable), VENV / "bin" / "python")
 RUNTIME = PYTHON.parent.parent
 SITE = VENV / "lib/python3.13/site-packages"
 CRED_RE = re.compile(r"(KEY|TOKEN|PASS|SECRET|CREDENTIAL)", re.I)
