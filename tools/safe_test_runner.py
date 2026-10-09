@@ -56,6 +56,44 @@ def tracked_diff_sha256() -> str:
     return hashlib.sha256(diff).hexdigest()
 
 
+def env_guard_source() -> str:
+    return """import builtins, json, os, re
+ALLOWED = set(SAFE_ENV_NAMES) | {"PYTEST_VERSION", "PYTEST_CURRENT_TEST"}
+SYNTHETIC = getattr(builtins, "_clover_safe_runner_synthetic_env", {})
+CRED = re.compile(r"(KEY|TOKEN|PASS|SECRET|CREDENTIAL)", re.I)
+PHASE_PATH = None
+def _check():
+ names=set(os.environ)
+ bad=sorted(k for k in names if CRED.search(k) and k not in SYNTHETIC)
+ extra=sorted(names-ALLOWED-set(SYNTHETIC))
+ assert not bad and not extra, {"credential_names":bad,"extra_names":extra}
+def pytest_sessionstart(session):
+ global PHASE_PATH
+ _check(); p=getattr(session.config.option,"xmlpath",None)
+ PHASE_PATH=p.replace(".junit.xml",".phases.jsonl") if p else None
+ if PHASE_PATH: open(PHASE_PATH,"w").close()
+def pytest_collection_finish(session): _check()
+def pytest_runtest_logreport(report):
+ if PHASE_PATH:
+  with open(PHASE_PATH,"a") as f: f.write(json.dumps({"nodeid":report.nodeid,"phase":report.when,"outcome":report.outcome,"duration":report.duration})+"\\n")
+""".replace("SAFE_ENV_NAMES", repr(sorted(SAFE_ENV)))
+
+
+def pytest_bootstrap(argv: list[str]) -> str:
+    return (
+        "import builtins, os, runpy, sys\n"
+        f"allowed = {SAFE_ENV!r}\n"
+        "observed = set(os.environ)\n"
+        "assert observed == set(allowed), {'unexpected_env_names':sorted(observed-set(allowed)), 'missing_env_names':sorted(set(allowed)-observed)}\n"
+        "import gateway.run\n"
+        "builtins._clover_safe_runner_synthetic_env = {k:v for k,v in os.environ.items() if k not in allowed}\n"
+        "os.environ.clear(); os.environ.update(allowed)\n"
+        "os.chdir('/work/src')\n"
+        f"sys.argv = ['pytest', *{argv[2:]!r}]\n"
+        "runpy.run_module('pytest', run_name='__main__')\n"
+    )
+
+
 def bwrap_prefix() -> list[str]:
     args = [
         BWRAP, "--die-with-parent", "--new-session",
@@ -201,37 +239,11 @@ def run_file(path: str, timeout: int = 1200) -> dict:
     junit = f"/results/{slug}.junit.xml"
     target = base + ("::" + node if separator else "")
     argv = ["-m", "pytest", "--basetemp=/tmp/pytest-tmp", "-o", "cache_dir=/tmp/pytest-cache", f"--junitxml={junit}", target]
-    guard = """import json, os, re
-ALLOWED = set(SAFE_ENV_NAMES) | {"PYTEST_VERSION", "PYTEST_CURRENT_TEST"}
-PHASE_PATH = None
-CRED = re.compile(r"(KEY|TOKEN|PASS|SECRET|CREDENTIAL)", re.I)
-def _check():
-    bad = sorted(k for k in os.environ if CRED.search(k))
-    extra = sorted(set(os.environ) - ALLOWED)
-    assert not bad and not extra, {"credential_names": bad, "extra_names": extra}
-def pytest_sessionstart(session):
-    global PHASE_PATH
-    _check()
-    xml_path = getattr(session.config.option, "xmlpath", None)
-    PHASE_PATH = xml_path.replace(".junit.xml", ".phases.jsonl") if xml_path else None
-    if PHASE_PATH:
-        open(PHASE_PATH, "w").close()
-def pytest_collection_finish(session): _check()
-def pytest_runtest_logreport(report):
-    if PHASE_PATH:
-        with open(PHASE_PATH, "a") as stream:
-            stream.write(json.dumps({"nodeid": report.nodeid, "phase": report.when, "outcome": report.outcome, "duration": report.duration}) + "\\n")
-""".replace("SAFE_ENV_NAMES", repr(sorted(SAFE_ENV)))
+    guard = env_guard_source()
     guard_tmp = RESULTS / f"safe_env_guard.{os.getpid()}.{threading.get_ident()}.tmp"
     guard_tmp.write_text(guard)
     guard_tmp.replace(RESULTS / "safe_env_guard.py")
-    bootstrap = (
-        "import gateway.run\nimport os, runpy, sys\n"
-        f"allowed = {SAFE_ENV!r}\n"
-        "os.environ.clear(); os.environ.update(allowed)\n"
-        f"sys.argv = ['pytest', *{argv[2:]!r}]\n"
-        "runpy.run_module('pytest', run_name='__main__')\n"
-    )
+    bootstrap = pytest_bootstrap(argv)
     started = time.time()
     try:
         run = invoke(["-c", bootstrap], timeout=timeout)
@@ -277,33 +289,11 @@ def run_group(paths: list[str], timeout: int = 1200) -> dict:
     junit = f"/results/{slug}.junit.xml"
     targets = sources
     argv = ["-m", "pytest", "--basetemp=/tmp/pytest-tmp", "-o", "cache_dir=/tmp/pytest-cache", f"--junitxml={junit}", *targets]
-    guard = """import json, os, re
-ALLOWED = set(SAFE_ENV_NAMES) | {"PYTEST_VERSION", "PYTEST_CURRENT_TEST"}
-PHASE_PATH = None
-CRED = re.compile(r"(KEY|TOKEN|PASS|SECRET|CREDENTIAL)", re.I)
-def _check():
- bad=sorted(k for k in os.environ if CRED.search(k)); extra=sorted(set(os.environ)-ALLOWED)
- assert not bad and not extra, {"credential_names":bad,"extra_names":extra}
-def pytest_sessionstart(session):
- global PHASE_PATH
- _check(); p=getattr(session.config.option,"xmlpath",None)
- PHASE_PATH=p.replace(".junit.xml",".phases.jsonl") if p else None
- if PHASE_PATH: open(PHASE_PATH,"w").close()
-def pytest_collection_finish(session): _check()
-def pytest_runtest_logreport(report):
- if PHASE_PATH:
-  with open(PHASE_PATH,"a") as f: f.write(json.dumps({"nodeid":report.nodeid,"phase":report.when,"outcome":report.outcome,"duration":report.duration})+"\\n")
-""".replace("SAFE_ENV_NAMES", repr(sorted(SAFE_ENV)))
+    guard = env_guard_source()
     temp = RESULTS / f"safe_env_guard.{os.getpid()}.{threading.get_ident()}.tmp"
     temp.write_text(guard)
     temp.replace(RESULTS / "safe_env_guard.py")
-    bootstrap = (
-        "import gateway.run\nimport os, runpy, sys\n"
-        f"allowed = {SAFE_ENV!r}\n"
-        "os.environ.clear(); os.environ.update(allowed)\n"
-        f"sys.argv = ['pytest', *{argv[2:]!r}]\n"
-        "runpy.run_module('pytest', run_name='__main__')\n"
-    )
+    bootstrap = pytest_bootstrap(argv)
     started = time.time()
     try:
         run = invoke(["-c", bootstrap], timeout=timeout)
