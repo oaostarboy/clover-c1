@@ -913,7 +913,8 @@ class DelegationCheckpoint:
                 accepted_policy = window.continuation_policy
                 accepted_at = window.continuation_expires_at - MAX_PLAN_AGE_SECONDS
                 window.spent = True
-                self.window = None
+                # Retain the spent callback overlay: a duplicate in this turn
+                # must not borrow the unrelated live request's spawn budget.
             else:
                 if self.phase not in (PHASE_FOREGROUND, PHASE_EXHAUSTED):
                     return False
@@ -959,7 +960,8 @@ class DelegationCheckpoint:
             )
             while len(self._owned) > _MAX_OWNED_HANDOFFS:
                 self._evict_owned_locked()
-            self.phase = PHASE_HANDED_OFF
+            if request_id == self.request_id:
+                self.phase = PHASE_HANDED_OFF
             self.exit_armed = True
             logger.debug("delegation checkpoint: handoff accepted (%s)", delegation_id)
             return True
@@ -998,6 +1000,24 @@ class DelegationCheckpoint:
         except Exception:
             logger.debug("continuation revocation persistence failed", exc_info=True)
         return True
+
+    def revoke_current_followthrough(self) -> None:
+        """A trusted hard Stop targets this request/window, not unrelated jobs."""
+        with self._lock:
+            request_id = self.window.request_id if self.window else self.request_id
+            children = {
+                sid for owned in self._owned.values() if owned.request_id == request_id
+                for sid in owned.subagent_ids
+            }
+        for sid in children:
+            self.revoke_followthrough(sid)
+
+    def revoke_all_followthrough(self) -> None:
+        """Owner closure revokes every remaining owned plan, not other roots."""
+        with self._lock:
+            children = {sid for owned in self._owned.values() for sid in owned.subagent_ids}
+        for sid in children:
+            self.revoke_followthrough(sid)
 
     def _evict_owned_locked(self) -> None:
         """Drop the oldest fully consumed handoff, else the oldest of all."""
@@ -1048,7 +1068,8 @@ class DelegationCheckpoint:
         ]
 
     def _handoff_text_locked(self) -> str:
-        handoffs = self._live_handoffs_locked(self.request_id)
+        request_id = self.window.request_id if self.window else self.request_id
+        handoffs = self._live_handoffs_locked(request_id)
         if not handoffs:
             return (
                 "**delegated:** accepted background work has no readable summary here.\n\n"

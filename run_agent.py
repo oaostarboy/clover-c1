@@ -3332,6 +3332,10 @@ class AIAgent:
             if session_has_running_agent:
                 running_agent.interrupt(new_message.text)
         """
+        if hard_cancel:
+            checkpoint = getattr(self, "_delegation_checkpoint", None)
+            if checkpoint is not None:
+                checkpoint.revoke_current_followthrough()
         # A hard stop and redirect share one lock so /stop cannot race with an
         # accepted correction and accidentally turn itself into a retry.
         def _admit_hard_cancel() -> None:
@@ -4520,6 +4524,9 @@ class AIAgent:
         Safe to call multiple times (idempotent).  Each cleanup step is
         independently guarded so a failure in one does not prevent the rest.
         """
+        checkpoint = getattr(self, "_delegation_checkpoint", None)
+        if checkpoint is not None:
+            checkpoint.revoke_all_followthrough()
         # AIAgent.close() is the hard owner boundary. Gateway cleanup may
         # call shutdown_memory_provider() first; its idempotence prevents
         # duplicate extraction while direct callers cannot skip provider close.

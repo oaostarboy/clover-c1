@@ -177,6 +177,7 @@ def test_accepted_dispatch_binds_one_exact_followthrough_stage(tmp_path, monkeyp
 
     (accepted,) = run_batch(agent, [('delegate_task', stage)])
     assert accepted['status'] == 'dispatched'
+    assert second_entered.wait(5), 'second worker start is asynchronous, not a dispatch receipt'
     assert len(started) == 2
     assert asyncd.get_continuation_plan(accepted['delegation_id']) is None
     second_row = asyncd.get_durable_delegation(accepted['delegation_id'])

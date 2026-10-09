@@ -353,7 +353,9 @@ def claim_continuation_stage(
         if row is None:
             return False
         state, delivery_state, claim, raw = row
-        if state in {"running", "finalizing"} or not (claim or delivery_state == "delivered"):
+        if state != "completed" or delivery_state == "dropped" or not (claim or delivery_state == "delivered"):
+            # Unknown/interrupted/error effects need inspection, not automatic
+            # next-stage execution. A terminal-looking row is not success.
             return False
         try:
             plan = json.loads(raw) if raw else None
