@@ -337,6 +337,64 @@ def finalize_subagent_worktree(
     return payload
 
 
+def prepare_subagent_worktree(
+    parent_cwd: Optional[str],
+    subagent_id: Optional[str],
+    *,
+    enabled: bool,
+    required: bool,
+    local_backend: bool,
+) -> tuple[Dict[str, Any], Optional[Dict[str, str]]]:
+    """Resolve the actual workspace outcome before a child can start editing."""
+    if not enabled:
+        return {
+            "status": "shared",
+            "required": required,
+            "reason": "worktree isolation is disabled",
+        }, None
+    if not local_backend:
+        return {
+            "status": "blocked" if required else "shared",
+            "required": required,
+            "reason": "worktree isolation is unsupported by the active terminal backend",
+        }, None
+    if not resolve_repo_root(parent_cwd):
+        return {
+            "status": "blocked" if required else "shared",
+            "required": required,
+            "reason": "workspace is not a git repository",
+        }, None
+    try:
+        info = create_subagent_worktree(parent_cwd, subagent_id)
+    except Exception as exc:
+        info = None
+        reason = f"worktree setup failed: {type(exc).__name__}: {exc}"
+    else:
+        reason = "git worktree creation failed"
+    if info is None:
+        return {
+            "status": "blocked" if required else "shared",
+            "required": required,
+            "reason": reason,
+        }, None
+    return {
+        "status": "isolated",
+        "required": required,
+        "path": info.get("path", ""),
+        "branch": info.get("branch", ""),
+    }, info
+
+
+def build_shared_workspace_context_note(outcome: Dict[str, Any]) -> str:
+    """Tell a child before execution that it will share, not isolate, files."""
+    return (
+        "\n\n[WORKSPACE ISOLATION OUTCOME] This task is running in the shared "
+        "workspace, NOT an isolated worktree. Reason: "
+        f"{outcome.get('reason', 'not provided')}. Avoid concurrent edits to the "
+        "same files; do not claim isolation."
+    )
+
+
 def build_worktree_context_note(info: Dict[str, str]) -> str:
     """Context block telling the child to work inside its isolated worktree."""
     return (

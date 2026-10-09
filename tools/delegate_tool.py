@@ -913,17 +913,15 @@ def _get_max_concurrent_children() -> int:
 
 
 def _get_worktree_isolation() -> bool:
-    """Read delegation.worktree_isolation from config (bool, default False).
-
-    Inspired by Muse Code's ``--subagent-worktree-isolation`` (Meta, Aug
-    2026): when enabled, each delegated child gets its own git worktree
-    checked out from the parent's current commit so parallel children never
-    contend for the same working copy. Opt-in and git-only — in a non-git
-    workspace or on a non-local terminal backend the flag is ignored without
-    an error and children share the parent's workspace as before.
-    """
+    """Read delegation.worktree_isolation from config (bool, default False)."""
     cfg = _load_config()
     return bool(cfg.get("worktree_isolation", False))
+
+
+def _get_worktree_isolation_required() -> bool:
+    """Read delegation.worktree_isolation_required (default False)."""
+    cfg = _load_config()
+    return bool(cfg.get("worktree_isolation_required", False))
 
 
 _LEGACY_MAX_ASYNC_WARNED = False
@@ -2883,9 +2881,12 @@ def _run_single_child(
     # Worktree-isolation state: populated inside the try once the child's
     # task id is known; the default no-op keeps every early error path safe.
     _worktree_info: Optional[Dict[str, str]] = None
+    _worktree_outcome: Optional[Dict[str, Any]] = None
 
     def _attach_worktree(entry_dict: Dict[str, Any]) -> None:
         """Inspect + prune the child worktree, reporting into the entry."""
+        if _worktree_outcome is not None:
+            entry_dict["workspace_isolation"] = dict(_worktree_outcome)
         if _worktree_info is None:
             return
         try:
@@ -2963,46 +2964,65 @@ def _run_single_child(
         except Exception as e:
             logger.debug("Child cwd seed failed: %s", e)
 
-        # Opt-in worktree isolation (delegation.worktree_isolation, inspired
-        # by Muse Code's --subagent-worktree-isolation): give this child its
-        # own git worktree branched from the parent repo's HEAD, and start its
-        # terminal there. Git-only and local-backend-only; any failure
-        # degrades silently to the shared-workspace behavior above.
-        if _get_worktree_isolation():
+        # Resolve and expose the isolation outcome before the child begins its
+        # conversation. Optional failures remain explicitly shared; required
+        # failures raise here and never start child execution.
+        from tools import subagent_worktree
+
+        isolation_requested = _get_worktree_isolation()
+        isolation_required = _get_worktree_isolation_required()
+        _worktree_outcome = {
+            "status": "shared",
+            "required": isolation_required,
+            "reason": "worktree isolation is disabled",
+        }
+        if isolation_requested:
+            _parent_cwd = None
             try:
-                from tools import subagent_worktree
+                from tools.terminal_tool import get_session_cwd as _gsc
 
-                if subagent_worktree.local_backend_active():
-                    _parent_cwd = None
-                    try:
-                        from tools.terminal_tool import get_session_cwd as _gsc
-
-                        _parent_cwd = _gsc(parent_task_id)
-                    except Exception:
-                        pass
-                    _worktree_info = subagent_worktree.create_subagent_worktree(
-                        _parent_cwd or _resolve_workspace_hint(parent_agent),
-                        subagent_id=_subagent_id,
-                    )
-                else:
-                    logger.debug(
-                        "worktree isolation skipped: non-local terminal backend"
-                    )
-            except Exception as e:
-                logger.debug("worktree isolation setup failed: %s", e)
+                _parent_cwd = _gsc(parent_task_id)
+            except Exception:
+                pass
+            _worktree_outcome, _worktree_info = subagent_worktree.prepare_subagent_worktree(
+                _parent_cwd or _resolve_workspace_hint(parent_agent),
+                _subagent_id,
+                enabled=True,
+                required=isolation_required,
+                local_backend=subagent_worktree.local_backend_active(),
+            )
             if _worktree_info is not None:
+                from tools.terminal_tool import record_session_cwd as _rsc
+
                 try:
-                    from tools.terminal_tool import record_session_cwd as _rsc
-
                     _rsc(child_task_id, _worktree_info["path"])
-                except Exception as e:
-                    logger.debug("worktree cwd seed failed: %s", e)
-                # The child's context is already built; carry the isolation
-                # contract on the goal message instead (same turn, no
-                # system-prompt mutation).
-                from tools.subagent_worktree import build_worktree_context_note
-
-                goal = goal + build_worktree_context_note(_worktree_info)
+                except Exception as exc:
+                    _worktree_outcome = {
+                        "status": "blocked",
+                        "required": True,
+                        "reason": f"isolated worktree was created but child cwd setup failed: {exc}",
+                    }
+                    raise RuntimeError(_worktree_outcome["reason"]) from exc
+                goal = goal + subagent_worktree.build_worktree_context_note(_worktree_info)
+            else:
+                goal = goal + subagent_worktree.build_shared_workspace_context_note(
+                    _worktree_outcome
+                )
+            if child_progress_cb:
+                child_progress_cb(
+                    "subagent.progress",
+                    preview=(
+                        "Workspace isolation: "
+                        + str(_worktree_outcome.get("status", "unknown"))
+                        + (" — " + str(_worktree_outcome.get("reason"))
+                           if _worktree_outcome.get("reason") else "")
+                    ),
+                )
+            if _worktree_outcome.get("status") == "blocked":
+                raise RuntimeError(
+                    "Required workspace isolation was not available; child was not started: "
+                    + str(_worktree_outcome.get("reason", "unknown setup failure"))
+                )
 
         wall_start = time.time()
         parent_reads_snapshot = (
