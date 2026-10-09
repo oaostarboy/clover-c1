@@ -274,6 +274,9 @@ class SessionKernel:
         self.execution_count = 0
         self.last_used: float = time.monotonic()
         self.cell_authority: Optional[CellAuthority] = None
+        # Serializes this kernel's runner launch against its teardown only.
+        # Never held across cell execution, and never shared across kernels.
+        self.lifecycle_lock = threading.Lock()
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
@@ -434,6 +437,13 @@ atexit.register(shutdown_all_kernels)
 
 
 def _teardown(kernel: SessionKernel) -> None:
+    # A launch in flight (_launch_if_registered) holds lifecycle_lock until its
+    # runner is published on kernel.proc; wait for it so the kill sees it.
+    with kernel.lifecycle_lock:
+        _teardown_unlocked(kernel)
+
+
+def _teardown_unlocked(kernel: SessionKernel) -> None:
     kernel.stop_event.set()
     if kernel.proc is not None and kernel.proc.poll() is None:
         from tools.code_execution_tool import _kill_process_group
@@ -674,6 +684,26 @@ def _remove_kernel_if_current(key: Tuple, kernel: SessionKernel) -> bool:
         return True
 
 
+def _launch_if_registered(key: Tuple, kernel: SessionKernel, **spawn_kwargs) -> bool:
+    """Confirm ``kernel`` is still the registered kernel for ``key``; launch if cold.
+
+    Returns False when the kernel was retired (reset, eviction, or shutdown)
+    after the caller selected it, in which case nothing is launched. The check
+    and the launch share ``kernel.lifecycle_lock``, which ``_teardown`` also
+    takes, so a kernel retired mid-launch is only torn down after its runner
+    is published on ``kernel.proc`` and can be killed there. Only this kernel's
+    launch is serialized; other owners and keys are not blocked.
+    """
+    with kernel.lifecycle_lock:
+        with _KERNELS_LOCK:
+            registered = _KERNELS.get(key) is kernel
+        if not registered:
+            return False
+        if kernel.proc is None:
+            _spawn(kernel, **spawn_kwargs)
+        return True
+
+
 @contextmanager
 def _reserved_cell_lock(kernel: SessionKernel):
     """Acquire a kernel reserved under _KERNELS_LOCK, then retire reservation."""
@@ -701,6 +731,50 @@ def execute_in_session_kernel(
 ) -> str:
     """Run one cell in the (owner, mode, python, cwd, tools) session kernel.
 
+    A caller retired while waiting for its selected kernel (a concurrent reset,
+    eviction, or shutdown replaced it) re-selects the registered kernel. The
+    replacement was already created fresh by the retiring caller, so the retry
+    does not reset it a second time.
+    """
+    carried = {"state_reset": False, "state_lost": False}
+    while True:
+        result = _execute_on_selected_kernel(
+            code,
+            task_id=task_id,
+            mode=mode,
+            child_python=child_python,
+            child_cwd=child_cwd,
+            sandbox_tools=sandbox_tools,
+            timeout=timeout,
+            max_tool_calls=max_tool_calls,
+            reset=reset,
+            is_interrupted=is_interrupted,
+            carried=carried,
+        )
+        if result is not None:
+            return result
+        reset = False
+
+
+def _execute_on_selected_kernel(
+    code: str,
+    *,
+    task_id: str,
+    mode: str,
+    child_python: str,
+    child_cwd: str,
+    sandbox_tools: frozenset,
+    timeout: int,
+    max_tool_calls: int,
+    reset: bool,
+    is_interrupted,
+    carried: dict,
+) -> Optional[str]:
+    """Run one cell in the (owner, mode, python, cwd, tools) session kernel.
+
+    Returns None (without running anything) when the selected kernel was
+    retired before this caller could launch or use it; the caller retries.
+
     The owner is the conversation's session key (``_resolve_owner``), not
     the per-turn task id, so state genuinely survives across user turns of
     one conversation and dies with the session. Every entry also sweeps
@@ -717,12 +791,12 @@ def execute_in_session_kernel(
     owner = _resolve_owner(task_id)
     key = _kernel_key(owner, mode, child_python, child_cwd, sandbox_tools)
     exec_start = time.monotonic()
-    state_reset = False
-    state_lost = False
+    state_reset = carried["state_reset"]
+    state_lost = carried["state_lost"]
 
     with _KERNELS_LOCK:
         expired = _reap_unlocked()
-        state_lost = key in _IDLE_REAPED_KEYS
+        state_lost = state_lost or key in _IDLE_REAPED_KEYS
         _IDLE_REAPED_KEYS.discard(key)
         kernel = _KERNELS.get(key)
         if kernel is not None and (reset or not kernel.alive()):
@@ -753,15 +827,21 @@ def execute_in_session_kernel(
 
     with _reserved_cell_lock(kernel):
         try:
-            if kernel.proc is None:
-                _spawn(
-                    kernel,
-                    task_id=task_id,
-                    child_python=child_python,
-                    child_cwd=child_cwd,
-                    sandbox_tools=sandbox_tools,
-                    max_tool_calls=max_tool_calls,
-                )
+            if not _launch_if_registered(
+                key,
+                kernel,
+                task_id=task_id,
+                child_python=child_python,
+                child_cwd=child_cwd,
+                sandbox_tools=sandbox_tools,
+                max_tool_calls=max_tool_calls,
+            ):
+                # Retired while this caller waited for the kernel lock: never
+                # launch into a kernel the registry no longer tracks. Hand the
+                # caller back to the retry loop with the state seen so far.
+                carried["state_reset"] = state_reset
+                carried["state_lost"] = state_lost
+                return None
             assert kernel.proc is not None and kernel.proc.stdin is not None
 
             # Per-cell tool budget: the RPC loop enforces counter < max, so a
