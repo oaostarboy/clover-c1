@@ -58,7 +58,11 @@ def tracked_diff_sha256() -> str:
 
 def env_guard_source() -> str:
     return """import builtins, json, os, re
-ALLOWED = set(SAFE_ENV_NAMES) | {"PYTEST_VERSION", "PYTEST_CURRENT_TEST"}
+# Only non-secret names with demonstrated import-time test defaults. The child
+# first proves its actual env names equal the safe whitelist; unknown names,
+# including any new credential-shaped name, remain a hard failure.
+TEST_IMPORT_DEFAULTS = {"BROWSER_INACTIVITY_TIMEOUT", "TERMINAL_HOME_MODE", "TERMINAL_LIFETIME_SECONDS"}
+ALLOWED = set(SAFE_ENV_NAMES) | {"PYTEST_VERSION", "PYTEST_CURRENT_TEST"} | TEST_IMPORT_DEFAULTS
 SYNTHETIC = getattr(builtins, "_clover_safe_runner_synthetic_env", {})
 CRED = re.compile(r"(KEY|TOKEN|PASS|SECRET|CREDENTIAL)", re.I)
 PHASE_PATH = None
