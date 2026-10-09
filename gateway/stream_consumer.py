@@ -2243,6 +2243,13 @@ class GatewayStreamConsumer:
                             self._CANCEL_FINAL_EDIT_TIMEOUT,
                             self.chat_id,
                         )
+                except asyncio.CancelledError:
+                    # Stop/reset/shutdown interrupted the cancel-time final
+                    # operation itself.  Fence BEFORE propagating so a
+                    # cancellation-suppressing in-flight call cannot resume
+                    # into a fallback edit/send after this point.
+                    self._abandoned = True
+                    raise
                 except Exception:
                     pass
             elif self._message_id is None:
@@ -2253,10 +2260,15 @@ class GatewayStreamConsumer:
                 # to inherit (review B8). Seal in place with what's already
                 # on screen; sets no delivery flags.
                 try:
-                    await await_bounded(
+                    _sealed, _ = await await_bounded(
                         self._abandon_native_stream(),
                         self._CANCEL_FINAL_EDIT_TIMEOUT,
                     )
+                    if not _sealed:
+                        self._abandoned = True
+                except asyncio.CancelledError:
+                    self._abandoned = True
+                    raise
                 except Exception:
                     pass
             # Only confirm final delivery if the best-effort send above

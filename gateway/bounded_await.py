@@ -49,7 +49,9 @@ def _escalate(task: "asyncio.Future[Any]", label: str, grace: float) -> None:
     the log and in :func:`stuck_task_count` but cannot accumulate silently.
     """
     if task in _STUCK_TASKS:
-        task.cancel()
+        # Already escalated: a task gets at most ONE extra cancel, so a
+        # cleanup it started after the second cancel is never interrupted
+        # again by repeated teardown attempts.
         return
     _STUCK_TASKS.add(task)
     task.add_done_callback(_STUCK_TASKS.discard)
@@ -70,6 +72,8 @@ def abandon(task: "asyncio.Future[Any]") -> None:
     if task.done():
         _consume_abandoned(task)
         return
+    if task in _STUCK_TASKS:
+        return
     task.cancel()
     task.add_done_callback(_consume_abandoned)
 
@@ -83,6 +87,8 @@ def _release(task: "asyncio.Future[Any]", label: str) -> None:
     """
     if task.done():
         _consume_abandoned(task)
+        return
+    if task in _STUCK_TASKS:
         return
     task.cancel()
     loop = task.get_loop()
@@ -193,7 +199,7 @@ async def drain_then_cancel(
         try:
             await asyncio.wait({task}, timeout=max(0.0, drain))
         except asyncio.CancelledError:
-            abandon(task)
+            _release(task, label)
             raise
     if task.done():
         _consume_abandoned(task)
