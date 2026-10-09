@@ -61,6 +61,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -252,6 +253,10 @@ class SessionKernel:
         self.key = key
         self.owner: str = key[0]
         self.lock = threading.Lock()
+        # Callers reserve a selected kernel before leaving the registry lock,
+        # then decrement only after acquiring this execution lock. Housekeeping
+        # must not reap a kernel in that selection-to-lock window.
+        self.pending_cells = 0
         self.proc: Optional[subprocess.Popen] = None
         self.tmpdir: str = ""
         self.sock_path: Optional[str] = None
@@ -387,7 +392,9 @@ def _reap_unlocked() -> List[SessionKernel]:
     doomed = [
         key
         for key, kernel in _KERNELS.items()
-        if now - kernel.last_used > idle_timeout and not kernel.lock.locked()
+        if now - kernel.last_used > idle_timeout
+        and kernel.pending_cells == 0
+        and not kernel.lock.locked()
     ]
     expired = [_KERNELS.pop(key) for key in doomed]
     _IDLE_REAPED_KEYS.update(doomed)
@@ -653,6 +660,18 @@ def _drain_stderr(kernel: SessionKernel) -> str:
     return b"".join(chunks).decode("utf-8", errors="replace")
 
 
+@contextmanager
+def _reserved_cell_lock(kernel: SessionKernel):
+    """Acquire a kernel reserved under _KERNELS_LOCK, then retire reservation."""
+    kernel.lock.acquire()
+    with _KERNELS_LOCK:
+        kernel.pending_cells -= 1
+    try:
+        yield
+    finally:
+        kernel.lock.release()
+
+
 def execute_in_session_kernel(
     code: str,
     *,
@@ -701,6 +720,7 @@ def execute_in_session_kernel(
             kernel = SessionKernel(key)
             _KERNELS[key] = kernel
         kernel.last_used = time.monotonic()
+        kernel.pending_cells += 1
         expired.extend(_evict_over_cap_unlocked(keep=key))
     for doomed in expired:
         _teardown(doomed)
@@ -710,9 +730,14 @@ def execute_in_session_kernel(
     # snapshot a per-call RPC thread would have received — and installed
     # atomically on the kernel so the serving thread dispatches this cell's
     # tool calls under this cell's approval/session/turn identity.
-    authority = CellAuthority(task_id)
+    try:
+        authority = CellAuthority(task_id)
+    except BaseException:
+        with _KERNELS_LOCK:
+            kernel.pending_cells -= 1
+        raise
 
-    with kernel.lock:
+    with _reserved_cell_lock(kernel):
         try:
             if kernel.proc is None:
                 _spawn(

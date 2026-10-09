@@ -19,6 +19,8 @@ tests patch ``_load_config`` directly, mirroring test_code_execution_modes.
 import json
 import os
 import sys
+import threading
+import time
 import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -570,3 +572,72 @@ class TestPerCellRpcAuthority(unittest.TestCase):
             _run("y = 2")
             self.assertIsNot(kernel.cell_authority, first_authority)
             self.assertFalse(kernel.cell_authority.active)
+
+
+class TestKernelReservation(unittest.TestCase):
+    def test_selected_kernel_cannot_be_reaped_before_cell_lock(self):
+        from tools import code_kernel
+        from tools.approval import reset_current_session_key, set_current_session_key
+
+        owner = "reservation-gap-owner"
+
+        def run_as_owner(code, task_id):
+            token = set_current_session_key(owner)
+            try:
+                return json.loads(execute_code(code, task_id=task_id))
+            finally:
+                reset_current_session_key(token)
+
+        with _kernel_config(kernel_idle_timeout=1, timeout=10):
+            seeded = run_as_owner("held = 42", "reservation-seed")
+            self.assertEqual(seeded["status"], "success", seeded)
+            key = next(iter(_KERNELS))
+            self.assertEqual(key[0], owner)
+            kernel = _KERNELS[key]
+            child_pid = kernel.proc.pid
+            entered = threading.Event()
+            release = threading.Event()
+            result = {}
+            errors = []
+            original_authority = code_kernel.CellAuthority
+            caller_ident = None
+
+            def pause_after_selection(task_id):
+                self.assertEqual(code_kernel._resolve_owner(task_id), owner)
+                self.assertIs(_KERNELS[key], kernel)
+                self.assertEqual(kernel.proc.pid, child_pid)
+                authority = original_authority(task_id)
+                if threading.get_ident() == caller_ident:
+                    entered.set()
+                    if not release.wait(5):
+                        raise AssertionError("reservation barrier release timed out")
+                return authority
+
+            def invoke():
+                nonlocal caller_ident
+                caller_ident = threading.get_ident()
+                try:
+                    result["cell"] = run_as_owner("print(held)", "reservation-cell")
+                except BaseException as exc:
+                    errors.append(exc)
+
+            worker = threading.Thread(target=invoke, name="test-owned-reservation-cell")
+            with patch.object(code_kernel, "CellAuthority", side_effect=pause_after_selection):
+                worker.start()
+                self.assertTrue(entered.wait(5), "execution missed selection-to-authority barrier")
+                self.assertEqual(kernel.pending_cells, 1)
+                time.sleep(1.15)
+                self.assertEqual(code_kernel.reap_idle_kernels(), 0)
+                self.assertIs(_KERNELS.get(key), kernel)
+                self.assertEqual([item.proc.pid for item in _KERNELS.values()], [child_pid])
+                self.assertIsNone(kernel.proc.poll())
+                release.set()
+                worker.join(8)
+            self.assertFalse(worker.is_alive(), "selected cell did not finish")
+            self.assertEqual(errors, [])
+            self.assertEqual(result["cell"]["status"], "success", result)
+            self.assertEqual(result["cell"]["output"].strip(), "42")
+            self.assertTrue(result["cell"]["kernel"]["reused"])
+            self.assertEqual(kernel.pending_cells, 0)
+            self.assertEqual(kernel.proc.pid, child_pid)
+            self.assertIsNone(kernel.proc.poll())
