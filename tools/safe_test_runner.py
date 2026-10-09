@@ -56,7 +56,9 @@ SAFE_ENV = {
 
 def record(name: str, payload: dict) -> None:
     RESULTS.mkdir(parents=True, exist_ok=True)
-    (RESULTS / name).write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    (RESULTS / name).write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def tracked_diff_sha256() -> str:
@@ -110,7 +112,7 @@ def pytest_bootstrap(argv: list[str]) -> str:
 def bwrap_prefix() -> list[str]:
     args = [
         BWRAP, "--die-with-parent", "--new-session",
-        "--unshare-user", "--uid", str(os.getuid()), "--gid", str(os.getgid()),
+        "--unshare-user", "--uid", str(os.getuid()), "--gid", str(os.getgid()),  # windows-footgun: ok — Linux namespace runner only
         "--unshare-net", "--unshare-pid", "--unshare-ipc",
         "--ro-bind", "/usr", "/usr", "--ro-bind", "/bin", "/bin",
         "--ro-bind", "/lib", "/lib", "--ro-bind", "/lib64", "/lib64",
@@ -144,7 +146,7 @@ def invoke(argv: list[str], timeout: int = 1200) -> subprocess.CompletedProcess:
         argv = ["-c", loopback + argv[1]]
     return subprocess.run(
         bwrap_prefix() + [str(PYTHON), "-S", *argv], stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
         timeout=timeout, env=clean_host_env, preexec_fn=lambda: os.nice(10),
     )
 
@@ -154,8 +156,8 @@ def preflight() -> dict:
     # Keep this harmless sentinel outside every bind-mounted input/runtime
     # directory. Never inspect or copy credential files.
     sentinel = pathlib.Path("/tmp") / f"clover-safe-sentinel-{os.getpid()}-{time.monotonic_ns()}.txt"
-    sentinel.write_text("synthetic harmless sandbox sentinel\n")
-    status = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "-uall"], capture_output=True, text=True, check=True).stdout.splitlines()
+    sentinel.write_text("synthetic harmless sandbox sentinel\n", encoding="utf-8")
+    status = subprocess.run(["git", "-C", str(ROOT), "status", "--porcelain", "-uall"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.splitlines()
     untracked_names = [line[3:] for line in status if line.startswith("?? ")]
     unsafe_untracked = [name for name in untracked_names if CRED_RE.search(pathlib.Path(name).name)]
     if unsafe_untracked:
@@ -204,7 +206,7 @@ x=socket.socket(); x.settimeout(2)
 try: x.connect(('192.0.2.1',9)); ext='unexpected-connect'
 except OSError as e: ext={'errno':e.errno,'name':errno.errorcode.get(e.errno)}
 x.close(); assert isinstance(ext,dict) and ext['name']=='ENETUNREACH', ext
-print(json.dumps({'initial_env_names':initial_env,'module_generated_env_names':generated_env_names,'post_whitelist_env_names':sorted(os.environ),'post_whitelist_credential_named_env':post_whitelist_cred,'env_names':sorted(os.environ),'credential_named_env':cred,'netns_inode':os.stat('/proc/self/ns/net').st_ino,'interfaces':interfaces,'routes':routes,'loopback':loop,'external_testnet_connect':ext,'sentinel':sentinel,'host_sockets_visible':sockets,'uid':os.getuid(),'gid':os.getgid(),'pidns_inode':os.stat('/proc/self/ns/pid').st_ino,'ipcns_inode':os.stat('/proc/self/ns/ipc').st_ino,'python_executable':sys.executable,'python_runtime_ready':True,'pytest_ready':True,'module_path':module_path,'module_sha256':module_sha}))'''.replace("SENTINEL", repr(sentinel_guest_path)).replace("EXPECTED_ENV", repr(SAFE_ENV))
+print(json.dumps({'initial_env_names':initial_env,'module_generated_env_names':generated_env_names,'post_whitelist_env_names':sorted(os.environ),'post_whitelist_credential_named_env':post_whitelist_cred,'env_names':sorted(os.environ),'credential_named_env':cred,'netns_inode':os.stat('/proc/self/ns/net').st_ino,'interfaces':interfaces,'routes':routes,'loopback':loop,'external_testnet_connect':ext,'sentinel':sentinel,'host_sockets_visible':sockets,'uid':os.getuid(),'gid':os.getgid(),'pidns_inode':os.stat('/proc/self/ns/pid').st_ino,'ipcns_inode':os.stat('/proc/self/ns/ipc').st_ino,'python_executable':sys.executable,'python_runtime_ready':True,'pytest_ready':True,'module_path':module_path,'module_sha256':module_sha})) # windows-footgun: ok — Linux namespace preflight'''.replace("SENTINEL", repr(sentinel_guest_path)).replace("EXPECTED_ENV", repr(SAFE_ENV))
     run = invoke(["-c", code], timeout=45)
     lines = run.stdout.strip().splitlines()
     data = json.loads(lines[-1]) if run.returncode == 0 and lines else {"output": run.stdout[-4000:]}
@@ -214,11 +216,11 @@ print(json.dumps({'initial_env_names':initial_env,'module_generated_env_names':g
         "distinct_netns": data.get("netns_inode") != host_netns,
         "bwrap": BWRAP,
         "unshare": UNSHARE,
-        "host_uid": os.getuid(),
+        "host_uid": os.getuid(),  # windows-footgun: ok — Linux namespace runner only
         "candidate_root": str(ROOT),
         "candidate_gateway_run_sha256": GATEWAY_SHA,
         "runner_sha256": RUNNER_SHA,
-        "candidate_git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip(),
+        "candidate_git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip(),
         "tracked_diff_sha256": tracked_diff_sha256(),
         "run_id": RUN_ID,
         "untracked_path_names_audited": untracked_names,
@@ -239,7 +241,7 @@ print(json.dumps({'initial_env_names':initial_env,'module_generated_env_names':g
         and data.get("module_sha256") == GATEWAY_SHA
     )
     record("PREFLIGHT.json", data)
-    (RESULTS / "PREFLIGHT.log").write_text(run.stdout)
+    (RESULTS / "PREFLIGHT.log").write_text(run.stdout, encoding="utf-8")
     sentinel.unlink(missing_ok=True)
     return data
 
@@ -254,7 +256,7 @@ def run_file(path: str, timeout: int = 1200) -> dict:
     argv = ["-m", "pytest", "--basetemp=/tmp/pytest-tmp", "-o", "cache_dir=/tmp/pytest-cache", f"--junitxml={junit}", target]
     guard = env_guard_source()
     guard_tmp = RESULTS / f"safe_env_guard.{os.getpid()}.{threading.get_ident()}.tmp"
-    guard_tmp.write_text(guard)
+    guard_tmp.write_text(guard, encoding="utf-8")
     guard_tmp.replace(RESULTS / "safe_env_guard.py")
     bootstrap = pytest_bootstrap(argv)
     started = time.time()
@@ -269,7 +271,7 @@ def run_file(path: str, timeout: int = 1200) -> dict:
             partial = partial.decode("utf-8", errors="replace")
         output = partial + "\nRUNNER_TIMEOUT\n"
     log_path = RESULTS / f"{slug}.log"
-    log_path.write_text(output + f"\nEXIT_CODE={code}\n")
+    log_path.write_text(output + f"\nEXIT_CODE={code}\n", encoding="utf-8")
     cases = []
     junit_host = RESULTS / f"{slug}.junit.xml"
     if junit_host.exists():
@@ -286,10 +288,10 @@ def run_file(path: str, timeout: int = 1200) -> dict:
     phase_host = RESULTS / f"{slug}.phases.jsonl"
     phase_events = []
     if phase_host.exists():
-        for line in phase_host.read_text().splitlines():
+        for line in phase_host.read_text(encoding="utf-8").splitlines():
             if line.strip():
                 phase_events.append(json.loads(line))
-    result = {"file": source, "argv": argv, "exit_code": code, "elapsed_seconds": round(time.time()-started, 3), "source_sha256": GATEWAY_SHA, "runner_sha256": RUNNER_SHA, "candidate_git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip(), "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "junit": str(junit_host), "log": str(log_path), "phase_events_file": str(phase_host), "phase_events": phase_events, "testcases": cases, "output_tail": output[-3000:]}
+    result = {"file": source, "argv": argv, "exit_code": code, "elapsed_seconds": round(time.time()-started, 3), "source_sha256": GATEWAY_SHA, "runner_sha256": RUNNER_SHA, "candidate_git_head": subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip(), "tracked_diff_sha256": tracked_diff_sha256(), "run_id": RUN_ID, "junit": str(junit_host), "log": str(log_path), "phase_events_file": str(phase_host), "phase_events": phase_events, "testcases": cases, "output_tail": output[-3000:]}
     record(f"{slug}.json", result)
     return result
 
@@ -304,7 +306,7 @@ def run_group(paths: list[str], timeout: int = 1200) -> dict:
     argv = ["-m", "pytest", "--basetemp=/tmp/pytest-tmp", "-o", "cache_dir=/tmp/pytest-cache", f"--junitxml={junit}", *targets]
     guard = env_guard_source()
     temp = RESULTS / f"safe_env_guard.{os.getpid()}.{threading.get_ident()}.tmp"
-    temp.write_text(guard)
+    temp.write_text(guard, encoding="utf-8")
     temp.replace(RESULTS / "safe_env_guard.py")
     bootstrap = pytest_bootstrap(argv)
     started = time.time()
@@ -317,7 +319,7 @@ def run_group(paths: list[str], timeout: int = 1200) -> dict:
         if isinstance(partial, bytes): partial = partial.decode("utf-8", errors="replace")
         output = partial + "\nRUNNER_TIMEOUT\n"
     log_path = RESULTS / f"{slug}.log"
-    log_path.write_text(output + f"\nEXIT_CODE={code}\n")
+    log_path.write_text(output + f"\nEXIT_CODE={code}\n", encoding="utf-8")
     junit_host = RESULTS / f"{slug}.junit.xml"
     cases=[]
     if junit_host.exists():
@@ -329,7 +331,7 @@ def run_group(paths: list[str], timeout: int = 1200) -> dict:
     phase_host=RESULTS / f"{slug}.phases.jsonl"
     events=[]
     if phase_host.exists():
-        for line in phase_host.read_text().splitlines():
+        for line in phase_host.read_text(encoding="utf-8").splitlines():
             if line.strip(): events.append(json.loads(line))
     file_receipts=[]
     for path in paths:
@@ -339,10 +341,10 @@ def run_group(paths: list[str], timeout: int = 1200) -> dict:
         file_events=[e for e in events if e["nodeid"].startswith(prefix)]
         node_ids=sorted({e["nodeid"] for e in file_events})
         file_cases=[{"nodeid":node,"phase_outcomes":[e["outcome"] for e in file_events if e["nodeid"]==node],"duration_seconds":sum(e["duration"] for e in file_events if e["nodeid"]==node)} for node in node_ids]
-        item={"file":path,"group_junit":str(junit_host),"group_log":str(log_path),"phase_events":file_events,"testcases":file_cases,"source_sha256":GATEWAY_SHA,"runner_sha256":RUNNER_SHA,"candidate_git_head":subprocess.run(["git","-C",str(ROOT),"rev-parse","HEAD"],capture_output=True,text=True,check=True).stdout.strip(),"run_id":RUN_ID,"exit_code":code}
+        item={"file":path,"group_junit":str(junit_host),"group_log":str(log_path),"phase_events":file_events,"testcases":file_cases,"source_sha256":GATEWAY_SHA,"runner_sha256":RUNNER_SHA,"candidate_git_head":subprocess.run(["git","-C",str(ROOT),"rev-parse","HEAD"],capture_output=True,text=True, encoding="utf-8", errors="replace",check=True).stdout.strip(),"run_id":RUN_ID,"exit_code":code}
         file_path=RESULTS/f"{slug}-{hashlib.sha256(path.encode()).hexdigest()[:10]}.json"
         record(file_path.name,item); file_receipts.append(str(file_path))
-    result={"files":paths,"argv":argv,"exit_code":code,"elapsed_seconds":round(time.time()-started,3),"source_sha256":GATEWAY_SHA,"runner_sha256":RUNNER_SHA,"candidate_git_head":subprocess.run(["git","-C",str(ROOT),"rev-parse","HEAD"],capture_output=True,text=True,check=True).stdout.strip(),"tracked_diff_sha256":tracked_diff_sha256(),"run_id":RUN_ID,"junit":str(junit_host),"log":str(log_path),"phase_events_file":str(phase_host),"phase_events":events,"testcases":cases,"per_file_receipts":file_receipts,"output_tail":output[-3000:]}
+    result={"files":paths,"argv":argv,"exit_code":code,"elapsed_seconds":round(time.time()-started,3),"source_sha256":GATEWAY_SHA,"runner_sha256":RUNNER_SHA,"candidate_git_head":subprocess.run(["git","-C",str(ROOT),"rev-parse","HEAD"],capture_output=True,text=True, encoding="utf-8", errors="replace",check=True).stdout.strip(),"tracked_diff_sha256":tracked_diff_sha256(),"run_id":RUN_ID,"junit":str(junit_host),"log":str(log_path),"phase_events_file":str(phase_host),"phase_events":events,"testcases":cases,"per_file_receipts":file_receipts,"output_tail":output[-3000:]}
     record(f"{slug}.json",result)
     return result
 
@@ -361,11 +363,11 @@ def main() -> int:
         print(json.dumps(result, indent=2))
         return 0 if result.get("preflight_ok") else 1
     receipt = RESULTS / "PREFLIGHT.json"
-    if not receipt.exists() or not json.loads(receipt.read_text()).get("preflight_ok"):
+    if not receipt.exists() or not json.loads(receipt.read_text(encoding="utf-8")).get("preflight_ok"):
         print("REFUSING: successful preflight receipt required")
         return 90
-    preflight_receipt = json.loads(receipt.read_text())
-    current_head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    preflight_receipt = json.loads(receipt.read_text(encoding="utf-8"))
+    current_head = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True).stdout.strip()
     if preflight_receipt.get("candidate_git_head") != current_head or preflight_receipt.get("runner_sha256") != RUNNER_SHA or preflight_receipt.get("candidate_gateway_run_sha256") != GATEWAY_SHA or preflight_receipt.get("tracked_diff_sha256") != tracked_diff_sha256():
         print("REFUSING: stale preflight candidate/runner/gateway metadata; rerun preflight")
         return 91
@@ -378,7 +380,7 @@ class Recorder:
   items=[]
   for item in session.items:
    items.append({'nodeid':item.nodeid,'path':str(item.path.relative_to('/work/src')) if str(item.path).startswith('/work/src/') else str(item.path),'markers':sorted(m.name for m in item.iter_markers())})
-  pathlib.Path('/results/DEFAULT-COLLECTION-RUN_ID.json').write_text(json.dumps({'nodeids':items},indent=2))
+  pathlib.Path('/results/DEFAULT-COLLECTION-RUN_ID.json').write_text(json.dumps({'nodeids':items},indent=2),encoding='utf-8')
 rc=pytest.main(['/work/src/tests','--collect-only','-q','--basetemp=/tmp/collect-tmp','-o','cache_dir=/tmp/pytest-cache'],plugins=[Recorder()])
 raise SystemExit(rc)'''.replace('RUN_ID', RUN_ID)
         run = invoke(["-c", code], timeout=args.timeout)
