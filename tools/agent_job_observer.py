@@ -349,7 +349,8 @@ class AgentJobObserver:
             return
         if exit_code == 0 and not result_error and (terminal_status == "built_unverified" or self._result_is_error is None):
             self._emit("subagent.complete", status="incomplete", duration_seconds=duration,
-                       reason="finished; task completion not verified", summary=result_text or "")
+                       reason="finished; task completion not verified", summary=result_text or "",
+                       exited_unverified=True)
             return
         if exit_code == 0 and not result_error:
             self._emit("subagent.complete", status="completed", duration_seconds=duration,
