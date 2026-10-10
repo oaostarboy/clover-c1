@@ -889,6 +889,8 @@ async def test_readiness_test_cleans_up_actual_fixture_on_early_failure(monkeypa
     real_ws_connect = TestClient.ws_connect
     real_wait_for = asyncio.wait_for
     real_event_factory = threading.Event
+    real_asyncio_module = asyncio
+    real_threading_module = threading
     real_ready = browser_test._wait_for_controller_ready
 
     class ObservedEvent:
@@ -966,9 +968,29 @@ async def test_readiness_test_cleans_up_actual_fixture_on_early_failure(monkeypa
 
     monkeypatch.setattr(browser_test, "_adapter", adapter_factory)
     monkeypatch.setattr(TestClient, "ws_connect", ws_connect)
-    monkeypatch.setattr(browser_test.threading, "Event", ObservedEvent)
+    from types import SimpleNamespace
+
+    threading_proxy = SimpleNamespace(
+        **{
+            name: getattr(real_threading_module, name)
+            for name in dir(real_threading_module)
+            if not name.startswith("__")
+        }
+    )
+    threading_proxy.Event = ObservedEvent
+    asyncio_proxy = SimpleNamespace(
+        **{
+            name: getattr(real_asyncio_module, name)
+            for name in dir(real_asyncio_module)
+            if not name.startswith("__")
+        }
+    )
+    asyncio_proxy.wait_for = wait_for
+    monkeypatch.setattr(browser_test, "threading", threading_proxy)
+    monkeypatch.setattr(browser_test, "asyncio", asyncio_proxy)
+    assert real_threading_module.Event is real_event_factory
+    assert real_asyncio_module.wait_for is real_wait_for
     monkeypatch.setattr(browser_test, "_wait_for_controller_ready", ready)
-    monkeypatch.setattr(browser_test.asyncio, "wait_for", wait_for)
     isolated_patch = pytest.MonkeyPatch()
     try:
         with pytest.raises(RuntimeError) as raised:
