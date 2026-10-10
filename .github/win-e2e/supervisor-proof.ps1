@@ -127,6 +127,11 @@ except Exception as exc:
   Set-Content -Path $probeFile -Value $probe -Encoding utf8
   Push-Location $env:INSTALL_DIR
   try { & "$env:INSTALL_DIR\venv\Scripts\python.exe" $probeFile 2>&1 | ForEach-Object { Write-Host "[$label] [scm-probe] $_" } } finally { Pop-Location }
+  # Pre-update identity, for the post-update proof that the RUNNING gateway changed.
+  $pre = Get-GatewayIdentity
+  Write-Host "[$label] pre-update identity: statePid=$($pre.StatePid) start=$($pre.StartTime) listener=$($pre.ListenerPid) code_sha='$($pre.CodeSha)' pidIsGateway=$($pre.PidIsGateway)"
+  "OLD_GATEWAY_CODE_SHA=$($pre.CodeSha)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+  "OLD_GATEWAY_START_TIME=$($pre.StartTime)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
   return [pscustomobject]@{ Pid = $gw; ViaSchedule = $viaSchedule }
 }
 
@@ -191,6 +196,66 @@ function Invoke-PathUpdate([string]$label) {
   return $code
 }
 
+function Get-GatewayProcessIds {
+  # Every process id belonging to a gateway (launcher + interpreter).
+  $all = @(Get-CimInstance Win32_Process | Where-Object {
+    $_.CommandLine -and $_.CommandLine -match 'clover_cli[.]main' -and
+    $_.CommandLine -match 'gateway\s+run' -and $_.CommandLine -notmatch '\s-c\s' })
+  ,@($all | ForEach-Object { [int]$_.ProcessId })
+}
+
+function Get-ApiListenerPid {
+  # The process that actually owns the API listening socket, or $null.
+  try {
+    $c = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:API_PORT) -ErrorAction Stop | Select-Object -First 1)
+    if ($c.Count -eq 1) { return [int]$c[0].OwningProcess }
+  } catch { }
+  return $null
+}
+
+function Get-GatewayIdentity {
+  # One consistent observation of "which gateway is this": the PID/start time it
+  # wrote to gateway_state.json, the code SHA it stamped, and whether that PID is
+  # a live gateway process that also owns the API listener.
+  $st = Get-GatewayState
+  $ids = Get-GatewayProcessIds
+  $statePid = if ($st -and $st.pid) { [int]$st.pid } else { 0 }
+  [pscustomobject]@{
+    StatePid     = $statePid
+    StartTime    = "$($st.start_time)"
+    CodeSha      = "$($st.code_sha)"
+    State        = "$($st.gateway_state)"
+    ListenerPid  = Get-ApiListenerPid
+    PidIsGateway = ($statePid -ne 0 -and $ids -contains $statePid)
+  }
+}
+
+function Test-GatewayRunsTarget($identity, [string]$expectedSha, [string]$oldSha) {
+  # Pure check: returns the list of violated criteria (empty = the RUNNING
+  # gateway is a live process, owns the API port, and stamped the target SHA).
+  $bad = @()
+  if (-not $identity.PidIsGateway) { $bad += "gateway_state.json pid $($identity.StatePid) is not a live gateway process" }
+  if ($null -eq $identity.ListenerPid -or $identity.ListenerPid -ne $identity.StatePid) { $bad += "API listener pid '$($identity.ListenerPid)' is not the state pid $($identity.StatePid)" }
+  if ([string]::IsNullOrEmpty($identity.CodeSha)) { $bad += "running gateway stamped no code_sha" }
+  elseif ($identity.CodeSha -ne $expectedSha) { $bad += "running gateway code_sha $($identity.CodeSha) != installed target HEAD $expectedSha" }
+  if ($oldSha -and $identity.CodeSha -eq $oldSha) { $bad += "running gateway code_sha is still the pre-update $oldSha" }
+  ,@($bad)
+}
+
+function Test-InstalledTreeIsTarget([string]$targetBranch) {
+  # The checkout the update left behind must hold the target's TREE (HEAD's
+  # object id is the replaced main commit by design, so compare trees), with no
+  # local modification on top of it.
+  $d = $env:INSTALL_DIR
+  $bad = @()
+  $wantTree = (git -C $d rev-parse "refs/remotes/origin/$targetBranch^{tree}").Trim()
+  $haveTree = (git -C $d rev-parse "HEAD^{tree}").Trim()
+  if ($wantTree -ne $haveTree) { $bad += "installed tree $haveTree != target tree $wantTree" }
+  git -C $d diff --quiet HEAD
+  if ($LASTEXITCODE -ne 0) { $bad += "installed working tree differs from HEAD" }
+  ,@($bad)
+}
+
 function Measure-Liveness90([string]$label) {
   # Up within 120 s after the update chain finished, then exactly one gateway,
   # api port bound, state running, no stale restart request, for 90 s straight.
@@ -198,14 +263,18 @@ function Measure-Liveness90([string]$label) {
   Wait-UpdateChainDone 1800
   $deadline = (Get-Date).AddSeconds(120)
   while ((Get-Date) -lt $deadline -and -not ((Get-GatewayRoots).Count -eq 1 -and (Test-ApiPort))) { Start-Sleep -Seconds 2 }
-  $end = (Get-Date).AddSeconds(90); $n = 0
+  $end = (Get-Date).AddSeconds(90); $n = 0; $firstId = $null
   while ((Get-Date) -lt $end) {
     $roots = Get-GatewayRoots; $port = Test-ApiPort; $st = Get-GatewayState
     $sched = (Get-ScheduleServiceInfo).State
     $n++
-    $line = "[$label] t=$n roots=$($roots.Count) pids=$(($roots | ForEach-Object ProcessId) -join ',') port=$port state=$($st.gateway_state) restart_requested=$($st.restart_requested) Schedule=$sched"
+    $id = Get-GatewayIdentity
+    if ($null -eq $firstId) { $firstId = $id }
+    $line = "[$label] t=$n roots=$($roots.Count) pids=$(($roots | ForEach-Object ProcessId) -join ',') port=$port state=$($st.gateway_state) restart_requested=$($st.restart_requested) Schedule=$sched statePid=$($id.StatePid) start=$($id.StartTime) listener=$($id.ListenerPid) sha=$($id.CodeSha)"
     Write-Host $line
     if ($roots.Count -ne 1 -or -not $port -or $st.restart_requested -eq $true -or $st.gateway_state -ne 'running' -or $sched -ne 'Running') { $bad += $line }
+    # Identity must be one and the same live gateway for the WHOLE window.
+    if (-not $id.PidIsGateway -or $id.ListenerPid -ne $id.StatePid -or $id.StatePid -ne $firstId.StatePid -or $id.StartTime -ne $firstId.StartTime -or $id.CodeSha -ne $firstId.CodeSha) { $bad += "identity drift: $line" }
     Start-Sleep -Seconds 3
   }
   ,@($bad)
@@ -224,12 +293,25 @@ function Assert-UpdateSucceeded([string]$label, [int]$logStart, $exitCode, [int]
   if ($starts -lt 1) { $bad += "no post-update 'Starting Clover Gateway' in gateway.log (gateway not respawned)" }
   if ($newRoot -eq $oldGatewayPid) { $bad += "gateway pid unchanged ($newRoot): it was not restarted by the update" }
   git -C "$env:INSTALL_DIR" log --oneline -1 | Out-Host
+  # Installed tree is the target's, and the RUNNING gateway stamped that checkout's SHA.
+  $targetBranch = if ($env:PHASE -eq 'old2new') { $env:TARGET_BRANCH } else { $env:NEXT_BRANCH }
+  $bad += Test-InstalledTreeIsTarget $targetBranch
+  $installedSha = (git -C "$env:INSTALL_DIR" rev-parse HEAD).Trim()
+  $finalId = Get-GatewayIdentity
+  $bad += Test-GatewayRunsTarget $finalId $installedSha $env:OLD_GATEWAY_CODE_SHA
+  if ($env:OLD_GATEWAY_START_TIME -and $finalId.StartTime -eq $env:OLD_GATEWAY_START_TIME) { $bad += "gateway start_time unchanged ($($finalId.StartTime)): same process as before the update" }
+  Write-Host "[$label] running gateway: pid=$($finalId.StatePid) start=$($finalId.StartTime) listener=$($finalId.ListenerPid) code_sha=$($finalId.CodeSha) installed HEAD=$installedSha (was $($env:OLD_GATEWAY_CODE_SHA))"
+  # Negative controls: the same checks must REJECT a wrong expectation, or they prove nothing.
+  if ((Test-GatewayRunsTarget $finalId ('0' * 40) '').Count -eq 0) { $bad += "negative control: wrong expected sha was accepted" }
+  if ((Test-GatewayRunsTarget $finalId $installedSha $finalId.CodeSha).Count -eq 0) { $bad += "negative control: unchanged code_sha was accepted" }
+  $wrongListener = $finalId.PSObject.Copy(); $wrongListener.ListenerPid = 1
+  if ((Test-GatewayRunsTarget $wrongListener $installedSha '').Count -eq 0) { $bad += "negative control: wrong listener pid was accepted" }
   if ($bad.Count) {
     Write-Host "FAIL [$label]:"; $bad | Select-Object -First 30 | ForEach-Object { Write-Host "  $_" }
     Write-Host "--- gateway.log tail ---"; Get-LogLines | Select-Object -Last 120 | Out-Host
     throw "[$label] failed $($bad.Count) criteria"
   }
-  Write-Host "PASS [$label]: update exit 0, gateway respawned (pid $oldGatewayPid -> $newRoot), exactly one gateway for 90s, port bound, state running, no stale restart_requested, Schedule service still Running"
+  Write-Host "PASS [$label]: update exit 0, installed tree == target tree, running gateway stamped the installed SHA and owns the API port, gateway respawned (pid $oldGatewayPid -> $newRoot), exactly one gateway for 90s, port bound, state running, no stale restart_requested, Schedule service still Running"
 }
 
 function Assert-ScheduleStopReproduced([string]$label, $exitCode) {

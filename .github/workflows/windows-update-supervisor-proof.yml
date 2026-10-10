@@ -48,10 +48,21 @@ jobs:
         setup: [troy, zyra]
         path: [cli, chat]
         phase: [old2new, new2next]
+        exclude:
+          # Old-updater expected-failure reproductions (reuse run 38022703063;
+          # they prove the old-code defect, not the c12846bb target).
+          - {setup: troy, path: cli, phase: old2new}
+          - {setup: troy, path: chat, phase: old2new}
     env:
       OLD_REF: 846650671931ae92982570d00d207a844a084d65
       HEAD_SHA: ${{ github.sha }}
       HEAD_BRANCH: ${{ github.ref_name }}
+      # Target-bound variant (CI-only helper): the update target is the exact
+      # frozen release candidate, NOT the helper branch head (workflow commit).
+      TARGET_SHA: c12846bb63268b8c3b9727fb769a625a797228f0
+      TARGET_TREE: 63692405f12c3b8758d710daf54a3e93495c7566
+      TARGET_BRANCH: ci/win-target/c1-2-c12846b
+      NEXT_BRANCH: ci/win-update-next/c1-2-c12846b
       SETUP: ${{ matrix.setup }}
       UPDATE_PATH: ${{ matrix.path }}
       PHASE: ${{ matrix.phase }}
@@ -68,7 +79,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $from = if ($env:PHASE -eq 'old2new') { $env:OLD_REF } else { $env:HEAD_SHA }
+          $from = if ($env:PHASE -eq 'old2new') { $env:OLD_REF } else { $env:TARGET_SHA }
           $cloverHome = "$env:LOCALAPPDATA\clover"
           $installDir = "$cloverHome\clover-c1"
           git config --global core.autocrlf false
@@ -76,7 +87,7 @@ jobs:
           git clone --branch main https://github.com/oaostarboy/clover-c1.git $installDir
           git -C $installDir checkout --detach $from
           if ($LASTEXITCODE -ne 0) { throw "pre-clone checkout of $from failed" }
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/$env:HEAD_SHA/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/$env:TARGET_SHA/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
           & "$env:TEMP\install.ps1" -Branch main -Commit $from -NonInteractive -SkipComputerUse -CloverHome $cloverHome -InstallDir $installDir
           "FROM_REF=$from" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "CLOVER_HOME=$cloverHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -127,9 +138,22 @@ jobs:
           # one marker commit at ci/win-update-next/<name> for helper
           # ci/win-update-proof/<name> (outside the trigger pattern, so pushing
           # it starts no run). PR #71's original pair keeps its old name.
-          $suffix = $env:HEAD_BRANCH -replace '^ci/win-update-proof/', ''
-          $next = if ($suffix -eq 'pr-head') { 'ci/win-update-proof-next' } else { "ci/win-update-next/$suffix" }
-          $target = if ($env:PHASE -eq 'old2new') { $env:HEAD_BRANCH } else { $next }
+          $target = if ($env:PHASE -eq 'old2new') { $env:TARGET_BRANCH } else { $env:NEXT_BRANCH }
+          # Pin the target: old2new target must be exactly the frozen candidate
+          # commit+tree; new2next target must be that commit + one marker commit.
+          git -C $env:INSTALL_DIR fetch -q origin "+refs/heads/${target}:refs/remotes/origin/${target}"
+          if ($LASTEXITCODE -ne 0) { throw "fetch of target $target failed" }
+          $tsha = (git -C $env:INSTALL_DIR rev-parse "refs/remotes/origin/$target").Trim()
+          $ttree = (git -C $env:INSTALL_DIR rev-parse "refs/remotes/origin/$target^{tree}").Trim()
+          if ($env:PHASE -eq 'old2new') {
+            if ($tsha -ne $env:TARGET_SHA -or $ttree -ne $env:TARGET_TREE) { throw "target pin mismatch: $tsha / $ttree" }
+          } else {
+            $par = (git -C $env:INSTALL_DIR rev-parse "refs/remotes/origin/$target^").Trim()
+            if ($par -ne $env:TARGET_SHA) { throw "next target parent $par != $env:TARGET_SHA" }
+            $chg = @(git -C $env:INSTALL_DIR diff --name-only $par $tsha)
+            if ($chg.Count -ne 1 -or $chg[0] -ne '.github/win-e2e/NEXT_MARKER.txt') { throw "next target differs from candidate beyond marker: $chg" }
+          }
+          Write-Host "TARGET-PIN OK phase=$env:PHASE target=$target sha=$tsha tree=$ttree workflow-commit=$env:HEAD_SHA candidate=$env:TARGET_SHA"
           Set-MainIsTarget $target
           $logStart = (Get-LogLines).Count
           $label = "$env:SETUP $env:UPDATE_PATH $env:PHASE"
