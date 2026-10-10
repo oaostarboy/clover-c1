@@ -21,3 +21,24 @@ def test_npm_summary_keeps_only_code_and_hostname() -> None:
 def test_npm_summary_handles_missing_or_unparseable_details() -> None:
     assert sanitize_debug_text("0 verbose title npm install\n") == "npm_debug_failure_details=unavailable"
     assert sanitize_debug_text("0 error code ECONNRESET\n") == "npm_error_code=ECONNRESET"
+
+
+def test_npm_summary_names_failing_lifecycle_package_without_local_paths() -> None:
+    raw = """12 error code 1
+12 error path /home/clover/.clover/clover-c1/node_modules/electron
+12 error command failed
+12 error command sh -c node install.js
+12 error Error: connect to https://user:pw@github.com/x/y.zip?token=abc failed
+"""
+
+    summary = sanitize_debug_text(raw)
+
+    assert summary.splitlines() == ["npm_error_code=1", "npm_error_package=electron"]
+    for leaked in ("/home", "clover-c1", "token", "pw", "github.com", "install.js"):
+        assert leaked not in summary
+
+
+def test_npm_summary_keeps_scoped_package_name() -> None:
+    raw = "1 error code 1\n1 error path /w/node_modules/@parcel/watcher\n"
+
+    assert "npm_error_package=@parcel/watcher" in sanitize_debug_text(raw).splitlines()
