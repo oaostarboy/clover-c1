@@ -2777,6 +2777,7 @@ from gateway.delivery import (
     looks_like_telegram_private_chat_id,
     resolve_delivery_transport,
 )
+from gateway.bounded_await import drain_then_cancel, reap_task, reap_tasks
 from gateway.turn_lease import (
     DEFAULT_LEASE_WAIT,
     SessionTurnLeaseRegistry,
@@ -4531,6 +4532,15 @@ def _needs_agent_progress_callback(ctx: TurnContext) -> bool:
         or ctx._live_status_adapter is not None
         or ctx.delegation_activity is not None
     )
+
+
+# Hard bounds (seconds) for tearing down a turn's helper tasks once the agent
+# has returned.  A hung platform request in a helper's cancellation handler
+# must never keep a finished turn -- and with it the session's busy guard --
+# alive: later human messages and background-worker completions would queue
+# behind a phantom turn.
+_TEARDOWN_STREAM_DRAIN_SECONDS = 5.0
+_TEARDOWN_TASK_GRACE_SECONDS = 5.0
 
 
 class TurnRunner:
@@ -20180,6 +20190,35 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _claim_state.turn.started_ts = time.time()
         self._persist_active_agents()
         _run_generation = self._begin_session_run_generation(_quick_key)
+        _model_scope_restored = False
+
+        def _restore_model_scope_while_owned() -> bool:
+            """Restore this turn's temporary model scope before it can be replaced."""
+            nonlocal _model_scope_restored
+            if _model_scope_restored:
+                return True
+            _scope_state = self._peek_session_state(_quick_key)
+            if _scope_state is None:
+                return False
+            _scope_turn = _scope_state.turn
+            # Prefer the exact lease owner. The generation can be advanced by
+            # /stop while this turn still owns its transcript lease.
+            owns_lease = (
+                _scope_turn.lease_token is not None
+                and _scope_turn.lease_generation == _run_generation
+            )
+            # A failed lease acquisition has no lease token to restore under;
+            # it may restore only while its run generation remains current.
+            owns_current_unleased_run = (
+                _scope_turn.lease_token is None
+                and _scope_state.persistent.run_generation == _run_generation
+            )
+            if not (owns_lease or owns_current_unleased_run):
+                return False
+            self._restore_moa_one_shot(event, _quick_key)
+            self._restore_pending_one_turn_model_override(_quick_key)
+            _model_scope_restored = True
+            return True
 
         try:
             try:
@@ -20202,6 +20241,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     "protect the transcript, this message was not processed. "
                     "Wait for the active turn to finish, then resend it."
                 )
+            finally:
+                # Restore temporary model/MoA scope before releasing the
+                # transcript lease. A successor must never inherit cleanup
+                # from this turn after it has claimed the session.
+                try:
+                    _restore_model_scope_while_owned()
+                finally:
+                    self._release_turn_lease(_quick_key, _run_generation)
             try:
                 await self._run_post_turn_hooks(
                     agent_result=_agent_result,
@@ -20213,32 +20260,24 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.debug("post-turn hook failed: %s", _goal_exc)
             return _agent_result
         finally:
-            # MoA one-shot restore must run on EVERY exit path, not just
-            # success. The restore data lives on the per-turn event object
-            # (_moa_restore_override), which is discarded once the event goes
-            # out of scope — so if _handle_message_with_agent raises, a restore
-            # in the try block would be skipped and the MoA override would leak
-            # permanently (every later message silently fans out through MoA).
-            # Putting it in finally guarantees the revert on success, exception,
-            # and interrupt alike.
-            self._restore_moa_one_shot(event, _quick_key)
-            self._restore_pending_one_turn_model_override(_quick_key)
-            # Normal completion/exception/interrupt owns and clears this exact
-            # durable marker.  SIGKILL/OOM skips finally, leaving the marker for
-            # the next unclean startup's recovery pass.
-            await self._clear_durable_active_turn(event)
-            # Unconditional release covers every exit path. _release_running_agent_state
-            # is idempotent (pop-on-absent is harmless) and, called without a
-            # run_generation guard, always clears the slot regardless of which
-            # generation it holds. This evicts the zombie left when session_reset
-            # bumps the generation (N -> N+1) mid-flight: gen-N's guarded release
-            # inside _run_agent returns False, and the old sentinel-only check here
-            # missed the leftover real agent — locking the session out forever (#28686).
-            self._release_running_agent_state(_quick_key)
-            # Turn lease (#64934): release THIS turn's lease token — keyed by
-            # (routing key, run generation) so this unwind can only ever free
-            # the lease its own turn acquired, never a newer turn's.
-            self._release_turn_lease(_quick_key, _run_generation)
+            # Defensive fallback for exits that bypass the inner handler. It is
+            # safe only while this generation still owns the lease (or remains
+            # the current unleased run); the normal path restores before lease
+            # release and marks this exactly-once guard.
+            _restore_model_scope_while_owned()
+            try:
+                # Normal completion/exception/interrupt owns and clears this exact
+                # durable marker. SIGKILL/OOM leaves it for startup recovery.
+                await self._clear_durable_active_turn(event)
+            finally:
+                # A cancellation or store error must not skip in-memory cleanup.
+                # Generation ownership prevents stale teardown after /new or a
+                # successor from erasing the newer turn's running-agent slot.
+                self._release_running_agent_state(
+                    _quick_key, run_generation=_run_generation
+                )
+                # Also safe when already released above; lease identity is checked.
+                self._release_turn_lease(_quick_key, _run_generation)
 
     def _restore_moa_one_shot(self, event: "MessageEvent", quick_key: str) -> None:
         """Revert a ``/moa <prompt>`` one-shot model override after its turn.
@@ -30935,10 +30974,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if _stream_consumer:
                 _stream_consumer.finish()
             if stream_task:
-                try:
-                    await asyncio.wait_for(stream_task, timeout=5.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    stream_task.cancel()
+                await drain_then_cancel(
+                    stream_task,
+                    drain=_TEARDOWN_STREAM_DRAIN_SECONDS,
+                    grace=_TEARDOWN_TASK_GRACE_SECONDS,
+                    label="proxy stream consumer",
+                )
 
         _elapsed = time.time() - _start
         if not _run_still_current():
@@ -32742,13 +32783,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _sc = stream_consumer_holder[0]
                     if _sc and stream_task:
                         try:
-                            await asyncio.wait_for(stream_task, timeout=5.0)
-                        except (asyncio.TimeoutError, asyncio.CancelledError):
-                            stream_task.cancel()
-                            try:
-                                await stream_task
-                            except asyncio.CancelledError:
-                                pass
+                            await drain_then_cancel(
+                                stream_task,
+                                drain=_TEARDOWN_STREAM_DRAIN_SECONDS,
+                                grace=_TEARDOWN_TASK_GRACE_SECONDS,
+                                label="stream consumer (queued follow-up)",
+                            )
                         except Exception as e:
                             logger.debug("Stream consumer wait before queued message failed: %s", e)
                     # The queued branch needs raw ``result`` for interruption,
@@ -32946,6 +32986,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             interrupt_monitor.cancel()
             _notify_task.cancel()
 
+            # Teardown must be (a) hard-bounded -- a helper task whose
+            # cancellation handler is stuck in platform I/O may not keep a
+            # finished turn alive -- and (b) cancellation-transparent: if the
+            # caller was cancelled (/stop, /new, shutdown) the cancellation
+            # is remembered, the ownership cleanup below still runs, and the
+            # CancelledError is re-raised afterwards so a stopped turn never
+            # returns its stale result as a success.
+            _teardown_cancelled = False
+
+            async def _teardown_step(coro) -> None:
+                nonlocal _teardown_cancelled
+                try:
+                    await coro
+                except asyncio.CancelledError:
+                    _teardown_cancelled = True
+
             # Wait for stream consumer to finish its final edit
             if stream_task:
                 # If the agent never created a stream consumer (e.g. non-
@@ -32959,20 +33015,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     and stream_consumer_holder[0] is not None
                 )
                 if not _has_stream_consumer:
-                    stream_task.cancel()
-                    try:
-                        await stream_task
-                    except asyncio.CancelledError:
-                        pass
+                    await _teardown_step(
+                        reap_task(
+                            stream_task,
+                            grace=_TEARDOWN_TASK_GRACE_SECONDS,
+                            label="idle stream consumer poller",
+                        )
+                    )
                 else:
-                    try:
-                        await asyncio.wait_for(stream_task, timeout=5.0)
-                    except (asyncio.TimeoutError, asyncio.CancelledError):
-                        stream_task.cancel()
-                        try:
-                            await stream_task
-                        except asyncio.CancelledError:
-                            pass
+                    await _teardown_step(
+                        drain_then_cancel(
+                            stream_task,
+                            drain=_TEARDOWN_STREAM_DRAIN_SECONDS,
+                            grace=_TEARDOWN_TASK_GRACE_SECONDS,
+                            label="stream consumer",
+                        )
+                    )
             
             # Unconditional abort + bounded wait for the streaming-TTS
             # consumer (#60671 hardening).  Covers cancellation / exception
@@ -32982,6 +33040,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _stts_finally.abort("cleanup")
                 try:
                     await _stts_finally.wait_complete(timeout=2.0)
+                except asyncio.CancelledError:
+                    _teardown_cancelled = True
                 except Exception:
                     pass
 
@@ -32999,23 +33059,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if self._draining:
                 self._update_runtime_status("draining")
             
-            # Wait for cancelled tasks
-            for task in [progress_task, log_task, interrupt_monitor, tracking_task, _notify_task]:
-                if task:
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                    except Exception:
-                        # A background task that died of a non-cancellation
-                        # error (transport drop in a progress/card publish)
-                        # must not abort the cleanup path — everything after
-                        # this loop (final-delivery bookkeeping) still runs
-                        # (review B7).
-                        logger.debug(
-                            "background turn task failed during cleanup",
-                            exc_info=True,
-                        )
+            # Wait for cancelled tasks.
+            # One shared, hard-bounded window: the progress sender's
+            # cancellation handler flushes a final edit to the platform, and a
+            # hung request there must not pin the finished turn.  A task that
+            # fails with a non-cancellation error (transport drop in a
+            # progress/card publish) must not abort the cleanup path either --
+            # everything after this (final-delivery bookkeeping) still runs
+            # (review B7); reap_tasks consumes those errors.
+            await _teardown_step(
+                reap_tasks(
+                    [progress_task, log_task, interrupt_monitor, tracking_task, _notify_task],
+                    grace=_TEARDOWN_TASK_GRACE_SECONDS,
+                    labels=[
+                        "progress sender", "tool log writer", "interrupt monitor",
+                        "agent tracker", "long-running notifier",
+                    ],
+                )
+            )
+            if _teardown_cancelled:
+                raise asyncio.CancelledError()
 
         # If streaming already delivered the response, mark it so the
         # caller's send() is skipped (avoiding duplicate messages).
@@ -33329,6 +33392,19 @@ def _start_gateway_housekeeping(stop_event: threading.Event, adapters=None, loop
     tick_count = 0
     while not stop_event.is_set():
         tick_count += 1
+
+        # Local session kernels are process-owned children. The existing
+        # execute-entry sweep cannot reclaim an owner that never executes
+        # again, so the gateway housekeeper drives the same configured idle
+        # timeout without touching kernels whose cell lock is held.
+        try:
+            from tools.code_kernel import reap_idle_kernels
+
+            reaped = reap_idle_kernels()
+            if reaped:
+                logger.info("Kernel housekeeping: reaped %d idle session kernel(s)", reaped)
+        except Exception as e:
+            logger.debug("Kernel housekeeping error: %s", e)
 
         if tick_count % CHANNEL_DIR_EVERY == 0 and adapters:
             try:

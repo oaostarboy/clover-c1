@@ -567,3 +567,39 @@ def test_non_boolean_success_values_fail_closed():
     broker.attach(scope, send)
     with pytest.raises(ControllerRejected):
         broker.dispatch(scope, action="controller.noop")
+
+
+def test_attach_racing_transport_loss_is_refused_not_left_selectable():
+    """A worker-thread attach that lands after its transport was torn down
+    (dashboard WS close -> ``disconnect_owner``) must not register a
+    controller nobody will ever disconnect."""
+    broker = BrowserControlBroker(command_timeout=1.0)
+    scope = _scope()
+
+    class _Transport:  # weakly referenceable, like a WS / WSTransport
+        pass
+
+    owner = _Transport()
+
+    # Teardown observed first (no controller registered yet): returns 0.
+    assert broker.disconnect_owner(owner) == 0
+    with pytest.raises(ControllerUnavailable):
+        broker.attach(scope, lambda frame: None, owner=owner)
+    assert broker.select(scope, "controller.noop") is None
+    assert broker.scope_for_session(
+        session_id=scope.session_id,
+        principal_id=scope.principal_id,
+        transport_family=scope.transport_family,
+    ) is None
+
+    # A reconnect (new transport object) is unaffected by the stale tombstone,
+    # including a refresh of an existing identity.
+    replacement = _Transport()
+    broker.attach(scope, lambda frame: None, owner=replacement)
+    assert broker.is_owner(scope, replacement)
+    stale = _Transport()
+    assert broker.disconnect_owner(stale) == 0
+    assert broker.is_owner(scope, replacement)
+    with pytest.raises(ControllerUnavailable):
+        broker.attach(scope, lambda frame: None, owner=stale)
+    assert broker.is_owner(scope, replacement)

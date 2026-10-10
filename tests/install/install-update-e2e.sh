@@ -75,7 +75,7 @@ FAKE_REMOTE="/work/repos/clover-c1.git"
 # Only used to fetch an old install.sh for the flag probe below; the sandbox does
 # its own fetching. Same override dev-sandbox.sh honours, so a fork can retarget
 # both together.
-UPSTREAM_URL="${CLOVER_DEV_SANDBOX_UPSTREAM:-"
+UPSTREAM_URL="${CLOVER_DEV_SANDBOX_UPSTREAM:-https://github.com/oaostarboy/clover-c1.git}"
 
 # Installer transcripts live outside the sandbox root: the sandbox is recreated
 # and (unless --keep) deleted, and these logs are the most useful artifact when
@@ -111,6 +111,16 @@ collect_sandbox_logs() {
     echo "--- sandbox proxy.log ---" >&2
     cat "$dest/proxy.log" >&2
     echo "--- end proxy.log ---" >&2
+  fi
+  # An npm failure under --silent prints no error code or request host, so
+  # the job log alone cannot say why it failed. Surface ONLY allowlisted facts
+  # from npm's debug logs (exit status/known errno, a lockfile-pinned package
+  # name, a fixed node-gyp cause label, a hostname); no log text is copied.
+  local npm_logs="$SANDBOX_ROOT/home/.npm/_logs"
+  if [ -d "$npm_logs" ] && command -v python3 >/dev/null 2>&1; then
+    echo "--- npm failure facts (sanitized) ---" >&2
+    python3 "$REPO_ROOT/scripts/sandbox/sanitize_npm_log.py" "$npm_logs" >&2 || true
+    echo "--- end npm failure facts ---" >&2
   fi
 }
 
@@ -215,7 +225,10 @@ install_in_sandbox() {
     collect_sandbox_logs "$tag"
     fail "$what failed (exit $status)"
   fi
-  grep -q 'Installation Complete' "$log" \
+  # The installer's success banner was reworded ("Installation Complete" ->
+  # "Clover is installed."); accept either so older upstream releases and this
+  # checkout are both recognised.
+  grep -qE 'Installation Complete|Clover is installed\.' "$log" \
     || { collect_sandbox_logs "$tag"; \
          fail "$what did not report a completed install"; }
   ok "$what completed (log: $log)"

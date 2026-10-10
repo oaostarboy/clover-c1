@@ -87,7 +87,7 @@ sys.exit(f'linked SQLite {sqlite3.sqlite_version} still has the WAL-reset bug') 
 db = sqlite3.connect(':memory:'); \
 db.execute(\"CREATE VIRTUAL TABLE docs USING fts5(content, tokenize='trigram')\"); \
 db.execute(\"INSERT INTO docs VALUES ('clover')\"); \
-sys.exit('SQLite FTS5 trigram self-test failed') if db.execute(\"SELECT count(*) FROM docs WHERE docs MATCH 'erm'\").fetchone()[0] != 1 else None; \
+sys.exit('SQLite FTS5 trigram self-test failed') if db.execute(\"SELECT count(*) FROM docs WHERE docs MATCH 'ove'\").fetchone()[0] != 1 else None; \
 db.close()"
 
 # ---------- s6-overlay install ----------
@@ -183,6 +183,11 @@ COPY ui-tui/packages/clover-ink/ ui-tui/packages/clover-ink/
 # apps/shared/ is copied IN FULL because web/package.json references it as a
 # `file:` workspace dependency (same pattern as clover-ink above).
 COPY apps/shared/ apps/shared/
+# packages/clover-ui/ (@clover/ui, prebuilt dist/ is tracked) is a root
+# workspace that web/package.json depends on as "*".  Without it in the
+# context, `npm install` cannot link it and the web build below fails with
+# TS2307 "Cannot find module '@clover/ui/...'".
+COPY packages/clover-ui/ packages/clover-ui/
 
 # `npm_config_install_links=false` forces npm to install `file:` deps as
 # symlinks instead of copies.  This is the default since npm 10+, which is

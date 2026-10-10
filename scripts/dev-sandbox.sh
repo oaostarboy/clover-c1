@@ -115,7 +115,7 @@ INSTALLER_PATH=""
 # reachable from main -- so "can a user two releases back still update?" is
 # expressible. --from-main is shorthand for refs/heads/main.
 INSTALL_REF=""
-UPSTREAM_URL="${CLOVER_DEV_SANDBOX_UPSTREAM:-"
+UPSTREAM_URL="${CLOVER_DEV_SANDBOX_UPSTREAM:-https://github.com/oaostarboy/clover-c1.git}"
 
 if [ "${1:-}" = install ]; then
   INSTALL_SHORTCUT=true
@@ -275,7 +275,7 @@ if [ "$INSTALL_SHORTCUT" = true ]; then
   fi
   set -- bash -c '
     set +e
-    curl -fsSL  | bash -s -- "$@"
+    curl -fsSL https://clover-c1./install.sh | bash -s -- "$@"
     install_status=$?
     if [ "$install_status" -eq 0 ] && [ -f /work/promote-main ]; then
       next_main=$(cat /work/promote-main)

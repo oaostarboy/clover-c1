@@ -19,8 +19,11 @@ tests patch ``_load_config`` directly, mirroring test_code_execution_modes.
 import json
 import os
 import sys
+import threading
+import time
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -132,6 +135,184 @@ class TestKernelLifecycle(unittest.TestCase):
         self.assertEqual(fresh["status"], "success", fresh)
         self.assertEqual(fresh["kernel"]["reused"], False)
         self.assertIn("alive", fresh["output"])
+
+    def test_idle_kernel_is_reaped_without_a_followup_execution(self):
+        """The idle timeout must reclaim the real child while its owner is quiet."""
+        import tempfile
+        import threading
+        import time
+
+        from tools.approval import reset_current_session_key, set_current_session_key
+        from tools.code_kernel import reap_idle_kernels
+
+        old_home = os.environ.get("CLOVER_HOME")
+        test_home = tempfile.TemporaryDirectory(prefix="clover-kernel-home-")
+        os.environ["CLOVER_HOME"] = test_home.name
+        token = set_current_session_key("idle-reap-repro")
+        stop_reaper = threading.Event()
+        try:
+            with _kernel_config(kernel_idle_timeout=1):
+                result = _run("print('idle-reap-ready')")
+                self.assertEqual(result["status"], "success", result)
+                kernel = next(iter(_KERNELS.values()))
+                child = kernel.proc
+                self.assertIsNotNone(child)
+                self.assertIsNone(child.poll())
+                pid = child.pid
+                rss_kb = None
+                try:
+                    with open(f"/proc/{pid}/status", encoding="utf-8") as status_file:
+                        for line in status_file:
+                            if line.startswith("VmRSS:"):
+                                rss_kb = int(line.split()[1])
+                                break
+                except OSError:
+                    pass
+
+                def run_reaper():
+                    while not stop_reaper.wait(0.05):
+                        reap_idle_kernels()
+
+                # Exercise the production reaper on a periodic housekeeping cadence.
+                reaper = threading.Thread(target=run_reaper, daemon=True)
+                reaper.start()
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline and child.poll() is None:
+                    time.sleep(0.05)
+                stop_reaper.set()
+                reaper.join(timeout=1)
+                self.assertIsNotNone(
+                    child.poll(),
+                    "idle kernel runner survived past kernel_idle_timeout without a new execution",
+                )
+                self.assertNotIn(kernel.key, _KERNELS)
+                self.assertFalse(os.path.exists(f"/proc/{pid}"))
+                self.assertGreater(rss_kb or 0, 0)
+
+                fresh = _run("print('fresh-after-idle-reap')")
+                self.assertEqual(fresh["status"], "success", fresh)
+                self.assertFalse(fresh["kernel"]["reused"])
+                self.assertTrue(fresh["kernel"]["state_lost"])
+                self.assertIn("in-memory state was lost", fresh["kernel"]["note"])
+                self.assertIn("fresh-after-idle-reap", fresh["output"])
+        finally:
+            stop_reaper.set()
+            reset_current_session_key(token)
+            if old_home is None:
+                os.environ.pop("CLOVER_HOME", None)
+            else:
+                os.environ["CLOVER_HOME"] = old_home
+            test_home.cleanup()
+
+    def test_long_running_cell_is_not_reaped_as_idle(self):
+        import threading
+        import time
+
+        from tools.approval import reset_current_session_key, set_current_session_key
+        from tools.code_kernel import reap_idle_kernels
+
+        started = threading.Event()
+        finished = threading.Event()
+        result = {}
+
+        def run_cell():
+            token = set_current_session_key("idle-reap-busy")
+            try:
+                with _kernel_config(kernel_idle_timeout=1, timeout=5):
+                    started.set()
+                    result.update(_run("import time\ntime.sleep(2)"))
+            finally:
+                reset_current_session_key(token)
+                finished.set()
+
+        worker = threading.Thread(target=run_cell)
+        worker.start()
+        self.assertTrue(started.wait(timeout=1))
+        deadline = time.monotonic() + 3
+        kernel = None
+        while time.monotonic() < deadline:
+            candidate = next(iter(_KERNELS.values()), None)
+            if candidate is not None and candidate.proc is not None:
+                kernel = candidate
+                break
+            time.sleep(0.02)
+        self.assertIsNotNone(kernel)
+        child = kernel.proc
+        time.sleep(1.2)
+        self.assertEqual(reap_idle_kernels(), 0)
+        self.assertIsNotNone(child)
+        self.assertIsNone(child.poll())
+        self.assertTrue(finished.wait(timeout=3))
+        worker.join(timeout=1)
+        self.assertEqual(result.get("status"), "success", result)
+
+    def test_reaper_does_not_touch_runner_from_separate_clover_home(self):
+        import signal
+        import subprocess
+        import tempfile
+        import time
+
+        from tools.approval import reset_current_session_key, set_current_session_key
+        from tools.code_kernel import reap_idle_kernels
+
+        old_home = os.environ.get("CLOVER_HOME")
+        local_home = tempfile.TemporaryDirectory(prefix="clover-kernel-local-")
+        other_home = tempfile.TemporaryDirectory(prefix="clover-kernel-other-")
+        os.environ["CLOVER_HOME"] = local_home.name
+        token = set_current_session_key("home-local")
+        other_env = os.environ.copy()
+        other_env["CLOVER_HOME"] = other_home.name
+        inherited_pythonpath = os.environ.get("PYTHONPATH", "")
+        other_env["PYTHONPATH"] = os.pathsep.join(
+            part
+            for part in (str(Path(__file__).resolve().parents[2]), inherited_pythonpath)
+            if part
+        )
+        other_script = (
+            "import json, time\n"
+            "from unittest.mock import patch\n"
+            "from tools.code_execution_tool import execute_code\n"
+            "from tools.code_kernel import _KERNELS, shutdown_all_kernels\n"
+            "with patch('tools.code_execution_tool._load_config', "
+            "return_value={'mode':'strict','timeout':20,'kernel_idle_timeout':1800}):\n"
+            "    execute_code(\"print('other-home-ready')\", task_id='other-home')\n"
+            "print(json.dumps({'pid': next(iter(_KERNELS.values())).proc.pid}), flush=True)\n"
+            "time.sleep(60)\n"
+        )
+        other_host = subprocess.Popen(
+            [sys.executable, "-c", other_script],
+            env=other_env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        try:
+            with _kernel_config(kernel_idle_timeout=1):
+                local_result = _run("print('local-home-ready')")
+                self.assertEqual(local_result["status"], "success", local_result)
+                local_kernel = next(iter(_KERNELS.values()))
+                local_pid = local_kernel.proc.pid
+                other_line = other_host.stdout.readline()
+                self.assertTrue(other_line, "other-home child did not report runner PID")
+                other_pid = json.loads(other_line)["pid"]
+                time.sleep(1.2)
+                self.assertEqual(reap_idle_kernels(), 1)
+                self.assertFalse(os.path.exists(f"/proc/{local_pid}"))
+                self.assertTrue(os.path.exists(f"/proc/{other_pid}"))
+        finally:
+            other_host.send_signal(signal.SIGINT)
+            try:
+                other_host.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                other_host.kill()
+                other_host.communicate()
+            reset_current_session_key(token)
+            if old_home is None:
+                os.environ.pop("CLOVER_HOME", None)
+            else:
+                os.environ["CLOVER_HOME"] = old_home
+            local_home.cleanup()
+            other_home.cleanup()
 
     def test_sys_exit_ends_the_kernel(self):
         with _kernel_config():
@@ -402,3 +583,72 @@ class TestPerCellRpcAuthority(unittest.TestCase):
             _run("y = 2")
             self.assertIsNot(kernel.cell_authority, first_authority)
             self.assertFalse(kernel.cell_authority.active)
+
+
+class TestKernelReservation(unittest.TestCase):
+    def test_selected_kernel_cannot_be_reaped_before_cell_lock(self):
+        from tools import code_kernel
+        from tools.approval import reset_current_session_key, set_current_session_key
+
+        owner = "reservation-gap-owner"
+
+        def run_as_owner(code, task_id):
+            token = set_current_session_key(owner)
+            try:
+                return json.loads(execute_code(code, task_id=task_id))
+            finally:
+                reset_current_session_key(token)
+
+        with _kernel_config(kernel_idle_timeout=1, timeout=10):
+            seeded = run_as_owner("held = 42", "reservation-seed")
+            self.assertEqual(seeded["status"], "success", seeded)
+            key = next(iter(_KERNELS))
+            self.assertEqual(key[0], owner)
+            kernel = _KERNELS[key]
+            child_pid = kernel.proc.pid
+            entered = threading.Event()
+            release = threading.Event()
+            result = {}
+            errors = []
+            original_authority = code_kernel.CellAuthority
+            caller_ident = None
+
+            def pause_after_selection(task_id):
+                self.assertEqual(code_kernel._resolve_owner(task_id), owner)
+                self.assertIs(_KERNELS[key], kernel)
+                self.assertEqual(kernel.proc.pid, child_pid)
+                authority = original_authority(task_id)
+                if threading.get_ident() == caller_ident:
+                    entered.set()
+                    if not release.wait(5):
+                        raise AssertionError("reservation barrier release timed out")
+                return authority
+
+            def invoke():
+                nonlocal caller_ident
+                caller_ident = threading.get_ident()
+                try:
+                    result["cell"] = run_as_owner("print(held)", "reservation-cell")
+                except BaseException as exc:
+                    errors.append(exc)
+
+            worker = threading.Thread(target=invoke, name="test-owned-reservation-cell")
+            with patch.object(code_kernel, "CellAuthority", side_effect=pause_after_selection):
+                worker.start()
+                self.assertTrue(entered.wait(5), "execution missed selection-to-authority barrier")
+                self.assertEqual(kernel.pending_cells, 1)
+                time.sleep(1.15)
+                self.assertEqual(code_kernel.reap_idle_kernels(), 0)
+                self.assertIs(_KERNELS.get(key), kernel)
+                self.assertEqual([item.proc.pid for item in _KERNELS.values()], [child_pid])
+                self.assertIsNone(kernel.proc.poll())
+                release.set()
+                worker.join(8)
+            self.assertFalse(worker.is_alive(), "selected cell did not finish")
+            self.assertEqual(errors, [])
+            self.assertEqual(result["cell"]["status"], "success", result)
+            self.assertEqual(result["cell"]["output"].strip(), "42")
+            self.assertTrue(result["cell"]["kernel"]["reused"])
+            self.assertEqual(kernel.pending_cells, 0)
+            self.assertEqual(kernel.proc.pid, child_pid)
+            self.assertIsNone(kernel.proc.poll())

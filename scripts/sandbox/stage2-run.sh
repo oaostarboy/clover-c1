@@ -48,9 +48,19 @@ fi
 home_mounts+=(--bind "$DEV_SANDBOX_ROOT/home" "$DEV_SANDBOX_HOME")
 
 node_env=()
-if [ -n "${DEV_SANDBOX_NODE_DIR:-}" ]; then
-  node_env+=(--setenv npm_config_nodedir "$DEV_SANDBOX_NODE_DIR")
-fi
+# Point node-gyp at the host Node's headers only when that directory is actually
+# visible INSIDE the sandbox.  Only /nix (read-only bound on Nix) and /usr
+# (read-only bound on other hosts) are; /usr/local is replaced by an empty bind,
+# and $HOME, /opt and friends are not mounted at all.  A host Node living
+# anywhere else would leave node-gyp looking for <prefix>/common.gypi in a
+# directory that does not exist, and every native addon (node-pty, get-windows)
+# would fail to build.  Without nodedir node-gyp fetches matching headers through
+# the sandbox proxy, which is what a real user's install does.
+case "${DEV_SANDBOX_NODE_DIR:-}" in
+  /usr/local|/usr/local/*) ;;
+  /nix/*|/usr/*) node_env+=(--setenv npm_config_nodedir "$DEV_SANDBOX_NODE_DIR") ;;
+  *) ;;
+esac
 electron_env=()
 if [ -n "${DEV_SANDBOX_ELECTRON_LD_LIBRARY_PATH:-}" ]; then
   electron_env+=(
@@ -216,7 +226,8 @@ exec bwrap \
   --setenv CURL_CA_BUNDLE /work/certs/ca.pem \
   --setenv SSL_CERT_FILE /work/certs/ca.pem \
   --setenv GIT_SSL_CAINFO /work/certs/ca.pem \
-  --setenv NODE_EXTRA_CA_CERTS /work/certs/real-ca.pem \
+  --setenv NODE_EXTRA_CA_CERTS /work/certs/ca.pem \
+  --setenv npm_config_foreground_scripts true \
   --setenv OPENSSL_CONF /work/certs/openssl.cnf \
   --setenv HTTP_PROXY http://127.0.0.1:8080 \
   --setenv HTTPS_PROXY http://127.0.0.1:8080 \

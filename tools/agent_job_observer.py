@@ -105,6 +105,7 @@ class AgentJobObserver:
         self._result_text: Optional[str] = None
         self._result_is_error: Optional[bool] = None
         self._result_subtype: str = ""
+        self._terminal_status: str = ""
         self._finished = False
         self.started_at = clock()
         self.last_output_at = self.started_at
@@ -269,6 +270,11 @@ class AgentJobObserver:
             self._apply_model_update(obj.get("model"))
         elif event == "model.fallback":
             self._apply_model_update(obj.get("to"))
+        elif event == "status":
+            from agent.delegation_activity import PUBLIC_ACTIVITY_STATUS
+            status = obj.get("status")
+            if status in PUBLIC_ACTIVITY_STATUS:
+                self._emit("subagent.progress", activity_status=status)
         elif event == "tool.started":
             self._emit(
                 "subagent.tool", obj.get("tool") or "tool", obj.get("summary"), None,
@@ -290,7 +296,8 @@ class AgentJobObserver:
             status = obj.get("status")
             with self._lock:
                 self._result_text = text if isinstance(text, str) else None
-                self._result_is_error = status not in (None, "completed", "incomplete")
+                self._terminal_status = status if isinstance(status, str) else ""
+                self._result_is_error = status not in ("completed", "incomplete", "built_unverified")
                 if status == "incomplete":
                     self._result_subtype = "error_max_turns"  # unfinished, not crashed
 
@@ -309,10 +316,18 @@ class AgentJobObserver:
             result_text = self._result_text
             result_error = self._result_is_error
             ran_out = self._result_subtype == "error_max_turns"
+            terminal_status = self._terminal_status
         duration = max(0.0, self._clock() - self.started_at)
-        if completion_reason == "killed":
+        if completion_reason == "killed" or terminal_status in {
+            "interrupted", "interrupted_possible_effects"
+        }:
+            reason = "interrupted"
+            if terminal_status == "interrupted_possible_effects":
+                reason = "interrupted; effects may have occurred"
+            elif completion_reason == "killed":
+                reason = "stopped (process killed)"
             self._emit("subagent.complete", status="interrupted", duration_seconds=duration,
-                       reason="stopped (process killed)")
+                       reason=reason, summary=result_text or "")
             return
         if completion_reason in {"lost", "failed_start"}:
             self._emit("subagent.complete", status="failed", duration_seconds=duration,
@@ -322,6 +337,10 @@ class AgentJobObserver:
             # Hit its turn cap: unfinished, not crashed (never a red X).
             self._emit("subagent.complete", status="incomplete", duration_seconds=duration,
                        summary=result_text or "")
+            return
+        if exit_code == 0 and not result_error and (terminal_status == "built_unverified" or self._result_is_error is None):
+            self._emit("subagent.complete", status="incomplete", duration_seconds=duration,
+                       reason="finished; task completion not verified", summary=result_text or "")
             return
         if exit_code == 0 and not result_error:
             self._emit("subagent.complete", status="completed", duration_seconds=duration,

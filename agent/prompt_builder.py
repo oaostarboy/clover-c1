@@ -1792,6 +1792,33 @@ def _current_session_platform_hint() -> str:
         return ""
 
 
+def _configured_compact_skill_categories() -> frozenset[str]:
+    """Read the validated names-only category list from the active profile config.
+
+    A malformed value fails closed to the full descriptions; this is an
+    opt-in prompt-size setting, not a capability filter.
+    """
+    try:
+        from clover_cli.config import load_config_readonly
+
+        config = load_config_readonly()
+        skills = config.get("skills") if isinstance(config, dict) else None
+        categories = skills.get("compact_categories") if isinstance(skills, dict) else None
+        if not isinstance(categories, list):
+            return frozenset()
+        validated = set()
+        for category in categories:
+            if not isinstance(category, str):
+                continue
+            value = category.strip()
+            if not value or any(part in {"", ".", ".."} for part in value.split("/")):
+                continue
+            validated.add(value)
+        return frozenset(validated)
+    except Exception:
+        return frozenset()
+
+
 def build_skills_system_prompt(
     available_tools: "set[str] | None" = None,
     available_toolsets: "set[str] | None" = None,
@@ -1843,12 +1870,14 @@ def build_skills_system_prompt(
         if not skills_dir.exists() and not external_dirs and not project_dirs:
             return ""
 
+        configured_compact_categories = _configured_compact_skill_categories()
+        effective_compact_categories = frozenset(compact_categories or ()) | configured_compact_categories
         return _build_skills_system_prompt_inner(
             skills_dir,
             external_dirs,
             available_tools,
             available_toolsets,
-            compact_categories,
+            effective_compact_categories,
             project_dirs=project_dirs,
         )
     finally:
@@ -2107,9 +2136,8 @@ def _build_skills_system_prompt_inner(
     hidden_note = ""
     if demoted:
         hidden_note = (
-            "\n(Categories marked [names only] are outside the current coding "
-            "context, so their descriptions are omitted — the skills work "
-            "normally and load with skill_view(name) as usual.)"
+            "\n(Categories marked [names only] omit descriptions to keep the skill index compact; "
+            "the skills work normally and load with skill_view(name) as usual.)"
         )
 
     if not skills_by_category:

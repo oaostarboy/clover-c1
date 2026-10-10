@@ -217,6 +217,155 @@ class TestCancelledBestEffortDeliveryFinalizes:
         assert consumer.final_response_sent is True
         assert consumer.final_content_delivered is True
 
+    @pytest.mark.asyncio
+    async def test_late_edit_from_superseded_run_is_removed(self):
+        """A transport that ignores cancellation must not leave a stale edit behind."""
+        adapter = _make_adapter()
+        adapter.REQUIRES_EDIT_FINALIZE = True
+        adapter.delete_message = AsyncMock(return_value=True)
+        edit_started = asyncio.Event()
+        release_edit = asyncio.Event()
+        edit_finished = asyncio.Event()
+        current = [True]
+
+        async def cancellation_suppressing_edit(*, chat_id, message_id, content, **kwargs):
+            edit_started.set()
+            while not release_edit.is_set():
+                try:
+                    await release_edit.wait()
+                except asyncio.CancelledError:
+                    # Model a transport whose in-flight request cannot be stopped.
+                    continue
+            edit_finished.set()
+            return SimpleNamespace(success=True, message_id=message_id)
+
+        adapter.edit_message = AsyncMock(side_effect=cancellation_suppressing_edit)
+        consumer = GatewayStreamConsumer(
+            adapter=adapter,
+            chat_id="chat",
+            run_still_current=lambda: current[0],
+        )
+        consumer._CANCEL_FINAL_EDIT_TIMEOUT = 0.01
+        consumer._accumulated = "completed answer"
+        consumer._message_id = "preview"
+        consumer._last_sent_text = "partial preview"
+
+        from gateway.bounded_await import await_bounded
+
+        finished, _ = await await_bounded(
+            consumer._send_or_edit("completed answer", finalize=True), timeout=0.01
+        )
+        assert not finished
+        consumer._abandoned = True
+
+        # The gateway's ordinary final path can finish before the stuck edit.
+        await adapter.send(chat_id="chat", content="completed answer")
+        current[0] = False
+        release_edit.set()
+        await asyncio.wait_for(edit_finished.wait(), timeout=1.0)
+        await asyncio.sleep(0)
+
+        adapter.delete_message.assert_awaited_once_with("chat", "preview")
+        assert consumer.final_response_sent is False
+        assert consumer.final_content_delivered is False
+
+    @pytest.mark.asyncio
+    async def test_late_split_edit_removes_every_message_it_created(self):
+        """An honest adapter splits an oversized edit into continuation messages;
+        a superseded edit must not leave any of them visible."""
+        adapter = _make_adapter()
+        adapter.REQUIRES_EDIT_FINALIZE = True
+        visible = {"preview": "partial"}
+        release_edit = asyncio.Event()
+        current = [True]
+        cancels = []
+
+        async def split_edit(*, chat_id, message_id, content, **kwargs):
+            while not release_edit.is_set():
+                try:
+                    await release_edit.wait()
+                except asyncio.CancelledError:
+                    cancels.append(True)
+                    continue
+            visible[message_id] = "stale first chunk"
+            visible["continuation-1"] = "stale second chunk"
+            visible["continuation-2"] = "stale third chunk"
+            return SimpleNamespace(
+                success=True,
+                message_id="continuation-2",
+                continuation_message_ids=("continuation-1", "continuation-2"),
+            )
+
+        async def delete(chat_id, message_id):
+            return visible.pop(message_id, None) is not None
+
+        adapter.edit_message = AsyncMock(side_effect=split_edit)
+        adapter.delete_message = AsyncMock(side_effect=delete)
+        consumer = GatewayStreamConsumer(
+            adapter=adapter, chat_id="chat", run_still_current=lambda: current[0]
+        )
+        consumer._CANCEL_FINAL_EDIT_TIMEOUT = 0.01
+        consumer._accumulated = "completed answer"
+        consumer._message_id = "preview"
+        consumer._last_sent_text = "partial"
+
+        from gateway.bounded_await import await_bounded
+
+        task = asyncio.create_task(
+            consumer._send_or_edit("completed answer", finalize=True)
+        )
+        await asyncio.sleep(0)
+        finished, _ = await await_bounded(task, timeout=0.01)
+        assert not finished
+        # Both the first cancel and the bounded-await escalation are swallowed
+        # by the transport before it finally completes.
+        for _ in range(200):
+            if len(cancels) >= 2:
+                break
+            await asyncio.sleep(0.005)
+        assert len(cancels) == 2
+        consumer._abandoned = True
+        current[0] = False
+        visible["fresh-final"] = "completed answer"  # the real, current answer
+        release_edit.set()
+        await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+
+        assert visible == {"fresh-final": "completed answer"}
+        assert sorted(c.args[1] for c in adapter.delete_message.await_args_list) == [
+            "continuation-1",
+            "continuation-2",
+            "preview",
+        ]
+        assert consumer.final_response_sent is False
+        assert consumer.final_content_delivered is False
+
+    @pytest.mark.asyncio
+    async def test_one_failed_cleanup_delete_does_not_skip_the_others(self):
+        adapter = _make_adapter()
+        adapter.REQUIRES_EDIT_FINALIZE = True
+        calls = []
+
+        async def delete(chat_id, message_id):
+            calls.append(message_id)
+            if message_id == "preview":
+                raise RuntimeError("platform refused")
+            return True
+
+        adapter.delete_message = AsyncMock(side_effect=delete)
+        consumer = GatewayStreamConsumer(adapter=adapter, chat_id="chat")
+        consumer._message_id = "preview"
+
+        await consumer._remove_stale_edit_messages(
+            SimpleNamespace(
+                success=True,
+                message_id="c2",
+                continuation_message_ids=("c1", "c2"),
+                raw_response={"message_ids": ["c1", "c3"]},
+            )
+        )
+
+        assert calls == ["preview", "c2", "c1", "c3"]
+
 
 class TestGotDoneOverflowSplitNotRefinalized:
     """A got_done finalize edit that split-and-delivered across continuation

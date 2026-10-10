@@ -69,6 +69,7 @@ import logging
 import secrets
 import threading
 import time
+import weakref
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
@@ -334,6 +335,12 @@ class BrowserControlBroker:
         self._tickets: Dict[str, _TicketRecord] = {}
         self._controllers: Dict[ControllerScope, _Controller] = {}
         self._pending: Dict[str, _PendingCommand] = {}
+        # Transports whose connection is gone (id -> weakref).  A worker-thread
+        # attach can still be running when its transport is torn down; without
+        # this, that late attach would register a controller nobody will ever
+        # disconnect.  Weak so a dead connection's entry vanishes with it, and
+        # compared by identity so a recycled ``id`` never matches a new owner.
+        self._closed_owners: Dict[int, "weakref.ref"] = {}
         # Developer Mode gates privileged capabilities (browser_evaluate,
         # browser_cdp). None defers to the live config on every selection so
         # a mid-process config change is honored without restart — including
@@ -452,6 +459,7 @@ class BrowserControlBroker:
         """
         while True:
             with self._lock:
+                self._raise_if_owner_closed_locked(owner)
                 existing_entry = next(
                     (
                         (candidate_scope, controller)
@@ -492,6 +500,7 @@ class BrowserControlBroker:
                 with self._lock:
                     if self._controllers.get(existing_scope) is not existing:
                         continue
+                    self._raise_if_owner_closed_locked(owner)
                     self._controllers.pop(existing_scope, None)
                     existing.scope = scope
                     existing.send = send
@@ -527,6 +536,40 @@ class BrowserControlBroker:
                     if self._controllers.get(scope) is existing:
                         existing.connected = True
                 return
+
+    def close_owner(self, owner: Any) -> None:
+        """Mark a transport as gone so a still-running attach cannot revive it.
+
+        Attach, like every broker call made for a connection, may be running
+        on a worker thread when the connection is torn down.  After this call
+        any ``attach(..., owner=owner)`` raises :class:`ControllerUnavailable`
+        instead of registering a controller for a dead transport.  Owners that
+        cannot be weakly referenced (plain strings) are not tombstoned.
+        """
+        if owner is None or owner is _OWNER_UNSET:
+            return
+        key = id(owner)
+        closed = self._closed_owners
+
+        def _forget(ref, key=key, closed=closed) -> None:
+            if closed.get(key) is ref:
+                closed.pop(key, None)
+
+        try:
+            ref = weakref.ref(owner, _forget)
+        except TypeError:
+            return
+        with self._lock:
+            self._closed_owners[key] = ref
+
+    def _raise_if_owner_closed_locked(self, owner: Any) -> None:
+        if owner is None:
+            return
+        ref = self._closed_owners.get(id(owner))
+        if ref is not None and ref() is owner:
+            raise ControllerUnavailable(
+                "browser controller transport closed before attach completed"
+            )
 
     def select(self, scope: ControllerScope, capability: str) -> Optional[_Controller]:
         """Return the connected controller matching identity and capability.
@@ -984,6 +1027,9 @@ class BrowserControlBroker:
 
     def disconnect_owner(self, owner: Any) -> int:
         """Mark every controller owned by one lost transport offline."""
+        # Tombstone first: an attach racing on a worker thread then either
+        # registered before this point (and is listed below) or is refused.
+        self.close_owner(owner)
         with self._lock:
             scopes = [
                 scope

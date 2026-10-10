@@ -117,6 +117,48 @@ async def test_card_edits_land_on_live_adapter_after_adapter_rebuild():
 
 # -- adapter that cannot edit and has no replacement to forward to ------------
 
+@pytest.mark.asyncio
+async def test_public_runtime_status_reaches_real_telegram_adapter():
+    import io
+    from clover_cli.activity_events import ActivityEventWriter
+    from tools.agent_job_observer import AgentJobObserver
+    from tests.agent.test_delegation_checkpoint import _agent
+    adapter = _real_adapter(300)
+    pub = _publisher(adapter)
+    observer = AgentJobObserver(session_id='test-status-worker',sink=pub,
+        group_id='test-status-group',index=0,title='Saved build verification',
+        model='test-model',parser='clover-activity')
+    stream = io.StringIO()
+    writer = ActivityEventWriter(stream)
+    agent = _agent()
+    agent.tool_progress_callback = writer.tool_progress_callback
+    observer.start()
+    try:
+        for desc, expected in [
+            ('starting API call #1','requesting provider'),
+            ('waiting for provider response (streaming)','waiting for provider'),
+            ('retrying provider request','retrying provider'),
+        ]:
+            stream.seek(0); stream.truncate(0)
+            agent._touch_activity(desc)
+            observer.feed(stream.getvalue())
+            await _settle(pub)
+            calls = adapter._bot.send_message.await_args_list + adapter._bot.edit_message_text.await_args_list
+            assert any(expected in str(call.kwargs.get('text','')) for call in calls)
+        stream.seek(0); stream.truncate(0)
+        writer.result('actual conversation ended','completed')
+        observer.feed(stream.getvalue()); observer.finish(0)
+        await _settle(pub)
+        assert pub.tracker.snapshot('test-status-group')[0]['state']=='completed'
+        before=adapter._bot.send_message.await_count
+        observer.finish(0)
+        observer.feed(stream.getvalue())
+        await _settle(pub)
+        assert adapter._bot.send_message.await_count==before
+    finally:
+        await pub.aclose()
+
+
 
 class _DeadEditAdapter(FakeTelegramAdapter):
     """edit fails with 'Not connected' and cannot be forwarded; send reaches a

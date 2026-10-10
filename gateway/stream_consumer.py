@@ -27,7 +27,9 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+from gateway.bounded_await import await_bounded
 from gateway.platforms.base import BasePlatformAdapter as _BasePlatformAdapter
+from gateway.platforms.base import SendResult as _SendResult
 from gateway.platforms.base import _custom_unit_to_cp
 from gateway.platforms.base import MEDIA_TAG_CLEANUP_RE
 from gateway.config import (
@@ -41,6 +43,12 @@ from gateway.response_filters import (
 )
 
 logger = logging.getLogger("gateway.stream_consumer")
+
+# What a fenced (abandoned) consumer returns instead of touching the platform.
+# Not retryable: callers must not loop on it.
+_ABANDONED_RESULT = _SendResult(
+    success=False, error="stream consumer abandoned after teardown", retryable=False
+)
 
 # Sentinel to signal the stream is complete
 _DONE = object()
@@ -334,6 +342,42 @@ class StreamConsumerConfig:
     chat_type: str = ""
 
 
+class _FencedAdapterIO:
+    """Delivery-side adapter calls for one consumer, fenced once abandoned.
+
+    After the consumer's cancel-time final edit is abandoned (timed out), a
+    late-waking in-flight call may resume the delivery state machine (retry,
+    fallback, continuation).  Routing every platform send/edit through this
+    proxy makes those continuations no-ops, so an abandoned consumer can
+    never duplicate the final the gateway now delivers itself or emit after
+    Stop / a newer run generation.  The call that is *already* in flight
+    cannot be recalled; only its continuations are fenced.
+    """
+
+    _FENCED = frozenset(
+        {"send", "send_draft", "send_stream_frame", "edit_message", "delete_message"}
+    )
+
+    def __init__(self, consumer: "GatewayStreamConsumer") -> None:
+        self._consumer = consumer
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._consumer.adapter, name)
+        if name not in self._FENCED or not callable(attr):
+            return attr
+        consumer = self._consumer
+
+        async def _call(*args, **kwargs):
+            if consumer._abandoned:
+                return False if name == "send_stream_frame" else _ABANDONED_RESULT
+            result = attr(*args, **kwargs)
+            if inspect.isawaitable(result):
+                result = await result
+            return result
+
+        return _call
+
+
 class GatewayStreamConsumer:
     """Async consumer that progressively edits a platform message with streamed tokens.
 
@@ -383,6 +427,19 @@ class GatewayStreamConsumer:
     # comfortably inside the connector's JS number range (2^53).
     _draft_id_counter: int = secrets.randbits(49)
 
+    # Upper bound (seconds) on the best-effort platform I/O performed from the
+    # cancellation handler in :meth:`run`.  The gateway awaits the cancelled
+    # consumer during turn teardown; an unbounded edit here pinned a finished
+    # turn for as long as the platform request hung.
+    _CANCEL_FINAL_EDIT_TIMEOUT: float = 4.0
+
+    # Set when the cancel-time final edit was abandoned (timed out).  From
+    # then on this consumer performs NO further platform I/O: an abandoned
+    # edit that wakes up late must not resume the delivery state machine
+    # (retry, fallback send, continuation) and duplicate the final the
+    # gateway delivers itself, or emit after Stop / a newer generation.
+    _abandoned: bool = False
+
     def __init__(
         self,
         adapter: Any,
@@ -396,6 +453,7 @@ class GatewayStreamConsumer:
         run_still_current: Optional[Callable[[], bool]] = None,
     ):
         self.adapter = adapter
+        self._io = _FencedAdapterIO(self)
         self.chat_id = chat_id
         self.cfg = config or StreamConsumerConfig()
         self.metadata = metadata
@@ -706,6 +764,8 @@ class GatewayStreamConsumer:
         finalize: bool = False,
     ):
         """Edit via the adapter, passing routing metadata when supported."""
+        if self._abandoned:
+            return _ABANDONED_RESULT
         kwargs = {
             "chat_id": self.chat_id,
             "message_id": message_id,
@@ -725,7 +785,7 @@ class GatewayStreamConsumer:
                     kwargs["metadata"] = self.metadata
             except (TypeError, ValueError):
                 pass
-        return await self.adapter.edit_message(**kwargs)
+        return await self._io.edit_message(**kwargs)
 
     def _append_accumulated(self, text: str) -> None:
         """Append to the live buffer and the split-stable stream ledger."""
@@ -1086,7 +1146,7 @@ class GatewayStreamConsumer:
                 finalize_text = self._accumulated or self._boundary_placeholder
                 finalize_ok = False
                 try:
-                    result = await self.adapter.send_stream_frame(
+                    result = await self._io.send_stream_frame(
                         finalize_text,
                         finalize=True,
                         chat_id=self.chat_id,
@@ -1108,7 +1168,7 @@ class GatewayStreamConsumer:
                     )
                     fallback_ok = False
                     try:
-                        send_result = await self.adapter.send(
+                        send_result = await self._io.send(
                             self.chat_id, finalize_text,
                         )
                         fallback_ok = getattr(send_result, "success", False)
@@ -1411,7 +1471,7 @@ class GatewayStreamConsumer:
                 self.chat_id,
             )
             try:
-                seed_ok = await self.adapter.send_stream_frame(
+                seed_ok = await self._io.send_stream_frame(
                     "",
                     chat_id=self.chat_id,
                     reply_to=self._initial_reply_to_id,
@@ -1592,7 +1652,7 @@ class GatewayStreamConsumer:
                         and not self._native_stream_opened
                     ):
                         try:
-                            seed_ok = await self.adapter.send_stream_frame(
+                            seed_ok = await self._io.send_stream_frame(
                                 "",
                                 chat_id=self.chat_id,
                                 reply_to=self._initial_reply_to_id,
@@ -1940,7 +2000,7 @@ class GatewayStreamConsumer:
                         # substantive was delivered, so the gateway's own
                         # whole-response filter still governs any fallback.
                         try:
-                            await self.adapter.send_stream_frame(
+                            await self._io.send_stream_frame(
                                 "",
                                 finalize=True,
                                 chat_id=self.chat_id,
@@ -2156,12 +2216,40 @@ class GatewayStreamConsumer:
             # _final_response_sent itself; this handler owns the flags.
             _best_effort_ok = False
             if self._accumulated and self._message_id:
+                # Hard-bounded: this runs inside cancellation, and the gateway
+                # awaits the cancelled consumer while tearing down a finished
+                # turn.  A stalled platform request here must not keep that
+                # turn (and so the session's busy guard) alive; a timed-out
+                # edit confirmed nothing, so no delivery flag is set below.
                 try:
-                    _best_effort_ok = bool(
-                        await self._send_or_edit(
+                    self._cancel_io_started = True
+                    _finished, _ok = await await_bounded(
+                        self._send_or_edit(
                             self._accumulated, finalize=True, is_turn_final=False,
-                        )
+                        ),
+                        self._CANCEL_FINAL_EDIT_TIMEOUT,
                     )
+                    _best_effort_ok = bool(_ok) if _finished else False
+                    if not _finished:
+                        # Abandoned I/O must not resume the delivery state
+                        # machine: fence every later send/edit/fallback from
+                        # this consumer so a late-waking continuation cannot
+                        # duplicate the final the gateway now sends itself.
+                        self._abandoned = True
+                        logger.warning(
+                            "Stream consumer: best-effort final edit did not "
+                            "finish within %.1fs of cancellation; abandoning it "
+                            "(chat=%s) — the normal final send will deliver.",
+                            self._CANCEL_FINAL_EDIT_TIMEOUT,
+                            self.chat_id,
+                        )
+                except asyncio.CancelledError:
+                    # Stop/reset/shutdown interrupted the cancel-time final
+                    # operation itself.  Fence BEFORE propagating so a
+                    # cancellation-suppressing in-flight call cannot resume
+                    # into a fallback edit/send after this point.
+                    self._abandoned = True
+                    raise
                 except Exception:
                     pass
             elif self._message_id is None:
@@ -2171,7 +2259,18 @@ class GatewayStreamConsumer:
                 # adapter kept armed interception state for the next turn
                 # to inherit (review B8). Seal in place with what's already
                 # on screen; sets no delivery flags.
-                await self._abandon_native_stream()
+                try:
+                    _sealed, _ = await await_bounded(
+                        self._abandon_native_stream(),
+                        self._CANCEL_FINAL_EDIT_TIMEOUT,
+                    )
+                    if not _sealed:
+                        self._abandoned = True
+                except asyncio.CancelledError:
+                    self._abandoned = True
+                    raise
+                except Exception:
+                    pass
             # Only confirm final delivery if the best-effort send above
             # actually succeeded OR if the final response was already
             # confirmed before we were cancelled.  Previously this
@@ -2238,11 +2337,13 @@ class GatewayStreamConsumer:
 
         Returns the message_id so callers can thread subsequent chunks.
         """
+        if self._abandoned:
+            return reply_to_id
         text = self._clean_for_display(text)
         if not text.strip():
             return reply_to_id
         try:
-            result = await self.adapter.send(
+            result = await self._io.send(
                 chat_id=self.chat_id,
                 content=text,
                 reply_to=reply_to_id,
@@ -2351,6 +2452,8 @@ class GatewayStreamConsumer:
 
         Retries each chunk once on flood-control failures with a short delay.
         """
+        if self._abandoned:
+            return
         final_text = self._clean_for_display(text)
         # Ensure balanced code fences before computing continuation,
         # so the closing fence reaches the user even when the fallback
@@ -2458,7 +2561,7 @@ class GatewayStreamConsumer:
             # Try sending with one retry on flood-control errors.
             result = None
             for attempt in range(2):
-                result = await self.adapter.send(
+                result = await self._io.send(
                     chat_id=self.chat_id,
                     content=chunk,
                     metadata=self._metadata_for_send(final=True),
@@ -2518,7 +2621,7 @@ class GatewayStreamConsumer:
             and not self._fallback_preserve_partial_messages
             and continuation == final_text
         ):
-            delete_fn = getattr(self.adapter, "delete_message", None)
+            delete_fn = getattr(self._io, "delete_message", None)
             if delete_fn is not None:
                 try:
                     await delete_fn(self.chat_id, stale_message_id)
@@ -2560,7 +2663,7 @@ class GatewayStreamConsumer:
         result = None
         for attempt in range(2):
             try:
-                result = await self.adapter.send(
+                result = await self._io.send(
                     chat_id=self.chat_id,
                     content=final_text,
                     metadata=self._metadata_for_send(final=True),
@@ -2590,7 +2693,7 @@ class GatewayStreamConsumer:
             )
 
         new_message_id = getattr(result, "message_id", None)
-        delete_fn = getattr(self.adapter, "delete_message", None)
+        delete_fn = getattr(self._io, "delete_message", None)
         if delete_fn is not None:
             for stale_id in stale_ids:
                 if not stale_id or stale_id == new_message_id:
@@ -2774,7 +2877,7 @@ class GatewayStreamConsumer:
         if self._initial_reply_to_id:
             _md.setdefault("reply_to_message_id", self._initial_reply_to_id)
         try:
-            result = await self.adapter.send_draft(
+            result = await self._io.send_draft(
                 chat_id=self.chat_id,
                 draft_id=self._draft_id,
                 content=text,
@@ -2856,7 +2959,7 @@ class GatewayStreamConsumer:
             # _send_commentary).
             _md = dict(self.metadata) if self.metadata else {}
             _md["_interim_send"] = True
-            result = await self.adapter.send(
+            result = await self._io.send(
                 chat_id=self.chat_id,
                 content=tail,
                 metadata=_md,
@@ -2901,7 +3004,7 @@ class GatewayStreamConsumer:
             # duplicate (live finding, 2026-08-16 canary).
             _md = dict(self.metadata) if self.metadata else {}
             _md["_interim_send"] = True
-            result = await self.adapter.send(
+            result = await self._io.send(
                 chat_id=self.chat_id,
                 content=format_thought(text),
                 metadata=_md,
@@ -2989,6 +3092,50 @@ class GatewayStreamConsumer:
             self._preview_message_ids.add(message_id)
             self._segment_preview_message_ids.add(message_id)
 
+    @staticmethod
+    def _message_ids_from_result(result: Any) -> "list[str]":
+        """Every message id a send/edit result exposes, in order, de-duplicated."""
+        ids: "list[Any]" = [getattr(result, "message_id", None)]
+        ids.extend(getattr(result, "continuation_message_ids", None) or ())
+        raw = getattr(result, "raw_response", None) or {}
+        if isinstance(raw, dict):
+            ids.extend(raw.get("message_ids") or ())
+        seen: "list[str]" = []
+        for mid in ids:
+            if mid and mid != "__no_edit__" and str(mid) not in seen:
+                seen.append(str(mid))
+        return seen
+
+    async def _remove_stale_edit_messages(self, result: Any) -> None:
+        """Delete everything a superseded edit just wrote, without touching
+        current-turn delivery state.
+
+        An oversized edit may be split by the adapter into the original message
+        plus continuation messages; all of them carry stale content, so each id
+        the result reports is removed along with the preview being edited.
+        Deletion is bounded and best-effort per id: one failure never skips the
+        others.
+        """
+        delete_message = getattr(self.adapter, "delete_message", None)
+        if not callable(delete_message):
+            return
+        targets = [str(self._message_id)] if self._message_id else []
+        for mid in self._message_ids_from_result(result):
+            if mid not in targets:
+                targets.append(mid)
+        for mid in targets:
+            try:
+                cleanup = delete_message(self.chat_id, mid)
+                if inspect.isawaitable(cleanup):
+                    await await_bounded(cleanup, self._CANCEL_FINAL_EDIT_TIMEOUT)
+            except Exception:
+                logger.debug(
+                    "Late stale stream edit cleanup failed (chat=%s message=%s)",
+                    self.chat_id,
+                    mid,
+                    exc_info=True,
+                )
+
     def _track_preview_ids_from_result(self, result: Any) -> None:
         """Record every message id a send/edit result exposes: the primary id
         plus any continuation ids from an oversized split
@@ -3061,7 +3208,7 @@ class GatewayStreamConsumer:
         if self._message_id and self._message_id != "__no_edit__":
             stale_ids.add(self._message_id)
         try:
-            result = await self.adapter.send(
+            result = await self._io.send(
                 chat_id=self.chat_id,
                 content=text,
                 metadata=self._metadata_for_send(final=True),
@@ -3081,7 +3228,7 @@ class GatewayStreamConsumer:
         # just leave the preview behind (still an acceptable outcome — the
         # visible final timestamp is the important part).  Never delete the
         # message we just sent.
-        delete_fn = getattr(self.adapter, "delete_message", None)
+        delete_fn = getattr(self._io, "delete_message", None)
         if delete_fn is not None:
             for stale_id in stale_ids:
                 if not stale_id or stale_id == "__no_edit__" or stale_id == new_message_id:
@@ -3133,7 +3280,7 @@ class GatewayStreamConsumer:
         # Do this before the delete loop; keep the delivery flags False below.
         if self._native_stream_opened:
             try:
-                await self.adapter.send_stream_frame(
+                await self._io.send_stream_frame(
                     "",
                     finalize=True,
                     chat_id=self.chat_id,
@@ -3151,7 +3298,7 @@ class GatewayStreamConsumer:
         stale_ids = set(self._preview_message_ids)
         if self._message_id and self._message_id != "__no_edit__":
             stale_ids.add(self._message_id)
-        delete_fn = getattr(self.adapter, "delete_message", None)
+        delete_fn = getattr(self._io, "delete_message", None)
         if delete_fn is not None:
             for stale_id in stale_ids:
                 if not stale_id or stale_id == "__no_edit__":
@@ -3190,6 +3337,8 @@ class GatewayStreamConsumer:
         ``finalize`` is True when this is the last edit in a streaming
         sequence.
         """
+        if self._abandoned:
+            return False
         # Strip MEDIA: directives so they don't appear as visible text.
         # Media files are delivered as native attachments after the stream
         # finishes (via _deliver_media_from_response in gateway/run.py).
@@ -3220,7 +3369,7 @@ class GatewayStreamConsumer:
             # to close the thinking bubble. Use placeholder text.
             if finalize and self._use_native_streaming and self._native_stream_opened:
                 try:
-                    ok = await self.adapter.send_stream_frame(
+                    ok = await self._io.send_stream_frame(
                         "✅",
                         finalize=True,
                         chat_id=self.chat_id,
@@ -3266,7 +3415,7 @@ class GatewayStreamConsumer:
             # and we have new content to send.
             if not self._native_stream_opened and text:
                 try:
-                    seed_ok = await self.adapter.send_stream_frame(
+                    seed_ok = await self._io.send_stream_frame(
                         "",
                         chat_id=self.chat_id,
                         reply_to=self._initial_reply_to_id,
@@ -3339,7 +3488,7 @@ class GatewayStreamConsumer:
 
             ok = False
             try:
-                ok = await self.adapter.send_stream_frame(
+                ok = await self._io.send_stream_frame(
                     text,
                     finalize=finalize,
                     chat_id=self.chat_id,
@@ -3380,7 +3529,7 @@ class GatewayStreamConsumer:
             # because the seed frame has zero length but still opens the bubble.
             if self._native_stream_opened:
                 try:
-                    await self.adapter.send_stream_frame(
+                    await self._io.send_stream_frame(
                         text,
                         finalize=True,
                         chat_id=self.chat_id,
@@ -3523,6 +3672,22 @@ class GatewayStreamConsumer:
                         content=text,
                         finalize=finalize,
                     )
+                    # A transport may suppress cancellation while an edit is
+                    # in flight.  If that edit completes after this consumer
+                    # was abandoned or its turn was superseded, do not let the
+                    # stale result advance delivery bookkeeping or fallback
+                    # state.  Remove the preview it may just have overwritten;
+                    # this is bounded compensation because the platform write
+                    # itself may not be cancellable.
+                    try:
+                        stale_delivery = (
+                            self._abandoned or not self._run_still_current()
+                        )
+                    except Exception:
+                        stale_delivery = True
+                    if stale_delivery:
+                        await self._remove_stale_edit_messages(result)
+                        return False
                     if result.success:
                         self._already_sent = True
                         # Record any continuation fragments an oversized edit
@@ -3680,7 +3845,7 @@ class GatewayStreamConsumer:
             else:
                 # First message — send new, threaded to the original user message
                 # so it lands in the correct topic/thread.
-                result = await self.adapter.send(
+                result = await self._io.send(
                     chat_id=self.chat_id,
                     content=text,
                     reply_to=self._initial_reply_to_id,

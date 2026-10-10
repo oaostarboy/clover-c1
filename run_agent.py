@@ -3332,6 +3332,10 @@ class AIAgent:
             if session_has_running_agent:
                 running_agent.interrupt(new_message.text)
         """
+        if hard_cancel:
+            checkpoint = getattr(self, "_delegation_checkpoint", None)
+            if checkpoint is not None:
+                checkpoint.revoke_current_followthrough()
         # A hard stop and redirect share one lock so /stop cannot race with an
         # accepted correction and accidentally turn itself into a retry.
         def _admit_hard_cancel() -> None:
@@ -4113,6 +4117,20 @@ class AIAgent:
         from agent.agent_runtime_helpers import apply_pending_steer_to_tool_results
         return apply_pending_steer_to_tool_results(self, messages, num_tool_msgs)
 
+    def _emit_public_status(self, status: str) -> None:
+        """Fixed runtime lifecycle labels only; never reasoning or tool output."""
+        from agent.delegation_activity import PUBLIC_ACTIVITY_STATUS
+        callback = getattr(self, "tool_progress_callback", None)
+        if status not in PUBLIC_ACTIVITY_STATUS or not callable(callback):
+            return
+        if getattr(self, "_last_public_status", None) == status:
+            return
+        self._last_public_status = status
+        try:
+            callback("agent.status", activity_status=status)
+        except Exception:
+            logger.debug("Public status observer unavailable", exc_info=True)
+
     def _touch_activity(
         self,
         desc: str,
@@ -4148,6 +4166,18 @@ class AIAgent:
         self._last_activity_ts = time.time()
         self._last_activity_desc = bound_activity_description(desc)
         self._last_activity_provenance = normalize_activity_provenance(provenance)
+        # These labels originate at existing runtime call/wait/result seams.
+        # Expose only fixed categories, never the potentially private desc.
+        if desc.startswith("starting API call #"):
+            AIAgent._emit_public_status(self, "requesting")
+        elif desc.startswith(("waiting for provider response", "waiting for non-streaming API response", "waiting for stream response", "⏳ waiting on")):
+            AIAgent._emit_public_status(self, "waiting")
+        elif desc.startswith("API call #") and desc.endswith(" completed"):
+            AIAgent._emit_public_status(self, "provider_result")
+        elif desc == "retrying provider request":
+            AIAgent._emit_public_status(self, "retrying")
+        elif desc == "executing tool: clarify" and callable(getattr(self, "clarify_callback", None)):
+            AIAgent._emit_public_status(self, "awaiting_input")
         if os.environ.get("CLOVER_KANBAN_TASK"):
             try:
                 from tools.kanban_tools import (
@@ -4520,6 +4550,9 @@ class AIAgent:
         Safe to call multiple times (idempotent).  Each cleanup step is
         independently guarded so a failure in one does not prevent the rest.
         """
+        checkpoint = getattr(self, "_delegation_checkpoint", None)
+        if checkpoint is not None:
+            checkpoint.revoke_all_followthrough()
         # AIAgent.close() is the hard owner boundary. Gateway cleanup may
         # call shutdown_memory_provider() first; its idempotence prevents
         # duplicate extraction while direct callers cannot skip provider close.
@@ -8342,7 +8375,7 @@ class AIAgent:
         finally:
             self._executing_tools = False
 
-    def _dispatch_delegate_task(self, function_args: dict) -> str:
+    def _dispatch_delegate_task(self, function_args: dict, *, task_id: Optional[str] = None) -> str:
         """Single call site for delegate_task dispatch.
 
         New DELEGATE_TASK_SCHEMA fields only need to be added here to reach all
@@ -8375,7 +8408,9 @@ class AIAgent:
             subagent_id=function_args.get("subagent_id"),
             message=function_args.get("message"),
             handoff=function_args.get("handoff"),
+            follow_through=function_args.get("follow_through"),
             parent_agent=self,
+            parent_task_id=task_id,
         )
 
     def _invoke_tool(self, function_name: str, function_args: dict, effective_task_id: str,

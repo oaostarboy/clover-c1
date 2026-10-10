@@ -108,12 +108,27 @@ class TestDetectDangerousRm:
                     None,
                 )
 
-    def test_symlinked_temp_dir_only_exempts_canonical_target(self, tmp_path):
+    @staticmethod
+    def _symlinked_temp(tmp_path):
         real_temp = tmp_path / "real-temp"
         real_temp.mkdir()
         linked_temp = tmp_path / "linked-temp"
         linked_temp.symlink_to(real_temp, target_is_directory=True)
-        basename = "clover-verify-example.py"
+        return real_temp, linked_temp, "clover-verify-example.py"
+
+    def test_symlinked_temp_dir_only_exempts_canonical_target(self, tmp_path, monkeypatch):
+        """Public detector, in an explicit context where HOME does not contain
+        the temp tree. (Under a HOME that contains it, the detector's
+        home-folding rewrites the absolute operand to ``~/...`` and a lone
+        ``rm -f`` of one file is not gated either way; see the HOME-contained
+        tests below. Previously this assertion silently depended on where
+        pytest's basetemp happened to live.)"""
+        real_temp, linked_temp, basename = self._symlinked_temp(tmp_path)
+        neutral_home = tmp_path.parent / (tmp_path.name + "-neutral-home")
+        neutral_home.mkdir()
+        for var in ("HOME", "USERPROFILE"):
+            monkeypatch.setenv(var, str(neutral_home))
+        assert not str(os.path.realpath(tmp_path)).startswith(str(os.path.realpath(neutral_home)) + os.sep)
 
         with mock_patch("tempfile.gettempdir", return_value=str(linked_temp)):
             assert detect_dangerous_command(f"rm -f {linked_temp / basename}")[0] is True
@@ -122,6 +137,39 @@ class TestDetectDangerousRm:
                 None,
                 None,
             )
+
+    def test_symlink_spelling_is_never_the_exempt_operand_in_any_home(self, tmp_path, monkeypatch):
+        """The exemption predicate itself, independent of any HOME layout:
+        only the canonical spelling of the temp dir is exempt."""
+        from tools.approval import _is_verification_artifact_cleanup
+
+        real_temp, linked_temp, basename = self._symlinked_temp(tmp_path)
+        homes = {
+            "contains-temp": tmp_path,
+            "neutral": tmp_path.parent / (tmp_path.name + "-neutral-home"),
+        }
+        homes["neutral"].mkdir(exist_ok=True)
+        for label, home in homes.items():
+            for var in ("HOME", "USERPROFILE"):
+                monkeypatch.setenv(var, str(home))
+            with mock_patch("tempfile.gettempdir", return_value=str(linked_temp)):
+                assert _is_verification_artifact_cleanup(f"rm -f {linked_temp / basename}") is False, label
+                assert _is_verification_artifact_cleanup(f"rm -f {real_temp / basename}") is True, label
+                # Still exactly one file named like a verification artifact.
+                assert _is_verification_artifact_cleanup(f"rm -f {real_temp / 'other.py'}") is False, label
+                assert _is_verification_artifact_cleanup(f"rm -rf {real_temp / basename}") is False, label
+
+    def test_home_contained_temp_keeps_single_file_rm_policy_and_gates_recursive(self, tmp_path, monkeypatch):
+        """Negative control for the HOME-contained layout: single-file ``rm -f``
+        stays ungated (existing policy), but a recursive delete through either
+        spelling is still gated and the exemption is not widened."""
+        real_temp, linked_temp, basename = self._symlinked_temp(tmp_path)
+        for var in ("HOME", "USERPROFILE"):
+            monkeypatch.setenv(var, str(tmp_path))
+        with mock_patch("tempfile.gettempdir", return_value=str(linked_temp)):
+            assert detect_dangerous_command(f"rm -f {real_temp / basename}") == (False, None, None)
+            for target in (linked_temp / basename, real_temp / basename, linked_temp):
+                assert detect_dangerous_command(f"rm -rf {target}")[0] is True, target
 
     def test_verification_cleanup_exemption_rejects_broader_deletions(self):
         commands = (

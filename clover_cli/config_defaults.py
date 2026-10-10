@@ -2262,6 +2262,9 @@ DEFAULT_CONFIG = {
     # always goes to ~/.clover/skills/.
     "skills": {
         "external_dirs": [],   # e.g. ["~/.agents/skills", "/shared/team-skills"]
+        # Category names whose skill descriptions are omitted from the system
+        # prompt index. Names remain discoverable/loadable through skill tools.
+        "compact_categories": [],
         # Project-local skill discovery: when a session starts inside a git
         # checkout, ``<root>/.clover/skills/`` and ``<root>/.agents/skills/``
         # are sourced as the highest-precedence skill tier — but ONLY when the
@@ -2947,8 +2950,11 @@ DEFAULT_CONFIG = {
         #     one conversation (the owner is the conversation's approval
         #     session key; delegated subagent sessions get their own).
         #     Kernels are disposed with their session (session clear/new),
-        #     reaped after kernel_idle_timeout seconds idle, and capped at
+        #     reaped after kernel_idle_timeout seconds idle by gateway
+        #     housekeeping (active cells are protected), and capped at
         #     max_session_kernels live children process-wide (LRU evicted).
+        #     If an idle-reaped owner returns, the next result reports
+        #     state_lost and that the persistent namespace was discarded.
         #     A timed-out or interrupted cell kills the kernel (state lost,
         #     next call starts fresh), and the child environment is frozen
         #     at kernel spawn — pass reset=true after changing env

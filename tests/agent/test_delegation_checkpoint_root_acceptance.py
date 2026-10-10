@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -112,6 +113,76 @@ def _write_is_blocked(agent, tmp_path, name='probe.txt'):
     assert not target.exists(), 'a non-accepted todo authorized parent work'
     assert blocked['error_type'] in ('delegation_decision_required', 'delegation_dispatch_required')
     return blocked
+
+
+# ── production-path bounded follow-through ────────────────────────────────
+
+def test_accepted_dispatch_binds_one_exact_followthrough_stage(tmp_path, monkeypatch):
+    import agent.delegation_checkpoint as dc
+    import run_agent
+    from tools import async_delegation as asyncd
+
+    monkeypatch.setenv('CLOVER_HOME', str(tmp_path))
+    entered, second_entered, release = threading.Event(), threading.Event(), threading.Event()
+    started = []
+
+    def held_conversation(self, user_message=None, **kwargs):
+        started.append(user_message)
+        entered.set()
+        if len(started) >= 2:
+            second_entered.set()
+        assert release.wait(10)
+        return {'final_response': f'done: {user_message}', 'messages': [], 'completed': True,
+                'api_calls': 1, 'input_tokens': 0, 'output_tokens': 0}
+
+    monkeypatch.setattr(run_agent.AIAgent, 'run_conversation', held_conversation)
+    agent = _agent()
+    dc.begin_turn(agent)
+    stage = {'goal': 'verify the generated patch', 'context': 'Use the inherited tools.'}
+    _, dispatched = run_batch(agent, [
+        _delegate('one bounded follow-through stage'),
+        ('delegate_task', {'goal': 'inspect source', 'follow_through': [stage]}),
+    ])
+    assert dispatched['status'] == 'dispatched'
+    delegation_id = dispatched['delegation_id']
+    saved = asyncd.get_continuation_plan(delegation_id)
+    checkpoint = dc.get_checkpoint(agent)
+    assert saved and saved['stages'] == [stage]
+    assert saved['request_id'] and saved['generation'] >= 0
+    assert saved['receipt_ids'] == [delegation_id]
+    assert saved['runtime_policy']['provider'] == agent.provider
+    assert saved['runtime_policy']['model'] == agent.model
+    assert saved['runtime_policy']['api_mode'] == agent.api_mode
+    assert saved['runtime_policy']['endpoint_sha256']
+    assert entered.wait(5), 'actual accepted child must start before completing its receipt'
+
+    release.set()
+    deadline = time.monotonic() + 10
+    row = asyncd.get_durable_delegation(delegation_id)
+    while time.monotonic() < deadline and row and row.get('state') in ('running', 'finalizing'):
+        time.sleep(0.02)
+        row = asyncd.get_durable_delegation(delegation_id)
+    assert row and row.get('state') not in ('running', 'finalizing')
+    assert asyncd.claim_completion_delivery(delegation_id, 'test-owned-stage-claim')
+
+    dc.begin_turn(agent, 'internal_notification')
+    checkpoint = dc.get_checkpoint(agent)
+    assert checkpoint.expected_followthrough_policy() == saved['runtime_policy']
+    (changed,) = run_batch(agent, [('delegate_task', {
+        'goal': 'verify the generated patch with extra work',
+        'context': 'Use the inherited tools.',
+    })])
+    assert changed.get('error_type') == 'delegation_spawn_closed'
+    assert len(started) == 1, 'changed task data must not start a worker'
+
+    (accepted,) = run_batch(agent, [('delegate_task', stage)])
+    assert accepted['status'] == 'dispatched'
+    assert second_entered.wait(5), 'second worker start is asynchronous, not a dispatch receipt'
+    assert len(started) == 2
+    assert asyncd.get_continuation_plan(accepted['delegation_id']) is None
+    second_row = asyncd.get_durable_delegation(accepted['delegation_id'])
+    assert second_row and second_row['state'] in ('running', 'finalizing', 'completed')
+    release.set()
 
 
 # ── 1. same sequential frame: later todos must not lend a receipt ──────────

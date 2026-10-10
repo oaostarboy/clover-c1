@@ -143,8 +143,21 @@ def close_request(request, target=None):
 
 
 def relay(source, destination):
+    """Copy ``source`` to ``destination`` until the upstream is finished.
+
+    Every request is sent with ``Connection: close``, so the end of the
+    response is the upstream closing the connection. Many registries (and
+    CDNs in front of them) close the TCP connection without a TLS
+    ``close_notify``, which Python reports as ``SSLEOFError`` on the next
+    read. By then the full response has been relayed, so that is a normal end
+    of stream -- letting it escape tears down the client's tunnel mid-flight
+    and npm sees a reset it then retries into the same failure.
+    """
     while True:
-        chunk = source.recv(MAX_REQUEST_BYTES)
+        try:
+            chunk = source.recv(MAX_REQUEST_BYTES)
+        except (ssl.SSLEOFError, ConnectionResetError):
+            return
         if not chunk:
             return
         destination.sendall(chunk)

@@ -550,6 +550,15 @@ def _handle_control_action(
         )
     with _active_subagents_lock:
         record = _active_subagents.get(sid)
+    if record is None and action == "stop":
+        # A completed child may still own an accepted, unspent next stage.
+        # Only this root's runtime ledger (not the supplied id) proves ownership.
+        from agent.delegation_checkpoint import get_checkpoint
+        checkpoint = get_checkpoint(parent_agent)
+        if checkpoint is not None and checkpoint.revoke_followthrough(sid):
+            return json.dumps({"action": "stop", "subagent_id": sid,
+                               "status": "continuation_cancelled",
+                               "note": "The child already ended; its remaining follow-through was cancelled."})
     if record is None or not _owns_subagent_record(record, parent_agent):
         return tool_error(
             f"No live subagent '{sid}' in this conversation's spawn tree. It "
@@ -558,6 +567,14 @@ def _handle_control_action(
         )
 
     if action == "stop":
+        revoked = False
+        try:
+            from agent.delegation_checkpoint import get_checkpoint
+            checkpoint = get_checkpoint(parent_agent)
+            if checkpoint is not None:
+                revoked = checkpoint.revoke_followthrough(sid)
+        except Exception:
+            logger.debug("explicit-stop continuation revocation failed", exc_info=True)
         if interrupt_subagent(sid):
             return json.dumps(
                 {
@@ -573,6 +590,10 @@ def _handle_control_action(
                 },
                 ensure_ascii=False,
             )
+        if revoked:
+            return json.dumps({"action": "stop", "subagent_id": sid,
+                               "status": "continuation_cancelled",
+                               "note": "The child ended during Stop; remaining follow-through was cancelled."})
         return tool_error(
             f"Could not interrupt '{sid}' — it likely finished in the last "
             "moment. Its result arrives as a normal completion message."
@@ -913,17 +934,15 @@ def _get_max_concurrent_children() -> int:
 
 
 def _get_worktree_isolation() -> bool:
-    """Read delegation.worktree_isolation from config (bool, default False).
-
-    Inspired by Muse Code's ``--subagent-worktree-isolation`` (Meta, Aug
-    2026): when enabled, each delegated child gets its own git worktree
-    checked out from the parent's current commit so parallel children never
-    contend for the same working copy. Opt-in and git-only — in a non-git
-    workspace or on a non-local terminal backend the flag is ignored without
-    an error and children share the parent's workspace as before.
-    """
+    """Read delegation.worktree_isolation from config (bool, default False)."""
     cfg = _load_config()
     return bool(cfg.get("worktree_isolation", False))
+
+
+def _get_worktree_isolation_required() -> bool:
+    """Read delegation.worktree_isolation_required (default False)."""
+    cfg = _load_config()
+    return bool(cfg.get("worktree_isolation_required", False))
 
 
 _LEGACY_MAX_ASYNC_WARNED = False
@@ -1315,6 +1334,35 @@ def _build_child_system_prompt(
     return "\n".join(parts)
 
 
+def _capture_parent_workspace(parent_agent, task_id: Optional[str] = None):
+    """Snapshot trusted terminal identity/cwd before constructing or queueing children.
+
+    The runtime task id is separate from gateway's approval/chat key. Never
+    consult another actor's default record or mutable global cwd for a bound
+    session. Legacy unbound CLI callers retain their startup-directory hint.
+    This tuple is internal dispatch metadata, not a model argument.
+    """
+    from tools.approval import get_current_session_key
+    from tools.terminal_tool import get_session_cwd
+
+    raw_task = task_id or getattr(parent_agent, "_current_task_id", None)
+    raw_task = raw_task if isinstance(raw_task, str) else ""
+    session_key = get_current_session_key(default="")
+    depth = getattr(parent_agent, "_delegate_depth", 0)
+    if isinstance(depth, int) and depth > 0:
+        # A child owns its task cwd, not the root's inherited approval context.
+        session_key = raw_task
+    key = session_key or raw_task
+    cwd = get_session_cwd(key) if key else None
+    if cwd is None and not session_key:
+        platform = getattr(parent_agent, "platform", None)
+        if platform in (None, "", "cli"):
+            # Single-session CLI only; capture now, never inside queued work.
+            cwd = get_session_cwd("default") if not key else None
+            cwd = cwd or _resolve_workspace_hint(parent_agent)
+    return (raw_task or session_key or None, cwd)
+
+
 def _resolve_workspace_hint(parent_agent) -> Optional[str]:
     """Best-effort local workspace hint for child prompts.
 
@@ -1493,6 +1541,9 @@ def _build_child_progress_callback(
     ):
         # Lifecycle events emitted by the orchestrator itself — handled
         # before enum normalisation since they are not part of DelegateEvent.
+        if event_type == "agent.status":
+            _relay("subagent.progress", activity_status=kwargs.get("activity_status"))
+            return
         if event_type == "subagent.start":
             if spinner and goal_label:
                 short = (
@@ -2689,6 +2740,7 @@ def _run_single_child(
     owner_transport: Any = None,
     owner_session_record: Any = None,
     checkpoint_ticket: Any = None,
+    parent_workspace: Optional[tuple] = None,
     **_kwargs,
 ) -> Dict[str, Any]:
     """
@@ -2883,9 +2935,12 @@ def _run_single_child(
     # Worktree-isolation state: populated inside the try once the child's
     # task id is known; the default no-op keeps every early error path safe.
     _worktree_info: Optional[Dict[str, str]] = None
+    _worktree_outcome: Optional[Dict[str, Any]] = None
 
     def _attach_worktree(entry_dict: Dict[str, Any]) -> None:
         """Inspect + prune the child worktree, reporting into the entry."""
+        if _worktree_outcome is not None:
+            entry_dict["workspace_isolation"] = dict(_worktree_outcome)
         if _worktree_info is None:
             return
         try:
@@ -2940,7 +2995,10 @@ def _run_single_child(
         import uuid as _uuid
 
         child_task_id = _subagent_id or f"subagent-{task_index}-{_uuid.uuid4().hex[:8]}"
-        parent_task_id = getattr(parent_agent, "_current_task_id", None)
+        parent_task_id, _parent_cwd = (
+            parent_workspace if parent_workspace is not None
+            else _capture_parent_workspace(parent_agent)
+        )
         # Seed the child's session-cwd record from the parent's (cwd rearch):
         # children share the parent's container, and today they inherit the
         # parent's live env.cwd implicitly. Seeding at spawn preserves that
@@ -2949,12 +3007,11 @@ def _run_single_child(
         # the parent once readers flip to the record store).
         try:
             from tools.terminal_tool import (
-                get_session_cwd,
                 record_session_cwd,
                 register_container_alias,
             )
 
-            record_session_cwd(child_task_id, get_session_cwd(parent_task_id))
+            record_session_cwd(child_task_id, _parent_cwd)
             # Per-session container isolation (docker + container_persistent:
             # false) keys containers by session task_id. The child must share
             # the PARENT's container — register the alias so the child's
@@ -2963,46 +3020,74 @@ def _run_single_child(
         except Exception as e:
             logger.debug("Child cwd seed failed: %s", e)
 
-        # Opt-in worktree isolation (delegation.worktree_isolation, inspired
-        # by Muse Code's --subagent-worktree-isolation): give this child its
-        # own git worktree branched from the parent repo's HEAD, and start its
-        # terminal there. Git-only and local-backend-only; any failure
-        # degrades silently to the shared-workspace behavior above.
-        if _get_worktree_isolation():
-            try:
-                from tools import subagent_worktree
+        # Resolve and expose the isolation outcome before the child begins its
+        # conversation. Optional failures remain explicitly shared; required
+        # failures raise here and never start child execution.
+        from tools import subagent_worktree
 
-                if subagent_worktree.local_backend_active():
-                    _parent_cwd = None
-                    try:
-                        from tools.terminal_tool import get_session_cwd as _gsc
-
-                        _parent_cwd = _gsc(parent_task_id)
-                    except Exception:
-                        pass
-                    _worktree_info = subagent_worktree.create_subagent_worktree(
-                        _parent_cwd or _resolve_workspace_hint(parent_agent),
-                        subagent_id=_subagent_id,
-                    )
-                else:
-                    logger.debug(
-                        "worktree isolation skipped: non-local terminal backend"
-                    )
-            except Exception as e:
-                logger.debug("worktree isolation setup failed: %s", e)
+        isolation_requested = _get_worktree_isolation()
+        isolation_required = _get_worktree_isolation_required()
+        _worktree_outcome = {
+            "status": "shared",
+            "required": isolation_required,
+            "reason": "worktree isolation is disabled",
+        }
+        if isolation_required and not isolation_requested:
+            _worktree_outcome = {
+                "status": "blocked",
+                "required": True,
+                "reason": (
+                    "worktree_isolation_required is true but worktree_isolation is "
+                    "disabled; enable isolation or disable the conflicting requirement"
+                ),
+            }
+            raise RuntimeError(
+                "Required workspace isolation was not available; child was not started: "
+                + _worktree_outcome["reason"]
+            )
+        if isolation_requested:
+            _worktree_outcome, _worktree_info = subagent_worktree.prepare_subagent_worktree(
+                _parent_cwd,
+                _subagent_id,
+                enabled=True,
+                required=isolation_required,
+                local_backend=subagent_worktree.local_backend_active(),
+            )
             if _worktree_info is not None:
+                from tools.terminal_tool import record_session_cwd as _rsc
+
                 try:
-                    from tools.terminal_tool import record_session_cwd as _rsc
-
                     _rsc(child_task_id, _worktree_info["path"])
-                except Exception as e:
-                    logger.debug("worktree cwd seed failed: %s", e)
-                # The child's context is already built; carry the isolation
-                # contract on the goal message instead (same turn, no
-                # system-prompt mutation).
-                from tools.subagent_worktree import build_worktree_context_note
-
-                goal = goal + build_worktree_context_note(_worktree_info)
+                except Exception as exc:
+                    _worktree_outcome = {
+                        "status": "blocked",
+                        "required": True,
+                        "reason": f"isolated worktree was created but child cwd setup failed: {exc}",
+                    }
+                    raise RuntimeError(_worktree_outcome["reason"]) from exc
+                goal = goal + subagent_worktree.build_worktree_context_note(_worktree_info)
+            else:
+                goal = goal + subagent_worktree.build_shared_workspace_context_note(
+                    _worktree_outcome
+                )
+            if child_progress_cb:
+                try:
+                    child_progress_cb(
+                        "subagent.progress",
+                        preview=(
+                            "Workspace isolation: "
+                            + str(_worktree_outcome.get("status", "unknown"))
+                            + (" — " + str(_worktree_outcome.get("reason"))
+                               if _worktree_outcome.get("reason") else "")
+                        ),
+                    )
+                except Exception as exc:
+                    logger.debug("Progress callback update failed: %s", exc)
+            if _worktree_outcome.get("status") == "blocked":
+                raise RuntimeError(
+                    "Required workspace isolation was not available; child was not started: "
+                    + str(_worktree_outcome.get("reason", "unknown setup failure"))
+                )
 
         wall_start = time.time()
         parent_reads_snapshot = (
@@ -4022,8 +4107,10 @@ def delegate_task(
     subagent_id: Optional[str] = None,
     message: Optional[str] = None,
     handoff: Optional[Dict[str, Any]] = None,
+    follow_through: Optional[List[Dict[str, Any]]] = None,
     parent_agent=None,
     credentials_cfg: Optional[Dict[str, Any]] = None,
+    parent_task_id: Optional[str] = None,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks, or control
@@ -4126,6 +4213,21 @@ def delegate_task(
         )
     except ValueError as exc:
         return tool_error(str(exc))
+
+    # Bind later stages to the effective route and inherited tools, without
+    # persisting credentials or accepting model-requested pin changes.
+    from agent.delegation_followthrough import runtime_policy_for
+    try:
+        runtime_policy = runtime_policy_for(creds, parent_agent)
+        from agent.delegation_checkpoint import get_checkpoint
+        _checkpoint = get_checkpoint(parent_agent)
+        _expected_policy = (
+            _checkpoint.expected_followthrough_policy() if _checkpoint else None
+        )
+        if _expected_policy is not None and _expected_policy != runtime_policy:
+            return tool_error("The predeclared follow-through cannot change the admitted model, provider, endpoint, inherited tools, or approval restrictions.")
+    except Exception:
+        return tool_error("Follow-through runtime policy could not be verified; no child was started.")
 
     # Normalize to task list
     max_children = _get_max_concurrent_children()
@@ -4252,6 +4354,9 @@ def delegate_task(
     from agent.delegation_checkpoint import ticket_for as _checkpoint_ticket_for
 
     _checkpoint_ticket = _checkpoint_ticket_for(parent_agent)
+    # Capture on the trusted caller, before child construction and before any
+    # thread handoff. Queued work must not re-read a later turn's parent/cwd.
+    _parent_workspace = _capture_parent_workspace(parent_agent, parent_task_id)
 
     # Strict background: a conversational root (the checkpoint applies to it)
     # asked for a detached job. If one cannot be had, say so; never run the
@@ -4456,6 +4561,7 @@ def delegate_task(
                 owner_transport=_origin_owner_transport,
                 owner_session_record=_origin_owner_session_record,
                 checkpoint_ticket=_start_ticket,
+                parent_workspace=_parent_workspace,
             )
             results.append(result)
         else:
@@ -4482,6 +4588,7 @@ def delegate_task(
                         owner_transport=_origin_owner_transport,
                         owner_session_record=_origin_owner_session_record,
                         checkpoint_ticket=_start_ticket,
+                        parent_workspace=_parent_workspace,
                     )
                     futures[future] = i
 
@@ -4854,6 +4961,12 @@ def delegate_task(
                     goals=_goals,
                     subagent_ids=[s for s in _sids if isinstance(s, str) and s],
                     handoff=handoff,
+                    continuation_plan=follow_through,
+                    accepted_task_data=[
+                        {"goal": t["goal"], **({"context": t["context"]} if t.get("context") is not None else {})}
+                        for t in task_list
+                    ],
+                    runtime_policy=runtime_policy,
                 )
             if any(isinstance(s, str) and s for s in _sids):
                 payload["subagent_ids"] = _sids
@@ -5721,6 +5834,29 @@ DELEGATE_TASK_SCHEMA = {
                     "specific."
                 ),
             },
+            "follow_through": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 1,
+                "description": (
+                    "Optional finite list of exact next-stage task payloads "
+                    "({goal, optional context}). These are proposed task data, "
+                    "not permission: the runtime binds them only if this "
+                    "background dispatch is actually accepted. A later stage "
+                    "can run only once after its owned terminal receipt is "
+                    "claimed, and only when delegate_task repeats the exact "
+                    "next payload. No model/provider/tool overrides are allowed."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "goal": {"type": "string", "minLength": 1, "maxLength": 2000},
+                        "context": {"type": "string", "maxLength": 8000},
+                    },
+                    "required": ["goal"],
+                    "additionalProperties": False,
+                },
+            },
             "handoff": {
                 "type": "object",
                 "description": (
@@ -5804,6 +5940,7 @@ registry.register(
         subagent_id=args.get("subagent_id"),
         message=args.get("message"),
         handoff=args.get("handoff"),
+        follow_through=args.get("follow_through"),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,

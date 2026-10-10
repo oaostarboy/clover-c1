@@ -1,11 +1,13 @@
 """Behavior contract for scripts/release_cut.py (the local half of the Release cut).
 
 Every test runs against a throwaway git repo built from copies of the real
-``clover_cli/__init__.py``, ``pyproject.toml``, ``uv.lock`` and
-``RELEASE_NOTES.md``, so nothing in the live checkout is touched and nothing is
-published.  The expected edit shape is the one hand-made in release commit
-253629ba (v1.1.2): same four files, one changed line each (two in __init__.py
-when the day changes), and RELEASE_NOTES.md only when a draft is promoted.
+``clover_cli/__init__.py``, ``pyproject.toml`` and ``uv.lock`` plus synthetic
+release notes anchored at the current package version. That prevents a newer
+unreleased draft header in the live notes from invalidating tests for the next
+release, and nothing in the live checkout is touched or published. The expected
+edit shape is the one hand-made in release commit 253629ba (v1.1.2): same four
+files, one changed line each (two in __init__.py when the day changes), and
+RELEASE_NOTES.md only when a draft is promoted.
 """
 
 from __future__ import annotations
@@ -61,10 +63,16 @@ def repo(tmp_path):
         dest = root / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes((REPO_ROOT / rel).read_bytes())
+    current = rc.read_versions(root)["init"]
+    (root / "RELEASE_NOTES.md").write_text(
+        "# Release notes fixture\n\n"
+        f"## {current} | Clover C{current} | 2000-01-01\n"
+        "- Synthetic previous release.\n",
+        encoding="utf-8",
+    )
     _git(root, "init", "-q", "-b", "main")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "base")
-    current = rc.read_versions(root)["init"]
     _git(root, "tag", "-a", f"v{current}", "-m", "current")
     return root
 

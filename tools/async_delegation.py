@@ -186,6 +186,7 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         # completions recovered after a process restart are unroutable on
         # api_server (the in-memory record that carried it is gone).
         ("origin_session_id", "TEXT"),
+        ("continuation_json", "TEXT"),
     ):
         if name not in columns:
             conn.execute(f"ALTER TABLE async_delegations ADD COLUMN {name} {sql_type}")
@@ -313,6 +314,117 @@ def _persist_dispatch(record: Dict[str, Any]) -> None:
              record.get("origin_session_id", "")),
         )
     _prune_durable_records()
+
+
+def bind_continuation_plan(delegation_id: str, plan: Dict[str, Any]) -> bool:
+    """Persist a plan only after its real async dispatch row exists.
+
+    This is called only by ``DispatchTicket.accept_handoff`` after the
+    dispatch path reports ``dispatched``. Existing rows cannot be re-bound or
+    have a plan overwritten by callbacks.
+    """
+    if not delegation_id or not isinstance(plan, dict):
+        return False
+    if plan.get("delegation_id") != delegation_id:
+        return False
+    encoded = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(encoded.encode("utf-8")) > 32_000:
+        return False
+    with _DB_LOCK, _transaction() as conn:
+        cur = conn.execute(
+            """UPDATE async_delegations SET continuation_json=?, updated_at=?
+               WHERE delegation_id=? AND state='running' AND continuation_json IS NULL""",
+            (encoded, time.time(), delegation_id),
+        )
+        return cur.rowcount == 1
+
+
+def claim_continuation_stage(
+    *, delegation_id: str, request_id: str, generation: int, receipt_id: str,
+    stage: Dict[str, Any],
+) -> bool:
+    """Atomically spend one exact stage on a matching claimed terminal receipt."""
+    from agent.delegation_followthrough import plan_is_live, stage_digest
+    with _DB_LOCK, _transaction() as conn:
+        row = conn.execute(
+            """SELECT state, delivery_state, delivery_claim, continuation_json
+               FROM async_delegations WHERE delegation_id=?""", (delegation_id,),
+        ).fetchone()
+        if row is None:
+            return False
+        state, delivery_state, claim, raw = row
+        if state != "completed" or delivery_state == "dropped" or not (claim or delivery_state == "delivered"):
+            # Unknown/interrupted/error effects need inspection, not automatic
+            # next-stage execution. A terminal-looking row is not success.
+            return False
+        try:
+            plan = json.loads(raw) if raw else None
+        except (TypeError, ValueError):
+            return False
+        if (
+            not isinstance(plan, dict) or not plan_is_live(plan)
+            or plan.get("request_id") != request_id
+            or plan.get("generation") != generation
+            or receipt_id not in (plan.get("receipt_ids") or ())
+            or plan.get("consumed") != 0
+            or not isinstance(plan.get("stages"), list) or not plan["stages"]
+            or not isinstance(plan.get("digests"), list) or not plan["digests"]
+            or stage_digest(plan["stages"][0]) != plan["digests"][0]
+            or stage_digest(stage) != plan["digests"][0]
+        ):
+            return False
+        plan["consumed"] = 1
+        encoded = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        cur = conn.execute(
+            """UPDATE async_delegations SET continuation_json=?, updated_at=?
+               WHERE delegation_id=? AND continuation_json=? AND state NOT IN ('running','finalizing')""",
+            (encoded, time.time(), delegation_id, raw),
+        )
+        return cur.rowcount == 1
+
+
+def revoke_continuation_plan(delegation_id: str) -> bool:
+    """Cancel remaining stages after an explicit owner stop."""
+    if not delegation_id:
+        return False
+    with _DB_LOCK, _transaction() as conn:
+        row = conn.execute(
+            "SELECT continuation_json FROM async_delegations WHERE delegation_id=?",
+            (delegation_id,),
+        ).fetchone()
+        if not row or not row[0]:
+            return False
+        try:
+            plan = json.loads(row[0])
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(plan, dict):
+            return False
+        plan["cancelled"] = True
+        plan["stages"] = []
+        encoded = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        conn.execute(
+            "UPDATE async_delegations SET continuation_json=?, updated_at=? WHERE delegation_id=?",
+            (encoded, time.time(), delegation_id),
+        )
+        return True
+
+
+def get_continuation_plan(delegation_id: str) -> Optional[Dict[str, Any]]:
+    """Read the plan bound to a durable dispatch row (diagnostic/recovery only)."""
+    if not delegation_id:
+        return None
+    try:
+        with _DB_LOCK, _transaction() as conn:
+            row = conn.execute(
+                "SELECT continuation_json FROM async_delegations WHERE delegation_id=?",
+                (delegation_id,),
+            ).fetchone()
+        value = json.loads(row[0]) if row and row[0] else None
+        return value if isinstance(value, dict) else None
+    except Exception:
+        logger.debug("continuation plan read failed closed", exc_info=True)
+        return None
 
 
 def _delete_durable_delegation(delegation_id: str) -> None:
