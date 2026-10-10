@@ -729,9 +729,13 @@ def _run_agent_tool_execution_middleware_impl(
         checkpoint_state: dict[str, Any] = {"verdict": None}
 
         def _admit_then_begin() -> None:
-            from agent import delegation_checkpoint
+            from agent import delegation_checkpoint, foreground_time_limit
 
-            verdict = delegation_checkpoint.admit(
+            # Per-message foreground time limit first (independent of the
+            # checkpoint): a refused call reserves no checkpoint budget.
+            verdict = foreground_time_limit.refusal(
+                agent, function_name, final_args
+            ) or delegation_checkpoint.admit(
                 agent, function_name, final_args, tool_call_id
             )
             checkpoint_state["verdict"] = verdict

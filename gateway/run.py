@@ -25354,6 +25354,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # Reload from disk — do not reuse the startup snapshot (#60955).
                     fallback_model=self._refresh_fallback_model(),
                 )
+                # A /background task is itself the hand-off: never time-limited.
+                agent._foreground_limit_exempt = "background"
                 try:
                     return agent.run_conversation(
                         user_message=enriched_prompt,

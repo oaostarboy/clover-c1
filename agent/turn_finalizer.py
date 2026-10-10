@@ -796,6 +796,11 @@ def finalize_turn(
     _leftover_steer = agent._drain_pending_steer()
     if _leftover_steer:
         result["pending_steer"] = _leftover_steer
+    # The foreground time limit's turn is over: stray tool calls between turns
+    # are not limited. The episode itself stays for a following internal turn.
+    from agent import foreground_time_limit as _fg_limit
+
+    _fg_limit.end_turn(agent)
     agent._response_was_previewed = False
 
     # Include interrupt message if one triggered the interrupt

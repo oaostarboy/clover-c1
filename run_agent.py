@@ -8494,10 +8494,12 @@ class AIAgent:
         from agent.tool_executor import execute_tool_calls_sequential
         return execute_tool_calls_sequential(self, assistant_message, messages, effective_task_id, api_call_count)
 
-    def _handle_max_iterations(self, messages: list, api_call_count: int) -> str:
+    def _handle_max_iterations(
+        self, messages: list, api_call_count: int, *, reason: str = "iterations"
+    ) -> str:
         """Forwarder — see ``agent.chat_completion_helpers.handle_max_iterations``."""
         from agent.chat_completion_helpers import handle_max_iterations
-        return handle_max_iterations(self, messages, api_call_count)
+        return handle_max_iterations(self, messages, api_call_count, reason=reason)
 
     def _conversation_root_id(self) -> Optional[str]:
         """Resolve the stable conversation id for Portal usage attribution.
@@ -8979,6 +8981,13 @@ class AIAgent:
                         moa_config=moa_config,
                     )
                 finally:
+                    # However the turn ended (finalize_turn, the Codex
+                    # app-server early return, an exception from the prologue
+                    # or the loop) the per-message foreground time limit stops
+                    # applying to tool calls made outside a turn.
+                    from agent import foreground_time_limit as _fg_limit
+
+                    _fg_limit.end_turn(self)
                     # The lease remains held through relay/task finalization, but
                     # those post-loop steps must not receive a late refresh
                     # interrupt that poisons the next turn on a cached agent.

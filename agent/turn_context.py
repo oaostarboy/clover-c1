@@ -696,6 +696,15 @@ def build_turn_context(
         agent._run_budget_started_at = None
     agent._run_budget_wrapup_injected = False
 
+    # Per-message foreground time limit (delegation.foreground_time_limit_seconds):
+    # a fresh human message starts the clock; a trusted internal_notification
+    # turn inherits the episode instead. Dormant (no clock) for subagents, cron,
+    # oneshot and other non-chat agents.
+    from agent import foreground_time_limit as _fg_limit
+    from agent import turn_notices as _turn_notices
+    _turn_notices.reset(agent)
+    _fg_limit.begin_turn(agent, persist_user_display_kind)
+
     # Log conversation turn start for debugging/observability.
     _preview_text = summarize_user_message_for_log(user_message)
     _msg_preview = (_preview_text[:80] + "...") if len(_preview_text) > 80 else _preview_text

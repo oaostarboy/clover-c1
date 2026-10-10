@@ -2108,6 +2108,21 @@ DEFAULT_CONFIG = {
         # extras" without silently stripping MCP tools the parent already has.
         # Set to false for strict intersection.
         "inherit_mcp_toolsets": True,
+        # Per-message time limit for the main chat agent. Applies to root
+        # conversational agents in chats where a background helper can be run
+        # and delivered later (messaging platforms, the interactive CLI/TUI);
+        # the API server is unchanged, and subagents, cron, --oneshot, non-TTY
+        # -q and batch runs are never limited. At 80% the agent is told to hand
+        # the rest to a background helper (delegate_task, background=true); at
+        # 100% heavy work tools (terminal, execute_code, browser, web, file
+        # writes, MCP) and process wait are refused until the next user
+        # message, while background delegate_task, cronjob, todo, memory,
+        # clarify, process poll/log and reads stay open. Hard stop: 60 s after
+        # the limit or 3 more model iterations the turn ends with one final
+        # no-tools call (that call has no tool schema: ONE prompt-cache miss
+        # per hard stop, accepted). Seconds; 0/null/false = off. Independent of
+        # delegation.checkpoint.
+        "foreground_time_limit_seconds": 300,
         "max_iterations": 250,  # per-subagent iteration cap (each subagent gets its own budget,
                                # independent of the parent's max_iterations)
         # When a subagent runs out of steps mid-task, refresh its budget and

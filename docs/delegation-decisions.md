@@ -5,6 +5,91 @@ work, it plans first and delegates useful independent execution or research
 without requiring you to request subagents. Small tasks can stay direct, and
 explicit requests not to use subagents take precedence.
 
+## The foreground time limit
+
+Instead of a work-call cap, the main chat agent gets a **time limit per user
+message**: `delegation.foreground_time_limit_seconds`, default **300** (5
+minutes). `0`, `null`, `false`, a boolean or any invalid value turns it off.
+The goal: a message gets a final answer close to that limit, and whatever is
+left is already running in a background helper.
+
+```yaml
+delegation:
+  foreground_time_limit_seconds: 300
+```
+
+- **Clock.** Monotonic; it starts when a turn that consumes a human message
+  begins. Helper completions, watches and restart wake-ups
+  (`internal_notification` turns) never start a clock: they inherit the
+  episode's remaining time, and when none is left (or a freshly restarted
+  process has no episode at all) they run in finish mode from the start, which
+  still allows reads and the final answer so a helper's result can be
+  integrated. Steering or redirecting a running turn does not reset it; a
+  follow-up message gets a fresh 5 minutes when it is consumed as its own turn.
+- **80%.** One notice, attached only to a tool result produced by the current
+  iteration that has not been sent yet (never to an earlier turn or a
+  caller-owned message): hand the rest to a background helper with
+  `delegate_task` (`background=true`, full context), tell the user, and end the
+  reply, unless the rest is a quick finish. Without `delegate_task` the notice
+  says to finish now.
+- **100% ("finish mode").** For the rest of the turn the following are refused:
+  heavy work tools (`terminal` in the foreground, `execute_code`, browser and
+  computer use, `web_search` / `web_extract`, `write_file` / `patch`, MCP
+  tools), a foreground `delegate_task`, and `process wait`. Always open:
+  background `delegate_task`, `cronjob`, `todo`, `memory`, `clarify`,
+  `process` poll / log / kill / list, `read_file` / `search_files`,
+  `skill_view`, message-sending tools, a background `terminal` command, and the
+  final text answer. Helpers cannot use `cronjob`, so the root keeps it for
+  jobs such as "update me every 30 minutes".
+- **Hard stop.** 60 seconds after the limit, or 3 more model iterations,
+  whichever comes first, the loop makes one final no-tools call (the same
+  summary path as the max-iterations limit, with its own exit reason
+  `foreground_time_limit_hard_stop`) and ends the turn. Tools admitted before
+  the limit run to completion under their own timeouts; the stop applies at
+  the next iteration boundary. A composed answer a verification gate was
+  holding back is used instead of a new call; queued steer / human input and
+  transcript persistence behave as on any other turn end.
+  **Cache note:** that final call carries no tool schema, so it is the one
+  provider request of the turn whose prefix differs from the earlier ones - one
+  prompt-cache miss, accepted once per hard stop. (It is a miss for the whole
+  prefix, not just the tool list: the summary path re-serializes earlier tool
+  calls' arguments from their raw strings, while the loop sends the canonical
+  form, so even the message bytes differ.) Turns that finish on their own never
+  pay it.
+- **Where it applies.** The limit exists to hand work to a background helper,
+  so it applies only in chats where the bot can actually run one and deliver
+  its result later: Telegram and the other messaging platforms, and the
+  interactive CLI / TUI (including `-q` on a real terminal, which seeds an
+  interactive session). Where a background helper cannot be delivered - the
+  API server, unless the request carries a session id it can be woken by - the
+  limit is simply **off** for that message: no notice, no refusals, no hard
+  stop, and delegation behaves exactly as before. That decision is made once
+  when the human message starts and is inherited by the helper-completion
+  turns that follow it.
+- **Whole-turn hand-off.** While the limit applies to a turn, every
+  `delegate_task` of the root runs as a background helper (the tool result says
+  so). A helper that cannot be started (capacity, persistence, scheduling,
+  construction) is reported as an error to the model; it is never silently run
+  inline.
+- **Codex app-server.** Codex runs its own tools, so they cannot be refused
+  mid-turn; the whole turn is bounded instead. Its turn timeout becomes
+  `min(its own 600 s, the episode's remaining time)` (never less than the
+  60-second finish window). At expiry the native turn is interrupted through
+  the normal interrupt path - even if it had already emitted an assistant
+  message - and answered with the last assistant text Codex produced (or a
+  plain "stopped at the time limit" note), without retiring the session or
+  losing the user's next message.
+- **Scope.** Only root conversational agents are limited: gateway messaging
+  sessions and the interactive CLI / TUI. Subagents, cron runs,
+  `--oneshot` / `-z` runs, `-q` / `-Q` without a terminal, batch and eval
+  runners, review forks and kanban workers are never limited. The limit holds
+  even if `delegate_task` is not available to the agent; the notice then says
+  to finish now.
+
+It is independent of the checkpoint below (either can be on alone) and of
+`agent.run_budget_seconds`, which keeps its existing behavior for `--run-budget`
+workers and evals (its notice uses the same unsent-tool-result channel).
+
 ## The optional checkpoint
 
 The checkpoint is **off by default**: the foreground agent has no cap on work

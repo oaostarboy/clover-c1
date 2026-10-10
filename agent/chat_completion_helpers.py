@@ -3104,9 +3104,23 @@ def try_substitute_unknown_model(agent, *, requested_model: str, provider: str):
     return substitute
 
 
-def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
-    """Request a summary when max iterations are reached. Returns the final response text."""
-    warning = f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary..."
+def handle_max_iterations(
+    agent, messages: list, api_call_count: int, *, reason: str = "iterations"
+) -> str:
+    """Request a summary when max iterations are reached. Returns the final response text.
+
+    ``reason="time_limit"`` is the foreground time limit's hard stop
+    (``agent.foreground_time_limit``): the same single no-tools call and the
+    same summary request (compaction recognizes its text), but the user-facing
+    warning and fallback wording name the time limit instead of iterations.
+    """
+    _time_limit = reason == "time_limit"
+    if _time_limit:
+        warning = "⏱️  Time limit for this reply reached. Requesting summary..."
+        _no_summary = "I reached the time limit for this reply and couldn't generate a summary."
+    else:
+        warning = f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary..."
+        _no_summary = "I reached the iteration limit and couldn't generate a summary."
     if getattr(agent, "suppress_status_output", False):
         # Strict machine-readable mode (clover chat -Q, oneshot, background
         # review): keep diagnostics out of stdout so wrappers receive only
@@ -3375,7 +3389,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                     {"role": "assistant", "content": final_response},
                 )
             else:
-                final_response = "I reached the iteration limit and couldn't generate a summary."
+                final_response = _no_summary
         else:
             # Retry summary generation
             if agent.api_mode == "codex_responses":
@@ -3440,13 +3454,16 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                         {"role": "assistant", "content": final_response},
                     )
                 else:
-                    final_response = "I reached the iteration limit and couldn't generate a summary."
+                    final_response = _no_summary
             else:
-                final_response = "I reached the iteration limit and couldn't generate a summary."
+                final_response = _no_summary
 
     except Exception as e:
         logger.warning("Failed to get summary response: %s", e)
-        final_response = f"I reached the maximum iterations ({agent.max_iterations}) but couldn't summarize. Error: {str(e)}"
+        if _time_limit:
+            final_response = f"I reached the time limit for this reply but couldn't summarize. Error: {str(e)}"
+        else:
+            final_response = f"I reached the maximum iterations ({agent.max_iterations}) but couldn't summarize. Error: {str(e)}"
     finally:
         from agent import relay_llm
 

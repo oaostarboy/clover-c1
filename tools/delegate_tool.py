@@ -4280,6 +4280,19 @@ def delegate_task(
     # every child was already published.
     background = is_truthy_value(background, default=False) if background is not None else False
 
+    # Per-message foreground time limit (agent.foreground_time_limit). It only
+    # applies to a root turn on a surface that can deliver a detached helper,
+    # so while it applies EVERY spawn is a background helper: no foreground
+    # child wait exists in a limited turn. (The root dispatcher already passes
+    # background=True; this covers direct callers.)
+    from agent import foreground_time_limit as _fg_limit
+
+    _fg_limited = _fg_limit.remaining_seconds(parent_agent) is not None
+    _fg_forced_background = False
+    if not background and _fg_limit.forces_background(parent_agent):
+        background = True
+        _fg_forced_background = True
+
     # Depth limit — configurable via delegation.max_spawn_depth,
     # default 2 for parity with the original MAX_DEPTH constant.
     depth = getattr(parent_agent, "_delegate_depth", 0)
@@ -4476,7 +4489,12 @@ def delegate_task(
     # batch inline instead. Other callers keep the historical fallbacks.
     from agent.delegation_checkpoint import checkpoint_applies as _checkpoint_applies
 
-    _strict_background = bool(background) and _checkpoint_applies(parent_agent)
+    # A time-limited root is held to the same rule: a helper that cannot be
+    # accepted (capacity, persistence, scheduling, construction) is an error
+    # the model sees, never an inline wait past the limit.
+    _strict_background = bool(background) and (
+        _checkpoint_applies(parent_agent) or _fg_limited
+    )
 
     def _reject_background(reason: str, error: str, built=()) -> str:
         return _strict_background_rejection(
@@ -5054,6 +5072,12 @@ def delegate_task(
         if dispatch.get("status") == "dispatched":
             n = len(_goals)
             note = _background_dispatch_note(n)
+            if _fg_forced_background:
+                note = (
+                    "The foreground time limit applies to this message, so "
+                    "background=true was applied for you: this ran as a "
+                    "BACKGROUND helper, not in the foreground. " + note
+                )
             payload = {
                 "status": "dispatched",
                 "mode": "background",
@@ -5062,6 +5086,8 @@ def delegate_task(
                 "goals": _goals,
                 "note": note,
             }
+            if _fg_forced_background:
+                payload["foreground_time_limit"] = True
             _sids = [
                 getattr(_c, "_subagent_id", None) for _c in _child_agents
             ]

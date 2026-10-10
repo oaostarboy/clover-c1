@@ -1594,6 +1594,18 @@ delegation:
                                               # or auto-approve "once" (true) instead of blocking on stdin.
                                               # The parent TUI owns stdin, so blocking would deadlock; non-interactive resolution is required.
                                               # Both choices emit a logger.warning audit line. Flip to true only for cron/batch pipelines.
+  # foreground_time_limit_seconds: 300        # Per-message time limit for the main chat agent (default: 300; 0/null/false = off).
+                                              # Applies in chats where the bot can run a background helper and deliver its result later
+                                              # (Telegram and other messaging, CLI/TUI). The API server is unchanged: no limit there.
+                                              # At 80% the agent is told to hand the rest to a background helper (delegate_task,
+                                              # background=true); at 100% terminal, execute_code, browser, web, file writes, MCP tools
+                                              # and process wait are refused until the next user message.
+                                              # delegate_task (background), cronjob, todo, memory, clarify, process poll/log, reads stay open.
+                                              # Hard stop: 60 s after the limit or 3 more model iterations the turn ends with one final
+                                              # no-tools call. That call carries no tool schema, so it costs ONE prompt-cache miss
+                                              # (once per hard stop). While the limit applies every delegate_task is a background helper.
+                                              # A follow-up message gets a fresh limit.
+                                              # Never applies to subagents, cron, --oneshot, non-TTY -q/-Q or batch runs.
   # checkpoint:                               # Optional delegation checkpoint for conversational roots with todo + delegate_task (off by default: no cap)
   #   enabled: false                          # true = opt in: gate work tools until a delegation choice is recorded
   #   max_work_tools: 5                       # parent work calls one direct/delegate choice covers (positive integer)
