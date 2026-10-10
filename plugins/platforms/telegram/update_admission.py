@@ -29,8 +29,6 @@ import json
 import logging
 import time
 
-from telegram.ext import ApplicationHandlerStop
-
 from utils import atomic_json_write
 
 logger = logging.getLogger(__name__)
@@ -149,6 +147,10 @@ def make_admission_handler(adapter, bot_id):
     """
 
     async def admit(update, context) -> None:
+        # Imported here: only a live PTB dispatcher runs this, while the module's
+        # event-side helpers (attach_receipt) are used with PTB stubbed out.
+        from telegram.ext import ApplicationHandlerStop
+
         key = f"{bot_id}:{update.update_id}"
         now = time.time()
         if _expired(adapter._seen_update_ids, key, now):

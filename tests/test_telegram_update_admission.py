@@ -343,7 +343,7 @@ async def test_runner_turn_marker_completes_the_receipt(tmp_path):
     await _process(app, _text_update(app.bot, 1400))
 
     class _Store:
-        async def mark_turn_active(self, key):
+        async def mark_turn_active(self, key, **kwargs):
             return "token"
 
     runner = object.__new__(GatewayRunner)
