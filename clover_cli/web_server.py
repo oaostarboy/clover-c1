@@ -4009,6 +4009,10 @@ async def get_status(profile: Optional[str] = None):
 
             storage_check = await run_in_threadpool(_probe_state_db, get_clover_home())
             components["storage"] = {"status": storage_check.get("status", "degraded")}
+            # The one reason enum consumers key off; same latch as readiness and
+            # the session lists (C1.4 R03).
+            if storage_check.get("detail") == "corrupt":
+                components["storage"]["reason"] = "corrupt"
         except Exception:
             components["storage"] = {"status": "degraded"}
         platform_states = [

@@ -25,9 +25,21 @@ def _check(status: str, detail: str | None = None, **extra: Any) -> dict[str, An
 
 
 def _probe_state_db(home: Path) -> dict[str, Any]:
+    """Read-only schema probe plus the process-wide corruption latch.
+
+    Adapted from NousResearch/hermes-agent bd945ec384 (MIT). The schema read only
+    catches an unreadable header or schema; damage deeper in the file surfaces when
+    a reader or writer touches it, and those publish into ``clover_state_health``.
+    Reporting the latch here keeps readiness, ``/api/status`` and the session list
+    in agreement. ``detail="corrupt"`` is the one reason string consumers key off.
+    """
+    from clover_state_health import STORAGE_CORRUPT, note_storage_error, storage_state
+
     path = home / "state.db"
     if not path.exists():
         return _check("ok", "not initialized")
+    if storage_state(path) == STORAGE_CORRUPT:
+        return _check("degraded", STORAGE_CORRUPT)
     try:
         # A readiness probe must never compete with normal state writers. A
         # read-only schema query still catches unreadable/corrupt databases
@@ -42,6 +54,8 @@ def _probe_state_db(home: Path) -> dict[str, Any]:
             conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
         return _check("ok")
     except Exception as exc:
+        if note_storage_error(path, exc):
+            return _check("degraded", STORAGE_CORRUPT)
         return _check("degraded", type(exc).__name__)
 
 
@@ -89,7 +103,13 @@ def _probe_gateway(runtime_status: dict[str, Any]) -> dict[str, Any]:
 def _probe_session_store(
     runtime_status: dict[str, Any], state_db_probe: dict[str, Any]
 ) -> dict[str, Any]:
-    """Report the running gateway cache state, not an independent reopen."""
+    """Report the running gateway cache state, not an independent reopen.
+
+    A corrupt store is unavailable whatever the cache says: an open handle on a
+    damaged file is not a working one.
+    """
+    if state_db_probe.get("detail") == "corrupt":
+        return _check("unavailable", "corrupt")
     runtime_store = runtime_status.get("session_store")
     if isinstance(runtime_store, dict):
         state = str(runtime_store.get("status") or "unknown")

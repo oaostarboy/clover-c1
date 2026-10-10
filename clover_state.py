@@ -1947,6 +1947,19 @@ def classify_persistence_error(exc_or_str) -> str:
     return "unknown"
 
 
+def _note_storage_error(db_path, exc: BaseException) -> bool:
+    """Publish structural corruption into the process-wide health latch.
+
+    Never raises: health reporting must not mask the original error.
+    """
+    try:
+        from clover_state_health import note_storage_error
+
+        return note_storage_error(db_path, exc)
+    except Exception:
+        return False
+
+
 def _claim_repair_attempt(db_path: Path) -> bool:
     """Claim the one-shot repair attempt for *db_path* in this process.
 
@@ -4970,6 +4983,21 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
     @contextmanager
     def _read_ctx(self):
+        """Yield a read connection; publish structural corruption to the health latch.
+
+        A reader is often the only observer of a damaged store (the session-list
+        poll on a DB nobody is writing to), so structural damage seen here must
+        reach readiness and the list endpoints (C1.4 R03).
+        """
+        try:
+            with self._read_ctx_unlatched() as conn:
+                yield conn
+        except sqlite3.DatabaseError as exc:
+            _note_storage_error(self.db_path, exc)
+            raise
+
+    @contextmanager
+    def _read_ctx_unlatched(self):
         """Yield a connection for read-only statements.
 
         WAL: a read-only connection borrowed from a bounded pool with NO
@@ -5361,6 +5389,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 if _is_no_more_rows(exc) and self._sleep_before_write_retry(deadline, patience_s):
                     continue
                 # Non-lock error or patience exhausted — propagate.
+                _note_storage_error(self.db_path, exc)
                 raise
             except sqlite3.DatabaseError as exc:
                 if _is_no_more_rows(exc) and self._sleep_before_write_retry(deadline, patience_s):
@@ -5376,6 +5405,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     continue
                 if self._enter_fts_fail_open(exc):
                     continue
+                # FTS repair did not apply or did not help: if SQLite reports
+                # structural (non-FTS) damage, publish it so readiness and the
+                # session list say "corrupt" instead of staying green (C1.4 R03).
+                _note_storage_error(self.db_path, exc)
                 raise
             except sqlite3.Error as exc:
                 # Catch-all for builds that surface 'no more rows available'
