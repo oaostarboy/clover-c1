@@ -127,6 +127,11 @@ except Exception as exc:
   Set-Content -Path $probeFile -Value $probe -Encoding utf8
   Push-Location $env:INSTALL_DIR
   try { & "$env:INSTALL_DIR\venv\Scripts\python.exe" $probeFile 2>&1 | ForEach-Object { Write-Host "[$label] [scm-probe] $_" } } finally { Pop-Location }
+  # Pre-update identity, for the post-update proof that the RUNNING gateway changed.
+  $pre = Get-GatewayIdentity
+  Write-Host "[$label] pre-update identity: statePid=$($pre.StatePid) start=$($pre.StartTime) listener=$($pre.ListenerPid) code_sha='$($pre.CodeSha)' pidIsGateway=$($pre.PidIsGateway)"
+  "OLD_GATEWAY_CODE_SHA=$($pre.CodeSha)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+  "OLD_GATEWAY_START_TIME=$($pre.StartTime)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
   return [pscustomobject]@{ Pid = $gw; ViaSchedule = $viaSchedule }
 }
 
@@ -289,7 +294,8 @@ function Assert-UpdateSucceeded([string]$label, [int]$logStart, $exitCode, [int]
   if ($newRoot -eq $oldGatewayPid) { $bad += "gateway pid unchanged ($newRoot): it was not restarted by the update" }
   git -C "$env:INSTALL_DIR" log --oneline -1 | Out-Host
   # Installed tree is the target's, and the RUNNING gateway stamped that checkout's SHA.
-  $targetBranch = if ($env:PHASE -eq 'old2new') { $env:HEAD_BRANCH } else { $env:NEXT_BRANCH }
+  $suffix = $env:HEAD_BRANCH -replace '^ci/win-update-proof/', ''
+  $targetBranch = if ($env:PHASE -eq 'old2new') { $env:HEAD_BRANCH } elseif ($suffix -eq 'pr-head') { 'ci/win-update-proof-next' } else { "ci/win-update-next/$suffix" }
   $bad += Test-InstalledTreeIsTarget $targetBranch
   $installedSha = (git -C "$env:INSTALL_DIR" rev-parse HEAD).Trim()
   $finalId = Get-GatewayIdentity
