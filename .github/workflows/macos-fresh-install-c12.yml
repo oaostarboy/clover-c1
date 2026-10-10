@@ -1,0 +1,102 @@
+name: macOS fresh native install (C1.2 c12846bb)
+on:
+  push:
+    branches: [ci/macos-fresh-install-c1-2-c12846b]
+permissions:
+  contents: read
+jobs:
+  fresh-install:
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      TARGET_BRANCH: clover-subagent/subagent-sa-0-c0019e79
+      EXPECTED_SHA: c12846bb63268b8c3b9727fb769a625a797228f0
+      API_PORT: 18793
+    steps:
+      - name: Preflight - runner must be fresh (no existing Clover)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/proof"
+          {
+            echo "uname: $(uname -a)"; sw_vers; echo "arch: $(uname -m)"
+            df -h "$HOME" | tail -1
+          } | tee "$RUNNER_TEMP/proof/runner.txt"
+          test ! -e "$HOME/.clover"
+          ! command -v clover
+          echo "fresh: no ~/.clover and no clover on PATH"
+      - name: Fresh shell install from origin at pinned commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL "https://raw.githubusercontent.com/oaostarboy/clover-c1/$TARGET_BRANCH/scripts/install.sh" -o install.sh
+          sha256sum install.sh 2>/dev/null || shasum -a 256 install.sh
+          bash install.sh --branch "$TARGET_BRANCH" --commit "$EXPECTED_SHA" --non-interactive --skip-setup --skip-browser --skip-computer-use 2>&1 | tee "$RUNNER_TEMP/proof/install.log"
+          test "${PIPESTATUS[0]}" = 0
+      - name: Assert source pin, origin, venv and neutral-cwd CLI/import
+        shell: bash
+        run: |
+          set -euo pipefail
+          D="$HOME/.clover/clover-c1"
+          test "$(git -C "$D" rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(git -C "$D" rev-parse 'HEAD^{tree}')" = "63692405f12c3b8758d710daf54a3e93495c7566"
+          test "$(git -C "$D" remote get-url origin)" = "https://github.com/oaostarboy/clover-c1.git"
+          test -x "$D/venv/bin/clover" && test -x "$D/venv/bin/python"
+          mkdir -p "$RUNNER_TEMP/neutral" && cd "$RUNNER_TEMP/neutral"
+          "$D/venv/bin/clover" --version | tee "$RUNNER_TEMP/proof/version.txt"
+          "$D/venv/bin/python" -c "import clover_cli, gateway, sys; print(sys.version.split()[0], clover_cli.__file__)" | tee "$RUNNER_TEMP/proof/import.txt"
+          grep -q "$D" "$RUNNER_TEMP/proof/import.txt"
+          node --version; "$D/venv/bin/python" -c "import sqlite3; print('sqlite', sqlite3.sqlite_version)"
+          echo "CLOVER_BIN=$D/venv/bin/clover" >> "$GITHUB_ENV"
+          echo "INSTALL_DIR=$D" >> "$GITHUB_ENV"
+          echo "source=$(git -C "$D" rev-parse HEAD) disk=$(du -sh "$HOME/.clover" | cut -f1)" | tee "$RUNNER_TEMP/proof/source-disk.txt"
+      - name: Real gateway health from neutral cwd (no bot credentials)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CLOVER_HOME="$HOME/.clover"
+          printf '\nAPI_SERVER_ENABLED=true\nAPI_SERVER_KEY=acceptance-test-key-123456789\nAPI_SERVER_PORT=%s\nAPI_SERVER_HOST=127.0.0.1\n' "$API_PORT" >> "$CLOVER_HOME/.env"
+          cd "$RUNNER_TEMP/neutral"
+          "$CLOVER_BIN" gateway run --replace > "$RUNNER_TEMP/gateway.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/gateway.pid"
+          ready=0
+          for _ in $(seq 1 90); do
+            if python3 -c "import socket;s=socket.create_connection(('127.0.0.1',$API_PORT),1);s.close()" 2>/dev/null; then ready=1; break; fi
+            sleep 2
+          done
+          test "$ready" = 1 || { cat "$RUNNER_TEMP/gateway.log"; exit 1; }
+          "$INSTALL_DIR/venv/bin/python" - <<'PY' | tee "$RUNNER_TEMP/proof/gateway-health.txt"
+          import json, os, time, urllib.request, psutil
+          home=os.path.expanduser('~/.clover'); port=int(os.environ['API_PORT'])
+          sha=os.environ['EXPECTED_SHA']
+          for n in range(20):
+              st=json.load(open(os.path.join(home,'gateway_state.json')))
+              pid=int(st['pid']); p=psutil.Process(pid)
+              assert st.get('gateway_state')=='running', st
+              assert st.get('code_sha')==sha, st
+              assert os.path.join(home,'clover-c1') in ' '.join(p.cmdline()), p.cmdline()
+              assert any(c.status==psutil.CONN_LISTEN and c.laddr.port==port for c in p.net_connections(kind='inet'))
+              with urllib.request.urlopen(f'http://127.0.0.1:{port}/health',timeout=3) as r:
+                  assert r.status==200 and json.load(r).get('status')=='ok'
+              if n==0: first=pid
+              assert pid==first, 'gateway pid changed'
+              time.sleep(3)
+          print(f'PASS: fresh install gateway pid {first} code_sha={sha} running, API bound, /health ok for ~60s')
+          PY
+      - name: Cleanup owned processes
+        if: always()
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/gateway.pid" ]; then kill "$(cat "$RUNNER_TEMP/gateway.pid")" 2>/dev/null || true; sleep 3; fi
+          pgrep -f "$HOME/.clover/clover-c1" | head || true
+          pkill -f "$HOME/.clover/clover-c1/venv" 2>/dev/null || true
+          echo cleaned
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: macos-fresh-install-proof
+          path: |
+            ${{ runner.temp }}/proof/*
+            ${{ runner.temp }}/gateway.log
+          if-no-files-found: ignore
