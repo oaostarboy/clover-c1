@@ -121,7 +121,9 @@ def attach_receipt(adapter, bot_id, update_id, event) -> None:
     The receipt is written when the gateway calls ``complete_inbound_handoff``
     on the event (turn marker set, recorded in the restart inbox, or the turn
     finished). Until then only the in-memory claim exists, so a crash lets
-    Telegram's unacknowledged replay through.
+    Telegram's unacknowledged replay through. An event the runner takes into
+    memory behind a running turn is released instead (``release``): no
+    receipt is ever written for it.
     """
     if bot_id is None or update_id is None:
         return
@@ -135,6 +137,17 @@ def attach_receipt(adapter, bot_id, update_id, event) -> None:
         if not done:
             done.append(True)
             _complete(adapter, bot_id, key)
+
+    def _release() -> None:
+        # The input only lives in memory (steer / queued behind a running
+        # turn). Drop the in-memory claim without a receipt and make every
+        # copy of the callback inert, so a replay after a crash is admitted.
+        if not done:
+            done.append(True)
+            adapter._inflight_with_event.discard(key)
+            adapter._inflight_update_ids.pop(key, None)
+
+    _receipt.release = _release
 
     receipts = getattr(event, "inbound_receipts", None)
     if receipts is not None:

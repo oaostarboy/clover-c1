@@ -2949,6 +2949,24 @@ def complete_inbound_handoff(event: Any) -> None:
             logger.warning("Inbound receipt callback failed", exc_info=True)
 
 
+def release_inbound_handoff(event: Any) -> None:
+    """Drop the event's inbound receipt without writing one (idempotent, never raises).
+
+    For input that only lives in memory (a steer, redirect or follow-up queued
+    behind a running turn). Every copy of the callbacks, including ones merged
+    into another event, turns inert, and the platform's in-memory claim is
+    released. A replay after a crash is then admitted again, never suppressed.
+    """
+    for callback in list(getattr(event, "inbound_receipts", None) or ()):
+        release = getattr(callback, "release", None)
+        if release is None:
+            continue
+        try:
+            release()
+        except Exception:
+            logger.warning("Inbound receipt release failed", exc_info=True)
+
+
 def absorb_inbound_receipts(existing: Any, incoming: Any) -> None:
     """Make ``existing`` carry ``incoming``'s receipt callbacks after a merge."""
     mine = getattr(existing, "inbound_receipts", None)
@@ -6713,11 +6731,10 @@ class BasePlatformAdapter(ABC):
             if self._busy_session_handler is not None:
                 try:
                     if await self._busy_session_handler(event, session_key):
-                        # A follow-up queued in memory is not durable yet: its
-                        # receipt waits for the turn it becomes (see
-                        # ``_inbound_deferred``) or the shutdown inbox record.
-                        if not getattr(event, "_inbound_deferred", False):
-                            complete_inbound_handoff(event)
+                        # A steer/follow-up taken into memory was released by
+                        # the runner (``release_inbound_handoff``), so this is
+                        # then a no-op; any other handled event is complete.
+                        complete_inbound_handoff(event)
                         return
                 except Exception as e:
                     logger.error("[%s] Busy-session handler failed: %s", self.name, e, exc_info=True)
@@ -6842,17 +6859,13 @@ class BasePlatformAdapter(ABC):
 
             # Call the handler (this can take a while with tool calls)
             event._turn_marker_handoff = self.gateway_runner is not None
-            # This event is the running turn now (a parked follow-up drained
-            # into a turn): its receipt follows the normal-turn rules.
-            event._inbound_deferred = False
             response = await self._message_handler(event)
             # The runner returned (turn finished, command answered or rejected):
             # the input is no longer waiting on the platform's replay. A
             # cancellation or crash before this point leaves it unreceipted
             # unless the turn marker already made it durable.
-            # (unless the handler parked it in memory: ``_inbound_deferred``).
-            if not getattr(event, "_inbound_deferred", False):
-                complete_inbound_handoff(event)
+            # (a handler that took it into memory released it: no-op).
+            complete_inbound_handoff(event)
             is_ephemeral_response = isinstance(response, EphemeralReply)
 
             # Slash-command handlers may return an EphemeralReply sentinel to

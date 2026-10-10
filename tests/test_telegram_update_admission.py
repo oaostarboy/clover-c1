@@ -580,48 +580,137 @@ async def _replayed(tmp_path, update_id):
 
 
 @pytest.mark.asyncio
-async def test_steered_input_receipt_completes_when_the_turn_persists_it(tmp_path, monkeypatch):
+async def test_steered_input_never_gets_a_receipt_even_after_a_clean_turn(tmp_path, monkeypatch):
+    """Busy-path inputs are never receipted, whatever the turn does next."""
     from tests.gateway.test_active_turn_recovery import _close_store_db
 
     runner, key, agent, store = await _steer_one(tmp_path, monkeypatch, 8100)
     try:
-        assert await _replayed(tmp_path, 8100)  # still replayable while in memory
+        assert not hasattr(runner, "_steered_inbound_events")
         agent._pending_steer = None  # the loop consumed it into a tool result
-        runner._settle_steered_inbound(
-            runner._take_steered_inbound(key), agent, {'final_response': 'done'})
-        assert await _replayed(tmp_path, 8100) == []
+        assert await _replayed(tmp_path, 8100)
     finally:
         _close_store_db(store)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('outcome', ['interrupted', 'failed', 'unconsumed', 'handed_back'])
-async def test_steered_input_stays_replayable_unless_turn_persisted_it(
-    tmp_path, monkeypatch, outcome
-):
+async def test_steer_then_failed_final_persist_leaves_no_receipt(tmp_path, monkeypatch):
+    """Accepted steer + final _persist_session failure: no receipt, replay admitted."""
+    from agent.prompt_builder import format_steer_marker
+    from agent.turn_finalizer import finalize_turn
+    from tests.agent.test_turn_finalizer_cleanup_guard import _StubAgent
     from tests.gateway.test_active_turn_recovery import _close_store_db
 
-    runner, key, agent, store = await _steer_one(tmp_path, monkeypatch, 8200)
+    runner, key, agent, store = await _steer_one(tmp_path, monkeypatch, 9200)
     try:
-        result = {'final_response': 'x'}
-        if outcome == 'interrupted':
-            agent._pending_steer = None
-            result['interrupted'] = True
-        elif outcome == 'failed':
-            agent._pending_steer = None
-            result['failure_reason'] = 'session_persistence_failed:disk'
-        elif outcome == 'handed_back':
-            agent._pending_steer = None
-            result['pending_steer'] = 'steer me'
-        # 'unconsumed': the steer is still sitting in agent._pending_steer
-        runner._settle_steered_inbound(runner._take_steered_inbound(key), agent, result)
-        assert await _replayed(tmp_path, 8200)
+        stub = _StubAgent(raise_in=("persist_session",))
+        messages = [
+            {"role": "user", "content": "initial task"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "function": {"name": "read_file", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1",
+             "content": "tool output" + format_steer_marker("steer me")},
+            {"role": "assistant", "content": "answered"},
+        ]
+        result = finalize_turn(
+            stub, final_response="answered", api_call_count=2, interrupted=False,
+            failed=False, messages=messages, conversation_history=None,
+            effective_task_id="t", turn_id="u", user_message="initial task",
+            original_user_message="initial task", _should_review_memory=False,
+            _turn_exit_reason="completed",
+        )
+        assert result["failed"] is False
+        assert any(i.startswith("persist_session:") for i in result["cleanup_errors"])
+        assert await _replayed(tmp_path, 9200)
     finally:
         _close_store_db(store)
 
 
 @pytest.mark.asyncio
-async def test_handler_that_parks_the_event_in_memory_keeps_it_replayable(tmp_path):
+async def test_early_steer_late_steer_and_queued_media_are_all_unreceipted(tmp_path, monkeypatch):
+    """Answered early steer + leftover steer + queued image: no busy event is receipted,
+    and an ordinary (non-busy) event still receipts exactly as before."""
+    from gateway.platforms.base import MessageType, build_session_key, complete_inbound_handoff
+    from tests.gateway.test_active_turn_recovery import _close_store_db, _make_db_store
+    from tests.gateway.test_busy_session_ack import _make_runner
+    from run_agent import AIAgent
+    import gateway.run as gr
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CLOVER_HOME", str(home))
+    monkeypatch.setenv("CLOVER_GATEWAY_BUSY_ACK_ENABLED", "false")
+    monkeypatch.setattr(gr, "_load_gateway_config", lambda: {})
+    adapter = _adapter(tmp_path)
+    events = []
+    app = _build_handing_off(adapter, 111, events)
+    for uid in (9100, 9101, 9102, 9103):
+        await _process(app, _text_update(app.bot, uid))
+    early, late, media, normal = events
+    early.text, late.text, media.text = "early", "late", "queued"
+    media.message_type = MessageType.PHOTO
+    media.media_urls, media.media_types = ["/nonexistent.png"], ["image/png"]
+    store = _make_db_store(home)
+    store.get_or_create_session(early.source)
+    runner, _ = _make_runner()
+    runner.session_store = store
+    key = build_session_key(early.source)
+    runner.adapters[early.source.platform] = adapter
+    agent = object.__new__(AIAgent)
+    agent._pending_steer = None
+    agent._pending_steer_lock = threading.Lock()
+    runner._running_agents[key] = agent
+    adapter._active_sessions[key] = asyncio.Event()
+    adapter._session_tasks[key] = asyncio.current_task()
+    adapter._busy_session_handler = runner._handle_active_session_busy_message
+    try:
+        runner._busy_input_mode = "steer"
+        for ev in (early, late, media):
+            assert await runner._handle_active_session_busy_message(ev, key)
+        # Settling the turn (answered / leftover / queued) must not receipt anything.
+        for uid in (9100, 9101, 9102):
+            assert not adapter._inflight_update_ids.get(f"111:{uid}")
+            assert f"111:{uid}" not in adapter._seen_update_ids
+            assert await _replayed(tmp_path, uid)
+        # Normal path: the ordinary event is receipted by its handoff, as before.
+        assert f"111:9103" in adapter._inflight_update_ids
+        complete_inbound_handoff(normal)
+        assert "111:9103" in adapter._seen_update_ids
+        assert await _replayed(tmp_path, 9103) == []
+    finally:
+        _close_store_db(store)
+
+
+@pytest.mark.asyncio
+async def test_busy_steers_release_their_claims_and_hold_nothing(tmp_path):
+    """5000 busy steers in one turn: no claim left behind, no held list anywhere."""
+    from gateway.platforms.base import release_inbound_handoff
+    from gateway.run import GatewayRunner
+
+    adapter = _adapter(tmp_path)
+    events = []
+    app = _build_handing_off(adapter, 111, events)
+    runner = object.__new__(GatewayRunner)
+    peak = 0
+    for offset in range(5000):
+        await _process(app, _text_update(app.bot, 30000 + offset))
+        peak = max(peak, len(adapter._inflight_update_ids))
+        release_inbound_handoff(events[-1])
+        events.clear()
+    from plugins.platforms.telegram.update_admission import _SEEN_CAP
+    assert peak <= _SEEN_CAP
+    assert adapter._inflight_update_ids == {}
+    assert adapter._inflight_with_event == set()
+    assert adapter._seen_update_ids == {}
+    assert not any(n.startswith("_steered") for n in runner.__dict__)
+    assert not hasattr(GatewayRunner, "_hold_inbound_for_active_turn")
+    # And the telegram receipt file was never written for any of them.
+    assert not list(adapter._update_receipt_dir.glob("*.json")) or not json.loads(
+        next(adapter._update_receipt_dir.glob("*.json")).read_text())["update_ids"]
+
+
+@pytest.mark.asyncio
+async def test_handler_that_parks_the_event_in_memory_leaves_it_replayable(tmp_path):
     """PRIORITY busy path: the runner returns after only queueing the event."""
     events = []
     adapter = _adapter(tmp_path)
@@ -630,7 +719,8 @@ async def test_handler_that_parks_the_event_in_memory_keeps_it_replayable(tmp_pa
     parked = events[0]
 
     async def handler(event):
-        event._inbound_deferred = True  # what GatewayRunner._defer_inbound_receipt does
+        from gateway.platforms.base import release_inbound_handoff
+        release_inbound_handoff(event)  # what the runner does for a queued busy event
         return None
 
     adapter._message_handler = handler

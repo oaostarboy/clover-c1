@@ -2821,8 +2821,8 @@ from gateway.platforms.base import (
     _prefix_within_utf16_limit,
     _reply_anchor_for_event,
     build_auto_tts_output_path,
-    absorb_inbound_receipts,
     complete_inbound_handoff,
+    release_inbound_handoff,
     events_share_security_context,
     merge_pending_message_event,
     message_event_class,
@@ -11425,7 +11425,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # security metadata separate from pending user input.
         if getattr(event, "internal", False) and not event.allow_gateway_control:
             if self._queue_or_replace_pending_event(session_key, event):
-                self._defer_inbound_receipt(event)
+                release_inbound_handoff(event)
             return True
         if getattr(event, "internal", False):
             return False
@@ -11508,7 +11508,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     logger.warning("Gateway steer failed for session %s: %s", session_key, exc)
                     steered = False
                 if steered:
-                    self._hold_inbound_for_active_turn(session_key, event)
+                    release_inbound_handoff(event)
             if not steered:
                 # Fall back to queue (merge into pending messages, no interrupt)
                 effective_mode = "queue"
@@ -11528,7 +11528,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.warning("Gateway redirect failed for session %s: %s", session_key, exc)
                 redirected = False
             if redirected:
-                self._hold_inbound_for_active_turn(session_key, event)
+                release_inbound_handoff(event)
 
         # Store the message so it's processed as the next turn after the
         # current run finishes (or is interrupted).  Skip this for a
@@ -11552,11 +11552,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # that was not queued).
                 await self._send_queue_full_reply(adapter, event)
                 return True
-            # The follow-up now lives only in memory. Its platform receipt
-            # waits for the turn it becomes (user message persisted), or the
-            # restart-inbox record written at shutdown.
-            if getattr(event, "inbound_receipts", None):
-                event._inbound_deferred = True
+            # The follow-up now lives only in memory: it never gets a durable
+            # receipt, so a replay after a crash is admitted (a double answer
+            # at worst) instead of suppressed.
+            release_inbound_handoff(event)
         is_queue_mode = effective_mode == "queue"
         is_steer_mode = effective_mode == "steer"
         is_redirect_mode = effective_mode == "interrupt" and redirected
@@ -19410,7 +19409,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 adapter = self._adapter_for_source(source)
                 if adapter:
                     self._merge_or_enqueue(adapter, _quick_key, event)
-                    self._defer_inbound_receipt(event)
+                    release_inbound_handoff(event)
                 return None
 
             effective_busy_input_mode = self._effective_busy_input_mode(source)
@@ -19439,7 +19438,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         self._merge_or_enqueue(
                             adapter, _quick_key, event, merge_text=True
                         )
-                    self._defer_inbound_receipt(event)
+                    release_inbound_handoff(event)
                 return None
 
             _ra_state = self._peek_session_state(_quick_key)
@@ -19461,7 +19460,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     self._merge_or_enqueue(
                         adapter, _quick_key, event, merge_text=True
                     )
-                    self._defer_inbound_receipt(event)
+                    release_inbound_handoff(event)
                 return None
             if self._draining:
                 queue_during_drain = self._queue_during_drain_enabled(
@@ -19480,7 +19479,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.debug("PRIORITY queue follow-up for session %s", _quick_key)
                 if not self._queue_or_replace_pending_event(_quick_key, event):
                     return _QUEUE_FULL_REPLY
-                self._defer_inbound_receipt(event)
+                release_inbound_handoff(event)
                 return None
             if effective_busy_input_mode == "steer":
                 # Steer mode: inject text into the running agent mid-run via
@@ -19502,12 +19501,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         steered = False
                 if steered:
                     logger.debug("PRIORITY steer for session %s", _quick_key)
-                    self._hold_inbound_for_active_turn(_quick_key, event)
+                    release_inbound_handoff(event)
                     return None
                 logger.debug("PRIORITY steer-fallback-to-queue for session %s", _quick_key)
                 if not self._queue_or_replace_pending_event(_quick_key, event):
                     return _QUEUE_FULL_REPLY
-                self._defer_inbound_receipt(event)
+                release_inbound_handoff(event)
                 return None
             # #30170 — Subagent protection (PRIORITY path). Same rationale
             # as ``_handle_active_session_busy_message``: an interrupt
@@ -19525,7 +19524,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 if not self._queue_or_replace_pending_event(_quick_key, event):
                     return _QUEUE_FULL_REPLY
-                self._defer_inbound_receipt(event)
+                release_inbound_handoff(event)
                 return None
             # #56391 — Compression protection (PRIORITY path). Same
             # rationale as ``_handle_active_session_busy_message``: context
@@ -19543,7 +19542,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 if not self._queue_or_replace_pending_event(_quick_key, event):
                     return _QUEUE_FULL_REPLY
-                self._defer_inbound_receipt(event)
+                release_inbound_handoff(event)
                 return None
             # Text-only corrections redirect the live turn (preserving
             # displayed context) when the runtime supports it; media/voice and
@@ -19559,7 +19558,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 try:
                     if running_agent.redirect((event.text or "").strip()):
                         logger.debug("PRIORITY redirect for session %s", _quick_key)
-                        self._hold_inbound_for_active_turn(_quick_key, event)
+                        release_inbound_handoff(event)
                         return None
                 except Exception as exc:
                     logger.warning(
@@ -20426,7 +20425,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # clearing here first would leave a kill window with neither the
                 # marker nor a ledger row (ported from hermes-agent 360b9697ac, MIT).
                 self._forget_inbound_handoff(event)
-                self._take_steered_inbound(_quick_key)
                 if not getattr(event, "_turn_marker_handoff", False):
                     await self._clear_durable_active_turn(event)
             finally:
@@ -20997,53 +20995,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not session_key or not getattr(event, "inbound_receipts", None):
             return
         self.__dict__.setdefault("_inbound_handoff_events", {})[session_key] = event
-
-    @staticmethod
-    def _defer_inbound_receipt(event: Any) -> None:
-        """The input now lives only in memory: the adapter must not receipt it."""
-        if getattr(event, "inbound_receipts", None):
-            event._inbound_deferred = True
-
-    def _hold_inbound_for_active_turn(self, session_key: Optional[str], event: Any) -> None:
-        """A steer/redirect was accepted by the live agent (memory only).
-
-        The receipt stays open until the turn ends cleanly with the text
-        written to the transcript (``_settle_steered_inbound``); a crash, an
-        interrupt, or an unconsumed steer leaves it for the platform replay.
-        """
-        if not getattr(event, "inbound_receipts", None):
-            return
-        event._inbound_deferred = True
-        if session_key:
-            self.__dict__.setdefault("_steered_inbound_events", {}).setdefault(
-                session_key, []
-            ).append(event)
-
-    def _take_steered_inbound(self, session_key: Optional[str]) -> list:
-        held = self.__dict__.get("_steered_inbound_events")
-        return list(held.pop(session_key, None) or ()) if held and session_key else []
-
-    def _settle_steered_inbound(self, events: list, agent: Any, result: Any) -> None:
-        """Complete steered receipts only when the turn persisted them.
-
-        Anything else (interrupted/failed turn, steer left unconsumed, steer
-        handed back as ``pending_steer``) is dropped WITHOUT a receipt so the
-        platform replays it.
-        """
-        if not events:
-            return
-        clean = (
-            isinstance(result, dict)
-            and not result.get("interrupted")
-            and not result.get("failed")
-            and not result.get("failure_reason")
-            and not result.get("pending_steer")
-            and not getattr(agent, "_pending_steer", None)
-            and not getattr(agent, "_pending_redirect", None)
-        )
-        if clean:
-            for steered in events:
-                complete_inbound_handoff(steered)
 
     def _forget_inbound_handoff(self, event: Any) -> None:
         """Drop any receipt hold on *event* (turn ended; base completes it)."""
@@ -32959,11 +32910,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if pending:
                         logger.debug("Processing queued message after agent completion: '%s...'", pending[:40])
 
-            # Steers/redirects accepted mid-run are in the transcript only if
-            # the turn ended cleanly; otherwise their receipts stay open.
-            _steered_events = self._take_steered_inbound(session_key)
-            _steered_carry = None
-
             # Leftover /steer: if a steer arrived after the last tool batch
             # (e.g. during the final API call), the agent couldn't inject it
             # and returned it in result["pending_steer"]. Deliver it as the
@@ -32972,10 +32918,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _leftover_steer = result.get("pending_steer")
                 if _leftover_steer:
                     pending = _leftover_steer
-                    _steered_carry = _steered_events
-                    _steered_events = []
                     logger.debug("Delivering leftover /steer as next turn: '%s...'", pending[:40])
-            self._settle_steered_inbound(_steered_events, agent_holder[0], result)
 
             # Safety net: if the pending text is a slash command (e.g. "/stop",
             # "/new"), discard it — commands should never be passed to the agent
@@ -33019,12 +32962,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         self._register_inbound_handoff(session_key, pending_event)
                     else:
                         complete_inbound_handoff(pending_event)
-                elif _steered_carry and session_key:
-                    # The unconsumed steer is now the next turn's input.
-                    _carry_head = _steered_carry[0]
-                    for _carry_ev in _steered_carry[1:]:
-                        absorb_inbound_receipts(_carry_head, _carry_ev)
-                    self._register_inbound_handoff(session_key, _carry_head)
 
                 # Clear the adapter's interrupt event so the next _run_agent call
                 # doesn't immediately re-trigger the interrupt before the new agent
