@@ -1,4 +1,4 @@
-"""Mandatory delegation checkpoint for conversational root agents.
+"""Optional (off by default) delegation checkpoint for conversational root agents.
 
 Before a capable root runs its first *work* tool of a task it must record a
 choice with the ``todo`` tool: ``direct`` (do it here, with an operational
@@ -210,12 +210,14 @@ CONTROL_PLANE_TOOLS = frozenset({
     "delegate_task",
 })
 
-_FALSE_STRINGS = frozenset({"false", "0", "no", "off"})
+_TRUE_STRINGS = frozenset({"true", "1", "yes", "on"})
 
 
 @dataclass(frozen=True)
 class CheckpointSettings:
-    enabled: bool = True
+    # Off by default (owner decision): the foreground agent is not capped.
+    # Opt in with ``delegation.checkpoint.enabled: true``.
+    enabled: bool = False
     max_work_tools: int = DEFAULT_MAX_WORK_TOOLS
     max_foreground_seconds: float = DEFAULT_MAX_FOREGROUND_SECONDS
     max_integration_windows: int = DEFAULT_MAX_INTEGRATION_WINDOWS
@@ -246,13 +248,13 @@ def normalize_settings(raw: Any) -> CheckpointSettings:
     """Validate a ``delegation.checkpoint`` mapping; never yield a zero budget."""
     if not isinstance(raw, dict):
         return CheckpointSettings()
-    enabled_raw = raw.get("enabled", True)
+    enabled_raw = raw.get("enabled", False)
     if isinstance(enabled_raw, str):
-        enabled = enabled_raw.strip().lower() not in _FALSE_STRINGS
-    elif isinstance(enabled_raw, bool):
-        enabled = enabled_raw
+        enabled = enabled_raw.strip().lower() in _TRUE_STRINGS
+    elif isinstance(enabled_raw, (bool, int)):
+        enabled = bool(enabled_raw)
     else:
-        enabled = True
+        enabled = False
     return CheckpointSettings(
         enabled=enabled,
         max_work_tools=_positive_int(

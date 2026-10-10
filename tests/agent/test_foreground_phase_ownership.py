@@ -60,7 +60,7 @@ def _root(clock=None):
         _interrupt_requested=False,
         _active_children=[],
         _active_children_lock=None,
-        _delegation_checkpoint=dc.DelegationCheckpoint(clock=clock or _Clock()),
+        _delegation_checkpoint=dc.DelegationCheckpoint(dc.CheckpointSettings(enabled=True), clock=clock or _Clock()),
     )
     return root
 

@@ -5,7 +5,11 @@ work, it plans first and delegates useful independent execution or research
 without requiring you to request subagents. Small tasks can stay direct, and
 explicit requests not to use subagents take precedence.
 
-## The mandatory checkpoint
+## The optional checkpoint
+
+The checkpoint is **off by default**: the foreground agent has no cap on work
+calls or time. Opt in with `delegation.checkpoint.enabled: true`. Everything
+below describes the behavior once it is enabled.
 
 When a conversational root agent has both `todo` and `delegate_task`, the
 runtime will not run its first *work* tool of a task until the agent has
@@ -125,15 +129,15 @@ message text. For these agents `todo` stays optional.
 ```yaml
 delegation:
   checkpoint:
-    enabled: true            # false is the rollback: no gating at all
+    enabled: false           # default; true opts in to gating
     max_work_tools: 5        # positive integer
     max_foreground_seconds: 120   # positive number
     max_integration_windows: 2    # positive integer, per handed-off request
 ```
 
 Invalid, boolean, non-finite or non-positive values fall back to the defaults,
-never to a zero budget. Changes take effect at the start of the next turn. The
-default applies to every eligible root, not only to a trial agent.
+never to a zero budget. Changes take effect at the start of the next turn.
+When enabled, it applies to every eligible root, not only to a trial agent.
 
 ## What this does not guarantee
 
