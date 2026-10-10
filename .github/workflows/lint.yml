@@ -151,6 +151,11 @@ jobs:
         run: |
           ruff check .
 
+      - name: Subprocess stdin guard
+        # Same command as local use; stdlib-only, runs on the runner's python3.
+        # Fails on any subprocess/os/asyncio spawn without an explicit stdin=.
+        run: python3 scripts/check_subprocess_stdin.py
+
   windows-footguns:
     # Static guardrails on Windows-unsafe Python primitives — os.kill(pid, 0),
     # os.killpg, os.setsid, signal.SIGKILL without getattr fallback,
