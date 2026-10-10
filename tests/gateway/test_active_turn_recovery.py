@@ -546,3 +546,91 @@ async def test_unclean_recovery_adopts_persisted_reply_instead_of_regenerating(
 
     assert resume is False
     assert [tuple(r) for r in rows] == [("the final answer", "attempting")]
+
+
+@pytest.mark.asyncio
+async def test_unclean_recovery_does_not_resend_a_previous_turns_reply(
+    tmp_path, monkeypatch,
+):
+    """A marked turn killed before its own reply was written must resume.
+
+    The transcript's last assistant row is then the PREVIOUS turn's reply
+    (older than the marker). Adopting it would re-send an old answer and
+    silently drop the interrupted one (Hermes 360b9697ac timestamp guard).
+    """
+    import time as _time
+
+    from gateway import delivery_ledger
+    from gateway.session import AsyncSessionStore
+
+    monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setattr(delivery_ledger, "ledger_enabled", lambda *_a, **_k: True)
+
+    store = _make_db_store(tmp_path)
+    source = _make_source("old-reply-chat")
+    entry = store.get_or_create_session(source)
+    store.append_to_transcript(entry.session_id, {"role": "user", "content": "first"})
+    store.append_to_transcript(
+        entry.session_id,
+        {"role": "assistant", "content": "previous answer", "timestamp": _time.time() - 600},
+    )
+    store.mark_turn_active(entry.session_key)
+
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+
+    try:
+        resumed, ledgered = await runner._recover_unclean_sessions()
+        rows = delivery_ledger._connect().execute(
+            "SELECT content FROM delivery_obligations WHERE session_key = ?",
+            (entry.session_key,),
+        ).fetchall()
+        resume = _entry_for(store, source).resume_pending
+    finally:
+        _close_store_db(store)
+
+    assert (resumed, ledgered) == (1, 0)
+    assert resume is True
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_unclean_recovery_ledgers_reply_under_the_routed_profile(
+    tmp_path, monkeypatch,
+):
+    """Multiplex: a secondary profile's crash-left reply must be ledgered for
+    that profile's bot, or the boot sweep hands it to the wrong transport."""
+    import time as _time
+
+    from gateway import delivery_ledger
+    from gateway.session import AsyncSessionStore
+
+    monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setattr(delivery_ledger, "ledger_enabled", lambda *_a, **_k: True)
+
+    store = _make_db_store(tmp_path)
+    source = _make_source("profile-reply-chat")
+    source.profile = "coder"
+    entry = store.get_or_create_session(source)
+    store.mark_turn_active(entry.session_key)
+    store.append_to_transcript(entry.session_id, {"role": "user", "content": "hi"})
+    store.append_to_transcript(
+        entry.session_id,
+        {"role": "assistant", "content": "coder answer", "timestamp": _time.time()},
+    )
+
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+
+    try:
+        await runner._recover_unclean_sessions()
+        rows = delivery_ledger._connect().execute(
+            "SELECT adapter_profile FROM delivery_obligations WHERE session_key = ?",
+            (entry.session_key,),
+        ).fetchall()
+    finally:
+        _close_store_db(store)
+
+    assert [tuple(r) for r in rows] == [("coder",)]

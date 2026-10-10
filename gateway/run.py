@@ -1249,6 +1249,21 @@ def _float_env(name: str, default: float) -> float:
         return float(default)
 
 
+def _transcript_ts(value: Any) -> float:
+    """A transcript row's timestamp as epoch seconds; 0.0 when absent/invalid."""
+    if value is None:
+        return 0.0
+    if hasattr(value, "timestamp"):
+        try:
+            return float(value.timestamp())
+        except Exception:
+            return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _stamp_hygiene_compression_provenance(
     agent: Any,
     desc: str,
@@ -13815,6 +13830,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 or last.get("role") != "assistant"
                 or last.get("tool_calls")
                 or not isinstance(last.get("content"), str)
+                # An older reply belongs to the PREVIOUS turn: this one died
+                # before writing its own, so it must resume, not resend that.
+                or _transcript_ts(last.get("timestamp")) < started_at.timestamp()
             ):
                 continue  # never produced its final reply: it resumes
             text = _strip_media_directives(
@@ -13831,6 +13849,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 thread_id=origin.thread_id,
                 content=text,
                 since=started_at.timestamp(),
+                # Same identity the live path records (the delivery adapter's
+                # owner profile), so a multiplexed sweep sends it on the right bot.
+                adapter_profile=getattr(origin, "profile", None),
             )
             if await self.async_session_store.clear_turn_active(key, token):
                 ledgered += 1
