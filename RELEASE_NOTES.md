@@ -15,11 +15,13 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
-## 1.2.0 | Clover C1.2 | 2026-10-09
+## 1.2.0 | Clover C1.2 | 2026-10-10
 - Long-running tool calls now stop cleanly, so you can send a new message right away.
 - Background helpers show clearer progress and only report success when their work is verified.
 - Code workspaces start more reliably, while isolated tasks stay separate from your project.
 - Clover reuses warm code sessions, cleans up idle ones, and keeps reset tasks tracked.
+- Old "working..." previews and stale replies are cleaned up, so you don't see leftover or doubled messages.
+- Fixed: the Docker image builds again.
 
 ## 1.1.4 | Clover C1.1.4 | 2026-10-08
 - Before an update starts, Clover now checks your setup and tells you in plain words if something would stop it, and changes nothing.
