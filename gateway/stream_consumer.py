@@ -3092,6 +3092,50 @@ class GatewayStreamConsumer:
             self._preview_message_ids.add(message_id)
             self._segment_preview_message_ids.add(message_id)
 
+    @staticmethod
+    def _message_ids_from_result(result: Any) -> "list[str]":
+        """Every message id a send/edit result exposes, in order, de-duplicated."""
+        ids: "list[Any]" = [getattr(result, "message_id", None)]
+        ids.extend(getattr(result, "continuation_message_ids", None) or ())
+        raw = getattr(result, "raw_response", None) or {}
+        if isinstance(raw, dict):
+            ids.extend(raw.get("message_ids") or ())
+        seen: "list[str]" = []
+        for mid in ids:
+            if mid and mid != "__no_edit__" and str(mid) not in seen:
+                seen.append(str(mid))
+        return seen
+
+    async def _remove_stale_edit_messages(self, result: Any) -> None:
+        """Delete everything a superseded edit just wrote, without touching
+        current-turn delivery state.
+
+        An oversized edit may be split by the adapter into the original message
+        plus continuation messages; all of them carry stale content, so each id
+        the result reports is removed along with the preview being edited.
+        Deletion is bounded and best-effort per id: one failure never skips the
+        others.
+        """
+        delete_message = getattr(self.adapter, "delete_message", None)
+        if not callable(delete_message):
+            return
+        targets = [str(self._message_id)] if self._message_id else []
+        for mid in self._message_ids_from_result(result):
+            if mid not in targets:
+                targets.append(mid)
+        for mid in targets:
+            try:
+                cleanup = delete_message(self.chat_id, mid)
+                if inspect.isawaitable(cleanup):
+                    await await_bounded(cleanup, self._CANCEL_FINAL_EDIT_TIMEOUT)
+            except Exception:
+                logger.debug(
+                    "Late stale stream edit cleanup failed (chat=%s message=%s)",
+                    self.chat_id,
+                    mid,
+                    exc_info=True,
+                )
+
     def _track_preview_ids_from_result(self, result: Any) -> None:
         """Record every message id a send/edit result exposes: the primary id
         plus any continuation ids from an oversized split
@@ -3642,27 +3686,7 @@ class GatewayStreamConsumer:
                     except Exception:
                         stale_delivery = True
                     if stale_delivery:
-                        delete_message = getattr(
-                            self.adapter, "delete_message", None
-                        )
-                        if callable(delete_message):
-                            try:
-                                cleanup = delete_message(
-                                    self.chat_id, self._message_id
-                                )
-                                if inspect.isawaitable(cleanup):
-                                    await await_bounded(
-                                        cleanup,
-                                        self._CANCEL_FINAL_EDIT_TIMEOUT,
-                                    )
-                            except Exception:
-                                logger.debug(
-                                    "Late stale stream edit cleanup failed "
-                                    "(chat=%s message=%s)",
-                                    self.chat_id,
-                                    self._message_id,
-                                    exc_info=True,
-                                )
+                        await self._remove_stale_edit_messages(result)
                         return False
                     if result.success:
                         self._already_sent = True

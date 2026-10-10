@@ -113,8 +113,9 @@ collect_sandbox_logs() {
     echo "--- end proxy.log ---" >&2
   fi
   # An npm failure under --silent prints no error code or request host, so
-  # the job log alone cannot say why it failed. Surface ONLY those two facts
-  # from npm's debug logs (the sanitizer drops URLs, paths and credentials).
+  # the job log alone cannot say why it failed. Surface ONLY allowlisted facts
+  # from npm's debug logs (exit status/known errno, a lockfile-pinned package
+  # name, a fixed node-gyp cause label, a hostname); no log text is copied.
   local npm_logs="$SANDBOX_ROOT/home/.npm/_logs"
   if [ -d "$npm_logs" ] && command -v python3 >/dev/null 2>&1; then
     echo "--- npm failure facts (sanitized) ---" >&2

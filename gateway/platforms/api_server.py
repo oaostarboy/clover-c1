@@ -3697,20 +3697,36 @@ class APIServerAdapter(BasePlatformAdapter):
                 elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
                     break
         finally:
-            if not attach_task.done():
-                # Cancelled mid-attach: let the worker finish first so the
-                # disconnect below cannot run before (and be undone by) it.
+            # Attach completion and the following disconnect are ONE unit of
+            # cleanup work owned by a background task, so no number of caller
+            # cancellations can reorder them or skip either half.  The handler
+            # only waits for it; cancels that arrive while waiting are
+            # remembered and re-raised afterwards.
+            async def _teardown() -> None:
                 try:
-                    await asyncio.shield(attach_task)
+                    await attach_task
                 except BaseException:
                     pass
-            await asyncio.shield(
-                self._spawn_browser_control_call(
+                await self._spawn_browser_control_call(
                     self._browser_control_broker.disconnect,
                     scope,
                     owner=ws,
                 )
-            )
+
+            teardown = asyncio.ensure_future(_teardown())
+            self._background_tasks.add(teardown)
+            teardown.add_done_callback(self._background_tasks.discard)
+            teardown.add_done_callback(lambda t: t.cancelled() or t.exception())
+            recancel = False
+            while not teardown.done():
+                try:
+                    await asyncio.shield(teardown)
+                except asyncio.CancelledError:
+                    if teardown.cancelled():
+                        break
+                    recancel = True
+            if recancel:
+                raise asyncio.CancelledError
         return ws
 
     def _spawn_browser_control_call(self, func, *args, **kwargs) -> "asyncio.Future":

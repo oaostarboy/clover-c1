@@ -102,6 +102,34 @@ async def _wait_for_controller_ready(
         await asyncio.sleep(min(0.01, remaining))
 
 
+def _watch_attach(monkeypatch, broker):
+    """Count COMPLETED broker.attach calls so tests wait on real attachment.
+
+    ``ws_connect`` returns at the HTTP 101 upgrade, before the handler's
+    offloaded ``broker.attach`` has run; dispatching immediately races it
+    (ControllerUnavailable).  ``await wait(n)`` returns once n attaches finished.
+    """
+    real_attach = broker.attach
+    done = []
+
+    def attach(scope, send, *, owner=None):
+        result = real_attach(scope, send, owner=owner)
+        done.append(owner)
+        return result
+
+    monkeypatch.setattr(broker, "attach", attach)
+
+    async def wait(count, timeout=5.0):
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while len(done) < count:
+            if loop.time() >= deadline:
+                raise TimeoutError(f"broker.attach completed {len(done)}/{count}")
+            await asyncio.sleep(0.005)
+
+    return wait
+
+
 def _registration_body(**overrides):
     payload = {
         "protocol_version": 1,
@@ -409,6 +437,7 @@ async def test_controller_ws_rechecks_feature_flag_before_consuming_ticket(monke
 async def test_local_api_ticket_ws_noop_round_trip_filters_spoofed_identity_and_disabled_actions(monkeypatch):
     adapter = _adapter()
     monkeypatch.setattr(adapter, "_browser_control_enabled", lambda: True)
+    wait_attached = _watch_attach(monkeypatch, adapter._browser_control_broker)
     async with TestClient(TestServer(_app(adapter))) as client:
         response = await client.post(
             "/v1/browser-control/register",
@@ -433,6 +462,7 @@ async def test_local_api_ticket_ws_noop_round_trip_filters_spoofed_identity_and_
             "/v1/browser-control/ws",
             protocols=[CONTROL_PROTOCOL, _ticket_protocol(registration["ticket"])],
         )
+        await wait_attached(1)
         await ws.send_json(
             {
                 "method": "browser.controller.heartbeat",
@@ -690,6 +720,7 @@ async def test_real_browser_action_routes_through_controller_without_legacy_fall
 async def test_local_api_same_identity_reconnect_completes_command_started_on_old_socket(monkeypatch):
     adapter = _adapter()
     monkeypatch.setattr(adapter, "_browser_control_enabled", lambda: True)
+    wait_attached = _watch_attach(monkeypatch, adapter._browser_control_broker)
     async with TestClient(TestServer(_app(adapter))) as client:
         first_response = await client.post(
             "/v1/browser-control/register",
@@ -701,6 +732,7 @@ async def test_local_api_same_identity_reconnect_completes_command_started_on_ol
             "/v1/browser-control/ws",
             protocols=[CONTROL_PROTOCOL, _ticket_protocol(first["ticket"])],
         )
+        await wait_attached(1)
 
         pending = asyncio.create_task(
             asyncio.to_thread(
@@ -731,6 +763,7 @@ async def test_local_api_same_identity_reconnect_completes_command_started_on_ol
             "/v1/browser-control/ws",
             protocols=[CONTROL_PROTOCOL, _ticket_protocol(second["ticket"])],
         )
+        await wait_attached(2)
         await second_ws.send_json(
             {
                 "method": "browser.controller.result",
@@ -749,6 +782,7 @@ async def test_local_api_same_identity_reconnect_completes_command_started_on_ol
 async def test_local_api_explicit_detach_is_hard_and_stale_socket_cannot_detach_refresh(monkeypatch):
     adapter = _adapter()
     monkeypatch.setattr(adapter, "_browser_control_enabled", lambda: True)
+    wait_attached = _watch_attach(monkeypatch, adapter._browser_control_broker)
     async with TestClient(TestServer(_app(adapter))) as client:
         first_response = await client.post(
             "/v1/browser-control/register",
@@ -760,6 +794,7 @@ async def test_local_api_explicit_detach_is_hard_and_stale_socket_cannot_detach_
             "/v1/browser-control/ws",
             protocols=[CONTROL_PROTOCOL, _ticket_protocol(first["ticket"])],
         )
+        await wait_attached(1)
         second_response = await client.post(
             "/v1/browser-control/register",
             json=_registration_body(capabilities=["controller.noop"]),
@@ -770,6 +805,7 @@ async def test_local_api_explicit_detach_is_hard_and_stale_socket_cannot_detach_
             "/v1/browser-control/ws",
             protocols=[CONTROL_PROTOCOL, _ticket_protocol(second["ticket"])],
         )
+        await wait_attached(2)
 
         await first_ws.send_json(
             {"method": "browser.controller.detach", "params": {}}
@@ -818,6 +854,7 @@ async def test_remote_api_uses_the_same_authenticated_noop_round_trip(monkeypatc
         "_browser_control_transport_family",
         lambda request: "remote-api",
     )
+    wait_attached = _watch_attach(monkeypatch, adapter._browser_control_broker)
     async with TestClient(TestServer(_app(adapter))) as client:
         response = await client.post(
             "/v1/browser-control/register",
@@ -832,6 +869,7 @@ async def test_remote_api_uses_the_same_authenticated_noop_round_trip(monkeypatc
             "/v1/browser-control/ws",
             protocols=[CONTROL_PROTOCOL, _ticket_protocol(registration["ticket"])],
         )
+        await wait_attached(1)
         scope = ControllerScope(
             principal_id=registration["scope"]["principal_id"],
             profile_id=registration["scope"]["profile_id"],
@@ -1110,3 +1148,84 @@ async def test_ws_teardown_disconnects_controller_even_if_handler_is_cancelled_w
     finally:
         release_worker.set()
         executor.shutdown(wait=True, cancel_futures=True)
+
+
+@pytest.mark.asyncio
+async def test_repeated_handler_cancellation_during_attach_never_leaves_a_ghost_controller(
+    monkeypatch,
+):
+    """Disconnect must run AFTER an in-flight attach, however often the handler is cancelled."""
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_browser_control_enabled", lambda: True)
+    broker = adapter._browser_control_broker
+    real_attach, real_disconnect = broker.attach, broker.disconnect
+    attach_started, release_attach = threading.Event(), threading.Event()
+    attach_done, disconnect_done = threading.Event(), threading.Event()
+    order = []
+    seen = {}
+
+    def attach(scope, send, *, owner=None):
+        seen["scope"] = scope
+        attach_started.set()
+        assert release_attach.wait(8), "probe never released attach"
+        real_attach(scope, send, owner=owner)
+        order.append("attach")
+        attach_done.set()
+
+    def disconnect(scope, *args, **kwargs):
+        order.append("disconnect")
+        result = real_disconnect(scope, *args, **kwargs)
+        disconnect_done.set()
+        return result
+
+    monkeypatch.setattr(broker, "attach", attach)
+    monkeypatch.setattr(broker, "disconnect", disconnect)
+    handlers = []
+    real_handler = adapter._handle_browser_control_ws
+
+    async def tracked(request):
+        handlers.append(asyncio.current_task())
+        return await real_handler(request)
+
+    app = web.Application()
+    app.router.add_post(
+        "/v1/browser-control/register", adapter._handle_browser_control_register
+    )
+    app.router.add_get("/v1/browser-control/ws", tracked)
+    loop = asyncio.get_running_loop()
+
+    async def until(predicate):
+        deadline = loop.time() + 5.0
+        while not predicate() and loop.time() < deadline:
+            await asyncio.sleep(0.005)
+        assert predicate()
+
+    try:
+        async with TestClient(TestServer(app)) as client:
+            response = await client.post(
+                "/v1/browser-control/register",
+                json=_registration_body(capabilities=["browser_snapshot"]),
+                headers={"Authorization": f"Bearer {API_KEY}"},
+            )
+            registration = await response.json()
+            ws = await client.ws_connect(
+                "/v1/browser-control/ws",
+                protocols=[CONTROL_PROTOCOL, _ticket_protocol(registration["ticket"])],
+            )
+            await until(attach_started.is_set)
+            for _ in range(4):  # first cancel enters cleanup; the rest hit it
+                handlers[0].cancel()
+                await asyncio.sleep(0.01)
+            assert order == [], "cleanup ran before the in-flight attach finished"
+            release_attach.set()
+            await until(disconnect_done.is_set)
+            await asyncio.gather(*handlers, return_exceptions=True)
+            assert order == ["attach", "disconnect"]
+            assert broker.select(seen["scope"], "browser_snapshot") is None
+            await ws.close()
+    finally:
+        release_attach.set()
+        if "scope" in seen:
+            real_disconnect(seen["scope"])
+        if adapter._background_tasks:
+            await asyncio.gather(*list(adapter._background_tasks), return_exceptions=True)

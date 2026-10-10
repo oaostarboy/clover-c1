@@ -115,6 +115,10 @@ jobs:
           }
           $own = Show-GatewayOwnership "pre-update $env:SETUP"
           "OLD_GATEWAY_PID=$($own.Pid)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $preId = Get-GatewayIdentity
+          Write-Host "pre-update identity: statePid=$($preId.StatePid) start=$($preId.StartTime) listener=$($preId.ListenerPid) code_sha='$($preId.CodeSha)' pidIsGateway=$($preId.PidIsGateway)"
+          "OLD_GATEWAY_CODE_SHA=$($preId.CodeSha)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "OLD_GATEWAY_START_TIME=$($preId.StartTime)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           if ($env:SETUP -eq 'troy' -and -not $own.ViaSchedule) { throw "troy gateway does not descend from the Schedule service host; the scenario is not Troy-like" }
           if ($env:SETUP -eq 'zyra' -and $own.ViaSchedule) { throw "zyra gateway unexpectedly descends from the Schedule service host" }
 
@@ -130,6 +134,8 @@ jobs:
           $suffix = $env:HEAD_BRANCH -replace '^ci/win-update-proof/', ''
           $next = if ($suffix -eq 'pr-head') { 'ci/win-update-proof-next' } else { "ci/win-update-next/$suffix" }
           $target = if ($env:PHASE -eq 'old2new') { $env:HEAD_BRANCH } else { $next }
+          "NEXT_BRANCH=$next" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $env:NEXT_BRANCH = $next
           Set-MainIsTarget $target
           $logStart = (Get-LogLines).Count
           $label = "$env:SETUP $env:UPDATE_PATH $env:PHASE"
