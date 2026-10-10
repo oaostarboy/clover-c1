@@ -640,6 +640,11 @@ class TelegramAdapter(BasePlatformAdapter):
     - Media messages
     """
 
+    # Experimental update admission (extra.update_admission); instances set it
+    # in __init__. The class default keeps "off" the answer for any adapter
+    # built without __init__.
+    _update_admission: bool = False
+
     # Telegram message limits
     MAX_MESSAGE_LENGTH = 4096
     supports_code_blocks = True  # Telegram MarkdownV2 renders fenced code blocks
@@ -730,14 +735,22 @@ class TelegramAdapter(BasePlatformAdapter):
         super().__init__(config, Platform.TELEGRAM)
         self._app: Optional[Application] = None
         self._bot: Optional[Bot] = None
-        # Update-ID admission (see update_admission.py). Durable receipts are experimental and opt-in
-        # (platforms.telegram.extra.durable_update_receipts, default false): a
-        # receipt on disk can suppress the crash replay of input that only
-        # lived in memory. Off, the receipt file is never read or written and
-        # completed IDs live in a per-process map shared by rebuilt adapters.
-        self._durable_update_receipts: bool = self._coerce_bool_extra("durable_update_receipts", False)
+        # Update-ID admission (see update_admission.py) is EXPERIMENTAL and off
+        # by default (platforms.telegram.extra.update_admission). Off, no
+        # admission handler, finalizer or error hook is installed and no claim,
+        # receipt or seen-ID is ever recorded: update handling is exactly
+        # C1.2's. On, durable receipts are a further opt-in
+        # (extra.durable_update_receipts, default false, only honoured with
+        # admission on): a receipt on disk can suppress the crash replay of
+        # input that only lived in memory. With receipts off the receipt file
+        # is never read or written and completed IDs live in a per-process map
+        # shared by rebuilt adapters.
+        self._update_admission: bool = self._coerce_bool_extra("update_admission", False)
+        self._durable_update_receipts: bool = self._update_admission and self._coerce_bool_extra(
+            "durable_update_receipts", False
+        )
         self._update_receipt_dir = _update_receipt_dir()
-        if self._durable_update_receipts:
+        if self._durable_update_receipts or not self._update_admission:
             self._seen_update_ids: dict = {}
         else:
             from plugins.platforms.telegram.update_admission import process_seen_ids
@@ -4547,24 +4560,25 @@ class TelegramAdapter(BasePlatformAdapter):
         the ``gateway_platform_event`` observer (group 99) in lockstep with the
         core handlers.
         """
-        # Update-ID admission runs first, in group -1, so a redelivered update is
-        # stopped before any core, plugin or observer handler sees it.
-        from plugins.platforms.telegram.update_admission import (
-            ADMISSION_GROUP,
-            load_receipts,
-            FINALIZE_GROUP,
-            make_admission_handler,
-            make_error_handler,
-            make_finalize_handler,
-        )
-
         # Dispatch accounting for the "healthy but deaf" watchdog. Runs before
         # admission so replayed/duplicate updates still count as dispatcher
         # progress; no handler raises ApplicationHandlerStop ahead of it.
         app.add_handler(TypeHandler(Update, self._on_update_dispatched), group=_DISPATCH_COUNT_GROUP)
 
         bot_id = _bot_id_from_token(getattr(self.config, "token", None))
-        if bot_id is not None:
+        if self._update_admission and bot_id is not None:
+            # Update-ID admission (experimental, opt-in) runs first, in group
+            # -1, so a redelivered update is stopped before any core, plugin
+            # or observer handler sees it. Off: none of this is installed.
+            from plugins.platforms.telegram.update_admission import (
+                ADMISSION_GROUP,
+                load_receipts,
+                FINALIZE_GROUP,
+                make_admission_handler,
+                make_error_handler,
+                make_finalize_handler,
+            )
+
             if self._durable_update_receipts:
                 load_receipts(self._seen_update_ids, self._update_receipt_dir, bot_id)
             app.add_handler(
@@ -11371,9 +11385,11 @@ class TelegramAdapter(BasePlatformAdapter):
             timestamp=message.date,
         )
         # The update's receipt is written when this event is durably handed off.
-        from plugins.platforms.telegram.update_admission import attach_receipt
+        # Admission off (the default): the event carries no receipt callbacks.
+        if self._update_admission:
+            from plugins.platforms.telegram.update_admission import attach_receipt
 
-        attach_receipt(self, _bot_id_from_token(getattr(self.config, "token", None)), update_id, event)
+            attach_receipt(self, _bot_id_from_token(getattr(self.config, "token", None)), update_id, event)
         return event
 
     # ── Message reactions (processing lifecycle) ──────────────────────────

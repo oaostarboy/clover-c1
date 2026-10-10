@@ -16,7 +16,6 @@ HOW TO EDIT (by hand, at release time)
 -->
 
 ## 1.3.0 | Clover C1.3 | 2026-10-10
-- Telegram doesn't answer the same message twice after a reconnect.
 - A busy database or a website firewall no longer cuts off replies or blames your API key.
 - Stopping a background task can no longer take Clover down with it.
 - Telegram restarts its connection by itself if it stops picking up messages.

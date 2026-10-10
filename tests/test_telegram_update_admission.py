@@ -88,7 +88,9 @@ async def _process(app, update):
 
 def _adapter(tmp_path, durable=True):
     """Durable receipts are opt-in; these tests exercise the opted-in mode."""
-    extra = {"durable_update_receipts": True} if durable else {}
+    extra = {"update_admission": True}
+    if durable:
+        extra["durable_update_receipts"] = True
     return TelegramAdapter(PlatformConfig(enabled=True, token="111:offline-test", extra=extra))
 
 
@@ -158,7 +160,7 @@ async def test_receipts_are_scoped_per_bot(tmp_path):
     app_a = _build(a, 111, seen_a)
     await _process(app_a, _text_update(app_a.bot, 700))
 
-    b = TelegramAdapter(PlatformConfig(enabled=True, token="222:offline-test", extra={}))
+    b = TelegramAdapter(PlatformConfig(enabled=True, token="222:offline-test", extra={"update_admission": True}))
     app_b = _build(b, 222, seen_b)
     await _process(app_b, _text_update(app_b.bot, 700))
     assert seen_a == [700]
