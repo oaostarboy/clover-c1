@@ -26,6 +26,15 @@ def _clean_registry():
     ad._reset_for_tests()
     _drain_queue()
     yield
+    # Tests release their gates in ``finally``; a released job still enqueues
+    # its batch-join event from the worker thread.  ``_reset_for_tests`` only
+    # shuts the executor down without waiting, so that event could land AFTER
+    # the drain and be mistaken for the next test's first event (flaky CI
+    # shard failure).  Join the workers (finite: every gate is already open)
+    # so nothing can publish past this point.
+    executor = ad._executor
+    if executor is not None:
+        executor.shutdown(wait=True)
     ad._reset_for_tests()
     _drain_queue()
 
