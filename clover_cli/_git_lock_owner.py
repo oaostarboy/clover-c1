@@ -339,12 +339,21 @@ def _release_dead_index_lock(git_dir: Path, root: Path | None = None, *, any_git
     """
     lock = git_dir / "index.lock"
     deadline = time.monotonic() + 5
-    while lock.exists():
+    while True:
+        examined = _lock_identity(lock)
+        if examined is None and not lock.exists():
+            return True
         held = None if sys.platform == "win32" else _held_open(lock, root, any_git=any_git)
         if held is False or sys.platform == "win32":
+            # The ownership proof above covers the file we examined, not whatever the path names
+            # now: a concurrent cleanup plus a live git can swap it in the meantime.
             try:
-                lock.unlink()
-                return True
+                if sys.platform == "win32":
+                    lock.unlink()
+                    return True
+                outcome = _unlink_if_same_file(lock, examined)
+                if outcome is not None:
+                    return outcome
             except FileNotFoundError:
                 return True
             except PermissionError:  # Windows: open in a live process
@@ -354,4 +363,51 @@ def _release_dead_index_lock(git_dir: Path, root: Path | None = None, *, any_git
         if time.monotonic() > deadline:
             return False
         time.sleep(0.1)
-    return True
+
+
+def _lock_identity(path: Path) -> tuple[int, int, int, int] | None:
+    """What a lock file IS (device, inode, size, mtime_ns), or None when the path names nothing."""
+    try:
+        st = path.lstat()
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def _unlink_if_same_file(lock: Path, examined: tuple[int, int, int, int] | None) -> bool | None:
+    """Delete ``lock`` only if it is still the file whose owner was proven gone.
+
+    True: removed (or already gone). None: the path now names a different file, so the proof does not
+    cover it and the caller must examine again. False: could not move it aside; leave it alone.
+
+    The path is renamed to a unique quarantine name first (atomic), and the inode re-checked on the
+    quarantined file, so a lock swapped in between the re-stat and the rename is put back instead of
+    deleted. Putting it back is ``link`` + ``unlink``, which never overwrites a newer lock.
+    """
+    if examined is None:
+        return None
+    if _lock_identity(lock) != examined:
+        return None
+    quarantine = lock.with_name(f"{lock.name}.clover-dead-{os.getpid()}-{time.monotonic_ns()}")
+    try:
+        os.rename(lock, quarantine)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    if _lock_identity(quarantine) == examined:
+        try:
+            quarantine.unlink()
+        except OSError:
+            pass
+        return True
+    # We moved a different file aside (it was replaced after our re-stat): restore it.
+    try:
+        os.link(quarantine, lock)
+    except OSError:
+        pass  # a newer lock already exists; the moved file is the live git's old name
+    try:
+        quarantine.unlink()
+    except OSError:
+        pass
+    return None

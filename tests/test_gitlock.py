@@ -185,3 +185,53 @@ def test_release_dead_index_lock_without_a_lock_is_a_noop(repo: Path) -> None:
 
     assert release_dead_index_lock(repo) is False
     assert release_dead_index_lock(repo / "missing") is False
+
+
+@pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="ownership proof via /proc (Linux)")
+def test_lock_replaced_between_owner_scan_and_unlink_is_not_deleted(repo: Path, monkeypatch) -> None:
+    """The proof covers the file examined, not whatever the path names by the time we unlink (C13-ASTRA-07)."""
+    import clover_cli._git_lock_owner as owner
+    from clover_cli.gitlock import release_dead_index_lock
+
+    lock = repo / ".git" / "index.lock"
+    lock.touch()
+    real_scan = owner._held_open
+    children: list[subprocess.Popen] = []
+
+    def scan_then_concurrent_recovery_and_git(path, root, **kwargs):
+        verdict = real_scan(path, root, **kwargs)
+        if children:  # only the first scan is interleaved
+            return verdict
+        assert verdict is False, verdict
+        # A concurrent updater releases the same dead lock after our scan, then a
+        # real live git takes a NEW lock before our unlink.
+        with monkeypatch.context() as concurrent:
+            concurrent.setattr(owner, "_held_open", real_scan)
+            assert release_dead_index_lock(repo) is True
+        children.append(_status_blocked_on_a_fifo(repo))
+        assert real_scan(path, root, **kwargs), "premise: replacement lock has a live holder"
+        return verdict
+
+    monkeypatch.setattr(owner, "_held_open", scan_then_concurrent_recovery_and_git)
+    try:
+        removed = release_dead_index_lock(repo)
+        assert children and children[0].poll() is None
+        assert not removed and lock.exists(), ("deleted live replacement index.lock", removed)
+        assert not list(lock.parent.glob("index.lock.clover-dead-*")), "quarantine file left behind"
+    finally:
+        for child in children:
+            child.kill()
+            child.wait(timeout=5)
+
+
+def test_unlink_if_same_file_restores_a_swapped_in_lock(tmp_path: Path) -> None:
+    from clover_cli._git_lock_owner import _lock_identity, _unlink_if_same_file
+
+    lock = tmp_path / "index.lock"
+    lock.write_text("old")
+    examined = _lock_identity(lock)
+    assert _unlink_if_same_file(lock, examined) is True and not lock.exists()
+    lock.write_text("new, longer")  # a different file under the same name
+    assert _unlink_if_same_file(lock, examined) is None
+    assert lock.read_text() == "new, longer"
+    assert _unlink_if_same_file(tmp_path / "gone.lock", examined) is None
