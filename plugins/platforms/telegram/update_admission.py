@@ -118,12 +118,11 @@ def _complete(adapter, bot_id, key: str) -> None:
 def attach_receipt(adapter, bot_id, update_id, event) -> None:
     """Defer the receipt for ``update_id`` until ``event`` is durably handed off.
 
-    The receipt is written when the gateway calls ``complete_inbound_handoff``
-    on the event (turn marker set, recorded in the restart inbox, or the turn
-    finished). Until then only the in-memory claim exists, so a crash lets
-    Telegram's unacknowledged replay through. An event the runner takes into
-    memory behind a running turn is released instead (``release``): no
-    receipt is ever written for it.
+    Receipts are opt-in. One is written only when the event was explicitly
+    marked durable (``mark_inbound_durable``: user message committed, or a
+    fully handled control command) and then completed. Every other path
+    releases (``release``): the in-memory claim is dropped, no receipt is
+    written, and a replay after a crash is admitted again.
     """
     if bot_id is None or update_id is None:
         return

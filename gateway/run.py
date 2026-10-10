@@ -2822,6 +2822,7 @@ from gateway.platforms.base import (
     _reply_anchor_for_event,
     build_auto_tts_output_path,
     complete_inbound_handoff,
+    mark_inbound_durable,
     release_inbound_handoff,
     events_share_security_context,
     merge_pending_message_event,
@@ -18510,6 +18511,24 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         "moa": "Agent is running — wait or /stop first, then run /moa.",
     }
 
+    # Slash commands that are handled synchronously, carry no memory-only
+    # payload, and are harmful or noisy to run twice (restart loops, repeated
+    # approvals or settings flips). Only these opt their inbound receipt in.
+    # NEVER add /steer, /queue, /bg, /btw, /goal, /loop, /heartbeat, /subgoal
+    # or anything else that stores text for later: those must release.
+    _RECEIPT_SAFE_COMMANDS = frozenset({
+        "restart", "stop", "new", "update",
+        "approve", "deny",
+        "model", "reasoning", "fast", "approvals", "skin", "codex-runtime",
+        "personality", "verbose", "footer", "busy", "fuckit", "sethome",
+        "pause",
+    })
+
+    def _mark_command_receipt_safe(self, event: Any, canonical: Optional[str]) -> None:
+        """Opt a fully-handled settings/control command into its inbound receipt."""
+        if canonical in self._RECEIPT_SAFE_COMMANDS:
+            mark_inbound_durable(event)
+
     def _gateway_plain_command_handlers(self):
         """Return ordinary slash handlers shared by idle and busy dispatch."""
         return {
@@ -18561,6 +18580,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         handler_key = getattr(cmd_def, "busy_handler", None)
 
         if handler_key:
+            # Only the handlers that really execute the command mark it. A
+            # busy-reject text or /steer, /queue, /goal, /loop (memory-only
+            # payloads or state read later) never do, so they release.
+            if handler_key in ("stop", "new"):
+                self._mark_command_receipt_safe(event, name)
             special = {
                 "start": self._busy_start_command,
                 "stop": self._busy_stop_command,
@@ -18580,6 +18604,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if policy in ("dispatch", "interrupt_then_dispatch"):
             plain = self._gateway_plain_command_handlers().get(name)
             if plain is not None:
+                self._mark_command_receipt_safe(event, name)
                 return await plain(event)
             logger.warning(
                 "busy_policy=%s for /%s has no mid-run handler — "
@@ -19715,6 +19740,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _cmd_def = _resolve_cmd(command) if command else None
                     canonical = _cmd_def.name if _cmd_def else command
                     break
+
+        self._mark_command_receipt_safe(event, canonical)
 
         if canonical == "council":
             return await self._handle_council_command(event)
@@ -21010,6 +21037,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         event = held.pop(session_key, None) if held else None
         if event is None:
             return
+        # The user message is committed: the one place a normal turn opts in.
+        mark_inbound_durable(event)
         # The receipt callbacks mutate adapter dicts owned by the gateway loop.
         if loop is not None and loop.is_running():
             try:
@@ -32961,7 +32990,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if session_key:
                         self._register_inbound_handoff(session_key, pending_event)
                     else:
-                        complete_inbound_handoff(pending_event)
+                        # No session key: nothing can commit it, so it is
+                        # memory-only until the recursive run persists it.
+                        release_inbound_handoff(pending_event)
 
                 # Clear the adapter's interrupt event so the next _run_agent call
                 # doesn't immediately re-trigger the interrupt before the new agent

@@ -2949,6 +2949,67 @@ def complete_inbound_handoff(event: Any) -> None:
             logger.warning("Inbound receipt callback failed", exc_info=True)
 
 
+def mark_inbound_durable(event: Any) -> None:
+    """Declare that *event*'s input is safe to receipt (opt-in, never the default).
+
+    Only two kinds of places may call this: the normal-turn path right after
+    the user message is committed to the session store, and slash commands
+    that are fully handled synchronously with no memory-only payload.
+    ``settle_inbound_handoff`` writes the receipt for a marked event and
+    releases every other one.
+    """
+    try:
+        event._inbound_durable = True
+    except Exception:
+        logger.debug("Could not mark inbound event durable", exc_info=True)
+    # A pre-dispatch rewrite hands the handler a ``dataclasses.replace`` copy
+    # that shares the callbacks but not private attributes. The mark rides the
+    # shared callbacks too, so the original event the adapter settles sees it.
+    for callback in list(getattr(event, "inbound_receipts", None) or ()):
+        try:
+            callback.durable = True
+        except Exception:
+            pass
+
+
+def inbound_is_durable(event: Any) -> bool:
+    """True only when the event was explicitly marked by ``mark_inbound_durable``."""
+    if getattr(event, "_inbound_durable", False) is True:
+        return True
+    return any(
+        getattr(cb, "durable", False) is True
+        for cb in (getattr(event, "inbound_receipts", None) or ())
+    )
+
+
+def settle_inbound_handoff(event: Any) -> None:
+    """Default end-of-handler settlement: receipt only if marked, else release.
+
+    A path that accepted input into memory only (steer, queue, interrupt,
+    merge, unknown handler, exception) never marks the event, so the platform
+    replay after a crash is admitted again. Worst case is a double answer,
+    never a lost input. Idempotent in both directions.
+    """
+    if getattr(event, "_inbound_durable", False) is True:
+        complete_inbound_handoff(event)
+        return
+    # Callbacks marked through a ``dataclasses.replace`` copy complete; any
+    # other callback this event carries (e.g. merged in) is released.
+    for callback in list(getattr(event, "inbound_receipts", None) or ()):
+        if getattr(callback, "durable", False) is True:
+            try:
+                callback()
+            except Exception:
+                logger.warning("Inbound receipt callback failed", exc_info=True)
+        else:
+            release = getattr(callback, "release", None)
+            if release is not None:
+                try:
+                    release()
+                except Exception:
+                    logger.warning("Inbound receipt release failed", exc_info=True)
+
+
 def release_inbound_handoff(event: Any) -> None:
     """Drop the event's inbound receipt without writing one (idempotent, never raises).
 
@@ -6511,7 +6572,7 @@ class BasePlatformAdapter(ABC):
 
         try:
             response = await self._message_handler(event)
-            complete_inbound_handoff(event)
+            settle_inbound_handoff(event)
             _text, _eph_ttl = self._unwrap_ephemeral(response)
             # Send the response BEFORE cancelling the old task so the send
             # cannot be affected by task-cancellation side effects (race
@@ -6652,7 +6713,7 @@ class BasePlatformAdapter(ABC):
                 try:
                     _thread_meta = _thread_metadata_for_source(event.source, _reply_anchor_for_event(event))
                     response = await self._message_handler(event)
-                    complete_inbound_handoff(event)
+                    settle_inbound_handoff(event)
                     _text, _eph_ttl = self._unwrap_ephemeral(response)
                     if _text:
                         _r = await self._send_with_retry(
@@ -6706,7 +6767,7 @@ class BasePlatformAdapter(ABC):
                             event.source, _reply_anchor_for_event(event)
                         )
                         response = await self._message_handler(event)
-                        complete_inbound_handoff(event)
+                        settle_inbound_handoff(event)
                         _text, _eph_ttl = self._unwrap_ephemeral(response)
                         if _text:
                             _r = await self._send_with_retry(
@@ -6734,7 +6795,7 @@ class BasePlatformAdapter(ABC):
                         # A steer/follow-up taken into memory was released by
                         # the runner (``release_inbound_handoff``), so this is
                         # then a no-op; any other handled event is complete.
-                        complete_inbound_handoff(event)
+                        settle_inbound_handoff(event)
                         return
                 except Exception as e:
                     logger.error("[%s] Busy-session handler failed: %s", self.name, e, exc_info=True)
@@ -6745,6 +6806,8 @@ class BasePlatformAdapter(ABC):
             if event.message_type == MessageType.PHOTO:
                 logger.debug("[%s] Queuing photo follow-up for session %s without interrupt", self.name, session_key)
                 self._merge_or_overflow(session_key, event)
+                # Queued in memory only: the platform replay stays admissible.
+                release_inbound_handoff(event)
                 return  # Don't interrupt now - will run after current task completes
 
             if self._is_queue_text_debounce_candidate(event):
@@ -6756,6 +6819,7 @@ class BasePlatformAdapter(ABC):
                     self._busy_text_debounce_seconds,
                 )
                 await self._queue_text_debounce(session_key, event)
+                release_inbound_handoff(event)
             else:
                 logger.debug(
                     "[%s] New message while session %s is active — queuing follow-up "
@@ -6768,6 +6832,7 @@ class BasePlatformAdapter(ABC):
                     event,
                     merge_text=event.message_type == MessageType.TEXT,
                 )
+                release_inbound_handoff(event)
             return  # Don't process now - will be handled after current task finishes
         
         # Mark session as active BEFORE spawning background task to close
@@ -6865,7 +6930,7 @@ class BasePlatformAdapter(ABC):
             # cancellation or crash before this point leaves it unreceipted
             # unless the turn marker already made it durable.
             # (a handler that took it into memory released it: no-op).
-            complete_inbound_handoff(event)
+            settle_inbound_handoff(event)
             is_ephemeral_response = isinstance(response, EphemeralReply)
 
             # Slash-command handlers may return an EphemeralReply sentinel to
@@ -7458,8 +7523,9 @@ class BasePlatformAdapter(ABC):
                     self.name, notify_err, exc_info=True,
                 )  # Last resort — don't let error reporting crash the handler
             else:
-                # The user was told to retry: nothing is owed on replay.
-                complete_inbound_handoff(event)
+                # The user was told to retry. An exception never proves the
+                # input is durable, so the replay stays admissible.
+                release_inbound_handoff(event)
             # Preserve shutdown semantics: SystemExit/KeyboardInterrupt must
             # still propagate after the user-facing failure notification, so
             # the loop's own signal handling can shut down cleanly. Other
