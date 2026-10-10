@@ -15,6 +15,14 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.3.0 | Clover C1.3 | 2026-10-10
+- After a crash or restart, Clover no longer answers chats again that it had already answered.
+- Telegram and other chats: a message re-sent after a reconnect is answered only once.
+- A busy database for a moment no longer stops a reply halfway through.
+- A website firewall blocking a request is no longer reported as a wrong API key.
+- Stopping a background task can no longer take Clover down with it.
+- /update no longer reports a failure because of a separate test copy of Clover.
+
 ## 1.2.0 | Clover C1.2 | 2026-10-10
 - Long-running tool calls now stop cleanly, so you can send a new message right away.
 - Background helpers show clearer progress and only report success when their work is verified.
