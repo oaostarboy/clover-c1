@@ -2067,6 +2067,13 @@ class LocalEnvironment(BaseEnvironment):
                     if pgid is None:
                         raise
 
+                if pgid == os.getpgrp():
+                    # Adapted from NousResearch/hermes-agent 2f41514cae (MIT):
+                    # a spawner that skipped setsid leaves the child in OUR
+                    # group; killpg would take Clover down. Kill by PID only.
+                    proc.kill()
+                    return
+
                 # Snapshot the descendant set BEFORE the first signal: once
                 # the wrapper dies its children reparent to init and a parent
                 # walk finds nothing (same rationale as agent/deadline.py

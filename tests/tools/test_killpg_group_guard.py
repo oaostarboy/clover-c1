@@ -191,3 +191,58 @@ def test_pty_bridge_close_does_not_killpg_shared_group(tmp_path):
     bridge.close()
     """
     _assert_harness_survived(_run_site(tmp_path, body))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_mcp_stdio_watchdog_terminate_does_not_killpg_shared_group(tmp_path):
+    body = """
+    from tools.mcp_stdio_watchdog import _terminate_process_group
+    _terminate_process_group(child)
+    """
+    _assert_harness_survived(_run_site(tmp_path, body))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_local_env_kill_process_does_not_killpg_shared_group(tmp_path):
+    # Hermes 2f41514cae / #107029 sibling: a spawner that skipped setsid leaves
+    # the child in OUR group; the local terminal backend must kill by PID.
+    body = """
+    from tools.environments.local import LocalEnvironment
+    env = object.__new__(LocalEnvironment)
+    env._kill_process(child)
+    """
+    _assert_harness_survived(_run_site(tmp_path, body))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_browser_legacy_kill_reaps_shared_group_descendants(tmp_path):
+    # Hermes 956cd8dd3e: with no safe group signal, descendants must still be
+    # killed individually or they keep the capture pipe open (#68915 hang).
+    pytest.importorskip("psutil")
+    body = """
+    import time
+    sys.modules["agent.deadline"] = None
+    from tools.browser_tool import _kill_process_tree
+    parent = _RealPopen(["sh", "-c", "sleep 30 & echo $!; wait"], stdout=subprocess.PIPE, text=True)
+    grandchild = int(parent.stdout.readline())
+    _kill_process_tree(parent)
+    parent.wait(timeout=10)
+    deadline = time.time() + 5
+    alive = True
+    while time.time() < deadline:
+        import psutil
+        try:
+            # Reparented zombies may linger unreaped in a sandbox pid ns.
+            if psutil.Process(grandchild).status() == psutil.STATUS_ZOMBIE:
+                alive = False
+                break
+        except psutil.NoSuchProcess:
+            alive = False
+            break
+        time.sleep(0.05)
+    print("GRANDCHILD_ALIVE", alive, flush=True)
+    child.kill()
+    """
+    result = _run_site(tmp_path, body)
+    _assert_harness_survived(result)
+    assert "GRANDCHILD_ALIVE False" in result.stdout, result.stdout + result.stderr

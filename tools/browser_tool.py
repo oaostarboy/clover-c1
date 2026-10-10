@@ -3256,11 +3256,26 @@ def _legacy_kill_process_tree(proc: "subprocess.Popen") -> None:
         return
     if pgid != proc.pid:
         # Adapted from NousResearch/hermes-agent 956cd8dd3e (MIT): the child shares
-        # our group, so killpg would take Clover down with it. Direct child only.
+        # our group, so killpg would take Clover down with it. Kill the direct
+        # child and its psutil-snapshotted descendants individually; a bare
+        # proc.kill() would leave them holding the capture pipe open (#68915).
+        # The snapshot must precede the parent kill (children reparent after).
+        descendants = []
+        try:
+            import psutil
+
+            descendants = psutil.Process(proc.pid).children(recursive=True)
+        except Exception:
+            descendants = []
         try:
             proc.kill()
         except Exception:
             pass
+        for child in descendants:
+            try:
+                child.kill()
+            except Exception:
+                pass
         return
     sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
     for sig in (signal.SIGTERM, sigkill):
