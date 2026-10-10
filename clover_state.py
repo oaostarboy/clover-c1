@@ -94,6 +94,7 @@ from clover_state_common import (  # noqa: F401  (re-exported for back-compat)
     _PREVIEW_SCAFFOLDED_SQL,
 )
 from clover_state_portability import SessionPortabilityMixin
+from clover_state_lockowners import log_write_lock_holders
 from clover_state_schema import SessionSchemaMixin
 from clover_state_search import SessionSearchMixin
 
@@ -4743,6 +4744,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                             pass
                         now = time.monotonic()
                         if now >= deadline:
+                            log_write_lock_holders(
+                                self.db_path, self._WRITE_PATIENCE_S
+                            )
                             raise
                         time.sleep(
                             min(
@@ -5343,6 +5347,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                         continue
                     # Patience exhausted — say what actually happened so the
                     # surfaced error doesn't read as disk/permission damage.
+                    # The holder goes to the log, not the message: error
+                    # classifiers bucket by phrase, and a holder's argv
+                    # (e.g. a worktree named fix-corrupt-db) would flip it.
+                    log_write_lock_holders(self.db_path, patience_s)
                     raise sqlite3.OperationalError(
                         f"database is locked (another Clover process held the "
                         f"state.db write lock for over {patience_s:.0f}s — "
