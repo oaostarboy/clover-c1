@@ -58,6 +58,7 @@ import sys
 import threading
 import time
 import uuid
+import weakref
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -3684,6 +3685,9 @@ class APIServerAdapter(BasePlatformAdapter):
         # work item, ``disconnect`` never runs and the controller stays
         # marked connected.  Run broker calls as shielded background tasks so
         # teardown always executes exactly once.
+        # Track the owner so adapter shutdown can tombstone it even if this
+        # handler never gets to run its ``finally`` (see ``disconnect``).
+        self._browser_control_owner_set().add(ws)
         attach_task = self._spawn_browser_control_call(
             self._browser_control_broker.attach, scope, _send, owner=ws
         )
@@ -3707,6 +3711,13 @@ class APIServerAdapter(BasePlatformAdapter):
                 elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
                     break
         finally:
+            # Invalidate this transport BEFORE awaiting anything.  The attach
+            # runs on a worker thread that cancellation cannot stop and that
+            # the bounded adapter drain may stop waiting for; if it lands
+            # later it must refuse (ControllerUnavailable) rather than
+            # re-register this dead socket over a replacement owner of the
+            # same identity.  Synchronous: no cancel can land in between.
+            self._browser_control_broker.close_owner(ws)
             # Attach completion and the following disconnect are ONE unit of
             # cleanup work owned by a background task, so no number of caller
             # cancellations can reorder them or skip either half.  The handler
@@ -3745,6 +3756,32 @@ class APIServerAdapter(BasePlatformAdapter):
         if tasks is None:
             tasks = self.__dict__["_browser_control_tasks"] = set()
         return tasks
+
+    def _browser_control_owner_set(self) -> "weakref.WeakSet":
+        # Live controller WebSockets of this adapter.  Weak, so a finished
+        # connection never outlives its own handler; lazy like the task set.
+        owners = self.__dict__.get("_browser_control_owners")
+        if owners is None:
+            owners = self.__dict__["_browser_control_owners"] = weakref.WeakSet()
+        return owners
+
+    def _close_browser_control_owners(self) -> None:
+        """Tombstone every controller socket this adapter still tracks.
+
+        Synchronous and first in ``disconnect`` so it holds even when the
+        bounded drain later gives up on a wedged attach.  Ordered
+        attach-then-disconnect cleanup stays with ``_browser_control_tasks``;
+        ``disconnect`` is owner-checked, so it only affects an identity this
+        socket still owns.
+        """
+        broker = self.__dict__.get("_browser_control_broker")
+        if broker is None:
+            return
+        for owner in list(self._browser_control_owner_set()):
+            try:
+                broker.close_owner(owner)
+            except Exception:
+                logger.debug("close_owner failed", exc_info=True)
 
     def _forget_browser_control_task(self, task: "asyncio.Future") -> None:
         self._browser_control_task_set().discard(task)
@@ -8488,6 +8525,7 @@ class APIServerAdapter(BasePlatformAdapter):
         and turns the whole gateway into a zombie
         (OSError: [Errno 24] Too many open files, #37011).
         """
+        self._close_browser_control_owners()
         self._mark_disconnected()
         if self._response_store is not None:
             try:

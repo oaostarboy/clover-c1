@@ -1168,7 +1168,12 @@ async def test_repeated_handler_cancellation_during_attach_never_leaves_a_ghost_
         seen["scope"] = scope
         attach_started.set()
         assert release_attach.wait(8), "probe never released attach"
-        real_attach(scope, send, owner=owner)
+        try:
+            # The cancelled handler tombstoned this owner, so the late attach
+            # is refused; either way it must COMPLETE before disconnect runs.
+            real_attach(scope, send, owner=owner)
+        except ControllerUnavailable:
+            pass
         order.append("attach")
         attach_done.set()
 
@@ -1266,7 +1271,12 @@ async def test_gateway_shutdown_never_leaves_late_attach_selectable(
         attach_started.set()
         try:
             assert release_attach.wait(8), "test never released attach"
-            real_attach(scope, send, owner=owner)
+            try:
+                # Refused for the tombstoned (cancelled/drained) owner; it must
+                # still COMPLETE before the owner-checked disconnect runs.
+                real_attach(scope, send, owner=owner)
+            except ControllerUnavailable:
+                pass
             order.append("attach")
         finally:
             attach_finished.set()
@@ -1348,3 +1358,165 @@ async def test_gateway_shutdown_never_leaves_late_attach_selectable(
         pending += list(adapter._background_tasks)
         if pending:
             await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), 5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_handler", [True, False])
+async def test_late_attach_of_drained_owner_cannot_steal_replacement_owner(
+    monkeypatch, cancel_handler
+):
+    """A drained/cancelled API socket is tombstoned before its attach can land.
+
+    Real adapter, broker, handler and ``GatewayRunner._bounded_adapter_teardown``.
+    The old socket's ``broker.attach`` is held behind a thread barrier past the
+    bounded adapter drain; a replacement API connection then registers the same
+    stable identity.  Releasing the old attach must refuse (the old owner is
+    closed), leave the replacement as the selectable owner, and the old
+    cleanup's owner-checked disconnect must not take it offline.
+
+    ``cancel_handler=False`` covers adapter-disconnect-only invalidation (the
+    handler is never cancelled, so only ``disconnect`` can tombstone it).
+    """
+    import gateway.platforms.api_server as api_server
+    from gateway.run import GatewayRunner
+
+    monkeypatch.setattr(
+        api_server, "_BROWSER_CONTROL_DRAIN_TIMEOUT_SECS", 0.3, raising=False
+    )
+    old = _adapter()
+    monkeypatch.setattr(old, "_browser_control_enabled", lambda: True)
+    broker = old._browser_control_broker
+    new = _adapter()
+    new._browser_control_broker = broker
+    monkeypatch.setattr(new, "_browser_control_enabled", lambda: True)
+
+    real_attach = broker.attach
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    state, handlers, clients, sockets = {}, [], [], []
+
+    def attach(scope, send, *, owner=None):
+        if "old_owner" not in state:
+            state["old_owner"], state["scope"] = owner, scope
+        if owner is not state["old_owner"]:
+            return real_attach(scope, send, owner=owner)
+        entered.set()
+        try:
+            assert release.wait(10), "test never released the old attach"
+            real_attach(scope, send, owner=owner)
+            state["late_attach_accepted"] = True
+        except ControllerUnavailable:
+            state["late_attach_refused"] = True
+            raise
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(broker, "attach", attach)
+
+    async def connect(adapter):
+        async def tracked(request):
+            handlers.append(asyncio.current_task())
+            return await adapter._handle_browser_control_ws(request)
+
+        app = web.Application()
+        app.router.add_post(
+            "/v1/browser-control/register", adapter._handle_browser_control_register
+        )
+        app.router.add_get("/v1/browser-control/ws", tracked)
+        client = TestClient(TestServer(app))
+        clients.append(client)
+        await client.start_server()
+        response = await client.post(
+            "/v1/browser-control/register",
+            json=_registration_body(capabilities=["browser_snapshot"]),
+            headers={"Authorization": f"Bearer {API_KEY}"},
+        )
+        assert response.status == 201
+        ticket = (await response.json())["ticket"]
+        ws = await client.ws_connect(
+            "/v1/browser-control/ws",
+            protocols=[CONTROL_PROTOCOL, _ticket_protocol(ticket)],
+        )
+        sockets.append(ws)
+        return ws
+
+    loop = asyncio.get_running_loop()
+
+    async def until(predicate, timeout=5.0):
+        deadline = loop.time() + timeout
+        while not predicate() and loop.time() < deadline:
+            await asyncio.sleep(0.005)
+        assert predicate()
+
+    try:
+        await connect(old)
+        await until(entered.is_set)
+        if cancel_handler:
+            for _ in range(4):
+                handlers[0].cancel()
+                await asyncio.sleep(0)
+            await until(lambda: len(old._browser_control_task_set()) >= 2)
+
+        runner = object.__new__(GatewayRunner)
+        await asyncio.wait_for(
+            runner._bounded_adapter_teardown(old, old.platform), 8
+        )
+        assert not finished.is_set(), "drain should expire with attach blocked"
+        # The old transport is invalidated before the drain gave up.
+        assert id(state["old_owner"]) in broker._closed_owners
+
+        new_ws = await connect(new)
+        scope = state["scope"]
+        await until(lambda: broker.select(scope, "browser_snapshot") is not None)
+        assert broker.select(scope, "browser_snapshot") is not None
+        new_owner = next(
+            c.owner for c in broker._controllers.values() if c.scope == scope
+        )
+        assert new_owner is not state["old_owner"]
+
+        release.set()
+        await until(finished.is_set)
+        await asyncio.wait_for(asyncio.gather(*handlers[:1], return_exceptions=True), 5)
+        await until(lambda: not old._browser_control_task_set())
+
+        assert state.get("late_attach_refused") is True
+        assert not state.get("late_attach_accepted")
+        assert not new_ws.closed
+        assert broker.is_owner(scope, new_owner)
+        assert broker.select(scope, "browser_snapshot") is not None
+    finally:
+        release.set()
+        if entered.is_set():
+            await until(finished.is_set)
+        for ws in sockets:
+            await ws.close()
+        for client in clients:
+            await asyncio.wait_for(client.close(), 5)
+        if handlers:
+            await asyncio.wait_for(asyncio.gather(*handlers, return_exceptions=True), 5)
+        pending = list(old._browser_control_task_set()) + list(
+            new._browser_control_task_set()
+        )
+        if pending:
+            await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), 5)
+
+
+@pytest.mark.asyncio
+async def test_closed_owner_tombstones_do_not_outlive_their_sockets():
+    """Tombstones are weak: once a finished connection is collected, it is gone."""
+    import gc
+
+    from gateway.browser_control_broker import BrowserControlBroker
+
+    broker = BrowserControlBroker(command_timeout=1)
+    before = len(broker._closed_owners)
+
+    class _Owner:
+        pass
+
+    owners = [_Owner() for _ in range(50)]
+    for owner in owners:
+        broker.close_owner(owner)
+    assert len(broker._closed_owners) == before + 50
+    del owners, owner
+    gc.collect()
+    assert len(broker._closed_owners) == before
