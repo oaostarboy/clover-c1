@@ -121,6 +121,14 @@ _DEFAULT_WORKER_MEMORY_MAX_BYTES = 1024 * 1024 * 1024
 _WORKER_MEMORY_MAX_CAP_BYTES = 4 * 1024 * 1024 * 1024
 
 
+# Reader final drain after a reconcile saw the direct child exit: the exited child's unread tail is
+# at most one pipe buffer (Linux pipe-max-size default 1 MiB), and the reader publishes within one
+# select interval plus that drain.
+# Adapted from NousResearch/hermes-agent 3507653690 (MIT)
+_FINAL_DRAIN_MAX_CHARS = 1 << 20
+_READER_FINAL_DRAIN_WAIT_SECONDS = 1.0
+
+
 def _worker_memory_max_bytes() -> int:
     """Return a finite per-worker cgroup limit without widening host risk.
 
@@ -432,8 +440,16 @@ class ProcessSession:
     _watch_strike_candidate: bool = field(default=False, repr=False)
     _watch_consecutive_strikes: int = field(default=0, repr=False)
     _completion_event: threading.Event = field(default_factory=threading.Event, repr=False)
+    # Set when a _move_to_finished call moved the session out of _running; only that call
+    # publishes the completion, so a duplicate finisher must not release waiters early.
+    # Adapted from NousResearch/hermes-agent e36a818033 (MIT)
+    _finish_claimed: bool = field(default=False, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock)
     _reader_thread: Optional[threading.Thread] = field(default=None, repr=False)
+    # A reconcile saw the direct child exit: the reader should drain what is already buffered and
+    # publish, instead of the reconciler reading the pipe behind the reader's back.
+    _reader_finish_requested: threading.Event = field(default_factory=threading.Event, repr=False)
+    _reader_selectable: bool = field(default=False, repr=False)
     _pty: Any = field(default=None, repr=False)  # ptyprocess handle (when use_pty=True)
     # Explicitly registered external agent job observer
     # (tools/agent_job_observer.py). None for ordinary processes; never
@@ -443,6 +459,37 @@ class ProcessSession:
     # can observe the exit first and finalize with reason "exited", so an
     # observer needs the intent to report a cancellation truthfully.
     _kill_requested: bool = field(default=False, repr=False)
+
+    def append_output(self, text: str) -> None:
+        """Append to the rolling output buffer under the session lock, keeping the tail."""
+        with self._lock:
+            self._append_locked(text)
+
+    def append_output_if_running(self, text: str) -> bool:
+        """Append unless the session has exited. Decided under the lock a kill holds while it
+        snapshots the output and sets ``exited``, so a chunk is either in the kill's receipt or
+        dropped, never added after it.
+        Adapted from NousResearch/hermes-agent aa45d6c9fb (MIT)"""
+        with self._lock:
+            if self.exited:
+                return False
+            self._append_locked(text)
+        return True
+
+    def _append_locked(self, text: str) -> None:
+        self.output_buffer += text
+        if len(self.output_buffer) > self.max_output_chars:
+            self.output_buffer = self.output_buffer[-self.max_output_chars:]
+
+    def mark_exited(self, exit_code, reason: str = "exited", source: str = "") -> None:
+        """Record an exit. A kill that raced the observer already recorded its own
+        exit_code/reason; never overwrite it. Callers hold ``_lock``."""
+        self.exited = True
+        if self.completion_reason != "killed":
+            self.exit_code = exit_code
+            self.completion_reason = reason
+            if source:
+                self.termination_source = source
 
 
 class ProcessRegistry:
@@ -1441,12 +1488,7 @@ class ProcessRegistry:
             if first_chunk:
                 chunk = self._clean_shell_noise(chunk)
                 first_chunk = False
-            with session._lock:
-                session.output_buffer += chunk
-                if len(session.output_buffer) > session.max_output_chars:
-                    session.output_buffer = session.output_buffer[-session.max_output_chars:]
-            self._check_watch_patterns(session, chunk)
-            self._emit_output(session, chunk)
+            self._ingest_output(session, chunk)
 
         try:
             proc = session.process
@@ -1472,10 +1514,17 @@ class ProcessRegistry:
             if fd is not None:
                 import select as _select
 
+                session._reader_selectable = True
                 idle_after_exit = 0
+                drained_after_request = 0
                 while True:
                     try:
-                        ready, _, _ = _select.select([fd], [], [], 0.2)
+                        # Once a reconcile asked us to finish, read only what is already
+                        # buffered: the exited child's tail, never an orphaned grandchild's
+                        # future writes.
+                        # Adapted from NousResearch/hermes-agent 3507653690 (MIT)
+                        finish_requested = session._reader_finish_requested.is_set()
+                        ready, _, _ = _select.select([fd], [], [], 0 if finish_requested else 0.2)
                     except (ValueError, OSError):
                         break  # fd already closed
                     if ready:
@@ -1485,7 +1534,16 @@ class ProcessRegistry:
                         chunk = decoder.decode(raw)
                         if chunk:
                             _append_chunk(chunk)
+                        if session._reader_finish_requested.is_set():
+                            # One chunk is not the tail: the child can exit with a whole pipe
+                            # buffer unread. The cap only stops a grandchild that never lets
+                            # the pipe go empty.
+                            drained_after_request += len(raw)
+                            if drained_after_request >= _FINAL_DRAIN_MAX_CHARS:
+                                break
                         idle_after_exit = 0
+                    elif finish_requested:
+                        break
                     elif proc.poll() is not None:
                         # Direct child is gone and the pipe was idle for
                         # ~200ms. Give it a few more cycles to catch any
@@ -1529,11 +1587,7 @@ class ProcessRegistry:
                 session.process.wait(timeout=5)
             except Exception as e:
                 logger.debug("Process wait timed out or failed: %s", e)
-            session.exited = True
-            if session.completion_reason != "killed":
-                session.exit_code = session.process.returncode
-                session.completion_reason = "exited"
-            self._move_to_finished(session)
+            self._finish_exited(session, session.process.returncode)
 
     def _env_poller_loop(
         self, session: ProcessSession, env: Any, log_path: str, pid_path: str, exit_path: str
@@ -1649,12 +1703,9 @@ class ProcessRegistry:
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
         def _append_text(text: str):
-            with session._lock:
-                session.output_buffer += text
-                if len(session.output_buffer) > session.max_output_chars:
-                    session.output_buffer = session.output_buffer[-session.max_output_chars:]
-            self._check_watch_patterns(session, text)
-            self._emit_output(session, text)
+            # A chunk read before a kill must be either in the kill's receipt or dropped,
+            # never added to the killed session afterwards.
+            self._ingest_output(session, text, unless_exited=True)
 
         try:
             while pty.isalive():
@@ -1685,22 +1736,52 @@ class ProcessRegistry:
             pty.wait()
         except Exception as e:
             logger.debug("PTY wait timed out or failed: %s", e)
-        session.exited = True
-        if session.completion_reason != "killed":
-            session.exit_code = pty.exitstatus if hasattr(pty, 'exitstatus') else -1
-            session.completion_reason = "exited"
+        self._finish_exited(session, pty.exitstatus if hasattr(pty, 'exitstatus') else -1)
+
+    def _ingest_output(self, session: ProcessSession, text: str, *, unless_exited: bool = False) -> None:
+        """Buffer a freshly-read chunk, then scan watch patterns and stream it live.
+        ``unless_exited`` drops the chunk once the session has exited (atomically with a kill)."""
+        if not unless_exited:
+            session.append_output(text)
+        elif not session.append_output_if_running(text):
+            return
+        self._check_watch_patterns(session, text)
+        self._emit_output(session, text)
+
+    def _finish_exited(self, session: ProcessSession, exit_code, reason: str = "exited", source: str = "") -> None:
+        """Mark a reader-observed exit (a raced kill keeps its own code/reason) and finish.
+        Under the session lock, like kill_process's commit: otherwise a kill can land between
+        mark_exited's ``killed`` check and its writes and the reader overwrites it.
+        Adapted from NousResearch/hermes-agent e36a818033 (MIT)"""
+        with session._lock:
+            session.mark_exited(exit_code, reason, source)
         self._move_to_finished(session)
 
-    def _move_to_finished(self, session: ProcessSession):
+    def _move_to_finished(self, session: ProcessSession) -> bool:
         """Move a session from running to finished.
 
-        Idempotent: if the session was already moved (e.g. kill_process raced
-        with the reader thread), the second call is a no-op — no duplicate
-        completion notification is enqueued.
+        Idempotent: kill_process() and the reader thread can both call this; only the FIRST
+        move (the owner) enqueues the completion notification, so no duplicates. Only the
+        owner releases waiters, and only after its notice is queued, so a one-shot parent
+        that wakes on completion cannot exit before the follow-up exists.
+        Returns True when this call is the owner.
+        Adapted from NousResearch/hermes-agent e36a818033 (MIT)
         """
         with self._lock:
             was_running = self._running.pop(session.id, None) is not None
+            if was_running:
+                session._finish_claimed = True
             self._finished[session.id] = session
+        try:
+            self._publish_finished(session, was_running)
+        finally:
+            # The owner releases waiters after its notice is queued (or its publish failed,
+            # so a waiter never parks forever). A duplicate leaves the event to the owner.
+            if was_running or not session._finish_claimed:
+                session._completion_event.set()
+        return was_running
+
+    def _publish_finished(self, session: ProcessSession, was_running: bool) -> None:
         # Report an observed agent job's exit before waiters are released, so
         # anything that waits on this process sees an already-final card.
         observer = session.agent_job
@@ -1712,15 +1793,13 @@ class ProcessRegistry:
                 )
             except Exception:
                 logger.debug("agent job finish failed for %s", session.id, exc_info=True)
-        session._completion_event.set()
         self._write_checkpoint()
 
-        # Only enqueue completion notification on the FIRST move.  Without
-        # this guard, kill_process() and the reader thread can both call
-        # _move_to_finished(), producing duplicate [IMPORTANT: ...] messages.
         if was_running and session.notify_on_complete:
             from tools.ansi_strip import strip_ansi
-            output_tail = strip_ansi(session.output_buffer[-2000:]) if session.output_buffer else ""
+            with session._lock:
+                tail = session.output_buffer[-2000:]
+            output_tail = strip_ansi(tail) if tail else ""
             notification = {
                 "type": "completion",
                 "session_id": session.id,
@@ -1738,6 +1817,16 @@ class ProcessRegistry:
             }
             _redact_process_result(notification)
             self.completion_queue.put(notification)
+
+    @staticmethod
+    def _reader_finalizing(session: ProcessSession) -> bool:
+        """A reconcile saw the direct child exit and set ``exited``, but the reader that owns
+        the output is still on its final drain: the buffer is not the whole output yet, so
+        nothing may consume it as the completion.
+        Adapted from NousResearch/hermes-agent e36a818033 (MIT)"""
+        reader = session._reader_thread
+        return (session._reader_finish_requested.is_set() and not session._completion_event.is_set()
+                and reader is not None and reader.is_alive())
 
     # ----- Query Methods -----
 
@@ -1843,11 +1932,16 @@ class ProcessRegistry:
             timeout = self._oneshot_completion_wait_seconds()
         result: dict = {"waited": [], "completed": [], "timed_out": []}
         with self._lock:
+            # `_finished` too: `_move_to_finished` pops a session from `_running` and queues
+            # its completion only after the checkpoint write. A parent whose turn ends in
+            # that window would otherwise see nothing pending and exit without the
+            # follow-up turn. Adapted from NousResearch/hermes-agent e36a818033 (MIT)
             pending = [
                 s
-                for s in self._running.values()
+                for store in (self._running, self._finished)
+                for s in store.values()
                 if s.notify_on_complete
-                and not s.exited
+                and not s._completion_event.is_set()
                 and (task_id is None or s.task_id == task_id)
             ]
         if not pending or timeout <= 0:
@@ -1870,7 +1964,7 @@ class ProcessRegistry:
         interrupted = False
         for session in pending:
             try:
-                while not session.exited:
+                while not session._completion_event.is_set():
                     if interrupted or _is_interrupted():
                         interrupted = True
                         break
@@ -1885,7 +1979,7 @@ class ProcessRegistry:
                         self._refresh_detached_session(session)
                     except Exception:
                         pass
-                    if session.exited:
+                    if session._completion_event.is_set():
                         break
                     session._completion_event.wait(min(remaining, interval))
             except KeyboardInterrupt:
@@ -1893,7 +1987,7 @@ class ProcessRegistry:
                 # never let the interrupt skip the caller's durable teardown
                 # (session flush, end_session) that follows this wait.
                 interrupted = True
-            if session.exited:
+            if session._completion_event.is_set():
                 result["completed"].append(session.id)
             else:
                 result["timed_out"].append(session.id)
@@ -2157,6 +2251,30 @@ class ProcessRegistry:
         if rc is None:
             return  # Direct child still running — reader block is legitimate.
 
+        reader = session._reader_thread
+        if (
+            not _IS_WINDOWS
+            and session._reader_selectable
+            and reader is not None
+            and reader.is_alive()
+        ):
+            # The reader owns the pipe and the completion payload. Reading the pipe
+            # here would race it (later bytes appended ahead of the chunk the reader
+            # holds) and hand the caller a truncated snapshot, so ask it to finish
+            # instead: it drains what is already buffered and publishes.
+            # Adapted from NousResearch/hermes-agent 3507653690 (MIT)
+            session._reader_finish_requested.set()
+            if session._completion_event.wait(_READER_FINAL_DRAIN_WAIT_SECONDS):
+                return
+            with session._lock:
+                session.mark_exited(rc)
+            logger.info(
+                "Reconciled session %s: direct child exited with code %s; "
+                "reader will publish the owned completion after its final drain.",
+                session.id, rc,
+            )
+            return
+
         # Direct child exited. Try to drain any bytes the reader hasn't
         # consumed yet. This is best-effort: if the pipe is held open by a
         # descendant, the non-blocking read returns what's immediately
@@ -2183,15 +2301,10 @@ class ProcessRegistry:
             except Exception as e:
                 logger.debug("Non-blocking drain failed for %s: %s", session.id, e)
 
+        if drained:
+            session.append_output(drained)
         with session._lock:
-            if drained:
-                session.output_buffer += drained
-                if len(session.output_buffer) > session.max_output_chars:
-                    session.output_buffer = session.output_buffer[-session.max_output_chars:]
-            session.exited = True
-            if session.completion_reason != "killed":
-                session.exit_code = rc
-                session.completion_reason = "exited"
+            session.mark_exited(rc)
         logger.info(
             "Reconciled session %s: direct child exited with code %s but reader "
             "was still blocked (orphaned pipe). Flipped to exited.",
@@ -2211,18 +2324,21 @@ class ProcessRegistry:
         # Guards against orphaned-pipe reader hangs (issue #17327).
         self._reconcile_local_exit(session)
 
+        # Read under the lock the reader appends and exits under, so the finalization
+        # check describes the output actually returned.
         with session._lock:
             output_preview = strip_ansi(session.output_buffer[-1000:]) if session.output_buffer else ""
+            exited, finalizing = session.exited, self._reader_finalizing(session)
 
         result = {
             "session_id": session.id,
             "command": session.command,
-            "status": "exited" if session.exited else "running",
+            "status": "exited" if exited else "running",
             "pid": session.pid,
             "uptime_seconds": int(time.time() - session.started_at),
             "output_preview": output_preview,
         }
-        if session.exited:
+        if exited:
             result["exit_code"] = session.exit_code
             result["completion_reason"] = session.completion_reason
             result["termination_source"] = session.termination_source
@@ -2236,7 +2352,10 @@ class ProcessRegistry:
             # dedups (the agent already saw the exit in this turn's poll result)
             # without affecting the gateway/tui watchers, which only consult
             # _completion_consumed.
-            self._poll_observed.add(session_id)
+            # A preview taken before the reader's final drain is partial and must not
+            # suppress the full completion.
+            if not finalizing:
+                self._poll_observed.add(session_id)
         if session.detached:
             result["detached"] = True
             result["note"] = "Process recovered after restart -- output history unavailable"
@@ -2252,6 +2371,7 @@ class ProcessRegistry:
 
         with session._lock:
             full_output = strip_ansi(session.output_buffer)
+            exited, finalizing = session.exited, self._reader_finalizing(session)
 
         lines = full_output.splitlines()
         total_lines = len(lines)
@@ -2275,12 +2395,12 @@ class ProcessRegistry:
         result = {
             "session_id": session.id,
             "command": session.command,
-            "status": "exited" if session.exited else "running",
+            "status": "exited" if exited else "running",
             "output": "\n".join(selected),
             "total_lines": total_lines,
             "showing": f"{len(selected)} lines",
         }
-        if session.exited and observed_completion_output:
+        if exited and observed_completion_output and not finalizing:
             self._completion_consumed.add(session_id)
         return result
 
@@ -2341,7 +2461,7 @@ class ProcessRegistry:
             # pipe reader hangs where the reader is blocked but the direct
             # child has already exited (issue #17327).
             self._reconcile_local_exit(session)
-            if session.exited:
+            if session.exited and not self._reader_finalizing(session):
                 self._completion_consumed.add(session_id)
                 result = {
                     "status": "exited",
@@ -2442,9 +2562,11 @@ class ProcessRegistry:
                     "termination_source": session.termination_source,
                     "output": strip_ansi(session.output_buffer[-2000:]),
                 }
+                finalizing = self._reader_finalizing(session)
             # Only suppress the autonomous turn after its output is present in
-            # the explicit kill result, matching wait/log consumption.
-            if consume_output:
+            # the explicit kill result, matching wait/log consumption. A snapshot
+            # taken before the reader's final drain is not the whole output.
+            if consume_output and not finalizing:
                 self._completion_consumed.add(session_id)
             return result
 
