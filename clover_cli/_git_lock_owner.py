@@ -330,12 +330,15 @@ def _ps_git_holder(lsof: str, git_dir: Path, root: Path, any_git: bool) -> _Hold
     return False
 
 
-def _release_dead_index_lock(git_dir: Path, root: Path | None = None, *, any_git: bool = False) -> bool:
+def _release_dead_index_lock(git_dir: Path, root: Path | None = None, *, any_git: bool = False,
+                             min_age_seconds: float = 0) -> bool:
     """Drop a killed git's ``index.lock`` (it refuses every git command) once its owner is PROVEN gone.
 
     False while a live git may hold it, or when this platform cannot prove it dead: the caller then
     keeps the interrupted-pull marker, so the next launch tries again instead of a rollback being lost.
     ``any_git``: every git working in ``root`` keeps it, readers included (:func:`_held_open`).
+    ``min_age_seconds``: a lock whose mtime is younger than this is never touched, whatever the process
+    table says (see :func:`_unlink_if_same_file` for why age is part of the proof).
     """
     lock = git_dir / "index.lock"
     deadline = time.monotonic() + 5
@@ -343,6 +346,8 @@ def _release_dead_index_lock(git_dir: Path, root: Path | None = None, *, any_git
         examined = _lock_identity(lock)
         if examined is None and not lock.exists():
             return True
+        if examined is not None and not _old_enough(examined, min_age_seconds):
+            return False
         held = None if sys.platform == "win32" else _held_open(lock, root, any_git=any_git)
         if held is False or sys.platform == "win32":
             # The ownership proof above covers the file we examined, not whatever the path names
@@ -351,7 +356,7 @@ def _release_dead_index_lock(git_dir: Path, root: Path | None = None, *, any_git
                 if sys.platform == "win32":
                     lock.unlink()
                     return True
-                outcome = _unlink_if_same_file(lock, examined)
+                outcome = _unlink_if_same_file(lock, examined, min_age_seconds)
                 if outcome is not None:
                     return outcome
             except FileNotFoundError:
@@ -374,40 +379,39 @@ def _lock_identity(path: Path) -> tuple[int, int, int, int] | None:
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
 
 
-def _unlink_if_same_file(lock: Path, examined: tuple[int, int, int, int] | None) -> bool | None:
-    """Delete ``lock`` only if it is still the file whose owner was proven gone.
+def _old_enough(identity: tuple[int, int, int, int], min_age_seconds: float) -> bool:
+    """The file with this identity was last written at least ``min_age_seconds`` ago (a future mtime is not old)."""
+    return time.time() - identity[3] / 1e9 >= min_age_seconds
 
-    True: removed (or already gone). None: the path now names a different file, so the proof does not
-    cover it and the caller must examine again. False: could not move it aside; leave it alone.
 
-    The path is renamed to a unique quarantine name first (atomic), and the inode re-checked on the
-    quarantined file, so a lock swapped in between the re-stat and the rename is put back instead of
-    deleted. Putting it back is ``link`` + ``unlink``, which never overwrites a newer lock.
+def _unlink_if_same_file(lock: Path, examined: tuple[int, int, int, int] | None,
+                         min_age_seconds: float = 0) -> bool | None:
+    """Delete ``lock`` only if it is still the file whose owner was proven gone AND it is old enough.
+
+    True: removed (or already gone). None: the path now names a different or too-young file, so the
+    proof does not cover it and the caller must examine again. False: could not unlink; leave it alone.
+
+    POSIX has no compare-and-delete, so no ordering of rename/link/unlink can remove a file that is
+    PROVABLY still the one examined: any "move it aside, check, put it back" scheme destroys a live
+    git's lock when the put-back fails (EEXIST, EOPNOTSUPP, a crash in between), and leaves the
+    checkout lock-less meanwhile. So this never renames, links or moves anything: it re-stats and
+    unlinks. What closes the window is AGE, not the stat: a lock swapped in after the scan is a live
+    git's brand-new file, whose mtime is seconds old, and ``min_age_seconds`` (the stale threshold)
+    refuses it. The residual race is a replacement landing between that last stat and the unlink call
+    for a lock that was already stale and ownerless; that window is microseconds wide and is the one
+    :func:`clover_cli.gitlock.clear_stale_git_locks` has always had. It is accepted, not eliminated.
     """
     if examined is None:
         return None
-    if _lock_identity(lock) != examined:
+    current = _lock_identity(lock)
+    if current != examined or not _old_enough(current, min_age_seconds):
         return None
-    quarantine = lock.with_name(f"{lock.name}.clover-dead-{os.getpid()}-{time.monotonic_ns()}")
     try:
-        os.rename(lock, quarantine)
+        os.unlink(lock)
     except FileNotFoundError:
         return True
+    except PermissionError:
+        raise
     except OSError:
         return False
-    if _lock_identity(quarantine) == examined:
-        try:
-            quarantine.unlink()
-        except OSError:
-            pass
-        return True
-    # We moved a different file aside (it was replaced after our re-stat): restore it.
-    try:
-        os.link(quarantine, lock)
-    except OSError:
-        pass  # a newer lock already exists; the moved file is the live git's old name
-    try:
-        quarantine.unlink()
-    except OSError:
-        pass
-    return None
+    return True

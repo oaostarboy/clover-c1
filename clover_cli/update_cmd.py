@@ -8448,10 +8448,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
     print()
 
     # A killed git (an earlier `clover update` interrupted mid-run, a probe
-    # killed by its own timeout) leaves .git/index.lock behind, and the age
-    # floor of the stale-lock sweep keeps it for 10 minutes -- the next merge
-    # dies on "File exists". Release it as soon as no live git can own it
-    # (ownership proof, not age), before anything touches the checkout.
+    # killed by its own timeout) leaves .git/index.lock behind and the next merge
+    # dies on "File exists". Release it, once stale, as soon as no live git can own it
+    # (ownership proof, once it is past the stale-age floor), before anything
+    # touches the checkout.
     # Adapted from NousResearch/hermes-agent a81d3408bc (MIT).
     try:
         from clover_cli.gitlock import release_dead_index_lock

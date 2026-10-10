@@ -124,15 +124,17 @@ def _git_dir(root: Path) -> Path:
 
 
 def release_dead_index_lock(repo_root: Path) -> bool:
-    """Drop ``.git/index.lock`` once the git that took it is proven gone, whatever its age.
+    """Drop a stale ``.git/index.lock`` once the git that took it is proven gone.
 
     Adapted from NousResearch/hermes-agent a81d3408bc (MIT). A git killed while it held the
     index lock (an update killed by the user, a probe killed by its own timeout) leaves it
     behind, and every later merge/stash/reset refuses with "File exists". The age floor in
     :func:`clear_stale_git_locks` keeps such a lock for 10 minutes, so the next ``clover
-    update`` died at its fast-forward. Ownership is proven from the process table
-    (:mod:`clover_cli._git_lock_owner`), not from age: a live holder keeps the lock, and a
-    platform that cannot prove it dead leaves it alone. Windows can only prove it by the
+    update`` died at its fast-forward. The lock must be BOTH older than that floor AND have no
+    live owner in the process table (:mod:`clover_cli._git_lock_owner`): a young lock is never
+    touched (deleting a file is only safe when a replacement cannot be a live git's fresh lock,
+    and POSIX has no atomic compare-and-delete; C13-ASTRA-07), a live holder keeps the lock, and
+    a platform that cannot prove it dead leaves it alone. Windows can only prove it by the
     unlink itself, which a lock-keeping git with its fd closed would not stop, so there any
     running git keeps it. Never raises.
     """
@@ -145,7 +147,9 @@ def release_dead_index_lock(repo_root: Path) -> bool:
             return False
         if os.name == "nt" and _git_proc_running():
             return False
-        return _release_dead_index_lock(git_dir, root, any_git=True)
+        return _release_dead_index_lock(
+            git_dir, root, any_git=True, min_age_seconds=STALE_LOCK_MIN_AGE_SECONDS
+        )
     except Exception:
         logger.debug("dead index.lock release failed (skipping)", exc_info=True)
         return False
