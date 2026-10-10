@@ -40,6 +40,9 @@ class FailoverReason(enum.Enum):
     # Upstream model rate-limited (aggregator 429) — fallback to a different
     # model, NOT credential rotation. The user's key is healthy.
     upstream_rate_limit = "upstream_rate_limit"
+    # 403 from a WAF/CDN/proxy in front of the provider — the key is healthy and
+    # never reached the provider. Fallback only; no rotation, no retry.
+    upstream_blocked = "upstream_blocked"
 
     # Server-side
     overloaded = "overloaded"            # 503/529 — provider overloaded, backoff
@@ -164,6 +167,24 @@ def _billing_ambiguity_context(error_msg: str) -> Dict[str, Any]:
 # provider-scoped: other providers' generic billing codes historically remain
 # auth failures when they arrive as 403.
 _XAI_SPENDING_LIMIT_ERROR_CODE = "personal-team-blocked:spending-limit"
+
+# A 403 body written by a WAF/CDN/proxy rather than the provider's API: Cloudflare's
+# browser challenge and block pages, plus the plain-text block relays return when they
+# reject the SDK User-Agent. Matched only on 403 (see ``_classify_by_status``); a bare
+# "access denied" or "forbidden" stays auth because providers word real permission
+# errors that way too.
+# Adapted from NousResearch/hermes-agent 6f6ed01355 (MIT).
+_UPSTREAM_BLOCKED_PATTERNS = (
+    "your request was blocked", "request blocked", "sorry, you have been blocked",
+    "enable javascript and cookies to continue", "cdn-cgi/challenge-platform", "cf-browser-verification",
+    "challenge-error-text", "__cf_chl", "cf-error-details", "attention required! | cloudflare",
+)
+
+# Structured error codes some gateways put on a 403 that mean "the upstream is down,
+# retry later" — not a credential refusal. Routed to the transient-overload path so
+# the retry budget applies and no credential is benched.
+# Adapted from NousResearch/hermes-agent 1213109474 (MIT).
+_403_TRANSIENT_CODES = frozenset({"upstream_unavailable"})
 
 # Structured provider codes that mean the account cannot serve paid traffic
 # until credits/subscription capacity is restored. xAI returns its explicit
@@ -1276,6 +1297,14 @@ def _classify_by_status(
         )
 
     if status_code == 403:
+        # A gateway stamping the structured upstream-outage code on a 403 is a
+        # transient outage, not a credential refusal (#75388). Checked first so
+        # the configured retry budget applies and no credential is benched.
+        if error_code.lower() in _403_TRANSIENT_CODES:
+            return result_fn(
+                FailoverReason.overloaded,
+                retryable=True,
+            )
         # OpenRouter 403 "key limit exceeded" is actually billing. Other
         # providers also use 403 for account-plan or credit exhaustion.
         if (
@@ -1291,6 +1320,16 @@ def _classify_by_status(
                 FailoverReason.billing,
                 retryable=False,
                 should_rotate_credential=True,
+                should_fallback=True,
+            )
+        # A WAF/CDN in front of the provider answered, not the provider: the
+        # credential never reached it, so key guidance and credential rotation
+        # are wrong. Gated on 403 and on established block/challenge markers;
+        # any other 403 stays auth.
+        if any(p in error_msg for p in _UPSTREAM_BLOCKED_PATTERNS):
+            return result_fn(
+                FailoverReason.upstream_blocked,
+                retryable=False,
                 should_fallback=True,
             )
         return result_fn(

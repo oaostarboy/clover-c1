@@ -73,6 +73,7 @@ _NON_RETRYABLE_REASONS = {
     "billing_unverified",
     "content_policy_blocked",
     "provider_policy_blocked",
+    "upstream_blocked",
     "model_not_found",
     "format_error",
     "ssl_cert_verification",
