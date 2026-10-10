@@ -224,7 +224,10 @@ install_in_sandbox() {
     collect_sandbox_logs "$tag"
     fail "$what failed (exit $status)"
   fi
-  grep -q 'Installation Complete' "$log" \
+  # The installer's success banner was reworded ("Installation Complete" ->
+  # "Clover is installed."); accept either so older upstream releases and this
+  # checkout are both recognised.
+  grep -qE 'Installation Complete|Clover is installed\.' "$log" \
     || { collect_sandbox_logs "$tag"; \
          fail "$what did not report a completed install"; }
   ok "$what completed (log: $log)"
