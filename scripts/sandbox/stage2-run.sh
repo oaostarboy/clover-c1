@@ -48,9 +48,16 @@ fi
 home_mounts+=(--bind "$DEV_SANDBOX_ROOT/home" "$DEV_SANDBOX_HOME")
 
 node_env=()
-if [ -n "${DEV_SANDBOX_NODE_DIR:-}" ]; then
-  node_env+=(--setenv npm_config_nodedir "$DEV_SANDBOX_NODE_DIR")
-fi
+# Point node-gyp at the host Node's headers only when they are actually visible
+# INSIDE the sandbox.  /usr/local is replaced by an empty bind below, so a host
+# Node installed there (every GitHub-hosted runner) would leave node-gyp looking
+# for /usr/local/common.gypi and every native addon (node-pty, get-windows)
+# would fail to build.  Without nodedir node-gyp fetches matching headers
+# through the sandbox proxy, which is what a real user's install does.
+case "${DEV_SANDBOX_NODE_DIR:-}" in
+  ''|/usr/local|/usr/local/*) ;;
+  *) node_env+=(--setenv npm_config_nodedir "$DEV_SANDBOX_NODE_DIR") ;;
+esac
 electron_env=()
 if [ -n "${DEV_SANDBOX_ELECTRON_LD_LIBRARY_PATH:-}" ]; then
   electron_env+=(
