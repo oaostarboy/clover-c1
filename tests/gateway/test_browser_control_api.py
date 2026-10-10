@@ -875,7 +875,16 @@ async def test_readiness_test_cleans_up_actual_fixture_on_early_failure(monkeypa
     from tests.gateway import test_browser_control_api as browser_test
 
     sentinel = RuntimeError(f"injected-{failure_boundary}")
-    observations = {"adapter": None, "ws": None, "close_calls": 0, "close_durations": [], "scope": None, "events": []}
+    observations = {
+        "adapter": None,
+        "ws": None,
+        "close_calls": 0,
+        "close_durations": [],
+        "scope": None,
+        "events": [],
+        "disconnect_event": threading.Event(),
+        "disconnect_results": [],
+    }
     real_adapter_factory = browser_test._adapter
     real_ws_connect = TestClient.ws_connect
     real_wait_for = asyncio.wait_for
@@ -902,6 +911,16 @@ async def test_readiness_test_cleans_up_actual_fixture_on_early_failure(monkeypa
     def adapter_factory():
         adapter = real_adapter_factory()
         observations["adapter"] = adapter
+        real_disconnect = adapter._browser_control_broker.disconnect
+
+        def observed_disconnect(scope, *args, **kwargs):
+            result = real_disconnect(scope, *args, **kwargs)
+            if scope == observations["scope"]:
+                observations["disconnect_results"].append(result)
+                observations["disconnect_event"].set()
+            return result
+
+        adapter._browser_control_broker.disconnect = observed_disconnect
         real_attach = adapter._browser_control_broker.attach
 
         def attach(scope, send, *, owner=None):
@@ -969,12 +988,11 @@ async def test_readiness_test_cleans_up_actual_fixture_on_early_failure(monkeypa
     assert finished.is_set()
     adapter = observations["adapter"]
     scope = observations["scope"]
-    if scope is not None:
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + 1.0
-        while adapter._browser_control_broker.select(scope, "browser_snapshot") is not None:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                pytest.fail("browser controller remained selectable after websocket teardown")
-            await asyncio.sleep(min(0.01, remaining))
-        assert adapter._browser_control_broker.select(scope, "browser_snapshot") is None
+    assert scope is not None
+    disconnected = await real_wait_for(
+        asyncio.to_thread(observations["disconnect_event"].wait, 2.5),
+        timeout=3.0,
+    )
+    assert disconnected, "actual broker disconnect did not complete after websocket teardown"
+    assert any(result is True for result in observations["disconnect_results"])
+    assert adapter._browser_control_broker.select(scope, "browser_snapshot") is None
