@@ -12,8 +12,9 @@ becomes a persisted per-bot receipt under CLOVER_HOME (so a rebuilt adapter or a
 restarted gateway still drops the replay) once the inbound work is durably handed
 off: the event's turn marker is set, it is recorded in the restart inbox, or its
 turn finished. A crash before that leaves no receipt, so Telegram's unacknowledged
-replay is processed rather than lost. Updates that build no event are completed
-by a final-group handler.
+replay is processed rather than lost. Updates that build no event, and updates
+whose handler raised, are released by a final-group handler and never recorded
+as handled (nothing was lost or answered, so a redelivery is harmless).
 
 Adapted from NousResearch/hermes-agent plugins/platforms/telegram/update_admission.py
 (MIT), commits 992f569fc1 and a1838ea87a. The Hermes version subclasses PTB's
@@ -128,9 +129,54 @@ def _expired(seen: dict, key: str, now: float) -> bool:
     return seen_at is not None
 
 
+def _release_claim(adapter, key: str) -> None:
+    """Drop an in-flight claim without recording anything (idempotent)."""
+    adapter._inflight_with_event.discard(key)
+    adapter._inflight_failed.discard(key)
+    adapter._inflight_update_ids.pop(key, None)
+
+
+def mark_failed(adapter, bot_id, update_id) -> None:
+    """Mark the in-flight claim for ``update_id`` failed (a handler raised).
+
+    A failed claim is never recorded as handled, in memory or on disk, so
+    Telegram's redelivery is admitted again. Same rule as Hermes
+    (f925b01791): ``process_error`` sets ``claim.failed`` and the release
+    records only ``accepted or (completed and not failed)``.
+    """
+    if bot_id is None or update_id is None:
+        return
+    key = f"{bot_id}:{update_id}"
+    if key in adapter._inflight_update_ids:
+        adapter._inflight_failed.add(key)
+
+
+def make_error_handler(adapter, bot_id):
+    """PTB error callback: any handler error marks that update's claim failed."""
+
+    async def on_error(update, context) -> None:
+        update_id = getattr(update, "update_id", None)
+        mark_failed(adapter, bot_id, update_id)
+        # Registering any error handler silences PTB's own "No error handlers
+        # are registered" log, so keep the exception visible when ours is the
+        # only one.
+        app = getattr(context, "application", None)
+        if len(getattr(app, "error_handlers", ())) <= 1:
+            logger.error(
+                "[Telegram] Exception while handling update %s", update_id,
+                exc_info=getattr(context, "error", None),
+            )
+
+    return on_error
+
+
 def _complete(adapter, bot_id, key: str) -> None:
     """Turn an in-flight claim into a persisted receipt (idempotent)."""
     inflight = adapter._inflight_update_ids
+    if key in adapter._inflight_failed:
+        # A handler raised for this update: nothing was handled, record nothing.
+        _release_claim(adapter, key)
+        return
     # Discard on every path: a claim trimmed or expired out of ``inflight``
     # must not leave its marker behind.
     adapter._inflight_with_event.discard(key)
@@ -169,8 +215,7 @@ def attach_receipt(adapter, bot_id, update_id, event) -> None:
         # copy of the callback inert, so a replay after a crash is admitted.
         if not done:
             done.append(True)
-            adapter._inflight_with_event.discard(key)
-            adapter._inflight_update_ids.pop(key, None)
+            _release_claim(adapter, key)
 
     _receipt.release = _release
 
@@ -201,6 +246,7 @@ def make_admission_handler(adapter, bot_id):
         # An expired claim was deleted by ``_expired``; its event marker must
         # not outlive it or the fresh claim would look event-owned.
         adapter._inflight_with_event.discard(key)
+        adapter._inflight_failed.discard(key)
         # Claim synchronously (no await between the check and the write), so
         # two copies of the same update can never both pass. The claim is NOT
         # persisted: nothing durable exists for this update yet.
@@ -209,21 +255,27 @@ def make_admission_handler(adapter, bot_id):
         # ``_trim`` drops the oldest claims; the event markers follow them so
         # the set stays bounded by the same cap.
         adapter._inflight_with_event.intersection_update(inflight)
+        adapter._inflight_failed.intersection_update(inflight)
 
     return admit
 
 
 def make_finalize_handler(adapter, bot_id):
-    """Group-after-everything callback: complete updates that produced no event.
+    """Group-after-everything callback: release claims that handled nothing.
 
     An update whose handlers built no ``MessageEvent`` (callback query, ignored
-    or unauthorized message, ...) has nothing to hand off, so it is complete.
-    One that did build an event is completed by that event's handoff instead.
+    or unauthorized message, ...) has nothing to lose or answer twice, so its
+    claim is released and nothing is recorded: a redelivery is harmless. A
+    claim whose handler raised (``mark_failed``) is released too, event or not.
+    One that built an event and did not fail is completed by that event's
+    handoff instead.
     """
 
     async def finalize(update, context) -> None:
         key = f"{bot_id}:{update.update_id}"
-        if key in adapter._inflight_update_ids and key not in adapter._inflight_with_event:
-            _complete(adapter, bot_id, key)
+        if key in adapter._inflight_update_ids and (
+            key in adapter._inflight_failed or key not in adapter._inflight_with_event
+        ):
+            _release_claim(adapter, key)
 
     return finalize

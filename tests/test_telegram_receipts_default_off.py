@@ -140,3 +140,113 @@ async def test_opt_in_still_writes_and_reads_receipts(tmp_path):
     assert _receipt_files()
     _full_restart()
     assert await _admit(tmp_path, 91040, durable=True) == []
+
+
+# --- C1.3 review 7: a failed or event-less update is never recorded as handled
+
+
+def _real_text_handler(adapter, app):
+    """Rewire ``app`` so the adapter's real _handle_text_message runs."""
+    adapter._handle_text_message = type(adapter)._handle_text_message.__get__(adapter)
+    app.handlers.clear()
+    adapter._register_handlers(app)
+
+
+def _permissive(adapter, enqueued):
+    from unittest.mock import AsyncMock
+
+    adapter._is_user_authorized_from_message = lambda msg: True
+    adapter._should_process_message = lambda msg: True
+    adapter._ensure_forum_commands = AsyncMock()
+    adapter._cache_replied_media = AsyncMock()
+    adapter._enqueue_text_event = enqueued.append
+
+
+@pytest.mark.asyncio
+async def test_failed_pre_event_handler_replay_survives_rebuild(tmp_path):
+    _full_restart()
+    first = _adapter(tmp_path, durable=False)
+    enqueued, attempted, errors = [], [], []
+    _permissive(first, enqueued)
+
+    def transient_event_failure(*a, **kw):
+        attempted.append(True)
+        raise OSError("test-owned transient event construction failure")
+
+    first._build_message_event = transient_event_failure
+    app = _build_handing_off(first, 111, [])
+    _real_text_handler(first, app)
+
+    async def on_error(update, context):
+        errors.append(context.error)
+
+    app.add_error_handler(on_error)
+    await _process(app, _text_update(app.bot, 91050))
+    assert attempted == [True] and enqueued == []
+    assert len(errors) == 1 and isinstance(errors[0], OSError)
+
+    # Same process, failed adapter replaced; no full-restart reset here.
+    fresh = _adapter(tmp_path, durable=False)
+    _permissive(fresh, enqueued)
+    app2 = _build_handing_off(fresh, 111, [])
+    _real_text_handler(fresh, app2)
+    await _process(app2, _text_update(app2.bot, 91050))
+    assert enqueued, "unhandled input suppressed after rebuild"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("durable", [False, True])
+async def test_handler_raising_after_event_marker_is_admitted_after_rebuild(tmp_path, durable):
+    from gateway.platforms.base import MessageType
+
+    _full_restart()
+    first = _adapter(tmp_path, durable=durable)
+    app = _build_handing_off(first, 111, [])
+
+    async def raises_after_event(update, context):
+        first._build_message_event(update.message, MessageType.TEXT, update_id=update.update_id)
+        raise RuntimeError("fails before handoff")
+
+    first._handle_text_message = raises_after_event
+    app.handlers.clear()
+    first._register_handlers(app)
+    await _process(app, _text_update(app.bot, 91060))
+    assert not _receipt_files()
+    assert first._inflight_update_ids == {} and first._inflight_failed == set()
+    assert await _admit(tmp_path, 91060, durable=durable), "replay must be admitted"
+
+
+@pytest.mark.asyncio
+async def test_update_without_handler_or_event_is_admitted_after_rebuild(tmp_path):
+    from telegram import Update
+
+    _full_restart()
+    first = _adapter(tmp_path, durable=False)
+    app = _build_handing_off(first, 111, [])
+    poll = Update.de_json(
+        {"update_id": 91070, "message": {
+            "message_id": 9, "date": 1800000000,
+            "chat": {"id": 42, "type": "group", "title": "g"},
+            "from": {"id": 88, "is_bot": False, "first_name": "Human"},
+            "new_chat_title": "renamed"}},
+        app.bot,
+    )
+    await _process(app, poll)
+    assert first._inflight_update_ids == {}
+    fresh = _adapter(tmp_path, durable=False)
+    app2 = _build_handing_off(fresh, 111, [])
+    await _process(app2, Update.de_json(poll.to_dict(), app2.bot))
+    # Admitted again and released: nothing is recorded as handled.
+    assert fresh._inflight_update_ids == {}
+    assert not any(k.endswith(":91070") for k in fresh._seen_update_ids)
+
+
+@pytest.mark.asyncio
+async def test_successful_text_message_still_deduped_across_rebuild(tmp_path):
+    from gateway.platforms.base import mark_inbound_durable
+
+    _full_restart()
+    events = await _admit(tmp_path, 91080, durable=False)
+    mark_inbound_durable(events[0])
+    complete_inbound_handoff(events[0])
+    assert await _admit(tmp_path, 91080, durable=False) == []

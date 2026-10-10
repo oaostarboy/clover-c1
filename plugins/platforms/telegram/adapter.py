@@ -748,6 +748,7 @@ class TelegramAdapter(BasePlatformAdapter):
         # MessageEvent will complete them, so the final-group handler skips them.
         self._inflight_update_ids: dict = {}
         self._inflight_with_event: set = set()
+        self._inflight_failed: set = set()
         self._update_receipts_loaded: set = set()
         self._webhook_mode: bool = False
         self._mention_patterns = self._compile_mention_patterns()
@@ -4553,6 +4554,7 @@ class TelegramAdapter(BasePlatformAdapter):
             load_receipts,
             FINALIZE_GROUP,
             make_admission_handler,
+            make_error_handler,
             make_finalize_handler,
         )
 
@@ -4573,6 +4575,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 TypeHandler(Update, make_finalize_handler(self, bot_id)),
                 group=FINALIZE_GROUP,
             )
+            # Any handler error marks the update's claim failed (never recorded).
+            app.add_error_handler(make_error_handler(self, bot_id))
 
         app.add_handler(TelegramMessageHandler(
             filters.TEXT & ~filters.COMMAND,

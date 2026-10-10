@@ -62,7 +62,16 @@ def _build(adapter, bot_id, seen):
            .request(OfflineRequest(bot_id)).get_updates_request(OfflineRequest(bot_id)).build())
 
     async def text_handler(update, context):
+        # A successfully handled message: the event is built, then handed off.
+        from gateway.platforms.base import (
+            MessageType, complete_inbound_handoff, mark_inbound_durable,
+        )
+
         seen.append(update.update_id)
+        event = adapter._build_message_event(
+            update.message, MessageType.TEXT, update_id=update.update_id)
+        mark_inbound_durable(event)
+        complete_inbound_handoff(event)
 
     adapter._handle_text_message = text_handler
     adapter._register_handlers(app)
@@ -312,17 +321,25 @@ async def test_merged_follow_up_completes_with_the_turn_it_joined(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_update_that_builds_no_event_is_completed_by_the_final_group(tmp_path):
+async def test_update_that_builds_no_event_is_released_by_the_final_group(tmp_path):
     # An update no handler turns into an event (ignored, unauthorized, ...) has
-    # nothing to hand off, so its replay is dropped after a restart.
+    # nothing to hand off or answer twice: its claim is released and nothing is
+    # recorded, so a replay is admitted (C1.3 review 7).
     first = _adapter(tmp_path)
-    app1 = _build(first, 111, [])
+    app1 = _build_handing_off(first, 111, [])
+
+    async def builds_nothing(update, context):
+        pass
+
+    first._handle_text_message = builds_nothing
+    app1.handlers.clear()
+    first._register_handlers(app1)
     await _process(app1, _text_update(app1.bot, 1300))
+    assert first._inflight_update_ids == {} and not first._seen_update_ids
     after = []
     app2 = _build_handing_off(_adapter(tmp_path), 111, after)
     await _process(app2, _text_update(app2.bot, 1300))
-    # _build's handler built no event, so 1300 completed; the replay is dropped.
-    assert after == []
+    assert [e.platform_update_id for e in after] == [1300]
 
 
 def test_receipt_callbacks_survive_dataclasses_replace_and_run_once():
