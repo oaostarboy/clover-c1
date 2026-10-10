@@ -42,3 +42,26 @@ def test_npm_summary_keeps_scoped_package_name() -> None:
     raw = "1 error code 1\n1 error path /w/node_modules/@parcel/watcher\n"
 
     assert "npm_error_package=@parcel/watcher" in sanitize_debug_text(raw).splitlines()
+
+
+def test_npm_summary_keeps_scrubbed_node_gyp_reason() -> None:
+    raw = """1 error code 1
+1 error path /home/runner/work/x/node_modules/node-pty
+5 gyp ERR! stack Error: not found: make
+5 gyp ERR! stack     at /home/runner/.clover/node/lib/node_modules/npm/node_modules/node-gyp/lib/find.js:1:1
+6 gyp ERR! stack Error: connect ECONNRESET https://nodejs.org/download/release/v26/node-headers.tar.gz?t=secret
+"""
+
+    summary = sanitize_debug_text(raw)
+
+    assert "node_gyp_error=Error: not found: make" in summary.splitlines()
+    for leaked in ("/home", "runner", "secret", "nodejs.org", "https://"):
+        assert leaked not in summary
+
+
+def test_npm_summary_scrubs_urls_and_paths_inside_node_gyp_line() -> None:
+    raw = "5 gyp ERR! stack Error: request to https://u:p@nodejs.org/x?k=v failed in /opt/secret/dir\n"
+
+    summary = sanitize_debug_text(raw)
+
+    assert summary == "node_gyp_error=Error: request to <url> failed in <path>"

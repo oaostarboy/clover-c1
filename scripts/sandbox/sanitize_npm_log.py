@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Extract non-sensitive npm failure facts from debug logs.
 
-Only an npm error code, the package whose lifecycle script failed, and the
-hostname from a FetchError request are emitted.  No raw lines, URL paths, query
+Only an npm error code, the package whose lifecycle script failed, the first
+scrubbed node-gyp error line, and the hostname from a FetchError request are
+emitted.  No raw lines, URL paths, query
 strings, headers, credentials, or local paths are copied to CI artifacts.
 
 ``error code 1`` (a bare number) is a lifecycle script's exit status rather than
@@ -19,6 +20,13 @@ from urllib.parse import urlsplit
 _ERROR_CODE = re.compile(r"\berror code\s+([A-Za-z0-9_.-]+)", re.IGNORECASE)
 _ERROR_PATH = re.compile(r"\berror path\s+(\S+)", re.IGNORECASE)
 _PACKAGE_NAME = re.compile(r"node_modules/((?:@[A-Za-z0-9._-]+/)?[A-Za-z0-9._-]+)/?$")
+# node-gyp reports why a native build failed on `gyp ERR!` lines.  Keep only the
+# first error line, with every URL and path-like token replaced, so the reason
+# ("not found: make", "Could not find any Python installation") survives
+# without leaking where the build ran.
+_GYP_ERROR = re.compile(r"gyp ERR!\s+(?:stack\s+)?(.*(?:not found|Error|error|ENOENT|EAI_AGAIN|ECONN\w+|EPROTO|CERT\w*).*)")
+_URL = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://\S+")
+_PATHLIKE = re.compile(r"(?<![\w.-])(?:/|[A-Za-z]:[\\/])[^\s:;,'\"()]+")
 _REQUEST_URL = re.compile(r"request to\s+(https?://[^\s\"'<>]+)", re.IGNORECASE)
 
 
@@ -27,7 +35,12 @@ def sanitize_debug_text(text: str) -> str:
     code = None
     host = None
     package = None
+    gyp = None
     for line in text.splitlines():
+        if gyp is None:
+            match = _GYP_ERROR.search(line)
+            if match:
+                gyp = _PATHLIKE.sub("<path>", _URL.sub("<url>", match.group(1))).strip()[:160]
         if code is None:
             match = _ERROR_CODE.search(line)
             if match:
@@ -52,6 +65,8 @@ def sanitize_debug_text(text: str) -> str:
         facts.append(f"npm_error_code={code}")
     if package:
         facts.append(f"npm_error_package={package}")
+    if gyp:
+        facts.append(f"node_gyp_error={gyp}")
     if host:
         facts.append(f"npm_error_host={host.lower()}")
     return "\n".join(facts) if facts else "npm_debug_failure_details=unavailable"
