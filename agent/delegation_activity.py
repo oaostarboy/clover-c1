@@ -44,6 +44,14 @@ PUBLIC_ACTIVITY_STATUS = {
     "provider_result": ("running", "provider result received"),
     "awaiting_input": ("blocked", "awaiting input"),
 }
+# Provider round-trip reasons. Every model call relays them, so they must
+# never replace a known current action on the card (C1.3 f): they only fill
+# the slot before the first tool/note, and "retrying" is appended as a
+# distinct problem signal.
+_PROVIDER_WAIT_REASONS = frozenset(
+    PUBLIC_ACTIVITY_STATUS[s][1] for s in ("requesting", "waiting", "retrying")
+)
+_PROVIDER_RETRY_REASON = PUBLIC_ACTIVITY_STATUS["retrying"][1]
 
 STATES = (
     "queued",
@@ -316,6 +324,9 @@ class ChildActivity:
     tools_failed: int = 0
     last_tool_result: Optional[str] = None
     note: Optional[str] = None
+    # Last thing the worker visibly did (tool phrase or progress note), shown
+    # while it waits on the provider between actions.
+    last_action: Optional[str] = None
     summary: Optional[str] = None
     files_written: List[str] = field(default_factory=list)
     duration_s: Optional[float] = None
@@ -572,6 +583,7 @@ class DelegationActivityTracker:
                 return False
             self._start(child, now)
             child.note = note
+            child.last_action = f"💬 {note}"
             group.push(FeedEntry(child_key=child.key, kind="note", at=now, text=note))
             self._settle_state(child)
             return True
@@ -590,6 +602,7 @@ class DelegationActivityTracker:
                 summary=summarize_tool_call(tool_name, preview, args),
                 started_at=now,
             )
+            child.last_action = f"🔧 {_tool_phrase(name, child.open_tools[call_id].summary)}"
             self._settle_state(child)
             return True
         if et == "subagent.tool_done":
@@ -613,6 +626,8 @@ class DelegationActivityTracker:
             )
             self._record_tool(group, child, name, opened.summary if opened else "",
                               not failed, dur, now)
+            if opened is not None:
+                child.last_action = f"🔧 {_tool_phrase(name, opened.summary)}"
             self._settle_state(child)
             return True
         if et == "subagent.complete":
@@ -922,11 +937,19 @@ def _doing(child: ChildActivity, now: float) -> str:
         extra = len(child.open_tools) - 1
         return phrase + (f" (+{extra})" if extra > 0 else "")
     if child.state in {"waiting", "blocked"} and child.reason:
+        if child.reason in _PROVIDER_WAIT_REASONS and child.last_action:
+            # A provider round-trip never hides the last visible action;
+            # only a retry is worth a (quiet) mention next to it.
+            if child.reason == _PROVIDER_RETRY_REASON:
+                return f"{child.last_action} · {child.reason}"
+            return child.last_action
         return f"{_state_icon(child.state)} {child.reason}"
     if child.state == "queued":
         return "queued"
     if child.visibility == "lifecycle":
         return "running · no tool detail"
+    if child.last_action:
+        return child.last_action
     if child.note:
         return f"💬 {child.note}"
     return "starting…" if child.state == "starting" else "thinking…"

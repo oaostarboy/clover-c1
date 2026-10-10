@@ -194,7 +194,16 @@ class AgentJobObserver:
                 self.dropped_lines += 1
             return
         if not text.startswith("{"):
-            return  # non-structured output is never surfaced
+            if self.parser != "clover-activity":
+                return  # non-structured output is never surfaced
+            # A non-quiet Clover worker shares one pipe between its human
+            # output and the JSONL stream, so a record can land right after a
+            # human write that had no trailing newline. Recover only a whole,
+            # versioned record; everything before it is never read.
+            idx = text.find('{"clover_activity"')
+            if idx < 0:
+                return
+            text = text[idx:]
         try:
             obj = json.loads(text)
         except (ValueError, RecursionError):
