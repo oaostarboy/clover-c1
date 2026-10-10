@@ -5871,6 +5871,20 @@ class BasePlatformAdapter(ABC):
             return response.text, int(ttl or 0)
         return response, 0
 
+    async def _release_turn_marker(self, event: MessageEvent) -> None:
+        """Clear the crash-recovery marker the runner handed to this delivery.
+
+        Runs only once the final reply is ledgered or nothing more is owed, so
+        no kill leaves a persisted reply with neither marker nor ledger row.
+        Ported from NousResearch/hermes-agent 360b9697ac (MIT). Idempotent.
+        """
+        if getattr(event, "_turn_marker_handoff", False) and getattr(
+            event, "_gateway_active_turn_token", None
+        ):
+            runner = getattr(self, "gateway_runner", None)
+            if runner is not None:
+                await runner._clear_durable_active_turn(event)
+
     def _final_delivery_adapter(
         self, source: Optional[SessionSource]
     ) -> "BasePlatformAdapter":
@@ -6787,6 +6801,7 @@ class BasePlatformAdapter(ABC):
             await self._run_processing_hook("on_processing_start", event)
 
             # Call the handler (this can take a while with tool calls)
+            event._turn_marker_handoff = self.gateway_runner is not None
             response = await self._message_handler(event)
             is_ephemeral_response = isinstance(response, EphemeralReply)
 
@@ -7061,6 +7076,10 @@ class BasePlatformAdapter(ABC):
                         except Exception:
                             logger.debug("delivery ledger record failed", exc_info=True)
                             _obligation_id = None
+                    if _obligation_id is not None:
+                        # The ledger now owns crash recovery: release the turn marker
+                        # (Hermes 360b9697ac, MIT). Idempotent via the CAS clear.
+                        await self._release_turn_marker(event)
                     result = await delivery_adapter._send_with_retry(
                         chat_id=event.source.chat_id,
                         content=text_content,
@@ -7388,6 +7407,10 @@ class BasePlatformAdapter(ABC):
             # callbacks may perform platform I/O; a stuck callback must not
             # leave the typing refresh task running indefinitely.
             await _stop_typing_task()
+            # Nothing more is owed for this turn (no reply, error, or already
+            # ledgered): release the handed-off marker. Idempotent.
+            await self._release_turn_marker(event)
+            event._turn_marker_handoff = False
             # Fire any one-shot post-delivery callback registered for this
             # session (e.g. deferred background-review notifications).
             #

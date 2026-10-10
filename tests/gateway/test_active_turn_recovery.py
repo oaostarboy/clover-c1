@@ -482,34 +482,67 @@ async def test_runner_active_turn_clear_stops_after_bounded_retries():
 
 
 @pytest.mark.asyncio
-async def test_unclean_recovery_promotes_exact_markers_before_legacy_fallback(
-    monkeypatch,
+async def test_unclean_recovery_uses_exact_markers_only_no_recency_sweep(
+    tmp_path, monkeypatch,
 ):
+    """Regression: a recently-active session whose turn already finished
+    (no durable marker) must NOT be re-armed for auto-resume after a crash.
+    The old 120 s ``updated_at`` sweep re-answered every such chat."""
+    monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    from gateway.session import AsyncSessionStore
+
+    store = _make_store(tmp_path)
+    source = _make_source("finished-chat")
+    entry = store.get_or_create_session(source)
+    # Finished turn: updated seconds ago, marker already cleared.
+    with store._lock:
+        store._entries[entry.session_key].updated_at = datetime.now()
+
     runner = object.__new__(GatewayRunner)
-    calls: list[str] = []
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+
+    assert await runner._recover_unclean_sessions() == (0, 0)
+    assert _entry_for(store, source).resume_pending is False
+
+
+@pytest.mark.asyncio
+async def test_unclean_recovery_adopts_persisted_reply_instead_of_regenerating(
+    tmp_path, monkeypatch,
+):
+    """A kill after the final reply was persisted but before it was ledgered
+    must adopt that reply into the delivery ledger (sent once), not re-run it."""
+    import time as _time
+
+    from gateway import delivery_ledger
+    from gateway.session import AsyncSessionStore
 
     monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setattr(delivery_ledger, "ledger_enabled", lambda *_a, **_k: True)
 
-    async def _recover(*, max_age_seconds):
-        assert max_age_seconds == ACTIVE_TURN_MAX_AGE_SECONDS
-        calls.append("exact")
-        return 1
-
-    async def _fallback(*, max_age_seconds):
-        assert max_age_seconds == 120
-        calls.append("fallback")
-        return 2
-
-    runner.session_store = MagicMock()
-    setattr(
-        runner,
-        "_async_session_store",
-        SimpleNamespace(
-            _store=runner.session_store,
-            recover_interrupted_turns=_recover,
-            suspend_recently_active=_fallback,
-        ),
+    store = _make_db_store(tmp_path)
+    source = _make_source("crash-reply-chat")
+    entry = store.get_or_create_session(source)
+    store.mark_turn_active(entry.session_key)
+    store.append_to_transcript(entry.session_id, {"role": "user", "content": "hi"})
+    store.append_to_transcript(
+        entry.session_id,
+        {"role": "assistant", "content": "the final answer", "timestamp": _time.time()},
     )
 
-    assert await runner._recover_unclean_sessions() == (1, 2)
-    assert calls == ["exact", "fallback"]
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+
+    try:
+        await runner._recover_unclean_sessions()
+        rows = delivery_ledger._connect().execute(
+            "SELECT content, state FROM delivery_obligations WHERE session_key = ?",
+            (entry.session_key,),
+        ).fetchall()
+        resume = _entry_for(store, source).resume_pending
+    finally:
+        _close_store_db(store)
+
+    assert resume is False
+    assert [tuple(r) for r in rows] == [("the final answer", "attempting")]

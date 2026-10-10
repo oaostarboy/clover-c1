@@ -13742,24 +13742,99 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         return discarded
 
     async def _recover_unclean_sessions(self) -> tuple[int, int]:
-        """Recover exact active turns, then run the legacy recency fallback."""
-        exact = 0
-        fallback = 0
+        """Recover only the turns the dead process left marked.
+
+        A marked turn whose final reply is already in the transcript is owed
+        delivery, not a new answer; any other marked turn resumes once. An
+        unmarked session finished its turn (the marker is held until the reply
+        is ledgered), so nothing re-runs it. The old 120 s recency sweep
+        re-answered every recently active chat after a crash (ported from
+        NousResearch/hermes-agent 360b9697ac, MIT). Returns (resumed, ledgered).
+        """
+        resumed = ledgered = 0
         try:
             agent_timeout = max(1.0, _float_env("CLOVER_AGENT_TIMEOUT", 1800))
             marker_max_age = max(60 * 60, int(agent_timeout * 2))
-            exact = await self.async_session_store.recover_interrupted_turns(
+        except Exception as exc:
+            logger.warning("Active-turn recovery config failed: %s", exc)
+            marker_max_age = 60 * 60
+        try:
+            ledgered = await self._ledger_crash_left_replies(marker_max_age)
+        except Exception as exc:
+            logger.warning("Crash-left reply recovery on startup failed: %s", exc)
+        try:
+            resumed = await self.async_session_store.recover_interrupted_turns(
                 max_age_seconds=marker_max_age
             )
         except Exception as exc:
             logger.warning("Exact active-turn recovery on startup failed: %s", exc)
-        try:
-            fallback = await self.async_session_store.suspend_recently_active(
-                max_age_seconds=120
+        return resumed, ledgered
+
+    async def _ledger_crash_left_replies(self, max_age_seconds: int) -> int:
+        """Adopt a marked turn's persisted final reply into the delivery ledger.
+
+        A kill after the reply was written to the transcript but before it was
+        ledgered left the marker set. The reply is recorded as owed (unowned,
+        'attempting', sent at most once more) and its marker cleared, so the
+        boot sweep delivers it instead of regenerating the turn. Without the
+        ledger such turns stay marked and resume as before. Ported from
+        NousResearch/hermes-agent 360b9697ac (MIT).
+        """
+        from gateway.delivery_ledger import (
+            compute_obligation_id,
+            ledger_enabled,
+            record_crash_left_reply,
+        )
+        from gateway.platforms.base import _strip_media_directives
+
+        if not await asyncio.to_thread(ledger_enabled):
+            return 0
+        cutoff = datetime.now() - timedelta(seconds=max_age_seconds)
+        store = self.session_store
+        with store._lock:
+            store._ensure_loaded_locked()
+            marked = [
+                (e.session_key, e.session_id, e.active_turn_token,
+                 e.active_turn_started_at, e.origin)
+                for e in store._entries.values()
+                if e.active_turn_token and e.active_turn_started_at
+                and e.origin and not e.suspended
+            ]
+        ledgered = 0
+        for key, session_id, token, started_at, origin in marked:
+            if started_at < cutoff:
+                continue  # stale marker: cleared by recover_interrupted_turns
+            history = await self.async_session_store.load_transcript(session_id)
+            last = next(
+                (m for m in reversed(history)
+                 if m.get("role") not in ("session_meta", "system")),
+                None,
             )
-        except Exception as exc:
-            logger.warning("Legacy session recovery on startup failed: %s", exc)
-        return exact, fallback
+            if (
+                not last
+                or last.get("role") != "assistant"
+                or last.get("tool_calls")
+                or not isinstance(last.get("content"), str)
+            ):
+                continue  # never produced its final reply: it resumes
+            text = _strip_media_directives(
+                _sanitize_gateway_final_response(origin.platform, last["content"])
+            ).strip()
+            if not text:
+                continue
+            await asyncio.to_thread(
+                record_crash_left_reply,
+                obligation_id=compute_obligation_id(key, f"crash:{token}", text),
+                session_key=key,
+                platform=str(getattr(origin.platform, "value", origin.platform)),
+                chat_id=origin.chat_id,
+                thread_id=origin.thread_id,
+                content=text,
+                since=started_at.timestamp(),
+            )
+            if await self.async_session_store.clear_turn_active(key, token):
+                ledgered += 1
+        return ledgered
 
     def _start_loop_heartbeat_task(self) -> None:
         """Start the loop-liveness heartbeat task (#66892), idempotent.
@@ -17042,8 +17117,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             release_gateway_runtime_lock()
 
             # Write a clean-shutdown marker so the next startup knows this
-            # wasn't a crash.  suspend_recently_active() only needs to run
-            # after unexpected exits.  However, if the drain timed out and
+            # wasn't a crash.  Crash recovery only promotes exact turn markers
+            # now (the recency sweep was removed; see _recover_unclean_sessions).
+            # However, if the drain timed out and
             # agents were force-interrupted, their sessions may be in an
             # incomplete state (trailing tool response, no final assistant
             # message).  Skip the marker in that case so the next startup
@@ -20268,7 +20344,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             try:
                 # Normal completion/exception/interrupt owns and clears this exact
                 # durable marker. SIGKILL/OOM leaves it for startup recovery.
-                await self._clear_durable_active_turn(event)
+                # A turn the adapter delivers hands its marker to that lifecycle,
+                # which clears it only once the reply is in the delivery ledger:
+                # clearing here first would leave a kill window with neither the
+                # marker nor a ledger row (ported from hermes-agent 360b9697ac, MIT).
+                if not getattr(event, "_turn_marker_handoff", False):
+                    await self._clear_durable_active_turn(event)
             finally:
                 # A cancellation or store error must not skip in-memory cleanup.
                 # Generation ownership prevents stale teardown after /new or a
