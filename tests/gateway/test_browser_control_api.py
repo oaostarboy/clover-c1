@@ -1018,3 +1018,95 @@ async def test_readiness_test_cleans_up_actual_fixture_on_early_failure(monkeypa
     assert disconnected, "actual broker disconnect did not complete after websocket teardown"
     assert any(result is True for result in observations["disconnect_results"])
     assert adapter._browser_control_broker.select(scope, "browser_snapshot") is None
+
+
+@pytest.mark.asyncio
+async def test_ws_teardown_disconnects_controller_even_if_handler_is_cancelled_while_queued(
+    monkeypatch,
+):
+    """A cancel racing the handler's teardown must not skip broker.disconnect.
+
+    ``disconnect`` is offloaded to the default executor.  When every worker is
+    busy the call is still queued, and cancelling the awaiting handler used to
+    cancel that queued work item too, leaving the controller marked connected
+    (the hosted ``[before_route]`` flake).  Saturating a one-worker executor
+    makes the race deterministic instead of load dependent.
+    """
+    adapter = _adapter()
+    monkeypatch.setattr(adapter, "_browser_control_enabled", lambda: True)
+    broker = adapter._browser_control_broker
+    loop = asyncio.get_running_loop()
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    loop.set_default_executor(executor)
+    attached = threading.Event()
+    disconnected = threading.Event()
+    disconnect_calls = []
+    release_worker = threading.Event()
+    real_attach = broker.attach
+    real_disconnect = broker.disconnect
+
+    def attach(scope, send, *, owner=None):
+        result = real_attach(scope, send, owner=owner)
+        attached.set()
+        return result
+
+    def disconnect(scope, *args, **kwargs):
+        result = real_disconnect(scope, *args, **kwargs)
+        disconnect_calls.append((scope, result))
+        disconnected.set()
+        return result
+
+    monkeypatch.setattr(broker, "attach", attach)
+    monkeypatch.setattr(broker, "disconnect", disconnect)
+
+    handler_tasks = []
+    real_handler = adapter._handle_browser_control_ws
+
+    async def tracked_handler(request):
+        handler_tasks.append(asyncio.current_task())
+        return await real_handler(request)
+
+    app = web.Application()
+    app.router.add_post(
+        "/v1/browser-control/register", adapter._handle_browser_control_register
+    )
+    app.router.add_get("/v1/browser-control/ws", tracked_handler)
+    try:
+        async with TestClient(TestServer(app)) as client:
+            response = await client.post(
+                "/v1/browser-control/register",
+                json=_registration_body(capabilities=["browser_snapshot"]),
+                headers={"Authorization": f"Bearer {API_KEY}"},
+            )
+            registration = await response.json()
+            ws = await client.ws_connect(
+                "/v1/browser-control/ws",
+                protocols=[CONTROL_PROTOCOL, _ticket_protocol(registration["ticket"])],
+            )
+            deadline = loop.time() + 2.0
+            while not attached.is_set() and loop.time() < deadline:
+                await asyncio.sleep(0.005)
+            assert attached.is_set()
+
+            # Occupy the only worker so the handler's teardown call queues.
+            executor.submit(release_worker.wait, 10.0)
+            await ws.close()
+            deadline = loop.time() + 2.0
+            while executor._work_queue.qsize() < 1 and loop.time() < deadline:
+                await asyncio.sleep(0.005)
+            assert executor._work_queue.qsize() >= 1, "teardown call never queued"
+            assert not disconnect_calls
+
+            handler_tasks[0].cancel()
+            await asyncio.sleep(0.05)
+            release_worker.set()
+            deadline = loop.time() + 2.0
+            while not disconnected.is_set() and loop.time() < deadline:
+                await asyncio.sleep(0.005)
+
+        assert disconnected.is_set(), "cancelled handler skipped broker.disconnect"
+        assert len(disconnect_calls) == 1
+        assert disconnect_calls[0][1] is True
+    finally:
+        release_worker.set()
+        executor.shutdown(wait=True, cancel_futures=True)

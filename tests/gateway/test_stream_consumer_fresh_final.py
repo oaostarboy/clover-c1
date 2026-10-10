@@ -217,6 +217,58 @@ class TestCancelledBestEffortDeliveryFinalizes:
         assert consumer.final_response_sent is True
         assert consumer.final_content_delivered is True
 
+    @pytest.mark.asyncio
+    async def test_late_edit_from_superseded_run_is_removed(self):
+        """A transport that ignores cancellation must not leave a stale edit behind."""
+        adapter = _make_adapter()
+        adapter.REQUIRES_EDIT_FINALIZE = True
+        adapter.delete_message = AsyncMock(return_value=True)
+        edit_started = asyncio.Event()
+        release_edit = asyncio.Event()
+        edit_finished = asyncio.Event()
+        current = [True]
+
+        async def cancellation_suppressing_edit(*, chat_id, message_id, content, **kwargs):
+            edit_started.set()
+            while not release_edit.is_set():
+                try:
+                    await release_edit.wait()
+                except asyncio.CancelledError:
+                    # Model a transport whose in-flight request cannot be stopped.
+                    continue
+            edit_finished.set()
+            return SimpleNamespace(success=True, message_id=message_id)
+
+        adapter.edit_message = AsyncMock(side_effect=cancellation_suppressing_edit)
+        consumer = GatewayStreamConsumer(
+            adapter=adapter,
+            chat_id="chat",
+            run_still_current=lambda: current[0],
+        )
+        consumer._CANCEL_FINAL_EDIT_TIMEOUT = 0.01
+        consumer._accumulated = "completed answer"
+        consumer._message_id = "preview"
+        consumer._last_sent_text = "partial preview"
+
+        from gateway.bounded_await import await_bounded
+
+        finished, _ = await await_bounded(
+            consumer._send_or_edit("completed answer", finalize=True), timeout=0.01
+        )
+        assert not finished
+        consumer._abandoned = True
+
+        # The gateway's ordinary final path can finish before the stuck edit.
+        await adapter.send(chat_id="chat", content="completed answer")
+        current[0] = False
+        release_edit.set()
+        await asyncio.wait_for(edit_finished.wait(), timeout=1.0)
+        await asyncio.sleep(0)
+
+        adapter.delete_message.assert_awaited_once_with("chat", "preview")
+        assert consumer.final_response_sent is False
+        assert consumer.final_content_delivered is False
+
 
 class TestGotDoneOverflowSplitNotRefinalized:
     """A got_done finalize edit that split-and-delivered across continuation

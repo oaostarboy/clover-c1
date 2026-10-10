@@ -3667,10 +3667,18 @@ class APIServerAdapter(BasePlatformAdapter):
         # transmit its frame (run_coroutine_threadsafe + result(timeout=10)).
         # Offload them so a teardown/attach racing an in-flight send parks a
         # worker thread, never the event loop.
-        await asyncio.to_thread(
+        #
+        # The handler task is cancelled when the client goes away.  A bare
+        # ``await asyncio.to_thread(...)`` in the ``finally`` below is itself
+        # cancellable: if the cancel lands before the executor starts the
+        # work item, ``disconnect`` never runs and the controller stays
+        # marked connected.  Run broker calls as shielded background tasks so
+        # teardown always executes exactly once.
+        attach_task = self._spawn_browser_control_call(
             self._browser_control_broker.attach, scope, _send, owner=ws
         )
         try:
+            await asyncio.shield(attach_task)
             async for msg in ws:
                 if msg.type == web.WSMsgType.TEXT:
                     try:
@@ -3689,12 +3697,37 @@ class APIServerAdapter(BasePlatformAdapter):
                 elif msg.type in (web.WSMsgType.CLOSE, web.WSMsgType.ERROR):
                     break
         finally:
-            await asyncio.to_thread(
-                self._browser_control_broker.disconnect,
-                scope,
-                owner=ws,
+            if not attach_task.done():
+                # Cancelled mid-attach: let the worker finish first so the
+                # disconnect below cannot run before (and be undone by) it.
+                try:
+                    await asyncio.shield(attach_task)
+                except BaseException:
+                    pass
+            await asyncio.shield(
+                self._spawn_browser_control_call(
+                    self._browser_control_broker.disconnect,
+                    scope,
+                    owner=ws,
+                )
             )
         return ws
+
+    def _spawn_browser_control_call(self, func, *args, **kwargs) -> "asyncio.Future":
+        """Run a blocking broker call in a thread as a strongly-held task.
+
+        Awaiting it through ``asyncio.shield`` keeps the call running to
+        completion even if the awaiting request handler is cancelled.
+        """
+        task = asyncio.ensure_future(asyncio.to_thread(func, *args, **kwargs))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        # Retrieve any exception so an abandoned (cancelled-caller) call
+        # does not log "exception was never retrieved".
+        task.add_done_callback(
+            lambda t: t.cancelled() or t.exception()
+        )
+        return task
 
     def _handle_browser_control_frame(
         self,

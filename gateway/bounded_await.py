@@ -46,7 +46,12 @@ def _escalate(task: "asyncio.Future[Any]", label: str, grace: float) -> None:
     await its cancellation handler is parked in (a handler is entered once
     per cancel), so abandoned work is finite rather than parked forever.  It
     is tracked only until it finishes, so a burst of hung turns is visible in
-    the log and in :func:`stuck_task_count` but cannot accumulate silently.
+    the log and in :func:`stuck_task_count`.
+
+    Known limit: the set is observable but NOT capped.  A task that swallows
+    every ``CancelledError`` and loops stays tracked (and running) until it
+    exits on its own; this module bounds how long a *turn* waits, not how
+    long an uncooperative task lives.
     """
     if task in _STUCK_TASKS:
         # Already escalated: a task gets at most ONE extra cancel, so a

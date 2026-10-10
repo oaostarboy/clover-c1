@@ -3628,6 +3628,42 @@ class GatewayStreamConsumer:
                         content=text,
                         finalize=finalize,
                     )
+                    # A transport may suppress cancellation while an edit is
+                    # in flight.  If that edit completes after this consumer
+                    # was abandoned or its turn was superseded, do not let the
+                    # stale result advance delivery bookkeeping or fallback
+                    # state.  Remove the preview it may just have overwritten;
+                    # this is bounded compensation because the platform write
+                    # itself may not be cancellable.
+                    try:
+                        stale_delivery = (
+                            self._abandoned or not self._run_still_current()
+                        )
+                    except Exception:
+                        stale_delivery = True
+                    if stale_delivery:
+                        delete_message = getattr(
+                            self.adapter, "delete_message", None
+                        )
+                        if callable(delete_message):
+                            try:
+                                cleanup = delete_message(
+                                    self.chat_id, self._message_id
+                                )
+                                if inspect.isawaitable(cleanup):
+                                    await await_bounded(
+                                        cleanup,
+                                        self._CANCEL_FINAL_EDIT_TIMEOUT,
+                                    )
+                            except Exception:
+                                logger.debug(
+                                    "Late stale stream edit cleanup failed "
+                                    "(chat=%s message=%s)",
+                                    self.chat_id,
+                                    self._message_id,
+                                    exc_info=True,
+                                )
+                        return False
                     if result.success:
                         self._already_sent = True
                         # Record any continuation fragments an oversized edit
