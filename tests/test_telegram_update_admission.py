@@ -334,13 +334,8 @@ def test_receipt_callbacks_survive_dataclasses_replace_and_run_once():
     assert calls == [1]
 
 
-@pytest.mark.asyncio
-async def test_runner_turn_marker_completes_the_receipt(tmp_path):
+def _marker_runner():
     from gateway.run import GatewayRunner
-
-    events = []
-    app = _build_handing_off(_adapter(tmp_path), 111, events)
-    await _process(app, _text_update(app.bot, 1400))
 
     class _Store:
         async def mark_turn_active(self, key, **kwargs):
@@ -350,9 +345,132 @@ async def test_runner_turn_marker_completes_the_receipt(tmp_path):
     runner._async_session_store = _Store()
     runner.session_store = _Store()
     runner.__class__ = type("R", (GatewayRunner,), {"async_session_store": property(lambda self: self._async_session_store)})
+    return runner
+
+
+@pytest.mark.asyncio
+async def test_turn_marker_alone_does_not_complete_the_receipt(tmp_path):
+    # The marker holds no text or media: until the user message is persisted a
+    # crash must let Telegram's replay through (C13-ASTRA-01).
+    events = []
+    app = _build_handing_off(_adapter(tmp_path), 111, events)
+    await _process(app, _text_update(app.bot, 1400))
+
+    runner = _marker_runner()
     assert await runner._mark_durable_active_turn(events[0], "sk")
+
+    replay = []
+    app2 = _build_handing_off(_adapter(tmp_path), 111, replay)
+    await _process(app2, _text_update(app2.bot, 1400))
+    assert [e.platform_update_id for e in replay] == [1400]
+
+
+@pytest.mark.asyncio
+async def test_persisted_user_message_completes_the_receipt(tmp_path):
+    events = []
+    app = _build_handing_off(_adapter(tmp_path), 111, events)
+    await _process(app, _text_update(app.bot, 1401))
+
+    runner = _marker_runner()
+    assert await runner._mark_durable_active_turn(events[0], "sk")
+    # The agent's turn-start persist committed the user row.
+    runner._on_inbound_persisted("sk")
 
     after = []
     app2 = _build_handing_off(_adapter(tmp_path), 111, after)
-    await _process(app2, _text_update(app2.bot, 1400))
+    await _process(app2, _text_update(app2.bot, 1401))
     assert after == []
+
+
+@pytest.mark.asyncio
+async def test_turn_end_without_persist_leaves_the_update_replayable(tmp_path):
+    events = []
+    app = _build_handing_off(_adapter(tmp_path), 111, events)
+    await _process(app, _text_update(app.bot, 1402))
+
+    runner = _marker_runner()
+    assert await runner._mark_durable_active_turn(events[0], "sk")
+    runner._forget_inbound_handoff(events[0])
+    runner._on_inbound_persisted("sk")  # nothing left to release
+
+    replay = []
+    app2 = _build_handing_off(_adapter(tmp_path), 111, replay)
+    await _process(app2, _text_update(app2.bot, 1402))
+    assert [e.platform_update_id for e in replay] == [1402]
+
+
+@pytest.mark.asyncio
+async def test_abandoned_event_claim_bookkeeping_is_bounded(tmp_path):
+    from types import SimpleNamespace
+
+    from plugins.platforms.telegram import update_admission as adm
+
+    adapter = _adapter(tmp_path)
+    admit = adm.make_admission_handler(adapter, 111)
+    # Dropped/cancelled pre-handoff events: no event object is retained here.
+    for uid in range(adm._SEEN_CAP + 12):
+        await admit(SimpleNamespace(update_id=uid), None)
+        adm.attach_receipt(adapter, 111, uid, SimpleNamespace(inbound_receipts=[]))
+    assert len(adapter._inflight_update_ids) <= adm._SEEN_CAP
+    assert len(adapter._inflight_with_event) <= adm._SEEN_CAP
+    # A set key never outlives its claim.
+    assert adapter._inflight_with_event <= set(adapter._inflight_update_ids)
+
+
+@pytest.mark.asyncio
+async def test_completing_an_evicted_event_claim_discards_its_marker(tmp_path):
+    from types import SimpleNamespace
+
+    from plugins.platforms.telegram import update_admission as adm
+
+    adapter = _adapter(tmp_path)
+    admit = adm.make_admission_handler(adapter, 111)
+    await admit(SimpleNamespace(update_id=1), None)
+    event = SimpleNamespace(inbound_receipts=[])
+    adm.attach_receipt(adapter, 111, 1, event)
+    adapter._inflight_update_ids.clear()  # evicted by trim / TTL
+    for receipt in event.inbound_receipts:
+        receipt()
+    assert "111:1" not in adapter._inflight_with_event
+
+
+@pytest.mark.asyncio
+async def test_marker_only_crash_leaves_update_replayable_or_text_durable(tmp_path, monkeypatch):
+    """C13-ASTRA-01 on a real SQLite store: after a crash between the turn
+    marker and the user-message write, the input is either replayed by
+    Telegram or already in the transcript."""
+    from gateway.run import GatewayRunner
+    from gateway.session import AsyncSessionStore
+    from tests.gateway.test_active_turn_recovery import _close_store_db, _make_db_store
+
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("CLOVER_HOME", str(home))
+    events = []
+    app = _build_handing_off(_adapter(tmp_path), 111, events)
+    await _process(app, _text_update(app.bot, 1515))
+    event = events[0]
+    store = _make_db_store(home)
+    entry = store.get_or_create_session(event.source)
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+    assert await runner._mark_durable_active_turn(event, entry.session_key)
+    _close_store_db(store)
+    del runner, store, event, events
+
+    store = _make_db_store(home)
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+    try:
+        await runner._recover_unclean_sessions()
+        history = store.load_transcript(entry.session_id)
+        replay = []
+        app = _build_handing_off(_adapter(tmp_path), 111, replay)
+        await _process(app, _text_update(app.bot, 1515))
+        assert replay or any(
+            m.get("role") == "user" and m.get("content") == "hello" for m in history
+        )
+    finally:
+        _close_store_db(store)

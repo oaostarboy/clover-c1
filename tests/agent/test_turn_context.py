@@ -452,3 +452,30 @@ def test_prologue_does_not_title_machine_driven_runs(platform):
     overwritten or never read.
     """
     assert not _title_turn(platform).called
+
+
+def _callback_agent(*, stamps_marker):
+    agent = _FakeAgent()
+    agent.fired = 0
+    agent.inbound_persisted_callback = lambda: setattr(agent, "fired", agent.fired + 1)
+
+    def _persist(messages, _history=None):
+        if stamps_marker:
+            messages[-1]["_db_persisted"] = True
+
+    agent._persist_session = _persist
+    return agent
+
+
+def test_inbound_persisted_callback_fires_once_the_user_row_is_committed():
+    agent = _callback_agent(stamps_marker=True)
+    _build(agent)
+    assert agent.fired == 1
+
+
+def test_inbound_persisted_callback_stays_quiet_when_the_persist_failed():
+    # Without the committed marker the input is not recoverable yet, so the
+    # platform receipt must not be released.
+    agent = _callback_agent(stamps_marker=False)
+    _build(agent)
+    assert agent.fired == 0

@@ -6713,7 +6713,11 @@ class BasePlatformAdapter(ABC):
             if self._busy_session_handler is not None:
                 try:
                     if await self._busy_session_handler(event, session_key):
-                        complete_inbound_handoff(event)
+                        # A follow-up queued in memory is not durable yet: its
+                        # receipt waits for the turn it becomes (see
+                        # ``_inbound_deferred``) or the shutdown inbox record.
+                        if not getattr(event, "_inbound_deferred", False):
+                            complete_inbound_handoff(event)
                         return
                 except Exception as e:
                     logger.error("[%s] Busy-session handler failed: %s", self.name, e, exc_info=True)

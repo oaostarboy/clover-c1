@@ -105,9 +105,11 @@ def _expired(seen: dict, key: str, now: float) -> bool:
 def _complete(adapter, bot_id, key: str) -> None:
     """Turn an in-flight claim into a persisted receipt (idempotent)."""
     inflight = adapter._inflight_update_ids
+    # Discard on every path: a claim trimmed or expired out of ``inflight``
+    # must not leave its marker behind.
+    adapter._inflight_with_event.discard(key)
     if inflight.pop(key, None) is None:
         return
-    adapter._inflight_with_event.discard(key)
     adapter._seen_update_ids[key] = time.time()
     _trim(adapter._seen_update_ids)
     _persist(adapter, bot_id)
@@ -158,11 +160,17 @@ def make_admission_handler(adapter, bot_id):
         inflight = adapter._inflight_update_ids
         if _expired(inflight, key, now):
             raise ApplicationHandlerStop  # same-process replay while in flight
+        # An expired claim was deleted by ``_expired``; its event marker must
+        # not outlive it or the fresh claim would look event-owned.
+        adapter._inflight_with_event.discard(key)
         # Claim synchronously (no await between the check and the write), so
         # two copies of the same update can never both pass. The claim is NOT
         # persisted: nothing durable exists for this update yet.
         inflight[key] = now
         _trim(inflight)
+        # ``_trim`` drops the oldest claims; the event markers follow them so
+        # the set stays bounded by the same cap.
+        adapter._inflight_with_event.intersection_update(inflight)
 
     return admit
 

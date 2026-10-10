@@ -6195,6 +6195,15 @@ class TurnRunner:
         agent.stream_delta_callback = _stream_delta_cb
         agent.interim_assistant_callback = _interim_assistant_cb if _want_interim_messages else None
         agent.status_callback = ctx._status_callback_sync
+        # Set every turn (a cached agent must not carry a stale one): fires once
+        # the turn's user message is committed, releasing the platform receipt.
+        _handoff_key = ctx.session_key
+        _handoff_loop = ctx._loop_for_step
+        agent.inbound_persisted_callback = (
+            (lambda: self._runner._on_inbound_persisted(_handoff_key, _handoff_loop))
+            if _handoff_key
+            else None
+        )
         # Credits / out-of-band notices (usage bands, depletion, restored).
         # Messaging has no persistent status bar, so each notice is a
         # standalone push: render to a single plaintext line and deliver via
@@ -11537,7 +11546,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # that was not queued).
                 await self._send_queue_full_reply(adapter, event)
                 return True
-
+            # The follow-up now lives only in memory. Its platform receipt
+            # waits for the turn it becomes (user message persisted), or the
+            # restart-inbox record written at shutdown.
+            if getattr(event, "inbound_receipts", None):
+                event._inbound_deferred = True
         is_queue_mode = effective_mode == "queue"
         is_steer_mode = effective_mode == "steer"
         is_redirect_mode = effective_mode == "interrupt" and redirected
@@ -20397,6 +20410,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # which clears it only once the reply is in the delivery ledger:
                 # clearing here first would leave a kill window with neither the
                 # marker nor a ledger row (ported from hermes-agent 360b9697ac, MIT).
+                self._forget_inbound_handoff(event)
                 if not getattr(event, "_turn_marker_handoff", False):
                     await self._clear_durable_active_turn(event)
             finally:
@@ -20955,11 +20969,41 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # token out of public metadata, transcripts, and platform payloads.
         setattr(event, "_gateway_active_turn_session_key", session_key)
         setattr(event, "_gateway_active_turn_token", token)
-        # The turn marker is the durable record of this input: a crash from here
-        # on is recovered by startup recovery, so the platform may now treat the
-        # inbound update as processed.
-        complete_inbound_handoff(event)
+        # The marker holds no text or media, so it is not yet a recoverable
+        # record of this input. The platform keeps the update replayable until
+        # the agent has durably written the user message (the turn-start persist
+        # fires ``_on_inbound_persisted``) or the turn ends.
+        self._register_inbound_handoff(session_key, event)
         return True
+
+    def _register_inbound_handoff(self, session_key: Optional[str], event: Any) -> None:
+        """Hold *event*'s platform receipt until its user message is persisted."""
+        if not session_key or not getattr(event, "inbound_receipts", None):
+            return
+        self.__dict__.setdefault("_inbound_handoff_events", {})[session_key] = event
+
+    def _forget_inbound_handoff(self, event: Any) -> None:
+        """Drop any receipt hold on *event* (turn ended; base completes it)."""
+        held = self.__dict__.get("_inbound_handoff_events")
+        if not held:
+            return
+        for key in [k for k, v in held.items() if v is event]:
+            held.pop(key, None)
+
+    def _on_inbound_persisted(self, session_key: str, loop: Any = None) -> None:
+        """Agent thread: the turn's user message is committed; release the receipt."""
+        held = self.__dict__.get("_inbound_handoff_events")
+        event = held.pop(session_key, None) if held else None
+        if event is None:
+            return
+        # The receipt callbacks mutate adapter dicts owned by the gateway loop.
+        if loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(complete_inbound_handoff, event)
+                return
+            except RuntimeError:
+                pass
+        complete_inbound_handoff(event)
 
     async def _clear_durable_active_turn(self, event: "MessageEvent") -> bool:
         """Best-effort CAS clear of the marker owned by *event*."""
@@ -32897,9 +32941,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if pending_event or pending:
                 logger.debug("Processing pending message: '%s...'", pending[:40])
                 # This follow-up becomes the running turn here, without passing
-                # through _handle_message's turn marker.
+                # through _handle_message's turn marker. Its receipt waits for
+                # the recursive run to persist the user message.
                 if pending_event is not None:
-                    complete_inbound_handoff(pending_event)
+                    if session_key:
+                        self._register_inbound_handoff(session_key, pending_event)
+                    else:
+                        complete_inbound_handoff(pending_event)
 
                 # Clear the adapter's interrupt event so the next _run_agent call
                 # doesn't immediately re-trigger the interrupt before the new agent
