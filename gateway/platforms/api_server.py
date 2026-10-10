@@ -116,6 +116,9 @@ class _ArtifactScopeFacade:
 _BROWSER_CONTROL_PROTOCOL_VERSION = 1
 _BROWSER_CONTROL_WS_PROTOCOL = "clover-browser-control-v1"
 _BROWSER_CONTROL_TICKET_PROTOCOL_PREFIX = "clover-browser-control-ticket."
+# Bound on how long adapter.disconnect() waits for controller attach/teardown
+# workers; below the gateway's per-adapter disconnect budget (5s default).
+_BROWSER_CONTROL_DRAIN_TIMEOUT_SECS = 3.0
 
 
 def _approval_event_choices(
@@ -1607,6 +1610,13 @@ class APIServerAdapter(BasePlatformAdapter):
         # and command lifecycle shared with the dashboard Gateway transport. This adapter only maps HTTP registration and the
         # controller WebSocket onto the broker; it owns no broker state.
         self._browser_control_broker = get_browser_control_broker()
+        # In-flight attach/disconnect lifecycle work for controller sockets.
+        # Deliberately NOT in the generic ``_background_tasks`` set: shutdown's
+        # ``cancel_background_tasks`` cancels that set directly, and cancelling
+        # the asyncio wrapper of a thread-offloaded call neither stops the
+        # thread nor protects the attach-then-disconnect order.  ``disconnect()``
+        # drains this set (bounded) instead.
+        self._browser_control_tasks: set = set()
         # One-shot artifact transport (Phase 8 Task 29). Lazy per-profile
         # stores + limiter are created on first authenticated artifact use;
         # tests inject their own store/limiter via
@@ -3714,8 +3724,8 @@ class APIServerAdapter(BasePlatformAdapter):
                 )
 
             teardown = asyncio.ensure_future(_teardown())
-            self._background_tasks.add(teardown)
-            teardown.add_done_callback(self._background_tasks.discard)
+            self._browser_control_tasks.add(teardown)
+            teardown.add_done_callback(self._forget_browser_control_task)
             teardown.add_done_callback(lambda t: t.cancelled() or t.exception())
             recancel = False
             while not teardown.done():
@@ -3729,6 +3739,27 @@ class APIServerAdapter(BasePlatformAdapter):
                 raise asyncio.CancelledError
         return ws
 
+    def _forget_browser_control_task(self, task: "asyncio.Future") -> None:
+        self._browser_control_tasks.discard(task)
+
+    async def _drain_browser_control_tasks(self) -> None:
+        """Wait (bounded) for in-flight controller attach/teardown work.
+
+        Every ``attach`` then finishes before its owner-specific
+        ``disconnect``, so shutdown cannot strand a connected controller.
+        The wait is finite; a wedged worker thread keeps its (uncancelled)
+        teardown task, which still disconnects right after the attach lands.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _BROWSER_CONTROL_DRAIN_TIMEOUT_SECS
+        while True:
+            pending = [t for t in self._browser_control_tasks if not t.done()]
+            remaining = deadline - loop.time()
+            if not pending or remaining <= 0:
+                return
+            await asyncio.wait(pending, timeout=remaining)
+            await asyncio.sleep(0)  # let a finished attach queue its teardown
+
     def _spawn_browser_control_call(self, func, *args, **kwargs) -> "asyncio.Future":
         """Run a blocking broker call in a thread as a strongly-held task.
 
@@ -3736,8 +3767,8 @@ class APIServerAdapter(BasePlatformAdapter):
         completion even if the awaiting request handler is cancelled.
         """
         task = asyncio.ensure_future(asyncio.to_thread(func, *args, **kwargs))
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        self._browser_control_tasks.add(task)
+        task.add_done_callback(self._forget_browser_control_task)
         # Retrieve any exception so an abandoned (cancelled-caller) call
         # does not log "exception was never retrieved".
         task.add_done_callback(
@@ -8466,6 +8497,8 @@ class APIServerAdapter(BasePlatformAdapter):
                 await self._runner.cleanup()
                 self._runner = None
         finally:
+            # Cancelled handlers queue their controller teardown; let it finish.
+            await self._drain_browser_control_tasks()
             self._close_cached_session_dbs()
             self._app = None
         logger.info("[%s] API server stopped", self.name)
