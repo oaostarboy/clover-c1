@@ -261,6 +261,10 @@ class PtyBridge:
             pgid = os.getpgid(self._proc.pid)  # windows-footgun: ok — POSIX-only module (imports fcntl/termios/ptyprocess at top)
         except Exception:
             pgid = None
+        if pgid is not None and pgid != self._proc.pid:
+            # Adapted from NousResearch/hermes-agent 956cd8dd3e (MIT): not a group
+            # leader, so the child shares OUR group; killpg would take Clover down.
+            pgid = None
 
         # SIGHUP is the conventional "your terminal went away" signal.
         # Send it to the whole foreground process group, not just the PTY

@@ -1693,7 +1693,12 @@ def _run_cua_driver_installer(
         import signal as _signal
         try:
             if not is_windows:
-                os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)  # windows-footgun: ok — POSIX branch only
+                pgid = os.getpgid(proc.pid)
+                if pgid == proc.pid:
+                    os.killpg(pgid, _signal.SIGKILL)  # windows-footgun: ok — POSIX branch only
+                else:
+                    # Installer shares our group; killpg would kill Clover itself.
+                    proc.kill()
             else:
                 # PowerShell may leave download/install helpers alive after its
                 # direct process is killed. Those descendants inherit stdout

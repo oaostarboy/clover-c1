@@ -1278,7 +1278,15 @@ class ProcessRegistry:
                 elif not _IS_WINDOWS:
                     try:
                         kill_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
-                        os.killpg(os.getpgid(proc.pid), kill_signal)  # windows-footgun: ok - guarded by _IS_WINDOWS above
+                        pgid = os.getpgid(proc.pid)
+                        if pgid == proc.pid:
+                            # The child leads its own group (start_new_session):
+                            # the group signal reaches any descendants with it.
+                            os.killpg(pgid, kill_signal)  # windows-footgun: ok - guarded by _IS_WINDOWS above
+                        else:
+                            # Child shares our process group: killpg would take
+                            # the whole Clover process down with it. Direct child only.
+                            proc.kill()
                     except (ProcessLookupError, PermissionError, OSError):
                         proc.kill()
                 else:

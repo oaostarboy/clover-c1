@@ -3254,6 +3254,14 @@ def _legacy_kill_process_tree(proc: "subprocess.Popen") -> None:
         pgid = os.getpgid(proc.pid)
     except (ProcessLookupError, OSError):
         return
+    if pgid != proc.pid:
+        # Adapted from NousResearch/hermes-agent 956cd8dd3e (MIT): the child shares
+        # our group, so killpg would take Clover down with it. Direct child only.
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return
     sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
     for sig in (signal.SIGTERM, sigkill):
         try:

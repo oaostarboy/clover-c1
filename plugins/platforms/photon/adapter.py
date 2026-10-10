@@ -1798,7 +1798,12 @@ class PhotonAdapter(BasePlatformAdapter):
             except subprocess.TimeoutExpired:
                 if sys.platform != "win32":
                     try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)  # windows-footgun: ok
+                        pgid = os.getpgid(proc.pid)
+                        if pgid == proc.pid:
+                            os.killpg(pgid, signal.SIGTERM)  # windows-footgun: ok
+                        else:
+                            # Sidecar shares our group; killpg would kill Clover.
+                            proc.terminate()
                     except (ProcessLookupError, PermissionError):
                         proc.terminate()
                 else:

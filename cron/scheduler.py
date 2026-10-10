@@ -4131,6 +4131,10 @@ def _terminate_cron_script_process(proc: subprocess.Popen) -> None:
             process_group: Optional[int] = os.getpgid(proc.pid)
         except (ProcessLookupError, OSError):
             process_group = None
+        if process_group is not None and process_group != proc.pid:
+            # Child shares our group (not a leader): killpg would signal Clover.
+            # Drop the group path; the direct-child kill below still applies.
+            process_group = None
         if process_group is not None:
             try:
                 os.killpg(process_group, signal.SIGTERM)  # windows-footgun: ok — POSIX-only branch (win32 handled above)

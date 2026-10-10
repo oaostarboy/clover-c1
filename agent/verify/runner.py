@@ -176,6 +176,11 @@ def _terminate_process_group(proc: subprocess.Popen) -> None:
             pgid = getpgid(proc.pid)
         except (ProcessLookupError, PermissionError):
             pgid = None
+    if pgid is not None and pgid != proc.pid:
+        # Adapted from NousResearch/hermes-agent 956cd8dd3e (MIT): the child does
+        # not lead its own group, so it shares ours; killpg would signal the
+        # whole runner process tree. Signal the direct child only.
+        pgid = None
     try:
         if pgid is not None and killpg is not None:
             killpg(pgid, signal.SIGTERM)  # windows-footgun: ok — POSIX-only branch (killpg checked above)
