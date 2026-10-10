@@ -64,6 +64,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from clover_constants import get_clover_home
+from clover_state import classify_persistence_error
 
 
 def _launch_cwd_for_session(source: str) -> Optional[str]:
@@ -256,6 +257,28 @@ _EPHEMERAL_SCAFFOLDING_FLAGS = (
     # retry instruction as user-authored context on resume.
     "_dropped_toolcall_nudge",
 )
+
+
+def _durable_lease_expires_at(db, session_id: str, holder: str, ttl_seconds: float) -> float:
+    """The admitted turn lease's committed ``expires_at``.
+
+    Falls back to ``now + ttl`` taken BEFORE the read when the row cannot be
+    read. That is never later than the real expiry, so the lock tolerance
+    cannot outlive the row.
+    """
+    floor = time.time()
+    reader = getattr(db, "session_turn_lease_expires_at", None)
+    if callable(reader):
+        try:
+            committed = reader(session_id, holder)
+            if isinstance(committed, (int, float)):
+                return float(committed)
+        except Exception:
+            logger.debug(
+                "Could not read the admitted turn lease expiry; using the pre-read floor",
+                exc_info=True,
+            )
+    return floor + float(ttl_seconds)
 
 
 def _is_ephemeral_scaffolding(msg: Any) -> bool:
@@ -8791,12 +8814,46 @@ class AIAgent:
                                 self._interrupt_requested = True
                                 self._interrupt_message = message
 
+                    def _stop_on_exhausted_authority() -> None:
+                        logger.warning(
+                            "Session turn lease refresh stayed locked through its lifetime: %s",
+                            getattr(self, "session_id", None) or session_id,
+                        )
+                        _interrupt_turn(
+                            "Session turn lease could not be refreshed; "
+                            "stopping to protect the transcript."
+                        )
+
+                    # Adapted from NousResearch/hermes-agent f925b01791 (MIT):
+                    # agent/turn_facade_lease.py refresh_tick + bae3a01012 /
+                    # 23cd990268 / b8788c3cb1.
+                    _lease_authority_deadline = _durable_lease_expires_at(
+                        _turn_db, session_id, durable_turn_lease, _lease_ttl
+                    )
+                    _lease_refresh_margin_s = 2.0
+                    _lease_refresh_patience_s = 20.0
+
                     while not durable_turn_lease_stop.wait(_lease_refresh_interval):
+                        _tick_started = time.time()
+                        # The whole renewal must finish before the committed
+                        # expiry; a SQLite lock wait that outlives it lets a
+                        # successor reclaim the row under this running turn.
+                        _patience = (
+                            _lease_authority_deadline
+                            - _lease_refresh_margin_s
+                            - _tick_started
+                        )
+                        if _patience <= 0:
+                            if durable_turn_lease_stop.is_set():
+                                return
+                            _stop_on_exhausted_authority()
+                            return
                         try:
                             if not _turn_db.refresh_session_turn_lease(
                                 getattr(self, "session_id", None) or session_id,
                                 durable_turn_lease,
                                 ttl_seconds=_lease_ttl,
+                                patience_s=min(_lease_refresh_patience_s, _patience),
                             ):
                                 # finally sets the stop event then releases.
                                 # A late holder-fenced miss after that join
@@ -8812,9 +8869,29 @@ class AIAgent:
                                     "the transcript."
                                 )
                                 return
-                        except Exception:
+                            # A successful renewal is the only thing that moves the
+                            # deadline, and it is taken before the write.
+                            _lease_authority_deadline = _tick_started + _lease_ttl
+                        except Exception as _refresh_exc:
                             if durable_turn_lease_stop.is_set():
                                 return
+                            if classify_persistence_error(_refresh_exc) == "locked":
+                                # The next attempt starts one interval from now
+                                # and must still finish before the row expires.
+                                if (
+                                    time.time()
+                                    + _lease_refresh_interval
+                                    + _lease_refresh_margin_s
+                                    >= _lease_authority_deadline
+                                ):
+                                    _stop_on_exhausted_authority()
+                                    return
+                                logger.warning(
+                                    "Session turn lease refresh hit a SQLite lock; "
+                                    "will retry: %s",
+                                    getattr(self, "session_id", None) or session_id,
+                                )
+                                continue
                             logger.warning(
                                 "Failed to refresh session turn lease: %s",
                                 getattr(self, "session_id", None) or session_id,

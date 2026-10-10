@@ -635,3 +635,107 @@ def test_flush_messages_to_session_db_fences_stale_holder_on_live_db(tmp_path):
     second.release_session_turn_lease("shared", next_holder)
     first.close()
     second.close()
+
+
+def _run_with_refresh(monkeypatch, db, agent, *, budget_s=2.0):
+    """Run one turn whose body waits for an interrupt (or finishes)."""
+    observed = {}
+
+    def fake_run(_agent, _message, _system, history, *_args, **_kwargs):
+        deadline = time.monotonic() + budget_s
+        while time.monotonic() < deadline:
+            if getattr(_agent, "_interrupt_requested", False):
+                observed["interrupted"] = True
+                return {
+                    "final_response": "",
+                    "messages": history,
+                    "api_calls": 0,
+                    "completed": False,
+                    "interrupted": True,
+                }
+            time.sleep(0.01)
+        observed["interrupted"] = False
+        return {"final_response": "ok", "messages": history, "failed": False}
+
+    monkeypatch.setattr("agent.conversation_loop.run_conversation", fake_run)
+    result = AIAgent.run_conversation(
+        agent,
+        "new message",
+        conversation_history=[{"role": "user", "content": "seed"}],
+    )
+    return result, observed
+
+
+def test_refresh_sqlite_lock_is_retried_not_treated_as_lost_lease(monkeypatch):
+    """A locked state.db is contention, not a lost holder: keep the turn running."""
+    db = _DB()
+    agent = _agent_with_db(db)
+    agent._session_turn_lease_refresh_interval = 0.01
+    interrupt_calls = []
+
+    def track_interrupt(message=None, hard_cancel=False):
+        interrupt_calls.append((message, hard_cancel))
+        agent._interrupt_requested = True
+        agent._interrupt_message = message
+
+    agent.interrupt = track_interrupt
+    attempts = {"n": 0}
+
+    def refresh_locked_once(session_id, holder, **kwargs):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return True
+
+    db.refresh_session_turn_lease = refresh_locked_once
+    result, observed = _run_with_refresh(monkeypatch, db, agent)
+
+    assert attempts["n"] >= 2, "lock error must schedule another renewal"
+    assert observed["interrupted"] is False
+    assert interrupt_calls == []
+    assert result["final_response"] == "ok"
+
+
+def test_refresh_persistent_lock_stops_only_near_committed_expiry(monkeypatch):
+    """Lock tolerance is bounded by the row's committed expiry, with a 2s margin."""
+    db = _DB()
+    agent = _agent_with_db(db)
+    agent._session_turn_lease_refresh_interval = 0.01
+    interrupt_calls = []
+
+    def track_interrupt(message=None, hard_cancel=False):
+        interrupt_calls.append((time.time(), message, hard_cancel))
+        agent._interrupt_requested = True
+        agent._interrupt_message = message
+
+    agent.interrupt = track_interrupt
+    committed_expiry = {"at": None}
+    patience_seen = []
+
+    def committed(session_id, holder):
+        return committed_expiry["at"]
+
+    def refresh_always_locked(session_id, holder, **kwargs):
+        patience_seen.append((time.time(), kwargs.get("patience_s")))
+        raise sqlite3.OperationalError("database is locked")
+
+    db.session_turn_lease_expires_at = committed
+    db.refresh_session_turn_lease = refresh_always_locked
+
+    # Committed expiry 4.5s away: a 2s margin means the turn stops after
+    # roughly 2.5s of retries, not on the first lock error.
+    committed_expiry["at"] = time.time() + 4.5
+    started = time.time()
+    result, observed = _run_with_refresh(monkeypatch, db, agent, budget_s=8.0)
+
+    assert result.get("interrupted") is True
+    assert len(interrupt_calls) == 1
+    assert "could not be refreshed" in str(interrupt_calls[0][1]).lower()
+    # More than one attempt was made before giving up (tolerance, not instant stop).
+    assert len(patience_seen) >= 2
+    # The stop happens no later than expiry minus the 2s margin.
+    assert interrupt_calls[0][0] <= started + 4.5 - 2.0 + 0.5
+    # Each renewal's write patience is capped to remaining authority minus 2s.
+    for at, patience in patience_seen:
+        assert patience is not None
+        assert patience <= (started + 4.5) - at - 2.0 + 0.05

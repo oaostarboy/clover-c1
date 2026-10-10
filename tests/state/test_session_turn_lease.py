@@ -667,3 +667,41 @@ def test_turn_lease_fence_walks_continuation_that_inherited_fork_markers(tmp_pat
     ]
     db.release_session_turn_lease("delegate-continuation", delegate_holder)
     db.release_session_turn_lease("branch-continuation", branch_holder)
+
+
+def test_refresh_honors_write_patience_cap_under_lock(tmp_path):
+    """A renewal waits no longer than its patience cap while another writer holds the lock."""
+    path = tmp_path / "state.db"
+    db = SessionDB(path)
+    db.create_session("capped", source="test")
+    holder = f"pid={os.getpid()}:turn=capped"
+    assert db.try_acquire_session_turn_lease("capped", holder, ttl_seconds=60)
+
+    blocker = sqlite3.connect(str(path), isolation_level=None, timeout=0)
+    blocker.execute("BEGIN IMMEDIATE")
+    try:
+        started = time.monotonic()
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            db.refresh_session_turn_lease(
+                "capped", holder, ttl_seconds=60, patience_s=0.3
+            )
+        elapsed = time.monotonic() - started
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
+
+    assert elapsed < 3.0
+    db.release_session_turn_lease("capped", holder)
+
+
+def test_session_turn_lease_expires_at_reads_committed_row(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("committed", source="test")
+    holder = f"pid={os.getpid()}:turn=committed"
+    before = time.time()
+    assert db.try_acquire_session_turn_lease("committed", holder, ttl_seconds=60)
+    committed = db.session_turn_lease_expires_at("committed", holder)
+    assert committed is not None
+    assert before + 59 <= committed <= time.time() + 60
+    assert db.session_turn_lease_expires_at("committed", "someone-else") is None
+    db.release_session_turn_lease("committed", holder)

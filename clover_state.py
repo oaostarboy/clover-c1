@@ -8083,14 +8083,43 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 last_notice_at = now
             time.sleep(min(max(0.01, float(poll_interval_seconds)), remaining))
 
+    def session_turn_lease_expires_at(self, session_id: str, holder: str) -> Optional[float]:
+        """Committed ``expires_at`` of the turn lease if ``holder`` owns it, else None.
+
+        Lets the turn owner bound its renewal tolerance by the row's real expiry
+        rather than a locally guessed deadline.
+        """
+        if not session_id or not holder:
+            return None
+
+        def _read(conn):
+            conversation_id = self._session_turn_lease_key_on_conn(conn, session_id)
+            row = conn.execute(
+                "SELECT expires_at FROM session_turn_leases "
+                "WHERE conversation_id = ? AND holder = ?",
+                (conversation_id, holder),
+            ).fetchone()
+            if row is None:
+                return None
+            value = row["expires_at"] if isinstance(row, sqlite3.Row) else row[0]
+            return float(value)
+
+        return self._execute_write(_read)
+
     def refresh_session_turn_lease(
         self,
         session_id: str,
         holder: str,
         *,
         ttl_seconds: float = 300.0,
+        patience_s: Optional[float] = None,
     ) -> bool:
-        """Extend a turn lease only while ``holder`` still owns it."""
+        """Extend a turn lease only while ``holder`` still owns it.
+
+        ``patience_s`` caps how long this renewal waits for the write lock. The
+        caller passes the remaining lease authority minus a safety margin so a
+        renewal cannot block past the row's expiry.
+        """
         if not session_id or not holder:
             return False
         expires_at = time.time() + max(0.1, float(ttl_seconds))
@@ -8104,7 +8133,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
             return cursor.rowcount > 0
 
-        return bool(self._execute_write(_do))
+        return bool(self._execute_write(_do, patience_s=patience_s))
 
     def release_session_turn_lease(self, session_id: str, holder: str) -> None:
         """Release a turn lease iff ``holder`` still owns it; idempotent."""
