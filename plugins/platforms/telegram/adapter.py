@@ -4419,7 +4419,7 @@ class TelegramAdapter(BasePlatformAdapter):
             make_admission_handler,
         )
 
-        bot_id = _bot_id_from_token(self.config.token)
+        bot_id = _bot_id_from_token(getattr(self.config, "token", None))
         if bot_id is not None:
             load_receipts(self._seen_update_ids, self._update_receipt_dir, bot_id)
             app.add_handler(

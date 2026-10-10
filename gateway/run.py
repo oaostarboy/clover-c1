@@ -13809,16 +13809,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not await asyncio.to_thread(ledger_enabled):
             return 0
         cutoff = datetime.now() - timedelta(seconds=max_age_seconds)
-        store = self.session_store
-        with store._lock:
-            store._ensure_loaded_locked()
-            marked = [
-                (e.session_key, e.session_id, e.active_turn_token,
-                 e.active_turn_started_at, e.origin)
-                for e in store._entries.values()
-                if e.active_turn_token and e.active_turn_started_at
-                and e.origin and not e.suspended
-            ]
+
+        def _snapshot_marked_turns() -> list:
+            # Off-loop: the store lock + lazy load are blocking I/O.
+            store = self.session_store
+            with store._lock:
+                store._ensure_loaded_locked()
+                return [
+                    (e.session_key, e.session_id, e.active_turn_token,
+                     e.active_turn_started_at, e.origin)
+                    for e in store._entries.values()
+                    if e.active_turn_token and e.active_turn_started_at
+                    and e.origin and not e.suspended
+                ]
+
+        marked = await asyncio.to_thread(_snapshot_marked_turns)
         ledgered = 0
         for key, session_id, token, started_at, origin in marked:
             if started_at < cutoff:
