@@ -1172,6 +1172,11 @@ _HEARTBEAT_INTERVAL = 30  # seconds between parent activity heartbeats during de
 # cap for users who want one.
 _HEARTBEAT_STALE_CYCLES_IDLE = 15  # 15 * 30s = 450s idle between turns → stale
 _HEARTBEAT_STALE_CYCLES_IN_TOOL = 40  # 40 * 30s = 1200s stuck on same tool → stale
+# After the wait for a child ends (configured cap elapsed), keep polling the worker this long for
+# its real result: a child that already wrote its final answer often finishes unwinding a moment
+# later, and that recorded result must be collected instead of a synthesized timeout.
+# Adapted from NousResearch/hermes-agent 79e222d869 (MIT), #113222.
+_STALE_RESULT_GRACE_SECONDS = 2.0
 DEFAULT_TOOLSETS = ["terminal", "file", "web"]
 
 
@@ -2667,6 +2672,16 @@ from agent.step_continuation import (  # noqa: E402
 )
 
 
+def _is_real_child_result(result: Any) -> bool:
+    """True when a result that landed in the grace window is the child's own
+    answer, not the partial our stop signal forced out of it."""
+    if not isinstance(result, dict) or result.get("interrupted"):
+        return False
+    return bool(result.get("completed")) or bool(
+        str(result.get("final_response") or "").strip()
+    )
+
+
 def _auto_continue_limit(cfg: Optional[dict] = None) -> int:
     from agent.step_continuation import auto_continue_limit
 
@@ -2706,7 +2721,26 @@ def _auto_continue_child(child, result, *, task_index, task_id, stream_callback,
         )
         try:
             fut = ex.submit(contextvars.copy_context().run, _leg, message, history)
-            return fut.result(timeout=timeout)
+            try:
+                return fut.result(timeout=timeout)
+            except FuturesTimeoutError:
+                # Same grace-collect as the first leg: stop the child, then
+                # prefer a real result that lands moments later.
+                if fut.done():
+                    raise
+                try:
+                    if hasattr(child, "interrupt"):
+                        child.interrupt()
+                except Exception:
+                    pass
+                grace_done = threading.Event()
+                fut.add_done_callback(lambda _f: grace_done.set())
+                if not grace_done.wait(timeout=_STALE_RESULT_GRACE_SECONDS) or not fut.done():
+                    raise
+                late = fut.result()
+                if not _is_real_child_result(late):
+                    raise FuturesTimeoutError()
+                return late
         except Exception:
             try:
                 if hasattr(child, "interrupt"):
@@ -3147,7 +3181,42 @@ def _run_single_child(
             _run_with_thread_capture,
         )
         try:
-            result = _child_future.result(timeout=child_timeout)
+            try:
+                result = _child_future.result(timeout=child_timeout)
+            except FuturesTimeoutError:
+                # Adapted from NousResearch/hermes-agent 79e222d869 (MIT):
+                # grace-collect (#113222). A child that already wrote its
+                # final answer often lands its result moments after the wait
+                # gave up; synthesizing a timeout here throws that real
+                # result away and strands the finished child (an async batch
+                # then never reaches "all children terminal"). Signal the
+                # cooperative stop so a stoppable worker can unwind, poll the
+                # future for a short grace window, and prefer the real
+                # result. Steering stays open here: the failure path below
+                # (or the success path) is the linearization boundary.
+                if _child_future.done():
+                    raise  # the worker itself raised TimeoutError
+                try:
+                    if child is not None and not request_hard_interrupt(child):
+                        if hasattr(child, "_interrupt_requested"):
+                            child._interrupt_requested = True
+                except Exception:
+                    pass
+                _grace_done = threading.Event()
+                _child_future.add_done_callback(lambda _f: _grace_done.set())
+                if not _grace_done.wait(timeout=_STALE_RESULT_GRACE_SECONDS) or not _child_future.done():
+                    raise
+                logger.info(
+                    "Subagent %d settled inside the %.1fs stale-result grace "
+                    "window — collecting its real result",
+                    task_index,
+                    _STALE_RESULT_GRACE_SECONDS,
+                )
+                result = _child_future.result()
+                if not _is_real_child_result(result):
+                    # Our own stop signal cut it short: that is the timeout,
+                    # not a result worth preferring.
+                    raise FuturesTimeoutError()
         except Exception as _timeout_exc:
             # No consumer boundary remains once this owner stops waiting for
             # the child. Close acceptance before any completion callback and
