@@ -275,7 +275,7 @@ if [ "$INSTALL_SHORTCUT" = true ]; then
   fi
   set -- bash -c '
     set +e
-    curl -fsSL  | bash -s -- "$@"
+    curl -fsSL https://clover-c1./install.sh | bash -s -- "$@"
     install_status=$?
     if [ "$install_status" -eq 0 ] && [ -f /work/promote-main ]; then
       next_main=$(cat /work/promote-main)

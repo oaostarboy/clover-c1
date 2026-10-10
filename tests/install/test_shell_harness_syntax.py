@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -25,3 +27,16 @@ def test_install_update_helpers_have_valid_bash_syntax(script: str) -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_dev_sandbox_installer_shortcut_uses_local_fixture_route() -> None:
+    script = (ROOT / "scripts/dev-sandbox.sh").read_text(encoding="utf-8")
+    match = re.search(r"curl\s+-fsSL\s+(\S+)", script)
+    assert match, "installer shortcut must pass an explicit fixture URL to curl"
+
+    url = urlsplit(match.group(1))
+    assert (url.scheme, url.netloc, url.path) == (
+        "https",
+        "clover-c1.",
+        "/install.sh",
+    )
