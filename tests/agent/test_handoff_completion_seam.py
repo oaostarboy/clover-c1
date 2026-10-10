@@ -340,7 +340,7 @@ def _unit_root():
         _delegate_depth=0, _subagent_id=None, session_id="s",
         _interrupt_requested=False, _active_children=[],
         _active_children_lock=None,
-        _delegation_checkpoint=dc.DelegationCheckpoint(),
+        _delegation_checkpoint=dc.DelegationCheckpoint(dc.CheckpointSettings(enabled=True)),
     )
 
 
@@ -551,7 +551,7 @@ def test_exit_text_after_a_consumed_handoff_does_not_deny_the_handoff():
 def test_report_only_receipt_beyond_the_window_cap_is_not_called_running():
     root = _unit_root()
     cp = root._delegation_checkpoint
-    cp.settings = dc.CheckpointSettings(max_integration_windows=1)
+    cp.settings = dc.CheckpointSettings(enabled=True, max_integration_windows=1)
     cp.declare("delegate", "Fan out.")
     assert cp.ticket().accept_handoff(delegation_id="d", goals=["a", "b"], subagent_ids=[])
     dc.completion_directive(root)

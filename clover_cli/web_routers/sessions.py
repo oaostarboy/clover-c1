@@ -15,6 +15,7 @@ the late-binding seam in :mod:`clover_cli.web_deps` so tests that
 import asyncio  # noqa: F401 — used by handlers
 import json
 import logging
+import sqlite3
 import time  # noqa: F401
 from typing import Any, Dict, List, Optional  # noqa: F401
 
@@ -23,6 +24,12 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 
 from clover_cli.web_deps import late
+from clover_state_health import (
+    CORRUPT_STORE_DETAIL,
+    STORAGE_CORRUPT,
+    note_storage_error,
+    storage_state,
+)
 from clover_cli.web_models import (
     BulkDeleteSessions,
     SessionImport,
@@ -157,11 +164,37 @@ def get_sessions(
                 s["pinned"] = bool(s.get("pinned"))
             if not full:
                 _strip_session_list_rows(sessions)
-            return {"sessions": sessions, "total": total, "limit": limit, "offset": offset}
+            # ``storage`` tells an empty page apart from an unreadable store;
+            # same ``{profile: "corrupt"}`` shape as /api/profiles/sessions*.
+            storage = (
+                {row_profile: STORAGE_CORRUPT}
+                if storage_state(db.db_path) == STORAGE_CORRUPT
+                else {}
+            )
+            return {
+                "sessions": sessions,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "storage": storage,
+            }
         finally:
             db.close()
     except HTTPException:
         raise
+    except sqlite3.DatabaseError as exc:
+        # A damaged store is unavailable, not empty and not an internal error.
+        from clover_state import _default_db_path
+
+        if profile:
+            db_path = _cron_profile_home(profile)[1] / "state.db"
+        else:
+            db_path = _default_db_path()
+        if not note_storage_error(db_path, exc):
+            _log.exception("GET /api/sessions failed")
+            raise HTTPException(status_code=500, detail="Internal server error")
+        _log.error("GET /api/sessions: state.db at %s is corrupt: %s", db_path, exc)
+        raise HTTPException(status_code=503, detail=dict(CORRUPT_STORE_DETAIL)) from exc
     except Exception:
         _log.exception("GET /api/sessions failed")
         raise HTTPException(status_code=500, detail="Internal server error")

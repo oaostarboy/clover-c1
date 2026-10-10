@@ -6,9 +6,10 @@ the Node.js parent over a JSON-RPC protocol on stdin. Subprocess calls that
 inherit this fd can cause the gateway to exit with stdin EOF during tool
 execution (issue #14036, PR #39257).
 
-This script checks that all subprocess.run() and subprocess.Popen() calls
-in TUI-context files (agent/, tools/, plugins/, tui_gateway/) explicitly
-set stdin= to prevent fd inheritance.
+This script checks that all subprocess.run(), subprocess.Popen() and sibling
+calls in every Clover-owned Python source tree (everything except tests/)
+explicitly set stdin= to prevent fd inheritance. Calls are found with an AST
+walk, so multi-line calls are checked exactly like one-liners.
 
 Exit codes:
   0 — all calls are safe
@@ -24,17 +25,25 @@ violation (does not modify files).
 
 from __future__ import annotations
 
+import ast
 import os
-import re
 import sys
 from pathlib import Path
 
 # Directories that run inside the TUI gateway child process.
+# Anything the backend imports or launches can spawn a child that inherits the
+# JSON-RPC stdin, so the whole tree is in scope; only tests/ is skipped.
 TUI_CONTEXT_DIRS = [
     "agent/",
     "tools/",
     "plugins/",
     "tui_gateway/",
+    "gateway/",
+    "cron/",
+    "clover_cli/",
+    "scripts/",
+    "skills/",
+    "optional-skills/",
 ]
 
 # User plugin roots — scanned at runtime if they exist.  Plugins load from
@@ -48,21 +57,27 @@ TUI_CONTEXT_DIRS = [
 # this script runs as a standalone subprocess — ``clover_constants`` isn't
 # on ``sys.path`` until the repo root is added.
 
+# Adapted from NousResearch/hermes-agent 1b8bd66b7f, 04dc1c6ea0 (MIT)
 # subprocess and os APIs that inherit stdin by default when called without
-# an explicit stdin= argument.  The original regex only covered run/Popen
-# (gap #1 in #67639); call, check_output, check_call, os.system, and
-# asyncio.create_subprocess_* all inherit fd 0 equally.
-_SUBPROCESS_PATTERNS = [
-    r"subprocess\.(run|Popen|call|check_output|check_call)\s*\([\"'a-zA-Z_\[\(]",
-    r"os\.system\s*\([\"'a-zA-Z_\[\(]",
-    r"asyncio\.create_subprocess_(exec|shell)\s*\([\"'a-zA-Z_\[\(]",
-]
+# an explicit stdin= argument, keyed by the module name the call is made on.
+# Calls are found as ast.Call nodes, so arguments that start on the next line
+# are checked too.
+_INHERITING_CALLS = {
+    "subprocess": {"run", "Popen", "call", "check_output", "check_call"},
+    "os": {"system"},
+    "asyncio": {"create_subprocess_exec", "create_subprocess_shell"},
+}
 
 # Files with intentional stdin= override (e.g. input= creates a pipe).
 # Format: "filepath:line" or just "filepath" to skip the whole file.
 KNOWN_SAFE = {
     "agent/shell_hooks.py",  # uses input=stdin_json, creates a pipe
     "plugins/security-guidance/patterns.py",  # subprocess mentions are in reminder strings, not calls
+    # _run_bootstrap runs a catalog entry's setup commands through the shell on
+    # the user's terminal and they may prompt, so it must inherit stdin. Listed
+    # here, not with an inline marker, so the file stays out of the CI
+    # mcp_catalog security-review gate; every other call in it sets stdin=.
+    "clover_cli/mcp_catalog.py",
 }
 
 # Inline marker that exempts a single subprocess call from this check.
@@ -72,84 +87,135 @@ KNOWN_SAFE = {
 # file:line entry).
 EXEMPT_MARKER = "noqa: subprocess-stdin"
 
-# Directories to skip entirely.
-SKIP_DIRS = {
-    "tests/",
-    "scripts/",
-    "skills/",
-    "optional-skills/",
-    "clover_cli/",
-    "gateway/",
-    "cron/",
-}
+# Directory names skipped at any depth below a context dir. Matching against the
+# path relative to that dir keeps a skill's own ``scripts/`` folder in scope.
+SKIP_DIRS = {"tests"}
+
+
+def _definition_sets_stdin(tree: ast.AST, name: str) -> bool:
+    """True when ``name`` is defined in the file (assignment or ``def``) and that
+    definition's OWN expression/body sets ``stdin=``.
+
+    Shared kwargs helpers (``_RUN_KW = dict(..., stdin=DEVNULL)``, ``def _run_kwargs(): return
+    dict(..., stdin=DEVNULL)``) legitimately carry the guard; we only accept them when the
+    definition provably sets stdin= — never on the helper's name alone, and never because an
+    unrelated later call in the file happens to pass ``stdin=``.
+    """
+    node = None
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name:
+            node = n
+            break
+        if isinstance(n, (ast.Assign, ast.AnnAssign)):
+            targets = n.targets if isinstance(n, ast.Assign) else [n.target]
+            if any(isinstance(t, ast.Name) and t.id == name for t in targets):
+                node = n.value if n.value is not None else n
+                break
+    return node is not None and _sets_stdin(node)
+
+
+def _is_stdin_key(node: ast.AST | None) -> bool:
+    return isinstance(node, ast.Constant) and node.value == "stdin"
+
+
+def _sets_stdin(node: ast.AST) -> bool:
+    """stdin is set as a keyword (``dict(stdin=...)``), a dict-literal key (``{"stdin": ...}``),
+    a subscript store (``kw["stdin"] = ...``) or ``kw.setdefault("stdin", ...)``. A ``"stdin"``
+    string anywhere else (a value, a path) does not count."""
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.keyword) and sub.arg == "stdin":
+            return True
+        if isinstance(sub, ast.Dict) and any(_is_stdin_key(key) for key in sub.keys):
+            return True
+        if isinstance(sub, ast.Subscript) and isinstance(sub.ctx, ast.Store) and _is_stdin_key(sub.slice):
+            return True
+        if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr == "setdefault" and sub.args and _is_stdin_key(sub.args[0])):
+            return True
+    return False
+
+
+def _is_inheriting_call(call: ast.Call) -> bool:
+    """``subprocess.run(...)``, ``os.system(...)`` etc., including ``x.subprocess.run(...)``."""
+    func = call.func
+    if not isinstance(func, ast.Attribute):
+        return False
+    owner = func.value
+    owner_name = owner.id if isinstance(owner, ast.Name) else getattr(owner, "attr", None)
+    return func.attr in _INHERITING_CALLS.get(owner_name, ())
+
+
+def _call_is_safe(call: ast.Call, tree: ast.AST) -> bool:
+    for kw in call.keywords:
+        # stdin= set, or input= (creates a pipe).
+        if kw.arg in ("stdin", "input"):
+            return True
+        if kw.arg is not None:
+            continue
+        # Inline splat that sets it: ``**dict(stdin=...)`` / ``**{"stdin": ...}``.
+        if _sets_stdin(kw.value):
+            return True
+        # ``**name`` / ``**name(...)`` splat: safe when the same-file definition sets stdin=.
+        value = kw.value.func if isinstance(kw.value, ast.Call) else kw.value
+        if isinstance(value, ast.Name) and _definition_sets_stdin(tree, value.id):
+            return True
+    return False
 
 
 def find_subprocess_calls(content: str, filepath: str) -> list[dict]:
     """Find all subprocess/os/asyncio calls missing stdin= in content."""
-    violations = []
     lines = content.split("\n")
+    try:
+        tree = ast.parse(content)
+    except SyntaxError as exc:
+        # Fail closed: an unparsable file cannot be shown to be safe.
+        return [{"file": filepath, "line": exc.lineno or 1, "snippet": f"SyntaxError: {exc.msg}"}]
 
-    # Match only actual function calls — not comments, docstrings, or prose.
-    # Multiple patterns cover subprocess.run/Popen/call/check_output/check_call,
-    # os.system, and asyncio.create_subprocess_exec/shell.
-    patterns = [re.compile(p) for p in _SUBPROCESS_PATTERNS]
-
-    for i, line in enumerate(lines):
-        # Skip comments.
-        stripped = line.lstrip()
-        if stripped.startswith("#"):
+    violations = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not _is_inheriting_call(node):
             continue
-
-        # Skip lines where the match is inside backticks (docstring references).
-        if "``subprocess" in line:
+        if _call_is_safe(node, tree):
             continue
-
-        if not any(p.search(line) for p in patterns):
+        # Inline exemption marker on the call itself or within the few comment
+        # lines immediately above it → the call intentionally inherits stdin.
+        start, end = node.lineno - 1, node.end_lineno or node.lineno
+        if EXEMPT_MARKER in "\n".join(lines[max(0, start - 4):end]):
             continue
+        violations.append({
+            "file": filepath,
+            "line": node.lineno,
+            "snippet": lines[start].strip()[:120],
+        })
 
-        # Collect the full call (may span multiple lines).
-        call_start = i
-        paren_depth = 0
-        found_open = False
-        call_lines = []
-        for j in range(i, min(i + 30, len(lines))):
-            call_lines.append(lines[j])
-            for ch in lines[j]:
-                if ch == "(":
-                    paren_depth += 1
-                    found_open = True
-                elif ch == ")":
-                    paren_depth -= 1
-                    if found_open and paren_depth == 0:
-                        call_text = "\n".join(call_lines)
-
-                        # Already has stdin= → safe.
-                        if "stdin=" in call_text:
-                            break
-
-                        # Has input= → creates a pipe, safe.
-                        if "input=" in call_text:
-                            break
-
-                        # Inline exemption marker on the call itself or within
-                        # the few comment lines immediately above it → the call
-                        # intentionally inherits stdin.
-                        window_start = max(0, i - 4)
-                        preceding = "\n".join(lines[window_start:i])
-                        if EXEMPT_MARKER in call_text or EXEMPT_MARKER in preceding:
-                            break
-
-                        violations.append({
-                            "file": filepath,
-                            "line": i + 1,
-                            "snippet": line.strip()[:120],
-                        })
-                        break
-            else:
-                continue
-            break
-
+    violations.sort(key=lambda v: v["line"])
     return violations
+
+
+def scan_repo(repo_root: Path) -> list[dict]:
+    """Scan every TUI-context directory under ``repo_root`` (tests/ is skipped)."""
+    all_violations: list[dict] = []
+    for tui_dir in TUI_CONTEXT_DIRS:
+        dirpath = repo_root / tui_dir
+        if not dirpath.exists():
+            continue
+
+        for py_file in dirpath.rglob("*.py"):
+            rel_path = py_file.relative_to(repo_root)
+            rel = str(rel_path)
+
+            # Skip known-safe files (KNOWN_SAFE is forward-slash).
+            if rel_path.as_posix() in KNOWN_SAFE:
+                continue
+
+            # Skip test dirs, matched relative to the context dir so a
+            # checkout that itself lives under a ``tests`` folder is scanned.
+            if SKIP_DIRS & set(py_file.relative_to(dirpath).parts):
+                continue
+
+            content = py_file.read_text(encoding="utf-8-sig")
+            all_violations.extend(find_subprocess_calls(content, rel))
+    return all_violations
 
 
 def main() -> int:
@@ -162,28 +228,7 @@ def main() -> int:
     sys.path.insert(0, str(repo_root))
     from clover_constants import get_clover_home
 
-    all_violations = []
-
-    for tui_dir in TUI_CONTEXT_DIRS:
-        dirpath = repo_root / tui_dir
-        if not dirpath.exists():
-            continue
-
-        for py_file in dirpath.rglob("*.py"):
-            rel = str(py_file.relative_to(repo_root))
-
-            # Skip known-safe files.
-            if rel in KNOWN_SAFE:
-                continue
-
-            # Skip test files inside tools/ etc.
-            parts = py_file.parts
-            if any(skip.rstrip("/") in parts for skip in SKIP_DIRS):
-                continue
-
-            content = py_file.read_text(encoding="utf-8")
-            violations = find_subprocess_calls(content, rel)
-            all_violations.extend(violations)
+    all_violations = scan_repo(repo_root)
 
     # Scan user plugin directories (Gap 1: guard missed user-installed
     # plugins in get_clover_home()/plugins/ and project plugins in
@@ -205,7 +250,7 @@ def main() -> int:
                 continue
 
             try:
-                content = py_file.read_text(encoding="utf-8")
+                content = py_file.read_text(encoding="utf-8-sig")
             except Exception:
                 continue
             violations = find_subprocess_calls(content, rel)

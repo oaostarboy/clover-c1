@@ -202,7 +202,48 @@ class TestPtyBridgeClose:
 
         bridge.close()
 
-        assert sent == [(67890, signal.SIGHUP)]
+        # Child (pid 12345) does NOT lead group 67890: killpg would hit a group
+        # we share with Clover, so no group signal may be sent (R11).
+        assert sent == []
+        assert bridge._closed is True
+
+    def test_close_signals_group_when_child_leads_it(self, monkeypatch):
+        sent: list[tuple[int, signal.Signals]] = []
+
+        class _FakeProc:
+            pid = 12345
+            fd = -1
+
+            def __init__(self):
+                self.alive = True
+
+            def isalive(self):
+                return self.alive
+
+            def kill(self, sig):
+                raise AssertionError(f"single-process kill used: {sig}")
+
+            def close(self, force=False):
+                self.closed = force
+
+        fake = _FakeProc()
+
+        def fake_killpg(pgid, sig):
+            sent.append((pgid, sig))
+            fake.alive = False
+
+        # Child leads its own group (start_new_session): pgid == pid.
+        monkeypatch.setattr(os, "getpgid", lambda pid: pid)
+        monkeypatch.setattr(os, "killpg", fake_killpg)
+
+        bridge = PtyBridge.__new__(PtyBridge)
+        bridge._proc = fake
+        bridge._fd = -1
+        bridge._closed = False
+
+        bridge.close()
+
+        assert sent == [(12345, signal.SIGHUP)]
         assert bridge._closed is True
 
 

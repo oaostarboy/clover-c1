@@ -212,6 +212,7 @@ def _process_start_marker(pid: int) -> str:
         capture_output=True,
         text=True,
         check=False,
+        stdin=subprocess.DEVNULL,
     )
     marker = result.stdout.strip()
     if result.returncode == 0 and marker:
@@ -2385,6 +2386,7 @@ def _fs_git_branch(cwd: str) -> str:
             "text": True,
             "timeout": 2,
             "check": False,
+            "stdin": subprocess.DEVNULL,
         }
         if sys.platform == "win32":
             run_kwargs["creationflags"] = windows_hide_flags()
@@ -4009,6 +4011,10 @@ async def get_status(profile: Optional[str] = None):
 
             storage_check = await run_in_threadpool(_probe_state_db, get_clover_home())
             components["storage"] = {"status": storage_check.get("status", "degraded")}
+            # The one reason enum consumers key off; same latch as readiness and
+            # the session lists (C1.4 R03).
+            if storage_check.get("detail") == "corrupt":
+                components["storage"]["reason"] = "corrupt"
         except Exception:
             components["storage"] = {"status": "degraded"}
         platform_states = [
@@ -5083,6 +5089,7 @@ def _recent_upstream_commits(n: int = 20) -> List[Dict[str, Any]]:
             encoding="utf-8",
             errors="replace",
             timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         if out.returncode != 0:
             return []
@@ -6409,6 +6416,7 @@ def _run_setup_command(
         errors="replace",
         timeout=timeout,
         check=False,
+        stdin=subprocess.DEVNULL,
     )
 
 
@@ -9657,6 +9665,7 @@ def _ensure_whatsapp_bridge_dependencies(bridge_dir: Path) -> None:
             timeout=timeout,
             env=with_clover_node_path(),
             creationflags=windows_hide_flags(),
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as exc:
         raise HTTPException(
@@ -9721,6 +9730,7 @@ def _spawn_whatsapp_pairing_process(session_path: Path, mode: str) -> subprocess
         start_new_session=True,
         env=env,
         creationflags=windows_hide_flags(),
+        stdin=subprocess.DEVNULL,
     )
 
 
@@ -14626,6 +14636,7 @@ def _probe_docker_backend() -> tuple:
             encoding="utf-8",
             errors="replace",
             timeout=2,
+            stdin=subprocess.DEVNULL,
         )
         if proc.returncode == 0:
             return ("ready", "")

@@ -58,7 +58,7 @@ Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
 
 def default_runner(cwd: Path) -> Runner:
     def run(cmd: Sequence[str]) -> "subprocess.CompletedProcess[str]":
-        return subprocess.run(list(cmd), cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+        return subprocess.run(list(cmd), cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
 
     return run
 

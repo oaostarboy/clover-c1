@@ -185,6 +185,13 @@ class SessionSource:
     # Transport-local fail-closed signal for an explicit profile route whose
     # target is not served. Excluded from repr/equality and wire serialization.
     profile_route_rejected: bool = field(default=False, repr=False, compare=False)
+    # Profile that OWNS the transport (bot credential) which received this
+    # message, as opposed to ``profile`` (the routed runtime/session
+    # namespace). A shared primary bot can route a chat into another profile's
+    # runtime, so the two differ. Persisted so crash recovery can deliver via
+    # the receiving transport. "default" => the primary/unscoped adapter.
+    # Captured when the receiving adapter is attached (``_transport_adapter_ref``).
+    transport_profile: Optional[str] = field(default=None, compare=False)
 
     # Discord auto-thread metadata.  Newly auto-created Discord threads start
     # with a fast placeholder title from the raw message, then the gateway can
@@ -228,6 +235,25 @@ class SessionSource:
             self.scope_id = self.guild_id
         elif self.scope_id is not None:
             self.guild_id = self.scope_id
+
+    @property
+    def _transport_adapter_ref(self):
+        """In-process weakref to the adapter that received this message."""
+        return self.__dict__.get("_transport_adapter_ref_obj")
+
+    @_transport_adapter_ref.setter
+    def _transport_adapter_ref(self, ref) -> None:
+        self.__dict__["_transport_adapter_ref_obj"] = ref
+        adapter = ref() if callable(ref) else None
+        if adapter is not None:
+            owner = getattr(adapter, "_owner_profile", None)
+            self.transport_profile = (
+                owner.strip() if isinstance(owner, str) and owner.strip() else "default"
+            )
+
+    @_transport_adapter_ref.deleter
+    def _transport_adapter_ref(self) -> None:
+        self.__dict__.pop("_transport_adapter_ref_obj", None)
 
     @property
     def description(self) -> str:
@@ -279,6 +305,8 @@ class SessionSource:
             d["message_id"] = self.message_id
         if self.profile:
             d["profile"] = self.profile
+        if self.transport_profile:
+            d["transport_profile"] = self.transport_profile
         if self.auto_thread_created:
             d["auto_thread_created"] = True
         if self.auto_thread_initial_name:
@@ -306,6 +334,7 @@ class SessionSource:
             parent_chat_id=data.get("parent_chat_id"),
             message_id=data.get("message_id"),
             profile=data.get("profile"),
+            transport_profile=data.get("transport_profile"),
             auto_thread_created=bool(data.get("auto_thread_created", False)),
             auto_thread_initial_name=data.get("auto_thread_initial_name"),
             prospective_thread_id=data.get("prospective_thread_id"),
@@ -3173,8 +3202,14 @@ class SessionStore:
                 return True
         return False
 
-    def mark_turn_active(self, session_key: str) -> Optional[str]:
+    def mark_turn_active(
+        self, session_key: str, transport_profile: Optional[str] = None
+    ) -> Optional[str]:
         """Persist exact ownership of the agent turn running for *session_key*.
+
+        ``transport_profile`` is the owner of the adapter that received this
+        turn's message; it is stored on the entry's origin so crash recovery
+        delivers via that transport rather than the routed runtime profile.
 
         The opaque token is returned to the caller and must be supplied to
         :meth:`clear_turn_active`.  Re-marking replaces the previous token so
@@ -3194,6 +3229,8 @@ class SessionStore:
             # rolling downgrade/upgrade window where an older binary cannot
             # understand the exact marker fields.
             candidate["updated_at"] = now.isoformat()
+            if transport_profile and isinstance(candidate.get("origin"), dict):
+                candidate["origin"]["transport_profile"] = transport_profile
 
             # Persist before publishing the marker in memory.  If the durable
             # write raises, a later unrelated save cannot leak an unowned token.
@@ -3205,6 +3242,8 @@ class SessionStore:
             entry.active_turn_token = token
             entry.active_turn_started_at = now
             entry.updated_at = now
+            if transport_profile and entry.origin is not None:
+                entry.origin.transport_profile = transport_profile
         return token
 
     def clear_turn_active(self, session_key: str, token: str) -> bool:
@@ -3407,42 +3446,6 @@ class SessionStore:
                 len(removed_keys), max_age_days,
             )
         return len(removed_keys)
-
-    def suspend_recently_active(self, max_age_seconds: int = 120) -> int:
-        """Mark recently-active sessions as resumable after an unexpected exit.
-
-        Called on gateway startup after a crash or fast restart to preserve
-        in-flight sessions instead of destroying their conversation history
-        (#7536).  Only marks sessions updated within *max_age_seconds* to
-        avoid touching long-idle sessions.  Sets ``resume_pending=True`` so
-        the next incoming message on the same session_key auto-resumes from
-        the existing transcript.
-
-        Entries already flagged ``resume_pending=True`` are skipped.  Entries
-        explicitly ``suspended=True`` (from /stop or stuck-loop escalation)
-        are also skipped.  Terminal escalation for genuinely stuck sessions
-        is still handled by the existing ``.restart_failure_counts`` counter
-        (threshold 3), which runs after this method and sets ``suspended=True``.
-
-        Returns the number of sessions marked resumable.
-        """
-        from datetime import timedelta
-
-        cutoff = _now() - timedelta(seconds=max_age_seconds)
-        count = 0
-        with self._lock:
-            self._ensure_loaded_locked()
-            for entry in self._entries.values():
-                if entry.resume_pending:
-                    continue
-                if not entry.suspended and entry.updated_at >= cutoff:
-                    entry.resume_pending = True
-                    entry.resume_reason = "restart_interrupted"
-                    entry.last_resume_marked_at = _now()
-                    count += 1
-            if count:
-                self._save()
-        return count
 
     def reset_session(self, session_key: str, display_name: Optional[str] = None) -> Optional[SessionEntry]:
         """Force reset a session, creating a new session ID."""

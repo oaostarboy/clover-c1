@@ -482,34 +482,269 @@ async def test_runner_active_turn_clear_stops_after_bounded_retries():
 
 
 @pytest.mark.asyncio
-async def test_unclean_recovery_promotes_exact_markers_before_legacy_fallback(
-    monkeypatch,
+async def test_unclean_recovery_uses_exact_markers_only_no_recency_sweep(
+    tmp_path, monkeypatch,
 ):
+    """Regression: a recently-active session whose turn already finished
+    (no durable marker) must NOT be re-armed for auto-resume after a crash.
+    The old 120 s ``updated_at`` sweep re-answered every such chat."""
+    monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    from gateway.session import AsyncSessionStore
+
+    store = _make_store(tmp_path)
+    source = _make_source("finished-chat")
+    entry = store.get_or_create_session(source)
+    # Finished turn: updated seconds ago, marker already cleared.
+    with store._lock:
+        store._entries[entry.session_key].updated_at = datetime.now()
+
     runner = object.__new__(GatewayRunner)
-    calls: list[str] = []
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+
+    assert await runner._recover_unclean_sessions() == (0, 0)
+    assert _entry_for(store, source).resume_pending is False
+
+
+@pytest.mark.asyncio
+async def test_unclean_recovery_adopts_persisted_reply_instead_of_regenerating(
+    tmp_path, monkeypatch,
+):
+    """A kill after the final reply was persisted but before it was ledgered
+    must adopt that reply into the delivery ledger (sent once), not re-run it."""
+    import time as _time
+
+    from gateway import delivery_ledger
+    from gateway.session import AsyncSessionStore
 
     monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setattr(delivery_ledger, "ledger_enabled", lambda *_a, **_k: True)
 
-    async def _recover(*, max_age_seconds):
-        assert max_age_seconds == ACTIVE_TURN_MAX_AGE_SECONDS
-        calls.append("exact")
-        return 1
-
-    async def _fallback(*, max_age_seconds):
-        assert max_age_seconds == 120
-        calls.append("fallback")
-        return 2
-
-    runner.session_store = MagicMock()
-    setattr(
-        runner,
-        "_async_session_store",
-        SimpleNamespace(
-            _store=runner.session_store,
-            recover_interrupted_turns=_recover,
-            suspend_recently_active=_fallback,
-        ),
+    store = _make_db_store(tmp_path)
+    source = _make_source("crash-reply-chat")
+    entry = store.get_or_create_session(source)
+    store.mark_turn_active(entry.session_key)
+    store.append_to_transcript(entry.session_id, {"role": "user", "content": "hi"})
+    store.append_to_transcript(
+        entry.session_id,
+        {"role": "assistant", "content": "the final answer", "timestamp": _time.time()},
     )
 
-    assert await runner._recover_unclean_sessions() == (1, 2)
-    assert calls == ["exact", "fallback"]
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+
+    try:
+        await runner._recover_unclean_sessions()
+        rows = delivery_ledger._connect().execute(
+            "SELECT content, state FROM delivery_obligations WHERE session_key = ?",
+            (entry.session_key,),
+        ).fetchall()
+        resume = _entry_for(store, source).resume_pending
+    finally:
+        _close_store_db(store)
+
+    assert resume is False
+    assert [tuple(r) for r in rows] == [("the final answer", "attempting")]
+
+
+@pytest.mark.asyncio
+async def test_unclean_recovery_does_not_resend_a_previous_turns_reply(
+    tmp_path, monkeypatch,
+):
+    """A marked turn killed before its own reply was written must resume.
+
+    The transcript's last assistant row is then the PREVIOUS turn's reply
+    (older than the marker). Adopting it would re-send an old answer and
+    silently drop the interrupted one (Hermes 360b9697ac timestamp guard).
+    """
+    import time as _time
+
+    from gateway import delivery_ledger
+    from gateway.session import AsyncSessionStore
+
+    monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setattr(delivery_ledger, "ledger_enabled", lambda *_a, **_k: True)
+
+    store = _make_db_store(tmp_path)
+    source = _make_source("old-reply-chat")
+    entry = store.get_or_create_session(source)
+    store.append_to_transcript(entry.session_id, {"role": "user", "content": "first"})
+    store.append_to_transcript(
+        entry.session_id,
+        {"role": "assistant", "content": "previous answer", "timestamp": _time.time() - 600},
+    )
+    store.mark_turn_active(entry.session_key)
+
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+
+    try:
+        resumed, ledgered = await runner._recover_unclean_sessions()
+        rows = delivery_ledger._connect().execute(
+            "SELECT content FROM delivery_obligations WHERE session_key = ?",
+            (entry.session_key,),
+        ).fetchall()
+        resume = _entry_for(store, source).resume_pending
+    finally:
+        _close_store_db(store)
+
+    assert (resumed, ledgered) == (1, 0)
+    assert resume is True
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_unclean_recovery_ledgers_reply_under_the_routed_profile(
+    tmp_path, monkeypatch,
+):
+    """Multiplex: a secondary profile's crash-left reply must be ledgered for
+    that profile's bot, or the boot sweep hands it to the wrong transport."""
+    import time as _time
+
+    from gateway import delivery_ledger
+    from gateway.session import AsyncSessionStore
+
+    monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setattr(delivery_ledger, "ledger_enabled", lambda *_a, **_k: True)
+
+    store = _make_db_store(tmp_path)
+    source = _make_source("profile-reply-chat")
+    source.profile = "coder"
+    entry = store.get_or_create_session(source)
+    store.mark_turn_active(entry.session_key)
+    store.append_to_transcript(entry.session_id, {"role": "user", "content": "hi"})
+    store.append_to_transcript(
+        entry.session_id,
+        {"role": "assistant", "content": "coder answer", "timestamp": _time.time()},
+    )
+
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+
+    try:
+        await runner._recover_unclean_sessions()
+        rows = delivery_ledger._connect().execute(
+            "SELECT adapter_profile FROM delivery_obligations WHERE session_key = ?",
+            (entry.session_key,),
+        ).fetchall()
+    finally:
+        _close_store_db(store)
+
+    assert [tuple(r) for r in rows] == [("coder",)]
+
+
+def _transport_runner(store, adapter):
+    from gateway.session import AsyncSessionStore
+
+    runner = object.__new__(GatewayRunner)
+    runner.config = GatewayConfig(multiplex_profiles=True)
+    runner.adapters = {Platform.TELEGRAM: adapter}
+    runner._profile_adapters = {"coder": {}}
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+    return runner
+
+
+def _telegram_adapter():
+    from gateway.config import PlatformConfig
+    from plugins.platforms.telegram.adapter import TelegramAdapter
+
+    return TelegramAdapter(
+        PlatformConfig(enabled=True, token="111:offline-test", extra={})
+    )
+
+
+@pytest.mark.asyncio
+async def test_crash_reply_uses_transport_not_routed_runtime_profile(
+    tmp_path, monkeypatch,
+):
+    """A shared primary bot routing into 'coder' must ledger the crash-left
+    reply for the PRIMARY transport, or no exact-transport sweep can claim it
+    (Astra C13-ASTRA-02)."""
+    import time as _time
+    import weakref
+
+    from gateway import delivery_ledger
+
+    monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setattr(delivery_ledger, "ledger_enabled", lambda *_a, **_k: True)
+
+    store = _make_db_store(tmp_path)
+    source = SessionSource(
+        platform=Platform.TELEGRAM, chat_id="42", user_id="88", profile="coder"
+    )
+    adapter = _telegram_adapter()
+    adapter._owner_profile = None
+    source._transport_adapter_ref = weakref.ref(adapter)
+    runner = _transport_runner(store, adapter)
+    assert runner._adapter_for_source(source) is adapter
+
+    entry = store.get_or_create_session(source)
+    store.mark_turn_active(entry.session_key)
+    store.append_to_transcript(entry.session_id, {"role": "user", "content": "hi"})
+    store.append_to_transcript(
+        entry.session_id,
+        {"role": "assistant", "content": "unsent answer", "timestamp": _time.time()},
+    )
+    # A crash drops the ephemeral transport provenance.
+    del source._transport_adapter_ref
+    try:
+        assert await runner._recover_unclean_sessions() == (0, 1)
+        assert not entry.resume_pending
+        claims = await runner._claim_pending_obligations()
+    finally:
+        _close_store_db(store)
+
+    assert claims and claims[0]["profile"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_crash_reply_transport_owner_survives_a_restart_reload(
+    tmp_path, monkeypatch,
+):
+    """The transport owner is persisted with the marker, so a freshly loaded
+    store (new process) still recovers via the receiving bot, not the route."""
+    import time as _time
+    import weakref
+
+    from gateway import delivery_ledger
+
+    monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setattr(delivery_ledger, "ledger_enabled", lambda *_a, **_k: True)
+
+    store = _make_db_store(tmp_path)
+    source = SessionSource(
+        platform=Platform.TELEGRAM, chat_id="43", user_id="88", profile="coder"
+    )
+    # The bot that received the message is the "support" credential owner,
+    # which differs from the routed runtime ("coder").
+    adapter = _telegram_adapter()
+    adapter.set_owner_profile("support")
+    source._transport_adapter_ref = weakref.ref(adapter)
+    entry = store.get_or_create_session(source)
+    store.mark_turn_active(entry.session_key, transport_profile=source.transport_profile)
+    store.append_to_transcript(
+        entry.session_id,
+        {"role": "assistant", "content": "support answer", "timestamp": _time.time()},
+    )
+    _close_store_db(store)
+
+    store2 = _make_db_store(tmp_path)
+    from gateway.session import AsyncSessionStore
+
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = store2
+    runner._async_session_store = AsyncSessionStore(store2)
+    try:
+        await runner._recover_unclean_sessions()
+        rows = delivery_ledger._connect().execute(
+            "SELECT adapter_profile FROM delivery_obligations WHERE session_key = ?",
+            (entry.session_key,),
+        ).fetchall()
+    finally:
+        _close_store_db(store2)
+
+    assert [tuple(r) for r in rows] == [("support",)]

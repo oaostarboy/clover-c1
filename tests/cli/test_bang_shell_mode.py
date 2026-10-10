@@ -8,6 +8,9 @@ byte-identical because it never becomes a turn.
 import copy
 import json
 import os
+import shlex
+import subprocess
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -311,3 +314,50 @@ class TestBangLeavesHistoryByteIdentical:
 
 
 
+
+
+# ── interactive stdin ──────────────────────────────────────────────────────
+
+_ASK = "import sys; print('answer=' + input('question? '))"
+
+
+def _bang_child_code(command: str) -> str:
+    return (
+        "from clover_cli.bang_shell import run_bang_command; "
+        f"raise SystemExit(run_bang_command({command!r}))"
+    )
+
+
+class TestBangInheritsStdin:
+    """A human-typed `!command` owns the terminal: it must read the user's stdin."""
+
+    def test_command_reads_inherited_pipe_stdin(self):
+        command = shlex.join([sys.executable, "-c", _ASK])
+        result = subprocess.run(
+            [sys.executable, "-c", _bang_child_code(command)],
+            input="yes\n", text=True, capture_output=True, timeout=30,
+        )
+        assert result.returncode == 0 and "answer=yes" in result.stdout, (
+            result.returncode, result.stdout, result.stderr,
+        )
+
+    @pytest.mark.linux_only
+    def test_question_with_a_real_terminal(self):
+        import pty
+
+        master, slave = pty.openpty()
+        command = shlex.join([sys.executable, "-c", _ASK])
+        child = subprocess.Popen(
+            [sys.executable, "-c", _bang_child_code(command)],
+            stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        os.close(slave)
+        try:
+            os.write(master, b"yes\n")
+            output, _ = child.communicate(timeout=30)
+            assert child.returncode == 0 and "answer=yes" in output, (child.returncode, output)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=5)
+            os.close(master)

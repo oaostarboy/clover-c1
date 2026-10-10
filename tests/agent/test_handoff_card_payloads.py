@@ -66,7 +66,7 @@ def _card(goals, handoff=None):
         _delegate_depth=0, _subagent_id=None, session_id="s",
         _interrupt_requested=False, _active_children=[],
         _active_children_lock=None,
-        _delegation_checkpoint=dc.DelegationCheckpoint(),
+        _delegation_checkpoint=dc.DelegationCheckpoint(dc.CheckpointSettings(enabled=True)),
     )
     checkpoint = root._delegation_checkpoint
     checkpoint.declare("delegate", "Long, independent work.")

@@ -56,6 +56,7 @@ def recalc(xlsx_path: str, timeout: int = 60) -> dict:
                 check=True,
                 capture_output=True,
                 timeout=timeout,
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired:
             return {"status": "error", "error": f"libreoffice timed out after {timeout}s"}

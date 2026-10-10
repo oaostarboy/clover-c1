@@ -559,6 +559,36 @@ def _common_betas_for_base_url(
     return betas
 
 
+def _apply_custom_provider_extra_headers(kwargs: Dict[str, Any], route) -> None:
+    """Merge ``custom_providers[].extra_headers`` onto ``kwargs["default_headers"]``.
+
+    Adapted from NousResearch/hermes-agent 6f6ed01355 (MIT).
+
+    ``route`` is the caller's raw base_url (the ``/v1`` form ``custom_providers``
+    entries are keyed by; ``kwargs["base_url"]`` has it stripped). Provider headers
+    are the most specific config level, so they win over the SDK User-Agent and the
+    attribution/beta sets already present (case-insensitively, so a configured
+    ``User-Agent`` replaces an OAuth ``user-agent`` instead of sending both). A relay
+    behind a WAF that rejects the SDK User-Agent needs this to stop 403ing.
+    SECURITY: values routinely carry credentials (Cloudflare Access tokens): never log them.
+    """
+    if not route:
+        return
+    try:
+        from clover_cli.config import get_custom_provider_extra_headers
+        extra = get_custom_provider_extra_headers(str(route))
+    except Exception:
+        logger.debug("custom-provider extra_headers skipped for Anthropic client", exc_info=True)
+        return
+    if not extra:
+        return
+    merged = dict(kwargs.get("default_headers") or {})
+    lowered = {str(k).lower() for k in extra}
+    merged = {k: v for k, v in merged.items() if str(k).lower() not in lowered}
+    merged.update(extra)
+    kwargs["default_headers"] = merged
+
+
 def _build_anthropic_client_with_bearer_hook(
     token_provider,
     base_url: str = None,
@@ -631,6 +661,7 @@ def _build_anthropic_client_with_bearer_hook(
     )
     if common_betas:
         kwargs["default_headers"] = {"anthropic-beta": ",".join(common_betas)}
+    _apply_custom_provider_extra_headers(kwargs, base_url)
 
     client = _anthropic_sdk.Anthropic(**kwargs)
     # Same env-inference trap as build_anthropic_client: auth_token-only
@@ -783,6 +814,7 @@ def build_anthropic_client(
         headers.setdefault("User-Agent", f"CloverAgent/{_CLOVER_VERSION}")
         kwargs["default_headers"] = headers
 
+    _apply_custom_provider_extra_headers(kwargs, base_url)
     client = _anthropic_sdk.Anthropic(**kwargs)
     # Bearer-only construction leaves ``api_key`` unset, so the SDK fills it
     # from ``ANTHROPIC_API_KEY`` (Clover loads that into the process env from

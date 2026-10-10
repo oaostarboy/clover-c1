@@ -53,7 +53,8 @@ def run_openssl(args):
     the host's openssl rejects all look identical.
     """
     done = subprocess.run(
-        ['openssl', *args], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+        ['openssl', *args], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
     )
     if done.returncode != 0:
         detail = done.stderr.decode('utf-8', 'replace').strip()

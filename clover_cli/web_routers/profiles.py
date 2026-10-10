@@ -30,6 +30,7 @@ from typing import Any, Dict, List, Optional, Tuple  # noqa: F401
 from fastapi import APIRouter, HTTPException, Query  # noqa: F401
 
 from clover_cli.web_deps import late
+from clover_state_health import STORAGE_CORRUPT, note_storage_error, storage_state
 from clover_cli.web_models import (
     ProfileCreate,
     ProfileActiveUpdate,
@@ -93,6 +94,17 @@ _SIDEBAR_CACHE_MAX_ENTRIES = 32
 _SIDEBAR_PROFILE_CACHE_MAX_ENTRIES = 256
 _SIDEBAR_PROFILE_CACHE = OrderedDict()
 _SIDEBAR_PROFILE_CACHE_LOCK = threading.Lock()
+
+
+def _corrupt_profile_stores(targets) -> Dict[str, str]:
+    """``{profile: "corrupt"}`` for every scanned profile whose state.db this process
+    has latched as structurally corrupt (``clover_state_health``). Lets the UI tell an
+    empty or partial list from a damaged store, including when some reads still work."""
+    return {
+        name: STORAGE_CORRUPT
+        for name, home in targets
+        if storage_state(Path(home) / "state.db") == STORAGE_CORRUPT
+    }
 
 
 def _stat_fingerprint(path: Path):
@@ -303,6 +315,7 @@ def get_profiles_sessions(
             # on every refresh until something else opened the DB writable.
             db = _open_session_db_at_path(db_path, read_only=True)
         except Exception as exc:
+            note_storage_error(db_path, exc)
             _warn_profile_read_error(name, exc)
             errors.append({"profile": name, "error": str(exc)})
             continue
@@ -343,6 +356,7 @@ def get_profiles_sessions(
                 s["pinned"] = bool(s.get("pinned"))
                 merged.append(s)
         except Exception as exc:
+            note_storage_error(db_path, exc)
             _warn_profile_read_error(name, exc)
             errors.append({"profile": name, "error": str(exc)})
         finally:
@@ -365,6 +379,7 @@ def get_profiles_sessions(
         "limit": limit,
         "offset": offset,
         "errors": errors,
+        "storage": _corrupt_profile_stores(targets),
     }
 
 
@@ -458,9 +473,11 @@ def get_profiles_sessions_sidebar(
             include_pinned=True,
         )
 
+    scanned: List[Tuple[str, Path]] = []
     for name, home in targets:
         if recents_scope != "all" and name != recents_scope:
             continue
+        scanned.append((name, home))
         db_path = Path(home) / "state.db"
         if not db_path.exists():
             continue
@@ -482,6 +499,7 @@ def get_profiles_sessions_sidebar(
                 # store predates a schema addition, plain read-only otherwise).
                 db = _open_session_db_at_path(db_path, read_only=True)
             except Exception as exc:
+                note_storage_error(db_path, exc)
                 _warn_profile_read_error(name, exc)
                 errors.append({"profile": name, "error": str(exc)})
                 continue
@@ -501,6 +519,7 @@ def get_profiles_sessions_sidebar(
                 }
                 _sidebar_profile_cache_put(profile_cache_key, slices)
             except Exception as exc:
+                note_storage_error(db_path, exc)
                 _warn_profile_read_error(name, exc)
                 errors.append({"profile": name, "error": str(exc)})
                 continue
@@ -544,6 +563,7 @@ def get_profiles_sessions_sidebar(
             "total": len(messaging_rows),
         },
         "errors": errors,
+        "storage": _corrupt_profile_stores(scanned),
     }
 
 
@@ -664,6 +684,7 @@ def get_profiles_projects_tree(preview_limit: int = 3, session_limit: int = 2000
         try:
             db = _open_session_db_at_path(db_path, read_only=True)
         except Exception as exc:
+            note_storage_error(db_path, exc)
             _warn_profile_read_error(name, exc)
             errors.append({"profile": name, "error": str(exc)})
             continue
@@ -680,6 +701,7 @@ def get_profiles_projects_tree(preview_limit: int = 3, session_limit: int = 2000
             _merge_profile_tree(merged, tree["projects"], name, preview_limit)
             scoped_session_ids.extend(tree["scoped_session_ids"])
         except Exception as exc:
+            note_storage_error(db_path, exc)
             _warn_profile_read_error(name, exc)
             errors.append({"profile": name, "error": str(exc)})
         finally:
@@ -950,7 +972,7 @@ async def open_profile_terminal_endpoint(name: str):
         command = _profile_setup_command(name)
 
         if sys.platform.startswith("win"):
-            subprocess.Popen(["cmd.exe", "/c", "start", "", command])
+            subprocess.Popen(["cmd.exe", "/c", "start", "", command], stdin=subprocess.DEVNULL)
         elif sys.platform == "darwin":
             escaped = command.replace("\\", "\\\\").replace('"', '\\"')
             applescript = (
@@ -959,7 +981,7 @@ async def open_profile_terminal_endpoint(name: str):
                 f'do script "{escaped}"\n'
                 "end tell"
             )
-            subprocess.Popen(["osascript", "-e", applescript])
+            subprocess.Popen(["osascript", "-e", applescript], stdin=subprocess.DEVNULL)
         else:
             terminal_commands = [
                 ("x-terminal-emulator", ["x-terminal-emulator", "-e", "sh", "-lc", command]),
@@ -978,8 +1000,9 @@ async def open_profile_terminal_endpoint(name: str):
                     ["which", executable],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
                 ) == 0:
-                    subprocess.Popen(popen_args)
+                    subprocess.Popen(popen_args, stdin=subprocess.DEVNULL)
                     break
             else:
                 raise HTTPException(

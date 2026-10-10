@@ -299,6 +299,7 @@ def _passes_boot_gate(staged: Path, venv_dir: Path) -> bool:
             text=True,
             timeout=30,
             env=env,
+            stdin=subprocess.DEVNULL,
         )
     except OSError as exc:
         if exc.errno in (errno.ENOENT, errno.ENOEXEC):

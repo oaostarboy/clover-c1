@@ -35,6 +35,16 @@ def test_stable_prompt_teaches_the_checkpoint_only_to_agents_it_gates():
     assert TODO_DELEGATION_DECISION_GUIDANCE not in _stable_prompt(exempt)
 
 
+def test_default_config_omits_the_checkpoint_instruction():
+    # Shipped default is OFF: no config at all, so no checkpoint text.
+    assert TODO_DELEGATION_DECISION_GUIDANCE not in _stable_prompt(_agent(opt_in=False))
+
+
+def test_explicit_opt_in_teaches_the_instruction():
+    _set_checkpoint_config({'enabled': True})
+    assert TODO_DELEGATION_DECISION_GUIDANCE in _stable_prompt(_agent())
+
+
 def test_rollback_config_removes_the_instruction_too():
     _set_checkpoint_config({'enabled': False})
     assert TODO_DELEGATION_DECISION_GUIDANCE not in _stable_prompt(_agent())

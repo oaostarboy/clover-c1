@@ -436,6 +436,7 @@ def _detect_default_darwin() -> str | None:
             encoding="utf-8",
             errors="replace",
             timeout=5,
+            stdin=subprocess.DEVNULL,
         ).stdout
     except Exception:
         return None
@@ -464,6 +465,7 @@ def _detect_default_linux() -> str | None:
             encoding="utf-8",
             errors="replace",
             timeout=5,
+            stdin=subprocess.DEVNULL,
         ).stdout.strip().lower()
     except Exception:
         out = ""
@@ -1421,6 +1423,7 @@ def launch_chrome_debug(
                     [candidate, *_chrome_debug_args(port)],
                     stdout=subprocess.DEVNULL,
                     stderr=stderr_file,
+                    stdin=subprocess.DEVNULL,
                     **_detach_kwargs(system),
                 )
         except Exception as exc:

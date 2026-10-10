@@ -248,6 +248,7 @@ def upload_evidence(
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
                 env=environment,
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.CalledProcessError as exc:
             output = "; ".join(

@@ -16691,6 +16691,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
         # this to True. Early returns (credential refresh failure, etc.)
         # leave it False, which is correct — those aren't user interrupts.
         self._last_turn_interrupted = False
+        # Real outcome of this turn, for machine consumers (``--activity-events``
+        # result status). Pessimistic until run_conversation returns, so early
+        # returns that carry display text (context refusal) never read as success.
+        self._last_turn_result = {"failed": True}
 
         # Refresh provider credentials if needed (handles key rotation transparently)
         if not self._ensure_runtime_credentials():
@@ -17245,6 +17249,8 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
                 self.session_id = self.agent.session_id
                 getattr(self, "_write_terminal_breadcrumb", lambda: None)()
                 self._pending_title = None
+
+            self._last_turn_result = result if isinstance(result, dict) else {"failed": True}
 
             # Get the final response
             response = result.get("final_response", "") if result else ""
@@ -21481,6 +21487,7 @@ def main(
     pass_session_id: bool = False,
     ignore_user_config: bool = False,
     ignore_rules: bool = False,
+    activity_events: bool = False,
 ):
     """
     Clover Cognition CLI - Interactive AI Assistant
@@ -21840,6 +21847,15 @@ def main(
         # agent must wait the full MCP cold-start bound before its first
         # (and only) tool snapshot. See #51316.
         cli._single_query_mode = True
+        # --activity-events: structured JSONL worker activity on stderr for a
+        # parent session's agent card. Independent of -Q, which only hides
+        # human chatter (banner, spinner, previews) — see
+        # clover_cli/activity_events.py for the wire format.
+        _activity_writer = None
+        if activity_events:
+            from clover_cli.activity_events import ActivityEventWriter
+
+            _activity_writer = ActivityEventWriter(sys.stderr)
         # Mark single-query for the approval gate. cli.py sets
         # CLOVER_INTERACTIVE earlier for interactive sudo prompts, but a -q
         # run has NO user waiting to answer approval prompts. The gate reads
@@ -21983,6 +21999,13 @@ def main(
                         # (they check agent.tool_progress_mode, initialized
                         # from display.tool_progress at construction).
                         cli.agent.tool_progress_mode = "off"
+                        if _activity_writer is not None:
+                            # After the neutralization above: the structured
+                            # stream writes JSONL to stderr only, never stdout.
+                            from clover_cli.activity_events import attach_to_agent
+
+                            attach_to_agent(cli.agent, _activity_writer, chain=False)
+                            _activity_writer.start(getattr(cli.agent, "model", None) or cli.model)
                         try:
                             result = cli.agent.run_conversation(
                                 user_message=effective_query,
@@ -21990,8 +22013,14 @@ def main(
                             )
                         except KeyboardInterrupt:
                             _emit_interrupted_session_end(cli, reason="keyboard_interrupt")
+                            if _activity_writer is not None:
+                                _activity_writer.result("", "interrupted_possible_effects")
                             print(f"\nsession_id: {cli.session_id}", file=sys.stderr)
                             sys.exit(130)
+                        except BaseException as _run_exc:
+                            if _activity_writer is not None:
+                                _activity_writer.result("", "failed")
+                            raise _run_exc
                         # Sync session_id if mid-run compression created a
                         # continuation session. The exit line below reports
                         # session_id to stderr for automation wrappers; without
@@ -22002,6 +22031,14 @@ def main(
                         ):
                             cli.session_id = cli.agent.session_id
                         response = result.get("final_response", "") if isinstance(result, dict) else str(result)
+                        if _activity_writer is not None:
+                            from clover_cli.activity_events import result_status
+
+                            _act_status = result_status(response, result)
+                            _activity_writer.result(
+                                response if _act_status in {"completed", "built_unverified"} else "",
+                                _act_status,
+                            )
                         # Surface backend errors that produced no visible output
                         # (e.g. invalid model slug → provider 4xx). Mirrors the
                         # interactive CLI path. Write to stderr so piped stdout
@@ -22081,7 +22118,24 @@ def main(
                 # Surface security advisories before the agent runs — short
                 # banner, doesn't depend on the welcome banner being shown.
                 cli._show_security_advisories()
-                cli.chat(query, images=single_query_images or None)
+                if _activity_writer is not None:
+                    # Picked up by _init_agent, which tees the stream next to
+                    # the human renderers on this (non -Q) path.
+                    cli._activity_writer = _activity_writer
+                _human_response = cli.chat(query, images=single_query_images or None)
+                if _activity_writer is not None:
+                    from clover_cli.activity_events import result_status
+
+                    # Real turn metadata (failed/interrupted/incomplete), not
+                    # the display text: chat() returns a non-empty error string
+                    # for provider failures.
+                    _act_status = result_status(
+                        _human_response, getattr(cli, "_last_turn_result", None) or {}
+                    )
+                    _activity_writer.result(
+                        _human_response if _act_status == "completed" else "",
+                        _act_status,
+                    )
                 cli._print_exit_summary(clear_screen=False)
         finally:
             _finalize_single_query(cli)

@@ -169,6 +169,7 @@ def _remux_aac_to_m4a(aac_data: bytes) -> Optional[Tuple[bytes, str]]:
                 [ffmpeg, "-y", "-loglevel", "error", "-i", src_path,
                  "-c:a", "copy", "-movflags", "+faststart", dst_path],
                 capture_output=True, timeout=10,
+                stdin=subprocess.DEVNULL,
             )
             if proc.returncode != 0:
                 logger.warning(

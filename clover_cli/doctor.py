@@ -998,6 +998,7 @@ def check_certificates(should_fix: bool = False, issues: "list | None" = None) -
             text=True,
             encoding="utf-8", errors="replace",
             timeout=300,
+            stdin=subprocess.DEVNULL,
         )
     except Exception as exc:
         check_fail("certifi repair could not run pip", str(exc))
@@ -1296,6 +1297,7 @@ def _macos_desktop_dr(app: Path) -> str | None:
             capture_output=True,
             text=True,
             timeout=15,
+            stdin=subprocess.DEVNULL,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         # Never let a hanging codesign abort the whole doctor run — the
@@ -2505,7 +2507,7 @@ def run_doctor(args):
         if _safe_which("docker"):
             # Check if docker daemon is running
             try:
-                result = subprocess.run(["docker", "info"], capture_output=True, timeout=10)
+                result = subprocess.run(["docker", "info"], capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
             except subprocess.TimeoutExpired:
                 result = None
             if result is not None and result.returncode == 0:
@@ -2548,7 +2550,8 @@ def run_doctor(args):
                     cmd,
                     capture_output=True,
                     text=True, encoding='utf-8', errors='replace',
-                    timeout=15
+                    timeout=15,
+                    stdin=subprocess.DEVNULL,
                 )
             except subprocess.TimeoutExpired:
                 result = None
@@ -2821,6 +2824,7 @@ def run_doctor(args):
                     [_npm_bin, "audit", "--json", *audit_extra],
                     cwd=str(npm_dir),
                     capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=30,
+                    stdin=subprocess.DEVNULL,
                 )
                 import json as _json
                 audit_data = _json.loads(audit_result.stdout) if audit_result.stdout.strip() else {}
@@ -3415,6 +3419,7 @@ def run_doctor(args):
             result = subprocess.run(
                 ["gh", "auth", "status", "--json", "authenticated"],
                 capture_output=True, timeout=10,
+                stdin=subprocess.DEVNULL,
             )
             return result.returncode == 0
         except (FileNotFoundError, subprocess.TimeoutExpired):

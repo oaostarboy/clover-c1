@@ -343,6 +343,7 @@ def _pdf_page_texts(path: str) -> Optional[list[str]]:
             ["pdftotext", path, "-"],
             capture_output=True,
             timeout=PDF_PAGE_SCAN_TIMEOUT,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return None

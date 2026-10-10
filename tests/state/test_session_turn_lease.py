@@ -365,7 +365,9 @@ def test_acquire_turn_lease_honors_should_abort(tmp_path):
 
 
 def test_acquire_turn_lease_retries_sqlite_lock(tmp_path, monkeypatch):
-    """Write-lock exhaustion is contended, not a hard abort of the wait."""
+    """Write-lock exhaustion is retried, not a hard abort of the wait, and is not a lease wait:
+    it reports on_contended instead of on_wait and does not sit out a poll interval on top of
+    the patience it already spent."""
     db = SessionDB(tmp_path / "state.db")
     db.create_session("shared", source="test")
     holder = f"pid={os.getpid()}:turn=waiter"
@@ -382,15 +384,69 @@ def test_acquire_turn_lease_retries_sqlite_lock(tmp_path, monkeypatch):
         return original(*args, **kwargs)
 
     monkeypatch.setattr(db, "try_acquire_session_turn_lease", flaky_acquire)
+    notices, contended = [], []
+    started = time.monotonic()
     assert db.acquire_session_turn_lease(
         "shared",
         holder,
-        wait_seconds=2,
-        poll_interval_seconds=0.02,
+        wait_seconds=10,
+        poll_interval_seconds=5,
+        on_wait=notices.append,
+        on_contended=lambda: contended.append(True),
         acquire_patience_s=0.05,
     )
+    assert time.monotonic() - started < 2.0
+    assert (notices, contended) == ([], [True])
     assert attempts["n"] >= 2
     db.release_session_turn_lease("shared", holder)
+
+
+def test_acquire_turn_lease_real_write_lock_is_not_a_lease_wait(tmp_path):
+    """A real writer holding state.db briefly: no 'another process' notice, no poll sleep."""
+    path = tmp_path / "state.db"
+    db = SessionDB(path)
+    db.create_session("shared", source="test")
+    holder = f"pid={os.getpid()}:turn=waiter"
+    blocker = sqlite3.connect(
+        str(path), isolation_level=None, timeout=0, check_same_thread=False
+    )
+    blocker.execute("BEGIN IMMEDIATE")
+    threading.Timer(2.0, lambda: blocker.execute("ROLLBACK")).start()
+    notices, contended = [], []
+    started = time.monotonic()
+    try:
+        assert db.acquire_session_turn_lease(
+            "shared",
+            holder,
+            wait_seconds=10,
+            poll_interval_seconds=5,
+            on_wait=notices.append,
+            on_contended=lambda: contended.append(True),
+            acquire_patience_s=0.2,
+        )
+    finally:
+        time.sleep(0.2)
+        blocker.close()
+    assert time.monotonic() - started < 4.0
+    assert notices == []
+    assert contended
+    db.release_session_turn_lease("shared", holder)
+
+
+def test_acquire_turn_lease_locked_for_the_whole_wait_times_out(tmp_path, monkeypatch):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("shared", source="test")
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(db, "try_acquire_session_turn_lease", locked)
+    notices = []
+    assert not db.acquire_session_turn_lease(
+        "shared", f"pid={os.getpid()}:turn=waiter", wait_seconds=0.3, poll_interval_seconds=5,
+        on_wait=notices.append,
+    )
+    assert notices == []
 
 
 def test_acquire_turn_lease_reraises_non_lock_sqlite_error(tmp_path, monkeypatch):
@@ -667,3 +723,41 @@ def test_turn_lease_fence_walks_continuation_that_inherited_fork_markers(tmp_pat
     ]
     db.release_session_turn_lease("delegate-continuation", delegate_holder)
     db.release_session_turn_lease("branch-continuation", branch_holder)
+
+
+def test_refresh_honors_write_patience_cap_under_lock(tmp_path):
+    """A renewal waits no longer than its patience cap while another writer holds the lock."""
+    path = tmp_path / "state.db"
+    db = SessionDB(path)
+    db.create_session("capped", source="test")
+    holder = f"pid={os.getpid()}:turn=capped"
+    assert db.try_acquire_session_turn_lease("capped", holder, ttl_seconds=60)
+
+    blocker = sqlite3.connect(str(path), isolation_level=None, timeout=0)
+    blocker.execute("BEGIN IMMEDIATE")
+    try:
+        started = time.monotonic()
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            db.refresh_session_turn_lease(
+                "capped", holder, ttl_seconds=60, patience_s=0.3
+            )
+        elapsed = time.monotonic() - started
+    finally:
+        blocker.execute("ROLLBACK")
+        blocker.close()
+
+    assert elapsed < 3.0
+    db.release_session_turn_lease("capped", holder)
+
+
+def test_session_turn_lease_expires_at_reads_committed_row(tmp_path):
+    db = SessionDB(tmp_path / "state.db")
+    db.create_session("committed", source="test")
+    holder = f"pid={os.getpid()}:turn=committed"
+    before = time.time()
+    assert db.try_acquire_session_turn_lease("committed", holder, ttl_seconds=60)
+    committed = db.session_turn_lease_expires_at("committed", holder)
+    assert committed is not None
+    assert before + 59 <= committed <= time.time() + 60
+    assert db.session_turn_lease_expires_at("committed", "someone-else") is None
+    db.release_session_turn_lease("committed", holder)

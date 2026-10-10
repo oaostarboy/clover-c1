@@ -66,6 +66,7 @@ def _get_git_commit(project_root: Path) -> str:
             ["git", "rev-parse", "--short=8", "HEAD"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
             cwd=str(project_root),
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             value = result.stdout.strip()
@@ -101,6 +102,7 @@ def _get_git_commit_date(project_root: Path) -> str:
             ["git", "log", "-1", "--format=%cd", "--date=short", "HEAD"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
             cwd=str(project_root),
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             value = result.stdout.strip()

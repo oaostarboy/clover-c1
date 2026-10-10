@@ -801,6 +801,7 @@ def _pip_install(
                 creationflags=_post_setup_no_window_flags(
                     streams_to_console=not capture_output
                 ),
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:
                 return result
@@ -816,6 +817,7 @@ def _pip_install(
             pip_cmd + ["--version"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
             creationflags=_post_setup_no_window_flags(),
+            stdin=subprocess.DEVNULL,
         )
         if probe.returncode != 0:
             raise FileNotFoundError("pip not in venv")
@@ -825,6 +827,7 @@ def _pip_install(
                 [sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=True,
                 creationflags=_post_setup_no_window_flags(),
+                stdin=subprocess.DEVNULL,
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
             # Synthesize a result so callers see a clean failure path.
@@ -839,6 +842,7 @@ def _pip_install(
         creationflags=_post_setup_no_window_flags(
             streams_to_console=not capture_output
         ),
+        stdin=subprocess.DEVNULL,
     )
 
 
@@ -1006,6 +1010,7 @@ def install_cua_driver(
                 [binary, "--version"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, env=_cua_driver_env(),
                 creationflags=_post_setup_no_window_flags(),
+                stdin=subprocess.DEVNULL,
             ).stdout.strip()
             _print_success(f"    {driver_cmd} already installed: {version or 'unknown version'}")
         except Exception:
@@ -1148,6 +1153,7 @@ def install_cua_driver(
                 [binary, "--version"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, env=_cua_driver_env(),
                 creationflags=_post_setup_no_window_flags(),
+                stdin=subprocess.DEVNULL,
             ).stdout.strip()
         except Exception:
             before = ""
@@ -1180,6 +1186,7 @@ def install_cua_driver(
                 [binary, "--version"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5, env=_cua_driver_env(),
                 creationflags=_post_setup_no_window_flags(),
+                stdin=subprocess.DEVNULL,
             ).stdout.strip()
             if after and after != before:
                 _print_success(f"    {driver_cmd} upgraded: {before} → {after}")
@@ -1454,6 +1461,7 @@ def _cua_driver_autostart_registered_windows() -> bool:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=10,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return False
@@ -1505,6 +1513,7 @@ def _repair_cua_driver_autostart_windows(driver_cmd: str, *, verbose: bool) -> b
             errors="replace",
             timeout=300,
             env=_cua_driver_env(),
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         _print_warning("    cua-driver autostart registration timed out.")
@@ -1593,6 +1602,7 @@ def _run_cua_driver_installer(
             dl = subprocess.run(
                 ["curl", "-fsSL", "-o", script_path, install_url],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
+                stdin=subprocess.DEVNULL,
             )
         except (subprocess.TimeoutExpired, OSError) as e:
             _print_warning(f"    cua-driver installer download failed: {e}")
@@ -1693,7 +1703,12 @@ def _run_cua_driver_installer(
         import signal as _signal
         try:
             if not is_windows:
-                os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)  # windows-footgun: ok — POSIX branch only
+                pgid = os.getpgid(proc.pid)
+                if pgid == proc.pid:
+                    os.killpg(pgid, _signal.SIGKILL)  # windows-footgun: ok — POSIX branch only
+                else:
+                    # Installer shares our group; killpg would kill Clover itself.
+                    proc.kill()
             else:
                 # PowerShell may leave download/install helpers alive after its
                 # direct process is killed. Those descendants inherit stdout
@@ -1795,7 +1810,7 @@ def _run_cua_driver_installer(
         # debuggable. Verbose installs (interactive `computer-use install`)
         # keep streaming live.
         if verbose:
-            proc = subprocess.Popen(
+            proc = subprocess.Popen(  # noqa: subprocess-stdin — interactive installer may prompt
                 install_cmd, shell=use_shell, env=installer_env,
                 creationflags=_post_setup_no_window_flags(streams_to_console=True),
                 **popen_kwargs
@@ -2025,6 +2040,7 @@ def _run_post_setup(post_setup_key: str):
                 install_cmd,
                 capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(PROJECT_ROOT), timeout=600,
                 creationflags=_post_setup_no_window_flags(),
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:
                 _print_success("    Chromium installed")
@@ -2062,6 +2078,7 @@ def _run_post_setup(post_setup_key: str):
                 [_npm_bin, "install", "--silent", "--workspaces=false"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=str(PROJECT_ROOT),
                 creationflags=_post_setup_no_window_flags(),
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:
                 _print_success("    Camofox installed")

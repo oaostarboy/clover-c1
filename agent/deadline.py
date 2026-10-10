@@ -587,6 +587,7 @@ def kill_process_tree(pid: int, *, sig: Optional[int] = None) -> bool:
                 timeout=15,
                 check=False,
                 creationflags=creationflags,
+                stdin=subprocess.DEVNULL,
             )
             # taskkill exits non-zero for not-found / access-denied; keep the
             # cross-platform contract (False = nothing was terminated).

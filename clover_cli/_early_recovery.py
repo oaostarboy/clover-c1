@@ -365,6 +365,7 @@ def _run_repair_install(specs: list[str], project_root: Path) -> bool:
                     capture_output=True,
                     text=True, encoding="utf-8", errors="replace",
                     env=env,
+                    stdin=subprocess.DEVNULL,
                 )
                 if result.returncode == 0:
                     return True
@@ -388,6 +389,7 @@ def _run_repair_install(specs: list[str], project_root: Path) -> bool:
             [sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
             cwd=project_root,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         pass
@@ -401,6 +403,7 @@ def _run_repair_install(specs: list[str], project_root: Path) -> bool:
             cwd=project_root,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
     except Exception as exc:
         print(f"  ✗ Early venv repair could not run pip: {exc}", file=sys.stderr)

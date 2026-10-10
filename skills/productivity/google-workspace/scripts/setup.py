@@ -139,6 +139,7 @@ def install_deps():
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "--quiet"] + missing,
             stdout=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
         )
         remaining = _missing_required_packages()
         if remaining:
@@ -161,6 +162,7 @@ def install_deps():
                 [uv, "pip", "install", "--python", sys.executable, "--quiet"]
                 + missing,
                 stdout=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
             )
             remaining = _missing_required_packages()
             if remaining:

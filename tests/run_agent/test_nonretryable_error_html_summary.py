@@ -127,3 +127,32 @@ def test_non_retryable_failure_error_is_summarized_not_raw_html():
     # The original page was tens of kilobytes; a summary is short.
     assert len(error) < 500
     assert len(error) < len(_CLOUDFLARE_CHALLENGE_HTML)
+
+
+def test_waf_block_403_tells_user_the_cdn_blocked_it_not_the_key():
+    """A WAF/CDN 403 is reported as a network/CDN block, with the key called fine.
+
+    Adapted from NousResearch/hermes-agent 6f6ed01355 (MIT).
+    """
+    agent = _make_agent()
+    err = Exception("Error code: 403 - Your request was blocked.")
+    err.status_code = 403
+    agent.client.chat.completions.create.side_effect = err
+
+    with (
+        patch.object(agent, "_persist_session"),
+        patch.object(agent, "_save_trajectory"),
+        patch.object(agent, "_cleanup_task_resources"),
+    ):
+        result = agent.run_conversation("hello")
+
+    assert agent.client.chat.completions.create.called
+    assert result.get("failed") is True
+    assert result.get("failure_reason") == "upstream_blocked"
+    assert result.get("failure_retryable") is False
+    text = result.get("final_response") or ""
+    assert "blocked" in text.lower()
+    assert "firewall" in text.lower() or "cdn" in text.lower()
+    assert "key" in text.lower() and "fine" in text.lower()
+    assert "User-Agent" in text
+    assert "rejected" not in text.lower()

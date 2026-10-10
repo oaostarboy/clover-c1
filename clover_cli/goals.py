@@ -483,6 +483,7 @@ def workspace_fingerprint(cwd: Optional[str] = None) -> str:
             ["git", "rev-parse", "HEAD"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=10, cwd=workdir,
+            stdin=subprocess.DEVNULL,
         )
         if head.returncode != 0:
             return ""
@@ -490,6 +491,7 @@ def workspace_fingerprint(cwd: Optional[str] = None) -> str:
             ["git", "status", "--porcelain"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=30, cwd=workdir,
+            stdin=subprocess.DEVNULL,
         )
         if status.returncode != 0:
             return ""
@@ -523,6 +525,7 @@ def run_gate(gate: GoalGate, *, cwd: Optional[str] = None) -> Tuple[bool, int, s
             errors="replace",
             timeout=max(1, int(gate.timeout_seconds)),
             cwd=cwd or None,
+            stdin=subprocess.DEVNULL,
         )
         combined = (proc.stdout or "") + (("\n" + proc.stderr) if proc.stderr else "")
         tail = combined[-_GATE_OUTPUT_TAIL_CHARS:]

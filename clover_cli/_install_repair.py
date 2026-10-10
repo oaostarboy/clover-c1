@@ -560,7 +560,7 @@ def _run_install_cmd(cmd: list[str], *, env: dict | None, root: Path) -> None:
         _restore_quarantined_exes(moved)
         raise ShimQuarantineError(failed)
     try:
-        subprocess.run(cmd, cwd=root, check=True, env=env)
+        subprocess.run(cmd, cwd=root, check=True, env=env, stdin=subprocess.DEVNULL)
     finally:
         # Restore runs on success AND failure: a SUCCESSFUL install can still
         # skip the entry-points step entirely (uv audits an already-satisfied
@@ -622,6 +622,7 @@ def run_core_install(root: Path) -> None:
                 [sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
                 cwd=root,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
             )
         except Exception:
             pass

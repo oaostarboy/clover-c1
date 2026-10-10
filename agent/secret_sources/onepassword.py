@@ -287,6 +287,7 @@ def _run_op_read(
             encoding="utf-8",
             errors="replace",
             timeout=_OP_RUN_TIMEOUT,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(

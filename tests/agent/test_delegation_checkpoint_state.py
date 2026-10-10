@@ -18,6 +18,8 @@ from tests.agent.test_delegation_checkpoint import sync_spawn
 
 
 def _agent(**overrides) -> Any:
+    from tests.agent.test_delegation_checkpoint import _opt_in_to_checkpoint
+    _opt_in_to_checkpoint()
     kwargs = dict(
         provider='custom', api_mode='chat_completions',
         base_url='http://127.0.0.1:1/v1', api_key='local-test-credential',
@@ -41,9 +43,9 @@ def _declare(agent, mode='direct', reason='Because.'):
 
 # ── settings ───────────────────────────────────────────────────────────────
 
-def test_defaults_are_finite_positive_and_enabled():
+def test_defaults_are_finite_positive_and_disabled():
     settings = dc.normalize_settings(None)
-    assert settings.enabled is True
+    assert settings.enabled is False
     assert settings.max_work_tools > 0
     assert math.isfinite(settings.max_foreground_seconds) and settings.max_foreground_seconds > 0
 
@@ -69,9 +71,10 @@ def test_valid_budget_values_are_honored():
 
 @pytest.mark.parametrize('raw,expected', [
     (False, False), ('false', False), ('OFF', False), ('no', False), ('0', False),
-    (True, True), ('true', True), (None, True), ('garbage', True), (1, True),
+    (True, True), ('true', True), ('on', True), (1, True), (0, False),
+    (None, False), ('garbage', False),
 ])
-def test_enabled_flag_only_turns_off_explicitly(raw, expected):
+def test_enabled_flag_only_turns_on_explicitly(raw, expected):
     assert dc.normalize_settings({'enabled': raw}).enabled is expected
 
 

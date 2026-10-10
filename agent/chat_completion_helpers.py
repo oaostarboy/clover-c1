@@ -2379,6 +2379,7 @@ def _fallback_reason_text(reason: "FailoverReason | None") -> str:
         FailoverReason.billing: "billing or quota exhausted",
         FailoverReason.rate_limit: "rate limit",
         FailoverReason.upstream_rate_limit: "upstream model rate limit",
+        FailoverReason.upstream_blocked: "request blocked by a WAF or proxy in front of the provider",
         FailoverReason.overloaded: "provider overloaded",
         FailoverReason.server_error: "provider server error",
         FailoverReason.timeout: "request timeout",

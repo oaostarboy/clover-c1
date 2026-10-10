@@ -14,6 +14,7 @@ Regression tests for two bugs in WhatsAppAdapter.connect():
 
 import asyncio
 import signal
+import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -412,6 +413,7 @@ class TestHttpSessionLifecycle:
             encoding="utf-8",
             errors="replace",
             timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         mock_proc.terminate.assert_not_called()
         mock_proc.kill.assert_not_called()

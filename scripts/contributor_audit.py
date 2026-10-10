@@ -99,6 +99,7 @@ def git(*args, cwd=None):
         capture_output=True,
         text=True, encoding='utf-8', errors='replace',
         cwd=cwd or str(REPO_ROOT),
+        stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0:
         print(f"  [warn] git {' '.join(args)} failed: {result.stderr.strip()}", file=sys.stderr)
@@ -124,6 +125,7 @@ def gh_pr_list():
             capture_output=True,
             text=True, encoding='utf-8', errors='replace',
             timeout=60,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             print(f"  [warn] gh pr list failed: {result.stderr.strip()}", file=sys.stderr)

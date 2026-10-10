@@ -62,10 +62,12 @@ def _git_proc_running() -> bool:
             out = subprocess.run(
                 ["tasklist", "/FI", "IMAGENAME eq git.exe", "/FO", "CSV"],
                 capture_output=True, text=True, timeout=10,
+                stdin=subprocess.DEVNULL,
             ).stdout.lower()
             return "git.exe" in out
         out = subprocess.run(
             ["pgrep", "-x", "git"], capture_output=True, text=True, timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         return out.returncode == 0
     except Exception:
@@ -106,6 +108,51 @@ def clear_stale_git_locks(repo_root: Path, *, min_age_seconds: Optional[int] = N
         except OSError:
             logger.debug("Could not clear %s (skipping)", lock_path, exc_info=True)
     return removed
+
+
+def _git_dir(root: Path) -> Path:
+    """``root``'s git dir: ``.git`` itself, or where a linked worktree's ``.git`` file points."""
+    dot_git = Path(root) / ".git"
+    if dot_git.is_file():
+        try:
+            text = dot_git.read_text(encoding="utf-8-sig").strip()
+        except OSError:
+            return dot_git
+        if text.startswith("gitdir:"):
+            return Path(root) / text[len("gitdir:"):].strip()
+    return dot_git
+
+
+def release_dead_index_lock(repo_root: Path) -> bool:
+    """Drop a stale ``.git/index.lock`` once the git that took it is proven gone.
+
+    Adapted from NousResearch/hermes-agent a81d3408bc (MIT). A git killed while it held the
+    index lock (an update killed by the user, a probe killed by its own timeout) leaves it
+    behind, and every later merge/stash/reset refuses with "File exists". The age floor in
+    :func:`clear_stale_git_locks` keeps such a lock for 10 minutes, so the next ``clover
+    update`` died at its fast-forward. The lock must be BOTH older than that floor AND have no
+    live owner in the process table (:mod:`clover_cli._git_lock_owner`): a young lock is never
+    touched (deleting a file is only safe when a replacement cannot be a live git's fresh lock,
+    and POSIX has no atomic compare-and-delete; C13-ASTRA-07), a live holder keeps the lock, and
+    a platform that cannot prove it dead leaves it alone. Windows can only prove it by the
+    unlink itself, which a lock-keeping git with its fd closed would not stop, so there any
+    running git keeps it. Never raises.
+    """
+    try:
+        from clover_cli._git_lock_owner import _release_dead_index_lock
+
+        root = Path(repo_root)
+        git_dir = _git_dir(root)
+        if not (git_dir / "index.lock").exists():
+            return False
+        if os.name == "nt" and _git_proc_running():
+            return False
+        return _release_dead_index_lock(
+            git_dir, root, any_git=True, min_age_seconds=STALE_LOCK_MIN_AGE_SECONDS
+        )
+    except Exception:
+        logger.debug("dead index.lock release failed (skipping)", exc_info=True)
+        return False
 
 
 # Aborted-fetch pack debris younger than this is presumed live (a fetch may
@@ -185,6 +232,7 @@ def is_ancestor_of_head(repo_root: Path, rev: str) -> bool:
             ["git", "merge-base", "--is-ancestor", rev, "HEAD"],
             cwd=str(repo_root),
             capture_output=True, text=True, timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         return result.returncode == 0
     except Exception:

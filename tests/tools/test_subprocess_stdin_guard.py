@@ -82,3 +82,60 @@ def test_inline_noqa_marker_exempts_a_call():
     )
     assert exempt == [], "inline marker should exempt the call"
 
+
+
+def test_multiline_call_with_args_on_next_line_is_checked():
+    """A call whose arguments start on the line after ``(`` is found and checked."""
+    guard = _load_guard()
+    multiline = "import subprocess\nsubprocess.run(\n    ['ffmpeg', '-y'],\n    check=True,\n)\n"
+    assert [v["line"] for v in guard.find_subprocess_calls(multiline, "x.py")] == [2]
+    fixed = multiline.replace("check=True,", "stdin=subprocess.DEVNULL, check=True,")
+    assert guard.find_subprocess_calls(fixed, "x.py") == []
+
+
+def test_splatted_kwargs_count_only_when_definition_sets_stdin():
+    guard = _load_guard()
+    safe = (
+        "import subprocess\n"
+        "_KW = dict(capture_output=True, stdin=subprocess.DEVNULL)\n"
+        "subprocess.run(['ls'], **_KW)\n"
+    )
+    unsafe = (
+        "import subprocess\n"
+        "_KW = dict(capture_output=True)\n"
+        "subprocess.run(['ls'], **_KW)\n"
+        "subprocess.run(['other'], stdin=subprocess.DEVNULL)\n"
+    )
+    assert guard.find_subprocess_calls(safe, "x.py") == []
+    assert [v["line"] for v in guard.find_subprocess_calls(unsafe, "x.py")] == [3]
+
+
+def test_unparsable_file_fails_closed():
+    guard = _load_guard()
+    assert len(guard.find_subprocess_calls("def (:\n", "x.py")) == 1
+
+
+def test_gateway_cron_cli_and_scripts_are_scanned(tmp_path):
+    """Gateway/cron/CLI/script code must not be exempt; only tests/ is skipped."""
+    guard = _load_guard()
+    bad = "import subprocess\nsubprocess.run(\n    ['ls'],\n)\n"
+    for d in ("gateway", "cron", "clover_cli", "scripts", "agent"):
+        (tmp_path / d / "sub").mkdir(parents=True)
+        (tmp_path / d / "sub" / "mod.py").write_text(bad)
+    (tmp_path / "gateway" / "tests").mkdir()
+    (tmp_path / "gateway" / "tests" / "test_x.py").write_text(bad)
+
+    violations = guard.scan_repo(tmp_path)
+    assert {Path(v["file"]).parts[0] for v in violations} == {
+        "gateway", "cron", "clover_cli", "scripts", "agent",
+    }
+    assert not any("tests" in Path(v["file"]).parts for v in violations)
+
+
+def test_skip_dirs_match_relative_to_scan_root_not_absolute_path(tmp_path):
+    """A checkout living under a dir named ``tests`` must still be scanned."""
+    guard = _load_guard()
+    root = tmp_path / "tests" / "checkout"
+    (root / "gateway").mkdir(parents=True)
+    (root / "gateway" / "mod.py").write_text("import subprocess\nsubprocess.run(['ls'])\n")
+    assert [v["line"] for v in guard.scan_repo(root)] == [2]

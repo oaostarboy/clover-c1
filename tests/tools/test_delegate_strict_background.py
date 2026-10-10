@@ -66,6 +66,16 @@ class _Harness:
         self.hold: threading.Event | None = None
 
 
+@pytest.fixture(autouse=True)
+def _checkpoint_opted_in():
+    """Strict background dispatch follows the checkpoint, which ships OFF."""
+    import yaml
+    from clover_constants import get_clover_home
+
+    (get_clover_home() / "config.yaml").write_text(
+        yaml.safe_dump({"delegation": {"checkpoint": {"enabled": True}}}))
+
+
 def _root(*, eligible: bool = True):
     """A conversational root with a real checkpoint, declared ``delegate``."""
     root = SimpleNamespace(
@@ -77,7 +87,7 @@ def _root(*, eligible: bool = True):
         _interrupt_requested=False,
         _active_children=[],
         _active_children_lock=None,
-        _delegation_checkpoint=dc.DelegationCheckpoint(),
+        _delegation_checkpoint=dc.DelegationCheckpoint(dc.CheckpointSettings(enabled=True)),
     )
     if not eligible:
         root._delegation_checkpoint_exempt = True

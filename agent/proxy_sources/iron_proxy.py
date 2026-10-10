@@ -605,6 +605,7 @@ def _verify_checksums_signature(tmp: Path, checksum_path: Path) -> bool:
     imp = subprocess.run(  # noqa: S603 — gpg path from trusted PATH lookup
         [*base_cmd, "--import", str(pubkey_path)],
         capture_output=True, timeout=60,
+        stdin=subprocess.DEVNULL,
     )
     if imp.returncode != 0:
         logger.warning(
@@ -617,6 +618,7 @@ def _verify_checksums_signature(tmp: Path, checksum_path: Path) -> bool:
     verify = subprocess.run(  # noqa: S603
         [*base_cmd, "--verify", str(sig_path), str(checksum_path)],
         capture_output=True, timeout=60,
+        stdin=subprocess.DEVNULL,
     )
     if verify.returncode != 0:
         # A present signature that does NOT verify is a tamper signal — fail hard.
@@ -709,6 +711,7 @@ def iron_proxy_version(binary: Path) -> str:
             text=True, encoding="utf-8", errors="replace",
             timeout=_RUN_TIMEOUT,
             env=minimal_env,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired):
         return ""
@@ -761,6 +764,7 @@ def ensure_ca_cert(*, force: bool = False) -> Tuple[Path, Path]:
             check=True,
             capture_output=True,
             timeout=60,
+            stdin=subprocess.DEVNULL,
         )
         subprocess.run(  # noqa: S603
             [
@@ -775,6 +779,7 @@ def ensure_ca_cert(*, force: bool = False) -> Tuple[Path, Path]:
             check=True,
             capture_output=True,
             timeout=60,
+            stdin=subprocess.DEVNULL,
         )
 
         # Move into place with private permissions.  CRITICAL: the key
@@ -1053,6 +1058,7 @@ def _detect_docker_bridge_ip() -> Optional[str]:
         res = subprocess.run(  # noqa: S603 — ip is a system binary
             ["ip", "-4", "-o", "addr", "show", "docker0"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=2,
+            stdin=subprocess.DEVNULL,
         )
         if res.returncode == 0:
             for line in res.stdout.splitlines():
@@ -1744,6 +1750,7 @@ def _pid_alive(pid: int) -> bool:
         res = subprocess.run(  # noqa: S603
             ["ps", "-p", str(pid), "-o", "comm="],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=2,
+            stdin=subprocess.DEVNULL,
         )
         if res.returncode == 0:
             comm = (res.stdout or "").strip()

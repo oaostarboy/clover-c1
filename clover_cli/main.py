@@ -1599,6 +1599,7 @@ def _resolve_workspace_key() -> Optional[str]:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0 and result.stdout.strip():
             return os.path.abspath(result.stdout.strip())
@@ -1649,7 +1650,7 @@ def _probe_container(cmd: list, backend: str, via_sudo: bool = False):
     all other exceptions propagate naturally.
     """
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         label = f"sudo {backend}" if via_sudo else backend
         print(
@@ -2419,6 +2420,7 @@ def _ensure_tui_node() -> None:
             encoding="utf-8",
             errors="replace",
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return
@@ -2468,6 +2470,7 @@ def _restore_tui_workspace(tui_dir: Path) -> bool:
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except OSError:
         return False
@@ -2645,6 +2648,7 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
                 encoding="utf-8",
                 errors="replace",
                 env=_npm_lifecycle_env(with_clover_node_path()),
+                stdin=subprocess.DEVNULL,
             )
 
         result = _run_tui_install()
@@ -2686,6 +2690,7 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
             encoding="utf-8",
             errors="replace",
             env=_npm_lifecycle_env(),
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             combined = f"{result.stdout or ''}{result.stderr or ''}".strip()
@@ -2717,6 +2722,7 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
             encoding="utf-8",
             errors="replace",
             env=_npm_lifecycle_env(),
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             combined = f"{result.stdout or ''}{result.stderr or ''}".strip()
@@ -3006,7 +3012,7 @@ def _launch_tui(
     code: Optional[int] = None
     try:
         try:
-            code = subprocess.call(argv, cwd=str(cwd), env=env)
+            code = subprocess.call(argv, cwd=str(cwd), env=env)  # noqa: subprocess-stdin — TUI owns the terminal
         except KeyboardInterrupt:
             code = 130
 
@@ -3448,6 +3454,9 @@ def cmd_chat(args):
         "ignore_rules": getattr(args, "ignore_rules", False) or getattr(args, "safe_mode", False),
         "ignore_user_config": getattr(args, "ignore_user_config", False) or getattr(args, "safe_mode", False),
         "compact": getattr(args, "compact", False),
+        # Top-level --activity-events (``clover --activity-events chat -q …``):
+        # the structured worker stream must survive -Q (agent cards).
+        "activity_events": bool(getattr(args, "activity_events", False)),
     }
     # Filter out None values
     kwargs = {k: v for k, v in kwargs.items() if v is not None}
@@ -3612,6 +3621,7 @@ def cmd_whatsapp(args):
                 encoding="utf-8",
                 errors="replace",
                 env=with_clover_node_path(),
+                stdin=subprocess.DEVNULL,
             )
         except KeyboardInterrupt:
             print("\n  ✗ Install cancelled")
@@ -3667,7 +3677,7 @@ def cmd_whatsapp(args):
     print()
 
     try:
-        subprocess.run(
+        subprocess.run(  # noqa: subprocess-stdin — interactive WhatsApp QR pairing
             [
                 find_node_executable("node") or "node",
                 str(bridge_script),
@@ -6047,6 +6057,7 @@ def _run_with_idle_timeout(
             errors="replace",
             bufsize=1,
             env=env,
+            stdin=subprocess.DEVNULL,
         )
     except OSError as exc:
         # E.g. npm not on PATH between the which() check and now.
@@ -6149,6 +6160,7 @@ def _nixos_build_env() -> dict[str, str] | None:
         result = subprocess.run(
             ["nix-shell", "-p", "python3", "--run", "which python3"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=15,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             python3_path = result.stdout.strip()
@@ -6267,6 +6279,7 @@ def _run_npm_watching_for_engine_failure(
             encoding="utf-8",
             errors="replace",
             check=False,
+            stdin=subprocess.DEVNULL,
         )
 
     captured: list[str] = []
@@ -6278,6 +6291,7 @@ def _run_npm_watching_for_engine_failure(
         text=True,
         encoding="utf-8",
         errors="replace",
+        stdin=subprocess.DEVNULL,
     ) as proc:
         if proc.stderr is not None:
             for line in proc.stderr:
@@ -7292,7 +7306,7 @@ def _redownload_electron_dist(
     if mirror:
         dl_env["ELECTRON_MIRROR"] = mirror
     try:
-        subprocess.run([node, str(installer)], cwd=str(electron_dir), env=dl_env, check=False)
+        subprocess.run([node, str(installer)], cwd=str(electron_dir), env=dl_env, check=False, stdin=subprocess.DEVNULL)
     except OSError:
         return False
     return _electron_dist_ok(project_root)
@@ -7449,7 +7463,8 @@ def _desktop_macos_has_valid_real_signature(app: Path) -> bool:
         return False
     try:
         info = subprocess.run(
-            [codesign, "-dv", str(app)], check=False, capture_output=True, text=True
+            [codesign, "-dv", str(app)], check=False, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL,
         )
         output = f"{info.stdout}\n{info.stderr}"
         if info.returncode != 0 or "TeamIdentifier=" not in output \
@@ -7458,6 +7473,7 @@ def _desktop_macos_has_valid_real_signature(app: Path) -> bool:
         verify = subprocess.run(
             [codesign, "--verify", "--deep", "--strict", str(app)],
             check=False, capture_output=True,
+            stdin=subprocess.DEVNULL,
         )
         return verify.returncode == 0
     except Exception:
@@ -7517,7 +7533,7 @@ def _desktop_macos_local_codesign(
             # identifier-based DR so TCC has something stable to persist.
             args += ["--requirements", f'=designated => identifier "{identifier}"']
         args.append(str(path))
-        subprocess.run(args, check=True, capture_output=True)
+        subprocess.run(args, check=True, capture_output=True, stdin=subprocess.DEVNULL)
 
     # 1) Standalone Mach-O files (native modules, dylibs, crashpad handler).
     #    Compare paths relative to the app root — the absolute path always
@@ -7557,6 +7573,7 @@ def _desktop_macos_local_codesign(
     subprocess.run(
         [codesign, "--verify", "--deep", "--strict", str(app)],
         check=True, capture_output=True,
+        stdin=subprocess.DEVNULL,
     )
     return True
 
@@ -7608,7 +7625,7 @@ def _desktop_macos_relaunchable_fixup(
         return False
     if _desktop_macos_has_valid_real_signature(app):
         return True
-    subprocess.run(["xattr", "-cr", str(app)], check=False)
+    subprocess.run(["xattr", "-cr", str(app)], check=False, stdin=subprocess.DEVNULL)
     identity = _desktop_macos_local_signing_identity() or "-"
     try:
         if _desktop_macos_local_codesign(app, desktop_dir=desktop_dir, identity=identity):
@@ -7636,6 +7653,7 @@ def _desktop_macos_relaunchable_fixup(
         result = subprocess.run(
             [codesign, "--force", "--deep", "--sign", "-", str(app)],
             check=False, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             print(
@@ -7646,6 +7664,7 @@ def _desktop_macos_relaunchable_fixup(
         verify = subprocess.run(
             [codesign, "--verify", "--deep", "--strict", str(app)],
             check=False, capture_output=True, text=True,
+            stdin=subprocess.DEVNULL,
         )
         if verify.returncode != 0:
             print(
@@ -7674,6 +7693,7 @@ def _macos_codesigning_identity_valid(security: str, identity: str) -> bool:
         result = subprocess.run(
             [security, "find-identity", "-v", "-p", "codesigning"],
             capture_output=True, text=True, check=False,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return False
@@ -7743,6 +7763,7 @@ def _desktop_macos_setup_tcc_identity(identity: str = "Clover Local Signing") ->
                     "-addext", "extendedKeyUsage=codeSigning",
                 ],
                 capture_output=True, check=True,
+                stdin=subprocess.DEVNULL,
             )
             # OpenSSL 3 defaults to AES/SHA-2 PKCS#12 encryption that macOS
             # `security import` rejects with "MAC verification failed during
@@ -7759,6 +7780,7 @@ def _desktop_macos_setup_tcc_identity(identity: str = "Clover Local Signing") ->
                         "-out", str(p12), "-passout", "pass:cloverlocal",
                     ],
                     capture_output=True, check=True,
+                    stdin=subprocess.DEVNULL,
                 )
 
             def _import_p12():
@@ -7769,6 +7791,7 @@ def _desktop_macos_setup_tcc_identity(identity: str = "Clover Local Signing") ->
                         "-T", codesign, "-T", "/usr/bin/codesign_allocate",
                     ],
                     capture_output=True, text=True, check=False,
+                    stdin=subprocess.DEVNULL,
                 )
 
             _export_p12([])
@@ -7794,6 +7817,7 @@ def _desktop_macos_setup_tcc_identity(identity: str = "Clover Local Signing") ->
             trusted = subprocess.run(
                 [security, "add-trusted-cert", "-r", "trustRoot", "-p", "codeSign", "-k", keychain, str(crt)],
                 capture_output=True, text=True, check=False,
+                stdin=subprocess.DEVNULL,
             )
             if trusted.returncode != 0:
                 print(
@@ -7954,7 +7978,7 @@ def _desktop_linux_sandbox_fixup(packaged_executable: Path) -> bool:
 
     print("→ Configuring Electron Linux sandbox helper (sudo required)...")
     for command in ([sudo, "chown", "root:root", str(sandbox)], [sudo, "chmod", "4755", str(sandbox)]):
-        if subprocess.run(command, check=False).returncode != 0:
+        if subprocess.run(command, check=False).returncode != 0:  # noqa: subprocess-stdin — sudo may prompt the user
             print(f"✗ Failed to configure Electron's Linux sandbox helper: {sandbox}")
             return False
     return True
@@ -7995,6 +8019,7 @@ def _detect_linux_password_store() -> str | None:
             ],
             capture_output=True,
             timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             return "gnome-libsecret"
@@ -8230,7 +8255,8 @@ def cmd_gui(args: argparse.Namespace):
                 if stopped:
                     print(f"  ⚠ Stopped running desktop app to free the build output (pid {', '.join(map(str, stopped))})")
             build_result = subprocess.run(
-                [npm, "run", build_script], cwd=desktop_dir, env=npm_build_env, check=False
+                [npm, "run", build_script], cwd=desktop_dir, env=npm_build_env, check=False,
+                stdin=subprocess.DEVNULL,
             )
             if (
                 build_result.returncode != 0
@@ -8259,7 +8285,8 @@ def cmd_gui(args: argparse.Namespace):
                     # is still locked by a running instance; stop it before retry.
                     _stop_desktop_processes_locking_build(desktop_dir)
                     build_result = subprocess.run(
-                        [npm, "run", build_script], cwd=desktop_dir, env=npm_build_env, check=False
+                        [npm, "run", build_script], cwd=desktop_dir, env=npm_build_env, check=False,
+                        stdin=subprocess.DEVNULL,
                     )
             if (
                 build_result.returncode != 0
@@ -8276,7 +8303,7 @@ def cmd_gui(args: argparse.Namespace):
                 if not _electron_dist_ok(PROJECT_ROOT):
                     _redownload_electron_dist(PROJECT_ROOT, env, mirror=mirror)
                 _stop_desktop_processes_locking_build(desktop_dir)
-                build_result = subprocess.run([npm, "run", build_script], cwd=desktop_dir, env=mirror_env, check=False)
+                build_result = subprocess.run([npm, "run", build_script], cwd=desktop_dir, env=mirror_env, check=False, stdin=subprocess.DEVNULL)
             if build_result.returncode != 0:
                 print("✗ Desktop GUI build failed")
                 print(f"  Run manually:  cd apps/desktop && npm run {build_script}")
@@ -8339,7 +8366,7 @@ def cmd_gui(args: argparse.Namespace):
 
     if source_mode:
         print("→ Launching Clover Desktop from source build...")
-        launch_result = subprocess.run([npm, "exec", "--", "electron", "."], cwd=desktop_dir, env=env, check=False)
+        launch_result = subprocess.run([npm, "exec", "--", "electron", "."], cwd=desktop_dir, env=env, check=False, stdin=subprocess.DEVNULL)
         sys.exit(launch_result.returncode)
 
     if packaged_executable is None:
@@ -8357,7 +8384,7 @@ def cmd_gui(args: argparse.Namespace):
 
     launch_command.extend(config_electron_flags)
     print(f"→ Launching packaged Clover Desktop: {' '.join(launch_command)}")
-    launch_result = subprocess.run(launch_command, cwd=desktop_dir, env=env, check=False)
+    launch_result = subprocess.run(launch_command, cwd=desktop_dir, env=env, check=False, stdin=subprocess.DEVNULL)
     sys.exit(launch_result.returncode)
 
 
@@ -8447,6 +8474,7 @@ def _restart_managed_dashboard_service(
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
 
     # Probe the user manager first: Clover installs Linux services in the
@@ -8511,6 +8539,7 @@ def _restart_managed_dashboard_service(
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
                 timeout=60,
+                stdin=subprocess.DEVNULL,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
             errors.append(f"{' '.join(command)}: {e}")
@@ -8622,6 +8651,7 @@ def _try_restart_systemd_service(svc_name: str, cgroup_path: str | None = None) 
                     capture_output=True,
                     text=True, encoding="utf-8", errors="replace",
                     timeout=15,
+                    stdin=subprocess.DEVNULL,
                 )
                 if r.returncode == 0:
                     return True
@@ -8635,6 +8665,7 @@ def _try_restart_systemd_service(svc_name: str, cgroup_path: str | None = None) 
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             timeout=15,
+            stdin=subprocess.DEVNULL,
         )
         return r.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
@@ -8669,6 +8700,7 @@ def _dashboard_cmdline_for_pid(pid: int) -> list[str] | None:
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             return None
@@ -9249,6 +9281,7 @@ def _run_install_with_heartbeat(
             cwd=PROJECT_ROOT,
             check=True,
             env=env,
+            stdin=subprocess.DEVNULL,
         )
     finally:
         done.set()
@@ -9750,6 +9783,7 @@ def _detect_broken_lazy_refresh_imports(
             text=True, encoding="utf-8", errors="replace",
             check=False,
             env=env,
+            stdin=subprocess.DEVNULL,
         )
     except Exception as exc:
         logger.debug("lazy refresh import probe failed: %s", exc)
@@ -10206,6 +10240,7 @@ def _verify_core_dependencies_installed(
                 text=True, encoding="utf-8", errors="replace",
                 check=False,
                 env=env,
+                stdin=subprocess.DEVNULL,
             )
         except Exception as e:
             logger.debug("dep verification: subprocess failed: %s", e)
@@ -11963,7 +11998,7 @@ def cmd_dashboard(args):
         # re-executing the dashboard for a non-default profile.  Use
         # subprocess.Popen + sys.exit() on Windows to avoid the crash.
         if sys.platform == "win32":
-            proc = subprocess.Popen(reexec_argv, env=env)
+            proc = subprocess.Popen(reexec_argv, env=env)  # noqa: subprocess-stdin — re-exec of the user session
             sys.exit(proc.wait())
         else:
             os.execvpe(sys.executable, reexec_argv, env)
@@ -13803,6 +13838,7 @@ def main():
                         [path, "--version"],
                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
                         env=_cua_driver_env(),
+                        stdin=subprocess.DEVNULL,
                     ).stdout.strip()
                 except Exception:
                     pass

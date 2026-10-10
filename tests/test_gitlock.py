@@ -137,3 +137,186 @@ def test_is_ancestor_false_for_unknown_rev(repo: Path) -> None:
 
 def test_is_ancestor_false_for_nonexistent_repo(tmp_path: Path) -> None:
     assert is_ancestor_of_head(tmp_path / "missing", "HEAD") is False
+
+
+# ---- a killed git's index.lock goes at once; a live one's stays ----
+
+
+def _status_blocked_on_a_fifo(repo: Path) -> subprocess.Popen:
+    """A real ``git status`` that takes ``.git/index.lock`` and then blocks: its
+    untracked scan opens a FIFO ``.gitignore`` nobody writes."""
+    (repo / "junk").mkdir()
+    os.mkfifo(repo / "junk" / ".gitignore")
+    (repo / "junk" / "x").touch()
+    (repo / "a.txt").touch()  # stat-dirty: status refreshes (and so locks) the index
+    proc = subprocess.Popen(
+        ["git", "status", "--porcelain"], cwd=repo,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 20
+    while not (repo / ".git" / "index.lock").exists():
+        assert proc.poll() is None and time.monotonic() < deadline, "git status never took index.lock"
+        time.sleep(0.05)
+    return proc
+
+
+def _age(path: Path, seconds: float) -> None:
+    old = time.time() - seconds
+    os.utime(path, (old, old))
+
+
+@pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="ownership proof via /proc (Linux)")
+def test_killed_gits_index_lock_goes_at_once_and_a_live_ones_stays(repo: Path) -> None:
+    from clover_cli.gitlock import release_dead_index_lock
+
+    lock = repo / ".git" / "index.lock"
+    proc = _status_blocked_on_a_fifo(repo)
+    try:
+        assert release_dead_index_lock(repo) is False
+        assert lock.exists()
+    finally:
+        proc.kill()
+        proc.wait()
+
+    assert lock.exists(), "premise: a SIGKILLed status strands index.lock"
+    # Fresh mtime: the 10-minute age sweep keeps it, and so does the dead-owner release (C13-ASTRA-07).
+    assert clear_stale_git_locks(repo) == []
+    assert release_dead_index_lock(repo) is False and lock.exists()
+    _age(lock, 2 * STALE_LOCK_MIN_AGE_SECONDS)
+    assert release_dead_index_lock(repo) is True
+    assert not lock.exists()
+
+
+def test_release_dead_index_lock_without_a_lock_is_a_noop(repo: Path) -> None:
+    from clover_cli.gitlock import release_dead_index_lock
+
+    assert release_dead_index_lock(repo) is False
+    assert release_dead_index_lock(repo / "missing") is False
+
+
+@pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="ownership proof via /proc (Linux)")
+def test_lock_replaced_between_owner_scan_and_unlink_is_not_deleted(repo: Path, monkeypatch) -> None:
+    """The proof covers the file examined, not whatever the path names by the time we unlink (C13-ASTRA-07)."""
+    import clover_cli._git_lock_owner as owner
+    from clover_cli.gitlock import release_dead_index_lock
+
+    lock = repo / ".git" / "index.lock"
+    _touch(lock, 2 * STALE_LOCK_MIN_AGE_SECONDS)
+    real_scan = owner._held_open
+    children: list[subprocess.Popen] = []
+
+    def scan_then_concurrent_recovery_and_git(path, root, **kwargs):
+        verdict = real_scan(path, root, **kwargs)
+        if children:  # only the first scan is interleaved
+            return verdict
+        assert verdict is False, verdict
+        # A concurrent updater releases the same dead lock after our scan, then a
+        # real live git takes a NEW lock before our unlink.
+        with monkeypatch.context() as concurrent:
+            concurrent.setattr(owner, "_held_open", real_scan)
+            assert release_dead_index_lock(repo) is True
+        children.append(_status_blocked_on_a_fifo(repo))
+        assert real_scan(path, root, **kwargs), "premise: replacement lock has a live holder"
+        return verdict
+
+    monkeypatch.setattr(owner, "_held_open", scan_then_concurrent_recovery_and_git)
+    try:
+        removed = release_dead_index_lock(repo)
+        assert children and children[0].poll() is None
+        assert not removed and lock.exists(), ("deleted live replacement index.lock", removed)
+        assert not list(lock.parent.glob("index.lock.clover-dead-*")), "quarantine file left behind"
+    finally:
+        for child in children:
+            child.kill()
+            child.wait(timeout=5)
+
+
+def test_unlink_if_same_file_refuses_a_swapped_in_lock(tmp_path: Path) -> None:
+    from clover_cli._git_lock_owner import _lock_identity, _unlink_if_same_file
+
+    lock = tmp_path / "index.lock"
+    lock.write_text("old")
+    examined = _lock_identity(lock)
+    assert _unlink_if_same_file(lock, examined) is True and not lock.exists()
+    lock.write_text("new, longer")  # a different file under the same name
+    assert _unlink_if_same_file(lock, examined) is None
+    assert lock.read_text() == "new, longer"
+    assert _unlink_if_same_file(tmp_path / "gone.lock", examined) is None
+
+
+def test_young_lock_is_never_unlinked_even_when_it_is_the_examined_file(tmp_path: Path) -> None:
+    """Age is part of the proof: a fresh file may be a live git's, and nothing can undo a wrong delete."""
+    from clover_cli._git_lock_owner import _lock_identity, _unlink_if_same_file
+
+    lock = tmp_path / "index.lock"
+    lock.write_text("x")
+    assert _unlink_if_same_file(lock, _lock_identity(lock), STALE_LOCK_MIN_AGE_SECONDS) is None
+    assert lock.exists()
+    _age(lock, 2 * STALE_LOCK_MIN_AGE_SECONDS)
+    assert _unlink_if_same_file(lock, _lock_identity(lock), STALE_LOCK_MIN_AGE_SECONDS) is True
+    assert not lock.exists()
+
+
+def test_removing_a_dead_lock_never_renames_or_links(repo: Path, monkeypatch) -> None:
+    """The unlink is the only filesystem operation: a move-aside has no safe undo (C13-ASTRA-07)."""
+    import clover_cli._git_lock_owner as owner
+    from clover_cli.gitlock import release_dead_index_lock
+
+    lock = repo / ".git" / "index.lock"
+    _touch(lock, 2 * STALE_LOCK_MIN_AGE_SECONDS)
+    monkeypatch.setattr(owner, "_held_open", lambda *a, **k: False)
+    calls: list[str] = []
+    for name in ("rename", "replace", "link", "symlink"):
+        monkeypatch.setattr(owner.os, name, lambda *a, _n=name, **k: calls.append(_n))
+    assert release_dead_index_lock(repo) is True
+    assert not lock.exists() and calls == []
+
+
+@pytest.mark.linux_only
+@pytest.mark.parametrize("restoration", ["another_git", "link_fails"])
+def test_cleanup_never_moves_the_lock_aside(repo: Path, monkeypatch, restoration: str) -> None:
+    """C13-ASTRA-07: rename-to-quarantine + link-back lost a live git's lock whenever the link-back
+    failed (EEXIST because a second git took the vacant name, EOPNOTSUPP, ...) and the quarantine was
+    then unlinked. The cleanup now never renames or links: a replacement it did not examine survives,
+    and no pathname is ever left vacant for a second git to take."""
+    import errno
+    import clover_cli._git_lock_owner as owner
+    from clover_cli.gitlock import release_dead_index_lock
+
+    lock = repo / ".git" / "index.lock"
+    _touch(lock, 2 * STALE_LOCK_MIN_AGE_SECONDS)
+    real_scan = owner._held_open
+    children: list[subprocess.Popen] = []
+    moved: list[tuple] = []
+
+    def scan_then_replace(path, root, **kwargs):
+        verdict = real_scan(path, root, **kwargs)
+        if not children:
+            assert verdict is False, verdict
+            lock.unlink()  # the dead lock is released by someone else ...
+            children.append(_status_blocked_on_a_fifo(repo))  # ... and a live git takes a new one
+        return verdict
+
+    def forbidden(name):
+        def hook(*args, **kwargs):
+            moved.append((name, args))
+            if name == "link" and restoration == "link_fails":
+                raise OSError(errno.EOPNOTSUPP, "hard links unavailable")
+            return None
+        return hook
+
+    monkeypatch.setattr(owner, "_held_open", scan_then_replace)
+    monkeypatch.setattr(owner.os, "rename", forbidden("rename"))
+    monkeypatch.setattr(owner.os, "link", forbidden("link"))
+    monkeypatch.setattr(owner.os, "replace", forbidden("replace"))
+    try:
+        removed = release_dead_index_lock(repo)
+        assert children and children[0].poll() is None
+        assert removed is False
+        assert lock.exists(), "deleted the live git's replacement index.lock"
+        assert moved == [], ("cleanup moved the lock aside", moved)
+        assert not list(lock.parent.glob("index.lock.clover-dead-*"))
+    finally:
+        for child in children:
+            child.kill()
+            child.wait(timeout=5)

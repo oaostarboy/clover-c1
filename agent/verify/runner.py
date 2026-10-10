@@ -118,6 +118,7 @@ def _run_phase_command(
             timeout=timeout,
             text=True,
             errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         output = proc.stdout or ""
         exit_code: int | None = proc.returncode
@@ -176,6 +177,11 @@ def _terminate_process_group(proc: subprocess.Popen) -> None:
             pgid = getpgid(proc.pid)
         except (ProcessLookupError, PermissionError):
             pgid = None
+    if pgid is not None and pgid != proc.pid:
+        # Adapted from NousResearch/hermes-agent 956cd8dd3e (MIT): the child does
+        # not lead its own group, so it shares ours; killpg would signal the
+        # whole runner process tree. Signal the direct child only.
+        pgid = None
     try:
         if pgid is not None and killpg is not None:
             killpg(pgid, signal.SIGTERM)  # windows-footgun: ok — POSIX-only branch (killpg checked above)
@@ -218,6 +224,7 @@ def _run_start_phase(
         start_new_session=True,  # own process group for clean teardown
         text=True,
         errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     output = ""
     try:

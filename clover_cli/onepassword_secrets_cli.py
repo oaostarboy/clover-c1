@@ -490,6 +490,7 @@ def _op_version(binary: Path) -> str:
             encoding="utf-8",
             errors="replace",
             timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         if res.returncode == 0:
             return (res.stdout or res.stderr).strip().splitlines()[0]
@@ -520,7 +521,8 @@ def _op_whoami(
     try:
         res = subprocess.run(
             cmd, env=env, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=10
+            encoding="utf-8", errors="replace", timeout=10,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

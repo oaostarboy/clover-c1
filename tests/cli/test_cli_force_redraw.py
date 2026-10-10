@@ -408,7 +408,11 @@ class TestFocusRegainRedraw:
 
         assert calls == ["redraw"]
 
-    def test_focus_regain_redraw_is_rate_limited(self, bare_cli):
+    def test_focus_regain_redraw_is_rate_limited(self, bare_cli, monkeypatch):
+        # time.monotonic() is host uptime on Linux; a CI runner booted < 60s
+        # ago would make even the first call look rate-limited. Pin the clock.
+        import time as _time
+        monkeypatch.setattr(_time, "monotonic", lambda: 10_000.0)
         calls = []
         bare_cli._force_full_redraw = lambda: calls.append("redraw")
 

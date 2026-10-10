@@ -79,6 +79,15 @@ def _terminate_process_group(proc: subprocess.Popen) -> None:
         pgid = os.getpgid(proc.pid)
     except (ProcessLookupError, OSError):
         return
+    if pgid != proc.pid:
+        # Adapted from NousResearch/hermes-agent 956cd8dd3e (MIT): the child
+        # shares our group, so killpg would signal this watchdog too. Direct
+        # child only.
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return
     sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
     for sig in (signal.SIGTERM, sigkill):
         try:

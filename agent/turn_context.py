@@ -1544,6 +1544,19 @@ def build_turn_context(
         else:
             with persist_lock:
                 _ensure_and_persist()
+        # The user row is committed (it carries the persisted marker): tell the
+        # gateway the inbound input is now recoverable from the session store.
+        _inbound_cb = getattr(agent, "inbound_persisted_callback", None)
+        if (
+            _inbound_cb is not None
+            and 0 <= current_turn_user_idx < len(messages)
+            and isinstance(messages[current_turn_user_idx], dict)
+            and messages[current_turn_user_idx].get("_db_persisted")
+        ):
+            try:
+                _inbound_cb()
+            except Exception:
+                logger.debug("inbound_persisted_callback failed", exc_info=True)
     except Exception:
         logger.warning(
             "Early turn-start session persistence failed for session=%s",

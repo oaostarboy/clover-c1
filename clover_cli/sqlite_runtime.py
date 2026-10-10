@@ -105,6 +105,7 @@ def probe_sqlite_runtime(
             timeout=timeout,
             check=False,
             env=env,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

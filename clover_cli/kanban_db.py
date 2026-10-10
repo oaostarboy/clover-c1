@@ -6006,6 +6006,7 @@ def _cleanup_worktree_workspace(
             text=True, encoding='utf-8', errors='replace',
             timeout=60,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             _log.warning(
@@ -6022,6 +6023,7 @@ def _cleanup_worktree_workspace(
                 text=True, encoding='utf-8', errors='replace',
                 timeout=30,
                 check=False,
+                stdin=subprocess.DEVNULL,
             )
     except Exception:
         pass  # best-effort — never block completion
@@ -6091,11 +6093,13 @@ def _cleanup_worker_tmux(conn: sqlite3.Connection, task_id: str) -> None:
         out = subprocess.run(
             ["tmux", "list-panes", "-t", session, "-F", "#{pane_dead}"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         if out.stdout.strip() == "1":
             subprocess.run(
                 ["tmux", "kill-session", "-t", session],
                 capture_output=True, timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             _log.debug("Killed stale tmux session: %s", session)
     except Exception:
@@ -7612,6 +7616,7 @@ def _git_toplevel(path: Path) -> Optional[Path]:
             text=True, encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return None
@@ -7634,6 +7639,7 @@ def _git_branch_exists(repo_root: Path, branch_name: str) -> bool:
             text=True, encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return False
@@ -7648,6 +7654,7 @@ def _git_common_dir(path: Path) -> Optional[Path]:
             text=True, encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return None
@@ -7667,6 +7674,7 @@ def _git_dir(path: Path) -> Optional[Path]:
             text=True, encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return None
@@ -7686,6 +7694,7 @@ def _git_current_branch(path: Path) -> Optional[str]:
             text=True, encoding='utf-8', errors='replace',
             timeout=30,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return None
@@ -7743,6 +7752,7 @@ def _ensure_git_worktree(repo_root: Path, target: Path, branch_name: str) -> Non
         text=True, encoding='utf-8', errors='replace',
         timeout=60,
         check=False,
+        stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0:
         stderr = (result.stderr or result.stdout or "").strip()
@@ -8250,6 +8260,7 @@ def _pid_alive(pid: Optional[int]) -> bool:
                 text=True, encoding='utf-8', errors='replace',
                 timeout=1,
                 check=False,
+                stdin=subprocess.DEVNULL,
             )
             if proc.returncode != 0:
                 return False

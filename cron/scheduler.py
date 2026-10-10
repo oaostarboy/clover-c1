@@ -2701,6 +2701,7 @@ def _deliver_to_bot_chat(job: dict, content: str, profile: str) -> Optional[str]
             timeout=_get_bot_chat_delivery_timeout(),
             env=env,
             creationflags=windows_hide_flags(),
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             tail = (result.stderr or result.stdout or "").strip()[-500:]
@@ -4123,6 +4124,7 @@ def _terminate_cron_script_process(proc: subprocess.Popen) -> None:
                 timeout=10,
                 creationflags=windows_hide_flags(),
                 check=False,
+                stdin=subprocess.DEVNULL,
             )
         except (OSError, subprocess.TimeoutExpired):
             proc.kill()
@@ -4130,6 +4132,10 @@ def _terminate_cron_script_process(proc: subprocess.Popen) -> None:
         try:
             process_group: Optional[int] = os.getpgid(proc.pid)
         except (ProcessLookupError, OSError):
+            process_group = None
+        if process_group is not None and process_group != proc.pid:
+            # Child shares our group (not a leader): killpg would signal Clover.
+            # Drop the group path; the direct-child kill below still applies.
             process_group = None
         if process_group is not None:
             try:
@@ -4432,6 +4438,7 @@ def _run_job_script(
             cwd=_script_cwd,
             env=env,
             **popen_kwargs,
+            stdin=subprocess.DEVNULL,
         )
         deadline = time.monotonic() + script_timeout
         while True:

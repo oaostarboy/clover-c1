@@ -105,6 +105,7 @@ def _cli_supports_recover(binary: str) -> bool:
             [binary, "-readonly", str(scratch), ".recover"],
             capture_output=True,
             timeout=30,
+            stdin=subprocess.DEVNULL,
         )
         if probe.returncode != 0:
             return False
@@ -136,6 +137,7 @@ def run_cli_lost_and_found_recover(
             [sqlite3_bin, "-readonly", str(source), command],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
         )
         load = subprocess.Popen(
             [sqlite3_bin, str(lf_path)],

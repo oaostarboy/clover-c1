@@ -60,7 +60,7 @@ def _repair_dependencies(import_detail: str = "") -> bool:
         python = venv_python_path(root / "venv", windows=sys.platform == "win32")
         if not python.exists():
             import subprocess
-            subprocess.run([uv, "venv", "venv"], cwd=root, check=True)
+            subprocess.run([uv, "venv", "venv"], cwd=root, check=True, stdin=subprocess.DEVNULL)
         env = managed_python_env()
         env["VIRTUAL_ENV"] = str(root / "venv")
         main._install_python_dependencies_with_optional_fallback(
@@ -69,7 +69,7 @@ def _repair_dependencies(import_detail: str = "") -> bool:
         if reinstall:
             import subprocess
             subprocess.run([sys.executable, "-m", "pip", "install", "--force-reinstall",
-                            "--no-deps", *reinstall], check=True, cwd=root)
+                            "--no-deps", *reinstall], check=True, cwd=root, stdin=subprocess.DEVNULL)
         main._install_python_dependencies_with_optional_fallback([sys.executable, "-m", "pip"], group="all")
     return update_cmd._venv_core_imports_healthy()[0]
 

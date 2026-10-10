@@ -636,6 +636,7 @@ def main() -> int:
             text=True,
             capture_output=True,
             timeout=120,
+            stdin=subprocess.DEVNULL,
         )
     finally:
         server.shutdown()
@@ -700,6 +701,7 @@ def main() -> int:
         text=True,
         capture_output=True,
         timeout=60,
+        stdin=subprocess.DEVNULL,
     )
     (root / "skills.stdout.txt").write_text(
         skill_result.stdout,

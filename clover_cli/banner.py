@@ -224,6 +224,7 @@ def _git_stdout(args: list[str], *, cwd: Path, timeout: int = 5) -> Optional[str
             errors="replace",
             timeout=timeout,
             cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return None
@@ -285,6 +286,7 @@ def _upstream_main_sha() -> Optional[str]:
             ["git", "ls-remote", _UPSTREAM_REPO_URL, "refs/heads/main"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=10,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return None
@@ -337,6 +339,7 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
         ancestor = subprocess.run(
             ["git", "merge-base", "--is-ancestor", upstream_rev, "HEAD"],
             capture_output=True, timeout=5, cwd=str(repo_dir),
+            stdin=subprocess.DEVNULL,
         )
         if ancestor.returncode == 0:
             return 0
@@ -387,6 +390,7 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
             fetch_args,
             capture_output=True, timeout=10,
             cwd=str(repo_dir),
+            stdin=subprocess.DEVNULL,
         )
         fetch_ok = fetch_proc.returncode == 0
     except Exception:
@@ -406,6 +410,7 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
                     capture_output=True, text=True, encoding="utf-8", errors="replace",
                     timeout=5,
                     cwd=str(repo_dir),
+                    stdin=subprocess.DEVNULL,
                 )
                 if result.returncode == 0:
                     behind = int(result.stdout.strip())
@@ -441,6 +446,7 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=5,
             cwd=str(repo_dir),
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             return int(result.stdout.strip())
@@ -552,6 +558,7 @@ def _git_short_hash(repo_dir: Path, rev: str) -> Optional[str]:
             errors="replace",
             timeout=5,
             cwd=str(repo_dir),
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return None
@@ -636,6 +643,7 @@ def _compute_git_banner_state(repo_dir: Optional[Path] = None) -> Optional[dict]
             errors="replace",
             timeout=5,
             cwd=str(repo_dir),
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             parts = (result.stdout or "").split()
@@ -683,6 +691,7 @@ def get_latest_release_tag(repo_dir: Optional[Path] = None) -> Optional[tuple]:
             errors="replace",
             timeout=3,
             cwd=str(repo_dir),
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         _latest_release_cache = ()

@@ -372,6 +372,7 @@ def _detect_macos_system_proxy() -> str | None:
     try:
         out = subprocess.check_output(
             ["scutil", "--proxy"], timeout=3, text=True, encoding='utf-8', errors='replace', stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return None
@@ -2529,7 +2530,16 @@ class MessageEvent:
     # queued human messages and internal completion events, and is never
     # merged with either.  Kept last to preserve positional construction.
     synthetic: bool = False
-    
+
+    # Callbacks that make the platform's inbound receipt durable (Telegram
+    # update-ID admission). Run once the event is durably handed off: its turn
+    # marker is set, it is recorded in the restart inbox, or its turn ended. A
+    # dataclass field, so ``dataclasses.replace`` carries it; events merged into
+    # another one hand theirs over (``absorb_inbound_receipts``).
+    inbound_receipts: List[Callable[[], None]] = field(
+        default_factory=list, repr=False, compare=False
+    )
+
     def is_command(self) -> bool:
         """Check if this is a command message (e.g., /new, /reset)."""
         return self.allow_gateway_control and (self.text or "").lstrip().startswith("/")
@@ -2930,6 +2940,103 @@ def promote_next_pending(
     return chosen
 
 
+def complete_inbound_handoff(event: Any) -> None:
+    """Run the event's inbound-receipt callbacks (idempotent, never raises)."""
+    for callback in list(getattr(event, "inbound_receipts", None) or ()):
+        try:
+            callback()
+        except Exception:
+            logger.warning("Inbound receipt callback failed", exc_info=True)
+
+
+def mark_inbound_durable(event: Any) -> None:
+    """Declare that *event*'s input is safe to receipt (opt-in, never the default).
+
+    Only two kinds of places may call this: the normal-turn path right after
+    the user message is committed to the session store, and slash commands
+    that are fully handled synchronously with no memory-only payload.
+    ``settle_inbound_handoff`` writes the receipt for a marked event and
+    releases every other one.
+    """
+    try:
+        event._inbound_durable = True
+    except Exception:
+        logger.debug("Could not mark inbound event durable", exc_info=True)
+    # A pre-dispatch rewrite hands the handler a ``dataclasses.replace`` copy
+    # that shares the callbacks but not private attributes. The mark rides the
+    # shared callbacks too, so the original event the adapter settles sees it.
+    for callback in list(getattr(event, "inbound_receipts", None) or ()):
+        try:
+            callback.durable = True
+        except Exception:
+            pass
+
+
+def inbound_is_durable(event: Any) -> bool:
+    """True only when the event was explicitly marked by ``mark_inbound_durable``."""
+    if getattr(event, "_inbound_durable", False) is True:
+        return True
+    return any(
+        getattr(cb, "durable", False) is True
+        for cb in (getattr(event, "inbound_receipts", None) or ())
+    )
+
+
+def settle_inbound_handoff(event: Any) -> None:
+    """Default end-of-handler settlement: receipt only if marked, else release.
+
+    A path that accepted input into memory only (steer, queue, interrupt,
+    merge, unknown handler, exception) never marks the event, so the platform
+    replay after a crash is admitted again. Worst case is a double answer,
+    never a lost input. Idempotent in both directions.
+    """
+    if getattr(event, "_inbound_durable", False) is True:
+        complete_inbound_handoff(event)
+        return
+    # Callbacks marked through a ``dataclasses.replace`` copy complete; any
+    # other callback this event carries (e.g. merged in) is released.
+    for callback in list(getattr(event, "inbound_receipts", None) or ()):
+        if getattr(callback, "durable", False) is True:
+            try:
+                callback()
+            except Exception:
+                logger.warning("Inbound receipt callback failed", exc_info=True)
+        else:
+            release = getattr(callback, "release", None)
+            if release is not None:
+                try:
+                    release()
+                except Exception:
+                    logger.warning("Inbound receipt release failed", exc_info=True)
+
+
+def release_inbound_handoff(event: Any) -> None:
+    """Drop the event's inbound receipt without writing one (idempotent, never raises).
+
+    For input that only lives in memory (a steer, redirect or follow-up queued
+    behind a running turn). Every copy of the callbacks, including ones merged
+    into another event, turns inert, and the platform's in-memory claim is
+    released. A replay after a crash is then admitted again, never suppressed.
+    """
+    for callback in list(getattr(event, "inbound_receipts", None) or ()):
+        release = getattr(callback, "release", None)
+        if release is None:
+            continue
+        try:
+            release()
+        except Exception:
+            logger.warning("Inbound receipt release failed", exc_info=True)
+
+
+def absorb_inbound_receipts(existing: Any, incoming: Any) -> None:
+    """Make ``existing`` carry ``incoming``'s receipt callbacks after a merge."""
+    mine = getattr(existing, "inbound_receipts", None)
+    theirs = getattr(incoming, "inbound_receipts", None)
+    if mine is None or not theirs or mine is theirs:
+        return
+    mine.extend(cb for cb in theirs if cb not in mine)
+
+
 def merge_pending_message_event(
     pending_messages: Dict[str, MessageEvent],
     session_key: str,
@@ -2973,6 +3080,7 @@ def merge_pending_message_event(
             if event.text:
                 existing.text = BasePlatformAdapter._merge_caption(existing.text, event.text)
             _invalidate_pending_stt_cache(existing)
+            absorb_inbound_receipts(existing, event)
             return MergeResult.MERGED
 
         if existing_has_media or incoming_has_media:
@@ -2992,6 +3100,7 @@ def merge_pending_message_event(
             ):
                 existing.message_type = event.message_type
             _invalidate_pending_stt_cache(existing)
+            absorb_inbound_receipts(existing, event)
             return MergeResult.MERGED
 
         if (
@@ -3001,6 +3110,7 @@ def merge_pending_message_event(
         ):
             if event.text:
                 existing.text = f"{existing.text}\n{event.text}" if existing.text else event.text
+            absorb_inbound_receipts(existing, event)
             return MergeResult.MERGED
 
     pending_messages[session_key] = event
@@ -5871,6 +5981,20 @@ class BasePlatformAdapter(ABC):
             return response.text, int(ttl or 0)
         return response, 0
 
+    async def _release_turn_marker(self, event: MessageEvent) -> None:
+        """Clear the crash-recovery marker the runner handed to this delivery.
+
+        Runs only once the final reply is ledgered or nothing more is owed, so
+        no kill leaves a persisted reply with neither marker nor ledger row.
+        Ported from NousResearch/hermes-agent 360b9697ac (MIT). Idempotent.
+        """
+        if getattr(event, "_turn_marker_handoff", False) and getattr(
+            event, "_gateway_active_turn_token", None
+        ):
+            runner = getattr(self, "gateway_runner", None)
+            if runner is not None:
+                await runner._clear_durable_active_turn(event)
+
     def _final_delivery_adapter(
         self, source: Optional[SessionSource]
     ) -> "BasePlatformAdapter":
@@ -6189,6 +6313,7 @@ class BasePlatformAdapter(ABC):
                 state.event.message_id = str(latest_message_id)
             if latest_anchor is not None and hasattr(state.event, "reply_to_message_id"):
                 state.event.reply_to_message_id = str(latest_anchor)
+            absorb_inbound_receipts(state.event, event)
             state.last_ts = now
 
         if state.task is not None and not state.task.done():
@@ -6447,6 +6572,7 @@ class BasePlatformAdapter(ABC):
 
         try:
             response = await self._message_handler(event)
+            settle_inbound_handoff(event)
             _text, _eph_ttl = self._unwrap_ephemeral(response)
             # Send the response BEFORE cancelling the old task so the send
             # cannot be affected by task-cancellation side effects (race
@@ -6587,6 +6713,7 @@ class BasePlatformAdapter(ABC):
                 try:
                     _thread_meta = _thread_metadata_for_source(event.source, _reply_anchor_for_event(event))
                     response = await self._message_handler(event)
+                    settle_inbound_handoff(event)
                     _text, _eph_ttl = self._unwrap_ephemeral(response)
                     if _text:
                         _r = await self._send_with_retry(
@@ -6640,6 +6767,7 @@ class BasePlatformAdapter(ABC):
                             event.source, _reply_anchor_for_event(event)
                         )
                         response = await self._message_handler(event)
+                        settle_inbound_handoff(event)
                         _text, _eph_ttl = self._unwrap_ephemeral(response)
                         if _text:
                             _r = await self._send_with_retry(
@@ -6664,6 +6792,10 @@ class BasePlatformAdapter(ABC):
             if self._busy_session_handler is not None:
                 try:
                     if await self._busy_session_handler(event, session_key):
+                        # A steer/follow-up taken into memory was released by
+                        # the runner (``release_inbound_handoff``), so this is
+                        # then a no-op; any other handled event is complete.
+                        settle_inbound_handoff(event)
                         return
                 except Exception as e:
                     logger.error("[%s] Busy-session handler failed: %s", self.name, e, exc_info=True)
@@ -6674,6 +6806,8 @@ class BasePlatformAdapter(ABC):
             if event.message_type == MessageType.PHOTO:
                 logger.debug("[%s] Queuing photo follow-up for session %s without interrupt", self.name, session_key)
                 self._merge_or_overflow(session_key, event)
+                # Queued in memory only: the platform replay stays admissible.
+                release_inbound_handoff(event)
                 return  # Don't interrupt now - will run after current task completes
 
             if self._is_queue_text_debounce_candidate(event):
@@ -6685,6 +6819,7 @@ class BasePlatformAdapter(ABC):
                     self._busy_text_debounce_seconds,
                 )
                 await self._queue_text_debounce(session_key, event)
+                release_inbound_handoff(event)
             else:
                 logger.debug(
                     "[%s] New message while session %s is active — queuing follow-up "
@@ -6697,6 +6832,7 @@ class BasePlatformAdapter(ABC):
                     event,
                     merge_text=event.message_type == MessageType.TEXT,
                 )
+                release_inbound_handoff(event)
             return  # Don't process now - will be handled after current task finishes
         
         # Mark session as active BEFORE spawning background task to close
@@ -6787,7 +6923,14 @@ class BasePlatformAdapter(ABC):
             await self._run_processing_hook("on_processing_start", event)
 
             # Call the handler (this can take a while with tool calls)
+            event._turn_marker_handoff = self.gateway_runner is not None
             response = await self._message_handler(event)
+            # The runner returned (turn finished, command answered or rejected):
+            # the input is no longer waiting on the platform's replay. A
+            # cancellation or crash before this point leaves it unreceipted
+            # unless the turn marker already made it durable.
+            # (a handler that took it into memory released it: no-op).
+            settle_inbound_handoff(event)
             is_ephemeral_response = isinstance(response, EphemeralReply)
 
             # Slash-command handlers may return an EphemeralReply sentinel to
@@ -7061,6 +7204,10 @@ class BasePlatformAdapter(ABC):
                         except Exception:
                             logger.debug("delivery ledger record failed", exc_info=True)
                             _obligation_id = None
+                    if _obligation_id is not None:
+                        # The ledger now owns crash recovery: release the turn marker
+                        # (Hermes 360b9697ac, MIT). Idempotent via the CAS clear.
+                        await self._release_turn_marker(event)
                     result = await delivery_adapter._send_with_retry(
                         chat_id=event.source.chat_id,
                         content=text_content,
@@ -7375,6 +7522,10 @@ class BasePlatformAdapter(ABC):
                     "[%s] Failed to send error notification to user: %s",
                     self.name, notify_err, exc_info=True,
                 )  # Last resort — don't let error reporting crash the handler
+            else:
+                # The user was told to retry. An exception never proves the
+                # input is durable, so the replay stays admissible.
+                release_inbound_handoff(event)
             # Preserve shutdown semantics: SystemExit/KeyboardInterrupt must
             # still propagate after the user-facing failure notification, so
             # the loop's own signal handling can shut down cleanly. Other
@@ -7388,6 +7539,10 @@ class BasePlatformAdapter(ABC):
             # callbacks may perform platform I/O; a stuck callback must not
             # leave the typing refresh task running indefinitely.
             await _stop_typing_task()
+            # Nothing more is owed for this turn (no reply, error, or already
+            # ledgered): release the handed-off marker. Idempotent.
+            await self._release_turn_marker(event)
+            event._turn_marker_handoff = False
             # Fire any one-shot post-delivery callback registered for this
             # session (e.g. deferred background-review notifications).
             #

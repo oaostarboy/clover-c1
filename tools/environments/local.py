@@ -994,6 +994,7 @@ def _mandatory_aslr_enabled() -> "bool | None":
             text=True, encoding="utf-8", errors="replace",
             timeout=10,
             creationflags=windows_hide_flags(),
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             return None
@@ -1060,6 +1061,7 @@ def _bash_starts(bash: str) -> bool:
             text=True, encoding="utf-8", errors="replace",
             timeout=15,
             creationflags=windows_hide_flags() if _IS_WINDOWS else 0,
+            stdin=subprocess.DEVNULL,
         )
         ok = result.returncode == 0
         if not ok:
@@ -2066,6 +2068,13 @@ class LocalEnvironment(BaseEnvironment):
                     pgid = getattr(proc, "_clover_pgid", None)
                     if pgid is None:
                         raise
+
+                if pgid == os.getpgrp():
+                    # Adapted from NousResearch/hermes-agent 2f41514cae (MIT):
+                    # a spawner that skipped setsid leaves the child in OUR
+                    # group; killpg would take Clover down. Kill by PID only.
+                    proc.kill()
+                    return
 
                 # Snapshot the descendant set BEFORE the first signal: once
                 # the wrapper dies its children reparent to init and a parent

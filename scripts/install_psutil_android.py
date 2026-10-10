@@ -90,7 +90,7 @@ def main() -> int:
 
         cmd = install_cmd_prefix + ["install", "--no-build-isolation", str(src_root)]
         print(f"  $ {' '.join(cmd)}")
-        result = subprocess.run(cmd)
+        result = subprocess.run(cmd, stdin=subprocess.DEVNULL)
         if result.returncode != 0:
             return result.returncode
 

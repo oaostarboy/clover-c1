@@ -128,7 +128,12 @@ def test_oneshot_wires_auto_continue():
 
     src = inspect.getsource(oneshot._run_agent)
     assert "continue_until_done" in src and "needs_continuation" in src
-    assert '"incomplete"' in inspect.getsource(oneshot.run_oneshot)
+    # The -z / chat -q result status is shared (clover_cli.activity_events):
+    # a run that stopped on its step budget reports "incomplete", not "completed".
+    from clover_cli.activity_events import result_status
+
+    assert result_status("partial", _res("partial", OUT)) == "incomplete"
+    assert result_status("done", _res("done", DONE)) == "completed"
 
 
 def test_observer_maps_clover_incomplete_to_unfinished():

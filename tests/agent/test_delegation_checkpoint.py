@@ -16,7 +16,20 @@ import pytest
 from run_agent import AIAgent
 
 
-def _agent(**overrides) -> Any:
+def _opt_in_to_checkpoint() -> None:
+    """The checkpoint ships OFF; these suites exercise it, so opt in unless the
+    test already wrote its own ``delegation.checkpoint`` config."""
+    import yaml
+    from clover_constants import get_clover_home
+
+    path = get_clover_home() / 'config.yaml'
+    if not path.exists():
+        path.write_text(yaml.safe_dump({'delegation': {'checkpoint': {'enabled': True}}}))
+
+
+def _agent(opt_in: bool = True, **overrides) -> Any:
+    if opt_in:
+        _opt_in_to_checkpoint()
     kwargs = dict(
         provider='custom', api_mode='chat_completions',
         base_url='http://127.0.0.1:1/v1', api_key='local-test-credential',
@@ -469,6 +482,8 @@ def _set_checkpoint_config(values):
     import yaml
     from clover_constants import get_clover_home
 
+    if isinstance(values, dict):
+        values = {'enabled': True, **values}
     (get_clover_home() / 'config.yaml').write_text(
         yaml.safe_dump({'delegation': {'checkpoint': values}}))
 
@@ -603,11 +618,41 @@ def test_explicit_rollback_restores_ungated_behavior(tmp_path, off):
     assert (tmp_path / 'ungated.txt').exists()
 
 
-def test_default_config_is_enabled_for_eligible_roots(tmp_path):
+def test_explicit_enabled_true_still_gates_eligible_roots(tmp_path):
+    _set_checkpoint_config({'enabled': True})
     agent = _agent()
     (blocked,) = run_batch(agent, [_write(tmp_path / 'gated.txt')])
     assert 'delegation_decision_required' in json.dumps(blocked)
     assert not (tmp_path / 'gated.txt').exists()
+
+
+def test_default_config_does_not_cap_the_foreground_agent(tmp_path):
+    # No config at all: the shipped default is OFF, so work is never gated.
+    agent = _agent(opt_in=False)
+    for i in range(8):  # well past the opt-in budget of 5 work calls
+        run_batch(agent, [_write(tmp_path / f'free{i}.txt')])
+    assert all((tmp_path / f'free{i}.txt').exists() for i in range(8))
+
+
+def test_checkpoint_section_without_enabled_key_stays_off(tmp_path):
+    import yaml
+    from clover_constants import get_clover_home
+    (get_clover_home() / 'config.yaml').write_text(
+        yaml.safe_dump({'delegation': {'checkpoint': {'max_work_tools': 2}}}))
+    agent = _agent()
+    for i in range(4):
+        run_batch(agent, [_write(tmp_path / f'k{i}.txt')])
+    assert all((tmp_path / f'k{i}.txt').exists() for i in range(4))
+
+
+def test_shipped_default_config_declares_the_checkpoint_off():
+    from clover_cli.config import DEFAULT_CONFIG
+    from agent.delegation_checkpoint import CheckpointSettings, normalize_settings
+
+    shipped = DEFAULT_CONFIG['delegation']['checkpoint']
+    assert shipped['enabled'] is False
+    assert normalize_settings(shipped).enabled is False
+    assert CheckpointSettings().enabled is False
 
 
 # ── eligibility matrix ─────────────────────────────────────────────────────

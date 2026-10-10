@@ -561,6 +561,15 @@ class CLIAgentSetupMixin:
             # forever — so memory shutdown never ran on /exit (#49287).
             import cli as _cli
             _cli._active_agent_ref = self.agent
+            # --activity-events on the human single-query path: tee the
+            # structured stream next to the normal renderers (the quiet path
+            # attaches its own after neutralizing them).
+            _activity_writer = getattr(self, "_activity_writer", None)
+            if _activity_writer is not None:
+                from clover_cli.activity_events import attach_to_agent
+
+                attach_to_agent(self.agent, _activity_writer, chain=True)
+                _activity_writer.start(effective_model)
             # Route agent status output through prompt_toolkit so ANSI escape
             # sequences aren't garbled by patch_stdout's StdoutProxy (#2262).
             self.agent._print_fn = _cprint

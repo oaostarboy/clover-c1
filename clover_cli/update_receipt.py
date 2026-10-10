@@ -401,6 +401,12 @@ def collect_fleet_versions(
                   checkout's HEAD (it is still serving pre-update modules).
     ``unknown`` — gateway predates the code-identity stamp (started before
                   this feature landed) or identity could not be resolved.
+    ``other_install`` — the gateway runs from a DIFFERENT install (another
+                  venv/checkout serving this profile home). The restart
+                  phase never owns it, so its code is not this update's
+                  business: shown, never a failure. Uses the restart phase's
+                  own same-venv ownership rule; unreadable ownership keeps
+                  the stale/unknown verdict (fail-closed).
     ``down``    — the gateway was ALIVE when this update started
                   (``pre_restart_pids``), its runtime status still says
                   running, but the PID is dead and no successor rewrote the
@@ -446,6 +452,18 @@ def collect_fleet_versions(
                 if entry.is_dir() and entry.name != "default" and _PROFILE_ID_RE.match(entry.name):
                     homes.append((entry.name, entry))
 
+        def _install_scoped(state: str, pid: int) -> str:
+            if state == "current":
+                return state
+            try:
+                from clover_cli.update_cmd import _gateway_pid_install_verdict
+
+                if _gateway_pid_install_verdict(pid) == "other":
+                    return "other_install"
+            except Exception:
+                pass
+            return state
+
         for profile, home in homes:
             # Prefer the gateway-owned control socket (#92091): a live
             # `identify` answer is authoritative — no PID-reuse or stale-file
@@ -471,6 +489,7 @@ def collect_fleet_versions(
                         state = "current"
                     else:
                         state = "stale"
+                    state = _install_scoped(state, pid)
                     results.append(
                         {
                             "profile": profile,
@@ -537,6 +556,7 @@ def collect_fleet_versions(
                 state = "current"
             else:
                 state = "stale"
+            state = _install_scoped(state, pid)
             results.append(
                 {
                     "profile": profile,
@@ -557,6 +577,8 @@ def print_fleet_version_matrix(fleet: list[dict[str, Any]]) -> bool:
     Returns True when at least one gateway is provably stale (still
     serving pre-update code) OR provably down (was running, killed by the
     restart phase, nothing came back), so the caller can escalate.
+    ``other_install`` rows (a gateway from a different install serving one
+    of these profile homes) are shown but never fail the update.
     ``unknown`` entries are reported but do NOT fail the update: gateways
     started before the code-identity stamp existed have no sha to compare,
     and failing on them would turn this feature's own rollout into a
@@ -579,6 +601,11 @@ def print_fleet_version_matrix(fleet: list[dict[str, Any]]) -> bool:
         elif state == "stale":
             any_stale = True
             print(f"  ✗ {profile} (pid {pid}) @ {short} — STALE (pre-update code)")
+        elif state == "other_install":
+            print(
+                f"  · {profile} (pid {pid}) @ {short} — other install "
+                "(runs from a different checkout/venv; not updated here)"
+            )
         elif state == "down":
             any_down = True
             print(

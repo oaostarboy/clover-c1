@@ -1512,6 +1512,7 @@ def _agent_browser_get_cdp(session_name: str) -> Optional[str]:
         proc = subprocess.run(
             [*_agent_browser_argv(browser_cmd), "--session", session_name, "get", "cdp-url"],
             capture_output=True, text=True, timeout=15, env=_build_browser_env(),
+            stdin=subprocess.DEVNULL,
         )
     except (subprocess.SubprocessError, OSError) as e:
         logger.debug("real-profile get cdp-url failed: %s", e)
@@ -1552,6 +1553,7 @@ def _agent_browser_close_session(session_name: str) -> None:
         subprocess.run(
             [*_agent_browser_argv(browser_cmd), "--session", session_name, "close"],
             capture_output=True, text=True, timeout=15, env=_build_browser_env(),
+            stdin=subprocess.DEVNULL,
         )
     except (subprocess.SubprocessError, OSError) as e:
         logger.debug("real-profile session close failed: %s", e)
@@ -1797,6 +1799,7 @@ def _real_profile_cdp() -> tuple:
                 argv, capture_output=True, text=True,
                 timeout=_get_open_command_timeout(first_open=True),
                 env=_build_browser_env(),
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired:
             return None, (
@@ -3253,6 +3256,29 @@ def _legacy_kill_process_tree(proc: "subprocess.Popen") -> None:
     try:
         pgid = os.getpgid(proc.pid)
     except (ProcessLookupError, OSError):
+        return
+    if pgid != proc.pid:
+        # Adapted from NousResearch/hermes-agent 956cd8dd3e (MIT): the child shares
+        # our group, so killpg would take Clover down with it. Kill the direct
+        # child and its psutil-snapshotted descendants individually; a bare
+        # proc.kill() would leave them holding the capture pipe open (#68915).
+        # The snapshot must precede the parent kill (children reparent after).
+        descendants = []
+        try:
+            import psutil
+
+            descendants = psutil.Process(proc.pid).children(recursive=True)
+        except Exception:
+            descendants = []
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        for child in descendants:
+            try:
+                child.kill()
+            except Exception:
+                pass
         return
     sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
     for sig in (signal.SIGTERM, sigkill):
@@ -5970,6 +5996,7 @@ def _maybe_autoinstall_chromium() -> bool:
             text=True, encoding='utf-8', errors='replace',
             timeout=600,
             env=_build_browser_env(),
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError) as e:
         logger.warning("browser: Chromium auto-install failed to start: %s", e)

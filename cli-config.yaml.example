@@ -1249,6 +1249,8 @@ platform_toolsets:
 #     # allowed_chats: ["-1001234567890"]
 #     extra:
 #       drop_pending_on_cold_boot: false  # Set true to discard messages queued while the gateway was offline on a cold boot (watcher reconnects always preserve them)
+#       update_admission: false         # EXPERIMENTAL. Set true to drop Telegram redeliveries of updates this process already handled. Off by default: Telegram update handling is exactly C1.2's, so a redelivered message is handled again. Implies the durable_update_receipts option below
+#       durable_update_receipts: false  # EXPERIMENTAL; only used when update_admission is true. Set true to keep a per-bot receipt file so a restarted gateway drops Telegram redeliveries of handled messages. Off by default: after a crash a message may be answered twice, but never lost
 #       disable_link_previews: false  # Set true to suppress Telegram URL previews in bot messages
 #       rich_messages: false          # Bot API 10.1 rich messages (tables/task lists/details/math); default false for copyable legacy MarkdownV2, set true to opt in
 #       rich_drafts: false            # Experimental rich draft previews during Telegram DM streaming; default false because Telegram Desktop/macOS can visually overlay draft frames
@@ -1592,8 +1594,8 @@ delegation:
                                               # or auto-approve "once" (true) instead of blocking on stdin.
                                               # The parent TUI owns stdin, so blocking would deadlock; non-interactive resolution is required.
                                               # Both choices emit a logger.warning audit line. Flip to true only for cron/batch pipelines.
-  # checkpoint:                               # Mandatory delegation checkpoint for conversational roots with todo + delegate_task
-  #   enabled: true                           # false = rollback: never gate work tools
+  # checkpoint:                               # Optional delegation checkpoint for conversational roots with todo + delegate_task (off by default: no cap)
+  #   enabled: false                          # true = opt in: gate work tools until a delegation choice is recorded
   #   max_work_tools: 5                       # parent work calls one direct/delegate choice covers (positive integer)
   #   max_foreground_seconds: 120             # seconds after the first work call before the choice must be renewed
   # inherit_mcp_toolsets: true                # When explicit child toolsets are narrowed, also keep the parent's MCP toolsets (default: true). Set false for strict intersection.

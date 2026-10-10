@@ -9,6 +9,9 @@ Pins:
   rows — the silent-miss tripwire.
 """
 
+import pytest
+
+from clover_cli import update_inventory
 from clover_cli.update_inventory import (
     RuntimeRecord,
     UpdatePlan,
@@ -17,6 +20,14 @@ from clover_cli.update_inventory import (
     match_runtime_outcomes,
     report_unaccounted_runtimes,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_pid_lookup(monkeypatch):
+    # These rows use made-up pids. On a busy host (CI) a made-up pid can be a
+    # live foreign process, which the install-identity probe would classify as
+    # another install. Ownership has its own tests; here every pid is ours.
+    monkeypatch.setattr(update_inventory, "_runtime_is_other_install", lambda pid: False)
 
 
 def _plan(*runtimes: RuntimeRecord) -> UpdatePlan:

@@ -94,6 +94,7 @@ from clover_state_common import (  # noqa: F401  (re-exported for back-compat)
     _PREVIEW_SCAFFOLDED_SQL,
 )
 from clover_state_portability import SessionPortabilityMixin
+from clover_state_lockowners import log_write_lock_holders
 from clover_state_schema import SessionSchemaMixin
 from clover_state_search import SessionSearchMixin
 
@@ -1944,6 +1945,19 @@ def classify_persistence_error(exc_or_str) -> str:
     ):
         return "disk"
     return "unknown"
+
+
+def _note_storage_error(db_path, exc: BaseException) -> bool:
+    """Publish structural corruption into the process-wide health latch.
+
+    Never raises: health reporting must not mask the original error.
+    """
+    try:
+        from clover_state_health import note_storage_error
+
+        return note_storage_error(db_path, exc)
+    except Exception:
+        return False
 
 
 def _claim_repair_attempt(db_path: Path) -> bool:
@@ -4743,6 +4757,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                             pass
                         now = time.monotonic()
                         if now >= deadline:
+                            log_write_lock_holders(
+                                self.db_path, self._WRITE_PATIENCE_S
+                            )
                             raise
                         time.sleep(
                             min(
@@ -4966,6 +4983,21 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
     @contextmanager
     def _read_ctx(self):
+        """Yield a read connection; publish structural corruption to the health latch.
+
+        A reader is often the only observer of a damaged store (the session-list
+        poll on a DB nobody is writing to), so structural damage seen here must
+        reach readiness and the list endpoints (C1.4 R03).
+        """
+        try:
+            with self._read_ctx_unlatched() as conn:
+                yield conn
+        except sqlite3.DatabaseError as exc:
+            _note_storage_error(self.db_path, exc)
+            raise
+
+    @contextmanager
+    def _read_ctx_unlatched(self):
         """Yield a connection for read-only statements.
 
         WAL: a read-only connection borrowed from a bounded pool with NO
@@ -5343,6 +5375,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                         continue
                     # Patience exhausted — say what actually happened so the
                     # surfaced error doesn't read as disk/permission damage.
+                    # The holder goes to the log, not the message: error
+                    # classifiers bucket by phrase, and a holder's argv
+                    # (e.g. a worktree named fix-corrupt-db) would flip it.
+                    log_write_lock_holders(self.db_path, patience_s)
                     raise sqlite3.OperationalError(
                         f"database is locked (another Clover process held the "
                         f"state.db write lock for over {patience_s:.0f}s — "
@@ -5353,6 +5389,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 if _is_no_more_rows(exc) and self._sleep_before_write_retry(deadline, patience_s):
                     continue
                 # Non-lock error or patience exhausted — propagate.
+                _note_storage_error(self.db_path, exc)
                 raise
             except sqlite3.DatabaseError as exc:
                 if _is_no_more_rows(exc) and self._sleep_before_write_retry(deadline, patience_s):
@@ -5368,6 +5405,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     continue
                 if self._enter_fts_fail_open(exc):
                     continue
+                # FTS repair did not apply or did not help: if SQLite reports
+                # structural (non-FTS) damage, publish it so readiness and the
+                # session list say "corrupt" instead of staying green (C1.4 R03).
+                _note_storage_error(self.db_path, exc)
                 raise
             except sqlite3.Error as exc:
                 # Catch-all for builds that surface 'no more rows available'
@@ -8022,19 +8063,29 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         wait_notice_interval_seconds: float = 15.0,
         should_abort=None,
         acquire_patience_s: float = 0.5,
+        on_contended=None,
     ) -> bool:
         """Wait for a cross-process turn lease without holding a SQLite lock.
 
-        ``on_wait(elapsed_seconds)`` is best-effort: invoked when the first
-        attempt fails (elapsed ~0) and again about every
+        ``on_wait(elapsed_seconds)`` is best-effort: invoked when another
+        holder owns the lease (first at elapsed ~0) and again about every
         ``wait_notice_interval_seconds`` while still waiting, so UIs can show
         that another process holds the conversation.
+
+        A busy database is not a holder: a write-lock timeout is retried at
+        once with a longer write patience (the poll interval moves into the
+        patience) and ``on_contended()`` is called instead of ``on_wait`` --
+        no user notice, but callers should still reload the transcript after
+        admission, since the busy writer may be the previous holder's last
+        flush.
 
         When ``should_abort()`` returns True (for example the agent received
         ``/stop`` while waiting), acquisition stops immediately and returns
         False without consuming the full ``wait_seconds`` budget.
         """
+        # Adapted from NousResearch/hermes-agent 73f7fc2ca5 (MIT)
         deadline = time.monotonic() + max(0.0, float(wait_seconds))
+        patience = acquire_patience_s
         wait_started = None
         last_notice_at = None
         notice_every = max(0.0, float(wait_notice_interval_seconds))
@@ -8053,15 +8104,32 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     session_id,
                     holder,
                     ttl_seconds=ttl_seconds,
-                    patience_s=acquire_patience_s,
+                    patience_s=patience,
                 ):
                     return True
             except sqlite3.Error as exc:
-                # Long holder transactions (compression publish, large
-                # flushes) can exhaust a single write-patience budget.
-                # Keep polling until wait_seconds or should_abort.
+                # Another writer's transaction outlasted the write patience
+                # (compression publish, large flushes). That is not a lease
+                # holder: no poll sleep and no "another process" notice. The
+                # retry waits on the write lock itself.
                 if classify_persistence_error(exc) != "locked":
                     raise
+                if on_contended is not None:
+                    try:
+                        on_contended()
+                    except Exception:
+                        logger.debug(
+                            "session turn lease on_contended callback failed",
+                            exc_info=True,
+                        )
+                patience = min(
+                    acquire_patience_s + max(0.0, float(poll_interval_seconds)),
+                    max(acquire_patience_s, deadline - time.monotonic()),
+                )
+                if time.monotonic() >= deadline:
+                    return False
+                continue
+            patience = acquire_patience_s
             now = time.monotonic()
             remaining = deadline - now
             if remaining <= 0:
@@ -8083,14 +8151,43 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 last_notice_at = now
             time.sleep(min(max(0.01, float(poll_interval_seconds)), remaining))
 
+    def session_turn_lease_expires_at(self, session_id: str, holder: str) -> Optional[float]:
+        """Committed ``expires_at`` of the turn lease if ``holder`` owns it, else None.
+
+        Lets the turn owner bound its renewal tolerance by the row's real expiry
+        rather than a locally guessed deadline.
+        """
+        if not session_id or not holder:
+            return None
+
+        def _read(conn):
+            conversation_id = self._session_turn_lease_key_on_conn(conn, session_id)
+            row = conn.execute(
+                "SELECT expires_at FROM session_turn_leases "
+                "WHERE conversation_id = ? AND holder = ?",
+                (conversation_id, holder),
+            ).fetchone()
+            if row is None:
+                return None
+            value = row["expires_at"] if isinstance(row, sqlite3.Row) else row[0]
+            return float(value)
+
+        return self._execute_write(_read)
+
     def refresh_session_turn_lease(
         self,
         session_id: str,
         holder: str,
         *,
         ttl_seconds: float = 300.0,
+        patience_s: Optional[float] = None,
     ) -> bool:
-        """Extend a turn lease only while ``holder`` still owns it."""
+        """Extend a turn lease only while ``holder`` still owns it.
+
+        ``patience_s`` caps how long this renewal waits for the write lock. The
+        caller passes the remaining lease authority minus a safety margin so a
+        renewal cannot block past the row's expiry.
+        """
         if not session_id or not holder:
             return False
         expires_at = time.time() + max(0.1, float(ttl_seconds))
@@ -8104,7 +8201,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
             return cursor.rowcount > 0
 
-        return bool(self._execute_write(_do))
+        return bool(self._execute_write(_do, patience_s=patience_s))
 
     def release_session_turn_lease(self, session_id: str, holder: str) -> None:
         """Release a turn lease iff ``holder`` still owns it; idempotent."""

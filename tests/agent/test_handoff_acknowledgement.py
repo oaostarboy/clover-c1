@@ -20,7 +20,7 @@ def _root():
         _delegate_depth=0, _subagent_id=None, session_id="s",
         _interrupt_requested=False, _active_children=[],
         _active_children_lock=None,
-        _delegation_checkpoint=dc.DelegationCheckpoint(),
+        _delegation_checkpoint=dc.DelegationCheckpoint(dc.CheckpointSettings(enabled=True)),
     )
 
 

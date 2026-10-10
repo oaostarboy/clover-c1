@@ -15,6 +15,13 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.3.0 | Clover C1.3 | 2026-10-10
+- A busy database or a website firewall no longer cuts off replies or blames your API key.
+- Stopping a background task can no longer take Clover down with it.
+- Telegram restarts its connection by itself if it stops picking up messages.
+- Helper cards show what the helper is actually doing again, and helpers start from any folder.
+- /update no longer reports a false failure, and the main chat's work limit is now off.
+
 ## 1.2.0 | Clover C1.2 | 2026-10-10
 - Long-running tool calls now stop cleanly, so you can send a new message right away.
 - Background helpers show clearer progress and only report success when their work is verified.

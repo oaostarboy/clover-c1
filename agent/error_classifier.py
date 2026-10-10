@@ -40,6 +40,9 @@ class FailoverReason(enum.Enum):
     # Upstream model rate-limited (aggregator 429) — fallback to a different
     # model, NOT credential rotation. The user's key is healthy.
     upstream_rate_limit = "upstream_rate_limit"
+    # 403 from a WAF/CDN/proxy in front of the provider — the key is healthy and
+    # never reached the provider. Fallback only; no rotation, no retry.
+    upstream_blocked = "upstream_blocked"
 
     # Server-side
     overloaded = "overloaded"            # 503/529 — provider overloaded, backoff
@@ -164,6 +167,24 @@ def _billing_ambiguity_context(error_msg: str) -> Dict[str, Any]:
 # provider-scoped: other providers' generic billing codes historically remain
 # auth failures when they arrive as 403.
 _XAI_SPENDING_LIMIT_ERROR_CODE = "personal-team-blocked:spending-limit"
+
+# A 403 body written by a WAF/CDN/proxy rather than the provider's API: Cloudflare's
+# browser challenge and block pages, plus the plain-text block relays return when they
+# reject the SDK User-Agent. Matched only on 403 (see ``_classify_by_status``); a bare
+# "access denied" or "forbidden" stays auth because providers word real permission
+# errors that way too.
+# Adapted from NousResearch/hermes-agent 6f6ed01355 (MIT).
+_UPSTREAM_BLOCKED_PATTERNS = (
+    "your request was blocked", "request blocked", "sorry, you have been blocked",
+    "enable javascript and cookies to continue", "cdn-cgi/challenge-platform", "cf-browser-verification",
+    "challenge-error-text", "__cf_chl", "cf-error-details", "attention required! | cloudflare",
+)
+
+# Structured error codes some gateways put on a 403 that mean "the upstream is down,
+# retry later" — not a credential refusal. Routed to the transient-overload path so
+# the retry budget applies and no credential is benched.
+# Adapted from NousResearch/hermes-agent 1213109474 (MIT).
+_403_TRANSIENT_CODES = frozenset({"upstream_unavailable"})
 
 # Structured provider codes that mean the account cannot serve paid traffic
 # until credits/subscription capacity is restored. xAI returns its explicit
@@ -586,6 +607,14 @@ _PROVIDER_POLICY_BLOCKED_PATTERNS = [
     "no endpoints found matching your data policy",
 ]
 
+# Upstream account ban relayed by an aggregator, often as HTTP 200 + an SSE error
+# event (no status): permanent for this account, so never the transient retry
+# ladder.  Matched status-agnostically.
+# Adapted from NousResearch/hermes-agent 2c948e6aa2 (MIT)
+_ACCOUNT_POLICY_BLOCK_PATTERNS = [
+    "blocked for a previous policy violation",
+]
+
 # Provider content-policy / safety-filter blocks. Distinct from
 # ``provider_policy_blocked`` above (which is an OpenRouter *account*-level
 # data/privacy guardrail) — these are *per-prompt* safety decisions made by
@@ -961,6 +990,17 @@ def classify_api_error(
             should_fallback=True,
         )
 
+    # Upstream account ban (often relayed inside an HTTP-200 stream, so no
+    # status).  Permanent for the account: no retry, and no credential
+    # rotation (every key on a banned account is banned; a 403 variant is not
+    # a bad key).  Status-agnostic, so it must run before status routing.
+    if any(p in error_msg for p in _ACCOUNT_POLICY_BLOCK_PATTERNS):
+        return _result(
+            FailoverReason.provider_policy_blocked,
+            retryable=False,
+            should_fallback=True,
+        )
+
     # Anthropic thinking block recovery (400).  Two distinct failure modes,
     # same recovery (strip all reasoning_details and retry without thinking
     # blocks — see the thinking_signature handler in conversation_loop.py):
@@ -1276,6 +1316,14 @@ def _classify_by_status(
         )
 
     if status_code == 403:
+        # A gateway stamping the structured upstream-outage code on a 403 is a
+        # transient outage, not a credential refusal (#75388). Checked first so
+        # the configured retry budget applies and no credential is benched.
+        if error_code.lower() in _403_TRANSIENT_CODES:
+            return result_fn(
+                FailoverReason.overloaded,
+                retryable=True,
+            )
         # OpenRouter 403 "key limit exceeded" is actually billing. Other
         # providers also use 403 for account-plan or credit exhaustion.
         if (
@@ -1291,6 +1339,16 @@ def _classify_by_status(
                 FailoverReason.billing,
                 retryable=False,
                 should_rotate_credential=True,
+                should_fallback=True,
+            )
+        # A WAF/CDN in front of the provider answered, not the provider: the
+        # credential never reached it, so key guidance and credential rotation
+        # are wrong. Gated on 403 and on established block/challenge markers;
+        # any other 403 stays auth.
+        if any(p in error_msg for p in _UPSTREAM_BLOCKED_PATTERNS):
+            return result_fn(
+                FailoverReason.upstream_blocked,
+                retryable=False,
                 should_fallback=True,
             )
         return result_fn(
@@ -2071,6 +2129,28 @@ def _classify_by_message(
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
+def _status_code_from_body(body: Any) -> Optional[int]:
+    """Numeric HTTP error status (400-599) from a structured error body.
+
+    An aggregator/relay can deliver an upstream failure only as an error
+    object inside an HTTP-200 SSE stream, leaving the SDK to raise a
+    status-less ``APIError`` whose ``body`` carries the status.  Only int codes
+    count; string codes stay symbolic (see ``_extract_error_code``).
+    Adapted from NousResearch/hermes-agent 0a661b7c94 + 763646c30d (MIT).
+    """
+    if not isinstance(body, dict):
+        return None
+    error_obj = body.get("error")
+    if not isinstance(error_obj, dict):
+        error_obj = {}
+    candidates = [error_obj.get(k) for k in ("status_code", "status", "http_status", "code")]
+    candidates.append(body.get("code"))
+    return next(
+        (c for c in candidates if isinstance(c, int) and not isinstance(c, bool) and 400 <= c < 600),
+        None,
+    )
+
+
 def _extract_status_code(error: Exception) -> Optional[int]:
     """Walk the error and its cause chain to find an HTTP status code."""
     current = error
@@ -2087,7 +2167,8 @@ def _extract_status_code(error: Exception) -> Optional[int]:
         if cause is None or cause is current:
             break
         current = cause
-    return None
+    # No status on the exception itself: a body-carried numeric code counts.
+    return _status_code_from_body(_extract_error_body(error))
 
 
 def _extract_error_body(error: Exception) -> dict:

@@ -1001,7 +1001,8 @@ class TestInstallerTimeoutKillsProcessGroup:
         with patch("subprocess.run", return_value=MagicMock(returncode=0, stderr="")), \
              patch("subprocess.Popen", return_value=fake_proc), \
              patch.object(
-                 tools_config.os, "getpgid", return_value=99999, create=True
+                 # start_new_session=True: the installer leads its own group.
+                 tools_config.os, "getpgid", return_value=12345, create=True
              ), \
              patch.object(
                  tools_config.os, "killpg", side_effect=fake_killpg, create=True
@@ -1012,10 +1013,40 @@ class TestInstallerTimeoutKillsProcessGroup:
             ok = tools_config._run_cua_driver_installer(label="Refreshing", verbose=False)
 
         assert ok is False
-        assert killed.get("pgid") == 99999
+        assert killed.get("pgid") == 12345
         assert killed.get("sig") == sigkill
         # Post-kill reap happened.
         assert fake_proc.communicate.call_count == 2
+
+    @pytest.mark.linux_only
+    def test_timeout_never_killpgs_a_group_the_installer_does_not_lead(self):
+        """C1.3 R11: a child sharing OUR group must get proc.kill(), not killpg."""
+        import subprocess
+        from unittest.mock import MagicMock
+        from clover_cli import tools_config
+
+        killed = []
+        fake_proc = MagicMock()
+        fake_proc.pid = 12345
+        fake_proc.communicate.side_effect = [
+            subprocess.TimeoutExpired(cmd="x", timeout=1),
+            ("", None),
+        ]
+        with patch("subprocess.run", return_value=MagicMock(returncode=0, stderr="")), \
+             patch("subprocess.Popen", return_value=fake_proc), \
+             patch.object(tools_config.os, "getpgid", return_value=99999, create=True), \
+             patch.object(
+                 tools_config.os, "killpg",
+                 side_effect=lambda pgid, sig: killed.append(pgid), create=True,
+             ), \
+             patch.object(tools_config, "_clear_stale_cua_install_lock"), \
+             patch.object(tools_config, "_print_warning"), \
+             patch.object(tools_config, "_print_info"):
+            ok = tools_config._run_cua_driver_installer(label="Refreshing", verbose=False)
+
+        assert ok is False
+        assert killed == []
+        fake_proc.kill.assert_called_once()
 
     def test_timeout_ceiling_exceeds_upstream_lock_window(self):
         from clover_cli import tools_config

@@ -128,6 +128,7 @@ def _(rid, params: dict) -> dict:
                     encoding="utf-8",
                     errors="replace",
                     timeout=600,
+                    stdin=subprocess.DEVNULL,
                 )
                 if proc.returncode != 0:
                     # Retry session policy (#93091 item 5): transient classes
@@ -152,6 +153,7 @@ def _(rid, params: dict) -> dict:
                             encoding="utf-8",
                             errors="replace",
                             timeout=600,
+                            stdin=subprocess.DEVNULL,
                         )
         finally:
             try:

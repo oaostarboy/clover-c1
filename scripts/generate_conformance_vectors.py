@@ -197,6 +197,7 @@ def _oracle_commit() -> str:
                 capture_output=True,
                 text=True,
                 check=True,
+                stdin=subprocess.DEVNULL,
             ).stdout.strip()
         )
     except Exception:

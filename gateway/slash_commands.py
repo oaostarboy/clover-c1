@@ -214,6 +214,7 @@ class GatewaySlashCommandsMixin:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            stdin=asyncio.subprocess.DEVNULL,
         )
         communicate = asyncio.create_task(process.communicate())
         last_state = await card.follow(
@@ -6973,6 +6974,7 @@ class GatewaySlashCommandsMixin:
                         stderr=subprocess.DEVNULL,
                         env=spawn_env,
                         **windows_detach_popen_kwargs(),
+                        stdin=subprocess.DEVNULL,
                     )
                 except OSError:
                     # A job that refuses CREATE_BREAKAWAY_FROM_JOB fails the
@@ -6988,6 +6990,7 @@ class GatewaySlashCommandsMixin:
                         stderr=subprocess.DEVNULL,
                         env=spawn_env,
                         creationflags=windows_detach_flags_without_breakaway(),
+                        stdin=subprocess.DEVNULL,
                     )
             else:
                 clover_cmd_str = " ".join(shlex.quote(part) for part in clover_cmd)
@@ -7021,6 +7024,7 @@ class GatewaySlashCommandsMixin:
                     stderr=subprocess.DEVNULL,
                     env=spawn_env,
                     start_new_session=True,
+                    stdin=subprocess.DEVNULL,
                 )
         except Exception as e:
             pending_path.unlink(missing_ok=True)

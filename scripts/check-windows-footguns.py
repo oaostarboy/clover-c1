@@ -676,6 +676,7 @@ def get_staged_files() -> list[Path]:
             cwd=REPO_ROOT,
             stderr=subprocess.DEVNULL,
             text=True, encoding='utf-8', errors='replace',
+            stdin=subprocess.DEVNULL,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []
@@ -690,6 +691,7 @@ def get_diff_files(ref: str) -> list[Path]:
             cwd=REPO_ROOT,
             stderr=subprocess.DEVNULL,
             text=True, encoding='utf-8', errors='replace',
+            stdin=subprocess.DEVNULL,
         )
     except (subprocess.CalledProcessError, FileNotFoundError):
         return []

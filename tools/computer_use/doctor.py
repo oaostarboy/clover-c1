@@ -117,6 +117,7 @@ def _read_cli_version(binary: str, *, timeout: float = 5.0) -> Optional[str]:
             errors="replace",
             timeout=timeout,
             env=_sanitized_cua_env(),
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
         return None
@@ -319,6 +320,7 @@ def _cli_driver_version(binary: str, timeout: float = 5.0) -> Tuple[str, Optiona
             errors="replace",
             timeout=timeout,
             env=_sanitized_cua_env(),
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
         return "fail", f"--version failed: {e}"
@@ -346,6 +348,7 @@ def _cli_doctor_snippet(binary: str, timeout: float = 8.0) -> Optional[str]:
             errors="replace",
             timeout=timeout,
             env=_sanitized_cua_env(),
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

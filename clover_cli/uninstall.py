@@ -251,12 +251,12 @@ def uninstall_gateway_service():
 
                     cmd = _systemctl_cmd(is_system)
                     subprocess.run(cmd + ["stop", svc_name],
-                                   capture_output=True, check=False)
+                                   capture_output=True, check=False, stdin=subprocess.DEVNULL)
                     subprocess.run(cmd + ["disable", svc_name],
-                                   capture_output=True, check=False)
+                                   capture_output=True, check=False, stdin=subprocess.DEVNULL)
                     unit_path.unlink()
                     subprocess.run(cmd + ["daemon-reload"],
-                                   capture_output=True, check=False)
+                                   capture_output=True, check=False, stdin=subprocess.DEVNULL)
                     log_success(f"Removed {scope} gateway service ({unit_path})")
                     stopped_something = True
                 except Exception as e:
@@ -271,7 +271,7 @@ def uninstall_gateway_service():
             plist_path = get_launchd_plist_path()
             if plist_path.exists():
                 subprocess.run(["launchctl", "unload", str(plist_path)],
-                               capture_output=True, check=False)
+                               capture_output=True, check=False, stdin=subprocess.DEVNULL)
                 plist_path.unlink()
                 log_success(f"Removed macOS gateway service ({plist_path})")
                 stopped_something = True
@@ -551,6 +551,7 @@ def _uninstall_profile(profile) -> None:
                 text=True, encoding='utf-8', errors='replace',
                 timeout=60,
                 check=False,
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.TimeoutExpired:
             log_warn(f"  Gateway {subcmd} timed out for '{name}'")

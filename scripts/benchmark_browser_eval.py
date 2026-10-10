@@ -42,6 +42,7 @@ def _start_chrome(port: int):
         ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
     )
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:

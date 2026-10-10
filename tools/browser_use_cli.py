@@ -399,6 +399,7 @@ def install_cli(timeout_s: int = 600) -> Tuple[bool, str]:
             errors="replace",
             env=env,
             timeout=timeout_s,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         return False, f"`uv tool install browser-use` timed out after {timeout_s}s"

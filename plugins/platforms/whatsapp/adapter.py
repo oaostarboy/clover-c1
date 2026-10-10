@@ -77,6 +77,7 @@ def _listener_pids_on_port(port: int) -> list:
         result = subprocess.run(
             ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         for line in result.stdout.strip().splitlines():
             try:
@@ -92,6 +93,7 @@ def _listener_pids_on_port(port: int) -> list:
         result = subprocess.run(
             ["ss", "-ltnHp", f"sport = :{port}"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         for m in re.finditer(r"pid=(\d+)", result.stdout):
             pids.append(int(m.group(1)))
@@ -111,6 +113,7 @@ def _kill_port_process(port: int) -> None:
                 ["netstat", "-ano", "-p", "TCP"],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
                 creationflags=windows_hide_flags(),
+                stdin=subprocess.DEVNULL,
             )
             for line in result.stdout.splitlines():
                 parts = line.split()
@@ -122,6 +125,7 @@ def _kill_port_process(port: int) -> None:
                                 ["taskkill", "/PID", parts[4], "/F"],
                                 capture_output=True, timeout=5,
                                 creationflags=windows_hide_flags(),
+                                stdin=subprocess.DEVNULL,
                             )
                         except subprocess.SubprocessError:
                             pass
@@ -246,6 +250,7 @@ def _terminate_bridge_process(proc, *, force: bool = False) -> None:
                 capture_output=True,
                 text=True, encoding='utf-8', errors='replace',
                 timeout=10,
+                stdin=subprocess.DEVNULL,
             )
         except FileNotFoundError:
             if force:
@@ -371,7 +376,8 @@ def check_whatsapp_requirements() -> bool:
             [_node, "--version"],
             capture_output=True,
             text=True, encoding='utf-8', errors='replace',
-            timeout=5
+            timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         return result.returncode == 0
     except Exception:
@@ -597,6 +603,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                         text=True, encoding='utf-8', errors='replace',
                         timeout=npm_install_timeout,
                         env=with_clover_node_path(),
+                        stdin=subprocess.DEVNULL,
                     )
                     if install_result.returncode != 0:
                         print(f"[{self.name}] npm install failed: {install_result.stderr}")
@@ -746,6 +753,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                 stderr=bridge_log_fh,
                 env=bridge_env,
                 **windows_detach_popen_kwargs(),
+                stdin=subprocess.DEVNULL,
             )
             _write_bridge_pidfile(self._session_path, self._bridge_process.pid)
             

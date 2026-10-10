@@ -1012,11 +1012,11 @@ def _install_neutts_deps() -> bool:
         if prompt_yes_no("Install espeak-ng now?", True):
             try:
                 if sys.platform == "darwin":
-                    subprocess.run(["brew", "install", "espeak-ng"], check=True)
+                    subprocess.run(["brew", "install", "espeak-ng"], check=True)  # noqa: subprocess-stdin — interactive installer (sudo/brew prompt)
                 elif sys.platform == "win32":
-                    subprocess.run(["choco", "install", "espeak-ng", "-y"], check=True)
+                    subprocess.run(["choco", "install", "espeak-ng", "-y"], check=True)  # noqa: subprocess-stdin — interactive installer (sudo/brew prompt)
                 else:
-                    subprocess.run(["sudo", "apt", "install", "-y", "espeak-ng"], check=True)
+                    subprocess.run(["sudo", "apt", "install", "-y", "espeak-ng"], check=True)  # noqa: subprocess-stdin — interactive installer (sudo/brew prompt)
                 print_success("espeak-ng installed")
             except (subprocess.CalledProcessError, FileNotFoundError) as e:
                 print_warning(f"Could not install espeak-ng automatically: {e}")
@@ -1608,12 +1608,14 @@ def setup_terminal_backend(config: dict):
                     [uv_bin, "pip", "install", "--python", sys.executable, "vercel"],
                     capture_output=True,
                     text=True,
+                    stdin=subprocess.DEVNULL,
                 )
             else:
                 result = subprocess.run(
                     [sys.executable, "-m", "pip", "install", "vercel"],
                     capture_output=True,
                     text=True,
+                    stdin=subprocess.DEVNULL,
                 )
             if result.returncode == 0:
                 print_success("vercel SDK installed")
@@ -1677,7 +1679,7 @@ def setup_terminal_backend(config: dict):
                 ssh_cmd.extend(["-p", port])
             ssh_cmd.append(f"{user}@{host}" if user else host)
             ssh_cmd.append("echo ok")
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10, stdin=subprocess.DEVNULL)
             if result.returncode == 0:
                 print_success("  SSH connection successful!")
             else:

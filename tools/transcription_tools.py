@@ -1634,6 +1634,7 @@ def _sysctl_value(name: str) -> str:
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=2,
+            stdin=subprocess.DEVNULL,
         ).strip()
     except Exception:
         return ""

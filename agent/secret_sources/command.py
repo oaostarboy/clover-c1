@@ -220,7 +220,12 @@ def _run_helper(
         # POSIX-only by construction: _run_helper early-returns on Windows
         # before ever spawning, so this line can't execute there.
         try:
-            os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)  # windows-footgun: ok
+            pgid = os.getpgid(proc.pid)
+            if pgid == proc.pid:
+                os.killpg(pgid, _signal.SIGKILL)  # windows-footgun: ok
+            else:
+                # Child shares our group; killpg here would kill Clover itself.
+                proc.kill()
         except (ProcessLookupError, PermissionError, OSError):
             proc.kill()
         try:

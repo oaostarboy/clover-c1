@@ -90,6 +90,7 @@ def _git(args: list, cwd: str, timeout: int = 15) -> subprocess.CompletedProcess
             ["git", *args],
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=timeout, cwd=cwd,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
@@ -105,6 +106,7 @@ def _tree_size_mb(path: Path) -> Optional[int]:
             ["du", "-sm", str(path)],
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=30,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0 and result.stdout.strip():
             return int(result.stdout.split()[0])
@@ -424,6 +426,7 @@ def worktrees_summary(repo_root: str) -> tuple[int, Optional[int]]:
             ["du", "-sm", str(worktrees_dir)],
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=20,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0 and result.stdout.strip():
             size_mb = int(result.stdout.split()[0])

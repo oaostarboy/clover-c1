@@ -223,6 +223,7 @@ def upgrade_managed_npm(
                 errors="replace",
                 timeout=_UPGRADE_TIMEOUT,
                 check=False,
+                stdin=subprocess.DEVNULL,
             )
     except (OSError, subprocess.SubprocessError):
         if not quiet:
@@ -253,6 +254,7 @@ def _probe_version(npm: str) -> str | None:
             timeout=30,
             env=with_clover_node_path(),
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return None

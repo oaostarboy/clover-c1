@@ -176,6 +176,7 @@ def _exec_schtasks(args: list[str]) -> tuple[int, str, str]:
             # is itself hosted in a TUI. See tools/browser_tool.py for the
             # same pattern and the windows-subprocess-sigint-storm.md ref.
             creationflags=windows_hide_flags(),
+            stdin=subprocess.DEVNULL,
         )
         return (proc.returncode, proc.stdout or "", proc.stderr or "")
     except subprocess.TimeoutExpired:

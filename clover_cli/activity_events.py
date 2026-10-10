@@ -40,6 +40,7 @@ class ActivityEventWriter:
         self._stream = stream
         self._lock = threading.Lock()
         self._broken = False
+        self._started = False
 
     def _write(self, event: str, **fields: Any) -> None:
         if self._broken:
@@ -58,6 +59,9 @@ class ActivityEventWriter:
     def start(self, model: Optional[str]) -> None:
         from agent.delegation_activity import sanitize_text
 
+        if self._started:
+            return  # one start per run, even if the agent is rebuilt mid-run
+        self._started = True
         self._write("start", model=sanitize_text(model, 80) or None)
 
     def tool_progress_callback(self, event_type: str, tool_name: Any = None,
@@ -119,3 +123,60 @@ class ActivityEventWriter:
                 "reason": sanitize_text(reason, 40) or None,
             },
         )
+
+
+def result_status(response: Any, result: Any, failure: Optional[BaseException] = None) -> str:
+    """Terminal status for the ``result`` event (shared by ``-z`` and ``chat -q``).
+
+    An interrupted conversation can have produced side effects before the
+    interruption, so it is never reported as a clean failure or completion.
+    """
+    result = result if isinstance(result, dict) else {}
+    if failure is not None:
+        return "failed"
+    if result.get("interrupted") is True:
+        return "interrupted_possible_effects"
+    ok = bool(str(response or "").strip()) and not result.get("failed")
+    if not ok:
+        return "failed"
+    from agent.step_continuation import needs_continuation
+
+    # Still stopped early after every allowed resume: say so, so the parent's
+    # card shows "unfinished" instead of a false "done".
+    if needs_continuation(result) is not None:
+        return "incomplete"
+    if result.get("completed") is False:
+        return "built_unverified"
+    return "completed"
+
+
+def attach_to_agent(agent: Any, writer: "ActivityEventWriter", *, chain: bool) -> None:
+    """Route ``agent``'s tool/progress/fallback callbacks into ``writer``.
+
+    ``chain=False`` replaces them (quiet single-query: the human renderers
+    were deliberately removed). ``chain=True`` tees, so an existing human
+    renderer keeps working alongside the structured stream.
+    """
+
+    def _tee(existing: Any, ours: Any) -> Any:
+        if not chain or existing is None:
+            return ours
+
+        def both(*args: Any, **kwargs: Any) -> None:
+            try:
+                existing(*args, **kwargs)
+            finally:
+                ours(*args, **kwargs)
+
+        both._clover_activity_tee = True  # type: ignore[attr-defined]
+        return both
+
+    for attr, ours in (
+        ("tool_progress_callback", writer.tool_progress_callback),
+        ("interim_assistant_callback", writer.interim_callback),
+        ("model_fallback_callback", writer.model_fallback),
+    ):
+        existing = getattr(agent, attr, None)
+        if getattr(existing, "_clover_activity_tee", False):
+            continue  # already attached (agent re-used across turns)
+        setattr(agent, attr, _tee(existing, ours))

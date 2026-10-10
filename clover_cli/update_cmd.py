@@ -553,6 +553,7 @@ def _capture_head_sha(git_cmd, cwd) -> str | None:
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             check=True,
+            stdin=subprocess.DEVNULL,
         )
         return result.stdout.strip() or None
     except (subprocess.CalledProcessError, OSError):
@@ -600,6 +601,7 @@ def _editable_install_is_current(git_cmd, cwd, pre_pull_sha: str | None) -> bool
             cwd=cwd,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
     except OSError:
         return False
@@ -728,6 +730,7 @@ def _validate_critical_modules_import(root) -> tuple[bool, str | None, str | Non
             encoding="utf-8",
             errors="replace",
             timeout=120,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         # Can't run the probe — don't block the update on our own tooling.
@@ -1330,11 +1333,13 @@ def _branch_head_label(git_cmd=None, cwd=None) -> str | None:
             cmd + ["rev-parse", "--abbrev-ref", "HEAD"],
             cwd=root, capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         sha = subprocess.run(
             cmd + ["rev-parse", "--short", "HEAD"],
             cwd=root, capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         branch_name = branch.stdout.strip()
         sha_text = sha.stdout.strip()
@@ -1397,9 +1402,10 @@ def _assess_parked_branch_switch(
         logger.debug("Could not read updates.auto_switch_parked_branch: %s", exc)
 
     status = subprocess.run(
-        git_cmd + ["status", "--porcelain"],
+        git_cmd + ["--no-optional-locks", "status", "--porcelain"],
         cwd=cwd, capture_output=True,
         text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     if status.returncode != 0:
         return False, "unverifiable"
@@ -1410,6 +1416,7 @@ def _assess_parked_branch_switch(
         git_cmd + ["cherry", f"origin/{target_branch}"],
         cwd=cwd, capture_output=True,
         text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     if cherry.returncode != 0:
         return False, "unverifiable"
@@ -1439,6 +1446,7 @@ def _print_parked_branch_skip_warning(
             git_cmd + ["rev-list", f"HEAD..origin/{target_branch}", "--count"],
             cwd=cwd, capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         if behind_result.returncode == 0 and behind_result.stdout.strip():
             behind = int(behind_result.stdout.strip())
@@ -1680,12 +1688,14 @@ def _zip_overlay_block_reason(
         # instead of enumerating its contents (cheaper, same verdict for the
         # top-level filter below). NOTE: ``--ignored=all`` is NOT a valid
         # git mode — it exits 128 and would fail-close every ZIP update.
-        git_cmd + ["status", "--porcelain", "--untracked-files=all", "--ignored=matching"],
+        git_cmd
+        + ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all", "--ignored=matching"],
         cwd=root,
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip().splitlines()
@@ -2151,12 +2161,14 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
                 cwd=_m().PROJECT_ROOT,
                 check=True,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.CalledProcessError:
             subprocess.run(
                 [_m().sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
                 cwd=_m().PROJECT_ROOT,
                 check=True,
+                stdin=subprocess.DEVNULL,
             )
         _m()._install_python_dependencies_with_optional_fallback(pip_cmd)
 
@@ -2337,11 +2349,12 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
 
 def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[str]:
     status = subprocess.run(
-        git_cmd + ["status", "--porcelain"],
+        git_cmd + ["--no-optional-locks", "status", "--porcelain"],
         cwd=cwd,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
         check=True,
+        stdin=subprocess.DEVNULL,
     )
     if not status.stdout.strip():
         return None
@@ -2355,10 +2368,11 @@ def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[st
         cwd=cwd,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     if unmerged.stdout.strip():
         print("→ Clearing unmerged index entries from a previous conflict...")
-        subprocess.run(git_cmd + ["reset"], cwd=cwd, capture_output=True)
+        subprocess.run(git_cmd + ["reset"], cwd=cwd, capture_output=True, stdin=subprocess.DEVNULL)
 
     from datetime import datetime, timezone
 
@@ -2371,12 +2385,14 @@ def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[st
         cwd=cwd,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     ).stdout.strip()
     push = subprocess.run(
         git_cmd + ["stash", "push", "--include-untracked", "-m", stash_name],
         cwd=cwd,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     if push.stdout.strip():
         print(push.stdout.strip())
@@ -2385,6 +2401,7 @@ def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[st
         cwd=cwd,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     stash_ref = stash_probe.stdout.strip()
     stash_created = (
@@ -2417,6 +2434,7 @@ def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[st
                 git_cmd + ["reset", "--hard", "HEAD"],
                 cwd=cwd,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
             )
         else:
             # No stash entry was created: the changes were NOT saved.  This
@@ -2443,6 +2461,7 @@ def _resolve_stash_selector(
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
         check=True,
+        stdin=subprocess.DEVNULL,
     )
     for line in stash_list.stdout.splitlines():
         selector, _, commit = line.partition(" ")
@@ -2546,6 +2565,7 @@ def _restore_stashed_changes(
         cwd=cwd,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     )
 
     # Check for unmerged (conflicted) files — can happen even when returncode is 0
@@ -2554,6 +2574,7 @@ def _restore_stashed_changes(
         cwd=cwd,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     has_conflicts = bool(unmerged.stdout.strip())
 
@@ -2593,6 +2614,7 @@ def _restore_stashed_changes(
             git_cmd + ["reset", "--hard", "HEAD"],
             cwd=cwd,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
         )
         print("Working tree reset to clean state.")
         print(f"Restore your changes later with: git stash apply {stash_ref}")
@@ -2616,6 +2638,7 @@ def _restore_stashed_changes(
             cwd=cwd,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         if drop.returncode != 0:
             print(
@@ -2667,6 +2690,7 @@ def _discard_stashed_changes(
         cwd=cwd,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     if drop.returncode != 0:
         print(
@@ -2700,6 +2724,7 @@ def _get_origin_url(git_cmd: list[str], cwd: Path) -> Optional[str]:
             cwd=cwd,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -2774,6 +2799,7 @@ def adopt_non_git_install(
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
 
     def must(args, what, **kw):
@@ -2890,6 +2916,7 @@ def _has_upstream_remote(git_cmd: list[str], cwd: Path) -> bool:
             cwd=cwd,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         return result.returncode == 0
     except Exception:
@@ -2903,6 +2930,7 @@ def _add_upstream_remote(git_cmd: list[str], cwd: Path) -> bool:
             cwd=cwd,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         return result.returncode == 0
     except Exception:
@@ -2916,6 +2944,7 @@ def _count_commits_between(git_cmd: list[str], cwd: Path, base: str, head: str) 
             cwd=cwd,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             return int(result.stdout.strip())
@@ -2949,6 +2978,7 @@ def _sync_fork_with_upstream(git_cmd: list[str], cwd: Path) -> bool:
             cwd=cwd,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         return result.returncode == 0
     except Exception:
@@ -3044,6 +3074,7 @@ def _sync_with_upstream_if_needed(
             cwd=cwd,
             capture_output=True,
             check=True,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError:
         print("  ✗ Failed to fetch upstream. Skipping upstream sync.")
@@ -3083,6 +3114,7 @@ def _sync_with_upstream_if_needed(
             git_cmd + ["pull", "--ff-only", "upstream", "main"],
             cwd=cwd,
             check=True,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError:
         print(
@@ -3264,6 +3296,9 @@ def _receipt_reports_stale_runtime(expected_sha: str | None = None) -> bool:
         for entry in fleet:
             if not isinstance(entry, dict):
                 continue
+            if entry.get("state") == "other_install":
+                # Another install's gateway: never ours to restart.
+                continue
             if entry.get("state") == "stale":
                 return True
             if _sha_mismatch(entry.get("code_sha")):
@@ -3365,6 +3400,7 @@ def _restart_systemd_gateway_units_best_effort(failed: list) -> None:
                 encoding="utf-8",
                 errors="replace",
                 timeout=10,
+                stdin=subprocess.DEVNULL,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
@@ -3386,6 +3422,7 @@ def _restart_systemd_gateway_units_best_effort(failed: list) -> None:
                 encoding="utf-8",
                 errors="replace",
                 timeout=30,
+                stdin=subprocess.DEVNULL,
             )
 
         def on_timeout(svc_name: str, exc: subprocess.TimeoutExpired) -> None:
@@ -3413,6 +3450,7 @@ def _owned_systemd_service_pids() -> set[int]:
             listed = subprocess.run(
                 scope + ["list-units", "*.service", "--plain", "--no-legend", "--no-pager"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+                stdin=subprocess.DEVNULL,
             )
             if listed.returncode != 0:
                 continue
@@ -3422,6 +3460,7 @@ def _owned_systemd_service_pids() -> set[int]:
                     shown = subprocess.run(
                         scope + ["show", name, "--property=MainPID", "--value"],
                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+                        stdin=subprocess.DEVNULL,
                     )
                     pid = int(shown.stdout.strip()) if shown.returncode == 0 else 0
                     if pid > 0:
@@ -3438,6 +3477,61 @@ def _owned_systemd_service_pids() -> set[int]:
     return pids
 
 
+def _gateway_pid_install_verdict(pid) -> str:
+    """Install ownership of a gateway PID, by the restart phase's same-venv rule.
+
+    ``"own"``     — the process runs this install's venv interpreter.
+    ``"other"``   — its interpreter is readable and belongs to a different
+                    venv/install (the restart phase never touches it).
+    ``"unknown"`` — not Linux, or the cmdline could not be read; callers must
+                    treat this as "not proven foreign".
+    """
+    if not sys.platform.startswith("linux"):
+        return "unknown"
+    from clover_cli.gateway import is_windows, is_macos
+    if is_windows() or is_macos():
+        return "unknown"
+    try:
+        args = _gateway_pid_cmdline_path(pid).read_bytes().split(b"\0")
+        executable = os.fsdecode(args[0])
+    except (OSError, IndexError, ValueError, TypeError):
+        return "unknown"
+    if not executable or not os.path.isabs(executable):
+        # A bare/relative argv[0] cannot name a venv: not proof of anything.
+        return "unknown"
+    # Same rule as the systemd unit check: ``venv/bin/python`` and
+    # ``venv/bin/python3`` are one install; another venv is not.
+    expected = os.path.abspath(sys.executable)
+    if _systemd_interpreter_path_matches(executable, expected):
+        return "own"
+    # A lexical mismatch is not proof of a foreign install: the same venv
+    # reached through a directory symlink fails the path compare. Settle it by
+    # filesystem identity; if either side can't be stat'ed, stay "unknown".
+    return _interpreter_identity_verdict(executable, expected)
+
+
+def _interpreter_identity_verdict(executable: str, expected: str) -> str:
+    """``own``/``other``/``unknown`` by resolved identity of the venv bin dir.
+
+    Only the *directory* is resolved (never the interpreter symlink itself),
+    so distinct venvs that share a base interpreter stay distinct.
+    """
+    cand, exp = Path(executable), Path(expected)
+    try:
+        if not os.path.samefile(cand.parent, exp.parent):
+            # Both venv bin dirs exist and are different directories.
+            os.stat(cand)
+            return "other"
+        python_alias = re.compile(r"python(?:3(?:\.[0-9]+)?)?\Z")
+        if not (python_alias.fullmatch(cand.name) and python_alias.fullmatch(exp.name)):
+            return "other"
+        if (exp.parent.parent / "pyvenv.cfg").is_file() and os.path.samefile(cand, exp):
+            return "own"
+        return "other" if os.path.exists(cand) else "unknown"
+    except OSError:
+        return "unknown"
+
+
 def _own_install_gateway_pids(pids):
     """Limit Linux update sweeps to this venv; unknown processes are spared."""
     if not sys.platform.startswith("linux"):
@@ -3445,19 +3539,7 @@ def _own_install_gateway_pids(pids):
     from clover_cli.gateway import is_windows, is_macos
     if is_windows() or is_macos():
         return list(pids)
-    selected = []
-    expected = os.path.abspath(sys.executable)
-    for pid in pids:
-        try:
-            args = _gateway_pid_cmdline_path(pid).read_bytes().split(b"\0")
-            executable = os.fsdecode(args[0])
-            # Same rule as the systemd unit check: ``venv/bin/python`` and
-            # ``venv/bin/python3`` are one install; another venv is not.
-            if _systemd_interpreter_path_matches(executable, expected):
-                selected.append(pid)
-        except (OSError, IndexError, ValueError):
-            continue
-    return selected
+    return [pid for pid in pids if _gateway_pid_install_verdict(pid) == "own"]
 
 
 def _run_pending_fleet_restart() -> bool:
@@ -3847,6 +3929,7 @@ def _restore_active_tool_dependencies(
                     capture_output=True,
                     env=env,
                     check=False,
+                    stdin=subprocess.DEVNULL,
                 )
                 if probe.returncode == 0:
                     continue
@@ -4109,6 +4192,7 @@ def _ensure_uv_for_termux(pip_cmd: list[str]) -> str | None:
             pip_cmd + ["install", "uv", "--only-binary", ":all:"],
             cwd=_m().PROJECT_ROOT,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             return None
@@ -4399,6 +4483,7 @@ def _run_logged_subprocess(cmd, *, cwd=None, env=None):
         text=True,
         encoding="utf-8",
         errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     _log_only_write(result.stdout or "")
     return result
@@ -4468,6 +4553,7 @@ def _fetch_branch_tracking(
         cwd=cwd,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     )
 
 
@@ -4547,6 +4633,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
             cwd=_m().PROJECT_ROOT,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         ).stdout.strip()
         == "true"
     )
@@ -4563,6 +4650,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
                 cwd=_m().PROJECT_ROOT,
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL,
             ).returncode
             == 0
         )
@@ -4574,6 +4662,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
                 cwd=_m().PROJECT_ROOT,
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL,
             )
         if fetch_result is not None and fetch_result.returncode == 0:
             upstream_exists = True
@@ -4608,6 +4697,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
         cwd=_m().PROJECT_ROOT,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     if verify_result.returncode != 0:
         print(f"✗ Branch '{branch}' not found on {compare_branch.split('/', 1)[0]}.")
@@ -4621,10 +4711,12 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
         head_sha = subprocess.run(
             git_cmd + ["rev-parse", "HEAD"],
             cwd=_m().PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         ).stdout.strip()
         target_sha = subprocess.run(
             git_cmd + ["rev-parse", compare_branch],
             cwd=_m().PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         ).stdout.strip()
         if head_sha and target_sha and head_sha == target_sha:
             print("✓ Already up to date.")
@@ -4651,6 +4743,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
         check=True,
+        stdin=subprocess.DEVNULL,
     )
     behind = int(rev_result.stdout.strip())
 
@@ -4711,6 +4804,7 @@ def _ensure_fhs_path_guard() -> None:
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             timeout=10,
+            stdin=subprocess.DEVNULL,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return  # no bash or probe hung — don't block update on this
@@ -5174,6 +5268,7 @@ def _venv_core_imports_healthy() -> tuple[bool, str]:
             text=True, encoding="utf-8", errors="replace",
             timeout=60,
             cwd=_m().PROJECT_ROOT,
+            stdin=subprocess.DEVNULL,
         )
     except Exception as exc:
         logger.debug("venv health probe failed to run: %s", exc)
@@ -6228,6 +6323,7 @@ def _stop_process_trees(pids: list[int]) -> None:
                 ["taskkill", "/PID", str(int(pid)), "/T", "/F"],
                 check=False,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
             )
         except Exception as exc:
             logger.debug("Could not stop process tree %s: %s", pid, exc)
@@ -6373,6 +6469,7 @@ def _stop_windows_gateway_service(
         errors="replace",
         timeout=10,
         check=False,
+        stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0 and service.status() != "stopped":
         detail = (result.stderr or result.stdout).strip()
@@ -6441,6 +6538,7 @@ def _start_windows_gateway_service(name: str, *, timeout: float = 30.0) -> None:
         errors="replace",
         timeout=10,
         check=False,
+        stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0 and service.status() != "running":
         detail = (result.stderr or result.stdout).strip()
@@ -6937,6 +7035,7 @@ def _systemd_unit_owned_by_install(
         show = subprocess.run(
             scope_cmd + ["show", unit, "--property=Id,ExecStart,Environment,WorkingDirectory,FragmentPath", "--no-pager"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+            stdin=subprocess.DEVNULL,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return False
@@ -7476,6 +7575,7 @@ def _recover_gateway_restart_after_abort(
         "check": False,
         "env": env,
         "timeout": max(120, 30 + 90 * len(profiles)),
+        "stdin": subprocess.DEVNULL,
     }
     if sys.platform == "win32":
         kwargs["creationflags"] = (
@@ -7749,6 +7849,7 @@ def _arm_restart_watcher_before_pause() -> bool:
             [sys.executable, str(_watch_script), str(beacon)],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
             **watcher_kwargs,
         )
 
@@ -8055,6 +8156,7 @@ def _discard_lockfile_churn(git_cmd, repo_root):
             cwd=repo_root,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         if diff.returncode != 0:
             return
@@ -8077,6 +8179,7 @@ def _discard_lockfile_churn(git_cmd, repo_root):
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             check=False,
+            stdin=subprocess.DEVNULL,
         )
         print(f"→ Discarded npm lockfile churn ({len(dirty)} file(s))")
     except Exception:
@@ -8112,6 +8215,7 @@ def _normalize_managed_eol(git_cmd, repo_root):
             cwd=repo_root,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         if out.returncode != 0:
             return None
@@ -8131,6 +8235,7 @@ def _normalize_managed_eol(git_cmd, repo_root):
             cwd=repo_root,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         if out.returncode != 0:
             return None
@@ -8157,6 +8262,7 @@ def _normalize_managed_eol(git_cmd, repo_root):
             cwd=repo_root,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         # Only "true" rewrites LF to CRLF on checkout. Unset, false, and input
         # all leave the working tree alone, so there is nothing to repair.
@@ -8189,6 +8295,7 @@ def _normalize_managed_eol(git_cmd, repo_root):
             cwd=repo_root,
             capture_output=True,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         # Never let line-ending cleanup block an update.
@@ -8339,6 +8446,20 @@ def _cmd_update_impl(args, gateway_mode: bool):
         pass
     print("☘ Updating Clover Cognition...")
     print()
+
+    # A killed git (an earlier `clover update` interrupted mid-run, a probe
+    # killed by its own timeout) leaves .git/index.lock behind and the next merge
+    # dies on "File exists". Release it, once stale, as soon as no live git can own it
+    # (ownership proof, once it is past the stale-age floor), before anything
+    # touches the checkout.
+    # Adapted from NousResearch/hermes-agent a81d3408bc (MIT).
+    try:
+        from clover_cli.gitlock import release_dead_index_lock
+
+        if release_dead_index_lock(_m().PROJECT_ROOT):
+            print("  (removed .git/index.lock left by a git that was killed)")
+    except Exception as _lock_exc:
+        logger.debug("Dead index.lock release failed: %s", _lock_exc)
 
     # Phase 1 (#91277): structured update receipt — record what this run
     # discovers, does, and skips, so silent-failure classes (#88848,
@@ -8500,6 +8621,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                          "clover_cli.update_restart_watcher", str(_beacon)],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
+                        stdin=subprocess.DEVNULL,
                         **_watcher_kwargs,
                     )
                     _atexit.register(_m()._clear_restart_beacon_if_gateway_up)
@@ -8727,6 +8849,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             cwd=_m().PROJECT_ROOT,
             check=False,
             capture_output=True,
+            stdin=subprocess.DEVNULL,
         )
 
     # Build git command once — reused for fork detection and the update itself.
@@ -8807,6 +8930,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             check=True,
+            stdin=subprocess.DEVNULL,
         )
         current_branch = result.stdout.strip()
 
@@ -8884,6 +9008,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         cwd=_m().PROJECT_ROOT,
                         capture_output=True,
                         text=True, encoding="utf-8", errors="replace",
+                        stdin=subprocess.DEVNULL,
                     )
                     if verify_ref.returncode != 0:
                         print(f"✗ Branch '{branch}' does not exist locally or on origin.")
@@ -8920,6 +9045,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 cwd=_m().PROJECT_ROOT,
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL,
             )
             if checkout_result.returncode != 0:
                 # Local checkout doesn't have this branch yet. Try to set
@@ -8931,6 +9057,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     cwd=_m().PROJECT_ROOT,
                     capture_output=True,
                     text=True, encoding="utf-8", errors="replace",
+                    stdin=subprocess.DEVNULL,
                 )
                 if track_result.returncode != 0:
                     # Restore the user's prior stash before bailing
@@ -8968,6 +9095,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             check=True,
+            stdin=subprocess.DEVNULL,
         )
         commit_count = int(result.stdout.strip())
 
@@ -8977,6 +9105,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 cwd=_m().PROJECT_ROOT,
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL,
             ).stdout.strip()
             == "true"
         )
@@ -8987,11 +9116,13 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 git_cmd + ["rev-parse", "HEAD"],
                 cwd=_m().PROJECT_ROOT, capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL,
             ).stdout.strip()
             target_sha = subprocess.run(
                 git_cmd + ["rev-parse", f"origin/{branch}"],
                 cwd=_m().PROJECT_ROOT, capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL,
             ).stdout.strip()
             counted = _github_compare_behind(head_sha, target_sha)
             # counted == 0 means local-ahead (remote tip reachable from HEAD):
@@ -9064,6 +9195,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     capture_output=True,
                     text=True, encoding="utf-8", errors="replace",
                     check=False,
+                    stdin=subprocess.DEVNULL,
                 )
 
             # "No new commits" does not mean the managed interpreter is safe.
@@ -9123,6 +9255,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         [repair_uv, "venv", "venv"],
                         cwd=_m().PROJECT_ROOT,
                         check=False,
+                        stdin=subprocess.DEVNULL,
                     )
                 if repair_uv:
                     # Isolated from third-party UV env vars (#83914), same as
@@ -9265,7 +9398,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
                             _watch_kwargs["start_new_session"] = True
                         subprocess.Popen(
                             [sys.executable, str(_watch_script), str(_beacon)],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **_watch_kwargs,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            stdin=subprocess.DEVNULL, **_watch_kwargs,
                         )
             except Exception:
                 logger.exception("Could not arm post-restart rollback watcher")
@@ -9281,6 +9415,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 cwd=_m().PROJECT_ROOT,
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
+                stdin=subprocess.DEVNULL,
             )
             if pull_result.returncode != 0:
                 # ff-only failed — local and remote have diverged. Before
@@ -9295,6 +9430,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         cwd=_m().PROJECT_ROOT,
                         capture_output=True,
                         text=True, encoding="utf-8", errors="replace",
+                        stdin=subprocess.DEVNULL,
                     ).stdout
                     or ""
                 ).strip()
@@ -9310,12 +9446,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         cwd=_m().PROJECT_ROOT,
                         capture_output=True,
                         check=False,
+                        stdin=subprocess.DEVNULL,
                     )
                     merge_result = subprocess.run(
                         git_cmd + ["merge", "--no-edit", f"origin/{branch}"],
                         cwd=_m().PROJECT_ROOT,
                         capture_output=True,
                         text=True, encoding="utf-8", errors="replace",
+                        stdin=subprocess.DEVNULL,
                     )
                     if merge_result.returncode != 0:
                         subprocess.run(
@@ -9323,6 +9461,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                             cwd=_m().PROJECT_ROOT,
                             capture_output=True,
                             check=False,
+                            stdin=subprocess.DEVNULL,
                         )
                         print(
                             "✗ Merge conflict between local commits and upstream — "
@@ -9348,6 +9487,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         cwd=_m().PROJECT_ROOT,
                         capture_output=True,
                         text=True, encoding="utf-8", errors="replace",
+                        stdin=subprocess.DEVNULL,
                     )
                     if reset_result.returncode != 0:
                         print(f"✗ Failed to reset to origin/{branch}.")
@@ -9384,6 +9524,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         cwd=_m().PROJECT_ROOT,
                         capture_output=True,
                         text=True, encoding="utf-8", errors="replace",
+                        stdin=subprocess.DEVNULL,
                     )
                     if rollback_result.returncode == 0:
                         print("  ✓ Rollback complete — your install is unchanged.")
@@ -9474,6 +9615,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             cwd=_m().PROJECT_ROOT,
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
         ).stdout.strip()
         if (
             not in_place_update
@@ -9586,12 +9728,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     cwd=_m().PROJECT_ROOT,
                     check=True,
                     capture_output=True,
+                    stdin=subprocess.DEVNULL,
                 )
             except subprocess.CalledProcessError:
                 subprocess.run(
                     [sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
                     cwd=_m().PROJECT_ROOT,
                     check=True,
+                    stdin=subprocess.DEVNULL,
                 )
             if _m()._is_termux_env():
                 install_group = "termux-all"
@@ -10139,6 +10283,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                             capture_output=True,
                             text=True, encoding="utf-8", errors="replace",
                             timeout=5,
+                            stdin=subprocess.DEVNULL,
                         )
                         if _verify.stdout.strip() == "active":
                             return True
@@ -10173,6 +10318,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         capture_output=True,
                         text=True, encoding="utf-8", errors="replace",
                         timeout=5,
+                        stdin=subprocess.DEVNULL,
                     )
                 except (FileNotFoundError, subprocess.TimeoutExpired):
                     return default
@@ -10241,6 +10387,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                             ["sudo", "-n", "true"],
                             capture_output=True,
                             timeout=5,
+                            stdin=subprocess.DEVNULL,
                         )
                         sudo_ok = _probe.returncode == 0
                         if not sudo_ok:
@@ -10251,6 +10398,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                                 sudo_cmd + ["reset-failed", svc_name_],
                                 capture_output=True,
                                 timeout=5,
+                                stdin=subprocess.DEVNULL,
                             )
                             sudo_ok = _probe.returncode == 0
                     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -10318,6 +10466,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                             capture_output=True,
                             text=True, encoding="utf-8", errors="replace",
                             timeout=10,
+                            stdin=subprocess.DEVNULL,
                         )
                     except FileNotFoundError:
                         continue
@@ -10337,6 +10486,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                             capture_output=True,
                             text=True, encoding="utf-8", errors="replace",
                             timeout=5,
+                            stdin=subprocess.DEVNULL,
                         )
                         if check.stdout.strip() != "active":
                             return
@@ -10376,6 +10526,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                                     capture_output=True,
                                     text=True, encoding="utf-8", errors="replace",
                                     timeout=5,
+                                    stdin=subprocess.DEVNULL,
                                 )
                                 _main_pid = int((_show.stdout or "").strip() or 0)
                             except (
@@ -10456,12 +10607,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
                                     capture_output=True,
                                     text=True, encoding="utf-8", errors="replace",
                                     timeout=10,
+                                    stdin=subprocess.DEVNULL,
                                 )
                                 subprocess.run(
                                     _manage_cmd + ["start", svc_name],
                                     capture_output=True,
                                     text=True, encoding="utf-8", errors="replace",
                                     timeout=15,
+                                    stdin=subprocess.DEVNULL,
                                 )
                                 # Short poll: the gateway should be up
                                 # within a few seconds now that we
@@ -10546,12 +10699,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
                             capture_output=True,
                             text=True, encoding="utf-8", errors="replace",
                             timeout=10,
+                            stdin=subprocess.DEVNULL,
                         )
                         restart = subprocess.run(
                             _manage_cmd + ["restart", svc_name],
                             capture_output=True,
                             text=True, encoding="utf-8", errors="replace",
                             timeout=15,
+                            stdin=subprocess.DEVNULL,
                         )
                         if restart.returncode == 0:
                             # Verify the service actually survived the
@@ -10578,12 +10733,14 @@ def _cmd_update_impl(args, gateway_mode: bool):
                                     capture_output=True,
                                     text=True, encoding="utf-8", errors="replace",
                                     timeout=10,
+                                    stdin=subprocess.DEVNULL,
                                 )
                                 subprocess.run(
                                     _manage_cmd + ["restart", svc_name],
                                     capture_output=True,
                                     text=True, encoding="utf-8", errors="replace",
                                     timeout=15,
+                                    stdin=subprocess.DEVNULL,
                                 )
                                 if _wait_for_service_active(
                                     scope_cmd,
@@ -11369,6 +11526,7 @@ def _wait_for_service_active(
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
                 timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             if _verify.stdout.strip() == "active":
                 return True
@@ -11403,6 +11561,7 @@ def _service_restart_sec(
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
             timeout=5,
+            stdin=subprocess.DEVNULL,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return default

@@ -1249,6 +1249,21 @@ def _float_env(name: str, default: float) -> float:
         return float(default)
 
 
+def _transcript_ts(value: Any) -> float:
+    """A transcript row's timestamp as epoch seconds; 0.0 when absent/invalid."""
+    if value is None:
+        return 0.0
+    if hasattr(value, "timestamp"):
+        try:
+            return float(value.timestamp())
+        except Exception:
+            return 0.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _stamp_hygiene_compression_provenance(
     agent: Any,
     desc: str,
@@ -2806,12 +2821,16 @@ from gateway.platforms.base import (
     _prefix_within_utf16_limit,
     _reply_anchor_for_event,
     build_auto_tts_output_path,
+    complete_inbound_handoff,
+    mark_inbound_durable,
+    release_inbound_handoff,
     events_share_security_context,
     merge_pending_message_event,
     message_event_class,
     promote_next_pending,
     utf16_len,
 )
+from gateway.platforms.helpers import carry_inbound_dedup, inbound_dedup_caches
 from gateway.shutdown_watchdog import (
     DEFAULT_HEARTBEAT_INTERVAL_S,
     DEFAULT_LOOP_WATCHDOG_INTERVAL_S,
@@ -3393,6 +3412,7 @@ async def _probe_audio_duration(path: str) -> Optional[str]:
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
         if proc.returncode == 0:
@@ -6177,6 +6197,15 @@ class TurnRunner:
         agent.stream_delta_callback = _stream_delta_cb
         agent.interim_assistant_callback = _interim_assistant_cb if _want_interim_messages else None
         agent.status_callback = ctx._status_callback_sync
+        # Set every turn (a cached agent must not carry a stale one): fires once
+        # the turn's user message is committed, releasing the platform receipt.
+        _handoff_key = ctx.session_key
+        _handoff_loop = ctx._loop_for_step
+        agent.inbound_persisted_callback = (
+            (lambda: self._runner._on_inbound_persisted(_handoff_key, _handoff_loop))
+            if _handoff_key
+            else None
+        )
         # Credits / out-of-band notices (usage bands, depletion, restored).
         # Messaging has no persistent status bar, so each notice is a
         # standalone push: render to a single plaintext line and deliver via
@@ -8917,6 +8946,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "listener_claim": self._adapter_listener_claim(
                 adapter.platform, adapter
             ),
+            # Held by reference so the rebuilt adapter still drops a replay of
+            # an inbound ID this one admitted (hermes-agent 43b8951beb, MIT).
+            "inbound_dedup": inbound_dedup_caches(adapter),
         }
         logger.info(
             "%s queued for background reconnection",
@@ -9855,6 +9887,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 continue
             recorded.extend(queued)
+            for event in queued:
+                complete_inbound_handoff(event)
         return written
 
     def _record_queued_humans_at_shutdown(self) -> int:
@@ -11391,7 +11425,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # payload text, so queue those through the gateway FIFO to keep their
         # security metadata separate from pending user input.
         if getattr(event, "internal", False) and not event.allow_gateway_control:
-            self._queue_or_replace_pending_event(session_key, event)
+            if self._queue_or_replace_pending_event(session_key, event):
+                release_inbound_handoff(event)
             return True
         if getattr(event, "internal", False):
             return False
@@ -11473,6 +11508,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 except Exception as exc:
                     logger.warning("Gateway steer failed for session %s: %s", session_key, exc)
                     steered = False
+                if steered:
+                    release_inbound_handoff(event)
             if not steered:
                 # Fall back to queue (merge into pending messages, no interrupt)
                 effective_mode = "queue"
@@ -11491,6 +11528,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             except Exception as exc:
                 logger.warning("Gateway redirect failed for session %s: %s", session_key, exc)
                 redirected = False
+            if redirected:
+                release_inbound_handoff(event)
 
         # Store the message so it's processed as the next turn after the
         # current run finishes (or is interrupted).  Skip this for a
@@ -11514,7 +11553,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # that was not queued).
                 await self._send_queue_full_reply(adapter, event)
                 return True
-
+            # The follow-up now lives only in memory: it never gets a durable
+            # receipt, so a replay after a crash is admitted (a double answer
+            # at worst) instead of suppressed.
+            release_inbound_handoff(event)
         is_queue_mode = effective_mode == "queue"
         is_steer_mode = effective_mode == "steer"
         is_redirect_mode = effective_mode == "interrupt" and redirected
@@ -12465,7 +12507,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Suspend sessions that have been active across too many restarts.
 
         Returns the number of sessions suspended.  Called on gateway startup
-        AFTER suspend_recently_active() to catch the stuck-loop pattern:
+        AFTER crash-turn recovery to catch the stuck-loop pattern:
         session loads → agent gets stuck → gateway restarts → repeat.
         """
         import json
@@ -12656,6 +12698,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     stderr=subprocess.DEVNULL,
                     env=watcher_env,
                     **windows_detach_popen_kwargs(),
+                    stdin=subprocess.DEVNULL,
                 )
             except OSError:
                 try:
@@ -12665,6 +12708,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         stderr=subprocess.DEVNULL,
                         env=watcher_env,
                         creationflags=windows_detach_flags_without_breakaway(),
+                        stdin=subprocess.DEVNULL,
                     )
                 except OSError as exc:
                     # Both spawn attempts failed (a breakaway-denying job object
@@ -12710,6 +12754,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 stderr=subprocess.DEVNULL,
                 env=watcher_env,
                 start_new_session=True,
+                stdin=subprocess.DEVNULL,
             )
         else:
             subprocess.Popen(
@@ -12718,6 +12763,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 stderr=subprocess.DEVNULL,
                 env=watcher_env,
                 start_new_session=True,
+                stdin=subprocess.DEVNULL,
             )
 
     def _wedged_agent_count(self) -> int:
@@ -12975,7 +13021,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
     # Drain-timeout reasons set by _stop_impl() when a still-running turn is
     # force-interrupted; "restart_interrupted" is set by
-    # SessionStore.suspend_recently_active() on crash recovery (no
+    # recover_interrupted_turns() for a crash-left turn marker (no
     # .clean_shutdown marker).  All three mean "the agent was mid-turn and
     # we killed it" — eligible for startup auto-resume.
     _AUTO_RESUME_REASONS = frozenset(
@@ -13742,24 +13788,117 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         return discarded
 
     async def _recover_unclean_sessions(self) -> tuple[int, int]:
-        """Recover exact active turns, then run the legacy recency fallback."""
-        exact = 0
-        fallback = 0
+        """Recover only the turns the dead process left marked.
+
+        A marked turn whose final reply is already in the transcript is owed
+        delivery, not a new answer; any other marked turn resumes once. An
+        unmarked session finished its turn (the marker is held until the reply
+        is ledgered), so nothing re-runs it. The old 120 s recency sweep
+        re-answered every recently active chat after a crash (ported from
+        NousResearch/hermes-agent 360b9697ac, MIT). Returns (resumed, ledgered).
+        """
+        resumed = ledgered = 0
         try:
             agent_timeout = max(1.0, _float_env("CLOVER_AGENT_TIMEOUT", 1800))
             marker_max_age = max(60 * 60, int(agent_timeout * 2))
-            exact = await self.async_session_store.recover_interrupted_turns(
+        except Exception as exc:
+            logger.warning("Active-turn recovery config failed: %s", exc)
+            marker_max_age = 60 * 60
+        try:
+            ledgered = await self._ledger_crash_left_replies(marker_max_age)
+        except Exception as exc:
+            logger.warning("Crash-left reply recovery on startup failed: %s", exc)
+        try:
+            resumed = await self.async_session_store.recover_interrupted_turns(
                 max_age_seconds=marker_max_age
             )
         except Exception as exc:
             logger.warning("Exact active-turn recovery on startup failed: %s", exc)
-        try:
-            fallback = await self.async_session_store.suspend_recently_active(
-                max_age_seconds=120
+        return resumed, ledgered
+
+    async def _ledger_crash_left_replies(self, max_age_seconds: int) -> int:
+        """Adopt a marked turn's persisted final reply into the delivery ledger.
+
+        A kill after the reply was written to the transcript but before it was
+        ledgered left the marker set. The reply is recorded as owed (unowned,
+        'attempting', sent at most once more) and its marker cleared, so the
+        boot sweep delivers it instead of regenerating the turn. Without the
+        ledger such turns stay marked and resume as before. Ported from
+        NousResearch/hermes-agent 360b9697ac (MIT).
+        """
+        from gateway.delivery_ledger import (
+            compute_obligation_id,
+            ledger_enabled,
+            record_crash_left_reply,
+        )
+        from gateway.platforms.base import _strip_media_directives
+
+        if not await asyncio.to_thread(ledger_enabled):
+            return 0
+        cutoff = datetime.now() - timedelta(seconds=max_age_seconds)
+
+        def _snapshot_marked_turns() -> list:
+            # Off-loop: the store lock + lazy load are blocking I/O.
+            store = self.session_store
+            with store._lock:
+                store._ensure_loaded_locked()
+                return [
+                    (e.session_key, e.session_id, e.active_turn_token,
+                     e.active_turn_started_at, e.origin)
+                    for e in store._entries.values()
+                    if e.active_turn_token and e.active_turn_started_at
+                    and e.origin and not e.suspended
+                ]
+
+        marked = await asyncio.to_thread(_snapshot_marked_turns)
+        ledgered = 0
+        for key, session_id, token, started_at, origin in marked:
+            if started_at < cutoff:
+                continue  # stale marker: cleared by recover_interrupted_turns
+            history = await self.async_session_store.load_transcript(session_id)
+            last = next(
+                (m for m in reversed(history)
+                 if m.get("role") not in ("session_meta", "system")),
+                None,
             )
-        except Exception as exc:
-            logger.warning("Legacy session recovery on startup failed: %s", exc)
-        return exact, fallback
+            if (
+                not last
+                or last.get("role") != "assistant"
+                or last.get("tool_calls")
+                or not isinstance(last.get("content"), str)
+                # An older reply belongs to the PREVIOUS turn: this one died
+                # before writing its own, so it must resume, not resend that.
+                or _transcript_ts(last.get("timestamp")) < started_at.timestamp()
+            ):
+                continue  # never produced its final reply: it resumes
+            text = _strip_media_directives(
+                _sanitize_gateway_final_response(origin.platform, last["content"])
+            ).strip()
+            if not text:
+                continue
+            await asyncio.to_thread(
+                record_crash_left_reply,
+                obligation_id=compute_obligation_id(key, f"crash:{token}", text),
+                session_key=key,
+                platform=str(getattr(origin.platform, "value", origin.platform)),
+                chat_id=origin.chat_id,
+                thread_id=origin.thread_id,
+                content=text,
+                since=started_at.timestamp(),
+                # Same identity the live path records (the delivery adapter's
+                # owner profile), so a multiplexed sweep sends it on the bot
+                # that received the message. ``origin.profile`` is only the
+                # routed runtime; a shared primary bot can route into another
+                # profile. Rows persisted before transport_profile existed
+                # fall back to it.
+                adapter_profile=(
+                    getattr(origin, "transport_profile", None)
+                    or getattr(origin, "profile", None)
+                ),
+            )
+            if await self.async_session_store.clear_turn_active(key, token):
+                ledgered += 1
+        return ledgered
 
     def _start_loop_heartbeat_task(self) -> None:
         """Start the loop-liveness heartbeat task (#66892), idempotent.
@@ -16290,6 +16429,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         del self._failed_platforms[platform]
                         continue
 
+                    carry_inbound_dedup(info.get("inbound_dedup"), adapter)
                     adapter.set_message_handler(self._primary_message_handler())
                     adapter.set_fatal_error_handler(self._handle_adapter_fatal_error)
                     adapter.set_session_store(self.session_store)
@@ -16775,8 +16915,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # interrupting the agents.  This preserves each session's
                 # session_id + transcript so the next message on the same
                 # session_key auto-resumes from the existing conversation
-                # instead of getting routed through suspend_recently_active()
-                # and converted into a fresh session.  Terminal escalation
+                # instead of being converted into a fresh session.  Terminal escalation
                 # for genuinely stuck sessions still flows through the
                 # existing ``.restart_failure_counts`` stuck-loop counter
                 # (incremented below, threshold 3), which sets
@@ -17042,8 +17181,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             release_gateway_runtime_lock()
 
             # Write a clean-shutdown marker so the next startup knows this
-            # wasn't a crash.  suspend_recently_active() only needs to run
-            # after unexpected exits.  However, if the drain timed out and
+            # wasn't a crash.  Crash recovery only promotes exact turn markers
+            # now (the recency sweep was removed; see _recover_unclean_sessions).
+            # However, if the drain timed out and
             # agents were force-interrupted, their sessions may be in an
             # incomplete state (trailing tool response, no final assistant
             # message).  Skip the marker in that case so the next startup
@@ -17469,7 +17609,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         )
 
     async def _run_secondary_profile_reconnect(
-        self, profile_name: str, platform: Platform
+        self, profile_name: str, platform: Platform, inbound_dedup=None
     ) -> None:
         """Reconnect a retryable secondary adapter under its own profile scope."""
         attempts = 0
@@ -17494,6 +17634,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                 profile_name,
                             )
                             return
+                        carry_inbound_dedup(inbound_dedup, adapter)
                         self._configure_profile_adapter(
                             adapter, profile_name, platform
                         )
@@ -17652,7 +17793,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if platform in profile_pending:
             return
         task = asyncio.create_task(
-            self._run_secondary_profile_reconnect(profile_name, platform),
+            self._run_secondary_profile_reconnect(
+                profile_name, platform, inbound_dedup_caches(adapter)
+            ),
             name=f"secondary-reconnect:{profile_name}:{platform.value}",
         )
         profile_pending[platform] = task
@@ -18368,6 +18511,24 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         "moa": "Agent is running — wait or /stop first, then run /moa.",
     }
 
+    # Slash commands that are handled synchronously, carry no memory-only
+    # payload, and are harmful or noisy to run twice (restart loops, repeated
+    # approvals or settings flips). Only these opt their inbound receipt in.
+    # NEVER add /steer, /queue, /bg, /btw, /goal, /loop, /heartbeat, /subgoal
+    # or anything else that stores text for later: those must release.
+    _RECEIPT_SAFE_COMMANDS = frozenset({
+        "restart", "stop", "new", "update",
+        "approve", "deny",
+        "model", "reasoning", "fast", "approvals", "skin", "codex-runtime",
+        "personality", "verbose", "footer", "busy", "fuckit", "sethome",
+        "pause",
+    })
+
+    def _mark_command_receipt_safe(self, event: Any, canonical: Optional[str]) -> None:
+        """Opt a fully-handled settings/control command into its inbound receipt."""
+        if canonical in self._RECEIPT_SAFE_COMMANDS:
+            mark_inbound_durable(event)
+
     def _gateway_plain_command_handlers(self):
         """Return ordinary slash handlers shared by idle and busy dispatch."""
         return {
@@ -18419,6 +18580,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         handler_key = getattr(cmd_def, "busy_handler", None)
 
         if handler_key:
+            # Only the handlers that really execute the command mark it. A
+            # busy-reject text or /steer, /queue, /goal, /loop (memory-only
+            # payloads or state read later) never do, so they release.
+            if handler_key in ("stop", "new"):
+                self._mark_command_receipt_safe(event, name)
             special = {
                 "start": self._busy_start_command,
                 "stop": self._busy_stop_command,
@@ -18438,6 +18604,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if policy in ("dispatch", "interrupt_then_dispatch"):
             plain = self._gateway_plain_command_handlers().get(name)
             if plain is not None:
+                self._mark_command_receipt_safe(event, name)
                 return await plain(event)
             logger.warning(
                 "busy_policy=%s for /%s has no mid-run handler — "
@@ -19267,6 +19434,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 adapter = self._adapter_for_source(source)
                 if adapter:
                     self._merge_or_enqueue(adapter, _quick_key, event)
+                    release_inbound_handoff(event)
                 return None
 
             effective_busy_input_mode = self._effective_busy_input_mode(source)
@@ -19295,6 +19463,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         self._merge_or_enqueue(
                             adapter, _quick_key, event, merge_text=True
                         )
+                    release_inbound_handoff(event)
                 return None
 
             _ra_state = self._peek_session_state(_quick_key)
@@ -19316,6 +19485,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     self._merge_or_enqueue(
                         adapter, _quick_key, event, merge_text=True
                     )
+                    release_inbound_handoff(event)
                 return None
             if self._draining:
                 queue_during_drain = self._queue_during_drain_enabled(
@@ -19334,6 +19504,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.debug("PRIORITY queue follow-up for session %s", _quick_key)
                 if not self._queue_or_replace_pending_event(_quick_key, event):
                     return _QUEUE_FULL_REPLY
+                release_inbound_handoff(event)
                 return None
             if effective_busy_input_mode == "steer":
                 # Steer mode: inject text into the running agent mid-run via
@@ -19355,10 +19526,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         steered = False
                 if steered:
                     logger.debug("PRIORITY steer for session %s", _quick_key)
+                    release_inbound_handoff(event)
                     return None
                 logger.debug("PRIORITY steer-fallback-to-queue for session %s", _quick_key)
                 if not self._queue_or_replace_pending_event(_quick_key, event):
                     return _QUEUE_FULL_REPLY
+                release_inbound_handoff(event)
                 return None
             # #30170 — Subagent protection (PRIORITY path). Same rationale
             # as ``_handle_active_session_busy_message``: an interrupt
@@ -19376,6 +19549,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 if not self._queue_or_replace_pending_event(_quick_key, event):
                     return _QUEUE_FULL_REPLY
+                release_inbound_handoff(event)
                 return None
             # #56391 — Compression protection (PRIORITY path). Same
             # rationale as ``_handle_active_session_busy_message``: context
@@ -19393,6 +19567,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 if not self._queue_or_replace_pending_event(_quick_key, event):
                     return _QUEUE_FULL_REPLY
+                release_inbound_handoff(event)
                 return None
             # Text-only corrections redirect the live turn (preserving
             # displayed context) when the runtime supports it; media/voice and
@@ -19408,6 +19583,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 try:
                     if running_agent.redirect((event.text or "").strip()):
                         logger.debug("PRIORITY redirect for session %s", _quick_key)
+                        release_inbound_handoff(event)
                         return None
                 except Exception as exc:
                     logger.warning(
@@ -19564,6 +19740,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _cmd_def = _resolve_cmd(command) if command else None
                     canonical = _cmd_def.name if _cmd_def else command
                     break
+
+        self._mark_command_receipt_safe(event, canonical)
 
         if canonical == "council":
             return await self._handle_council_command(event)
@@ -19940,6 +20118,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                 stdout=asyncio.subprocess.PIPE,
                                 stderr=asyncio.subprocess.PIPE,
                                 env=sanitized_env,
+                                stdin=asyncio.subprocess.DEVNULL,
                             )
                             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
                             output = (stdout or stderr).decode().strip()
@@ -20268,7 +20447,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             try:
                 # Normal completion/exception/interrupt owns and clears this exact
                 # durable marker. SIGKILL/OOM leaves it for startup recovery.
-                await self._clear_durable_active_turn(event)
+                # A turn the adapter delivers hands its marker to that lifecycle,
+                # which clears it only once the reply is in the delivery ledger:
+                # clearing here first would leave a kill window with neither the
+                # marker nor a ledger row (ported from hermes-agent 360b9697ac, MIT).
+                self._forget_inbound_handoff(event)
+                if not getattr(event, "_turn_marker_handoff", False):
+                    await self._clear_durable_active_turn(event)
             finally:
                 # A cancellation or store error must not skip in-memory cleanup.
                 # Generation ownership prevents stale teardown after /new or a
@@ -20803,7 +20988,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     ) -> bool:
         """Persist the exact resolved routing key for this running turn."""
         try:
-            token = await self.async_session_store.mark_turn_active(session_key)
+            _transport_profile = getattr(
+                getattr(event, "source", None), "transport_profile", None
+            )
+            if _transport_profile:
+                token = await self.async_session_store.mark_turn_active(
+                    session_key, transport_profile=_transport_profile
+                )
+            else:
+                token = await self.async_session_store.mark_turn_active(session_key)
         except Exception as exc:
             logger.warning(
                 "Could not persist active-turn marker for %s: %s",
@@ -20817,7 +21010,43 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # token out of public metadata, transcripts, and platform payloads.
         setattr(event, "_gateway_active_turn_session_key", session_key)
         setattr(event, "_gateway_active_turn_token", token)
+        # The marker holds no text or media, so it is not yet a recoverable
+        # record of this input. The platform keeps the update replayable until
+        # the agent has durably written the user message (the turn-start persist
+        # fires ``_on_inbound_persisted``) or the turn ends.
+        self._register_inbound_handoff(session_key, event)
         return True
+
+    def _register_inbound_handoff(self, session_key: Optional[str], event: Any) -> None:
+        """Hold *event*'s platform receipt until its user message is persisted."""
+        if not session_key or not getattr(event, "inbound_receipts", None):
+            return
+        self.__dict__.setdefault("_inbound_handoff_events", {})[session_key] = event
+
+    def _forget_inbound_handoff(self, event: Any) -> None:
+        """Drop any receipt hold on *event* (turn ended; base completes it)."""
+        held = self.__dict__.get("_inbound_handoff_events")
+        if not held:
+            return
+        for key in [k for k, v in held.items() if v is event]:
+            held.pop(key, None)
+
+    def _on_inbound_persisted(self, session_key: str, loop: Any = None) -> None:
+        """Agent thread: the turn's user message is committed; release the receipt."""
+        held = self.__dict__.get("_inbound_handoff_events")
+        event = held.pop(session_key, None) if held else None
+        if event is None:
+            return
+        # The user message is committed: the one place a normal turn opts in.
+        mark_inbound_durable(event)
+        # The receipt callbacks mutate adapter dicts owned by the gateway loop.
+        if loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(complete_inbound_handoff, event)
+                return
+            except RuntimeError:
+                pass
+        complete_inbound_handoff(event)
 
     async def _clear_durable_active_turn(self, event: "MessageEvent") -> bool:
         """Best-effort CAS clear of the marker owned by *event*."""
@@ -26356,11 +26585,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if sys.platform == "win32":
                 subprocess.Popen([*restart_cmd, "gateway", "restart"],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 **windows_detach_popen_kwargs())
+                                 **windows_detach_popen_kwargs(), stdin=subprocess.DEVNULL)
             else:
                 subprocess.Popen([*restart_cmd, "gateway", "restart"],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 start_new_session=True)
+                                 start_new_session=True, stdin=subprocess.DEVNULL)
         except Exception:
             logger.exception("Could not restart gateway after dependency repair")
 
@@ -32754,6 +32983,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             if pending_event or pending:
                 logger.debug("Processing pending message: '%s...'", pending[:40])
+                # This follow-up becomes the running turn here, without passing
+                # through _handle_message's turn marker. Its receipt waits for
+                # the recursive run to persist the user message.
+                if pending_event is not None:
+                    if session_key:
+                        self._register_inbound_handoff(session_key, pending_event)
+                    else:
+                        # No session key: nothing can commit it, so it is
+                        # memory-only until the recursive run persists it.
+                        release_inbound_handoff(pending_event)
 
                 # Clear the adapter's interrupt event so the next _run_agent call
                 # doesn't immediately re-trigger the interrupt before the new agent

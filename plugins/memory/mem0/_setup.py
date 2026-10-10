@@ -629,6 +629,7 @@ def _ensure_ollama(models: list[str]) -> bool:
                 subprocess.Popen(
                     [ollama_bin, "serve"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
                 )
                 _wait_for_port("localhost", 11434, timeout=10)
                 ok, _ = _check_ollama(url)
