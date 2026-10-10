@@ -2740,7 +2740,11 @@ os.environ["CLOVER_QUIET"] = "1"
 # see gateway/cwd_placeholder.py for the three-case contract (local vs docker
 # mount-off vs docker mount-on).  MESSAGING_CWD is a backward-compat fallback.
 from gateway import clover_acks as _clover_acks
-from gateway.cwd_placeholder import CWD_PLACEHOLDERS, resolve_placeholder_terminal_cwd
+from gateway.cwd_placeholder import (
+    CWD_PLACEHOLDERS,
+    resolve_placeholder_terminal_cwd,
+    startup_terminal_cwd,
+)
 from gateway.stream_consumer import format_thought
 from gateway.progress_cleanup import (
     collapse_or_delete as _collapse_or_delete_bubbles,
@@ -2763,6 +2767,17 @@ if not _configured_cwd or _configured_cwd in CWD_PLACEHOLDERS:
         os.environ.pop("TERMINAL_CWD", None)
     else:
         os.environ["TERMINAL_CWD"] = _resolved_cwd
+
+# Freeze where a chat's first terminal command starts, now, before anything
+# (workdir cron jobs above all) rewrites the process-global TERMINAL_CWD.
+# delegate_task reads it for a chat that has not run a command yet, so required
+# worktree isolation has a real folder to check instead of blocking the helper.
+# Published to tools.terminal_tool by start_gateway(), not here: importing this
+# module from the CLI/serve must not make those processes look like a gateway.
+try:
+    _GATEWAY_START_CWD = startup_terminal_cwd(os.environ, os.getcwd())
+except OSError:  # cwd deleted/unreadable at startup: no snapshot, helpers keep refusing
+    _GATEWAY_START_CWD = None
 
 from gateway.config import (
     ChannelOverride,
@@ -34063,6 +34078,18 @@ def _is_fresh_post_update_gateway(pid: int) -> bool:
         return False
 
 
+def _publish_gateway_start_cwd() -> None:
+    """Hand the startup snapshot to the terminal layer (gateway process only).
+
+    Runs at the top of ``start_gateway()``, ahead of the cron provider, so the
+    value is in place before any scheduled job can run. Write-once.
+    """
+    if _GATEWAY_START_CWD:
+        from tools.terminal_tool import capture_gateway_start_cwd
+
+        capture_gateway_start_cwd(_GATEWAY_START_CWD)
+
+
 async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = False, verbosity: Optional[int] = 0) -> bool:
     """
     Start the gateway and run until interrupted.
@@ -34081,6 +34108,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # platforms. Set here (not at module import) so incidental imports of
     # gateway.run from CLI/tool code do not poison CLOVER_EXEC_ASK.
     os.environ["CLOVER_EXEC_ASK"] = "1"
+    _publish_gateway_start_cwd()
     # A gateway relaunched by an update's hand-off child inherits that
     # child's CLOVER_UPDATE_REEXEC; nothing this gateway starts (a chat
     # /update above all) may think it is that hand-off child.

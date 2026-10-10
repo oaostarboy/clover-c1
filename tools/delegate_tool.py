@@ -1359,13 +1359,57 @@ def _capture_parent_workspace(parent_agent, task_id: Optional[str] = None):
         session_key = raw_task
     key = session_key or raw_task
     cwd = get_session_cwd(key) if key else None
+    platform = getattr(parent_agent, "platform", None)
     if cwd is None and not session_key:
-        platform = getattr(parent_agent, "platform", None)
         if platform in (None, "", "cli"):
             # Single-session CLI only; capture now, never inside queued work.
             cwd = get_session_cwd("default") if not key else None
             cwd = cwd or _resolve_workspace_hint(parent_agent)
+    if (
+        cwd is None
+        and key
+        and platform not in (None, "", "cli")
+        and not (isinstance(depth, int) and depth > 0)
+    ):
+        # A bound gateway/API chat that has not run a terminal command yet has
+        # no record, but its first command would start in the gateway's
+        # startup folder. Resolve that same answer now (child-only: the chat
+        # itself is not given a record).
+        cwd = _resolve_fresh_gateway_chat_cwd(raw_task, key)
     return (raw_task or session_key or None, cwd)
+
+
+def _resolve_fresh_gateway_chat_cwd(
+    task_id: str, session_key: str
+) -> Optional[str]:
+    """Where a gateway chat with no cwd record would run its first command.
+
+    Uses the terminal tool's own resolver with the folder the gateway process
+    froze at startup, never the live ``TERMINAL_CWD`` (cron rewrites it) and
+    never home. Returns ``None`` — today's behaviour, required isolation
+    blocks — unless the process is the gateway, the backend is local, and the
+    result is an existing absolute directory.
+    """
+    from tools import subagent_worktree
+    from tools.terminal_tool import get_gateway_start_cwd, resolve_first_command_cwd
+
+    start = get_gateway_start_cwd()
+    # An empty/"default" key would read the shared CLI record, which belongs
+    # to no gateway chat. Never resolve on its behalf.
+    if session_key in ("", "default"):
+        return None
+    if not start or not subagent_worktree.local_backend_active():
+        return None
+    try:
+        cwd = resolve_first_command_cwd(
+            task_id or session_key, session_key, default_cwd=start, env_type="local"
+        )
+    except Exception as exc:
+        logger.debug("fresh gateway chat cwd resolution failed: %s", exc)
+        return None
+    if isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd):
+        return cwd
+    return None
 
 
 def _resolve_workspace_hint(parent_agent) -> Optional[str]:

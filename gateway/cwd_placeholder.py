@@ -9,6 +9,9 @@ Docker with workspace mounting still needs an explicit host path signal
 
 from __future__ import annotations
 
+import os
+from typing import Mapping
+
 CWD_PLACEHOLDERS = frozenset({".", "auto", "cwd"})
 
 
@@ -47,3 +50,27 @@ def resolve_placeholder_terminal_cwd(
             return messaging
 
     return None
+
+
+def startup_terminal_cwd(environ: Mapping[str, str], process_cwd: str) -> str | None:
+    """Return the folder a local terminal's first command starts in, or ``None``.
+
+    Mirrors ``tools.terminal_tool._get_env_config``'s local default
+    (``TERMINAL_CWD``, else the process cwd, with ``~`` expanded) as it stands
+    AFTER the gateway's placeholder normalization. Pure: the gateway calls it
+    once at startup so later ``TERMINAL_CWD`` writes (workdir cron jobs mutate
+    the process-global) cannot move the answer.
+
+    Only an absolute folder on the local backend is a usable host start
+    folder; anything else (container/ssh backends, a relative or placeholder
+    value that survived normalization) returns ``None`` so callers keep
+    refusing rather than guess.
+    """
+    backend = (environ.get("TERMINAL_ENV") or "local").strip().lower()
+    if backend != "local":
+        return None
+    candidate = (environ.get("TERMINAL_CWD") or "").strip() or process_cwd
+    if not candidate:
+        return None
+    expanded = os.path.expanduser(candidate)
+    return expanded if os.path.isabs(expanded) else None
