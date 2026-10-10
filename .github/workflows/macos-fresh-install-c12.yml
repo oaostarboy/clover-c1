@@ -23,7 +23,7 @@ jobs:
             df -h "$HOME" | tail -1
           } | tee "$RUNNER_TEMP/proof/runner.txt"
           test ! -e "$HOME/.clover"
-          ! command -v clover
+          if command -v clover; then echo "clover already on PATH"; exit 1; fi
           echo "fresh: no ~/.clover and no clover on PATH"
       - name: Fresh shell install from origin at pinned commit
         shell: bash
