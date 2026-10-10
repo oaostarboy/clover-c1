@@ -1436,6 +1436,43 @@ def _invalid_tool_name_error_content(name: str, valid_tool_names) -> str:
     return f"Tool '{name}' does not exist. Available tools: {available}"
 
 
+# User-facing copy for a WAF/CDN 403 (``FailoverReason.upstream_blocked``).
+# Adapted from NousResearch/hermes-agent 6f6ed01355 (MIT). The credential never
+# reached the provider, so this must NOT read as a key rejection.
+_UPSTREAM_BLOCKED_USER_MESSAGE = (
+    "A firewall/CDN in front of {provider} blocked this request before it reached "
+    "the model. Your API key is fine; the provider's network blocked the request, "
+    "not the key.\n\n"
+    "Relays often reject the SDK's default User-Agent: set "
+    "`extra_headers: {{User-Agent: CloverAgent/1.0}}` on the custom_providers entry, "
+    "or check the proxy/WAF rules and your network. You can also switch providers "
+    "with /model or add a fallback with `clover fallback add`."
+)
+
+
+def _upstream_blocked_result(
+    classified,
+    summary: str,
+    messages: List[Dict],
+    api_call_count: int,
+    provider: str,
+) -> Dict[str, Any]:
+    """Terminal turn result for a WAF/CDN block: plain-words copy, key is fine."""
+    final = _UPSTREAM_BLOCKED_USER_MESSAGE.format(provider=provider or "the provider")
+    if summary:
+        final += f"\n\nProvider message: {summary}"
+    return {
+        "final_response": final,
+        "messages": messages,
+        "api_calls": api_call_count,
+        "completed": False,
+        "failed": True,
+        "error": summary,
+        "failure_reason": classified.reason.value,
+        "failure_retryable": bool(classified.retryable),
+    }
+
+
 def _content_policy_blocked_result(
     messages: List[Dict],
     api_call_count: int,
@@ -6152,6 +6189,12 @@ def run_conversation(
                                 "⚠️ Provider safety filter blocked this request — trying fallback...",
                                 "provider safety filter blocked this request — trying fallback...",
                             ))
+                        elif classified.reason == FailoverReason.upstream_blocked:
+                            agent._buffer_status(_clo_status(
+                                agent, "error",
+                                "⚠️ A firewall/CDN in front of the provider blocked the request (your key is fine) — trying fallback...",
+                                "a firewall/CDN in front of the provider blocked the request (your key is fine) — trying fallback...",
+                            ))
                         elif classified.reason == FailoverReason.ssl_cert_verification:
                             agent._buffer_status(_clo_status(
                                 agent, "error",
@@ -6193,6 +6236,14 @@ def run_conversation(
                             f"{_nonretryable_summary}",
                             f"provider safety filter blocked this request: "
                             f"{_nonretryable_summary}",
+                        ))
+                    elif classified.reason == FailoverReason.upstream_blocked:
+                        agent._emit_status(_clo_status(
+                            agent, "error",
+                            f"❌ A firewall/CDN in front of the provider blocked the request "
+                            f"(your key is fine): {_nonretryable_summary}",
+                            f"a firewall/CDN in front of the provider blocked the request "
+                            f"(your key is fine): {_nonretryable_summary}",
                         ))
                     elif classified.reason == FailoverReason.ssl_cert_verification:
                         agent._emit_status(_clo_status(
@@ -6241,6 +6292,24 @@ def run_conversation(
                                 agent._vprint(f"{agent.log_prefix}      • Check credits: https://openrouter.ai/settings/credits", force=True)
                     else:
                         agent._vprint(f"{agent.log_prefix}   💡 This type of error won't be fixed by retrying.", force=True)
+                    # A WAF/CDN block: the key never reached the provider.
+                    if classified.reason == FailoverReason.upstream_blocked:
+                        agent._vprint(
+                            f"{agent.log_prefix}   💡 The endpoint's firewall/CDN blocked the request before it reached the model.",
+                            force=True,
+                        )
+                        agent._vprint(
+                            f"{agent.log_prefix}      Your key and model access are probably fine. Relays often reject the SDK's",
+                            force=True,
+                        )
+                        agent._vprint(
+                            f"{agent.log_prefix}      default User-Agent: set `extra_headers: {{User-Agent: CloverAgent/1.0}}` on the",
+                            force=True,
+                        )
+                        agent._vprint(
+                            f"{agent.log_prefix}      custom_providers entry, or check the proxy/WAF rules and your network.",
+                            force=True,
+                        )
                     # Content-policy blocks deserve their own actionable
                     # guidance — neither "fix your API key" nor "retry won't
                     # help" tells the user what to actually do. The provider
@@ -6326,6 +6395,11 @@ def run_conversation(
                             api_call_count,
                             final_response=_policy_response,
                             error_detail=_nonretryable_summary,
+                        )
+                    if classified.reason == FailoverReason.upstream_blocked:
+                        return _upstream_blocked_result(
+                            classified, _nonretryable_summary, messages,
+                            api_call_count, _provider,
                         )
                     # Billing walls are the common non-retryable abort: enrich
                     # the result with the same structured recovery descriptor as
