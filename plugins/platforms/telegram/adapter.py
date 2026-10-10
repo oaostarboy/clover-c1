@@ -730,17 +730,25 @@ class TelegramAdapter(BasePlatformAdapter):
         super().__init__(config, Platform.TELEGRAM)
         self._app: Optional[Application] = None
         self._bot: Optional[Bot] = None
-        # Update-ID admission (see update_admission.py). Completed IDs are kept
-        # per bot and persisted to a receipt file, so a rebuilt adapter or a
-        # restarted gateway still drops Telegram's redeliveries.
-        self._seen_update_ids: dict = {}
+        # Update-ID admission (see update_admission.py). Durable receipts are experimental and opt-in
+        # (platforms.telegram.extra.durable_update_receipts, default false): a
+        # receipt on disk can suppress the crash replay of input that only
+        # lived in memory. Off, the receipt file is never read or written and
+        # completed IDs live in a per-process map shared by rebuilt adapters.
+        self._durable_update_receipts: bool = self._coerce_bool_extra("durable_update_receipts", False)
+        self._update_receipt_dir = _update_receipt_dir()
+        if self._durable_update_receipts:
+            self._seen_update_ids: dict = {}
+        else:
+            from plugins.platforms.telegram.update_admission import process_seen_ids
+
+            self._seen_update_ids = process_seen_ids(self._update_receipt_dir)
         # Claimed but not yet durably handed off (in memory only; see
         # update_admission.py). ``_inflight_with_event`` marks the claims whose
         # MessageEvent will complete them, so the final-group handler skips them.
         self._inflight_update_ids: dict = {}
         self._inflight_with_event: set = set()
         self._update_receipts_loaded: set = set()
-        self._update_receipt_dir = _update_receipt_dir()
         self._webhook_mode: bool = False
         self._mention_patterns = self._compile_mention_patterns()
         self._reply_to_mode: str = getattr(config, 'reply_to_mode', 'first') or 'first'
@@ -4555,7 +4563,8 @@ class TelegramAdapter(BasePlatformAdapter):
 
         bot_id = _bot_id_from_token(getattr(self.config, "token", None))
         if bot_id is not None:
-            load_receipts(self._seen_update_ids, self._update_receipt_dir, bot_id)
+            if self._durable_update_receipts:
+                load_receipts(self._seen_update_ids, self._update_receipt_dir, bot_id)
             app.add_handler(
                 TypeHandler(Update, make_admission_handler(self, bot_id)),
                 group=ADMISSION_GROUP,

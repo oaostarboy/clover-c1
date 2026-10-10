@@ -77,9 +77,10 @@ async def _process(app, update):
         await app.shutdown()
 
 
-def _adapter(tmp_path):
-    adapter = TelegramAdapter(PlatformConfig(enabled=True, token="111:offline-test", extra={}))
-    return adapter
+def _adapter(tmp_path, durable=True):
+    """Durable receipts are opt-in; these tests exercise the opted-in mode."""
+    extra = {"durable_update_receipts": True} if durable else {}
+    return TelegramAdapter(PlatformConfig(enabled=True, token="111:offline-test", extra=extra))
 
 
 @pytest.mark.asyncio

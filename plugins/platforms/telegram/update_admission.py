@@ -22,6 +22,16 @@ This port uses a plain group -1 handler with PTB's own ApplicationHandlerStop, a
 writes each receipt synchronously when the update's work is handed off. The receipt-file layout and 24h TTL are
 kept from Hermes.
 
+Durable receipts are EXPERIMENTAL and off by default
+(``platforms.telegram.extra.durable_update_receipts``). A receipt on disk can
+suppress the crash replay of input that was only held in memory (a pending
+confirmation, an approval reason, ...), and the replay is the only recovery for
+that input. With the default (off) nothing is read from or written to disk:
+after a crash a message may be answered twice, but never lost. Completed IDs
+are still remembered in memory for the life of the process, shared across
+adapter rebuilds and reconnects, because nothing is lost while the process is
+alive.
+
 No cross-process coordination or exactly-once effects are promised.
 """
 
@@ -43,12 +53,26 @@ ADMISSION_GROUP = -1
 FINALIZE_GROUP = 100
 
 
+# Default (non-durable) mode: completed update IDs shared by every adapter built
+# in this process, keyed by receipt directory (the profile's CLOVER_HOME), so a
+# rebuilt adapter or a reconnect still drops a redelivery. Never touches disk.
+_PROCESS_SEEN: dict = {}
+
+
+def process_seen_ids(receipt_dir) -> dict:
+    """The in-memory completed-ID map shared by adapters of one profile."""
+    return _PROCESS_SEEN.setdefault(str(receipt_dir), {})
+
+
 def _receipt_path(receipt_dir, bot_id):
     return receipt_dir / f"telegram_update_receipts_{bot_id}.json"
 
 
 def load_receipts(seen: dict, receipt_dir, bot_id) -> None:
-    """Seed admitted history for one bot from its receipt file."""
+    """Seed admitted history for one bot from its receipt file.
+
+    Callers only reach this in durable mode; the default never reads the file.
+    """
     path = _receipt_path(receipt_dir, bot_id)
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -79,6 +103,8 @@ def _trim(seen: dict) -> None:
 
 def _persist(adapter, bot_id) -> None:
     """Write this bot's unexpired admitted IDs to its receipt file."""
+    if not getattr(adapter, "_durable_update_receipts", False):
+        return
     prefix, cutoff = f"{bot_id}:", time.time() - RECEIPT_TTL_SECONDS
     ids = {key[len(prefix):]: ts for key, ts in adapter._seen_update_ids.items()
            if key.startswith(prefix) and ts > cutoff}

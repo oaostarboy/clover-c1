@@ -1249,6 +1249,7 @@ platform_toolsets:
 #     # allowed_chats: ["-1001234567890"]
 #     extra:
 #       drop_pending_on_cold_boot: false  # Set true to discard messages queued while the gateway was offline on a cold boot (watcher reconnects always preserve them)
+#       durable_update_receipts: false  # EXPERIMENTAL. Set true to keep a per-bot receipt file so a restarted gateway drops Telegram redeliveries of handled messages. Off by default: after a crash a message may be answered twice, but never lost
 #       disable_link_previews: false  # Set true to suppress Telegram URL previews in bot messages
 #       rich_messages: false          # Bot API 10.1 rich messages (tables/task lists/details/math); default false for copyable legacy MarkdownV2, set true to opt in
 #       rich_drafts: false            # Experimental rich draft previews during Telegram DM streaming; default false because Telegram Desktop/macOS can visually overlay draft frames
