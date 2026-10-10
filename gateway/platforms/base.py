@@ -2529,7 +2529,16 @@ class MessageEvent:
     # queued human messages and internal completion events, and is never
     # merged with either.  Kept last to preserve positional construction.
     synthetic: bool = False
-    
+
+    # Callbacks that make the platform's inbound receipt durable (Telegram
+    # update-ID admission). Run once the event is durably handed off: its turn
+    # marker is set, it is recorded in the restart inbox, or its turn ended. A
+    # dataclass field, so ``dataclasses.replace`` carries it; events merged into
+    # another one hand theirs over (``absorb_inbound_receipts``).
+    inbound_receipts: List[Callable[[], None]] = field(
+        default_factory=list, repr=False, compare=False
+    )
+
     def is_command(self) -> bool:
         """Check if this is a command message (e.g., /new, /reset)."""
         return self.allow_gateway_control and (self.text or "").lstrip().startswith("/")
@@ -2930,6 +2939,24 @@ def promote_next_pending(
     return chosen
 
 
+def complete_inbound_handoff(event: Any) -> None:
+    """Run the event's inbound-receipt callbacks (idempotent, never raises)."""
+    for callback in list(getattr(event, "inbound_receipts", None) or ()):
+        try:
+            callback()
+        except Exception:
+            logger.warning("Inbound receipt callback failed", exc_info=True)
+
+
+def absorb_inbound_receipts(existing: Any, incoming: Any) -> None:
+    """Make ``existing`` carry ``incoming``'s receipt callbacks after a merge."""
+    mine = getattr(existing, "inbound_receipts", None)
+    theirs = getattr(incoming, "inbound_receipts", None)
+    if mine is None or not theirs or mine is theirs:
+        return
+    mine.extend(cb for cb in theirs if cb not in mine)
+
+
 def merge_pending_message_event(
     pending_messages: Dict[str, MessageEvent],
     session_key: str,
@@ -2973,6 +3000,7 @@ def merge_pending_message_event(
             if event.text:
                 existing.text = BasePlatformAdapter._merge_caption(existing.text, event.text)
             _invalidate_pending_stt_cache(existing)
+            absorb_inbound_receipts(existing, event)
             return MergeResult.MERGED
 
         if existing_has_media or incoming_has_media:
@@ -2992,6 +3020,7 @@ def merge_pending_message_event(
             ):
                 existing.message_type = event.message_type
             _invalidate_pending_stt_cache(existing)
+            absorb_inbound_receipts(existing, event)
             return MergeResult.MERGED
 
         if (
@@ -3001,6 +3030,7 @@ def merge_pending_message_event(
         ):
             if event.text:
                 existing.text = f"{existing.text}\n{event.text}" if existing.text else event.text
+            absorb_inbound_receipts(existing, event)
             return MergeResult.MERGED
 
     pending_messages[session_key] = event
@@ -6203,6 +6233,7 @@ class BasePlatformAdapter(ABC):
                 state.event.message_id = str(latest_message_id)
             if latest_anchor is not None and hasattr(state.event, "reply_to_message_id"):
                 state.event.reply_to_message_id = str(latest_anchor)
+            absorb_inbound_receipts(state.event, event)
             state.last_ts = now
 
         if state.task is not None and not state.task.done():
@@ -6461,6 +6492,7 @@ class BasePlatformAdapter(ABC):
 
         try:
             response = await self._message_handler(event)
+            complete_inbound_handoff(event)
             _text, _eph_ttl = self._unwrap_ephemeral(response)
             # Send the response BEFORE cancelling the old task so the send
             # cannot be affected by task-cancellation side effects (race
@@ -6601,6 +6633,7 @@ class BasePlatformAdapter(ABC):
                 try:
                     _thread_meta = _thread_metadata_for_source(event.source, _reply_anchor_for_event(event))
                     response = await self._message_handler(event)
+                    complete_inbound_handoff(event)
                     _text, _eph_ttl = self._unwrap_ephemeral(response)
                     if _text:
                         _r = await self._send_with_retry(
@@ -6654,6 +6687,7 @@ class BasePlatformAdapter(ABC):
                             event.source, _reply_anchor_for_event(event)
                         )
                         response = await self._message_handler(event)
+                        complete_inbound_handoff(event)
                         _text, _eph_ttl = self._unwrap_ephemeral(response)
                         if _text:
                             _r = await self._send_with_retry(
@@ -6678,6 +6712,7 @@ class BasePlatformAdapter(ABC):
             if self._busy_session_handler is not None:
                 try:
                     if await self._busy_session_handler(event, session_key):
+                        complete_inbound_handoff(event)
                         return
                 except Exception as e:
                     logger.error("[%s] Busy-session handler failed: %s", self.name, e, exc_info=True)
@@ -6803,6 +6838,11 @@ class BasePlatformAdapter(ABC):
             # Call the handler (this can take a while with tool calls)
             event._turn_marker_handoff = self.gateway_runner is not None
             response = await self._message_handler(event)
+            # The runner returned (turn finished, command answered or rejected):
+            # the input is no longer waiting on the platform's replay. A
+            # cancellation or crash before this point leaves it unreceipted
+            # unless the turn marker already made it durable.
+            complete_inbound_handoff(event)
             is_ephemeral_response = isinstance(response, EphemeralReply)
 
             # Slash-command handlers may return an EphemeralReply sentinel to
@@ -7394,6 +7434,9 @@ class BasePlatformAdapter(ABC):
                     "[%s] Failed to send error notification to user: %s",
                     self.name, notify_err, exc_info=True,
                 )  # Last resort — don't let error reporting crash the handler
+            else:
+                # The user was told to retry: nothing is owed on replay.
+                complete_inbound_handoff(event)
             # Preserve shutdown semantics: SystemExit/KeyboardInterrupt must
             # still propagate after the user-facing failure notification, so
             # the loop's own signal handling can shut down cleanly. Other

@@ -192,6 +192,8 @@ from gateway.authz_mixin import _coerce_allow_set
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
     BasePlatformAdapter,
+    absorb_inbound_receipts,
+    complete_inbound_handoff,
     MessageEvent,
     MessageType,
     ProcessingOutcome,
@@ -712,6 +714,11 @@ class TelegramAdapter(BasePlatformAdapter):
         # per bot and persisted to a receipt file, so a rebuilt adapter or a
         # restarted gateway still drops Telegram's redeliveries.
         self._seen_update_ids: dict = {}
+        # Claimed but not yet durably handed off (in memory only; see
+        # update_admission.py). ``_inflight_with_event`` marks the claims whose
+        # MessageEvent will complete them, so the final-group handler skips them.
+        self._inflight_update_ids: dict = {}
+        self._inflight_with_event: set = set()
         self._update_receipts_loaded: set = set()
         self._update_receipt_dir = _update_receipt_dir()
         self._webhook_mode: bool = False
@@ -4416,7 +4423,9 @@ class TelegramAdapter(BasePlatformAdapter):
         from plugins.platforms.telegram.update_admission import (
             ADMISSION_GROUP,
             load_receipts,
+            FINALIZE_GROUP,
             make_admission_handler,
+            make_finalize_handler,
         )
 
         bot_id = _bot_id_from_token(getattr(self.config, "token", None))
@@ -4425,6 +4434,10 @@ class TelegramAdapter(BasePlatformAdapter):
             app.add_handler(
                 TypeHandler(Update, make_admission_handler(self, bot_id)),
                 group=ADMISSION_GROUP,
+            )
+            app.add_handler(
+                TypeHandler(Update, make_finalize_handler(self, bot_id)),
+                group=FINALIZE_GROUP,
             )
 
         app.add_handler(TelegramMessageHandler(
@@ -9997,6 +10010,7 @@ class TelegramAdapter(BasePlatformAdapter):
             if event.message_id:
                 entry["message_id"] = str(event.message_id)
             store.append_to_transcript(session_entry.session_id, entry)
+            complete_inbound_handoff(event)
             adapter_name = getattr(self, "name", "telegram")
             logger.info(
                 "[%s] Telegram group message observed (no bot trigger): chat=%s from=%s",
@@ -10331,6 +10345,7 @@ class TelegramAdapter(BasePlatformAdapter):
             if event.text:
                 existing.text = f"{existing.text}\n{event.text}" if existing.text else event.text
             existing._last_chunk_len = chunk_len  # type: ignore[attr-defined]
+            absorb_inbound_receipts(existing, event)
             # Merge any media that might be attached
             if event.media_urls:
                 existing.media_urls.extend(event.media_urls)
@@ -10455,6 +10470,7 @@ class TelegramAdapter(BasePlatformAdapter):
             existing.media_types.extend(event.media_types)
             if event.text:
                 existing.text = self._merge_caption(existing.text, event.text)
+            absorb_inbound_receipts(existing, event)
 
         prior_task = self._pending_photo_batch_tasks.get(batch_key)
         if prior_task and not prior_task.done():
@@ -10782,6 +10798,7 @@ class TelegramAdapter(BasePlatformAdapter):
             existing.media_types.extend(event.media_types)
             if event.text:
                 existing.text = self._merge_caption(existing.text, event.text)
+            absorb_inbound_receipts(existing, event)
 
         prior_task = self._media_group_tasks.get(media_group_id)
         if prior_task:
@@ -11201,7 +11218,7 @@ class TelegramAdapter(BasePlatformAdapter):
             _chat_id_str if thread_id_str else None,
         )
 
-        return MessageEvent(
+        event = MessageEvent(
             text=message.text or "",
             message_type=msg_type,
             source=source,
@@ -11214,6 +11231,11 @@ class TelegramAdapter(BasePlatformAdapter):
             channel_prompt=_channel_prompt,
             timestamp=message.date,
         )
+        # The update's receipt is written when this event is durably handed off.
+        from plugins.platforms.telegram.update_admission import attach_receipt
+
+        attach_receipt(self, _bot_id_from_token(getattr(self.config, "token", None)), update_id, event)
+        return event
 
     # ── Message reactions (processing lifecycle) ──────────────────────────
 

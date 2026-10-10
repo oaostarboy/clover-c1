@@ -2821,6 +2821,7 @@ from gateway.platforms.base import (
     _prefix_within_utf16_limit,
     _reply_anchor_for_event,
     build_auto_tts_output_path,
+    complete_inbound_handoff,
     events_share_security_context,
     merge_pending_message_event,
     message_event_class,
@@ -9874,6 +9875,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 continue
             recorded.extend(queued)
+            for event in queued:
+                complete_inbound_handoff(event)
         return written
 
     def _record_queued_humans_at_shutdown(self) -> int:
@@ -20946,6 +20949,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # token out of public metadata, transcripts, and platform payloads.
         setattr(event, "_gateway_active_turn_session_key", session_key)
         setattr(event, "_gateway_active_turn_token", token)
+        # The turn marker is the durable record of this input: a crash from here
+        # on is recovered by startup recovery, so the platform may now treat the
+        # inbound update as processed.
+        complete_inbound_handoff(event)
         return True
 
     async def _clear_durable_active_turn(self, event: "MessageEvent") -> bool:
@@ -32883,6 +32890,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             if pending_event or pending:
                 logger.debug("Processing pending message: '%s...'", pending[:40])
+                # This follow-up becomes the running turn here, without passing
+                # through _handle_message's turn marker.
+                if pending_event is not None:
+                    complete_inbound_handoff(pending_event)
 
                 # Clear the adapter's interrupt event so the next _run_agent call
                 # doesn't immediately re-trigger the interrupt before the new agent

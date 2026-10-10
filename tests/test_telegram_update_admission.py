@@ -179,3 +179,180 @@ async def test_new_telegram_update_after_week_idle_is_not_duplicate(tmp_path, mo
         assert received == [500, 500], f"new message silently dropped: {received}"
     finally:
         await app.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_crash_before_business_handler_does_not_poison_replay(tmp_path, monkeypatch):
+    # Astra C13-ASTRA-01: admission must not be a completed receipt before the
+    # update is durably handed off. Kill the process inside the business
+    # handler; Telegram's replay to the restarted gateway must get through.
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    home = tmp_path / "private-home"
+    home.mkdir()
+    monkeypatch.setenv("CLOVER_HOME", str(home))
+    child = r'''
+import asyncio, os
+from pathlib import Path
+from tests.test_telegram_update_admission import _adapter, _build, _text_update
+async def main():
+    adapter = _adapter(Path('/tmp'))
+    app = _build(adapter, 111, [])
+    async def die_before_business_logic(update, context):
+        os._exit(73)
+    app.handlers[0][0].callback = die_before_business_logic
+    await app.initialize()
+    await app.process_update(_text_update(app.bot, 1000))
+asyncio.run(main())
+'''
+    repo = Path(__file__).resolve().parents[1]
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(filter(None, [str(repo), os.environ.get("PYTHONPATH")])))
+    proc = subprocess.run([sys.executable, "-c", child], env=env, cwd=repo,
+                          capture_output=True, text=True, timeout=60)
+    assert proc.returncode == 73, (proc.returncode, proc.stderr)
+    # (Astra's original also asserted a receipt file existed here: that was the
+    # bug's precondition. The fixed invariant is the replay outcome below.)
+    for receipt in (home / "telegram").glob("telegram_update_receipts_*.json"):
+        assert "1000" not in json.loads(receipt.read_text())["update_ids"]
+    # There was no gateway turn, transcript, marker or reply. Telegram's
+    # unacknowledged update is delivered to the replacement application.
+    received = []
+    app = _build(_adapter(tmp_path), 111, received)
+    await app.initialize()
+    try:
+        await app.process_update(_text_update(app.bot, 1000))
+        assert received == [1000], f"unanswered update discarded after restart: {received}"
+    finally:
+        await app.shutdown()
+
+
+def _build_handing_off(adapter, bot_id, events):
+    """Like _build, but the text handler builds the real MessageEvent and parks
+    it (queued / not yet durable), as the real handlers do before the runner."""
+    from gateway.platforms.base import MessageType
+
+    app = (Application.builder().token(f"{bot_id}:offline-test")
+           .request(OfflineRequest(bot_id)).get_updates_request(OfflineRequest(bot_id)).build())
+
+    async def text_handler(update, context):
+        events.append(adapter._build_message_event(
+            update.message, MessageType.TEXT, update_id=update.update_id))
+
+    adapter._handle_text_message = text_handler
+    adapter._register_handlers(app)
+    return app
+
+
+@pytest.mark.asyncio
+async def test_receipt_completes_only_on_durable_handoff(tmp_path):
+    from gateway.platforms.base import complete_inbound_handoff
+
+    events = []
+    first = _adapter(tmp_path)
+    app1 = _build_handing_off(first, 111, events)
+    await app1.initialize()
+    try:
+        await app1.process_update(_text_update(app1.bot, 1100))
+        # Same-process replay while the event is still in flight: dropped.
+        await app1.process_update(_text_update(app1.bot, 1100))
+    finally:
+        await app1.shutdown()
+    assert [e.platform_update_id for e in events] == [1100]
+
+    # Restart before the handoff: the update was never processed -> replayed.
+    replay = []
+    app2 = _build_handing_off(_adapter(tmp_path), 111, replay)
+    await _process(app2, _text_update(app2.bot, 1100))
+    assert [e.platform_update_id for e in replay] == [1100]
+
+    # Durable handoff (the runner's turn marker) completes the receipt...
+    complete_inbound_handoff(replay[0])
+    # ...so a later replay after another restart is dropped.
+    after = []
+    app3 = _build_handing_off(_adapter(tmp_path), 111, after)
+    await _process(app3, _text_update(app3.bot, 1100))
+    assert after == []
+
+
+@pytest.mark.asyncio
+async def test_merged_follow_up_completes_with_the_turn_it_joined(tmp_path):
+    from gateway.platforms.base import (
+        complete_inbound_handoff,
+        merge_pending_message_event,
+    )
+
+    events = []
+    adapter = _adapter(tmp_path)
+    app = _build_handing_off(adapter, 111, events)
+    await app.initialize()
+    try:
+        await app.process_update(_text_update(app.bot, 1200))
+        await app.process_update(_text_update(app.bot, 1201))
+    finally:
+        await app.shutdown()
+    pending = {}
+    merge_pending_message_event(pending, "s", events[0], merge_text=True)
+    merge_pending_message_event(pending, "s", events[1], merge_text=True)
+    complete_inbound_handoff(pending["s"])
+    later = []
+    app2 = _build_handing_off(_adapter(tmp_path), 111, later)
+    await app2.initialize()
+    try:
+        await app2.process_update(_text_update(app2.bot, 1200))
+        await app2.process_update(_text_update(app2.bot, 1201))
+    finally:
+        await app2.shutdown()
+    assert later == []
+
+
+@pytest.mark.asyncio
+async def test_update_that_builds_no_event_is_completed_by_the_final_group(tmp_path):
+    # An update no handler turns into an event (ignored, unauthorized, ...) has
+    # nothing to hand off, so its replay is dropped after a restart.
+    first = _adapter(tmp_path)
+    app1 = _build(first, 111, [])
+    await _process(app1, _text_update(app1.bot, 1300))
+    after = []
+    app2 = _build_handing_off(_adapter(tmp_path), 111, after)
+    await _process(app2, _text_update(app2.bot, 1300))
+    # _build's handler built no event, so 1300 completed; the replay is dropped.
+    assert after == []
+
+
+def test_receipt_callbacks_survive_dataclasses_replace_and_run_once():
+    import dataclasses
+
+    from gateway.platforms.base import MessageEvent, complete_inbound_handoff
+
+    calls = []
+    event = MessageEvent(text="hi", inbound_receipts=[lambda: calls.append(1)])
+    clone = dataclasses.replace(event, text="hi there")
+    complete_inbound_handoff(clone)
+    assert calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_runner_turn_marker_completes_the_receipt(tmp_path):
+    from gateway.run import GatewayRunner
+
+    events = []
+    app = _build_handing_off(_adapter(tmp_path), 111, events)
+    await _process(app, _text_update(app.bot, 1400))
+
+    class _Store:
+        async def mark_turn_active(self, key):
+            return "token"
+
+    runner = object.__new__(GatewayRunner)
+    runner._async_session_store = _Store()
+    runner.session_store = _Store()
+    runner.__class__ = type("R", (GatewayRunner,), {"async_session_store": property(lambda self: self._async_session_store)})
+    assert await runner._mark_durable_active_turn(events[0], "sk")
+
+    after = []
+    app2 = _build_handing_off(_adapter(tmp_path), 111, after)
+    await _process(app2, _text_update(app2.bot, 1400))
+    assert after == []

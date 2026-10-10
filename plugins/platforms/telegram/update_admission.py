@@ -6,16 +6,20 @@ a reconnect, or an adapter rebuild, where the replacement adapter starts with an
 empty in-memory set and a new PTB Updater polls from offset 0.
 
 This gate runs in PTB group -1, before any core or plugin handler. An update ID
-that was already admitted is answered once: a replay raises ApplicationHandlerStop
-so no later group sees it. Admitted IDs are persisted to a per-bot receipt file
-under CLOVER_HOME, so a rebuilt adapter or a restarted gateway still drops them.
+that was already claimed is answered once: a replay raises ApplicationHandlerStop
+so no later group sees it. A claim is only an in-memory in-flight marker. It
+becomes a persisted per-bot receipt under CLOVER_HOME (so a rebuilt adapter or a
+restarted gateway still drops the replay) once the inbound work is durably handed
+off: the event's turn marker is set, it is recorded in the restart inbox, or its
+turn finished. A crash before that leaves no receipt, so Telegram's unacknowledged
+replay is processed rather than lost. Updates that build no event are completed
+by a final-group handler.
 
 Adapted from NousResearch/hermes-agent plugins/platforms/telegram/update_admission.py
 (MIT), commits 992f569fc1 and a1838ea87a. The Hermes version subclasses PTB's
 Application to pin dispatch claims and flushes receipts from a background task.
 This port uses a plain group -1 handler with PTB's own ApplicationHandlerStop, and
-writes each receipt synchronously before the update continues, so a crash right
-after admission cannot lose the record. The receipt-file layout and 24h TTL are
+writes each receipt synchronously when the update's work is handed off. The receipt-file layout and 24h TTL are
 kept from Hermes.
 
 No cross-process coordination or exactly-once effects are promised.
@@ -38,6 +42,7 @@ _SEEN_CAP = 4096
 # silence after which Telegram may restart update IDs at a random value.
 RECEIPT_TTL_SECONDS = 24 * 60 * 60
 ADMISSION_GROUP = -1
+FINALIZE_GROUP = 100
 
 
 def _receipt_path(receipt_dir, bot_id):
@@ -88,29 +93,89 @@ def _persist(adapter, bot_id) -> None:
         logger.warning("[Telegram] Failed to persist update receipts to %s", path, exc_info=True)
 
 
-def make_admission_handler(adapter, bot_id):
-    """Return the group -1 TypeHandler callback that admits each update once.
+def _expired(seen: dict, key: str, now: float) -> bool:
+    """Drop ``key`` from ``seen`` when its entry is past the TTL; True if present and live."""
+    seen_at = seen.get(key)
+    if seen_at is not None and now - seen_at >= RECEIPT_TTL_SECONDS:
+        # Expired (same rule as MessageDeduplicator): Telegram never
+        # redelivers past 24h, and may recycle IDs after a week idle.
+        del seen[key]
+        return False
+    return seen_at is not None
 
-    ``adapter`` owns ``_seen_update_ids`` (admitted IDs) and ``_update_receipt_dir``.
+
+def _complete(adapter, bot_id, key: str) -> None:
+    """Turn an in-flight claim into a persisted receipt (idempotent)."""
+    inflight = adapter._inflight_update_ids
+    if inflight.pop(key, None) is None:
+        return
+    adapter._inflight_with_event.discard(key)
+    adapter._seen_update_ids[key] = time.time()
+    _trim(adapter._seen_update_ids)
+    _persist(adapter, bot_id)
+
+
+def attach_receipt(adapter, bot_id, update_id, event) -> None:
+    """Defer the receipt for ``update_id`` until ``event`` is durably handed off.
+
+    The receipt is written when the gateway calls ``complete_inbound_handoff``
+    on the event (turn marker set, recorded in the restart inbox, or the turn
+    finished). Until then only the in-memory claim exists, so a crash lets
+    Telegram's unacknowledged replay through.
+    """
+    if bot_id is None or update_id is None:
+        return
+    key = f"{bot_id}:{update_id}"
+    if key not in adapter._inflight_update_ids:
+        return
+    adapter._inflight_with_event.add(key)
+    done = []
+
+    def _receipt() -> None:
+        if not done:
+            done.append(True)
+            _complete(adapter, bot_id, key)
+
+    receipts = getattr(event, "inbound_receipts", None)
+    if receipts is not None:
+        receipts.append(_receipt)
+
+
+def make_admission_handler(adapter, bot_id):
+    """Return the group -1 TypeHandler callback that claims each update once.
+
+    ``adapter`` owns ``_seen_update_ids`` (completed receipts, persisted),
+    ``_inflight_update_ids`` (claimed, in memory only) and ``_update_receipt_dir``.
     """
 
     async def admit(update, context) -> None:
         key = f"{bot_id}:{update.update_id}"
-        seen = adapter._seen_update_ids
         now = time.time()
-        seen_at = seen.get(key)
-        if seen_at is not None and now - seen_at >= RECEIPT_TTL_SECONDS:
-            # Expired (same rule as MessageDeduplicator): Telegram never
-            # redelivers past 24h, and may recycle IDs after a week idle.
-            del seen[key]
-            seen_at = None
-        if seen_at is not None:
-            # Replay of an already-admitted update: answer it once.
-            raise ApplicationHandlerStop
-        # Admit synchronously (no await between the check and the write), so two
-        # copies of the same update can never both pass.
-        seen[key] = now
-        _trim(seen)
-        _persist(adapter, bot_id)
+        if _expired(adapter._seen_update_ids, key, now):
+            raise ApplicationHandlerStop  # already processed
+        inflight = adapter._inflight_update_ids
+        if _expired(inflight, key, now):
+            raise ApplicationHandlerStop  # same-process replay while in flight
+        # Claim synchronously (no await between the check and the write), so
+        # two copies of the same update can never both pass. The claim is NOT
+        # persisted: nothing durable exists for this update yet.
+        inflight[key] = now
+        _trim(inflight)
 
     return admit
+
+
+def make_finalize_handler(adapter, bot_id):
+    """Group-after-everything callback: complete updates that produced no event.
+
+    An update whose handlers built no ``MessageEvent`` (callback query, ignored
+    or unauthorized message, ...) has nothing to hand off, so it is complete.
+    One that did build an event is completed by that event's handoff instead.
+    """
+
+    async def finalize(update, context) -> None:
+        key = f"{bot_id}:{update.update_id}"
+        if key in adapter._inflight_update_ids and key not in adapter._inflight_with_event:
+            _complete(adapter, bot_id, key)
+
+    return finalize
