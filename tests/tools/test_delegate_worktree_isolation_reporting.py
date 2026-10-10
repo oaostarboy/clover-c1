@@ -228,3 +228,46 @@ def test_required_isolation_nongit_workspace_runs_real_child(tmp_path):
     assert "not a git repository" in goals[0]
     assert result["status"] in ("completed", "success"), result
     assert result["workspace_isolation"]["status"] == "shared"
+
+
+def test_required_isolation_does_not_fail_open_through_directory_alias(tmp_path):
+    repo = _repo(tmp_path / "repo")
+    subdir = repo / "src"
+    subdir.mkdir()
+    alias = tmp_path / "workspace-alias"
+    alias.symlink_to(subdir, target_is_directory=True)
+    # Damaged checkout: git discovery fails, but the .git entry is still there.
+    (repo / ".git" / "HEAD").write_text("broken HEAD\n")
+    for name, path in (("direct", subdir), ("aliased", alias)):
+        outcome, _ = sw.prepare_subagent_worktree(
+            str(path), name, enabled=True, required=True, local_backend=True
+        )
+        assert outcome["status"] == "blocked", (name, outcome)
+        assert not outcome.get("no_checkout"), (name, outcome)
+
+
+def test_real_non_git_folder_and_alias_are_still_confirmed_non_git(tmp_path):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    alias = tmp_path / "plain-alias"
+    alias.symlink_to(plain, target_is_directory=True)
+    assert sw.is_confirmed_non_git_workspace(str(plain)) is True
+    assert sw.is_confirmed_non_git_workspace(str(alias)) is True
+    outcome, _ = sw.prepare_subagent_worktree(
+        str(alias), "plain-child", enabled=True, required=True, local_backend=True
+    )
+    assert outcome["status"] == "shared" and outcome["no_checkout"] is True
+
+
+def test_unreadable_git_probe_is_not_confirmed_non_git(tmp_path, monkeypatch):
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    real_lstat = sw.os.lstat
+
+    def flaky(path, *a, **k):
+        if str(path).endswith(".git"):
+            raise PermissionError(13, "denied")
+        return real_lstat(path, *a, **k)
+
+    monkeypatch.setattr(sw.os, "lstat", flaky)
+    assert sw.is_confirmed_non_git_workspace(str(plain)) is False

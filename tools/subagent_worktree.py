@@ -114,13 +114,34 @@ def is_confirmed_non_git_workspace(path: Optional[str]) -> bool:
         return False
     if not os.path.isdir(candidate) or resolve_repo_root(candidate):
         return False
-    current = candidate
-    while True:
-        if os.path.lexists(os.path.join(current, ".git")):
+    try:
+        real = os.path.realpath(candidate)
+    except Exception:
+        return False
+    # A directory alias (symlink) can hide the real ``.git`` ancestor, so both
+    # the spelled path and the resolved path must be free of one.
+    for start in dict.fromkeys((candidate, real)):
+        if _has_git_entry_above(start) is not False:
             return False
+    return True
+
+
+def _has_git_entry_above(start: str) -> Optional[bool]:
+    """True/False if a ``.git`` entry exists at/above *start*; None if unreadable."""
+    current = start
+    while True:
+        try:
+            os.lstat(os.path.join(current, ".git"))
+            return True
+        except FileNotFoundError:
+            pass
+        except NotADirectoryError:
+            pass
+        except OSError:
+            return None
         parent = os.path.dirname(current)
         if parent == current:
-            return True
+            return False
         current = parent
 
 
