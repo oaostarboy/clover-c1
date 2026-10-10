@@ -40,3 +40,9 @@ def test_dev_sandbox_installer_shortcut_uses_local_fixture_route() -> None:
         "clover-c1.",
         "/install.sh",
     )
+
+
+def test_stage2_node_trusts_the_sandbox_proxy_ca() -> None:
+    script = (ROOT / "scripts/sandbox/stage2-run.sh").read_text(encoding="utf-8")
+    assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/ca.pem" in script
+    assert "--setenv NODE_EXTRA_CA_CERTS /work/certs/real-ca.pem" not in script

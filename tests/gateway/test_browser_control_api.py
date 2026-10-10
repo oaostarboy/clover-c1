@@ -969,4 +969,12 @@ async def test_readiness_test_cleans_up_actual_fixture_on_early_failure(monkeypa
     assert finished.is_set()
     adapter = observations["adapter"]
     scope = observations["scope"]
-    assert scope is None or adapter._browser_control_broker.select(scope, "browser_snapshot") is None
+    if scope is not None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 1.0
+        while adapter._browser_control_broker.select(scope, "browser_snapshot") is not None:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                pytest.fail("browser controller remained selectable after websocket teardown")
+            await asyncio.sleep(min(0.01, remaining))
+        assert adapter._browser_control_broker.select(scope, "browser_snapshot") is None
