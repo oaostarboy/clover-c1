@@ -15,8 +15,10 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
-## 1.4.0 | Clover C1.4 | 2026-10-10
+## 1.4.0 | Clover C1.4 | TBD
+<!-- draft -->
 - Asking for a helper works in any chat again, even before the bot has run a command there.
+- After /update you see what's new whenever the new version is actually running, even if part of the update reported a problem.
 
 ## 1.3.0 | Clover C1.3 | 2026-10-10
 - A busy database or a website firewall no longer cuts off replies or blames your API key.

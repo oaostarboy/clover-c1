@@ -4049,18 +4049,40 @@ def _get_channel_override(
     return None
 
 
-def _update_whats_new_text(*marker_paths: Path) -> str:
-    """Version name + "what's new" for a SUCCESSFUL /update's completion message.
+def _update_run_rolled_back(*marker_paths: Path) -> bool:
+    """True when THIS /update run's receipt says it was rolled back. Never raises."""
+    try:
+        from clover_cli.release_notes import this_run_rolled_back
 
-    Rendered by whichever gateway sends the completion message; after a chat
-    ``/update`` that is the restarted gateway, i.e. the NEW code, so even a
-    first hop from an older release shows it. Read before the pending markers
-    are deleted. Returns "" on any problem (the message is then unchanged).
+        return this_run_rolled_back(_clover_home, marker_paths)
+    except Exception:
+        return False
+
+
+def _update_whats_new_text(
+    *marker_paths: Path,
+    succeeded: bool = True,
+    refused: bool = False,
+    rolled_back: bool = False,
+) -> str:
+    """Version name + "what's new" for a /update completion message.
+
+    The one gate for all three places the gateway reports an update's end
+    (streaming watcher, updater-died conclusion, legacy notifier), for
+    success, partial, failed and timed-out runs alike. Notes appear iff the
+    run was not refused or rolled back and this process's immutable boot
+    identity differs from the origin the pending marker recorded (see
+    ``clover_cli.release_notes.update_whats_new_section``). Read before the
+    pending markers are deleted. Returns "" on any problem or when there is
+    no proof (the message is then unchanged).
     """
     try:
-        from clover_cli.release_notes import section_for_update_markers
+        from clover_cli.release_notes import update_whats_new_section
 
-        return section_for_update_markers(_clover_home, marker_paths)
+        return update_whats_new_section(
+            _clover_home, marker_paths,
+            succeeded=succeeded, refused=refused, rolled_back=rolled_back,
+        )
     except Exception:
         return ""
 
@@ -26847,9 +26869,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             metadata=_non_conversational_metadata(metadata, platform=platform),
                         )
                     else:
+                        from clover_cli.update_contract import UPDATE_EXIT_REFUSED
+
+                        _fail_text = "❌ Clover update failed (exit code {}).".format(exit_code)
+                        # A partial/failed run can still have restarted onto
+                        # new code; the helper proves that from the boot
+                        # identity and is silent for refused runs.
+                        _whats_new = _update_whats_new_text(
+                            claimed_path, pending_path,
+                            succeeded=False,
+                            refused=exit_code == UPDATE_EXIT_REFUSED,
+                            rolled_back=_update_run_rolled_back(claimed_path, pending_path),
+                        )
+                        if _whats_new:
+                            _fail_text += "\n\n" + _whats_new
                         await adapter.send(
                             chat_id,
-                            "❌ Clover update failed (exit code {}).".format(exit_code),
+                            _fail_text,
                             metadata=_non_conversational_metadata(metadata, platform=platform),
                         )
                     logger.info("Update finished (exit=%s), notified %s", exit_code, session_key)
@@ -26975,10 +27011,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             logger.warning("Update watcher timed out after %.0fs", timeout)
             exit_code_path.write_text("124", encoding="utf-8")
             await _flush_buffer()
+            # A restarted gateway that resumed a hung updater may already run
+            # the new code; same gate, never a success one-liner.
+            _timeout_text = "❌ Clover update timed out after 30 minutes."
+            _whats_new = _update_whats_new_text(
+                claimed_path, pending_path,
+                succeeded=False,
+                rolled_back=_update_run_rolled_back(claimed_path, pending_path),
+            )
+            if _whats_new:
+                _timeout_text += "\n\n" + _whats_new
             try:
                 await adapter.send(
                     chat_id,
-                    "❌ Clover update timed out after 30 minutes.",
+                    _timeout_text,
                     metadata=_non_conversational_metadata(metadata, platform=platform),
                 )
             except Exception:
@@ -27126,12 +27172,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 f"❌ Clover update did not complete (updater died; last "
                 f"recorded outcome: {detail}). Run `clover doctor` or retry."
             )
+            from clover_cli.release_notes import is_rollback_outcome
+
+            _whats_new = _update_whats_new_text(
+                claimed_path, pending_path,
+                succeeded=False, refused=detail == "refused",
+                rolled_back=is_rollback_outcome(detail),
+            )
+            if _whats_new:
+                text += "\n\n" + _whats_new
         else:
             text = (
                 "⚠️ The update process ended without reporting a result. The "
                 "gateway restarted fine — run `clover --version` or retry the "
                 "update to confirm."
             )
+            _whats_new = _update_whats_new_text(
+                claimed_path, pending_path, succeeded=False
+            )
+            if _whats_new:
+                text += "\n\n" + _whats_new
 
         if adapter is not None and chat_id:
             try:
@@ -27262,9 +27322,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     UPDATE_REFUSED_HEADLINE,
                 )
 
-                _whats_new = (
-                    _update_whats_new_text(claimed_path, pending_path)
-                    if exit_code == 0 else ""
+                _whats_new = _update_whats_new_text(
+                    claimed_path, pending_path,
+                    succeeded=exit_code == 0,
+                    refused=exit_code == UPDATE_EXIT_REFUSED,
+                    rolled_back=_update_run_rolled_back(claimed_path, pending_path),
                 )
                 _whats_new_block = f"\n\n{_whats_new}" if _whats_new else ""
                 if output:
@@ -27275,7 +27337,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     elif exit_code == UPDATE_EXIT_REFUSED:
                         msg = f"{UPDATE_REFUSED_HEADLINE}\n\n```\n{output}\n```"
                     else:
-                        msg = f"❌ Clover update failed.\n\n```\n{output}\n```"
+                        msg = f"❌ Clover update failed.{_whats_new_block}\n\n```\n{output}\n```"
                 elif exit_code == 0:
                     msg = f"✅ Clover update finished successfully.{_whats_new_block}"
                 elif exit_code == UPDATE_EXIT_REFUSED:
@@ -27291,7 +27353,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _refusal = None
                     msg = f"{UPDATE_REFUSED_HEADLINE}\n\n{update_refused_detail(_refusal)}"
                 else:
-                    msg = "❌ Clover update failed. Check the gateway logs or run `clover update` manually for details."
+                    msg = (
+                        "❌ Clover update failed. Check the gateway logs or run "
+                        f"`clover update` manually for details.{_whats_new_block}"
+                    )
                 await adapter.send(
                     chat_id,
                     msg,
@@ -34129,6 +34194,15 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # in-memory module.
     from gateway.code_skew import record_boot_fingerprint
     record_boot_fingerprint()
+
+    # Same moment, different question: which code did THIS process load?
+    # The post-/update "what's new" proof compares against it, so it must be
+    # taken before any update can pull under us and never be refreshed.
+    try:
+        from clover_cli.build_info import capture_boot_identity
+        capture_boot_identity()
+    except Exception:
+        logger.debug("Boot identity capture failed", exc_info=True)
 
     # ── Duplicate-instance guard ──────────────────────────────────────
     # Prevent two gateways from running under the same CLOVER_HOME.

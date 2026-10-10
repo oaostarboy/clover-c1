@@ -108,7 +108,8 @@ def home(tmp_path, monkeypatch):
     notes = tmp_path / "RELEASE_NOTES.md"
     notes.write_text(NOTES, encoding="utf-8")
     monkeypatch.setattr(rn, "default_notes_path", lambda: notes)
-    monkeypatch.setattr(rn, "current_code_identity", lambda: ("1.1.1", "new"))
+    # The restarted gateway's immutable boot identity is the proof of new code.
+    monkeypatch.setattr(rn, "boot_code_identity", lambda: ("1.1.1", "new"))
     with patch("gateway.run._clover_home", h):
         yield h
 
@@ -172,7 +173,9 @@ async def test_malformed_exit_code_never_turns_a_failure_into_success(home, rece
     await runner._watch_update_progress(poll_interval=0.05, stream_interval=0.05, timeout=5.0)
 
     assert "❌ Clover update failed (exit code 1)." in _sent(adapter)
-    assert "Now on Clover" not in _sent(adapter)
+    # Never the success headline.  (A failed run that restarted onto new code
+    # may still list what's new under the failure headline; that is not success.)
+    assert "✅" not in _sent(adapter)
 
 
 @pytest.mark.asyncio

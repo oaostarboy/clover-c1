@@ -9,12 +9,18 @@ finished" chat message.  It adds no message of its own.
 
 Design points (each one is a real failure class for ``/update``):
 
-* **The restarted gateway renders it.**  The old updater/gateway cannot know
-  about this feature, so the first hop from an older release works only because
-  the *new* gateway (restarted onto new code) reads the notes from disk and
-  renders them.  The "from" version is therefore recovered from what an old
-  updater already leaves behind (this run's update receipt), or, for gateways
-  that have this feature, from the pending marker written at ``/update`` time.
+* **The restarted gateway renders it.**  The *new* gateway (restarted onto
+  new code) reads the notes from disk and renders them.  Its own boot identity
+  (see ``clover_cli.build_info.capture_boot_identity``) is the proof that new
+  code is running: notes are shown iff the update was not refused or rolled
+  back, and the pending marker's recorded origin differs from what this process
+  booted on -- in the success AND the partial/failed messages, since a
+  half-failed update can still have restarted onto new code.
+  ``update_whats_new_section`` is the one gate every gateway reporting site
+  uses.  Markers written by this code record the boot sha (``from_identity:
+  "boot"``); markers written by <=1.3.x do not, and their ``from_sha`` may be a
+  refreshed on-disk HEAD, so those are proven by the version instead (see
+  ``update_whats_new_section``).
 * **Never reuse an old receipt.**  A receipt only counts when it started after
   this run's pending marker was written.
 * **Never fail an update report.**  Every public function swallows errors and
@@ -33,6 +39,14 @@ from pathlib import Path
 from typing import Iterable, Optional
 
 NOTES_FILENAME = "RELEASE_NOTES.md"
+
+# Value of the pending marker's ``from_identity`` field: ``from_sha`` was taken
+# from the process's immutable boot identity, not the refreshable cache.
+BOOT_IDENTITY_MARKER = "boot"
+# Receipt outcomes of a run that ended with the old code put back.
+_ROLLBACK_OUTCOMES = frozenset(
+    {"rolled-back", "rolled_back", "rollback-unhealthy", "rollback-failed"}
+)
 
 # Telegram-friendly: a whole block of at most this many lines (header included).
 MAX_SECTION_LINES = 10
@@ -327,8 +341,61 @@ def read_this_runs_receipt(clover_home: Path, marker_mtime: Optional[float]) -> 
     return receipt
 
 
+def is_rollback_outcome(outcome: object) -> bool:
+    """True for a receipt outcome meaning this run's update was rolled back."""
+    return isinstance(outcome, str) and outcome in _ROLLBACK_OUTCOMES
+
+
+def this_run_rolled_back(clover_home: Path, marker_paths: Iterable[Path]) -> bool:
+    """True when THIS run's receipt says the update was rolled back.
+
+    The rollback watcher rewrites the run's ``latest.json`` outcome and also
+    writes exit code 1 (``publish_gateway_verdict``), so an exit code alone
+    looks like any failure.  Only a receipt that started after this run's
+    pending marker counts; a stale one is never read.  Never raises.
+    """
+    try:
+        _, mtime = read_marker(marker_paths)
+        receipt = read_this_runs_receipt(Path(clover_home), mtime)
+        return receipt is not None and is_rollback_outcome(receipt.get("outcome"))
+    except Exception:
+        return False
+
+
+def boot_code_identity() -> tuple[Optional[str], Optional[str]]:
+    """``(version, sha)`` THIS process started on.  Never raises.
+
+    The sha comes only from the immutable boot identity the process captured
+    at startup; it is ``None`` when none was captured.  It never falls back to
+    ``current_code_identity()``, whose sha is refreshed to on-disk HEAD after
+    an update pulls code and so cannot prove what is running.  The version is
+    the imported ``clover_cli.__version__`` (fixed for the process lifetime).
+    """
+    version: Optional[str] = None
+    sha: Optional[str] = None
+    try:
+        from clover_cli import __version__
+
+        version = __version__
+    except Exception:
+        pass
+    try:
+        from clover_cli.build_info import get_boot_identity
+
+        identity = get_boot_identity() or {}
+        sha = identity.get("sha") or None
+    except Exception:
+        pass
+    return version, sha
+
+
 def current_code_identity() -> tuple[Optional[str], Optional[str]]:
-    """``(version, sha)`` of the code THIS process runs.  Never raises."""
+    """``(version, sha)`` of the checkout's CURRENT identity.  Never raises.
+
+    The sha is the refreshable ``get_code_identity()`` cache: after an update
+    pulled new code it describes the checkout on disk, not necessarily the
+    code this process loaded.  Use ``boot_code_identity()`` to ask what is
+    running."""
     version: Optional[str] = None
     sha: Optional[str] = None
     try:
@@ -359,13 +426,23 @@ def read_marker(paths: Iterable[Path]) -> tuple[Optional[dict], Optional[float]]
 
 def pending_marker_origin() -> dict:
     """Fields stored in the ``/update`` pending marker so the restarted gateway
-    can tell where this run started from.  Never raises."""
-    version, sha = current_code_identity()
+    can tell where this run started from.  Never raises.
+
+    Written from the immutable boot identity, not the refreshable cache: a
+    second ``/update`` before any restart would otherwise record the code the
+    first one pulled, and the eventual restart could never show notes.  A
+    process with no captured boot sha records no ``from_sha`` (no notes
+    later) rather than guessing."""
+    version, sha = boot_code_identity()
     out: dict = {}
     if version:
         out["from_version"] = version
     if sha:
         out["from_sha"] = sha
+    if out:
+        # Tells the restarted gateway that from_sha is the immutable boot sha
+        # (markers from <=1.3.x have no such field; see update_whats_new_section).
+        out["from_identity"] = BOOT_IDENTITY_MARKER
     return out
 
 
@@ -381,13 +458,14 @@ def build_post_update_section(
     """The text to append to a *successful* ``/update`` completion message.
 
     ``pending`` is the parsed pending marker, ``marker_mtime`` its mtime.  The
-    running version/sha default to this process's own (which, in a restarted
-    gateway, is the new code).  Returns ``""`` on any problem so the caller's
-    existing message is sent unchanged.
+    running version/sha default to this process's boot identity (which, in a
+    restarted gateway, is the new code).  Returns ``""`` on any problem so the
+    caller's existing message is sent unchanged.  Gateways go through
+    ``update_whats_new_section``, which gates this on the boot identity.
     """
     try:
         if running_version is None or running_sha is None:
-            cur_version, cur_sha = current_code_identity()
+            cur_version, cur_sha = boot_code_identity()
             running_version = running_version or cur_version
             running_sha = running_sha or cur_sha
         if not running_version:
@@ -430,6 +508,77 @@ def build_post_update_section(
             to_sha=running_sha,
             pulled_new_code=pulled_new_code,
             origin_trusted=origin_trusted,
+        )
+    except Exception:
+        return ""
+
+
+def update_whats_new_section(
+    clover_home: Path,
+    marker_paths: Iterable[Path],
+    *,
+    succeeded: bool,
+    refused: bool = False,
+    rolled_back: bool = False,
+    notes_path: Optional[Path] = None,
+) -> str:
+    """The block to append to ANY ``/update`` completion message.
+
+    One eligibility rule for every reporting site and outcome (success,
+    partial, failed, timed out).  Never notes for a ``refused`` or
+    ``rolled_back`` run.  Otherwise this process must provably run different
+    code than the update started from:
+
+    * Marker written by this code (``from_identity == "boot"``): its
+      ``from_sha`` is the boot sha of the gateway that took ``/update``; notes
+      iff that is present and differs from this process's boot sha.
+    * Marker written by <=1.3.x (no ``from_identity``): its ``from_sha`` came
+      from the refreshable cache and may already be the NEW on-disk HEAD (an
+      earlier pull that never restarted that gateway), so it proves nothing
+      when it equals our sha.  Its ``from_version`` is
+      ``clover_cli.__version__`` of the old process -- a literal in
+      ``clover_cli/__init__.py`` bound at import, never refreshed -- so a boot
+      version different from it proves new code is running.  Equal versions
+      fall back to the sha rule.  The receipt's sha is never proof.
+
+    When no new code is running a ``succeeded`` run still gets the honest
+    one-liner ("Already up to date" / "New code was downloaded; send
+    /restart"); a failed one gets nothing, so "Already up to date" is never
+    printed on a failure message.  Read the markers BEFORE they are deleted.
+    Never raises; ``""`` means "append nothing".
+    """
+    try:
+        if refused or rolled_back:
+            return ""
+        boot_version, boot_sha = boot_code_identity()
+        pending, mtime = read_marker(marker_paths)
+        if not isinstance(pending, dict):
+            return ""
+
+        if pending.get("from_identity") != BOOT_IDENTITY_MARKER:
+            from_version = pending.get("from_version")
+            lo, hi = parse_version(from_version), parse_version(boot_version)
+            if lo is not None and hi is not None and lo != hi:
+                return format_update_section(
+                    entries=load_release_notes(notes_path),
+                    to_version=boot_version,
+                    from_version=str(from_version),
+                    from_sha=None,
+                    to_sha=boot_sha,
+                    pulled_new_code=False,
+                    origin_trusted=True,
+                )
+
+        from_sha = pending.get("from_sha")
+        if not boot_version or not boot_sha:
+            return ""
+        if not isinstance(from_sha, str) or not from_sha.strip():
+            return ""
+        if from_sha == boot_sha and not succeeded:
+            return ""
+        return build_post_update_section(
+            Path(clover_home), pending, mtime, notes_path=notes_path,
+            running_version=boot_version, running_sha=boot_sha,
         )
     except Exception:
         return ""

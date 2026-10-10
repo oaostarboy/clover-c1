@@ -257,14 +257,14 @@ def test_truncation_never_leaves_a_heading_as_the_last_kept_line():
 # ---------------------------------------------------------------------------
 
 
-def _write_receipt(home: Path, *, started: datetime, pre_v, pre_sha, post_sha):
+def _write_receipt(home: Path, *, started: datetime, pre_v, pre_sha, post_sha, outcome="success"):
     d = home / "logs" / "update_receipts"
     d.mkdir(parents=True, exist_ok=True)
     (d / "latest.json").write_text(
         json.dumps(
             {
                 "started_at": started.isoformat(),
-                "outcome": "success",
+                "outcome": outcome,
                 "pre_update": {"version": pre_v, "sha": pre_sha},
                 "post_update": {"version": "1.1.1", "sha": post_sha},
             }
@@ -273,7 +273,12 @@ def _write_receipt(home: Path, *, started: datetime, pre_v, pre_sha, post_sha):
     )
 
 
-def _marker(home: Path, **fields) -> Path:
+def _marker(home: Path, *, legacy: bool = False, **fields) -> Path:
+    """A pending marker.  By default it is in the form this code writes (origin
+    recorded from the boot identity, ``from_identity: "boot"``); ``legacy=True``
+    is the form a <=1.3.x gateway wrote (no ``from_identity``)."""
+    if not legacy and ("from_version" in fields or "from_sha" in fields):
+        fields.setdefault("from_identity", "boot")
     p = home / ".update_pending.json"
     p.write_text(json.dumps({"platform": "telegram", "chat_id": "1", **fields}), encoding="utf-8")
     return p
@@ -369,6 +374,11 @@ def test_pending_marker_origin_records_running_version_and_sha():
 # ---------------------------------------------------------------------------
 
 
+def _boot(monkeypatch, version, sha):
+    """Set the immutable identity the gateway captured at start."""
+    monkeypatch.setattr(rn, "boot_code_identity", lambda: (version, sha), raising=False)
+
+
 def _runner():
     from gateway.run import GatewayRunner
 
@@ -390,8 +400,11 @@ def _runner():
 def home(tmp_path, notes_file, monkeypatch):
     h = tmp_path / "clover"
     h.mkdir()
-    # The restarted gateway runs the NEW code: v1.1.1 at sha "new".
+    # The restarted gateway runs the NEW code: v1.1.1 at sha "new". The
+    # refreshable on-disk identity says the same; tests that need them to
+    # differ override the boot identity via _boot().
     monkeypatch.setattr(rn, "current_code_identity", lambda: ("1.1.1", "new"))
+    _boot(monkeypatch, "1.1.1", "new")
     with patch("gateway.run._clover_home", h):
         yield h
 
@@ -438,13 +451,13 @@ async def test_legacy_notifier_without_output_still_shows_version(home):
 
 
 @pytest.mark.asyncio
-async def test_failed_update_messages_are_unchanged_and_carry_no_notes(home):
+async def test_failed_update_messages_are_unchanged_when_the_running_code_did_not_change(home):
     from gateway.config import Platform
 
     runner = _runner()
     adapter = AsyncMock()
     runner.adapters = {Platform.TELEGRAM: adapter}
-    _marker(home, from_version="1.1.0", from_sha="old")
+    _marker(home, from_version="1.1.1", from_sha="new")  # still on the code it started from
     (home / ".update_exit_code").write_text("1", encoding="utf-8")
 
     await runner._send_update_notification()
@@ -473,13 +486,13 @@ async def test_streaming_watcher_final_message_has_version_and_notes_in_one_mess
 
 
 @pytest.mark.asyncio
-async def test_streaming_watcher_failure_message_is_unchanged(home):
+async def test_streaming_watcher_failure_message_is_unchanged_when_the_running_code_did_not_change(home):
     from gateway.config import Platform
 
     runner = _runner()
     adapter = AsyncMock()
     runner.adapters = {Platform.TELEGRAM: adapter}
-    _marker(home, from_version="1.1.0", from_sha="old", session_key="agent:main:telegram:dm:1")
+    _marker(home, from_version="1.1.1", from_sha="new", session_key="agent:main:telegram:dm:1")
     (home / ".update_exit_code").write_text("1", encoding="utf-8")
 
     await runner._watch_update_progress(poll_interval=0.05, stream_interval=0.05, timeout=5.0)
@@ -489,15 +502,15 @@ async def test_streaming_watcher_failure_message_is_unchanged(home):
 
 
 @pytest.mark.asyncio
-async def test_updater_died_after_restart_new_gateway_adds_notes_for_the_first_hop(home):
+async def test_updater_died_after_restart_with_marker_from_sha_adds_notes(home):
     """The real chat /update: the updater is the old gateway's child and dies at
-    restart; the NEW gateway concludes from this run's receipt. The old gateway
-    never wrote from_version, so the receipt supplies it."""
+    restart; the NEW gateway concludes from this run's receipt and shows the
+    notes because its own boot sha differs from the marker's from_sha."""
     from gateway.config import Platform
     from tests.gateway.restart_test_helpers import make_restart_runner
 
     runner, adapter = make_restart_runner()
-    marker = _marker(home)  # as written by a 1.1.0 gateway: no from_version
+    marker = _marker(home, from_version="1.1.0", from_sha="old")
     _write_receipt(
         home, started=datetime.now(timezone.utc) + timedelta(seconds=1),
         pre_v="1.1.0", pre_sha="old", post_sha="new",
@@ -521,6 +534,33 @@ async def test_updater_died_after_restart_new_gateway_adds_notes_for_the_first_h
     assert "Clover C1.1.1 (v1.1.1)" in msg and "updated from v1.1.0" in msg
     assert "• Fix A." in msg
     assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_updater_died_after_restart_from_a_gateway_without_from_sha_shows_no_notes(home):
+    """An old gateway (pre-feature) wrote no from_sha. The receipt's "before"
+    cannot prove the running code is new (a re-exec'd updater child sees the
+    new checkout as its before), so the message carries no notes at all."""
+    from gateway.config import Platform
+    from tests.gateway.restart_test_helpers import make_restart_runner
+
+    runner, adapter = make_restart_runner()
+    _marker(home)  # as written by an old gateway: no from_*
+    _write_receipt(
+        home, started=datetime.now(timezone.utc) + timedelta(seconds=1),
+        pre_v="1.1.0", pre_sha="old", post_sha="new",
+    )
+    paths = [home / n for n in (".update_pending.json", ".update_pending.claimed.json",
+                                ".update_output.txt", ".update_exit_code", ".update_prompt.json")]
+
+    await runner._conclude_update_after_updater_death(
+        *paths, adapter=adapter, chat_id="42", session_key=None,
+        metadata=None, platform=Platform.TELEGRAM,
+    )
+
+    msg = adapter.sent[0]
+    assert msg.startswith("✅ Clover update finished.")
+    assert "What's new" not in msg and "Fix A." not in msg and "updated from" not in msg
 
 
 @pytest.mark.asyncio
@@ -592,3 +632,489 @@ def test_receipt_only_origin_never_claims_already_up_to_date(tmp_path, notes_fil
     )
     assert text == "You are on Clover C1.1.1 (v1.1.1)."
     assert "Already up to date" not in text
+
+
+# ---------------------------------------------------------------------------
+# One eligibility rule at all three sites: notes iff the restarted gateway
+# provably runs different code than the one /update started from.
+# ---------------------------------------------------------------------------
+
+SITES = ("watcher", "legacy", "died")
+# The rollback watcher publishes its verdict as exit code 1 (publish_gateway_verdict).
+_EXIT_CODE = {"success": "0", "partial": "1", "failed": "1", "refused": "2", "rolled-back": "1"}
+_FAILURE_HEADLINE = {
+    "watcher": "❌ Clover update failed (exit code 1).",
+    "legacy": "❌ Clover update failed.",
+    "died": "❌ Clover update did not complete",
+}
+_SESSION_KEY = "agent:main:telegram:dm:1"
+
+
+async def _drive(site, home, *, outcome, output="", receipt_age=timedelta(seconds=1), pre=("1.1.0", "old")):
+    """Run one completion path for an update that ended with ``outcome``
+    (success | partial | failed | refused | rolled-back) and return all text sent.
+
+    The marker must already exist.  A receipt is always written, as the real
+    updater does; ``receipt_age`` negative makes it older than the marker."""
+    from gateway.config import Platform
+    from tests.gateway.restart_test_helpers import make_restart_runner
+
+    _write_receipt(
+        home, started=datetime.now(timezone.utc) + receipt_age,
+        pre_v=pre[0], pre_sha=pre[1], post_sha="new", outcome=outcome,
+    )
+    if output:
+        (home / ".update_output.txt").write_text(output, encoding="utf-8")
+    if site == "died":
+        runner, adapter = make_restart_runner()
+        paths = [home / n for n in (".update_pending.json", ".update_pending.claimed.json",
+                                    ".update_output.txt", ".update_exit_code", ".update_prompt.json")]
+        await runner._conclude_update_after_updater_death(
+            *paths, adapter=adapter, chat_id="42", session_key=None,
+            metadata=None, platform=Platform.TELEGRAM,
+        )
+        return "\n".join(adapter.sent)
+    runner = _runner()
+    adapter = AsyncMock()
+    runner.adapters = {Platform.TELEGRAM: adapter}
+    (home / ".update_exit_code").write_text(_EXIT_CODE[outcome], encoding="utf-8")
+    if site == "watcher":
+        await runner._watch_update_progress(poll_interval=0.05, stream_interval=0.05, timeout=5.0)
+    else:
+        await runner._send_update_notification()
+    return _sent_text(adapter)
+
+
+def _no_notes(text):
+    assert "What's new" not in text
+    assert "• Fix" not in text
+    assert "updated from" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+@pytest.mark.parametrize("outcome", ["partial", "failed"])
+async def test_partial_update_restarted_on_new_code_shows_whats_new(home, site, outcome):
+    _marker(home, from_version="1.1.0", from_sha="old", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome=outcome)
+
+    assert _FAILURE_HEADLINE[site] in text  # still reported as a problem
+    assert "Clover C1.1.1 (v1.1.1)" in text and "updated from v1.1.0" in text
+    assert "• Fix A." in text and "• Fix C." in text
+    assert "Already up to date" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+async def test_successful_update_restarted_on_new_code_shows_whats_new(home, site):
+    _marker(home, from_version="1.1.0", from_sha="old", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome="success")
+
+    assert "✅ Clover update finished" in text
+    assert "updated from v1.1.0" in text and "• Fix A." in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output", ["", "✗ dependency install failed"])
+async def test_legacy_notifier_failure_notes_in_output_and_no_output_branches(home, output):
+    _marker(home, from_version="1.1.0", from_sha="old")
+
+    text = await _drive("legacy", home, outcome="partial", output=output)
+
+    assert text.startswith("❌ Clover update failed.")
+    assert "• Fix A." in text
+    assert "Already up to date" not in text
+    if output:
+        assert text.index("• Fix A.") < text.index("```")  # notes first, raw output last
+        assert output in text
+    else:
+        assert "```" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+@pytest.mark.parametrize("outcome", ["partial", "failed"])
+async def test_pulled_but_not_restarted_shows_no_notes_and_never_claims_up_to_date(home, monkeypatch, site, outcome):
+    # The gateway is still the process it was when /update started.
+    _boot(monkeypatch, "1.1.0", "old")
+    _marker(home, from_version="1.1.0", from_sha="old", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome=outcome)
+
+    _no_notes(text)
+    assert _FAILURE_HEADLINE[site] in text
+    assert "Already up to date" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+async def test_successful_pull_without_restart_says_restart_instead_of_notes(home, monkeypatch, site):
+    _boot(monkeypatch, "1.1.0", "old")
+    _marker(home, from_version="1.1.0", from_sha="old", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome="success")
+
+    _no_notes(text)
+    assert "send /restart" in text
+    assert "Already up to date" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+@pytest.mark.parametrize("output", ["", "refused: another update is running"])
+async def test_refused_update_never_shows_notes(home, site, output):
+    # New code is running (e.g. an earlier run restarted us) but THIS run was refused.
+    _marker(home, from_version="1.1.0", from_sha="old", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome="refused", output=output if site != "died" else "")
+
+    _no_notes(text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+@pytest.mark.parametrize("outcome", ["success", "failed"])
+async def test_marker_without_from_sha_shows_no_notes(home, site, outcome):
+    _marker(home, from_version="1.1.0", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome=outcome)
+
+    _no_notes(text)
+    assert "Already up to date" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+@pytest.mark.parametrize("outcome", ["success", "failed"])
+async def test_unknown_boot_identity_shows_no_notes_even_if_disk_identity_is_known(home, monkeypatch, site, outcome):
+    # current_code_identity() (refreshable, on-disk) still says "new"; the
+    # gateway never captured a boot identity, so there is no proof.
+    _boot(monkeypatch, None, None)
+    _marker(home, from_version="1.1.0", from_sha="old", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome=outcome)
+
+    _no_notes(text)
+    assert "Already up to date" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", ["watcher", "legacy"])
+@pytest.mark.parametrize("outcome", ["success", "failed"])
+async def test_rollback_to_an_older_version_never_replays_notes(home, monkeypatch, site, outcome):
+    _boot(monkeypatch, "1.1.0", "older")
+    _marker(home, from_version="1.1.1", from_sha="new", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome=outcome, pre=("1.1.1", "new"))
+
+    _no_notes(text)
+    assert "Already up to date" not in text
+
+
+@pytest.mark.asyncio
+async def test_updater_died_rolled_back_says_so_and_shows_no_notes(home):
+    _marker(home, from_version="1.1.0", from_sha="old")
+
+    text = await _drive("died", home, outcome="rolled-back")
+
+    assert "went back to the version" in text
+    _no_notes(text)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+@pytest.mark.parametrize("outcome", ["success", "failed"])
+async def test_same_version_different_sha_names_the_version_without_notes(home, site, outcome):
+    _marker(home, from_version="1.1.1", from_sha="old", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome=outcome, pre=("1.1.1", "old"))
+
+    _no_notes(text)
+    assert "Now on Clover C1.1.1 (v1.1.1)." in text
+    assert "Already up to date" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+async def test_stale_receipt_never_supplies_the_starting_point(home, site):
+    # A receipt from days ago (pre version 1.0.0) must not become the "from".
+    _marker(home, from_version="1.1.0", from_sha="old", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome="success", receipt_age=-timedelta(days=3), pre=("1.0.0", "ancient"))
+
+    assert "v1.0.0" not in text
+    assert "Day one." not in text and "First named release." not in text
+    if site == "died":
+        assert "without reporting a result" in text  # stale receipt is not a verdict
+
+
+# ---------------------------------------------------------------------------
+# Marker origin + shared helper, end to end with real build_info + a real repo
+# ---------------------------------------------------------------------------
+
+
+def test_pending_marker_origin_uses_boot_sha_not_the_refreshable_identity(monkeypatch):
+    monkeypatch.setattr(rn, "current_code_identity", lambda: ("9.9.9", "refreshed-on-disk"))
+    _boot(monkeypatch, "1.1.0", "boot")
+    origin = rn.pending_marker_origin()
+    assert origin["from_sha"] == "boot"
+    assert origin["from_version"] == "1.1.0"
+
+
+def test_pending_marker_origin_without_boot_identity_omits_from_sha(monkeypatch):
+    monkeypatch.setattr(rn, "current_code_identity", lambda: ("1.1.1", "refreshed-on-disk"))
+    _boot(monkeypatch, None, None)
+    origin = rn.pending_marker_origin()
+    assert "from_sha" not in origin  # never borrow the refreshable cache
+
+
+def _git(repo, *args):
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", "-C", str(repo), *args],
+        check=True, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+    ).stdout.strip()
+
+
+def _commit(repo, message):
+    (repo / "f.txt").write_text(message, encoding="utf-8")
+    _git(repo, "add", "f.txt")
+    _git(repo, "commit", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def test_repeated_partial_updates_before_restart_keep_the_boot_sha(tmp_path, monkeypatch, notes_file):
+    """Two /update runs before any restart: each pull moves the on-disk HEAD
+    and update_receipt refreshes the shared cache to it.  The second marker
+    must still record the sha the gateway actually BOOTED on, and the
+    eventually-restarted gateway must show notes since that start."""
+    from clover_cli import build_info
+
+    repo = tmp_path / "checkout"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    monkeypatch.setattr(build_info, "_PROJECT_ROOT", repo)
+    monkeypatch.setattr(build_info, "_BUILD_SHA_FILE", tmp_path / "no-build-sha")
+    monkeypatch.setattr(build_info, "_boot_identity", None)
+    monkeypatch.setattr(build_info, "_code_identity_cache", None)
+    # Version is what the process imported, not what is on disk.
+    monkeypatch.setattr("clover_cli.__version__", "1.1.0")
+
+    boot_sha = _commit(repo, "boot")
+    build_info.capture_boot_identity()
+    assert rn.pending_marker_origin() == {
+        "from_version": "1.1.0", "from_sha": boot_sha, "from_identity": "boot",
+    }
+
+    pulled_1 = _commit(repo, "pull 1")  # update 1: pulled, partial, no restart
+    assert build_info.get_code_identity(refresh=True)["sha"] == pulled_1
+    assert rn.pending_marker_origin()["from_sha"] == boot_sha
+
+    pulled_2 = _commit(repo, "pull 2")  # update 2, still no restart
+    assert build_info.get_code_identity(refresh=True)["sha"] == pulled_2
+    marker = _marker(tmp_path, **rn.pending_marker_origin())
+    assert json.loads(marker.read_text(encoding="utf-8"))["from_sha"] == boot_sha
+
+    # Restart: a new process captures its own boot identity from disk.
+    monkeypatch.setattr(build_info, "_boot_identity", None)
+    monkeypatch.setattr(build_info, "_code_identity_cache", None)
+    monkeypatch.setattr("clover_cli.__version__", "1.1.1")
+    build_info.capture_boot_identity()
+    assert rn.boot_code_identity() == ("1.1.1", pulled_2)
+
+    text = rn.update_whats_new_section(tmp_path, [marker], succeeded=False, notes_path=notes_file)
+    assert "updated from v1.1.0" in text and "• Fix A." in text
+
+
+def test_update_whats_new_section_gate_matrix(tmp_path, monkeypatch, notes_file):
+    def section(marker_fields, boot, *, succeeded, refused=False):
+        for name in (".update_pending.json", ".update_pending.claimed.json"):
+            (tmp_path / name).unlink(missing_ok=True)
+        marker = _marker(tmp_path, **marker_fields)
+        _boot(monkeypatch, *boot)
+        return rn.update_whats_new_section(
+            tmp_path, [marker], succeeded=succeeded, refused=refused, notes_path=notes_file
+        )
+
+    origin = {"from_version": "1.1.0", "from_sha": "old"}
+    assert "• Fix A." in section(origin, ("1.1.1", "new"), succeeded=False)
+    assert "• Fix A." in section(origin, ("1.1.1", "new"), succeeded=True)
+    assert section(origin, ("1.1.1", "new"), succeeded=False, refused=True) == ""
+    assert section({"from_version": "1.1.0"}, ("1.1.1", "new"), succeeded=True) == ""
+    assert section(origin, (None, None), succeeded=True) == ""
+    assert section(origin, ("1.1.1", None), succeeded=True) == ""
+    assert section(origin, (None, "new"), succeeded=True) == ""
+    # Same code as the start: a failure says nothing, a success keeps its one-liner.
+    same = {"from_version": "1.1.1", "from_sha": "new"}
+    assert section(same, ("1.1.1", "new"), succeeded=False) == ""
+    assert section(same, ("1.1.1", "new"), succeeded=True) == "Already up to date. You are on Clover C1.1.1 (v1.1.1)."
+
+
+def test_update_whats_new_section_never_raises(tmp_path, monkeypatch):
+    def boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(rn, "boot_code_identity", boom, raising=False)
+    assert rn.update_whats_new_section(tmp_path, [tmp_path / "nope.json"], succeeded=True) == ""
+
+
+# ---------------------------------------------------------------------------
+# Rollback is a verdict of THIS run's receipt, at every site
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", ["watcher", "legacy"])
+@pytest.mark.parametrize("outcome", ["rolled-back", "rollback-unhealthy", "rollback-failed"])
+async def test_rolled_back_run_never_shows_notes_even_though_boot_sha_differs(home, monkeypatch, site, outcome):
+    """The rollback watcher publishes exit code 1 plus a rolled-back receipt.
+    Boot sha != from_sha (an earlier pull moved the checkout under the
+    process), yet the user must not be told what's new."""
+    monkeypatch.setitem(_EXIT_CODE, outcome, "1")
+    _marker(home, from_version="1.1.0", from_sha="old", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome=outcome, pre=("1.1.0", "old"))
+
+    _no_notes(text)
+    assert _FAILURE_HEADLINE[site] in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", ["watcher", "legacy"])
+async def test_a_stale_rolled_back_receipt_does_not_suppress_this_runs_notes(home, site):
+    _marker(home, from_version="1.1.0", from_sha="old", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome="rolled-back", receipt_age=-timedelta(days=2))
+
+    assert "• Fix A." in text  # the receipt belongs to an earlier run
+
+
+def test_this_run_rolled_back_reads_only_this_runs_receipt(tmp_path):
+    marker = _marker(tmp_path, from_version="1.1.0", from_sha="old")
+    assert rn.this_run_rolled_back(tmp_path, [marker]) is False  # no receipt
+    _write_receipt(tmp_path, started=datetime.now(timezone.utc) + timedelta(seconds=1),
+                   pre_v="1.1.0", pre_sha="old", post_sha="old", outcome="rolled-back")
+    assert rn.this_run_rolled_back(tmp_path, [marker]) is True
+    _write_receipt(tmp_path, started=datetime.now(timezone.utc) - timedelta(hours=1),
+                   pre_v="1.1.0", pre_sha="old", post_sha="old", outcome="rolled-back")
+    assert rn.this_run_rolled_back(tmp_path, [marker]) is False
+    assert rn.this_run_rolled_back(tmp_path, [tmp_path / "missing.json"]) is False
+
+
+# ---------------------------------------------------------------------------
+# Markers written by <=1.3.x: from_sha may be the refreshed on-disk HEAD, so
+# the (never-refreshed) from_version is the proof; the receipt's sha never is.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+@pytest.mark.parametrize("outcome", ["success", "partial"])
+async def test_legacy_marker_with_refreshed_sha_still_shows_notes_when_the_version_changed(home, site, outcome):
+    # The old gateway had already seen the pulled HEAD ("new") when /update ran.
+    _marker(home, legacy=True, from_version="1.1.0", from_sha="new", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome=outcome)
+
+    assert "updated from v1.1.0" in text and "• Fix A." in text
+    assert "Already up to date" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+async def test_legacy_marker_version_proof_ignores_the_receipts_sha(home, site):
+    # A re-exec'd updater child saw the new checkout as its "before": the
+    # receipt says old == new.  That must neither prove nor disprove anything.
+    _marker(home, legacy=True, from_version="1.1.0", from_sha="new", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome="success", pre=("1.1.1", "new"))
+
+    assert "• Fix A." in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+@pytest.mark.parametrize("outcome", ["success", "partial"])
+async def test_legacy_marker_with_equal_versions_and_equal_shas_shows_no_notes(home, site, outcome):
+    _marker(home, legacy=True, from_version="1.1.1", from_sha="new", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome=outcome, pre=("1.1.1", "new"))
+
+    _no_notes(text)
+    if outcome != "success":
+        assert "Already up to date" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+async def test_legacy_marker_pulled_but_not_restarted_shows_no_notes(home, monkeypatch, site):
+    _boot(monkeypatch, "1.1.0", "old")
+    _marker(home, legacy=True, from_version="1.1.0", from_sha="old", session_key=_SESSION_KEY)
+
+    text = await _drive(site, home, outcome="partial")
+
+    _no_notes(text)
+    assert "Already up to date" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("site", SITES)
+async def test_legacy_marker_refused_or_rolled_back_shows_no_notes(home, monkeypatch, site):
+    _marker(home, legacy=True, from_version="1.1.0", from_sha="old", session_key=_SESSION_KEY)
+    _no_notes(await _drive(site, home, outcome="refused"))
+
+
+def test_legacy_marker_gate_matrix(tmp_path, monkeypatch, notes_file):
+    def section(fields, boot, *, succeeded=False, legacy=True):
+        for name in (".update_pending.json", ".update_pending.claimed.json"):
+            (tmp_path / name).unlink(missing_ok=True)
+        marker = _marker(tmp_path, legacy=legacy, **fields)
+        _boot(monkeypatch, *boot)
+        return rn.update_whats_new_section(tmp_path, [marker], succeeded=succeeded, notes_path=notes_file)
+
+    # version differs: proof, with or without a usable from_sha / boot sha
+    assert "• Fix A." in section({"from_version": "1.1.0", "from_sha": "new"}, ("1.1.1", "new"))
+    assert "• Fix A." in section({"from_version": "1.1.0"}, ("1.1.1", "new"))
+    assert "• Fix A." in section({"from_version": "1.1.0", "from_sha": "x"}, ("1.1.1", None))
+    # 1.1 and 1.1.0 are the same version
+    assert section({"from_version": "1.1", "from_sha": "same"}, ("1.1.0", "same")) == ""
+    # unknown boot version / unparseable or absent from_version: sha rule only
+    assert section({"from_version": "1.1.0", "from_sha": "old"}, (None, "new")) == ""
+    assert section({"from_version": "garbage", "from_sha": "old"}, ("1.1.1", "new")) != ""  # sha rule
+    assert section({"from_sha": "old"}, ("1.1.1", "new")) != ""  # sha rule, no version
+    assert section({"from_version": "garbage"}, ("1.1.1", "new")) == ""
+    assert section({}, ("1.1.1", "new")) == ""
+    # new-form marker: from_identity makes from_sha authoritative, version is not proof
+    assert section({"from_version": "1.1.0"}, ("1.1.1", "new"), legacy=False) == ""
+    assert section({"from_version": "1.1.1", "from_sha": "old"}, ("1.1.1", "new"), legacy=False).startswith("Now on")
+    assert section({"from_version": "1.1.0", "from_sha": "new"}, ("1.1.1", "new"), legacy=False, succeeded=False) == ""
+
+
+# ---------------------------------------------------------------------------
+# Fourth reporting site: the watcher's own 30-minute timeout
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fields,expect_notes", [
+    ({"from_version": "1.1.0", "from_sha": "old"}, True),    # restarted onto new code
+    ({"from_version": "1.1.1", "from_sha": "new"}, False),   # same code: nothing, no one-liner
+    ({"from_version": "1.1.0"}, False),                      # no boot sha recorded
+])
+async def test_watcher_timeout_message_uses_the_same_gate(home, fields, expect_notes):
+    from gateway.config import Platform
+
+    runner = _runner()
+    adapter = AsyncMock()
+    runner.adapters = {Platform.TELEGRAM: adapter}
+    _marker(home, session_key=_SESSION_KEY, **fields)
+
+    await runner._watch_update_progress(poll_interval=0.01, stream_interval=0.01, timeout=0.05)
+
+    text = _sent_text(adapter)
+    assert "❌ Clover update timed out after 30 minutes." in text
+    assert ("• Fix A." in text) == expect_notes
+    assert "Already up to date" not in text and "✅" not in text
