@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+import pytest
 import threading
 import time
 from types import SimpleNamespace
@@ -66,7 +67,10 @@ def _agent_with_db(db, *, session_id="stale-parent", platform="desktop"):
     return agent
 
 
-def test_run_conversation_acquires_then_reloads_latest_tip(monkeypatch):
+@pytest.mark.parametrize("signal", ["on_wait", "on_contended"])
+def test_run_conversation_acquires_then_reloads_latest_tip(monkeypatch, signal):
+    """A lease wait and a busy-database retry both reload after admission; only a real
+    holder is announced to the user."""
     db = _DB()
     agent = _agent_with_db(db)
     status_events = []
@@ -84,9 +88,7 @@ def test_run_conversation_acquires_then_reloads_latest_tip(monkeypatch):
     # Simulate a contended wait so the resume status path is covered.
     def acquire_with_wait(session_id, holder, **kwargs):
         db.events.append(("acquire", session_id, holder))
-        on_wait = kwargs.get("on_wait")
-        if on_wait is not None:
-            on_wait(0.0)
+        kwargs[signal](*((0.0,) if signal == "on_wait" else ()))
         return True
 
     db.acquire_session_turn_lease = acquire_with_wait
@@ -113,18 +115,9 @@ def test_run_conversation_acquires_then_reloads_latest_tip(monkeypatch):
         "repair_alternation": True,
         "include_row_ids": True,
     }
-    assert any(
-        kind == "lifecycle"
-        and text
-        and "waiting for it to finish" in text
-        for kind, text in status_events
-    )
-    assert any(
-        kind == "lifecycle"
-        and text
-        and "loading the latest transcript" in text
-        for kind, text in status_events
-    )
+    texts = [text or "" for _kind, text in status_events]
+    for notice in ("waiting for it to finish", "loading the latest transcript"):
+        assert any(notice in text for text in texts) is (signal == "on_wait"), notice
 
 
 def test_run_conversation_acquires_lease_when_session_probe_raises(monkeypatch):

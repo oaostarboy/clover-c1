@@ -8676,10 +8676,18 @@ class AIAgent:
                 )
                 _lease_ttl = 300.0
                 _lease_waited = False
+                _lease_announced = False
 
-                def _on_session_turn_lease_wait(elapsed: float) -> None:
+                def _on_session_turn_lease_contended() -> None:
+                    # A busy state.db, not a known holder: say nothing, but
+                    # still reload after admission -- the busy writer may be
+                    # the previous holder's final flush.
                     nonlocal _lease_waited
                     _lease_waited = True
+
+                def _on_session_turn_lease_wait(elapsed: float) -> None:
+                    nonlocal _lease_waited, _lease_announced
+                    _lease_waited = _lease_announced = True
                     if elapsed < 1.0:
                         self._emit_status(
                             "⏳ Another Clover process is using this session; "
@@ -8697,6 +8705,7 @@ class AIAgent:
                     ttl_seconds=_lease_ttl,
                     wait_seconds=1800.0,
                     on_wait=_on_session_turn_lease_wait,
+                    on_contended=_on_session_turn_lease_contended,
                     should_abort=lambda: getattr(self, "_interrupt_requested", False),
                 ):
                     if getattr(self, "_interrupt_requested", False):
@@ -8768,7 +8777,7 @@ class AIAgent:
                 durable_turn_lease = _durable_holder
                 self._active_session_turn_lease_holder = _durable_holder
                 self._active_session_turn_lease_ttl_seconds = _lease_ttl
-                if _lease_waited:
+                if _lease_announced:
                     self._emit_status(
                         "Session is free; loading the latest transcript..."
                     )

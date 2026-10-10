@@ -8030,19 +8030,29 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         wait_notice_interval_seconds: float = 15.0,
         should_abort=None,
         acquire_patience_s: float = 0.5,
+        on_contended=None,
     ) -> bool:
         """Wait for a cross-process turn lease without holding a SQLite lock.
 
-        ``on_wait(elapsed_seconds)`` is best-effort: invoked when the first
-        attempt fails (elapsed ~0) and again about every
+        ``on_wait(elapsed_seconds)`` is best-effort: invoked when another
+        holder owns the lease (first at elapsed ~0) and again about every
         ``wait_notice_interval_seconds`` while still waiting, so UIs can show
         that another process holds the conversation.
+
+        A busy database is not a holder: a write-lock timeout is retried at
+        once with a longer write patience (the poll interval moves into the
+        patience) and ``on_contended()`` is called instead of ``on_wait`` --
+        no user notice, but callers should still reload the transcript after
+        admission, since the busy writer may be the previous holder's last
+        flush.
 
         When ``should_abort()`` returns True (for example the agent received
         ``/stop`` while waiting), acquisition stops immediately and returns
         False without consuming the full ``wait_seconds`` budget.
         """
+        # Adapted from NousResearch/hermes-agent 73f7fc2ca5 (MIT)
         deadline = time.monotonic() + max(0.0, float(wait_seconds))
+        patience = acquire_patience_s
         wait_started = None
         last_notice_at = None
         notice_every = max(0.0, float(wait_notice_interval_seconds))
@@ -8061,15 +8071,32 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     session_id,
                     holder,
                     ttl_seconds=ttl_seconds,
-                    patience_s=acquire_patience_s,
+                    patience_s=patience,
                 ):
                     return True
             except sqlite3.Error as exc:
-                # Long holder transactions (compression publish, large
-                # flushes) can exhaust a single write-patience budget.
-                # Keep polling until wait_seconds or should_abort.
+                # Another writer's transaction outlasted the write patience
+                # (compression publish, large flushes). That is not a lease
+                # holder: no poll sleep and no "another process" notice. The
+                # retry waits on the write lock itself.
                 if classify_persistence_error(exc) != "locked":
                     raise
+                if on_contended is not None:
+                    try:
+                        on_contended()
+                    except Exception:
+                        logger.debug(
+                            "session turn lease on_contended callback failed",
+                            exc_info=True,
+                        )
+                patience = min(
+                    acquire_patience_s + max(0.0, float(poll_interval_seconds)),
+                    max(acquire_patience_s, deadline - time.monotonic()),
+                )
+                if time.monotonic() >= deadline:
+                    return False
+                continue
+            patience = acquire_patience_s
             now = time.monotonic()
             remaining = deadline - now
             if remaining <= 0:
