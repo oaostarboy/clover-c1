@@ -13859,8 +13859,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 content=text,
                 since=started_at.timestamp(),
                 # Same identity the live path records (the delivery adapter's
-                # owner profile), so a multiplexed sweep sends it on the right bot.
-                adapter_profile=getattr(origin, "profile", None),
+                # owner profile), so a multiplexed sweep sends it on the bot
+                # that received the message. ``origin.profile`` is only the
+                # routed runtime; a shared primary bot can route into another
+                # profile. Rows persisted before transport_profile existed
+                # fall back to it.
+                adapter_profile=(
+                    getattr(origin, "transport_profile", None)
+                    or getattr(origin, "profile", None)
+                ),
             )
             if await self.async_session_store.clear_turn_active(key, token):
                 ledgered += 1
@@ -20917,7 +20924,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     ) -> bool:
         """Persist the exact resolved routing key for this running turn."""
         try:
-            token = await self.async_session_store.mark_turn_active(session_key)
+            _transport_profile = getattr(
+                getattr(event, "source", None), "transport_profile", None
+            )
+            if _transport_profile:
+                token = await self.async_session_store.mark_turn_active(
+                    session_key, transport_profile=_transport_profile
+                )
+            else:
+                token = await self.async_session_store.mark_turn_active(session_key)
         except Exception as exc:
             logger.warning(
                 "Could not persist active-turn marker for %s: %s",

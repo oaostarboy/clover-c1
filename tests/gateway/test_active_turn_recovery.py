@@ -634,3 +634,117 @@ async def test_unclean_recovery_ledgers_reply_under_the_routed_profile(
         _close_store_db(store)
 
     assert [tuple(r) for r in rows] == [("coder",)]
+
+
+def _transport_runner(store, adapter):
+    from gateway.session import AsyncSessionStore
+
+    runner = object.__new__(GatewayRunner)
+    runner.config = GatewayConfig(multiplex_profiles=True)
+    runner.adapters = {Platform.TELEGRAM: adapter}
+    runner._profile_adapters = {"coder": {}}
+    runner.session_store = store
+    runner._async_session_store = AsyncSessionStore(store)
+    return runner
+
+
+def _telegram_adapter():
+    from gateway.config import PlatformConfig
+    from plugins.platforms.telegram.adapter import TelegramAdapter
+
+    return TelegramAdapter(
+        PlatformConfig(enabled=True, token="111:offline-test", extra={})
+    )
+
+
+@pytest.mark.asyncio
+async def test_crash_reply_uses_transport_not_routed_runtime_profile(
+    tmp_path, monkeypatch,
+):
+    """A shared primary bot routing into 'coder' must ledger the crash-left
+    reply for the PRIMARY transport, or no exact-transport sweep can claim it
+    (Astra C13-ASTRA-02)."""
+    import time as _time
+    import weakref
+
+    from gateway import delivery_ledger
+
+    monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setattr(delivery_ledger, "ledger_enabled", lambda *_a, **_k: True)
+
+    store = _make_db_store(tmp_path)
+    source = SessionSource(
+        platform=Platform.TELEGRAM, chat_id="42", user_id="88", profile="coder"
+    )
+    adapter = _telegram_adapter()
+    adapter._owner_profile = None
+    source._transport_adapter_ref = weakref.ref(adapter)
+    runner = _transport_runner(store, adapter)
+    assert runner._adapter_for_source(source) is adapter
+
+    entry = store.get_or_create_session(source)
+    store.mark_turn_active(entry.session_key)
+    store.append_to_transcript(entry.session_id, {"role": "user", "content": "hi"})
+    store.append_to_transcript(
+        entry.session_id,
+        {"role": "assistant", "content": "unsent answer", "timestamp": _time.time()},
+    )
+    # A crash drops the ephemeral transport provenance.
+    del source._transport_adapter_ref
+    try:
+        assert await runner._recover_unclean_sessions() == (0, 1)
+        assert not entry.resume_pending
+        claims = await runner._claim_pending_obligations()
+    finally:
+        _close_store_db(store)
+
+    assert claims and claims[0]["profile"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_crash_reply_transport_owner_survives_a_restart_reload(
+    tmp_path, monkeypatch,
+):
+    """The transport owner is persisted with the marker, so a freshly loaded
+    store (new process) still recovers via the receiving bot, not the route."""
+    import time as _time
+    import weakref
+
+    from gateway import delivery_ledger
+
+    monkeypatch.delenv("CLOVER_AGENT_TIMEOUT", raising=False)
+    monkeypatch.setattr(delivery_ledger, "ledger_enabled", lambda *_a, **_k: True)
+
+    store = _make_db_store(tmp_path)
+    source = SessionSource(
+        platform=Platform.TELEGRAM, chat_id="43", user_id="88", profile="coder"
+    )
+    # The bot that received the message is the "support" credential owner,
+    # which differs from the routed runtime ("coder").
+    adapter = _telegram_adapter()
+    adapter.set_owner_profile("support")
+    source._transport_adapter_ref = weakref.ref(adapter)
+    entry = store.get_or_create_session(source)
+    store.mark_turn_active(entry.session_key, transport_profile=source.transport_profile)
+    store.append_to_transcript(
+        entry.session_id,
+        {"role": "assistant", "content": "support answer", "timestamp": _time.time()},
+    )
+    _close_store_db(store)
+
+    store2 = _make_db_store(tmp_path)
+    from gateway.session import AsyncSessionStore
+
+    runner = object.__new__(GatewayRunner)
+    runner.session_store = store2
+    runner._async_session_store = AsyncSessionStore(store2)
+    try:
+        await runner._recover_unclean_sessions()
+        rows = delivery_ledger._connect().execute(
+            "SELECT adapter_profile FROM delivery_obligations WHERE session_key = ?",
+            (entry.session_key,),
+        ).fetchall()
+    finally:
+        _close_store_db(store2)
+
+    assert [tuple(r) for r in rows] == [("support",)]
