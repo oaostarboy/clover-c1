@@ -179,7 +179,8 @@ def build_top_level_parser():
         action="store_true",
         default=False,
         help=(
-            "One-shot mode only: write structured JSONL activity events "
+            "One-shot / single-query mode (-z, or chat -q, including with "
+            "-Q): write structured JSONL activity events "
             "(tool calls, tool outcomes, public progress notes; never "
             "reasoning or tool output) to stderr so a parent Clover session "
             "can show this worker's activity. See clover_cli/activity_events.py."
