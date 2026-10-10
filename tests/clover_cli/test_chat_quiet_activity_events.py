@@ -14,7 +14,12 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -167,3 +172,58 @@ def test_human_single_query_tees_activity_next_to_renderers(monkeypatch):
     assert seen == ["human"]
     kinds = [e["event"] for e in _events(err.getvalue())]
     assert kinds == ["start", "tool.started"]
+
+
+class _RejectKey(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        body = json.dumps({"error": {"message": "Invalid API key: synthetic review failure",
+                                     "type": "invalid_request_error",
+                                     "code": "invalid_api_key"}}).encode()
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        body = json.dumps({"data": [{"id": "review-model", "object": "model"}]}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        pass
+
+
+@pytest.mark.parametrize("quiet", [False, True])
+def test_failed_real_chat_worker_does_not_emit_completed(tmp_path, quiet):
+    """A provider failure (401) is ``failed`` with and without ``-Q``."""
+    server = HTTPServer(("127.0.0.1", 0), _RejectKey)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        "model:\n  provider: custom\n"
+        f"  base_url: http://127.0.0.1:{server.server_address[1]}/v1\n"
+        "  default: review-model\n  api_key: synthetic-review-key\n  context_length: 128000\n"
+    )
+    repo = Path(__file__).resolve().parents[2]
+    args = [sys.executable, str(repo / "clover"), "--activity-events", "chat", "--oneshot",
+            "-q", "answer this", "-t", "terminal"]
+    if quiet:
+        args.append("-Q")
+    try:
+        proc = subprocess.run(args, cwd=tmp_path, env=dict(os.environ, CLOVER_HOME=str(home)),
+                              capture_output=True, text=True, timeout=60)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    results = [e for e in _events(proc.stderr) if e.get("event") == "result"]
+    assert results, (proc.returncode, proc.stderr[-2000:])
+    assert results[-1]["status"] == "failed", results[-1]
+

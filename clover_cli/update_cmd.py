@@ -3465,9 +3465,35 @@ def _gateway_pid_install_verdict(pid) -> str:
         return "unknown"
     # Same rule as the systemd unit check: ``venv/bin/python`` and
     # ``venv/bin/python3`` are one install; another venv is not.
-    if _systemd_interpreter_path_matches(executable, os.path.abspath(sys.executable)):
+    expected = os.path.abspath(sys.executable)
+    if _systemd_interpreter_path_matches(executable, expected):
         return "own"
-    return "other"
+    # A lexical mismatch is not proof of a foreign install: the same venv
+    # reached through a directory symlink fails the path compare. Settle it by
+    # filesystem identity; if either side can't be stat'ed, stay "unknown".
+    return _interpreter_identity_verdict(executable, expected)
+
+
+def _interpreter_identity_verdict(executable: str, expected: str) -> str:
+    """``own``/``other``/``unknown`` by resolved identity of the venv bin dir.
+
+    Only the *directory* is resolved (never the interpreter symlink itself),
+    so distinct venvs that share a base interpreter stay distinct.
+    """
+    cand, exp = Path(executable), Path(expected)
+    try:
+        if not os.path.samefile(cand.parent, exp.parent):
+            # Both venv bin dirs exist and are different directories.
+            os.stat(cand)
+            return "other"
+        python_alias = re.compile(r"python(?:3(?:\.[0-9]+)?)?\Z")
+        if not (python_alias.fullmatch(cand.name) and python_alias.fullmatch(exp.name)):
+            return "other"
+        if (exp.parent.parent / "pyvenv.cfg").is_file() and os.path.samefile(cand, exp):
+            return "own"
+        return "other" if os.path.exists(cand) else "unknown"
+    except OSError:
+        return "unknown"
 
 
 def _own_install_gateway_pids(pids):

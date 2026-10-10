@@ -155,3 +155,39 @@ def test_plan_runtime_from_other_install_is_not_unaccounted(monkeypatch, tmp_pat
         "dev": "other_install",
     }
     assert report_unaccounted_runtimes(outcomes) is False
+
+
+def test_same_venv_via_directory_symlink_still_reports_stale(fleet_env):
+    """A lexical path mismatch (symlinked venv dir) is not proof of another install."""
+    import clover_cli.update_receipt as receipt
+
+    own = fleet_env["own"]
+    alias = fleet_env["tmp"] / "same-install-alias"
+    alias.symlink_to(own.parent.parent, target_is_directory=True)
+    aliased_python = alias / "bin" / "python"
+    assert os.path.samefile(aliased_python.parent.parent, own.parent.parent)
+    fleet_env["run"](aliased_python, "OLDSHA")
+
+    fleet = receipt.collect_fleet_versions(pre_restart_pids=[])
+
+    assert [r["state"] for r in fleet] == ["stale"], fleet
+
+
+def test_symlinked_alias_of_a_different_venv_is_still_other_install(fleet_env):
+    import clover_cli.update_receipt as receipt
+
+    dev_python = _venv(fleet_env["tmp"], "dev-venv")
+    alias = fleet_env["tmp"] / "dev-alias"
+    alias.symlink_to(dev_python.parent.parent, target_is_directory=True)
+    fleet_env["run"](alias / "bin" / "python", "OLDSHA")
+
+    fleet = receipt.collect_fleet_versions(pre_restart_pids=[])
+
+    assert [r["state"] for r in fleet] == ["other_install"], fleet
+
+
+def test_unreadable_interpreter_identity_is_unknown_not_other(fleet_env):
+    """Ambiguity (interpreter missing on disk) must never be classed foreign."""
+    ghost = fleet_env["tmp"] / "ghost-venv" / "bin" / "python"
+    assert update_cmd._interpreter_identity_verdict(str(ghost), str(fleet_env["own"])) == "unknown"
+

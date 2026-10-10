@@ -16691,6 +16691,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
         # this to True. Early returns (credential refresh failure, etc.)
         # leave it False, which is correct — those aren't user interrupts.
         self._last_turn_interrupted = False
+        # Real outcome of this turn, for machine consumers (``--activity-events``
+        # result status). Pessimistic until run_conversation returns, so early
+        # returns that carry display text (context refusal) never read as success.
+        self._last_turn_result = {"failed": True}
 
         # Refresh provider credentials if needed (handles key rotation transparently)
         if not self._ensure_runtime_credentials():
@@ -17245,6 +17249,8 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
                 self.session_id = self.agent.session_id
                 getattr(self, "_write_terminal_breadcrumb", lambda: None)()
                 self._pending_title = None
+
+            self._last_turn_result = result if isinstance(result, dict) else {"failed": True}
 
             # Get the final response
             response = result.get("final_response", "") if result else ""
@@ -22120,7 +22126,12 @@ def main(
                 if _activity_writer is not None:
                     from clover_cli.activity_events import result_status
 
-                    _act_status = result_status(_human_response, {})
+                    # Real turn metadata (failed/interrupted/incomplete), not
+                    # the display text: chat() returns a non-empty error string
+                    # for provider failures.
+                    _act_status = result_status(
+                        _human_response, getattr(cli, "_last_turn_result", None) or {}
+                    )
                     _activity_writer.result(
                         _human_response if _act_status == "completed" else "",
                         _act_status,
