@@ -73,6 +73,11 @@ _INHERITING_CALLS = {
 KNOWN_SAFE = {
     "agent/shell_hooks.py",  # uses input=stdin_json, creates a pipe
     "plugins/security-guidance/patterns.py",  # subprocess mentions are in reminder strings, not calls
+    # _run_bootstrap runs a catalog entry's setup commands through the shell on
+    # the user's terminal and they may prompt, so it must inherit stdin. Listed
+    # here, not with an inline marker, so the file stays out of the CI
+    # mcp_catalog security-review gate; every other call in it sets stdin=.
+    "clover_cli/mcp_catalog.py",
 }
 
 # Inline marker that exempts a single subprocess call from this check.

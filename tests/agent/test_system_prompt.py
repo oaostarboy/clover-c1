@@ -7,6 +7,7 @@ from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from agent.system_prompt import build_system_prompt, build_system_prompt_parts
+from tests.agent.test_delegation_checkpoint import _opt_in_to_checkpoint
 
 
 def _make_agent(**overrides):
@@ -77,18 +78,22 @@ def _stable_prompt(agent):
 
 
 def test_delegation_decision_guidance_requires_todo_and_delegation_tools():
+    # The checkpoint ships OFF (its guidance is only taught when it is enabled).
+    _opt_in_to_checkpoint()
     prompt = _stable_prompt(_make_agent(valid_tool_names={"todo", "delegate_task"}))
 
     assert "record todo delegation mode" in prompt
 
 
 def test_delegation_decision_guidance_is_absent_without_todo():
+    _opt_in_to_checkpoint()
     prompt = _stable_prompt(_make_agent(valid_tool_names={"delegate_task"}))
 
     assert "record todo delegation mode" not in prompt
 
 
 def test_delegation_decision_guidance_is_absent_for_child_identity():
+    _opt_in_to_checkpoint()
     prompt = _stable_prompt(_make_agent(
         valid_tool_names={"todo", "delegate_task"},
         _delegate_depth=1,

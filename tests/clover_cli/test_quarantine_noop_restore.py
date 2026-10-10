@@ -120,7 +120,7 @@ def test_repair_rewriting_success_keeps_fresh_shims(tmp_path):
     scripts = _make_scripts_dir(tmp_path)
     win, vdir = _patch_repair_windows(scripts)
 
-    def fake_run(cmd, cwd=None, check=None, env=None):
+    def fake_run(cmd, cwd=None, check=None, env=None, stdin=None):
         (scripts / "clover.exe").write_bytes(b"MZ-new-clover")
 
     with win, vdir, patch.object(ir.subprocess, "run", fake_run):
@@ -133,7 +133,7 @@ def test_repair_failure_restores_shims_and_reraises(tmp_path):
     scripts = _make_scripts_dir(tmp_path)
     win, vdir = _patch_repair_windows(scripts)
 
-    def fake_run(cmd, cwd=None, check=None, env=None):
+    def fake_run(cmd, cwd=None, check=None, env=None, stdin=None):
         raise ir.subprocess.CalledProcessError(1, cmd)
 
     with win, vdir, patch.object(ir.subprocess, "run", fake_run):
