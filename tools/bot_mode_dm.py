@@ -574,6 +574,7 @@ def _run_delivery(argv: list[str], dm_file: str, *, stdin_file: bool) -> int:
                 check=False,
                 capture_output=True,
                 text=True,
+                stdin=subprocess.DEVNULL,
             )
             if proc.returncode != 0:
                 from tools.bot_failure_reasons import (
@@ -589,6 +590,7 @@ def _run_delivery(argv: list[str], dm_file: str, *, stdin_file: bool) -> int:
                         check=False,
                         capture_output=True,
                         text=True,
+                        stdin=subprocess.DEVNULL,
                     )
             # Re-emit the transport's streams: stdout is the reply text the
             # completion notification carries back to the sending agent.

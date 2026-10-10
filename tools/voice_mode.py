@@ -1719,10 +1719,12 @@ def _play_audio_file_impl(file_path: str) -> bool:
                 _win_tmp_raw = subprocess.check_output(
                     ["cmd.exe", "/c", "echo %TEMP%"],
                     stderr=subprocess.DEVNULL, timeout=3,
+                    stdin=subprocess.DEVNULL,
                 ).decode(errors="replace").strip()
                 _win_tmp_wsl = subprocess.check_output(
                     ["wslpath", "-u", _win_tmp_raw],
                     stderr=subprocess.DEVNULL, timeout=3,
+                    stdin=subprocess.DEVNULL,
                 ).decode(errors="replace").strip()
                 if _win_tmp_wsl:
                     # Unique suffix prevents concurrent TTS playback collision.
@@ -1731,6 +1733,7 @@ def _play_audio_file_impl(file_path: str) -> bool:
                     _win_wav = subprocess.check_output(
                         ["wslpath", "-w", _wsl_wav],
                         stderr=subprocess.DEVNULL, timeout=3,
+                        stdin=subprocess.DEVNULL,
                     ).decode(errors="replace").strip()
                     if _win_wav:
                         _win_wav_safe = _win_wav.replace("'", "''")

@@ -372,6 +372,7 @@ def _detect_macos_system_proxy() -> str | None:
     try:
         out = subprocess.check_output(
             ["scutil", "--proxy"], timeout=3, text=True, encoding='utf-8', errors='replace', stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return None

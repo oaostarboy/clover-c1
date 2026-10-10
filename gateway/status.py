@@ -321,6 +321,7 @@ def terminate_pid(pid: int, *, force: bool = False) -> None:
                 text=True, encoding='utf-8', errors='replace',
                 timeout=10,
                 creationflags=windows_hide_flags(),
+                stdin=subprocess.DEVNULL,
             )
         except FileNotFoundError:
             os.kill(pid, signal.SIGTERM)
@@ -406,6 +407,7 @@ def _read_process_cmdline(pid: int) -> Optional[str]:
                 capture_output=True,
                 text=True, encoding='utf-8', errors='replace',
                 timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0 and result.stdout.strip():
                 return result.stdout.strip()
@@ -917,6 +919,7 @@ def _pid_exists(pid: int) -> bool:
                     capture_output=True,
                     text=True, encoding='utf-8', errors='replace',
                     timeout=5,
+                    stdin=subprocess.DEVNULL,
                 )
                 if r.returncode == 0 and r.stdout.strip().startswith("Z"):
                     return False

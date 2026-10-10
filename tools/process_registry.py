@@ -251,6 +251,7 @@ def _systemd_run_user_scope_available() -> bool:
                         ],
                         capture_output=True,
                         timeout=3,
+                        stdin=subprocess.DEVNULL,
                     )
                     available = result.returncode == 0
                     if not available:
@@ -355,6 +356,7 @@ def _stop_systemd_unit(unit_name: str) -> bool:
             [binary, "--user", "stop", unit_name],
             capture_output=True,
             timeout=15,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             stderr = (result.stderr or b"").decode(errors="replace").strip()

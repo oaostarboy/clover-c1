@@ -101,6 +101,7 @@ def _core_imports_healthy(root: Path, python: Path | None = None) -> bool:
         return subprocess.run(
             [str(python), "-c", "import clover_cli.main, gateway.run"], cwd=root,
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20,
+            stdin=subprocess.DEVNULL,
         ).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -167,7 +168,7 @@ def _current_head(root: Path) -> str | None:
     try:
         result = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
                                 capture_output=True, text=True, encoding="utf-8",
-                                errors="replace", timeout=10)
+                                errors="replace", timeout=10, stdin=subprocess.DEVNULL)
         return result.stdout.strip() if result.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -222,7 +223,7 @@ def _restart_from_beacon(data: dict[str, Any]) -> None:
                     "done=[]; failed=[]; restart(done, failed, 45.0); "
                     "assert not failed, f'Launchd restart failed: {failed}'")
         subprocess.run([str(python), "-c", code], cwd=root, check=True,
-                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90, stdin=subprocess.DEVNULL)
         return
     services = data.get("windows_services") or []
     if services and os.name == "nt":
@@ -237,12 +238,17 @@ def _restart_from_beacon(data: dict[str, Any]) -> None:
                  "_restore_windows_gateway_service(sys.argv[1])", str(name)],
                 cwd=root, check=True, capture_output=True, text=True,
                 encoding="utf-8", errors="replace", timeout=70,
+                stdin=subprocess.DEVNULL,
             )
         return
     argv = data.get("gateway_argv") or []
     if not argv:
         raise RuntimeError("No saved gateway restart command")
-    kwargs: dict[str, Any] = {"cwd": data.get("cwd") or None, "close_fds": True}
+    kwargs: dict[str, Any] = {
+        "cwd": data.get("cwd") or None,
+        "close_fds": True,
+        "stdin": subprocess.DEVNULL,
+    }
     if os.name == "nt":
         kwargs["creationflags"] = (getattr(subprocess, "DETACHED_PROCESS", 0)
                                     | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0))
@@ -261,32 +267,32 @@ def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
     if os.name == "nt":
         for service in data.get("windows_services") or []:
             subprocess.run(["sc", "stop", str(service)], capture_output=True,
-                           text=True, encoding="utf-8", errors="replace", timeout=10)
+                           text=True, encoding="utf-8", errors="replace", timeout=10, stdin=subprocess.DEVNULL)
             deadline = time.monotonic() + 60
             while True:
                 state = subprocess.run(["sc", "query", str(service)], capture_output=True,
-                                       text=True, encoding="utf-8", errors="replace", timeout=10)
+                                       text=True, encoding="utf-8", errors="replace", timeout=10, stdin=subprocess.DEVNULL)
                 if state.returncode == 0 and "STOPPED" in state.stdout:
                     break
                 if time.monotonic() >= deadline:
                     raise RuntimeError(f"Windows gateway service did not stop: {service}")
                 time.sleep(0.25)
     dirty = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"], cwd=root, check=True,
-                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, stdin=subprocess.DEVNULL)
     parked = bool(dirty.stdout.strip())
     if parked:
         subprocess.run(["git", "stash", "push", "--include-untracked", "-m", "update-rollback-local-edits"],
                        cwd=root, check=True, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace", timeout=60)
+                       encoding="utf-8", errors="replace", timeout=60, stdin=subprocess.DEVNULL)
     subprocess.run(["git", "reset", "--hard", sha], cwd=root, check=True,
-                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, stdin=subprocess.DEVNULL)
     if parked:
         reapplied = subprocess.run(["git", "stash", "apply", "stash@{0}"], cwd=root,
                                    capture_output=True, text=True, encoding="utf-8",
-                                   errors="replace", timeout=60)
+                                   errors="replace", timeout=60, stdin=subprocess.DEVNULL)
         if reapplied.returncode == 0:
             subprocess.run(["git", "stash", "drop", "stash@{0}"], cwd=root, check=True,
-                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, stdin=subprocess.DEVNULL)
         # Conflicts stay in the stash; never discard the user's edits.
     snapshot_id = data.get("pre_update_snapshot_id")
     home = beacon.parent
@@ -311,7 +317,7 @@ def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
                 raise RuntimeError("No Python interpreter available to recreate the managed venv")
             create = [bootstrap, "-m", "venv", venv_arg]
         subprocess.run(create, cwd=root, check=True, capture_output=True,
-                       text=True, encoding="utf-8", errors="replace", timeout=120)
+                       text=True, encoding="utf-8", errors="replace", timeout=120, stdin=subprocess.DEVNULL)
     if not python.is_file():
         raise RuntimeError("Managed venv interpreter still missing after recreation")
     # Delegate to the same repair helper as `clover update` after the old
@@ -319,7 +325,7 @@ def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
     repair = ("from clover_cli.main import _install_python_dependencies_with_optional_fallback as install; "
               "import sys; install([sys.executable, '-m', 'pip'], group='all')")
     subprocess.run([str(python), "-c", repair], cwd=root, check=True,
-                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+                   capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300, stdin=subprocess.DEVNULL)
 
 
 def publish_gateway_verdict(beacon: Path, outcome: str) -> None:
@@ -597,6 +603,7 @@ def _pid_alive(pid: int) -> bool:
             out = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
                 capture_output=True, text=True, encoding="utf-8", timeout=10,
+                stdin=subprocess.DEVNULL,
             ).stdout
             return str(pid) in out
         except Exception:
@@ -639,10 +646,12 @@ def _gateway_running() -> bool:
             out = subprocess.run(
                 ["wmic", "process", "get", "commandline"],
                 capture_output=True, text=True, encoding="utf-8", timeout=20,
+                stdin=subprocess.DEVNULL,
             ).stdout
         else:
             out = subprocess.run(
-                ["ps", "-eo", "args"], capture_output=True, text=True, encoding="utf-8", timeout=20
+                ["ps", "-eo", "args"], capture_output=True, text=True, encoding="utf-8", timeout=20,
+                stdin=subprocess.DEVNULL,
             ).stdout
     except Exception:
         return True  # cannot tell: assume healthy rather than start a second one
@@ -697,6 +706,7 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
                     head = subprocess.run(
                         ["git", "rev-parse", "HEAD"], cwd=data["repo"],
                         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
+                        stdin=subprocess.DEVNULL,
                     )
                     if head.returncode == 0 and head.stdout.strip() == data["pre_pull_sha"]:
                         if not _gateway_running() and _relaunch_owned_elsewhere(beacon):
@@ -742,7 +752,11 @@ def watch(beacon: Path, *, poll: float = POLL_SECONDS) -> str:
                 return "no-argv"
 
             cwd = data.get("cwd") or None
-            kwargs: dict[str, Any] = {"cwd": cwd, "close_fds": True}
+            kwargs: dict[str, Any] = {
+                "cwd": cwd,
+                "close_fds": True,
+                "stdin": subprocess.DEVNULL,
+            }
             if os.name == "nt":  # pragma: no cover
                 kwargs["creationflags"] = (
                     getattr(subprocess, "DETACHED_PROCESS", 0)

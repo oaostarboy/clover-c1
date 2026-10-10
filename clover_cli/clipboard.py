@@ -142,6 +142,7 @@ def _macos_has_image() -> bool:
         info = subprocess.run(
             ["osascript", "-e", "clipboard info"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=3,
+            stdin=subprocess.DEVNULL,
         )
         return "«class PNGf»" in info.stdout or "«class TIFF»" in info.stdout
     except Exception:
@@ -154,6 +155,7 @@ def _macos_pngpaste(dest: Path) -> bool:
         r = subprocess.run(
             ["pngpaste", str(dest)],
             capture_output=True, timeout=3,
+            stdin=subprocess.DEVNULL,
         )
         if r.returncode == 0 and dest.exists() and dest.stat().st_size > 0:
             return True
@@ -184,6 +186,7 @@ def _macos_osascript(dest: Path) -> bool:
         r = subprocess.run(
             ["osascript", "-e", script],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         if r.returncode == 0 and "fail" not in r.stdout and dest.exists() and dest.stat().st_size > 0:
             return True
@@ -275,6 +278,7 @@ def _run_powershell(exe: str, script: str, timeout: int) -> subprocess.Completed
     return subprocess.run(
         [exe, "-NoProfile", "-NonInteractive", "-Command", script],
         capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout,
+        stdin=subprocess.DEVNULL,
     )
 
 
@@ -333,6 +337,7 @@ def _find_powershell() -> str | None:
             r = subprocess.run(
                 [name, "-NoProfile", "-NonInteractive", "-Command", "echo ok"],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             if r.returncode == 0 and "ok" in r.stdout:
                 return name
@@ -408,6 +413,7 @@ def _wayland_has_image() -> bool:
         r = subprocess.run(
             ["wl-paste", "--list-types"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=3,
+            stdin=subprocess.DEVNULL,
         )
         return r.returncode == 0 and any(
             t.startswith("image/") for t in r.stdout.splitlines()
@@ -426,6 +432,7 @@ def _wayland_save(dest: Path) -> bool:
         types_r = subprocess.run(
             ["wl-paste", "--list-types"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=3,
+            stdin=subprocess.DEVNULL,
         )
         if types_r.returncode != 0:
             return False
@@ -447,6 +454,7 @@ def _wayland_save(dest: Path) -> bool:
             subprocess.run(
                 ["wl-paste", "--type", mime],
                 stdout=f, stderr=subprocess.DEVNULL, timeout=5, check=True,
+                stdin=subprocess.DEVNULL,
             )
 
         if not dest.exists() or dest.stat().st_size == 0:
@@ -491,6 +499,7 @@ def _convert_to_png(path: Path) -> bool:
         r = subprocess.run(
             ["convert", str(tmp), "png:" + str(path)],
             capture_output=True, timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         if r.returncode == 0 and path.exists() and path.stat().st_size > 0:
             tmp.unlink(missing_ok=True)
@@ -528,6 +537,7 @@ def _xclip_has_image() -> bool:
         r = subprocess.run(
             ["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=3,
+            stdin=subprocess.DEVNULL,
         )
         return r.returncode == 0 and "image/png" in r.stdout
     except FileNotFoundError:
@@ -544,6 +554,7 @@ def _xclip_save(dest: Path) -> bool:
         targets = subprocess.run(
             ["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=3,
+            stdin=subprocess.DEVNULL,
         )
         if "image/png" not in targets.stdout:
             return False
@@ -559,6 +570,7 @@ def _xclip_save(dest: Path) -> bool:
             subprocess.run(
                 ["xclip", "-selection", "clipboard", "-t", "image/png", "-o"],
                 stdout=f, stderr=subprocess.DEVNULL, timeout=5, check=True,
+                stdin=subprocess.DEVNULL,
             )
         if dest.exists() and dest.stat().st_size > 0:
             return True

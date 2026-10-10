@@ -383,6 +383,7 @@ def _linux_session_locked() -> Optional[bool]:
         proc = subprocess.run(
             ["loginctl", "list-sessions", "--no-legend"],
             capture_output=True, text=True, timeout=2.0,
+            stdin=subprocess.DEVNULL,
         )
         if proc.returncode != 0:
             return None
@@ -395,6 +396,7 @@ def _linux_session_locked() -> Optional[bool]:
             probe = subprocess.run(
                 ["loginctl", "show-session", parts[0], "-p", "LockedHint"],
                 capture_output=True, text=True, timeout=2.0,
+                stdin=subprocess.DEVNULL,
             )
             if "LockedHint=no" in probe.stdout:
                 return False
@@ -465,6 +467,7 @@ def _linux_x11_active_window_id() -> Optional[int]:
             text=True, encoding="utf-8", errors="replace",
             timeout=2,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except Exception:
         return None
@@ -594,6 +597,7 @@ def _validate_cua_driver_app_signature(app_path: str) -> None:
             capture_output=True,
             text=True,
             timeout=15,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError(f"could not verify CuaDriver.app signature: {exc}") from exc

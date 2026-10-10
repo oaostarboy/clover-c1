@@ -468,6 +468,7 @@ def _install_sidecar() -> int:
         check=False,
         stderr=subprocess.PIPE,
         text=True,
+        stdin=subprocess.DEVNULL,
     )
     if proc.stderr:
         print(proc.stderr, end="", file=sys.stderr)
@@ -479,6 +480,7 @@ def _install_sidecar() -> int:
             check=False,
             stderr=subprocess.PIPE,
             text=True,
+            stdin=subprocess.DEVNULL,
         )
         if proc.stderr:
             print(proc.stderr, end="", file=sys.stderr)

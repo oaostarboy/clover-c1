@@ -355,7 +355,7 @@ def _open_in_editor(initial: str, *, suffix: str) -> Optional[str]:
         fh.write(initial)
         path = fh.name
     try:
-        subprocess.call([*editor.split(), path])
+        subprocess.call([*editor.split(), path])  # noqa: subprocess-stdin — interactive editor
         with open(path, encoding="utf-8") as fh:
             return fh.read()
     except OSError as exc:

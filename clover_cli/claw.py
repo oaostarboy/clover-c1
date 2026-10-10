@@ -69,6 +69,7 @@ def _detect_openclaw_processes() -> list[str]:
             result = subprocess.run(
                 ["systemctl", "--user", "is-active", "openclaw-gateway.service"],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             if result.stdout.strip() == "active":
                 found.append("systemd service: openclaw-gateway.service")
@@ -113,6 +114,7 @@ def _detect_openclaw_processes() -> list[str]:
             result = subprocess.run(
                 ["pgrep", "-f", "openclaw"],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=3,
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:
                 pids = result.stdout.strip().split()

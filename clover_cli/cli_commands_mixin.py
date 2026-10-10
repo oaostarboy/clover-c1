@@ -1391,6 +1391,7 @@ class CLICommandsMixin:
                     ["git", "worktree", "list"],
                     capture_output=True, text=True, encoding="utf-8",
                     errors="replace", timeout=10, cwd=repo_root,
+                    stdin=subprocess.DEVNULL,
                 )
                 out = result.stdout.strip() if result.returncode == 0 else ""
             except Exception:
@@ -3429,11 +3430,11 @@ class CLICommandsMixin:
                 if initial_text:
                     fh.write(initial_text)
             try:
-                subprocess.call([*shlex.split(editor), path])
+                subprocess.call([*shlex.split(editor), path])  # noqa: subprocess-stdin — interactive editor
             except Exception:
                 # Fall back to a bare invocation (editor value may not be a
                 # simple argv-splittable string on some platforms).
-                subprocess.call(f"{editor} {shlex.quote(path)}", shell=True)
+                subprocess.call(f"{editor} {shlex.quote(path)}", shell=True)  # noqa: subprocess-stdin — interactive editor
             with open(path, "r", encoding="utf-8") as fh:
                 raw = fh.read()
         finally:

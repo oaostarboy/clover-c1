@@ -61,6 +61,7 @@ def _run_git(args, cwd: str, timeout: int = _GIT_TIMEOUT):
         encoding="utf-8",
         errors="replace",
         timeout=timeout,
+        stdin=subprocess.DEVNULL,
     )
 
 

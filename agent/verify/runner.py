@@ -118,6 +118,7 @@ def _run_phase_command(
             timeout=timeout,
             text=True,
             errors="replace",
+            stdin=subprocess.DEVNULL,
         )
         output = proc.stdout or ""
         exit_code: int | None = proc.returncode
@@ -223,6 +224,7 @@ def _run_start_phase(
         start_new_session=True,  # own process group for clean teardown
         text=True,
         errors="replace",
+        stdin=subprocess.DEVNULL,
     )
     output = ""
     try:

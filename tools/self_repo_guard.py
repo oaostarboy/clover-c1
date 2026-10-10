@@ -572,6 +572,7 @@ def _read_git_alias(executable: str, target: Path, alias: str) -> str | None:
             text=True,
             timeout=1,
             check=False,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return None

@@ -41,7 +41,7 @@ UNFINISHED = re.compile(
 def run(argv: list[str]) -> tuple[int, dict]:
     # Explicit UTF-8: stream-json is UTF-8, and the locale code page on
     # Windows (cp1252 etc.) would crash on the first non-ASCII character.
-    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", bufsize=1)
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", bufsize=1, stdin=subprocess.DEVNULL)
     last: dict = {}
     assert proc.stdout is not None
     out = sys.stdout

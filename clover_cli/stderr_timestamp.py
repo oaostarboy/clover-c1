@@ -138,7 +138,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     log_path: Path = args.error_log
 
     try:
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # noqa: subprocess-stdin — wrapped command owns the terminal
             _prepare_child_command(args.command),
             stderr=subprocess.PIPE,
         )

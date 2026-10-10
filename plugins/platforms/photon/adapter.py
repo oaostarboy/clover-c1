@@ -516,6 +516,7 @@ def _reinstall_sidecar_deps() -> None:
             check=False,
             timeout=_NPM_REINSTALL_TIMEOUT,
             creationflags=windows_hide_flags(),
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             logger.warning(
@@ -529,6 +530,7 @@ def _reinstall_sidecar_deps() -> None:
                 check=False,
                 timeout=_NPM_REINSTALL_TIMEOUT,
                 creationflags=windows_hide_flags(),
+                stdin=subprocess.DEVNULL,
             )
     except subprocess.TimeoutExpired:
         # A wedged npm (dead registry, network blackhole) must not stall the
@@ -1493,6 +1495,7 @@ class PhotonAdapter(BasePlatformAdapter):
             out = subprocess.run(  # noqa: S603, S607
                 ["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5.0, check=False,
+                stdin=subprocess.DEVNULL,
             )
         except (OSError, subprocess.TimeoutExpired):
             return []
@@ -1505,6 +1508,7 @@ class PhotonAdapter(BasePlatformAdapter):
             out = subprocess.run(  # noqa: S603, S607
                 ["ps", "-p", str(pid), "-o", "command="],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5.0, check=False,
+                stdin=subprocess.DEVNULL,
             )
         except (OSError, subprocess.TimeoutExpired):
             return False

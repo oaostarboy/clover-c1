@@ -283,6 +283,7 @@ def _kill_tree(proc: "subprocess.Popen", pgid: int | None = None) -> None:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=10,
+                stdin=subprocess.DEVNULL,
             )  # windows-footgun: ok
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             pass
@@ -416,6 +417,7 @@ def _run_one_file_once(
         # Windows: this maps to CREATE_NEW_PROCESS_GROUP in CPython 3.12+;
         # _kill_tree handles the Windows path via taskkill /F /T.
         start_new_session=True,
+        stdin=subprocess.DEVNULL,
     )
 
     # Capture the pgid NOW, before the leader can exit and be reaped. Once

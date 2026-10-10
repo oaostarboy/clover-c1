@@ -182,6 +182,7 @@ def run_bang_command(
             cwd=run_cwd,
             env=_bang_env(),
             creationflags=creationflags,
+            stdin=subprocess.DEVNULL,
         )
     except Exception as exc:
         emit(f"!: failed to run command: {exc}")

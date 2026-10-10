@@ -76,6 +76,7 @@ def _build_sha() -> str:
             errors="replace",
             stderr=subprocess.DEVNULL,
             timeout=2,
+            stdin=subprocess.DEVNULL,
         ).strip()
     except Exception:
         return "unknown"
@@ -118,6 +119,7 @@ def _pid_command(pid: int) -> str:
             errors="replace",
             stderr=subprocess.DEVNULL,
             timeout=2,
+            stdin=subprocess.DEVNULL,
         ).strip()
     except Exception:
         return ""

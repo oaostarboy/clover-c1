@@ -333,6 +333,7 @@ def _probe_voice_duration_seconds(path: str) -> Optional[int]:
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
                  "-of", "default=noprint_wrappers=1:nokey=1", path],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
+                stdin=subprocess.DEVNULL,
             )
             if proc.returncode == 0:
                 return _coerce_duration_seconds(proc.stdout.strip())
@@ -8117,6 +8118,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
             )
             _stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(), timeout=60,

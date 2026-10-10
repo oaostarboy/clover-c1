@@ -185,7 +185,7 @@ def relaunch(
         # Windows: subprocess + exit, because execvp can't swap to .cmd/.exe shims.
         import subprocess
         try:
-            result = subprocess.run(new_argv)
+            result = subprocess.run(new_argv)  # noqa: subprocess-stdin — re-exec of the user session
             sys.exit(result.returncode)
         except KeyboardInterrupt:
             sys.exit(130)

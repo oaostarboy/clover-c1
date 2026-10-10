@@ -170,6 +170,7 @@ def _run_quiet(cmd: "list[str]") -> bool:
             stderr=subprocess.DEVNULL,
             check=False,
             timeout=60,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.SubprocessError):
         return False

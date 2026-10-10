@@ -477,6 +477,7 @@ def check_alias_collision(name: str) -> Optional[str]:
         result = subprocess.run(
             ["where" if is_windows else "which", canon],
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0:
             existing_path = result.stdout.strip().splitlines()[0]
@@ -1398,6 +1399,7 @@ def seed_profile_skills(profile_dir: Path, quiet: bool = False) -> Optional[dict
             env={**os.environ, "CLOVER_HOME": str(profile_dir)},
             cwd=str(project_root),
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=60,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode == 0 and result.stdout.strip():
             return json.loads(result.stdout.strip())
@@ -1958,15 +1960,18 @@ def _cleanup_gateway_service(name: str, profile_dir: Path) -> None:
                 subprocess.run(
                     ["systemctl", "--user", "disable", svc_name],
                     capture_output=True, check=False, timeout=10,
+                    stdin=subprocess.DEVNULL,
                 )
                 subprocess.run(
                     ["systemctl", "--user", "stop", svc_name],
                     capture_output=True, check=False, timeout=10,
+                    stdin=subprocess.DEVNULL,
                 )
                 svc_file.unlink(missing_ok=True)
                 subprocess.run(
                     ["systemctl", "--user", "daemon-reload"],
                     capture_output=True, check=False, timeout=10,
+                    stdin=subprocess.DEVNULL,
                 )
                 print(f"✓ Service {svc_name} removed")
 
@@ -1976,6 +1981,7 @@ def _cleanup_gateway_service(name: str, profile_dir: Path) -> None:
                 subprocess.run(
                     ["launchctl", "unload", str(plist_path)],
                     capture_output=True, check=False, timeout=10,
+                    stdin=subprocess.DEVNULL,
                 )
                 plist_path.unlink(missing_ok=True)
                 print("✓ Launchd service removed")

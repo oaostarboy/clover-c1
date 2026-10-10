@@ -1983,6 +1983,7 @@ class SlashCommandCompleter(Completer):
                 proc = subprocess.run(
                     cmd, capture_output=True, text=True, timeout=2,
                     cwd=cwd, encoding="utf-8", errors="replace",
+                    stdin=subprocess.DEVNULL,
                 )
                 if proc.returncode == 0 and proc.stdout and proc.stdout.strip():
                     raw = proc.stdout.strip().split("\n")

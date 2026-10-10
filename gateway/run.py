@@ -3410,6 +3410,7 @@ async def _probe_audio_duration(path: str) -> Optional[str]:
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", path,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
         if proc.returncode == 0:
@@ -12678,6 +12679,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     stderr=subprocess.DEVNULL,
                     env=watcher_env,
                     **windows_detach_popen_kwargs(),
+                    stdin=subprocess.DEVNULL,
                 )
             except OSError:
                 try:
@@ -12687,6 +12689,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         stderr=subprocess.DEVNULL,
                         env=watcher_env,
                         creationflags=windows_detach_flags_without_breakaway(),
+                        stdin=subprocess.DEVNULL,
                     )
                 except OSError as exc:
                     # Both spawn attempts failed (a breakaway-denying job object
@@ -12732,6 +12735,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 stderr=subprocess.DEVNULL,
                 env=watcher_env,
                 start_new_session=True,
+                stdin=subprocess.DEVNULL,
             )
         else:
             subprocess.Popen(
@@ -12740,6 +12744,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 stderr=subprocess.DEVNULL,
                 env=watcher_env,
                 start_new_session=True,
+                stdin=subprocess.DEVNULL,
             )
 
     def _wedged_agent_count(self) -> int:
@@ -20059,6 +20064,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                 stdout=asyncio.subprocess.PIPE,
                                 stderr=asyncio.subprocess.PIPE,
                                 env=sanitized_env,
+                                stdin=asyncio.subprocess.DEVNULL,
                             )
                             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
                             output = (stdout or stderr).decode().strip()
@@ -26492,11 +26498,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if sys.platform == "win32":
                 subprocess.Popen([*restart_cmd, "gateway", "restart"],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 **windows_detach_popen_kwargs())
+                                 **windows_detach_popen_kwargs(), stdin=subprocess.DEVNULL)
             else:
                 subprocess.Popen([*restart_cmd, "gateway", "restart"],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                 start_new_session=True)
+                                 start_new_session=True, stdin=subprocess.DEVNULL)
         except Exception:
             logger.exception("Could not restart gateway after dependency repair")
 

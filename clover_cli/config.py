@@ -5184,7 +5184,7 @@ def edit_config():
         return
     
     print(f"Opening {config_path} in {editor}...")
-    subprocess.run([editor, str(config_path)])
+    subprocess.run([editor, str(config_path)])  # noqa: subprocess-stdin — interactive editor
 
 
 def _cron_model_drift_axis_for_config_key(key: str) -> Optional[str]:

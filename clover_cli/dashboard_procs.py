@@ -121,6 +121,7 @@ def _scan_dashboard_processes(
                 capture_output=True,
                 text=True, encoding="utf-8", errors="replace",
                 timeout=10,
+                stdin=subprocess.DEVNULL,
             )
             if result.returncode == 0:
                 for line in getattr(result, "stdout", "").split("\n"):
@@ -472,6 +473,7 @@ def _kill_stale_dashboard_processes(
                     capture_output=True,
                     text=True, encoding="utf-8", errors="replace",
                     timeout=10,
+                    stdin=subprocess.DEVNULL,
                 )
                 if result.returncode == 0:
                     killed.append(pid)
@@ -746,6 +748,7 @@ def _process_ppid(pid: int) -> int | None:
             encoding="utf-8",
             errors="replace",
             timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0 or not result.stdout:
             return None

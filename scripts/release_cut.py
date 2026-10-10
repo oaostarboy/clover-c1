@@ -348,7 +348,8 @@ def plan_notes(text: str, version: str, name: Optional[str], date_arg: Optional[
 
 def _git(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=check
+        ["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", check=check,
+        stdin=subprocess.DEVNULL,
     )
 
 
@@ -489,7 +490,7 @@ def plan(
 
 
 def run_tests(root: Path, test_cmd: str) -> None:
-    proc = subprocess.run(shlex.split(test_cmd), cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    proc = subprocess.run(shlex.split(test_cmd), cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
     tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-15:])
     if proc.returncode != 0:
         raise TestFailure(f"release-notes test failed (exit {proc.returncode}):\n{tail}")

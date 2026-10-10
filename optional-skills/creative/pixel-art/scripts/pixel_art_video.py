@@ -301,6 +301,7 @@ def pixel_art_video(
              "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18",
              output_path],
             check=True,
+            stdin=subprocess.DEVNULL,
         )
 
         gif_path = None
@@ -315,6 +316,7 @@ def pixel_art_video(
                  "-loop", "0",
                  gif_path],
                 check=True,
+                stdin=subprocess.DEVNULL,
             )
 
     return output_path, gif_path

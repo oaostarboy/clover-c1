@@ -176,6 +176,7 @@ def ensure_dependency(
     result = subprocess.run(
         cmd,
         env=run_env,
+        stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0:
         return False

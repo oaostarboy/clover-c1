@@ -1285,6 +1285,7 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                 "-application", "voip", out_path,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
             )
             _, stderr = await proc.communicate()
             if proc.returncode != 0 or not Path(out_path).exists():

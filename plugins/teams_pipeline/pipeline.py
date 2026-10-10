@@ -516,6 +516,7 @@ class TeamsMeetingPipeline:
             str(audio_path),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
         )
         _stdout, stderr = await proc.communicate()
         if proc.returncode != 0:

@@ -153,6 +153,7 @@ def _get_service_pids(all_profiles: bool = False) -> set:
                     capture_output=True,
                     text=True, encoding='utf-8', errors='replace',
                     timeout=5,
+                    stdin=subprocess.DEVNULL,
                 )
                 for line in result.stdout.strip().splitlines():
                     parts = line.split()
@@ -165,6 +166,7 @@ def _get_service_pids(all_profiles: bool = False) -> set:
                             capture_output=True,
                             text=True, encoding='utf-8', errors='replace',
                             timeout=5,
+                            stdin=subprocess.DEVNULL,
                         )
                         pid = int(show.stdout.strip())
                         if pid > 0:
@@ -204,6 +206,7 @@ def _get_service_pids(all_profiles: bool = False) -> set:
                     capture_output=True,
                     text=True, encoding='utf-8', errors='replace',
                     timeout=5,
+                    stdin=subprocess.DEVNULL,
                 )
                 if result.returncode == 0:
                     for line in result.stdout.strip().splitlines():
@@ -255,6 +258,7 @@ def _get_parent_pid(pid: int) -> int | None:
             capture_output=True,
             text=True, encoding='utf-8', errors='replace',
             timeout=5,
+            stdin=subprocess.DEVNULL,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -899,6 +903,7 @@ def _scan_gateway_pids(
                     capture_output=True,
                     text=True, encoding='utf-8', errors='replace',
                     timeout=10,
+                    stdin=subprocess.DEVNULL,
                 )
                 if result.returncode != 0:
                     return []
@@ -1628,6 +1633,7 @@ def _spawn_gateway_restart_watcher(old_pid: int, run_argv: list[str]) -> bool:
             watcher_argv,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
             **windows_detach_popen_kwargs(),
         )
     except OSError:
@@ -1646,6 +1652,7 @@ def _spawn_gateway_restart_watcher(old_pid: int, run_argv: list[str]) -> bool:
                 watcher_argv,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
                 **fallback_kwargs,
             )
         except OSError:
@@ -2098,6 +2105,7 @@ def _launchd_print_service_pid(domain: str, label: str) -> tuple[bool, int | Non
             capture_output=True,
             text=True, encoding='utf-8', errors='replace',
             timeout=5,
+            stdin=subprocess.DEVNULL,
         )
     except FileNotFoundError:
         return (False, None)
@@ -2122,6 +2130,7 @@ def _launchd_service_registered(label: str) -> bool:
         capture_output=True,
         text=True, encoding='utf-8', errors='replace',
         timeout=5,
+        stdin=subprocess.DEVNULL,
     )
     return result.returncode == 0
 
@@ -2162,6 +2171,7 @@ def _probe_launchd_service_running() -> bool:
             capture_output=True,
             text=True, encoding='utf-8', errors='replace',
             timeout=10,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         return False
@@ -2743,6 +2753,7 @@ def _windows_scheduled_task_state(task_name: str) -> str | None:
             encoding="utf-8",
             errors="ignore",
             timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             return None
@@ -3108,6 +3119,7 @@ def _preflight_user_systemd(*, auto_enable_linger: bool = True) -> None:
                 text=True, encoding='utf-8', errors='replace',
                 check=False,
                 timeout=30,
+                stdin=subprocess.DEVNULL,
             )
         except Exception as exc:
             _raise_user_systemd_unavailable(
@@ -3186,7 +3198,10 @@ def _run_systemctl(
     clear error instead of a raw ``FileNotFoundError`` traceback.
     """
     try:
-        return subprocess.run(_systemctl_cmd(system) + args, **kwargs)
+        return subprocess.run(
+            _systemctl_cmd(system) + args,
+            **{"stdin": subprocess.DEVNULL, **kwargs},
+        )
     except FileNotFoundError:
         raise RuntimeError("systemctl is not available on this system") from None
 
@@ -3673,6 +3688,7 @@ def get_systemd_linger_status() -> tuple[bool | None, str]:
             text=True, encoding='utf-8', errors='replace',
             check=False,
             timeout=10,
+            stdin=subprocess.DEVNULL,
         )
     except Exception as e:
         return None, str(e)
@@ -4459,6 +4475,7 @@ def _ensure_linger_enabled() -> None:
             text=True, encoding='utf-8', errors='replace',
             check=False,
             timeout=30,
+            stdin=subprocess.DEVNULL,
         )
     except Exception as e:
         _print_linger_enable_warning(username, str(e))
@@ -4985,7 +5002,7 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
         ]
         if full:
             log_cmd.append("-l")
-        subprocess.run(log_cmd, timeout=10)
+        subprocess.run(log_cmd, timeout=10, stdin=subprocess.DEVNULL)
 
 
 # =============================================================================
@@ -5029,6 +5046,7 @@ def _probe_launchd_domain_for_label(label: str) -> str:
                 check=True,
                 timeout=5,
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
             )
             return domain
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
@@ -5042,6 +5060,7 @@ def _probe_launchd_domain_for_label(label: str) -> str:
             capture_output=True,
             text=True, encoding='utf-8', errors='replace',
             timeout=5,
+            stdin=subprocess.DEVNULL,
         )
         if "Aqua" in (result.stdout or ""):
             return gui_domain
@@ -5136,6 +5155,7 @@ def _launchctl_bootstrap(
             ["launchctl", "bootstrap", domain, str(plist_path)],
             check=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
         return
     except subprocess.CalledProcessError as exc:
@@ -5146,11 +5166,13 @@ def _launchctl_bootstrap(
             ["launchctl", "bootout", f"{domain}/{label}"],
             check=False,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
         subprocess.run(
             ["launchctl", "bootstrap", domain, str(plist_path)],
             check=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
 
 
@@ -5197,6 +5219,7 @@ def _launchctl_label_supervising_process(label: str) -> bool:
             timeout=10,
             capture_output=True,
             text=True, encoding='utf-8', errors='replace',
+            stdin=subprocess.DEVNULL,
         )
         if result.returncode != 0:
             return False
@@ -5682,6 +5705,7 @@ def refresh_launchd_plist_if_needed() -> bool:
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
             )
         except Exception as e:
             # Don't give up — fall through to the in-process bootout/bootstrap
@@ -5712,6 +5736,7 @@ def refresh_launchd_plist_if_needed() -> bool:
         ["launchctl", "bootout", target],
         check=False,
         timeout=90,
+        stdin=subprocess.DEVNULL,
     )
     # Size the retry window to the restart drain timeout (default 180s), not a
     # fixed ~10s: the failure mode occurs while the old gateway is still
@@ -5796,6 +5821,7 @@ def launchd_uninstall():
         ["launchctl", "bootout", f"{_launchd_domain()}/{label}"],
         check=False,
         timeout=90,
+        stdin=subprocess.DEVNULL,
     )
 
     if plist_path.exists():
@@ -5823,6 +5849,7 @@ def launchd_start():
                 ["launchctl", "kickstart", f"{_launchd_domain()}/{label}"],
                 check=True,
                 timeout=30,
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.CalledProcessError as e:
             if not _launchctl_domain_unsupported(e.returncode):
@@ -5839,6 +5866,7 @@ def launchd_start():
             ["launchctl", "kickstart", f"{_launchd_domain()}/{label}"],
             check=True,
             timeout=30,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.CalledProcessError as e:
         if not _launchd_error_indicates_unloaded(e):
@@ -5851,6 +5879,7 @@ def launchd_start():
                 ["launchctl", "kickstart", f"{_launchd_domain()}/{label}"],
                 check=True,
                 timeout=30,
+                stdin=subprocess.DEVNULL,
             )
         except subprocess.CalledProcessError as e2:
             # Even a fresh bootstrap can't manage the domain on this host —
@@ -5879,7 +5908,7 @@ def launchd_stop():
     # immediately restarts it because KeepAlive is unconditionally true.
     # `clover gateway start` re-bootstraps when it detects the job is unloaded.
     try:
-        subprocess.run(["launchctl", "bootout", target], check=True, timeout=90)
+        subprocess.run(["launchctl", "bootout", target], check=True, timeout=90, stdin=subprocess.DEVNULL)
     except subprocess.CalledProcessError as e:
         # Job already unloaded (3/113/125), or the domain can't be managed at
         # all (5/125, macOS 26+ detached-fallback process, issue #23387) — in
@@ -5958,6 +5987,7 @@ def _launchd_kickstart(label: str, domain: str) -> None:
         capture_output=True,
         text=True, encoding='utf-8', errors='replace',
         timeout=90,
+        stdin=subprocess.DEVNULL,
     )
 
 
@@ -6061,7 +6091,7 @@ def launchd_restart():
                 print(
                     f"⚠ Gateway drain timed out after {wait_budget:.0f}s — forcing launchd restart"
                 )
-        subprocess.run(["launchctl", "kickstart", "-k", target], check=True, timeout=90)
+        subprocess.run(["launchctl", "kickstart", "-k", target], check=True, timeout=90, stdin=subprocess.DEVNULL)
         print("✓ Service restarted")
         _clear_launchd_unsupported_marker()
     except subprocess.CalledProcessError as e:
@@ -6086,13 +6116,15 @@ def launchd_restart():
                 ["launchctl", "bootout", target],
                 check=False,
                 timeout=90,
+                stdin=subprocess.DEVNULL,
             )
             subprocess.run(
                 ["launchctl", "bootstrap", _launchd_domain(), str(plist_path)],
                 check=True,
                 timeout=30,
+                stdin=subprocess.DEVNULL,
             )
-            subprocess.run(["launchctl", "kickstart", target], check=True, timeout=30)
+            subprocess.run(["launchctl", "kickstart", target], check=True, timeout=30, stdin=subprocess.DEVNULL)
         except subprocess.CalledProcessError as e2:
             if not _launchctl_domain_unsupported(e2.returncode):
                 raise
@@ -6156,6 +6188,7 @@ def launchd_status(deep: bool = False):
             capture_output=True,
             text=True, encoding='utf-8', errors='replace',
             timeout=10,
+            stdin=subprocess.DEVNULL,
         )
         service_listed = result.returncode == 0
         list_output = result.stdout
@@ -6226,7 +6259,7 @@ def launchd_status(deep: bool = False):
         if log_file.exists():
             print()
             print("Recent logs:")
-            subprocess.run(["tail", "-20", str(log_file)], timeout=10)
+            subprocess.run(["tail", "-20", str(log_file)], timeout=10, stdin=subprocess.DEVNULL)
 
 
 # =============================================================================
@@ -7384,6 +7417,7 @@ def _is_service_running() -> bool:
                 capture_output=True,
                 text=True, encoding='utf-8', errors='replace',
                 timeout=10,
+                stdin=subprocess.DEVNULL,
             )
             return result.returncode == 0
         except subprocess.TimeoutExpired:

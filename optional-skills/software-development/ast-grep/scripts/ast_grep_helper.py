@@ -179,6 +179,7 @@ def which_binary() -> Optional[Path]:
                         capture_output=True,
                         text=True,
                         timeout=5,
+                        stdin=subprocess.DEVNULL,
                     )
                     if out.returncode != 0 or "ast-grep" not in (out.stdout + out.stderr).lower():
                         continue
@@ -396,6 +397,7 @@ def run_sg(
             capture_output=capture,
             text=True,
             timeout=timeout,
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
         err(f"ast-grep call timed out after {timeout}s")
@@ -605,7 +607,7 @@ def cmd_install(_args: argparse.Namespace) -> int:
         err(f"installer not found: {installer}")
         return 1
     trace(f"running installer: {' '.join(cmd)}")
-    return subprocess.run(cmd).returncode
+    return subprocess.run(cmd).returncode  # noqa: subprocess-stdin — user-invoked installer
 
 
 def cmd_validate(args: argparse.Namespace) -> int:

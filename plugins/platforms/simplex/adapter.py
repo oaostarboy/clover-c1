@@ -973,6 +973,7 @@ class SimplexAdapter(BasePlatformAdapter):
                         check=True,
                         capture_output=True,
                         timeout=30,
+                        stdin=subprocess.DEVNULL,
                     )
                 with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
                     tmp_path = tmp.name
@@ -989,6 +990,7 @@ class SimplexAdapter(BasePlatformAdapter):
                     check=True,
                     capture_output=True,
                     timeout=30,
+                    stdin=subprocess.DEVNULL,
                 )
                 with open(tmp_path, "rb") as f:
                     thumb_uri = (

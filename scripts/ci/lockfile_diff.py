@@ -117,6 +117,7 @@ def _git_show(ref: str, path: str, repo_root: str) -> str | None:
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
         cwd=repo_root,
+        stdin=subprocess.DEVNULL,
     )
     return proc.stdout if proc.returncode == 0 else None
 
@@ -128,6 +129,7 @@ def _tracked_lockfiles(ref: str, repo_root: str) -> set[str]:
         text=True, encoding="utf-8", errors="replace",
         cwd=repo_root,
         check=True,
+        stdin=subprocess.DEVNULL,
     )
     return {
         line
