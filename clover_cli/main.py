@@ -7978,7 +7978,7 @@ def _desktop_linux_sandbox_fixup(packaged_executable: Path) -> bool:
 
     print("→ Configuring Electron Linux sandbox helper (sudo required)...")
     for command in ([sudo, "chown", "root:root", str(sandbox)], [sudo, "chmod", "4755", str(sandbox)]):
-        if subprocess.run(command, check=False, stdin=subprocess.DEVNULL).returncode != 0:
+        if subprocess.run(command, check=False).returncode != 0:  # noqa: subprocess-stdin — sudo may prompt the user
             print(f"✗ Failed to configure Electron's Linux sandbox helper: {sandbox}")
             return False
     return True

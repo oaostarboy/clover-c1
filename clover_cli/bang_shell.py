@@ -171,7 +171,9 @@ def run_bang_command(
     try:
         # shell=True is intentional and matches quick_commands: this is a
         # command the human typed into their own composer, not model output.
-        proc = subprocess.Popen(
+        # Interactive: the human typed this command, so it inherits the
+        # terminal's stdin (prompts, `read`, `cat`, confirmations must work).
+        proc = subprocess.Popen(  # noqa: subprocess-stdin — interactive user command
             command,
             shell=True,
             stdout=subprocess.PIPE,
@@ -182,7 +184,6 @@ def run_bang_command(
             cwd=run_cwd,
             env=_bang_env(),
             creationflags=creationflags,
-            stdin=subprocess.DEVNULL,
         )
     except Exception as exc:
         emit(f"!: failed to run command: {exc}")
