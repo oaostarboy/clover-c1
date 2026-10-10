@@ -420,6 +420,16 @@ def print_update_plan(plan: UpdatePlan) -> None:
         )
 
 
+def _runtime_is_other_install(pid: int) -> bool:
+    """Same-venv ownership rule the restart phase uses; unknown is not foreign."""
+    try:
+        from clover_cli.update_cmd import _gateway_pid_install_verdict
+
+        return _gateway_pid_install_verdict(pid) == "other"
+    except Exception:
+        return False
+
+
 def match_runtime_outcomes(
     plan: "UpdatePlan",
     *,
@@ -439,7 +449,8 @@ def match_runtime_outcomes(
 
         {"kind", "profile", "pid", "mechanism", "outcome"}
 
-    outcome: ``restarted`` (service restarted / profile relaunched /
+    outcome: ``other_install`` (runs from a different install; the
+    install-scoped restart phase correctly leaves it alone), ``restarted`` (service restarted / profile relaunched /
     handed to external supervisor), ``stopped`` (pid killed, watcher or
     operator relaunches), ``failed`` (in the phase's failed/stale list) or
     ``unaccounted`` — the plan saw it and NO bookkeeping mentions it: the
@@ -459,7 +470,11 @@ def match_runtime_outcomes(
             if r is None:
                 continue
             outcome = "unaccounted"
-            if r.profile in relaunched or r.profile in external:
+            if r.pid is not None and _runtime_is_other_install(r.pid):
+                # The restart phase is install-scoped: another install's
+                # runtime serving this profile home is never ours to touch.
+                outcome = "other_install"
+            elif r.profile in relaunched or r.profile in external:
                 outcome = "restarted"
             elif r.pid is not None and r.pid in killed:
                 outcome = "stopped"

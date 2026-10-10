@@ -3264,6 +3264,9 @@ def _receipt_reports_stale_runtime(expected_sha: str | None = None) -> bool:
         for entry in fleet:
             if not isinstance(entry, dict):
                 continue
+            if entry.get("state") == "other_install":
+                # Another install's gateway: never ours to restart.
+                continue
             if entry.get("state") == "stale":
                 return True
             if _sha_mismatch(entry.get("code_sha")):
@@ -3438,6 +3441,35 @@ def _owned_systemd_service_pids() -> set[int]:
     return pids
 
 
+def _gateway_pid_install_verdict(pid) -> str:
+    """Install ownership of a gateway PID, by the restart phase's same-venv rule.
+
+    ``"own"``     — the process runs this install's venv interpreter.
+    ``"other"``   — its interpreter is readable and belongs to a different
+                    venv/install (the restart phase never touches it).
+    ``"unknown"`` — not Linux, or the cmdline could not be read; callers must
+                    treat this as "not proven foreign".
+    """
+    if not sys.platform.startswith("linux"):
+        return "unknown"
+    from clover_cli.gateway import is_windows, is_macos
+    if is_windows() or is_macos():
+        return "unknown"
+    try:
+        args = _gateway_pid_cmdline_path(pid).read_bytes().split(b"\0")
+        executable = os.fsdecode(args[0])
+    except (OSError, IndexError, ValueError, TypeError):
+        return "unknown"
+    if not executable or not os.path.isabs(executable):
+        # A bare/relative argv[0] cannot name a venv: not proof of anything.
+        return "unknown"
+    # Same rule as the systemd unit check: ``venv/bin/python`` and
+    # ``venv/bin/python3`` are one install; another venv is not.
+    if _systemd_interpreter_path_matches(executable, os.path.abspath(sys.executable)):
+        return "own"
+    return "other"
+
+
 def _own_install_gateway_pids(pids):
     """Limit Linux update sweeps to this venv; unknown processes are spared."""
     if not sys.platform.startswith("linux"):
@@ -3445,19 +3477,7 @@ def _own_install_gateway_pids(pids):
     from clover_cli.gateway import is_windows, is_macos
     if is_windows() or is_macos():
         return list(pids)
-    selected = []
-    expected = os.path.abspath(sys.executable)
-    for pid in pids:
-        try:
-            args = _gateway_pid_cmdline_path(pid).read_bytes().split(b"\0")
-            executable = os.fsdecode(args[0])
-            # Same rule as the systemd unit check: ``venv/bin/python`` and
-            # ``venv/bin/python3`` are one install; another venv is not.
-            if _systemd_interpreter_path_matches(executable, expected):
-                selected.append(pid)
-        except (OSError, IndexError, ValueError):
-            continue
-    return selected
+    return [pid for pid in pids if _gateway_pid_install_verdict(pid) == "own"]
 
 
 def _run_pending_fleet_restart() -> bool:
