@@ -151,3 +151,31 @@ async def test_receipts_are_scoped_per_bot(tmp_path):
     await _process(app_b, _text_update(app_b.bot, 700))
     assert seen_a == [700]
     assert seen_b == [700]
+
+
+@pytest.mark.asyncio
+async def test_new_telegram_update_after_week_idle_is_not_duplicate(tmp_path, monkeypatch):
+    # Astra C13-ASTRA-05: the 24h receipt TTL must also bound the in-memory
+    # lookup, or a recycled update_id after Telegram's week-idle reset is dropped.
+    import plugins.platforms.telegram.update_admission as admission
+
+    now = [1800000000.0]
+    monkeypatch.setattr(admission.time, "time", lambda: now[0])
+    adapter = _adapter(tmp_path)
+    received = []
+    app = _build(adapter, 111, received)
+    await app.initialize()
+    try:
+        await app.process_update(_text_update(app.bot, 500))
+        assert received == [500]
+        # Telegram may choose a random starting update_id after a week idle.
+        # This is a NEW message, with a colliding recycled update_id.
+        now[0] += 8 * 24 * 60 * 60
+        fresh = _text_update(app.bot, 500).to_dict()
+        fresh["message"]["message_id"] = 999
+        fresh["message"]["text"] = "a genuinely new question"
+        fresh["message"]["date"] = int(now[0])
+        await app.process_update(Update.de_json(fresh, app.bot))
+        assert received == [500, 500], f"new message silently dropped: {received}"
+    finally:
+        await app.shutdown()

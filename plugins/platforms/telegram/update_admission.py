@@ -97,12 +97,19 @@ def make_admission_handler(adapter, bot_id):
     async def admit(update, context) -> None:
         key = f"{bot_id}:{update.update_id}"
         seen = adapter._seen_update_ids
-        if key in seen:
+        now = time.time()
+        seen_at = seen.get(key)
+        if seen_at is not None and now - seen_at >= RECEIPT_TTL_SECONDS:
+            # Expired (same rule as MessageDeduplicator): Telegram never
+            # redelivers past 24h, and may recycle IDs after a week idle.
+            del seen[key]
+            seen_at = None
+        if seen_at is not None:
             # Replay of an already-admitted update: answer it once.
             raise ApplicationHandlerStop
         # Admit synchronously (no await between the check and the write), so two
         # copies of the same update can never both pass.
-        seen[key] = time.time()
+        seen[key] = now
         _trim(seen)
         _persist(adapter, bot_id)
 
