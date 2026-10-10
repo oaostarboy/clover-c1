@@ -98,6 +98,31 @@ def resolve_repo_root(path: Optional[str]) -> Optional[str]:
     return root or None
 
 
+def is_confirmed_non_git_workspace(path: Optional[str]) -> bool:
+    """True only when *path* is an existing directory with no git checkout.
+
+    Conservative: a missing/unknown path, a ``.git`` entry anywhere above it
+    (even one git refuses to open, e.g. dubious ownership), or a git failure
+    we cannot classify all return False, so required isolation keeps refusing.
+    """
+    if not path:
+        return False
+    try:
+        candidate = os.path.abspath(os.path.expanduser(str(path)))
+    except Exception:
+        return False
+    if not os.path.isdir(candidate) or resolve_repo_root(candidate):
+        return False
+    current = candidate
+    while True:
+        if os.path.lexists(os.path.join(current, ".git")):
+            return False
+        parent = os.path.dirname(current)
+        if parent == current:
+            return True
+        current = parent
+
+
 def _ensure_gitignore_entry(repo_root: str) -> None:
     """Best-effort: keep ``.worktrees/`` out of git status."""
     gitignore = Path(repo_root) / ".gitignore"
@@ -359,6 +384,16 @@ def prepare_subagent_worktree(
             "reason": "worktree isolation is unsupported by the active terminal backend",
         }, None
     if not resolve_repo_root(parent_cwd):
+        if is_confirmed_non_git_workspace(parent_cwd):
+            # Isolation protects a git checkout from concurrent writers; with
+            # no checkout there is nothing to protect, so even required
+            # isolation lets the child run in the parent's workspace.
+            return {
+                "status": "shared",
+                "required": required,
+                "reason": "workspace is not a git repository",
+                "no_checkout": True,
+            }, None
         return {
             "status": "blocked" if required else "shared",
             "required": required,
@@ -387,6 +422,13 @@ def prepare_subagent_worktree(
 
 def build_shared_workspace_context_note(outcome: Dict[str, Any]) -> str:
     """Tell a child before execution that it will share, not isolate, files."""
+    if outcome.get("no_checkout"):
+        return (
+            "\n\n[WORKSPACE ISOLATION OUTCOME] This task is running in the "
+            "parent's workspace, NOT an isolated worktree: the workspace is "
+            "not a git repository, so there is nothing to isolate. Do not "
+            "claim isolation; avoid concurrent edits to the same files."
+        )
     return (
         "\n\n[WORKSPACE ISOLATION OUTCOME] This task is running in the shared "
         "workspace, NOT an isolated worktree. Reason: "
