@@ -2389,6 +2389,19 @@ class SessionSearchMixin:
                     logger.warning(
                         "FTS optimize failed for %s: %s", tbl, exc
                     )
+                except sqlite3.DatabaseError as exc:
+                    # Adapted from NousResearch/hermes-agent a0b14df1bc (MIT)
+                    # SQLITE_CORRUPT is a DatabaseError, not an
+                    # OperationalError: skip this index, keep optimizing the
+                    # healthy ones, and leave no transaction open.
+                    self._conn.rollback()
+                    logger.error(
+                        "FTS optimize failed with a corruption-class error "
+                        "for %s: %s; run `clover doctor` to repair the "
+                        "state database",
+                        tbl,
+                        exc,
+                    )
         return optimized
 
     def rebuild_fts(self) -> int:
@@ -2435,6 +2448,20 @@ class SessionSearchMixin:
                         self._conn.rollback()
                         logger.warning(
                             "FTS rebuild failed for %s: %s", tbl, exc
+                        )
+                    except sqlite3.DatabaseError as exc:
+                        # Adapted from NousResearch/hermes-agent e9a981bb6c (MIT)
+                        # SQLITE_CORRUPT ("database disk image is malformed")
+                        # is a DatabaseError, not an OperationalError — the
+                        # very class this recovery exists for. Roll back and
+                        # keep the 0-means-no-progress contract.
+                        self._conn.rollback()
+                        logger.error(
+                            "FTS rebuild failed with a corruption-class error "
+                            "for %s: %s; run `clover doctor` to repair the "
+                            "state database",
+                            tbl,
+                            exc,
                         )
         return rebuilt
 
