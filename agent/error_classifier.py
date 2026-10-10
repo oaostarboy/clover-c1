@@ -607,6 +607,14 @@ _PROVIDER_POLICY_BLOCKED_PATTERNS = [
     "no endpoints found matching your data policy",
 ]
 
+# Upstream account ban relayed by an aggregator, often as HTTP 200 + an SSE error
+# event (no status): permanent for this account, so never the transient retry
+# ladder.  Matched status-agnostically.
+# Adapted from NousResearch/hermes-agent 2c948e6aa2 (MIT)
+_ACCOUNT_POLICY_BLOCK_PATTERNS = [
+    "blocked for a previous policy violation",
+]
+
 # Provider content-policy / safety-filter blocks. Distinct from
 # ``provider_policy_blocked`` above (which is an OpenRouter *account*-level
 # data/privacy guardrail) — these are *per-prompt* safety decisions made by
@@ -978,6 +986,17 @@ def classify_api_error(
     if any(p in error_msg for p in _CONTENT_POLICY_BLOCKED_PATTERNS):
         return _result(
             FailoverReason.content_policy_blocked,
+            retryable=False,
+            should_fallback=True,
+        )
+
+    # Upstream account ban (often relayed inside an HTTP-200 stream, so no
+    # status).  Permanent for the account: no retry, and no credential
+    # rotation (every key on a banned account is banned; a 403 variant is not
+    # a bad key).  Status-agnostic, so it must run before status routing.
+    if any(p in error_msg for p in _ACCOUNT_POLICY_BLOCK_PATTERNS):
+        return _result(
+            FailoverReason.provider_policy_blocked,
             retryable=False,
             should_fallback=True,
         )
@@ -2110,6 +2129,28 @@ def _classify_by_message(
 
 # ── Helpers ─────────────────────────────────────────────────────────────
 
+def _status_code_from_body(body: Any) -> Optional[int]:
+    """Numeric HTTP error status (400-599) from a structured error body.
+
+    An aggregator/relay can deliver an upstream failure only as an error
+    object inside an HTTP-200 SSE stream, leaving the SDK to raise a
+    status-less ``APIError`` whose ``body`` carries the status.  Only int codes
+    count; string codes stay symbolic (see ``_extract_error_code``).
+    Adapted from NousResearch/hermes-agent 0a661b7c94 + 763646c30d (MIT).
+    """
+    if not isinstance(body, dict):
+        return None
+    error_obj = body.get("error")
+    if not isinstance(error_obj, dict):
+        error_obj = {}
+    candidates = [error_obj.get(k) for k in ("status_code", "status", "http_status", "code")]
+    candidates.append(body.get("code"))
+    return next(
+        (c for c in candidates if isinstance(c, int) and not isinstance(c, bool) and 400 <= c < 600),
+        None,
+    )
+
+
 def _extract_status_code(error: Exception) -> Optional[int]:
     """Walk the error and its cause chain to find an HTTP status code."""
     current = error
@@ -2126,7 +2167,8 @@ def _extract_status_code(error: Exception) -> Optional[int]:
         if cause is None or cause is current:
             break
         current = cause
-    return None
+    # No status on the exception itself: a body-carried numeric code counts.
+    return _status_code_from_body(_extract_error_body(error))
 
 
 def _extract_error_body(error: Exception) -> dict:
