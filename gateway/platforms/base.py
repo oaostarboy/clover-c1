@@ -6842,12 +6842,17 @@ class BasePlatformAdapter(ABC):
 
             # Call the handler (this can take a while with tool calls)
             event._turn_marker_handoff = self.gateway_runner is not None
+            # This event is the running turn now (a parked follow-up drained
+            # into a turn): its receipt follows the normal-turn rules.
+            event._inbound_deferred = False
             response = await self._message_handler(event)
             # The runner returned (turn finished, command answered or rejected):
             # the input is no longer waiting on the platform's replay. A
             # cancellation or crash before this point leaves it unreceipted
             # unless the turn marker already made it durable.
-            complete_inbound_handoff(event)
+            # (unless the handler parked it in memory: ``_inbound_deferred``).
+            if not getattr(event, "_inbound_deferred", False):
+                complete_inbound_handoff(event)
             is_ephemeral_response = isinstance(response, EphemeralReply)
 
             # Slash-command handlers may return an EphemeralReply sentinel to

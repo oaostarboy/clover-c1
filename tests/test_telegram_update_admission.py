@@ -7,7 +7,9 @@ PTB Application and real Clover handler registration are used. Only the network
 request is stubbed.
 """
 
+import asyncio
 import json
+import threading
 
 import pytest
 
@@ -474,3 +476,163 @@ async def test_marker_only_crash_leaves_update_replayable_or_text_durable(tmp_pa
         )
     finally:
         _close_store_db(store)
+
+
+@pytest.mark.asyncio
+async def test_steered_input_is_replayable_until_persisted(tmp_path, monkeypatch):
+    from gateway.platforms.base import build_session_key
+    from tests.gateway.test_busy_session_ack import _make_runner
+    from tests.gateway.test_active_turn_recovery import _make_db_store, _close_store_db
+    from run_agent import AIAgent
+    import gateway.run as gr
+
+    home = tmp_path / 'home'
+    home.mkdir()
+    monkeypatch.setenv('CLOVER_HOME', str(home))
+    monkeypatch.setenv('CLOVER_GATEWAY_BUSY_ACK_ENABLED', 'false')
+    monkeypatch.setattr(gr, '_load_gateway_config', lambda: {})
+    events = []
+    adapter = _adapter(tmp_path)
+    app = _build_handing_off(adapter, 111, events)
+    await _process(app, _text_update(app.bot, 8000))
+    event = events[0]
+    event.text = 'please preserve this steering instruction'
+    store = _make_db_store(home)
+    entry = store.get_or_create_session(event.source)
+    runner, _ = _make_runner()
+    runner.session_store = store
+    runner._busy_input_mode = 'steer'
+    key = build_session_key(event.source)
+    runner.adapters[event.source.platform] = adapter
+    agent = object.__new__(AIAgent)
+    agent._pending_steer = None
+    agent._pending_steer_lock = threading.Lock()
+    runner._running_agents[key] = agent
+    adapter._active_sessions[key] = asyncio.Event()
+    adapter._session_tasks[key] = asyncio.current_task()
+    adapter._busy_session_handler = runner._handle_active_session_busy_message
+
+    async def unexpected_turn(event):
+        raise AssertionError('busy event must steer, not create another turn')
+
+    adapter._message_handler = unexpected_turn
+    try:
+        await adapter.handle_message(event)
+        assert agent._pending_steer == event.text
+        assert store.load_transcript(entry.session_id) == []
+        replay = []
+        # Fresh adapter has no old in-memory agent/steer queue.
+        app2 = _build_handing_off(_adapter(tmp_path), 111, replay)
+        await _process(app2, _text_update(app2.bot, 8000))
+        assert replay, ('steer only exists in memory, but durable receipt suppressed replay', adapter._seen_update_ids)
+    finally:
+        _close_store_db(store)
+
+
+async def _steer_one(tmp_path, monkeypatch, update_id):
+    """Busy-steer one real Telegram event; return (runner, key, agent, store, entry)."""
+    from gateway.platforms.base import build_session_key
+    from tests.gateway.test_busy_session_ack import _make_runner
+    from tests.gateway.test_active_turn_recovery import _make_db_store
+    from run_agent import AIAgent
+    import gateway.run as gr
+
+    home = tmp_path / 'home'
+    home.mkdir(exist_ok=True)
+    monkeypatch.setenv('CLOVER_HOME', str(home))
+    monkeypatch.setenv('CLOVER_GATEWAY_BUSY_ACK_ENABLED', 'false')
+    monkeypatch.setattr(gr, '_load_gateway_config', lambda: {})
+    events = []
+    adapter = _adapter(tmp_path)
+    app = _build_handing_off(adapter, 111, events)
+    await _process(app, _text_update(app.bot, update_id))
+    event = events[0]
+    event.text = 'steer me'
+    store = _make_db_store(home)
+    store.get_or_create_session(event.source)
+    runner, _ = _make_runner()
+    runner.session_store = store
+    runner._busy_input_mode = 'steer'
+    key = build_session_key(event.source)
+    runner.adapters[event.source.platform] = adapter
+    agent = object.__new__(AIAgent)
+    agent._pending_steer = None
+    agent._pending_steer_lock = threading.Lock()
+    runner._running_agents[key] = agent
+    adapter._active_sessions[key] = asyncio.Event()
+    adapter._session_tasks[key] = asyncio.current_task()
+    adapter._busy_session_handler = runner._handle_active_session_busy_message
+
+    async def unexpected_turn(event):
+        raise AssertionError('busy event must steer, not create another turn')
+
+    adapter._message_handler = unexpected_turn
+    await adapter.handle_message(event)
+    assert agent._pending_steer == event.text
+    return runner, key, agent, store
+
+
+async def _replayed(tmp_path, update_id):
+    replay = []
+    app = _build_handing_off(_adapter(tmp_path), 111, replay)
+    await _process(app, _text_update(app.bot, update_id))
+    return replay
+
+
+@pytest.mark.asyncio
+async def test_steered_input_receipt_completes_when_the_turn_persists_it(tmp_path, monkeypatch):
+    from tests.gateway.test_active_turn_recovery import _close_store_db
+
+    runner, key, agent, store = await _steer_one(tmp_path, monkeypatch, 8100)
+    try:
+        assert await _replayed(tmp_path, 8100)  # still replayable while in memory
+        agent._pending_steer = None  # the loop consumed it into a tool result
+        runner._settle_steered_inbound(
+            runner._take_steered_inbound(key), agent, {'final_response': 'done'})
+        assert await _replayed(tmp_path, 8100) == []
+    finally:
+        _close_store_db(store)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['interrupted', 'failed', 'unconsumed', 'handed_back'])
+async def test_steered_input_stays_replayable_unless_turn_persisted_it(
+    tmp_path, monkeypatch, outcome
+):
+    from tests.gateway.test_active_turn_recovery import _close_store_db
+
+    runner, key, agent, store = await _steer_one(tmp_path, monkeypatch, 8200)
+    try:
+        result = {'final_response': 'x'}
+        if outcome == 'interrupted':
+            agent._pending_steer = None
+            result['interrupted'] = True
+        elif outcome == 'failed':
+            agent._pending_steer = None
+            result['failure_reason'] = 'session_persistence_failed:disk'
+        elif outcome == 'handed_back':
+            agent._pending_steer = None
+            result['pending_steer'] = 'steer me'
+        # 'unconsumed': the steer is still sitting in agent._pending_steer
+        runner._settle_steered_inbound(runner._take_steered_inbound(key), agent, result)
+        assert await _replayed(tmp_path, 8200)
+    finally:
+        _close_store_db(store)
+
+
+@pytest.mark.asyncio
+async def test_handler_that_parks_the_event_in_memory_keeps_it_replayable(tmp_path):
+    """PRIORITY busy path: the runner returns after only queueing the event."""
+    events = []
+    adapter = _adapter(tmp_path)
+    app = _build_handing_off(adapter, 111, events)
+    await _process(app, _text_update(app.bot, 8300))
+    parked = events[0]
+
+    async def handler(event):
+        event._inbound_deferred = True  # what GatewayRunner._defer_inbound_receipt does
+        return None
+
+    adapter._message_handler = handler
+    await adapter._process_message_background(parked, "k")
+    assert await _replayed(tmp_path, 8300)
