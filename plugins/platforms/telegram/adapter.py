@@ -591,6 +591,22 @@ class _PollingLifecycleAbort(RuntimeError):
     """Internal control flow for polling startup fenced by teardown."""
 
 
+def _update_receipt_dir():
+    """Per-profile directory for Telegram update receipts (profile-aware via CLOVER_HOME)."""
+    from clover_constants import get_clover_home
+
+    return get_clover_home() / "telegram"
+
+
+def _bot_id_from_token(token) -> Optional[int]:
+    """The numeric bot id is the part of a Telegram token before the colon.
+
+    Read from the token so admission can key receipts before PTB initializes the bot.
+    """
+    head = str(token or "").split(":", 1)[0]
+    return int(head) if head.isdigit() else None
+
+
 class TelegramAdapter(BasePlatformAdapter):
     """
     Telegram bot adapter.
@@ -692,6 +708,12 @@ class TelegramAdapter(BasePlatformAdapter):
         super().__init__(config, Platform.TELEGRAM)
         self._app: Optional[Application] = None
         self._bot: Optional[Bot] = None
+        # Update-ID admission (see update_admission.py). Completed IDs are kept
+        # per bot and persisted to a receipt file, so a rebuilt adapter or a
+        # restarted gateway still drops Telegram's redeliveries.
+        self._seen_update_ids: dict = {}
+        self._update_receipts_loaded: set = set()
+        self._update_receipt_dir = _update_receipt_dir()
         self._webhook_mode: bool = False
         self._mention_patterns = self._compile_mention_patterns()
         self._reply_to_mode: str = getattr(config, 'reply_to_mode', 'first') or 'first'
@@ -4389,6 +4411,22 @@ class TelegramAdapter(BasePlatformAdapter):
         the ``gateway_platform_event`` observer (group 99) in lockstep with the
         core handlers.
         """
+        # Update-ID admission runs first, in group -1, so a redelivered update is
+        # stopped before any core, plugin or observer handler sees it.
+        from plugins.platforms.telegram.update_admission import (
+            ADMISSION_GROUP,
+            load_receipts,
+            make_admission_handler,
+        )
+
+        bot_id = _bot_id_from_token(self.config.token)
+        if bot_id is not None:
+            load_receipts(self._seen_update_ids, self._update_receipt_dir, bot_id)
+            app.add_handler(
+                TypeHandler(Update, make_admission_handler(self, bot_id)),
+                group=ADMISSION_GROUP,
+            )
+
         app.add_handler(TelegramMessageHandler(
             filters.TEXT & ~filters.COMMAND,
             self._handle_text_message
