@@ -92,7 +92,7 @@ behavior on the next access.
 | `is_fresh_reset` | `bool` | `False` | Set by explicit `/new` or `/reset`. Triggers topic/channel skill re-injection on first message. Distinguished from `was_auto_reset` to avoid misleading "session expired" notices. |
 | `expiry_finalized` | `bool` | `False` | Set by background expiry watcher after invoking `on_session_finalize` hooks, cleaning tool resources, and evicting the cached agent. Prevents redundant finalization across restarts. |
 | `suspended` | `bool` | `False` | Hard force-wipe signal. Set by `/stop` or stuck-loop escalation (3+ consecutive restart failures). On next `get_or_create_session()`, forces a new `session_id` regardless of `resume_pending`. |
-| `resume_pending` | `bool` | `False` | Soft recovery marker. Set by `suspend_recently_active()` (crash recovery) or drain timeout. On next access, preserves the existing `session_id` — the user continues on the same transcript. Cleared after the next successful turn completes. |
+| `resume_pending` | `bool` | `False` | Soft recovery marker. Set by `recover_interrupted_turns()` (crash-left turn marker) or drain timeout. On next access, preserves the existing `session_id` — the user continues on the same transcript. Cleared after the next successful turn completes. |
 | `resume_reason` | `Optional[str]` | `None` | Why resume was marked: `"restart_timeout"`, `"shutdown_timeout"`, `"restart_interrupted"`. |
 | `last_resume_marked_at` | `Optional[datetime]` | `None` | Timestamp of the last resume-pending marking. |
 
@@ -169,7 +169,7 @@ SessionStore(sessions_dir: Path, config: GatewayConfig, has_active_processes_fn=
 | `suspend_session(session_key)` | Mark session as `suspended=True` (from `/stop`). Forces auto-reset on next access. |
 | `mark_resume_pending(session_key, reason)` | Mark session as `resume_pending=True` (from drain timeout). Preserves session_id on next access. Will NOT override `suspended=True`. |
 | `clear_resume_pending(session_key)` | Clear `resume_pending` after a successful resumed turn. Called from gateway after `run_conversation()` returns. |
-| `suspend_recently_active(max_age_seconds=120)` | Crash recovery: mark recently-active sessions as `resume_pending=True`. Skips already-pending and already-suspended entries. Called on startup after unclean shutdown. |
+| `recover_interrupted_turns(max_age_seconds)` | Crash recovery: mark only sessions whose durable active-turn marker survived an unclean exit as `resume_pending=True`. Called on startup after unclean shutdown. |
 | `prune_old_entries(max_age_days)` | Drop entries older than `max_age_days` (based on `updated_at`). Skips `suspended` entries and sessions with active processes. |
 | `list_sessions(active_minutes=None)` | Return all sessions, optionally filtered by recent activity. Sorted by `updated_at` descending. |
 | `lookup_by_session_id(session_id)` | Find the active `SessionEntry` for a persisted session ID. |
@@ -360,8 +360,8 @@ Gateway starts
        │ Missing
        ▼
 ┌───────────────────────────────┐
-│ session_store                 │── Marks sessions updated within
-│ .suspend_recently_active()    │   last 120 seconds as resume_pending
+│ _recover_unclean_sessions()   │── Exact turn markers only: a persisted
+│                               │   reply is ledgered, others resume
 └───────────────────────────────┘
        │
        ▼
@@ -387,15 +387,17 @@ Gateway starts
 └───────────────────────────────┘
 ```
 
-### suspend_recently_active(max_age_seconds=120)
+### Crash-turn recovery (`_recover_unclean_sessions`)
 
 Called on gateway startup when no `.clean_shutdown` marker exists (indicating a crash or
-unexpected exit). For each session updated within the last 120 seconds:
+unexpected exit). Only turns the dead process left marked (durable active-turn marker) are
+recovered:
 
-- Sets `resume_pending=True`, `resume_reason="restart_interrupted"`,
-  `last_resume_marked_at=now`.
-- Skips entries already `resume_pending=True` (no double-mark).
-- Skips entries explicitly `suspended=True` (hard wipe should stay).
+- A marked turn whose final reply is already in the transcript has that reply adopted into
+  the delivery ledger and is sent once, not regenerated.
+- Any other marked turn gets `resume_pending=True`, `resume_reason="restart_interrupted"`.
+- Unmarked sessions finished their turn and are left alone (the old 120-second recency
+  sweep re-answered every recently active chat; removed in C1.3).
 
 ### Stuck-Loop Detection (`_suspend_stuck_loop_sessions`)
 
@@ -410,7 +412,7 @@ session that was mid-turn when the drain timeout fired. Reasons:
 
 - `"restart_timeout"` — killed during restart drain
 - `"shutdown_timeout"` — killed during shutdown drain
-- `"restart_interrupted"` — crash recovery (from `suspend_recently_active`)
+- `"restart_interrupted"` — crash recovery (from `recover_interrupted_turns`)
 
 All three reasons are in `_AUTO_RESUME_REASONS` and eligible for startup auto-resume.
 
@@ -431,7 +433,7 @@ When `get_or_create_session()` encounters `resume_pending=True`:
 
 Written at the end of a graceful shutdown. On next startup:
 
-- If present: skip `suspend_recently_active()` entirely. Active agents were already
+- If present: skip crash-turn recovery entirely. Active agents were already
   drained, so no sessions are stuck.
 - Then delete the marker.
 

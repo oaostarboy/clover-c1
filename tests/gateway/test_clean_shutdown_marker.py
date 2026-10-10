@@ -2,9 +2,7 @@
 
 When the gateway shuts down gracefully (clover update, gateway restart, /restart),
 it writes a .clean_shutdown marker.  On the next startup, if the marker exists,
-suspend_recently_active() is skipped so users don't lose their sessions.
-
-After a crash (no marker), suspension still fires as a safety net for stuck sessions.
+crash-turn recovery is skipped and orphan turn markers are discarded.
 """
 
 from datetime import datetime, timedelta
@@ -28,28 +26,6 @@ def _make_store(tmp_path, policy=None):
     if policy:
         config.default_reset_policy = policy
     return SessionStore(sessions_dir=tmp_path, config=config)
-
-
-# ---------------------------------------------------------------------------
-# SessionStore.suspend_recently_active
-# ---------------------------------------------------------------------------
-
-class TestSuspendRecentlyActive:
-    """Verify suspend_recently_active only marks recent sessions."""
-
-    def test_suspends_recently_active_sessions(self, tmp_path):
-        store = _make_store(tmp_path)
-        source = _make_source()
-        entry = store.get_or_create_session(source)
-        assert not entry.suspended
-
-        count = store.suspend_recently_active()
-        assert count == 1
-
-        # Re-fetch — should be resume_pending (preserved, not wiped)
-        refreshed = store.get_or_create_session(source)
-        assert refreshed.resume_pending
-        assert refreshed.session_id == entry.session_id  # same session preserved
 
 
 # ---------------------------------------------------------------------------
@@ -102,32 +78,6 @@ class TestCleanShutdownMarker:
         assert marker.exists(), ".clean_shutdown marker should exist after graceful stop"
 
 
-    def test_no_marker_triggers_suspension(self, tmp_path, monkeypatch):
-        """Without .clean_shutdown marker (crash), suspension should fire."""
-        monkeypatch.setattr("gateway.run._clover_home", tmp_path)
-
-        marker = tmp_path / ".clean_shutdown"
-        assert not marker.exists()
-
-        # Create a store with a recently active session
-        store = _make_store(tmp_path)
-        source = _make_source()
-        entry = store.get_or_create_session(source)
-        assert not entry.suspended
-
-        # Simulate what start() does:
-        if marker.exists():
-            marker.unlink()
-        else:
-            store.suspend_recently_active()
-
-        # Session SHOULD be resume_pending (crash recovery preserves history)
-        with store._lock:
-            store._ensure_loaded_locked()
-            resume_count = sum(1 for e in store._entries.values() if e.resume_pending)
-        assert resume_count == 1, "Session should be resume_pending after crash (no marker)"
-
-
 # ---------------------------------------------------------------------------
 # resume_pending freshness gate (#46934)
 # ---------------------------------------------------------------------------
@@ -146,9 +96,8 @@ class TestResumePendingFreshnessGate:
 
     def _mark_resume_pending(self, store, source):
         """Put the session into resume_pending and return the entry."""
-        store.get_or_create_session(source)
-        count = store.suspend_recently_active()
-        assert count == 1
+        entry = store.get_or_create_session(source)
+        assert store.mark_resume_pending(entry.session_key, "restart_interrupted")
         with store._lock:
             entry = store._entries[store._generate_session_key(source)]
         assert entry.resume_pending

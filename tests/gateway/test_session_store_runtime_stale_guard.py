@@ -311,6 +311,5 @@ class TestAdvanceCompressionSession:
 
         assert result is not None
         assert result.updated_at == idle
-        assert store.suspend_recently_active(max_age_seconds=120) == 0
 
 

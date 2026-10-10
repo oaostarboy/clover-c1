@@ -12484,7 +12484,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Suspend sessions that have been active across too many restarts.
 
         Returns the number of sessions suspended.  Called on gateway startup
-        AFTER suspend_recently_active() to catch the stuck-loop pattern:
+        AFTER crash-turn recovery to catch the stuck-loop pattern:
         session loads → agent gets stuck → gateway restarts → repeat.
         """
         import json
@@ -12994,7 +12994,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
     # Drain-timeout reasons set by _stop_impl() when a still-running turn is
     # force-interrupted; "restart_interrupted" is set by
-    # SessionStore.suspend_recently_active() on crash recovery (no
+    # recover_interrupted_turns() for a crash-left turn marker (no
     # .clean_shutdown marker).  All three mean "the agent was mid-turn and
     # we killed it" — eligible for startup auto-resume.
     _AUTO_RESUME_REASONS = frozenset(
@@ -16876,8 +16876,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # interrupting the agents.  This preserves each session's
                 # session_id + transcript so the next message on the same
                 # session_key auto-resumes from the existing conversation
-                # instead of getting routed through suspend_recently_active()
-                # and converted into a fresh session.  Terminal escalation
+                # instead of being converted into a fresh session.  Terminal escalation
                 # for genuinely stuck sessions still flows through the
                 # existing ``.restart_failure_counts`` stuck-loop counter
                 # (incremented below, threshold 3), which sets
