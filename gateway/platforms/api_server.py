@@ -167,6 +167,7 @@ from gateway.browser_control_broker import (
     BROWSER_CONTROL_DEVELOPER_CAPABILITIES,
     ControllerScope,
     ControllerTicketInvalid,
+    ControllerUnavailable,
     browser_control_developer_mode,
     browser_control_protocol_supported,
     filter_browser_control_capabilities,
@@ -3748,6 +3749,26 @@ class APIServerAdapter(BasePlatformAdapter):
                     recancel = True
             if recancel:
                 raise asyncio.CancelledError
+            if (
+                attach_task.done()
+                and not attach_task.cancelled()
+                and isinstance(attach_task.exception(), ControllerUnavailable)
+            ):
+                # Expected: this owner was tombstoned (adapter drain/teardown)
+                # before its attach landed, so the broker refused it. Teardown
+                # above already ran; finish the request cleanly instead of
+                # letting aiohttp log it as an unhandled ERROR + traceback.
+                # The transport is dead to us, so drop it exactly as the
+                # unhandled-error path did (no graceful close handshake to
+                # wait on for a peer that may never answer).
+                logger.debug(
+                    "Browser-control attach refused for a closed owner: %s",
+                    attach_task.exception(),
+                )
+                transport = request.transport
+                if transport is not None:
+                    transport.close()
+                return ws
         return ws
 
     def _browser_control_task_set(self) -> set:

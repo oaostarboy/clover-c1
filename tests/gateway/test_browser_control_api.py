@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import logging
 import threading
 import time
 
@@ -1363,7 +1364,7 @@ async def test_gateway_shutdown_never_leaves_late_attach_selectable(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_handler", [True, False])
 async def test_late_attach_of_drained_owner_cannot_steal_replacement_owner(
-    monkeypatch, cancel_handler
+    monkeypatch, caplog, cancel_handler
 ):
     """A drained/cancelled API socket is tombstoned before its attach can land.
 
@@ -1473,10 +1474,21 @@ async def test_late_attach_of_drained_owner_cannot_steal_replacement_owner(
         )
         assert new_owner is not state["old_owner"]
 
+        caplog.set_level(logging.DEBUG)
         release.set()
         await until(finished.is_set)
-        await asyncio.wait_for(asyncio.gather(*handlers[:1], return_exceptions=True), 5)
+        old_handler_outcome = (
+            await asyncio.wait_for(asyncio.gather(*handlers[:1], return_exceptions=True), 5)
+        )[0]
         await until(lambda: not old._browser_control_task_set())
+        # The refused late attach is expected for a tombstoned owner: the
+        # handler absorbs it (no exception escapes to aiohttp, which would log
+        # ERROR "Error handling request" with a traceback).
+        assert not isinstance(old_handler_outcome, ControllerUnavailable)
+        assert not [
+            r for r in caplog.records
+            if r.levelno >= logging.ERROR and "Error handling request" in r.getMessage()
+        ]
 
         assert state.get("late_attach_refused") is True
         assert not state.get("late_attach_accepted")
