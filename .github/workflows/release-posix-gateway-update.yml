@@ -1,0 +1,254 @@
+name: Release POSIX gateway-running updater acceptance
+on:
+  push:
+    branches: [ci/release-posix-acceptance-c1-2-r1-493c9b6]
+permissions:
+  contents: read
+jobs:
+  gateway-update:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      FROM_SHA: c499b9590442fbda158b493f6ca1bb89dd73355a
+      TO_BRANCH: clover-subagent/subagent-sa-0-c0019e79
+      EXPECTED_TARGET_SHA: 493c9b6b0d5c91c2b20c1c348f8fcbe56a8b7391
+      API_PORT: 18791
+    steps:
+      - name: Install old candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/oaostarboy/clover-c1/ci/release-posix-acceptance-c1-2-r1-493c9b6/scripts/install.sh -o /tmp/install.sh
+          bash /tmp/install.sh --branch main --commit "$FROM_SHA" --non-interactive --skip-setup --skip-browser --skip-computer-use
+          echo "CLOVER_HOME=$HOME/.clover" >> "$GITHUB_ENV"
+          echo "INSTALL_DIR=$HOME/.clover/clover-c1" >> "$GITHUB_ENV"
+          echo "CLOVER_BIN=$HOME/.clover/clover-c1/venv/bin/clover" >> "$GITHUB_ENV"
+          "$HOME/.clover/clover-c1/venv/bin/clover" --version
+          test "$(git -C "$HOME/.clover/clover-c1" rev-parse HEAD)" = "$FROM_SHA"
+          git -C "$HOME/.clover/clover-c1" remote set-branches --add origin "$TO_BRANCH"
+          git -C "$HOME/.clover/clover-c1" fetch origin "$TO_BRANCH:refs/remotes/origin/$TO_BRANCH"
+          test "$(git -C "$HOME/.clover/clover-c1" rev-parse refs/remotes/origin/$TO_BRANCH)" = "$EXPECTED_TARGET_SHA"
+          git -C "$HOME/.clover/clover-c1" checkout -b "$TO_BRANCH" "$FROM_SHA"
+          git -C "$HOME/.clover/clover-c1" branch --set-upstream-to="origin/$TO_BRANCH" "$TO_BRANCH"
+          test "$(git -C "$HOME/.clover/clover-c1" rev-parse HEAD)" = "$FROM_SHA"
+          test "$(git -C "$HOME/.clover/clover-c1" rev-parse --abbrev-ref --symbolic-full-name '@{u}')" = "origin/$TO_BRANCH"
+      - name: Start real gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$CLOVER_HOME"
+          printf '\nAPI_SERVER_ENABLED=true\nAPI_SERVER_KEY=acceptance-test-key-123456789\nAPI_SERVER_PORT=%s\nAPI_SERVER_HOST=127.0.0.1\n' "$API_PORT" >> "$CLOVER_HOME/.env"
+          "$CLOVER_BIN" gateway run --replace > "$RUNNER_TEMP/gateway.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/gateway.pid"
+          ready=0
+          for _ in $(seq 1 90); do
+            if python3 -c "import socket,sys;s=socket.create_connection(('127.0.0.1',${API_PORT}),1);s.close()"; then ready=1; break; fi
+            sleep 2
+          done
+          test "$ready" = 1 || { cat "$RUNNER_TEMP/gateway.log"; exit 1; }
+          python3 - <<'PY' >> "$GITHUB_ENV"
+          import json, os
+          state=json.load(open(os.path.join(os.environ['CLOVER_HOME'],'gateway_state.json')))
+          print('PRE_UPDATE_GATEWAY_PID='+str(state['pid']))
+          print('PRE_UPDATE_GATEWAY_SHA='+str(state.get('code_sha','')))
+          print('PRE_UPDATE_GATEWAY_START_TIME='+str(state.get('start_time','')))
+          PY
+          echo "Pre-update gateway identity captured; API port $API_PORT is bound"
+      - name: Linux second interpreter and custom systemd gateway
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          OTHER_HOME="$HOME/.clover-other"
+          OTHER_INSTALL="$OTHER_HOME/clover-c1"
+          export CLOVER_HOME="$OTHER_HOME" CLOVER_INSTALL_DIR="$OTHER_INSTALL"
+          bash /tmp/install.sh --branch main --commit "$FROM_SHA" --non-interactive --skip-setup --skip-browser --skip-computer-use
+          mkdir -p "$OTHER_HOME"
+          printf '\nAPI_SERVER_ENABLED=true\nAPI_SERVER_KEY=acceptance-test-other-123456789\nAPI_SERVER_PORT=18792\nAPI_SERVER_HOST=127.0.0.1\n' >> "$OTHER_HOME/.env"
+          UNIT="clover-acceptance-other-$GITHUB_RUN_ID"
+          echo "OTHER_HOME=$OTHER_HOME" >> "$GITHUB_ENV"
+          echo "OTHER_INSTALL=$OTHER_INSTALL" >> "$GITHUB_ENV"
+          echo "OTHER_UNIT=$UNIT" >> "$GITHUB_ENV"
+          systemd-run --user --unit="$UNIT" --collect --setenv="CLOVER_HOME=$OTHER_HOME" --working-directory="$OTHER_INSTALL" "$OTHER_INSTALL/venv/bin/clover" gateway run
+          ready=0
+          for _ in $(seq 1 90); do
+            if python3 -c "import socket;s=socket.create_connection(('127.0.0.1',18792),1);s.close()" 2>/dev/null; then ready=1; break; fi
+            sleep 2
+          done
+          test "$ready" = 1 || { systemctl --user status "$UNIT" --no-pager; exit 1; }
+          OTHER_PID="$(systemctl --user show "$UNIT" --property=MainPID --value)"
+          test "$OTHER_PID" != 0
+          echo "OTHER_PID=$OTHER_PID" >> "$GITHUB_ENV"
+          python3 - "$OTHER_HOME" <<'PY' >> "$GITHUB_ENV"
+          import json, os, sys
+          state=json.load(open(os.path.join(sys.argv[1],'gateway_state.json')))
+          print('OTHER_START_TIME='+str(state.get('start_time','')))
+          PY
+          test "$(git -C "$OTHER_INSTALL" rev-parse HEAD)" = "$FROM_SHA"
+          echo "unrelated install started: custom unit=$UNIT pid=$OTHER_PID second interpreter=$OTHER_INSTALL"
+      - name: Update from old SHA while gateway runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            cat > "$RUNNER_TEMP/watch-unrelated.py" <<'PY'
+          import json, os, socket, subprocess, sys, time
+          home=os.environ['OTHER_HOME']; unit=os.environ['OTHER_UNIT']; expected=os.environ['OTHER_PID']; sha=os.environ['FROM_SHA']
+          sentinel=os.path.join(os.environ['RUNNER_TEMP'],'unrelated-gateway-monitor.failed')
+          while os.path.exists(os.path.join(os.environ['RUNNER_TEMP'],'unrelated-gateway-monitor.running')):
+              try:
+                  pid=subprocess.check_output(['systemctl','--user','show',unit,'--property=MainPID','--value'],text=True).strip()
+                  assert pid==expected and pid!='0', f'MainPID changed: {pid}'
+                  subprocess.run(['systemctl','--user','is-active','--quiet',unit],check=True)
+                  with socket.create_connection(('127.0.0.1',18792),2): pass
+                  import urllib.request
+                  with urllib.request.urlopen('http://127.0.0.1:18792/health',timeout=2) as response:
+                      assert response.status==200 and json.load(response).get('status')=='ok'
+                  assert subprocess.check_output(['git','-C',os.environ['OTHER_INSTALL'],'rev-parse','HEAD'],text=True).strip()==sha
+                  state=json.load(open(os.path.join(home,'gateway_state.json')))
+                  assert int(state.get('pid',-1))==int(expected) and state.get('gateway_state')=='running', state
+                  assert state.get('code_sha')==sha and state.get('restart_requested') is not True, state
+                  proc_check = "import os,psutil,sys; root=sys.argv[1]; home=sys.argv[2]; out=[]\nfor p in psutil.process_iter(['cmdline','cwd']):\n if p.pid==os.getpid(): continue\n try:\n  a=p.info['cmdline'] or []; env=p.environ()\n  if ('gateway' in a and 'run' in a and 'update' not in a and root in ' '.join(a) and env.get('CLOVER_HOME')==home): out.append(p.pid)\n except (psutil.NoSuchProcess,psutil.AccessDenied): pass\nprint(','.join(map(str,out)))"
+                  own=subprocess.check_output([os.path.join(os.environ['OTHER_INSTALL'],'venv','bin','python'),'-c',proc_check,os.environ['OTHER_INSTALL'],home],text=True).strip().splitlines()[-1]
+                  assert [p for p in own.split(',') if p]==[expected], f'unrelated gateway process set changed: {own}'
+              except Exception as e:
+                  open(sentinel,'w').write(str(e)); sys.exit(1)
+              time.sleep(1)
+          open(os.path.join(os.environ['RUNNER_TEMP'],'unrelated-gateway-monitor.done'),'w').write('ok')
+          PY
+            touch "$RUNNER_TEMP/unrelated-gateway-monitor.running"
+            python3 "$RUNNER_TEMP/watch-unrelated.py" > "$RUNNER_TEMP/unrelated-gateway-monitor.log" 2>&1 &
+            echo "$!" > "$RUNNER_TEMP/unrelated-gateway-monitor.pid"
+            sleep 2
+            test ! -e "$RUNNER_TEMP/unrelated-gateway-monitor.failed"
+          fi
+          "$HOME/.clover/clover-c1/venv/bin/python" - <<'PY'
+          import json, os, socket, urllib.request
+          import psutil
+          home=os.environ['CLOVER_HOME']; pid=int(os.environ['PRE_UPDATE_GATEWAY_PID'])
+          state=json.load(open(os.path.join(home,'gateway_state.json')))
+          assert state.get('gateway_state')=='running' and state.get('code_sha')==os.environ['FROM_SHA'], state
+          assert int(state.get('pid',-1))==pid and str(state.get('start_time'))==os.environ['PRE_UPDATE_GATEWAY_START_TIME'], state
+          proc=psutil.Process(pid)
+          assert proc.is_running() and proc.status()!=psutil.STATUS_ZOMBIE
+          assert os.path.join(home,'clover-c1') in ' '.join(proc.cmdline()), proc.cmdline()
+          assert proc.environ().get('CLOVER_HOME')==home
+          assert any(c.status==psutil.CONN_LISTEN and c.laddr.port==int(os.environ['API_PORT']) for c in proc.net_connections(kind='inet'))
+          with urllib.request.urlopen(f"http://127.0.0.1:{os.environ['API_PORT']}/health",timeout=2) as response:
+              assert response.status==200 and json.load(response).get('status')=='ok'
+          print(f'PASS: original gateway PID {pid} is live on base SHA and answers HTTP /health immediately before updater')
+          PY
+          "$CLOVER_BIN" update --branch "$TO_BRANCH" --yes --gateway 2>&1 | tee "$RUNNER_TEMP/update.log"
+          if grep -F 'Already up to date!' "$RUNNER_TEMP/update.log"; then echo 'Updater took no-op path despite stale base SHA'; exit 1; fi
+          TARGET_SHA="$(git -C "$INSTALL_DIR" rev-parse HEAD)"
+          test "$TARGET_SHA" = "$EXPECTED_TARGET_SHA"
+          echo "TARGET_SHA=$TARGET_SHA" >> "$GITHUB_ENV"
+          echo "update landed at pinned target $TARGET_SHA"
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            echo "Linux unrelated-unit checks are performed throughout the final health window"
+          fi
+      - name: Assert post-update gateway health for 90 seconds
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, socket, subprocess, time, urllib.request
+          home=os.environ['CLOVER_HOME']; port=int(os.environ['API_PORT'])
+          target=os.environ['TARGET_SHA']
+          pre_pid=int(os.environ['PRE_UPDATE_GATEWAY_PID'])
+          pre_sha=os.environ.get('PRE_UPDATE_GATEWAY_SHA','')
+          install=os.environ['INSTALL_DIR']; venv_python=os.path.join(install,'venv','bin','python')
+          proc_check = "import os,psutil,sys; pid=int(sys.argv[1]); root=sys.argv[2]; home=sys.argv[3]; port=int(sys.argv[4]); p=psutil.Process(pid); a=p.cmdline(); env=p.environ(); conns=p.net_connections(kind='inet'); assert root in ' '.join(a) and 'gateway' in a and 'run' in a, a; assert env.get('CLOVER_HOME')==home, env.get('CLOVER_HOME'); assert any(c.status==psutil.CONN_LISTEN and c.laddr.port==port for c in conns), [(c.laddr,c.status) for c in conns]; stat='/proc/'+str(pid)+'/stat'; print(open(stat).read().rsplit(')',1)[1].split()[19] if os.path.exists(stat) else repr(p.create_time()))"
+          def process_start(pid):
+              return subprocess.check_output([venv_python,'-c',proc_check,str(pid),install,home,str(port)],text=True).strip()
+          def assert_live_start(pid, recorded):
+              live=process_start(pid)
+              if os.path.exists('/proc'):
+                  assert live==str(recorded), f'live Linux process start ticks {live} != state {recorded}'
+              else:
+                  assert abs(float(live.strip("'"))*100-float(recorded))<1.0, f'live process start time {live} (seconds) != state {recorded} (centiseconds)'
+              return live
+          deadline=time.time()+180
+          state={}
+          stable_pid=None; stable_start=None
+          while time.time()<deadline:
+              try: state=json.load(open(os.path.join(home,'gateway_state.json')))
+              except Exception: state={}
+              reasons=[]
+              if int(state.get('pid',-1)) == pre_pid: reasons.append(f'pid still old ({pre_pid})')
+              if state.get('code_sha') != target: reasons.append(f'code_sha={state.get("code_sha")!r}, wanted {target!r}')
+              if state.get('gateway_state') != 'running': reasons.append(f'gateway_state={state.get("gateway_state")!r}, wanted \'running\'')
+              if reasons:
+                  print('Convergence candidate rejected: ' + '; '.join(reasons), flush=True)
+              else:
+                  try:
+                      with urllib.request.urlopen(f'http://127.0.0.1:{port}/health',timeout=2) as response:
+                          body=json.load(response)
+                          assert response.status==200, f'HTTP status {response.status}, wanted 200'
+                          assert body.get('status')=='ok', f'health body status={body.get("status")!r}, wanted \'ok\''
+                      stable_pid=int(state['pid']); stable_start=str(state.get('start_time'))
+                      assert_live_start(stable_pid,stable_start)
+                      break
+                  except Exception as exc:
+                      print(f'Convergence candidate rejected for pid={state.get("pid")}: {type(exc).__name__}: {exc}', flush=True)
+                      stable_pid=None
+              time.sleep(2)
+          else:
+              print('post-update updater output:',open(os.path.join(os.environ['RUNNER_TEMP'],'update.log'),errors='replace').read())
+              raise SystemExit(f'gateway did not restart onto target code within 180 seconds; old pid={pre_pid}, old sha={pre_sha}, state={state}')
+          for n in range(30):
+              with socket.create_connection(('127.0.0.1',port),2): pass
+              import urllib.request
+              with urllib.request.urlopen(f'http://127.0.0.1:{port}/health',timeout=2) as response:
+                  assert response.status==200 and json.load(response).get('status')=='ok'
+              state=json.load(open(os.path.join(home,'gateway_state.json')))
+              assert state.get('gateway_state')=='running', state
+              assert state.get('restart_requested') is not True, state
+              assert int(state.get('pid',-1)) == stable_pid, f'gateway PID changed during health window: expected {stable_pid}; state={state}'
+              assert str(state.get('start_time')) == stable_start, f'gateway start_time changed during health window: {state}'
+              assert_live_start(stable_pid,stable_start)
+              assert state.get('code_sha') == target, f'gateway code_sha={state.get("code_sha")}, wanted {target}; old={pre_sha}'
+              owned_check = "import os,psutil,sys; root=sys.argv[1]; home=sys.argv[2]; out=[]\nfor p in psutil.process_iter(['cmdline']):\n if p.pid==os.getpid(): continue\n try:\n  a=p.info['cmdline'] or []; env=p.environ()\n  if ('gateway' in a and 'run' in a and 'update' not in a and root in ' '.join(a) and env.get('CLOVER_HOME')==home): out.append(p.pid)\n except (psutil.NoSuchProcess,psutil.AccessDenied): pass\nprint(','.join(map(str,out)))"
+              own=subprocess.check_output([venv_python,'-c',owned_check,install,home],text=True).strip().splitlines()[-1]
+              assert [p for p in own.split(',') if p]==[str(stable_pid)], f'expected exactly one owned gateway matching state PID {stable_pid}; found {own}'
+              if os.environ['RUNNER_OS']=='Linux':
+                  other_pid=subprocess.check_output(['systemctl','--user','show',os.environ['OTHER_UNIT'],'--property=MainPID','--value'],text=True).strip()
+                  assert other_pid==os.environ['OTHER_PID'] and other_pid!='0', f'unrelated unit PID changed: {other_pid}'
+                  subprocess.run(['systemctl','--user','is-active','--quiet',os.environ['OTHER_UNIT']],check=True)
+                  with socket.create_connection(('127.0.0.1',18792),2): pass
+                  assert subprocess.check_output(['git','-C',os.environ['OTHER_INSTALL'],'rev-parse','HEAD'],text=True).strip()==os.environ['FROM_SHA']
+              time.sleep(3)
+          print('PASS: restarted gateway PID and target code SHA verified; exactly one primary process, API bound, running, no stale restart request; Linux unrelated unit preserved; continuous health for 90 seconds')
+          PY
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            MONITOR_PID="$(cat "$RUNNER_TEMP/unrelated-gateway-monitor.pid")"
+            kill -0 "$MONITOR_PID"
+            rm -f "$RUNNER_TEMP/unrelated-gateway-monitor.running"
+            for _ in $(seq 1 10); do
+              [ -e "$RUNNER_TEMP/unrelated-gateway-monitor.done" ] && break
+              kill -0 "$MONITOR_PID" || { echo "unrelated monitor exited before clean completion"; exit 1; }
+              sleep 1
+            done
+            test -e "$RUNNER_TEMP/unrelated-gateway-monitor.done"
+            test ! -e "$RUNNER_TEMP/unrelated-gateway-monitor.failed"
+            echo "PASS: unrelated custom systemd gateway identity, process count, API, state, and code SHA continuously monitored across updater and health window"
+          fi
+      - name: Gateway log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-logs-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/gateway.log
+            ${{ runner.temp }}/update.log
+            ${{ runner.temp }}/unrelated-gateway-monitor.log
+            ${{ runner.temp }}/unrelated-gateway-monitor.failed
+            ${{ runner.temp }}/unrelated-gateway-monitor.done
+            ${{ runner.temp }}/gateway-post-update.log
+            ~/.clover/logs/*
+            ~/.clover-other/logs/*
+          if-no-files-found: ignore
