@@ -197,6 +197,14 @@ def _teardown_probe(provider, monkeypatch, *, limit_on: bool):
     return returned_while_closing, snapshot, releases, pool, closed, entry, child, root
 
 
+def _assert_pool_immediately_reusable(pool):
+    # the pool is immediately reusable by the next child
+    nxt = pool.acquire_lease()
+    assert nxt == 'cred-1'
+    pool.release_lease(nxt)
+    assert pool._active_leases == {}
+
+
 def test_limit_on_inline_child_teardown_is_detached_and_lease_released_once(provider, clock, monkeypatch):
     # FIX ROUND 2 (parent decision, owner agreed): "limit on" in config but a
     # no-async surface -> the limit is off for the turn and teardown is the
@@ -210,6 +218,7 @@ def test_limit_on_inline_child_teardown_is_detached_and_lease_released_once(prov
     assert closed == [True] and releases == ['cred-1']
     assert pool._active_leases == {}
     assert entry['status'] == 'completed' and entry['summary'] == 'child result', entry
+    _assert_pool_immediately_reusable(pool)
 
 
 def test_limit_off_inline_child_teardown_is_synchronous_as_before(provider, clock, monkeypatch):
@@ -221,6 +230,7 @@ def test_limit_off_inline_child_teardown_is_synchronous_as_before(provider, cloc
     assert child not in active_at_return
     assert closed == [True] and releases == ['cred-1']
     assert entry['status'] == 'completed' and entry['summary'] == 'child result', entry
+    _assert_pool_immediately_reusable(pool)
 
 
 # ── 3. bounded lease acquisition: never leaks, never double-releases ───────
@@ -261,11 +271,11 @@ def test_bounded_lease_acquire_stress_releases_every_lease_exactly_once(provider
 
     parent = SimpleNamespace(_touch_activity=lambda *a, **k: None, _current_task_id=None,
                              _active_children=[], _active_children_lock=None)
-    for _ in range(40):
+    for _ in range(300):
         result = dt._run_single_child(task_index=0, goal='stress lease', child=Child(),
                                       parent_agent=parent)
         assert result['status'] == 'completed'
-    assert len(acquired) == 40 and len(released) == 40
+    assert len(acquired) == 300 and len(released) == 300
     assert pool._active_leases == {}, pool._active_leases
 
 
