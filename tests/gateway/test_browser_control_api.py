@@ -1344,9 +1344,7 @@ async def test_gateway_shutdown_never_leaves_late_attach_selectable(
         await client.close()
         if handlers:
             await asyncio.wait_for(asyncio.gather(*handlers, return_exceptions=True), 5)
-        pending = list(adapter._browser_control_tasks) if hasattr(
-            adapter, "_browser_control_tasks"
-        ) else []
+        pending = list(adapter._browser_control_task_set())
         pending += list(adapter._background_tasks)
         if pending:
             await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), 5)

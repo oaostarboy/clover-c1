@@ -3724,7 +3724,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 )
 
             teardown = asyncio.ensure_future(_teardown())
-            self._browser_control_tasks.add(teardown)
+            self._browser_control_task_set().add(teardown)
             teardown.add_done_callback(self._forget_browser_control_task)
             teardown.add_done_callback(lambda t: t.cancelled() or t.exception())
             recancel = False
@@ -3739,8 +3739,15 @@ class APIServerAdapter(BasePlatformAdapter):
                 raise asyncio.CancelledError
         return ws
 
+    def _browser_control_task_set(self) -> set:
+        # Lazy so adapters built without __init__ (test doubles) still work.
+        tasks = self.__dict__.get("_browser_control_tasks")
+        if tasks is None:
+            tasks = self.__dict__["_browser_control_tasks"] = set()
+        return tasks
+
     def _forget_browser_control_task(self, task: "asyncio.Future") -> None:
-        self._browser_control_tasks.discard(task)
+        self._browser_control_task_set().discard(task)
 
     async def _drain_browser_control_tasks(self) -> None:
         """Wait (bounded) for in-flight controller attach/teardown work.
@@ -3753,7 +3760,7 @@ class APIServerAdapter(BasePlatformAdapter):
         loop = asyncio.get_running_loop()
         deadline = loop.time() + _BROWSER_CONTROL_DRAIN_TIMEOUT_SECS
         while True:
-            pending = [t for t in self._browser_control_tasks if not t.done()]
+            pending = [t for t in self._browser_control_task_set() if not t.done()]
             remaining = deadline - loop.time()
             if not pending or remaining <= 0:
                 return
@@ -3767,7 +3774,7 @@ class APIServerAdapter(BasePlatformAdapter):
         completion even if the awaiting request handler is cancelled.
         """
         task = asyncio.ensure_future(asyncio.to_thread(func, *args, **kwargs))
-        self._browser_control_tasks.add(task)
+        self._browser_control_task_set().add(task)
         task.add_done_callback(self._forget_browser_control_task)
         # Retrieve any exception so an abandoned (cancelled-caller) call
         # does not log "exception was never retrieved".
