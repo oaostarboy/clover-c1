@@ -108,6 +108,47 @@ def clear_stale_git_locks(repo_root: Path, *, min_age_seconds: Optional[int] = N
     return removed
 
 
+def _git_dir(root: Path) -> Path:
+    """``root``'s git dir: ``.git`` itself, or where a linked worktree's ``.git`` file points."""
+    dot_git = Path(root) / ".git"
+    if dot_git.is_file():
+        try:
+            text = dot_git.read_text(encoding="utf-8-sig").strip()
+        except OSError:
+            return dot_git
+        if text.startswith("gitdir:"):
+            return Path(root) / text[len("gitdir:"):].strip()
+    return dot_git
+
+
+def release_dead_index_lock(repo_root: Path) -> bool:
+    """Drop ``.git/index.lock`` once the git that took it is proven gone, whatever its age.
+
+    Adapted from NousResearch/hermes-agent a81d3408bc (MIT). A git killed while it held the
+    index lock (an update killed by the user, a probe killed by its own timeout) leaves it
+    behind, and every later merge/stash/reset refuses with "File exists". The age floor in
+    :func:`clear_stale_git_locks` keeps such a lock for 10 minutes, so the next ``clover
+    update`` died at its fast-forward. Ownership is proven from the process table
+    (:mod:`clover_cli._git_lock_owner`), not from age: a live holder keeps the lock, and a
+    platform that cannot prove it dead leaves it alone. Windows can only prove it by the
+    unlink itself, which a lock-keeping git with its fd closed would not stop, so there any
+    running git keeps it. Never raises.
+    """
+    try:
+        from clover_cli._git_lock_owner import _release_dead_index_lock
+
+        root = Path(repo_root)
+        git_dir = _git_dir(root)
+        if not (git_dir / "index.lock").exists():
+            return False
+        if os.name == "nt" and _git_proc_running():
+            return False
+        return _release_dead_index_lock(git_dir, root, any_git=True)
+    except Exception:
+        logger.debug("dead index.lock release failed (skipping)", exc_info=True)
+        return False
+
+
 # Aborted-fetch pack debris younger than this is presumed live (a fetch may
 # be writing it right now) and is never removed. A healthy fetch completes in
 # minutes; the same 10-minute bar the lock sweep uses is comfortably safe.

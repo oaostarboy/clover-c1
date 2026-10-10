@@ -271,7 +271,7 @@ def _rollback_checkout(data: dict[str, Any], beacon: Path) -> None:
                 if time.monotonic() >= deadline:
                     raise RuntimeError(f"Windows gateway service did not stop: {service}")
                 time.sleep(0.25)
-    dirty = subprocess.run(["git", "status", "--porcelain"], cwd=root, check=True,
+    dirty = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain"], cwd=root, check=True,
                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
     parked = bool(dirty.stdout.strip())
     if parked:

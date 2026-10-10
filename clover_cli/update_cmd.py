@@ -1397,7 +1397,7 @@ def _assess_parked_branch_switch(
         logger.debug("Could not read updates.auto_switch_parked_branch: %s", exc)
 
     status = subprocess.run(
-        git_cmd + ["status", "--porcelain"],
+        git_cmd + ["--no-optional-locks", "status", "--porcelain"],
         cwd=cwd, capture_output=True,
         text=True, encoding="utf-8", errors="replace",
     )
@@ -1680,7 +1680,8 @@ def _zip_overlay_block_reason(
         # instead of enumerating its contents (cheaper, same verdict for the
         # top-level filter below). NOTE: ``--ignored=all`` is NOT a valid
         # git mode — it exits 128 and would fail-close every ZIP update.
-        git_cmd + ["status", "--porcelain", "--untracked-files=all", "--ignored=matching"],
+        git_cmd
+        + ["--no-optional-locks", "status", "--porcelain", "--untracked-files=all", "--ignored=matching"],
         cwd=root,
         capture_output=True,
         text=True,
@@ -2337,7 +2338,7 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
 
 def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[str]:
     status = subprocess.run(
-        git_cmd + ["status", "--porcelain"],
+        git_cmd + ["--no-optional-locks", "status", "--porcelain"],
         cwd=cwd,
         capture_output=True,
         text=True, encoding="utf-8", errors="replace",
@@ -8385,6 +8386,20 @@ def _cmd_update_impl(args, gateway_mode: bool):
         pass
     print("☘ Updating Clover Cognition...")
     print()
+
+    # A killed git (an earlier `clover update` interrupted mid-run, a probe
+    # killed by its own timeout) leaves .git/index.lock behind, and the age
+    # floor of the stale-lock sweep keeps it for 10 minutes -- the next merge
+    # dies on "File exists". Release it as soon as no live git can own it
+    # (ownership proof, not age), before anything touches the checkout.
+    # Adapted from NousResearch/hermes-agent a81d3408bc (MIT).
+    try:
+        from clover_cli.gitlock import release_dead_index_lock
+
+        if release_dead_index_lock(_m().PROJECT_ROOT):
+            print("  (removed .git/index.lock left by a git that was killed)")
+    except Exception as _lock_exc:
+        logger.debug("Dead index.lock release failed: %s", _lock_exc)
 
     # Phase 1 (#91277): structured update receipt — record what this run
     # discovers, does, and skips, so silent-failure classes (#88848,

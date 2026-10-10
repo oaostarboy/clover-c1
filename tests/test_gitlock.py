@@ -137,3 +137,51 @@ def test_is_ancestor_false_for_unknown_rev(repo: Path) -> None:
 
 def test_is_ancestor_false_for_nonexistent_repo(tmp_path: Path) -> None:
     assert is_ancestor_of_head(tmp_path / "missing", "HEAD") is False
+
+
+# ---- a killed git's index.lock goes at once; a live one's stays ----
+
+
+def _status_blocked_on_a_fifo(repo: Path) -> subprocess.Popen:
+    """A real ``git status`` that takes ``.git/index.lock`` and then blocks: its
+    untracked scan opens a FIFO ``.gitignore`` nobody writes."""
+    (repo / "junk").mkdir()
+    os.mkfifo(repo / "junk" / ".gitignore")
+    (repo / "junk" / "x").touch()
+    (repo / "a.txt").touch()  # stat-dirty: status refreshes (and so locks) the index
+    proc = subprocess.Popen(
+        ["git", "status", "--porcelain"], cwd=repo,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 20
+    while not (repo / ".git" / "index.lock").exists():
+        assert proc.poll() is None and time.monotonic() < deadline, "git status never took index.lock"
+        time.sleep(0.05)
+    return proc
+
+
+@pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="ownership proof via /proc (Linux)")
+def test_killed_gits_index_lock_goes_at_once_and_a_live_ones_stays(repo: Path) -> None:
+    from clover_cli.gitlock import release_dead_index_lock
+
+    lock = repo / ".git" / "index.lock"
+    proc = _status_blocked_on_a_fifo(repo)
+    try:
+        assert release_dead_index_lock(repo) is False
+        assert lock.exists()
+    finally:
+        proc.kill()
+        proc.wait()
+
+    assert lock.exists(), "premise: a SIGKILLed status strands index.lock"
+    # Fresh mtime: the 10-minute age sweep would keep it.
+    assert clear_stale_git_locks(repo) == []
+    assert release_dead_index_lock(repo) is True
+    assert not lock.exists()
+
+
+def test_release_dead_index_lock_without_a_lock_is_a_noop(repo: Path) -> None:
+    from clover_cli.gitlock import release_dead_index_lock
+
+    assert release_dead_index_lock(repo) is False
+    assert release_dead_index_lock(repo / "missing") is False
