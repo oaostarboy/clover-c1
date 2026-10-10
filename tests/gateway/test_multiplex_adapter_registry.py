@@ -288,6 +288,31 @@ class TestSecondaryProfileFatalRecovery:
         assert replacement.disconnected is True
         assert runner._profile_failed_platforms == {}
 
+    @pytest.mark.asyncio
+    async def test_secondary_reconnect_keeps_inbound_dedup(self, monkeypatch):
+        """A secondary profile's rebuilt adapter still drops an inbound ID the
+        stale one admitted (adapted from NousResearch/hermes-agent 43b8951beb, MIT)."""
+        from gateway.platforms.helpers import MessageDeduplicator
+
+        runner = _secondary_recovery_runner()
+        stale, replacement = _SecondaryRecoveryAdapter(), _SecondaryRecoveryAdapter()
+        stale._dedup, replacement._dedup = MessageDeduplicator(), MessageDeduplicator()
+        runner._profile_adapters["reviewer"] = {Platform.DISCORD: stale}
+        _install_secondary_reconnect_context(monkeypatch, runner, replacement)
+        monkeypatch.setattr(
+            runner, "_connect_adapter_with_timeout", AsyncMock(return_value=True)
+        )
+        assert stale._dedup.is_duplicate("m1") is False
+
+        await runner._handle_profile_adapter_fatal_error(
+            "reviewer", Platform.DISCORD, stale
+        )
+        await asyncio.gather(*runner._background_tasks)
+
+        assert runner._profile_adapters["reviewer"][Platform.DISCORD] is replacement
+        assert replacement._dedup.is_duplicate("m1") is True
+        assert replacement._dedup.is_duplicate("m2") is False
+
 
 class TestSecondaryStartupFailureRecovery:
     """Cold-start connect failures must reach the same reconnect slot as

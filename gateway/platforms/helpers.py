@@ -11,7 +11,7 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from utils import atomic_json_write
 
@@ -89,6 +89,40 @@ class MessageDeduplicator:
     def clear(self):
         """Clear all tracked messages."""
         self._seen.clear()
+
+    def absorb(self, other: "MessageDeduplicator") -> None:
+        """Adopt *other*'s still-live IDs (at their original seen times)."""
+        cutoff = time.time() - self._ttl
+        self._seen.update(
+            {k: v for k, v in other._seen.items() if v > cutoff and k not in self._seen}
+        )
+
+
+# Adapted from NousResearch/hermes-agent 43b8951beb (MIT).
+def inbound_dedup_caches(adapter: Any) -> Dict[str, MessageDeduplicator]:
+    """The adapter's ``MessageDeduplicator`` attributes, by name.
+
+    Held by reference, so IDs the old adapter admits after this call still
+    reach its replacement.
+    """
+    try:
+        attrs = vars(adapter)
+    except TypeError:
+        return {}
+    return {name: v for name, v in attrs.items() if isinstance(v, MessageDeduplicator)}
+
+
+def carry_inbound_dedup(caches: Optional[Dict[str, Any]], adapter: Any) -> None:
+    """Seed a rebuilt adapter's dedup caches from the instance it replaces.
+
+    The reconnect path builds a NEW adapter; without this a platform replaying
+    a recent inbound ID after the reconnect (websocket resume, webhook retry,
+    unacked poll batch) is admitted and answered a second time.
+    """
+    for name, previous in (caches or {}).items():
+        current = getattr(adapter, name, None)
+        if isinstance(current, MessageDeduplicator) and current is not previous:
+            current.absorb(previous)
 
 
 # ─── Text Batch Aggregation ──────────────────────────────────────────────────

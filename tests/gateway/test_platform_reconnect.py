@@ -363,6 +363,60 @@ class TestRuntimeDisconnectQueuing:
         assert Platform.TELEGRAM in runner._failed_platforms
 
 
+class TestReconnectKeepsInboundDedup:
+    # Adapted from NousResearch/hermes-agent 43b8951beb (MIT).
+    @pytest.mark.asyncio
+    async def test_replayed_inbound_id_after_watcher_reconnect_is_dropped(self):
+        """The watcher builds a NEW adapter; an inbound ID the old one already
+        admitted must still read as a duplicate there, or a platform replay
+        after the reconnect is answered twice."""
+        from gateway.platforms.helpers import MessageDeduplicator
+
+        runner = _make_runner()
+        runner.stop = AsyncMock()
+        runner._sync_voice_mode_state_to_adapter = MagicMock()
+        old, new = StubAdapter(), StubAdapter()
+        for a in (old, new):
+            a._dedup = MessageDeduplicator()
+        runner.adapters[Platform.TELEGRAM] = old
+        assert old._dedup.is_duplicate("m1") is False  # handled before the drop
+
+        old._set_fatal_error("network_error", "socket closed", retryable=True)
+        await runner._handle_adapter_fatal_error(old)
+        assert Platform.TELEGRAM in runner._failed_platforms
+        runner._failed_platforms[Platform.TELEGRAM]["next_retry"] = time.monotonic() - 1
+        # IDs the stale adapter admits after the queue entry still carry over.
+        assert old._dedup.is_duplicate("m3") is False
+
+        real_sleep = asyncio.sleep
+        calls = 0
+
+        async def fake_sleep(n):
+            nonlocal calls
+            calls += 1
+            if calls > 1:
+                runner._running = False
+            await real_sleep(0)
+
+        with patch.object(runner, "_create_adapter", return_value=new):
+            with patch("gateway.run.build_channel_directory", create=True):
+                with patch("asyncio.sleep", side_effect=fake_sleep):
+                    await runner._platform_reconnect_watcher()
+
+        assert runner.adapters[Platform.TELEGRAM] is new
+        assert new._dedup.is_duplicate("m1") is True
+        assert new._dedup.is_duplicate("m3") is True
+        assert new._dedup.is_duplicate("m2") is False
+
+    def test_absorb_skips_expired_and_keeps_original_seen_time(self):
+        from gateway.platforms.helpers import MessageDeduplicator
+
+        old, new = MessageDeduplicator(ttl_seconds=60), MessageDeduplicator(ttl_seconds=60)
+        now = time.time()
+        old._seen = {"live": now - 10, "expired": now - 120}
+        new.absorb(old)
+        assert new._seen == {"live": now - 10}
+
 # --- Pause / resume circuit breaker ---
 
 

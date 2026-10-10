@@ -2827,6 +2827,7 @@ from gateway.platforms.base import (
     promote_next_pending,
     utf16_len,
 )
+from gateway.platforms.helpers import carry_inbound_dedup, inbound_dedup_caches
 from gateway.shutdown_watchdog import (
     DEFAULT_HEARTBEAT_INTERVAL_S,
     DEFAULT_LOOP_WATCHDOG_INTERVAL_S,
@@ -8932,6 +8933,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "listener_claim": self._adapter_listener_claim(
                 adapter.platform, adapter
             ),
+            # Held by reference so the rebuilt adapter still drops a replay of
+            # an inbound ID this one admitted (hermes-agent 43b8951beb, MIT).
+            "inbound_dedup": inbound_dedup_caches(adapter),
         }
         logger.info(
             "%s queued for background reconnection",
@@ -16386,6 +16390,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         del self._failed_platforms[platform]
                         continue
 
+                    carry_inbound_dedup(info.get("inbound_dedup"), adapter)
                     adapter.set_message_handler(self._primary_message_handler())
                     adapter.set_fatal_error_handler(self._handle_adapter_fatal_error)
                     adapter.set_session_store(self.session_store)
@@ -17566,7 +17571,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         )
 
     async def _run_secondary_profile_reconnect(
-        self, profile_name: str, platform: Platform
+        self, profile_name: str, platform: Platform, inbound_dedup=None
     ) -> None:
         """Reconnect a retryable secondary adapter under its own profile scope."""
         attempts = 0
@@ -17591,6 +17596,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                 profile_name,
                             )
                             return
+                        carry_inbound_dedup(inbound_dedup, adapter)
                         self._configure_profile_adapter(
                             adapter, profile_name, platform
                         )
@@ -17749,7 +17755,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if platform in profile_pending:
             return
         task = asyncio.create_task(
-            self._run_secondary_profile_reconnect(profile_name, platform),
+            self._run_secondary_profile_reconnect(
+                profile_name, platform, inbound_dedup_caches(adapter)
+            ),
             name=f"secondary-reconnect:{profile_name}:{platform.value}",
         )
         profile_pending[platform] = task

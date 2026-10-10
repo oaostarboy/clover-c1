@@ -139,6 +139,8 @@ def check_<platform>_requirements() -> bool:
 - Use `cache_image_from_bytes`, `cache_audio_from_bytes`, `cache_document_from_bytes` for attachments
 - Filter self-messages (prevent reply loops)
 - Filter sync/echo messages if the platform has them
+- Drop redelivered inbound IDs with `MessageDeduplicator` (`gateway/platforms/helpers.py`) held as an adapter
+  attribute; the runner's reconnect copies its live IDs into the rebuilt adapter, a hand-rolled cache starts empty
 - Redact sensitive identifiers (phone numbers, tokens) in all log output
 - Implement reconnection with exponential backoff + jitter for streaming connections
 - Set `MAX_MESSAGE_LENGTH` if the platform has message size limits
