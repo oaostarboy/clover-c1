@@ -565,6 +565,16 @@ _DRAIN_TIMEOUT = 15.0
 # (_UPDATER_START_TIMEOUT) + max backoff (60s) is ~135s, so 300s is
 # unambiguously stuck.
 _POLLING_ERROR_TASK_STUCK_TIMEOUT = 300.0
+# "Healthy but deaf" watchdog: getUpdates keeps succeeding (so the polling-stall
+# watchdog stays quiet) while PTB's dispatcher hands nothing to the handlers.
+# Updates fetched but not dispatched, with no dispatch progress across this many
+# heartbeats (90s each, so 360s), hands the adapter to the supervisor for a
+# rebuild. Sized past _POLLING_ERROR_TASK_STUCK_TIMEOUT, the bound on a slow
+# handler, so a long-running handler on a busy chat never trips it. Re-arms on
+# progress. Adapted from NousResearch/hermes-agent 3671e521f2, 1809f4fec3 (MIT).
+_INGRESS_DISPATCH_STALL_HEARTBEATS = 4
+# PTB handler group for the dispatch counter: ahead of update admission (-1).
+_DISPATCH_COUNT_GROUP = -2
 # A generation is not healthy until the dedicated getUpdates request returns
 # successfully. This exceeds a normal long-poll cycle for healthy idle bots.
 _POLLING_PROGRESS_TIMEOUT = 60.0
@@ -587,6 +597,15 @@ _MEDIA_SEND_READ_TIMEOUT = 60.0
 _POLLING_GENERATION_CONTEXT: ContextVar[Optional[int]] = ContextVar(
     "telegram_polling_generation", default=None
 )
+
+
+class _PollingStallError(RuntimeError):
+    """A confirmed dispatcher stall, as opposed to a transport drop.
+
+    Typed so the recovery ladder can hand the adapter to the supervisor instead
+    of classifying log text: restarting the same Updater in place keeps the
+    wedged PTB dispatcher, so only a rebuild heals it.
+    """
 
 
 class _PollingLifecycleAbort(RuntimeError):
@@ -819,6 +838,13 @@ class TelegramAdapter(BasePlatformAdapter):
         # getUpdates round-trip completed. None = unknown / not yet observed.
         self._polling_generation_started_monotonic: Optional[float] = None
         self._polling_last_progress_monotonic: Optional[float] = None
+        # Received (fetched by getUpdates) vs dispatched (reached the handler
+        # chain) update counts for the "healthy but deaf" watchdog; re-based
+        # per polling generation.
+        self._updates_received_total: int = 0
+        self._updates_dispatched_total: int = 0
+        self._ingress_dispatched_seen: int = 0
+        self._ingress_stalled_heartbeats: int = 0
         # Live @username, refreshed whenever Telegram tells us what it is.
         # PTB caches getMe() in Bot._bot_user at initialize() and only rewrites
         # it inside get_me(), so a BotFather rename leaves self._bot.username
@@ -2592,16 +2618,24 @@ class TelegramAdapter(BasePlatformAdapter):
         # proven getUpdates progress yet, and its age is measured from here.
         self._polling_generation_started_monotonic = time.monotonic()
         self._polling_last_progress_monotonic = None
+        # Re-base the backlog per generation. On an in-place updater restart PTB
+        # keeps the old update_queue, so old dispatches can briefly exceed
+        # received; the check treats that as no backlog.
+        self._updates_received_total = self._updates_dispatched_total = 0
+        self._ingress_dispatched_seen = self._ingress_stalled_heartbeats = 0
         return self._polling_generation, self._polling_progress_event
 
-    def _record_polling_progress(self, generation: int) -> None:
-        """Record successful getUpdates I/O for the current generation only."""
+    def _record_polling_progress(self, generation: int) -> bool:
+        """Record successful getUpdates I/O for the current generation only.
+
+        Returns True when the progress was accepted (current generation).
+        """
         if getattr(self, "_polling_teardown_started", False):
-            return
+            return False
         if not self._polling_progress_accepting:
-            return
+            return False
         if generation != self._polling_generation:
-            return
+            return False
         if not self._polling_progress_event.is_set():
             # The first confirmed getUpdates round-trip of this generation
             # resolves the "health pending getUpdates progress" line both
@@ -2623,6 +2657,22 @@ class TelegramAdapter(BasePlatformAdapter):
         else:
             self._polling_conflict_count = 0
         self._send_path_degraded = False
+        return True
+
+    def _record_updates_received(self, result) -> None:
+        """Count updates Telegram handed us on the getUpdates wire. Only reached
+        for the accepted generation, so a late response from a fenced poll
+        cannot inflate the backlog."""
+        if isinstance(result, list) and result:
+            self._updates_received_total += len(result)
+
+    def _count_dispatched_update(self, update=None) -> None:
+        self._updates_dispatched_total = getattr(self, "_updates_dispatched_total", 0) + 1
+
+    async def _on_update_dispatched(self, update, context) -> None:
+        """PTB handler (group before admission): every update PTB's dispatcher
+        hands to handlers is counted, replays and unmatched updates included."""
+        self._count_dispatched_update(update)
 
     def _observe_polling_request_result(self, request, generation, result):
         """Record getUpdates progress from an observed do_request result.
@@ -2646,7 +2696,8 @@ class TelegramAdapter(BasePlatformAdapter):
             and envelope.get("ok") is True
             and "result" in envelope
         ):
-            self._record_polling_progress(generation)
+            if self._record_polling_progress(generation):
+                self._record_updates_received(envelope.get("result"))
 
     def _instrument_polling_request(self, request):
         """Instrument one dedicated PTB getUpdates request with progress tracking.
@@ -2840,10 +2891,17 @@ class TelegramAdapter(BasePlatformAdapter):
             )
             return
         self._send_path_degraded = True
-        logger.warning(
-            "[%s] Telegram polling degraded (%s); gateway stays alive and will retry. Error: %s",
-            self.name, reason, _redact_telegram_error_text(error),
-        )
+        if isinstance(error, _PollingStallError):
+            logger.warning(
+                "[%s] Telegram stall confirmed (%s); handing off to the supervisor "
+                "for an adapter rebuild. Error: %s",
+                self.name, reason, _redact_telegram_error_text(error),
+            )
+        else:
+            logger.warning(
+                "[%s] Telegram polling degraded (%s); gateway stays alive and will retry. Error: %s",
+                self.name, reason, _redact_telegram_error_text(error),
+            )
         loop = asyncio.get_running_loop()
         self._polling_error_task = loop.create_task(self._handle_polling_network_error(error))
         self._background_tasks.add(self._polling_error_task)
@@ -3032,6 +3090,20 @@ class TelegramAdapter(BasePlatformAdapter):
         if getattr(self, "_polling_teardown_started", False):
             return
         if self.has_fatal_error:
+            return
+
+        if isinstance(error, _PollingStallError):
+            # Not a retry: no counter bump, no backoff, no in-place stop/drain.
+            # Reusing the wedged Updater/dispatcher cannot heal it; the
+            # supervisor's rebuild runs disconnect() and a fresh connect().
+            message = (
+                "Telegram polling stall confirmed (%s); rebuilding the adapter "
+                "instead of reusing a wedged Updater/dispatcher in place."
+                % _redact_telegram_error_text(error)
+            )
+            logger.error("[%s] %s", self.name, message)
+            self._set_fatal_error("telegram_network_error", message, retryable=True)
+            await self._handoff_polling_fatal_error()
             return
 
         MAX_NETWORK_RETRIES = 10
@@ -3267,6 +3339,10 @@ class TelegramAdapter(BasePlatformAdapter):
                 # successful round-trip past the stall threshold is dead
                 # (#92991). Pure local-state check — no Bot API call needed.
                 await self._check_polling_stall()
+                # Transport health is not dispatch health: getUpdates can keep
+                # succeeding while PTB's dispatcher hands nothing to handlers.
+                # Pure local-state check.
+                self._check_ingress_dispatch_stall()
             except asyncio.CancelledError:
                 return
             except (asyncio.TimeoutError, OSError) as probe_err:
@@ -3386,6 +3462,49 @@ class TelegramAdapter(BasePlatformAdapter):
                     RuntimeError("getUpdates consumer wedged: pending updates not draining")
                 )
             )
+
+    def _check_ingress_dispatch_stall(self) -> None:
+        """Escalate fetched updates PTB's dispatcher is not handing to handlers.
+
+        ``received`` and ``dispatched`` count the same population (every fetched
+        update reaches the group ``_DISPATCH_COUNT_GROUP`` counter), so a backlog
+        with no dispatch progress across ``_INGRESS_DISPATCH_STALL_HEARTBEATS``
+        heartbeats is a wedged dispatcher at any traffic rate. Raises
+        ``_PollingStallError`` once per stall so the supervisor rebuilds the
+        adapter (an in-place restart keeps the wedged dispatcher); re-arms on
+        progress.
+
+        Adapted from NousResearch/hermes-agent 3671e521f2, 1809f4fec3 (MIT).
+        """
+        if (
+            self._webhook_mode
+            or getattr(self, "_polling_teardown_started", False)
+            or self.has_fatal_error
+            or (self._polling_error_task and not self._polling_error_task.done())
+        ):
+            return
+        received = getattr(self, "_updates_received_total", 0)
+        dispatched = getattr(self, "_updates_dispatched_total", 0)
+        if received <= dispatched or dispatched != getattr(self, "_ingress_dispatched_seen", 0):
+            self._ingress_dispatched_seen = dispatched
+            self._ingress_stalled_heartbeats = 0
+            return
+        stalled = getattr(self, "_ingress_stalled_heartbeats", 0)
+        if stalled >= _INGRESS_DISPATCH_STALL_HEARTBEATS:
+            return  # already reported this stall
+        self._ingress_stalled_heartbeats = stalled + 1
+        if stalled + 1 < _INGRESS_DISPATCH_STALL_HEARTBEATS:
+            return
+        self._schedule_polling_recovery(
+            _PollingStallError(
+                f"ingress healthy but deaf: PTB dispatcher made no progress for "
+                f"{_INGRESS_DISPATCH_STALL_HEARTBEATS} heartbeats with "
+                f"{received - dispatched} update(s) fetched but not dispatched "
+                f"({received} received, {dispatched} dispatched, "
+                f"generation {getattr(self, '_polling_generation', 0)})"
+            ),
+            reason="ingress dispatch stall watchdog",
+        )
 
     async def _check_polling_stall(self) -> None:
         """Watchdog the last successful getUpdates round-trip (#92991).
@@ -4427,6 +4546,11 @@ class TelegramAdapter(BasePlatformAdapter):
             make_admission_handler,
             make_finalize_handler,
         )
+
+        # Dispatch accounting for the "healthy but deaf" watchdog. Runs before
+        # admission so replayed/duplicate updates still count as dispatcher
+        # progress; no handler raises ApplicationHandlerStop ahead of it.
+        app.add_handler(TypeHandler(Update, self._on_update_dispatched), group=_DISPATCH_COUNT_GROUP)
 
         bot_id = _bot_id_from_token(getattr(self.config, "token", None))
         if bot_id is not None:
