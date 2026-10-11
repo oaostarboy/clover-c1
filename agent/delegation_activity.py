@@ -1228,7 +1228,7 @@ def _state_counts(children: List[ChildActivity]) -> str:
     done = sum(1 for c in children if c.state == "completed")
     failed = sum(1 for c in children if c.state == "failed")
     cancelled = sum(1 for c in children if c.state == "cancelled")
-    unverified = sum(1 for c in children if c.exited_unverified)
+    unverified = sum(1 for c in children if getattr(c, "exited_unverified", False))
     incomplete = sum(1 for c in children if c.state == "incomplete") - unverified
     if failed == 0 and cancelled == 0 and incomplete == 0 and unverified == 0:
         return ""
@@ -1270,9 +1270,9 @@ def group_icon(children: List[ChildActivity]) -> str:
     states = {c.state for c in children}
     if "failed" in states:
         return get_fail_mark()
-    if any(c.state == "incomplete" and not c.exited_unverified for c in children):
+    if any(c.state == "incomplete" and not getattr(c, "exited_unverified", False) for c in children):
         return "⏳"
-    if any(c.exited_unverified for c in children):
+    if any(getattr(c, "exited_unverified", False) for c in children):
         return _UNVERIFIED_ICON
     if "cancelled" in states:
         return "⏹"
