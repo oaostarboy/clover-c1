@@ -49,9 +49,20 @@ jobs:
         path: [cli, chat]
         phase: [old2new, new2next]
     env:
-      OLD_REF: 846650671931ae92982570d00d207a844a084d65
+      # OLD_REF is v1.3.0 (main's tip, what users run today). Its updater
+      # already has the Schedule-service fix, so troy old2new is a normal
+      # "must succeed" row here, not an expected-failure reproduction.
+      OLD_REF: 7d78893dcd5ec95e197cfd94d4fbb38646f43a86
       HEAD_SHA: ${{ github.sha }}
       HEAD_BRANCH: ${{ github.ref_name }}
+      # Target-bound variant (CI-only helper): the update target is the exact
+      # frozen release candidate, NOT the helper branch head (workflow commit).
+      # TARGET_BRANCH is a frozen copy of the candidate tip (the pin below
+      # checks sha+tree), so a later push to c1.5/integration cannot move it.
+      TARGET_SHA: dcbe7ef10b60f93a0ed00d64f0189841b00638fc
+      TARGET_TREE: db8239293e7b2e1fcb5f8b938108786c6cc2ac27
+      TARGET_BRANCH: ci/win-update-next/c1-5-dcbe7ef-target
+      NEXT_BRANCH: ci/win-update-next/c1-5-dcbe7ef
       SETUP: ${{ matrix.setup }}
       UPDATE_PATH: ${{ matrix.path }}
       PHASE: ${{ matrix.phase }}
@@ -68,7 +79,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $from = if ($env:PHASE -eq 'old2new') { $env:OLD_REF } else { $env:HEAD_SHA }
+          $from = if ($env:PHASE -eq 'old2new') { $env:OLD_REF } else { $env:TARGET_SHA }
           $cloverHome = "$env:LOCALAPPDATA\clover"
           $installDir = "$cloverHome\clover-c1"
           git config --global core.autocrlf false
@@ -76,8 +87,30 @@ jobs:
           git clone --branch main https://github.com/oaostarboy/clover-c1.git $installDir
           git -C $installDir checkout --detach $from
           if ($LASTEXITCODE -ne 0) { throw "pre-clone checkout of $from failed" }
-          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/$env:HEAD_SHA/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/oaostarboy/clover-c1/$env:TARGET_SHA/scripts/install.ps1" -OutFile "$env:TEMP\install.ps1"
           & "$env:TEMP\install.ps1" -Branch main -Commit $from -NonInteractive -SkipComputerUse -CloverHome $cloverHome -InstallDir $installDir
+          if ($env:PHASE -eq 'old2new') {
+            # origin/main IS $from here (v1.3.0 is still main's tip). The proof
+            # makes main read as the candidate with `git replace`, which is keyed
+            # by commit id, so an install sitting ON main's tip would be replaced
+            # too (0 commits behind, "up to date"). Re-id the install: same tree,
+            # same parents, different commit id. Set-MainIsTarget grafts it into
+            # the candidate's history, so the update is a real fast-forward.
+            $tree = (git -C $installDir rev-parse "$from^{tree}").Trim()
+            $ids = @((git -C $installDir rev-list --parents -n 1 $from).Trim() -split ' ')
+            $pargs = @()
+            if ($ids.Count -gt 1) { foreach ($p in $ids[1..($ids.Count - 1)]) { $pargs += @('-p', $p) } }
+            $env:GIT_AUTHOR_NAME = 'ci'; $env:GIT_AUTHOR_EMAIL = 'ci@example.invalid'
+            $env:GIT_COMMITTER_NAME = 'ci'; $env:GIT_COMMITTER_EMAIL = 'ci@example.invalid'
+            $alias = (git -C $installDir commit-tree $tree @pargs -m "proof alias of $from").Trim()
+            if ($LASTEXITCODE -ne 0 -or $alias.Length -ne 40) { throw "alias commit for $from failed" }
+            git -C $installDir checkout -q --detach $alias
+            if ($LASTEXITCODE -ne 0) { throw "checkout of alias $alias failed" }
+            $aliasTree = (git -C $installDir rev-parse "HEAD^{tree}").Trim()
+            if ($aliasTree -ne $tree) { throw "alias tree $aliasTree != $from tree $tree" }
+            "OLD_REF_ALIAS=$alias" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            Write-Host "installed $from; running checkout is its alias $alias (same tree $tree)"
+          }
           "FROM_REF=$from" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "CLOVER_HOME=$cloverHome" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "INSTALL_DIR=$installDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -127,21 +160,30 @@ jobs:
           # one marker commit at ci/win-update-next/<name> for helper
           # ci/win-update-proof/<name> (outside the trigger pattern, so pushing
           # it starts no run). PR #71's original pair keeps its old name.
-          $suffix = $env:HEAD_BRANCH -replace '^ci/win-update-proof/', ''
-          $next = if ($suffix -eq 'pr-head') { 'ci/win-update-proof-next' } else { "ci/win-update-next/$suffix" }
-          $target = if ($env:PHASE -eq 'old2new') { $env:HEAD_BRANCH } else { $next }
+          $target = if ($env:PHASE -eq 'old2new') { $env:TARGET_BRANCH } else { $env:NEXT_BRANCH }
+          # Pin the target: old2new target must be exactly the frozen candidate
+          # commit+tree; new2next target must be that commit + one marker commit.
+          git -C $env:INSTALL_DIR fetch -q origin "+refs/heads/${target}:refs/remotes/origin/${target}"
+          if ($LASTEXITCODE -ne 0) { throw "fetch of target $target failed" }
+          $tsha = (git -C $env:INSTALL_DIR rev-parse "refs/remotes/origin/$target").Trim()
+          $ttree = (git -C $env:INSTALL_DIR rev-parse "refs/remotes/origin/$target^{tree}").Trim()
+          if ($env:PHASE -eq 'old2new') {
+            if ($tsha -ne $env:TARGET_SHA -or $ttree -ne $env:TARGET_TREE) { throw "target pin mismatch: $tsha / $ttree" }
+          } else {
+            $par = (git -C $env:INSTALL_DIR rev-parse "refs/remotes/origin/$target^").Trim()
+            if ($par -ne $env:TARGET_SHA) { throw "next target parent $par != $env:TARGET_SHA" }
+            $chg = @(git -C $env:INSTALL_DIR diff --name-only $par $tsha)
+            if ($chg.Count -ne 1 -or $chg[0] -ne '.github/win-e2e/NEXT_MARKER.txt') { throw "next target differs from candidate beyond marker: $chg" }
+          }
+          Write-Host "TARGET-PIN OK phase=$env:PHASE target=$target sha=$tsha tree=$ttree workflow-commit=$env:HEAD_SHA candidate=$env:TARGET_SHA"
           Set-MainIsTarget $target
           $logStart = (Get-LogLines).Count
           $label = "$env:SETUP $env:UPDATE_PATH $env:PHASE"
           $exitCode = Invoke-PathUpdate $label
           Write-Host "[$label] update exit=$exitCode"
-          if ($env:SETUP -eq 'troy' -and $env:PHASE -eq 'old2new') {
-            # The OLD updater runs here: this is the reported bug.
-            Assert-ScheduleStopReproduced $label $exitCode
-            "SCHEDULE_REPRODUCED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          } else {
-            Assert-UpdateSucceeded $label $logStart $exitCode ([int]$env:OLD_GATEWAY_PID)
-          }
+          # Every row must succeed: v1.3.0's updater (old2new) and the candidate's
+          # (new2next) both handle the Schedule-hosted gateway.
+          Assert-UpdateSucceeded $label $logStart $exitCode ([int]$env:OLD_GATEWAY_PID)
           exit 0
 
       - name: d2. (troy old2new) state after the reproduced failure; Schedule service untouched
