@@ -46,7 +46,7 @@ import time
 import threading
 import uuid
 import warnings
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Sequence
 # NOTE: `from openai import OpenAI` is deliberately NOT at module top — the
 # SDK pulls ~240 ms of imports. We expose `OpenAI` as a thin proxy object
 # that imports the SDK on first call/isinstance check. This preserves:
@@ -8542,6 +8542,7 @@ class AIAgent:
         persist_user_display_kind: Optional[str] = None,
         persist_user_display_metadata: Optional[Dict[str, Any]] = None,
         moa_config: Optional[dict[str, Any]] = None,
+        completion_delegation_ids: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
         """Forwarder — see ``agent.conversation_loop.run_conversation``."""
         # A review deliberately shares this agent's session_id for prompt-cache
@@ -8979,6 +8980,7 @@ class AIAgent:
                         persist_user_display_kind=persist_user_display_kind,
                         persist_user_display_metadata=persist_user_display_metadata,
                         moa_config=moa_config,
+                        completion_delegation_ids=completion_delegation_ids,
                     )
                 finally:
                     # However the turn ended (finalize_turn, the Codex

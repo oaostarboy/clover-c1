@@ -107,6 +107,22 @@ delegation:
   calls' arguments from their raw strings, while the loop sends the canonical
   form, so even the message bytes differ.) Turns that finish on their own never
   pay it.
+- **Checking a helper's result.** `delegation.verify_time_limit_seconds`
+  (default **120**; `0`, `null` or `false` = off, and off whenever the
+  foreground limit is off). When the completion turn of a helper THIS agent
+  started arrives after the limit is spent, the agent gets one fresh episode of
+  that length - enough for a short terminal check - and then the usual finish
+  mode. It is granted only from the gateway's own completion metadata (the
+  helper's delegation id), never from notification text or session identity;
+  each helper's allowance is spent once, also across restarts; a restarted or
+  rebuilt agent, cron, another profile and unrelated internal turns keep the
+  start-expired behaviour above. Helpers started in the window are background
+  helpers for all of it, expiry included, and a human message during or after
+  it gets its own fresh clock. Nothing about the window is shown to the user.
+  Several helpers finishing together share one window and spend one allowance.
+  Existing limitation: the API-server wake path (`gateway/wake.py`) re-enters as
+  an ordinary request with no completion ids, so no verification window exists
+  there.
 - **Where it applies.** The limit exists to hand work to a background helper,
   so it applies only in chats where the bot can actually run one and deliver
   its result later: Telegram and the other messaging platforms, and the

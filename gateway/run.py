@@ -6957,6 +6957,12 @@ class TurnRunner:
                 _conversation_kwargs["persist_user_display_kind"] = (
                     ctx.persist_user_display_kind
                 )
+            if ctx.completion_delegation_ids:
+                # Trusted ids of the helper completion this turn delivers: the
+                # foreground time limit's verification window keys on them.
+                _conversation_kwargs["completion_delegation_ids"] = (
+                    ctx.completion_delegation_ids
+                )
             if ctx.moa_config is not None:
                 _conversation_kwargs["moa_config"] = ctx.moa_config
             if _persist_user_timestamp_override is not None:
@@ -21579,6 +21585,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_display_kind = (
             "internal_notification" if getattr(event, "internal", False) else None
         )
+        completion_delegation_ids = self._completion_ids_for_event(event)
         try:
             _pcfg = _load_gateway_config()
             _redact_pii = bool((_pcfg.get("privacy") or {}).get("redact_pii", False))
@@ -22923,6 +22930,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # session_entry.session_id while the old run is still unwinding.
             _run_start_session_id = session_entry.session_id
             _turn_started_monotonic = time.monotonic()
+            # Passed only when present, so a stand-in ``_run_agent`` with the
+            # older signature keeps working for every ordinary turn.
+            _completion_kwargs = (
+                {"completion_delegation_ids": completion_delegation_ids}
+                if completion_delegation_ids else {}
+            )
             agent_result = await self._run_agent(
                 message=message_text,
                 context_prompt=context_prompt,
@@ -22938,6 +22951,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_timestamp=persist_user_timestamp,
                 persist_user_display_kind=persist_user_display_kind,
                 message_type=event.message_type,
+                **_completion_kwargs,
             )
             _turn_seconds = time.monotonic() - _turn_started_monotonic
 
@@ -28399,6 +28413,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 metadata["completion_inbox_siblings"] = [
                     list(sib) for sib in evt["_coalesced_siblings"]
                 ]
+            # Trusted ids of the helper results this turn delivers (producer
+            # event fields, never the notification text): the foreground time
+            # limit keys its one verification window on them.
+            _completion_ids = self._completion_delegation_ids(evt)
+            if _completion_ids:
+                metadata["completion_delegation_ids"] = _completion_ids
             synth_event = MessageEvent(
                 text=synth_text,
                 message_type=MessageType.TEXT,
@@ -28482,6 +28502,41 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if route is None:
             return None
         return route, await self._resolve_completion_owner(parent_session_id, route)
+
+    @staticmethod
+    def _completion_ids_for_event(event) -> Optional[tuple]:
+        """Validated completion ids carried by ONE gateway event, or ``None``.
+
+        Only a gateway-built internal event can carry them; a human message's
+        metadata is never consulted.  Every turn derives its ids from its own
+        event (top-level and queued follow-up alike) -- never from the previous
+        turn.
+        """
+        if not getattr(event, "internal", False):
+            return None
+        ids = (getattr(event, "metadata", None) or {}).get("completion_delegation_ids")
+        if not isinstance(ids, (list, tuple)):
+            return None
+        return tuple(i for i in ids if isinstance(i, str) and i.strip()) or None
+
+    @staticmethod
+    def _completion_delegation_ids(evt: dict) -> list:
+        """Delegation ids a completion event (and its coalesced siblings) carries."""
+        ids: list = []
+
+        def add(value) -> None:
+            value = str(value or "").strip()
+            if value and value not in ids:
+                ids.append(value)
+
+        if evt.get("type") == "async_delegation":
+            add(evt.get("delegation_id"))
+            add(evt.get("batch_delegation_id"))
+        for sibling in evt.get("_coalesced_siblings") or ():
+            key = str(sibling[0] or "") if sibling else ""
+            if key.startswith("deleg:"):
+                add(key[len("deleg:"):])
+        return ids
 
     @staticmethod
     def _completion_inbox_identity(evt: dict):
@@ -31345,6 +31400,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_timestamp: Optional[float] = None,
         persist_user_display_kind: Optional[str] = None,
         message_type: Optional[str] = None,
+        completion_delegation_ids: Optional[tuple] = None,
     ) -> Dict[str, Any]:
         """Profile-scoping wrapper around the agent run.
 
@@ -31365,6 +31421,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_timestamp=persist_user_timestamp,
                 persist_user_display_kind=persist_user_display_kind,
                 message_type=message_type,
+                completion_delegation_ids=completion_delegation_ids,
             )
 
         profile_home = self._resolve_profile_home_for_source(source)
@@ -31378,6 +31435,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_timestamp=persist_user_timestamp,
                 persist_user_display_kind=persist_user_display_kind,
                 message_type=message_type,
+                completion_delegation_ids=completion_delegation_ids,
             )
 
     def _profile_name_for_source(self, source: SessionSource) -> Optional[str]:
@@ -31521,6 +31579,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_timestamp: Optional[float] = None,
         persist_user_display_kind: Optional[str] = None,
         message_type: Optional[str] = None,
+        completion_delegation_ids: Optional[tuple] = None,
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
@@ -31884,6 +31943,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             persist_user_message=persist_user_message,
             persist_user_timestamp=persist_user_timestamp,
             persist_user_display_kind=persist_user_display_kind,
+            completion_delegation_ids=completion_delegation_ids,
         )
         turn_runner = TurnRunner(self, turn_ctx)
         # Callback invoked by agent on tool lifecycle events — extracted to
@@ -33209,8 +33269,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # recursive call so queued voice turns can stream TTS and
                 # re-mark the generation for the final delivered turn.
                 next_message_type = None
+                # A queued internal event (a helper completion drained
+                # in-band) keeps its identity: typed as an internal
+                # notification and carrying ITS OWN trusted completion ids,
+                # same rules as the top-level handler.  A genuine queued human
+                # message gets neither (a fresh human turn).
+                next_display_kind = None
+                next_completion_ids = None
                 if pending_event is not None:
                     next_source = getattr(pending_event, "source", None) or source
+                    if getattr(pending_event, "internal", False):
+                        next_display_kind = "internal_notification"
+                        next_completion_ids = self._completion_ids_for_event(pending_event)
                     if self._is_goal_continuation_event(pending_event) and not self._goal_still_active_for_session(session_id):
                         logger.info(
                             "Discarding stale goal continuation for session %s — goal is no longer active",
@@ -33284,6 +33354,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # what the follow-up's guard will consult.  Fail-safe in helper.
                 await self._refresh_agent_cache_message_count(session_key, session_id)
 
+                # Passed only for a queued internal event, so a genuine human
+                # follow-up call is exactly what it always was.
+                _next_identity: Dict[str, Any] = {}
+                if next_display_kind:
+                    _next_identity["persist_user_display_kind"] = next_display_kind
+                if next_completion_ids:
+                    _next_identity["completion_delegation_ids"] = next_completion_ids
                 followup_result = await self._run_agent(
                     message=next_message,
                     context_prompt=context_prompt,
@@ -33296,6 +33373,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     event_message_id=next_message_id,
                     channel_prompt=next_channel_prompt,
                     message_type=next_message_type,
+                    **_next_identity,
                 )
                 return _preserve_queued_followup_history_offset(result, followup_result)
         finally:

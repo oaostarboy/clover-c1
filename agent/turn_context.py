@@ -29,7 +29,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from agent.conversation_compression import (
     IDLE_COMPACTION_STATUS_TEMPLATE,
@@ -517,6 +517,7 @@ def build_turn_context(
     *,
     persist_user_display_kind: Optional[str] = None,
     persist_user_display_metadata: Optional[Dict[str, Any]] = None,
+    completion_delegation_ids: Optional[Sequence[str]] = None,
     restore_or_build_system_prompt,
     install_safe_stdio,
     sanitize_surrogates,
@@ -703,7 +704,7 @@ def build_turn_context(
     from agent import foreground_time_limit as _fg_limit
     from agent import turn_notices as _turn_notices
     _turn_notices.reset(agent)
-    _fg_limit.begin_turn(agent, persist_user_display_kind)
+    _fg_limit.begin_turn(agent, persist_user_display_kind, completion_delegation_ids)
 
     # Log conversation turn start for debugging/observability.
     _preview_text = summarize_user_message_for_log(user_message)

@@ -2132,6 +2132,14 @@ DEFAULT_CONFIG = {
         # per hard stop, accepted). Seconds; 0/null/false = off. Independent of
         # delegation.checkpoint.
         "foreground_time_limit_seconds": 300,
+        # A short checking window for a helper's OWN result coming back: when
+        # the completion turn of a hand-off this agent dispatched arrives after
+        # the foreground limit is spent, it gets a fresh episode of this many
+        # seconds (once per dispatch, also across restart) so the agent can
+        # verify the result before answering; helpers it spawns there stay in
+        # the background. Seconds; 0/null/false = off. Off too whenever
+        # foreground_time_limit_seconds is off.
+        "verify_time_limit_seconds": 120,
         "max_iterations": 250,  # per-subagent iteration cap (each subagent gets its own budget,
                                # independent of the parent's max_iterations)
         # When a subagent runs out of steps mid-task, refresh its budget and

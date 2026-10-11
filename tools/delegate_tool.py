@@ -5111,6 +5111,9 @@ def delegate_task(
         )
 
         if dispatch.get("status") == "dispatched":
+            # This instance made the dispatch: its own completion turn may earn
+            # the short verification window (agent.foreground_time_limit).
+            _fg_limit.note_own_dispatch(parent_agent, dispatch.get("delegation_id"))
             n = len(_goals)
             note = _background_dispatch_note(n)
             if _fg_forced_background:
