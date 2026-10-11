@@ -91,6 +91,12 @@ NOTICE_MARKER = f"{RUNTIME_NOTE_MARKER} Time check:"
 # What every human-facing surface (activity feed, TUI / desktop tool rows) shows
 # for a refused call: a neutral "skipped", never the model-facing refusal text.
 SKIPPED_CODE = "skipped"
+# The router backstop's refused call (agent.router_backstop) gets the same
+# neutral treatment; its code lives here so ``display_result`` has no import
+# cycle with the backstop module.
+ROUTER_HANDOFF_CODE = "router_backstop_handoff"
+ROUTER_HANDOFF_FAILED_CODE = "router_backstop_handoff_failed"
+_NEUTRAL_DISPLAY_CODES = (BLOCK_CODE, ROUTER_HANDOFF_CODE, ROUTER_HANDOFF_FAILED_CODE)
 
 
 def _now() -> float:
@@ -619,18 +625,19 @@ def refusal(agent: Any, function_name: str, function_args: Any):
 def display_result(result: Any) -> Any:
     """The result a human-facing surface should show for a tool result.
 
-    A foreground-limit refusal (``error_type == BLOCK_CODE``) is model-facing
-    mechanics -- the user must never read about the limit -- so surfaces get a
-    neutral ``skipped`` payload instead.  Every other result passes through
+    A foreground-limit refusal (``error_type == BLOCK_CODE``) or a router
+    backstop hand-off is model-facing mechanics -- the user must never read
+    about the limit or the plumbing -- so surfaces get a neutral ``skipped``
+    payload instead.  Every other result passes through
     unchanged; the model always receives the original text.
     """
-    if not isinstance(result, str) or BLOCK_CODE not in result:
+    if not isinstance(result, str) or not any(c in result for c in _NEUTRAL_DISPLAY_CODES):
         return result
     try:
         data = json.loads(result)
     except ValueError:
         return result
-    if isinstance(data, dict) and data.get("error_type") == BLOCK_CODE:
+    if isinstance(data, dict) and data.get("error_type") in _NEUTRAL_DISPLAY_CODES:
         return json.dumps(
             {"error": SKIPPED_CODE, "error_type": SKIPPED_CODE, "skipped": True}
         )

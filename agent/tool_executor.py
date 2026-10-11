@@ -730,11 +730,19 @@ def _run_agent_tool_execution_middleware_impl(
         checkpoint_state: dict[str, Any] = {"verdict": None}
 
         def _admit_then_begin() -> None:
-            from agent import delegation_checkpoint, foreground_time_limit
+            from agent import (
+                delegation_checkpoint,
+                foreground_time_limit,
+                router_backstop,
+            )
 
-            # Per-message foreground time limit first (independent of the
-            # checkpoint): a refused call reserves no checkpoint budget.
-            verdict = foreground_time_limit.refusal(
+            # Router backstop first: a not-direct plan the root keeps doing
+            # itself is handed to helpers by the runtime. Then the per-message
+            # foreground time limit (independent of the checkpoint): a refused
+            # call reserves no checkpoint budget.
+            verdict = router_backstop.refusal(
+                agent, function_name, final_args
+            ) or foreground_time_limit.refusal(
                 agent, function_name, final_args
             ) or delegation_checkpoint.admit(
                 agent, function_name, final_args, tool_call_id
@@ -788,10 +796,20 @@ def _run_agent_tool_execution_middleware_impl(
         )
         _hb_thread.start()
         try:
+            from agent import router_backstop
             from agent.delegation_checkpoint import admitted
 
             with admitted(admission):
-                return execute(final_args)
+                result = None
+                try:
+                    result = execute(final_args)
+                    return result
+                finally:
+                    # What an admitted call found travels with a later
+                    # hand-off; a call that raised just frees its slot.
+                    router_backstop.note_result(
+                        agent, function_name, final_args, result
+                    )
         finally:
             _hb_stop.set()
             _hb_thread.join(timeout=2.0)
