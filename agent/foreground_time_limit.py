@@ -330,7 +330,7 @@ def _open_ack_part(did: str, receipt: "DispatchReceipt") -> None:
 
         open_part(
             did, receipt.summary, receipt.steps,
-            expected=max(1, len(receipt.goals)), say=receipt.say,
+            expected=max(1, len(receipt.goals)), say=receipt.say, goals=receipt.goals,
         )
     except Exception:
         pass

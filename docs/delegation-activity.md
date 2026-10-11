@@ -48,13 +48,17 @@ display:
 `auto` shows the card wherever `tool_progress` is shown in chat and stays
 silent where it is `off`/`log`, so existing opt-outs are preserved.
 
-`helper_card` styles the ack message of a single dispatched helper. `unified`
-(default) makes it the one card for that helper: your assistant's opening line,
-the work title and outcome with an ETA, the steps (⬜/🔄/🍀/🍂), the current
-tool, and `Model · 🛠 N tool calls · ⏱ time`; when the helper finishes the ETA
-and tool line give way to its plain summary and no separate 🔀 card is posted.
-`classic` is the previous look (plain checklist plus the 🔀 card). Roll back
-with `clover config set display.helper_card classic` and `/restart`.
+`helper_card` styles the ack message of a dispatched helper. `unified` (default)
+makes it the one card for the dispatch: your assistant's opening line, the work
+title and outcome with an ETA, the steps (⬜/🔄/🍀/🍂) for one helper, the
+current tool plus the previous ones (✓ ok / ✗ error, newest first; 3 lines for
+one helper, 2 per running helper for several), and `Model · 🛠 N tool calls ·
+⏱ time`. A dispatch of several helpers gets one block per helper (⬜ waiting,
+🔄 running, 🍀 done, 🍂 failed, ⏹ stopped) with a totals line; the header shows
+`k of N done`. When a helper finishes its tool lines give way to its plain
+summary, and no separate 🔀 card is posted. `classic` is the previous look
+(plain checklist plus the 🔀 card). Roll back with
+`clover config set display.helper_card classic` and `/restart`.
 
 ## External agent CLI workers (Claude, Codex, Clover/Luna)
 

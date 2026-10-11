@@ -241,11 +241,26 @@ async def test_ticks_stop_when_the_helper_finishes(monkeypatch):
     assert editor._ticking is False
 
 
+def _multi(did=OWNED, goals=("g1", "g2")):
+    r = fl.DispatchReceipt(delegation_id=did, seq=1, goals=goals, summary=HEAD, steps=())
+    return ac.card_for([r])
+
+
 @pytest.mark.asyncio
-async def test_publisher_keeps_the_roster_card_for_a_multi_helper_dispatch():
-    r = fl.DispatchReceipt(delegation_id=OWNED, seq=1, goals=("g1", "g2"), summary=HEAD, steps=())
-    ac.card_for([r])
-    assert ac.owns_delegation(OWNED) is False
+async def test_publisher_posts_no_roster_card_for_a_multi_helper_dispatch_under_unified():
+    _multi()
+    assert ac.owns_delegation(OWNED) is True
+    adapter = FakeTelegramAdapter()
+    pub = await _drive(adapter)
+    assert adapter.status_calls == [] and adapter.sends == [], "no 🔀 card, no summary"
+    assert pub.tracker.group_ids() == []
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_publisher_still_posts_the_roster_card_for_a_multi_helper_dispatch_under_classic():
+    _multi()
+    ac.set_style_for_tests("classic")
     adapter = FakeTelegramAdapter()
     pub = await _drive(adapter)
     assert adapter.status_calls or adapter.sends
@@ -253,11 +268,48 @@ async def test_publisher_keeps_the_roster_card_for_a_multi_helper_dispatch():
 
 
 @pytest.mark.asyncio
-async def test_editor_does_not_tick_a_multi_helper_card(monkeypatch):
-    r = fl.DispatchReceipt(delegation_id="dm", seq=1, goals=("g1", "g2"), summary=HEAD, steps=())
-    adapter, card = _Adapter(), ac.card_for([r])
+async def test_editor_ticks_a_multi_helper_card_while_it_runs(monkeypatch):
+    adapter, card = _Adapter(), _multi("dm")
     editor = await _bind(adapter, card)
     calls: List[Any] = []
     monkeypatch.setattr(asyncio.get_running_loop(), "call_later", lambda *a: calls.append(a))
     editor._tick_later()
-    assert calls == []
+    assert len(calls) == 1 and calls[0][0] == da.ACK_TICK_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_multi_helper_events_edit_the_one_message_in_place():
+    adapter, card = _Adapter(), _multi("dm", goals=("check a", "check b"))
+    editor = await _bind(adapter, card)
+    ac.on_child_event("subagent.tool", delegation_id="dm", task_index=1, tool_name="terminal",
+                      preview="npm test", args={"command": "npm test"}, tool_count=2, subagent_id="s2")
+    await _settle(editor)
+    assert adapter.edits and adapter.edits[-1]["id"] == "m42"
+    text = adapter.edits[-1]["text"]
+    assert "\U0001f527 *terminal npm test*" in text and "\u2b1c **check a**" in text
+    assert adapter.edits[-1]["finalize"] is False
+    for i in (0, 1):
+        ac.on_child_event("subagent.complete", delegation_id="dm", task_index=i, status="completed",
+                          summary="Plain summary: ok.")
+    await _settle(editor)
+    assert adapter.edits[-1]["finalize"] is True and "\U0001f340 **check b**" in adapter.edits[-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_a_six_helper_edit_fits_the_telegram_limit():
+    goals = tuple(f"Check site number {i}" for i in range(6))
+    adapter, card = _Adapter(), _multi("dm", goals=goals)
+    editor = await _bind(adapter, card)
+    for i in range(6):
+        ac.on_child_event("subagent.complete", delegation_id="dm", task_index=i, status="completed",
+                          summary="Plain summary: " + " ".join(["word"] * 70) + ".")
+    await _settle(editor)
+    sent = adapter.edits[-1]["text"]
+    assert len(sent) <= 4000 and "\U0001f340 **Check site number 5**" in sent and sent.rstrip().endswith("*")
+
+
+@pytest.mark.asyncio
+async def test_classic_editor_text_is_unchanged_for_a_multi_dispatch():
+    card = _multi("dm")
+    ac.set_style_for_tests("classic")
+    assert card.render() == HEAD

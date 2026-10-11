@@ -1436,9 +1436,7 @@ class AckCardEditor:
         try:
             from agent.ack_checklist import unified
 
-            if not unified() or not any(
-                getattr(p.checklist, "solo", True) for p in self.card.parts
-            ):
+            if not unified():
                 return
         except Exception:
             return

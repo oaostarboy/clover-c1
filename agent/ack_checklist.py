@@ -30,17 +30,19 @@ import json
 import re
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
 
 MAX_STEPS = 6
 MAX_STEP_CHARS = 60
 MAX_SAY_CHARS = 200
 
-# ``display.helper_card``: ``unified`` (default) puts the helper's live
-# activity -- current tool, model, tool calls, time and, when done, its plain
-# summary -- inside this one message and the separate 🔀 roster card is not
-# posted for that dispatch.  ``classic`` is the previous look: this checklist
+# ``display.helper_card``: ``unified`` (default) puts the helpers' live
+# activity -- recent tool calls, model, tool count, time and, when done, the
+# plain summary -- inside this one message (one block per helper when a
+# dispatch has several) and the separate 🔀 roster card is not posted for
+# that dispatch.  ``classic`` is the previous look: this checklist
 # plus the separate 🔀 card.  Read from config (cached briefly), so switching
 # back is one ``clover config set display.helper_card classic``.
 STYLE_UNIFIED = "unified"
@@ -83,6 +85,12 @@ DONE = "done"
 FAILED = "failed"
 STOPPED = "stopped"
 
+PENDING = "pending"  # a helper of a multi dispatch that has not started
+RECENT_TOOLS_SINGLE = 3  # tool lines on a one-helper card
+RECENT_TOOLS_MULTI = 2  # tool lines per running helper on a several-helper card
+SUMMARY_CHARS = 140  # a helper's summary on a several-helper card
+CARD_BUDGET = 3900  # Telegram's message limit, with room to spare
+
 PENDING_ICON = "\u2b1c"  # ⬜
 ACTIVE_ICON = "\U0001f504"  # 🔄
 DONE_ICON = "\U0001f340"  # 🍀
@@ -97,6 +105,9 @@ _STEP_ICON = {
     "failed": FAILED_ICON,
 }
 _END_ICON = {DONE: DONE_ICON, FAILED: FAILED_ICON, STOPPED: STOPPED_ICON}
+_CHILD_ICON = {PENDING: PENDING_ICON, RUNNING: ACTIVE_ICON, **_END_ICON}
+_TOOL_OK, _TOOL_ERR = "\u2713", "\u2717"  # ✓ ✗
+_MAX_OPEN_TOOLS = 8
 
 
 def clean_say(value: Any) -> str:
@@ -143,6 +154,30 @@ def clean_steps(value: Any) -> Tuple[str, ...]:
 
 
 @dataclass
+class Child:
+    """One helper of a multi-helper dispatch (observed state only)."""
+
+    index: int
+    title: str = ""
+    goal: str = ""
+    sid: str = ""
+    state: str = PENDING
+    model: str = ""
+    calls: int = 0
+    doing: str = ""
+    summary: str = ""
+    started: Optional[float] = None
+    ended: Optional[float] = None
+    titled: bool = False  # the helper's own title was seen (beats the goal)
+    open: List[Tuple[str, str, str]] = field(default_factory=list)  # (call id, name, phrase)
+    recent: Deque[Tuple[str, bool]] = field(default_factory=lambda: deque(maxlen=RECENT_TOOLS_SINGLE))
+
+    @property
+    def label(self) -> str:
+        return (self.title or "").replace("*", "").strip() or f"helper {self.index + 1}"
+
+
+@dataclass
 class Checklist:
     """One dispatch's header line + steps + (once over) its result."""
 
@@ -157,9 +192,12 @@ class Checklist:
     summary: str = ""
     started: Optional[float] = None
     ended: Optional[float] = None
-    # One helper owns the unified card.  A dispatch of several helpers keeps
-    # the classic checklist plus the 🔀 roster, which shows each of them.
-    solo: bool = True
+    # The current tool(s) and the last few finished ones (newest last).
+    open: List[Tuple[str, str, str]] = field(default_factory=list)
+    recent: Deque[Tuple[str, bool]] = field(default_factory=lambda: deque(maxlen=RECENT_TOOLS_SINGLE))
+    # A dispatch of several helpers: one entry each, in dispatch order.  The
+    # card then shows a block per helper instead of one helper's steps.
+    kids: List[Child] = field(default_factory=list)
 
     @classmethod
     def start(cls, header: str, steps: Sequence[str], say: str = "") -> "Checklist":
@@ -211,12 +249,15 @@ class Checklist:
 
     # -- text ------------------------------------------------------------
 
-    def render(self) -> str:
-        if self.solo and unified():
+    def render(self, summary_chars: int = SUMMARY_CHARS, tool_cap: int = RECENT_TOOLS_MULTI) -> str:
+        if unified():
+            if self.kids:
+                return self.render_unified_multi(summary_chars=summary_chars, tool_cap=tool_cap)
             return self.render_unified()
         return self.render_classic()
 
-    def render_unified(self, now: Optional[float] = None) -> str:
+    def _title_outcome(self) -> Tuple[str, str, str]:
+        """(icon, title, outcome) of the header line."""
         icon, rest = ACTIVE_ICON, self.header
         for ic in (ACTIVE_ICON, DONE_ICON, FAILED_ICON, STOPPED_ICON):
             if rest.startswith(ic):
@@ -228,7 +269,10 @@ class Checklist:
         outcome = outcome.replace(", ~", " \u00b7 ~", 1)
         if self.state != RUNNING and " \u00b7 ~" in outcome:
             outcome = outcome.split(" \u00b7 ~", 1)[0]
-        title = work.replace("*", "").strip()
+        return icon, work.replace("*", "").strip(), outcome
+
+    def render_unified(self, now: Optional[float] = None) -> str:
+        icon, title, outcome = self._title_outcome()
         lines = [f"{icon} **{title}**"]
         quoted: List[str] = []
         if outcome:
@@ -238,11 +282,10 @@ class Checklist:
             quoted += [f"{_STEP_ICON[status]} {text}" for text, status in self.steps]
         tail: List[str] = []
         if self.state == RUNNING:
-            if self.doing:
-                tail.append(f"\U0001f527 {_italic(self.doing)}")
+            tail += _tool_lines(self, RECENT_TOOLS_SINGLE)
         elif self.summary:
             tail.append(self.summary.replace("*", ""))
-        stats = self._stats(now)
+        stats = _stats_line(self.model, self.calls, self.started, self.ended, now)
         if stats:
             tail.append(_italic(stats))
         if tail:
@@ -251,21 +294,47 @@ class Checklist:
         body = "\n".join(lines + [f"> {q}" for q in quoted if q])
         return f"{self.say}\n\n{body}" if self.say else body
 
-    def _stats(self, now: Optional[float]) -> str:
-        parts: List[str] = []
-        if self.model:
-            parts.append(self.model)
-        if self.calls:
-            parts.append(f"\U0001f6e0 {self.calls} tool call{'s' if self.calls != 1 else ''}")
-        if self.started is not None:
-            end = self.ended if self.ended is not None else (now if now is not None else time.monotonic())
-            try:
-                from agent.delegation_activity import short_duration
-
-                parts.append(f"\u23f1 {short_duration(max(0.0, end - self.started))}")
-            except Exception:
-                pass
-        return " \u00b7 ".join(parts)
+    def render_unified_multi(
+        self, now: Optional[float] = None, summary_chars: int = SUMMARY_CHARS,
+        tool_cap: int = RECENT_TOOLS_MULTI,
+    ) -> str:
+        """One block per helper: icon + title, its recent tool calls while it
+        runs (its summary once over), its stats; a totals line at the end."""
+        now = time.monotonic() if now is None else now
+        icon, title, outcome = self._title_outcome()
+        kids = self.kids
+        done = sum(1 for k in kids if k.state == DONE)
+        head = f"{icon} **{title}**"
+        if self.state == RUNNING or done < len(kids):
+            head += f" \u00b7 {done} of {len(kids)} done"
+        quoted: List[str] = []
+        if outcome:
+            quoted.append(_italic("\u2192 " + outcome))
+        for k in kids:
+            quoted.append(_SPACER)
+            quoted.append(f"{_CHILD_ICON[k.state]} **{k.label}**")
+            if k.state == PENDING:
+                quoted.append(_italic("waiting to start"))
+                continue
+            if k.state == RUNNING:
+                quoted += _tool_lines(k, tool_cap)
+            elif k.summary and summary_chars > 0:
+                quoted.append(_cut_word(k.summary.replace("*", ""), summary_chars))
+            stats = _stats_line(k.model, k.calls, k.started, k.ended, now)
+            if stats:
+                quoted.append(_italic(stats))
+        started = [k.started for k in kids if k.started is not None]
+        ended = [k.ended for k in kids if k.ended is not None]
+        calls = sum(k.calls for k in kids)
+        foot = [f"{len(kids)} helpers"]
+        if calls:
+            foot.append(f"\U0001f6e0 {calls} tool call{'s' if calls != 1 else ''}")
+        if started:
+            end = max(ended) if self.state != RUNNING and ended else now
+            foot.append("\u23f1 " + _duration(max(0.0, end - min(started))))
+        quoted += [_SPACER, _italic(" \u00b7 ".join(foot))]
+        body = "\n".join([head] + [f"> {q}" for q in quoted if q])
+        return f"{self.say}\n\n{body}" if self.say else body
 
     def render_classic(self) -> str:
         head = self.header
@@ -283,6 +352,49 @@ _SPACER = "\u2800"
 def _italic(text: str) -> str:
     text = (text or "").replace("*", "").strip()
     return f"*{text}*" if text else ""
+
+
+def _duration(seconds: float) -> str:
+    try:
+        from agent.delegation_activity import short_duration
+
+        return short_duration(seconds)
+    except Exception:
+        return f"{int(seconds)}s"
+
+
+def _stats_line(
+    model: str, calls: int, started: Optional[float], ended: Optional[float], now: Optional[float],
+) -> str:
+    parts: List[str] = []
+    if model:
+        parts.append(model)
+    if calls:
+        parts.append(f"\U0001f6e0 {calls} tool call{'s' if calls != 1 else ''}")
+    if started is not None:
+        end = ended if ended is not None else (now if now is not None else time.monotonic())
+        parts.append("\u23f1 " + _duration(max(0.0, end - started)))
+    return " \u00b7 ".join(parts)
+
+
+def _cut_word(text: str, limit: int) -> str:
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    space = cut.rfind(" ")
+    if space >= limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,;:-") + "\u2026"
+
+
+def _tool_lines(obj: Any, cap: int) -> List[str]:
+    """The helper's open tool(s) then its last finished ones, newest first."""
+    lines = [f"\U0001f527 {_italic(phrase)}" for _, _, phrase in reversed(obj.open)]
+    lines += [
+        f"{_TOOL_OK if ok else _TOOL_ERR} {_italic(phrase)}" for phrase, ok in reversed(obj.recent)
+    ]
+    return [ln for ln in lines if _italic("x") and ln.strip()][:cap]
 
 
 def _after_icon(header: str) -> str:
@@ -381,6 +493,7 @@ class Part:
 
 def open_part(
     delegation_id: str, header: str, steps: Sequence[str], expected: int = 1, say: str = "",
+    goals: Sequence[Any] = (),
 ) -> Optional[Part]:
     did = str(delegation_id or "").strip()
     if not did or not str(header or "").strip():
@@ -388,8 +501,11 @@ def open_part(
     with _LOCK:
         part = _PARTS.pop(did, None)
         if part is None:
-            part = Part(did, Checklist.start(header, steps, say), max(1, int(expected or 1)))
-            part.checklist.solo = part.expected == 1
+            n = max(1, int(expected or 1))
+            # Several helpers share the one card: a block each, no step list.
+            part = Part(did, Checklist.start(header, steps if n == 1 else (), say), n)
+            if n > 1:
+                part.checklist.kids = [Child(index=i, title=_goal_title(_nth(goals, i))) for i in range(n)]
         _PARTS[did] = part
         while len(_PARTS) > _MAX_PARTS:
             _PARTS.pop(next(iter(_PARTS)))
@@ -401,6 +517,24 @@ def open_part(
             else:
                 _record_complete(part, kw)
         return part
+
+
+def _nth(items: Any, i: int) -> Any:
+    try:
+        return list(items or ())[i]
+    except (IndexError, TypeError):
+        return ""
+
+
+def _goal_title(goal: Any) -> str:
+    if not str(goal or "").strip():
+        return ""
+    try:
+        from agent.delegation_activity import derive_task_title
+
+        return derive_task_title(goal)
+    except Exception:
+        return ""
 
 
 def on_child_event(event_type: Any, **kw: Any) -> bool:
@@ -424,7 +558,8 @@ def on_child_event(event_type: Any, **kw: Any) -> bool:
                     early = _EARLY.setdefault(did, [])
                     if et == "subagent.todo":
                         early[:] = [e for e in early if e[0] != "subagent.todo"]
-                    early.append((et, {k: kw.get(k) for k in ("todos", "status", "exit_reason", "outcome", "summary", "preview")}))
+                    early.append((et, {k: kw.get(k) for k in ("todos", "status", "exit_reason", "outcome", "summary", "preview",
+                                                             "task_index", "subagent_id", "title", "goal")}))
                     while len(_EARLY) > _MAX_PARTS:
                         _EARLY.pop(next(iter(_EARLY)))
                 return False
@@ -442,6 +577,47 @@ def on_child_event(event_type: Any, **kw: Any) -> bool:
 _ACTIVITY_EVENTS = frozenset({"subagent.start", "subagent.tool", "subagent.tool_done"})
 
 
+def _child_for(cl: Checklist, kw: Dict[str, Any], *, ending: bool = False) -> Optional[Child]:
+    """The helper an event belongs to: ``task_index``, else ``subagent_id``.
+    A completion that names neither closes the first helper still open."""
+    kids = cl.kids
+    ti = kw.get("task_index")
+    if isinstance(ti, int) and not isinstance(ti, bool) and 0 <= ti < len(kids):
+        return kids[ti]
+    sid = str(kw.get("subagent_id") or "")
+    if sid:
+        for k in kids:
+            if k.sid == sid:
+                return k
+        for k in kids:
+            if not k.sid and k.state in (PENDING, RUNNING):
+                k.sid = sid
+                return k
+    if ending:
+        for k in kids:
+            if k.state == RUNNING:
+                return k
+        for k in kids:
+            if k.state == PENDING:
+                return k
+    return None
+
+
+def _snapshot(obj: Any) -> Tuple[Any, ...]:
+    return (
+        obj.model, obj.calls, tuple(obj.open), tuple(obj.recent),
+        getattr(obj, "state", ""), getattr(obj, "title", ""),
+    )
+
+
+def _note_identity(kid: Child, kw: Dict[str, Any]) -> None:
+    title = " ".join(str(kw.get("title") or "").replace("*", "").split())
+    if title:
+        kid.title, kid.titled = title, True
+    elif not kid.titled and str(kw.get("goal") or "").strip():
+        kid.title = _goal_title(kw.get("goal")) or kid.title
+
+
 def _on_activity(et: str, kw: Dict[str, Any]) -> bool:
     """Live activity for the unified card.  Recorded whatever the style (it
     is cheap), so switching styles mid-run shows the right numbers."""
@@ -453,60 +629,120 @@ def _on_activity(et: str, kw: Dict[str, Any]) -> bool:
         cl = part.checklist
         if cl.state != RUNNING:
             return False
-        before = (cl.model, cl.calls, cl.doing)
-        if cl.started is None:
-            cl.started = time.monotonic()
+        obj: Any = cl
+        if cl.kids:
+            obj = _child_for(cl, kw)
+            if obj is None or obj.state not in (PENDING, RUNNING):
+                return False
+            _note_identity(obj, kw)
+            obj.state = RUNNING
+        before = _snapshot(obj)
+        if obj.started is None:
+            obj.started = time.monotonic()
         model = kw.get("model")
-        if model and not cl.model:
+        if model and not obj.model:
             try:
                 from agent.delegation_activity import pretty_model
 
-                cl.model = pretty_model(str(model)) or ""
+                obj.model = pretty_model(str(model)) or ""
             except Exception:
-                cl.model = ""
+                obj.model = ""
         try:
-            cl.calls = max(cl.calls, int(kw.get("tool_count") or 0))
+            obj.calls = max(obj.calls, int(kw.get("tool_count") or 0))
         except (TypeError, ValueError):
             pass
         if et == "subagent.tool":
-            try:
-                from agent.delegation_activity import _tool_phrase, summarize_tool_call
-
-                name = str(kw.get("tool_name") or "tool")
-                cl.doing = _tool_phrase(name, summarize_tool_call(name, kw.get("preview"), kw.get("args")))
-            except Exception:
-                cl.doing = str(kw.get("tool_name") or "")
-        changed = (cl.model, cl.calls, cl.doing) != before
-    if changed and cl.solo and unified():
+            _tool_started(obj, kw)
+        elif et == "subagent.tool_done":
+            _tool_finished(obj, kw)
+        changed = _snapshot(obj) != before
+        if hasattr(obj, "doing"):
+            obj.doing = obj.open[-1][2] if obj.open else ""
+    if changed and unified():
         part._changed()
     return changed
 
 
+def _tool_started(obj: Any, kw: Dict[str, Any]) -> None:
+    name = str(kw.get("tool_name") or "tool")
+    call_id = str(kw.get("tool_call_id") or "")
+    if call_id and any(c == call_id for c, _, _ in obj.open):
+        return  # a repeated start for a call that is already open
+    try:
+        from agent.delegation_activity import _tool_phrase, summarize_tool_call
+
+        phrase = _tool_phrase(name, summarize_tool_call(name, kw.get("preview"), kw.get("args")))
+    except Exception:
+        phrase = name
+    obj.open.append((call_id, name, phrase))
+    del obj.open[:-_MAX_OPEN_TOOLS]
+
+
+def _tool_finished(obj: Any, kw: Dict[str, Any]) -> None:
+    """Move the open call this result belongs to into the finished ones: by
+    ``tool_call_id`` when there is one, else the newest open call of the same
+    tool, else the newest open call."""
+    if not obj.open:
+        return
+    call_id = str(kw.get("tool_call_id") or "")
+    name = str(kw.get("tool_name") or "")
+    pick = -1
+    if call_id:
+        pick = next((i for i, (c, _, _) in enumerate(obj.open) if c == call_id), -1)
+    if pick < 0 and name:
+        pick = next((i for i in range(len(obj.open) - 1, -1, -1) if obj.open[i][1] == name), -1)
+    if pick < 0:
+        pick = len(obj.open) - 1
+    _, _, phrase = obj.open.pop(pick)
+    obj.recent.append((phrase, not kw.get("is_error")))
+
+
 def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
-    if part.checklist.state != RUNNING:
-        return False
     cl = part.checklist
+    if cl.state != RUNNING:
+        return False
     summary = kw.get("summary") or kw.get("preview")
-    if summary and not cl.summary:
+    plain = ""
+    if summary:
         try:
             from agent.delegation_activity import plain_summary
 
-            cl.summary = plain_summary(summary)
+            plain = plain_summary(summary)
         except Exception:
-            cl.summary = ""
+            plain = ""
     state = end_state_for(kw.get("status"))
     if str(kw.get("exit_reason") or "").lower() in {"max_iterations", "max_turns"}:
         state = FAILED
     if state == DONE and kw.get("outcome") == "not_done":
         # The run ended cleanly but the helper says the job is not done.
         state = FAILED
+    now = time.monotonic()
+    if cl.kids:
+        kid = _child_for(cl, kw, ending=True)
+        if kid is None or kid.state not in (PENDING, RUNNING):
+            return False
+        _note_identity(kid, kw)
+        kid.state = state
+        kid.open.clear()
+        if plain and not kid.summary:
+            kid.summary = plain
+        if kid.started is not None:
+            kid.ended = now
+    elif plain and not cl.summary:
+        cl.summary = plain
     part.ended.append(state)
     if len(part.ended) < part.expected:
-        return False
+        return bool(cl.kids)
     final = FAILED if FAILED in part.ended else STOPPED if STOPPED in part.ended else DONE
-    if cl.started is not None:
-        cl.ended = time.monotonic()
-    return part.checklist.finish(final)
+    if cl.started is not None or any(k.started is not None for k in cl.kids):
+        cl.ended = now
+    cl.open.clear()
+    part.checklist.finish(final)
+    return True
+
+
+# (summary chars, tool lines per running helper) tried in turn until it fits.
+_BUDGET_STEPS = ((SUMMARY_CHARS, RECENT_TOOLS_MULTI), (80, RECENT_TOOLS_MULTI), (0, RECENT_TOOLS_MULTI), (0, 1), (0, 0))
 
 
 class Card:
@@ -521,10 +757,16 @@ class Card:
 
     def render(self) -> str:
         with _LOCK:
-            rendered = [p.checklist.render() for p in self.parts]
             # Unified cards are multi-line blocks: keep two on one message apart.
-            unified_parts = unified() and any(p.checklist.solo for p in self.parts)
-            return ("\n\n" if unified_parts else "\n").join(rendered)
+            sep = "\n\n" if unified() else "\n"
+            text = ""
+            # Over Telegram's limit: cut the helpers' summaries first, then
+            # their tool lines.
+            for summary_chars, tool_cap in _BUDGET_STEPS:
+                text = sep.join(p.checklist.render(summary_chars, tool_cap) for p in self.parts)
+                if len(text) <= CARD_BUDGET:
+                    break
+            return text
 
     @property
     def finished(self) -> bool:
@@ -554,6 +796,7 @@ def card_for(receipts: Sequence[Any]) -> Optional[Card]:
                 r.delegation_id, header, getattr(r, "steps", ()) or (),
                 expected=max(1, len(getattr(r, "goals", ()) or ())),
                 say=getattr(r, "say", ""),
+                goals=getattr(r, "goals", ()) or (),
             )
             if part is not None:
                 parts.append(part)
@@ -594,13 +837,14 @@ def match_unbound(content: Any) -> Optional[Card]:
 
 def owns_delegation(delegation_id: Any) -> bool:
     """True when the unified card is on and this dispatch has a checklist
-    message: the gateway then skips its separate 🔀 roster card for it."""
+    message (one helper or several): the gateway then skips its separate 🔀
+    roster card for it."""
     did = str(delegation_id or "")
     if not did or not unified():
         return False
     with _LOCK:
         part = _PARTS.get(did)
-        return part is not None and part.checklist.solo
+        return part is not None
 
 
 def reset_for_tests() -> None:
