@@ -1,0 +1,928 @@
+"""Scorer self-test for the live delegation-mode eval harness.
+
+Every transcript here is written through the real ``SessionDB`` in a temp
+home and read back with the same reader the live run uses, so the scorer is
+exercised on the real row shapes: assistant ``tool_calls`` JSON, ``tool``
+result rows, and delegation-completion user rows rendered by the real
+``format_process_notification``.  Only the model/network boundary is absent.
+"""
+from __future__ import annotations
+
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = REPO_ROOT / "scripts" / "eval" / "delegation_modes.py"
+CASES_PATH = REPO_ROOT / "tests" / "eval" / "delegation_modes.jsonl"
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location("delegation_modes_eval", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["delegation_modes_eval"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+dm = _load_module()
+
+BASE_TS = 1_800_000_000.0
+
+
+# ---------------------------------------------------------------------------
+# Transcript recorder: writes rows through the real SessionDB API
+# ---------------------------------------------------------------------------
+
+
+class Recorder:
+    def __init__(self, db, session_id: str, start: float = BASE_TS):
+        self.db = db
+        self.sid = session_id
+        self.t = start
+        self._calls = 0
+        db.create_session(session_id, "tui", model="fake-root")
+
+    def _tick(self, dt: float = 1.0) -> float:
+        self.t += dt
+        return self.t
+
+    def user(self, text: str, *, kind: str | None = None, dt: float = 1.0) -> None:
+        self.db.append_message(
+            self.sid, "user", text, display_kind=kind, timestamp=self._tick(dt)
+        )
+
+    def assistant(self, text=None, calls=None, dt: float = 1.0) -> None:
+        self.db.append_message(
+            self.sid, "assistant", text, tool_calls=calls, timestamp=self._tick(dt)
+        )
+
+    def tool_result(self, call_id: str, name: str, payload, dt: float = 1.0) -> None:
+        content = payload if isinstance(payload, str) else json.dumps(payload)
+        self.db.append_message(
+            self.sid, "tool", content, tool_name=name, tool_call_id=call_id,
+            timestamp=self._tick(dt),
+        )
+
+    def call(self, name: str, args: dict) -> dict:
+        self._calls += 1
+        return {
+            "id": f"call_{self._calls}",
+            "type": "function",
+            "function": {"name": name, "arguments": json.dumps(args)},
+        }
+
+    # -- composite helpers -------------------------------------------------
+
+    def work(self, name: str = "terminal", args: dict | None = None, result="ok") -> None:
+        c = self.call(name, args or {"command": "true"})
+        self.assistant(None, [c])
+        self.tool_result(c["id"], name, {"output": result, "exit_code": 0})
+
+    def delegate(
+        self,
+        tasks: list[dict],
+        *,
+        delegation_id: str,
+        text: str | None = None,
+        status: str = "dispatched",
+        args_extra: dict | None = None,
+    ) -> str:
+        args = {"tasks": tasks, **(args_extra or {})}
+        c = self.call("delegate_task", args)
+        self.assistant(text, [c])
+        if status == "dispatched":
+            payload = {
+                "status": "dispatched",
+                "mode": "background",
+                "count": len(tasks),
+                "delegation_id": delegation_id,
+                "goals": [t.get("goal", "") for t in tasks],
+                "note": "Running in the background.",
+            }
+        else:
+            payload = {
+                "status": "rejected",
+                "mode": "background",
+                "started": False,
+                "reason": "capacity",
+                "error": "no capacity",
+                "note": "",
+            }
+        self.tool_result(c["id"], "delegate_task", payload)
+        return c["id"]
+
+    def completion_single(
+        self,
+        delegation_id: str,
+        *,
+        goal: str,
+        status: str = "completed",
+        summary: str = "Finished the job; files are in place.",
+        error: str | None = None,
+        kind: str | None = "internal_notification",
+        dt: float = 30.0,
+    ) -> None:
+        from tools.process_registry import format_process_notification
+
+        text = format_process_notification(
+            {
+                "type": "async_delegation",
+                "delegation_id": delegation_id,
+                "goal": goal,
+                "role": "leaf",
+                "model": "fake-worker",
+                "status": status,
+                "summary": summary,
+                "error": error,
+                "api_calls": 4,
+                "duration_seconds": 21.5,
+                "dispatched_at": self.t - dt,
+                "completed_at": self.t,
+            }
+        )
+        self.user(text, kind=kind, dt=dt)
+
+    def completion_batch(
+        self,
+        delegation_id: str,
+        goals: list[str],
+        *,
+        statuses: list[str] | None = None,
+        kind: str | None = "internal_notification",
+        dt: float = 40.0,
+    ) -> None:
+        from tools.process_registry import format_process_notification
+
+        statuses = statuses or ["completed"] * len(goals)
+        results = [
+            {
+                "task_index": i,
+                "status": st,
+                "summary": f"Result for task {i}",
+                "api_calls": 2,
+                "duration_seconds": 9.0,
+            }
+            for i, st in enumerate(statuses)
+        ]
+        text = format_process_notification(
+            {
+                "type": "async_delegation",
+                "delegation_id": delegation_id,
+                "is_batch": True,
+                "goals": goals,
+                "results": results,
+                "role": "leaf",
+                "model": "fake-worker",
+                "total_duration_seconds": 33,
+                "dispatched_at": self.t - dt,
+                "completed_at": self.t,
+            }
+        )
+        self.user(text, kind=kind, dt=dt)
+
+
+@pytest.fixture()
+def db(tmp_path):
+    from clover_state import SessionDB
+
+    database = SessionDB(db_path=tmp_path / ".clover" / "state.db")
+    yield database
+    database.close()
+
+
+def _score(db, sid: str) -> dict:
+    return dm.score_transcript(db.get_messages(sid))
+
+
+# ---------------------------------------------------------------------------
+# Mode classification
+# ---------------------------------------------------------------------------
+
+
+def test_direct_no_dispatch(db):
+    r = Recorder(db, "s-direct")
+    r.user("What is my disk usage by folder?")
+    r.work("terminal", {"command": "du -sh *"})
+    r.assistant("Your biggest folder is Videos at 41 GB.", dt=3.0)
+
+    s = _score(db, "s-direct")
+
+    assert s["mode"] == "direct"
+    assert s["accepted_dispatches"] == 0
+    assert s["first_dispatch_ordinal"] is None
+    assert s["tool_calls_before_first_dispatch"] is None
+    assert s["tool_calls_total"] == 1
+    assert s["tiers"] == []
+    assert s["limit_hits"] == []
+    assert s["premature_success"] == []
+    # direct: the acknowledgement is the answer itself (user row -> final text)
+    assert s["ack_seconds"] == pytest.approx(5.0, abs=0.01)
+
+
+def test_single_one_call_one_task(db):
+    r = Recorder(db, "s-single")
+    r.user("Write a 3000-word market report on EV chargers in Canada.")
+    r.delegate(
+        [{"goal": "Write the 3000-word EV charger report", "tier": "code",
+          "context": "Plan: outline, draft, check word count."}],
+        delegation_id="deleg-1",
+        text="On it: a helper is writing the report and I will post it here.",
+    )
+    r.assistant("A helper is writing it now; I will check it and send it over.", dt=2.0)
+    r.completion_single("deleg-1", goal="Write the 3000-word EV charger report")
+    r.assistant("Here is the report, checked at 3,012 words.", dt=5.0)
+
+    s = _score(db, "s-single")
+
+    assert s["mode"] == "single"
+    assert s["accepted_dispatches"] == 1
+    assert s["first_wave_tasks"] == 1
+    assert s["tiers"] == ["code"]
+    assert s["first_dispatch_ordinal"] == 1
+    assert s["tool_calls_before_first_dispatch"] == 0
+    assert s["completion_turns"] == 1
+    assert s["premature_success"] == []
+    assert s["ack_seconds"] == pytest.approx(1.0, abs=0.01)
+
+
+def test_parallel_one_call_many_tasks(db):
+    r = Recorder(db, "s-par")
+    r.user("25 best indie horror games, Steam score, length, rank and pitch each.")
+    tasks = [{"goal": f"Research horror games batch {i}", "tier": "read"} for i in range(5)]
+    r.delegate(tasks, delegation_id="deleg-9", text="Splitting this across five helpers.")
+    r.completion_batch("deleg-9", [t["goal"] for t in tasks])
+    r.assistant("Merged list of 25 games, ranked.", dt=4.0)
+
+    s = _score(db, "s-par")
+
+    assert s["mode"] == "parallel"
+    assert s["first_wave_tasks"] == 5
+    assert s["tiers"] == ["read"] * 5
+    assert s["first_dispatch_ordinal"] == 1
+    assert s["premature_success"] == []
+
+
+def test_parallel_two_single_task_calls_in_one_root_turn(db):
+    r = Recorder(db, "s-par2")
+    r.user("Compare the pricing pages of Slack and Teams.")
+    r.delegate([{"goal": "Summarise Slack pricing page"}], delegation_id="d-a")
+    r.delegate([{"goal": "Summarise Teams pricing page"}], delegation_id="d-b")
+    r.completion_single("d-a", goal="Summarise Slack pricing page")
+    r.completion_single("d-b", goal="Summarise Teams pricing page")
+    r.assistant("Comparison done.", dt=3.0)
+
+    s = _score(db, "s-par2")
+
+    assert s["mode"] == "parallel"
+    assert s["accepted_dispatches"] == 2
+    assert s["staged_dispatches"] == 0
+
+
+def test_staged_second_dispatch_from_completion_turn_after_verified_stage(db):
+    r = Recorder(db, "s-staged")
+    r.user("Add a feature flag for dark mode, write tests, then review the diff.")
+    r.delegate(
+        [{"goal": "Add the dark-mode feature flag and its tests", "tier": "code"}],
+        delegation_id="stage-1",
+        text="A helper is building it; a reviewer follows.",
+    )
+    r.assistant("Building it now; I will have it reviewed next.", dt=2.0)
+    r.completion_single("stage-1", goal="Add the dark-mode feature flag and its tests")
+    # root verifies stage 1 before chaining
+    r.work("read_file", {"path": "flags.py"}, result="DARK_MODE = False")
+    r.delegate(
+        [{"goal": "Review the diff of the dark-mode flag change for correctness",
+          "tier": "check"}],
+        delegation_id="stage-2",
+    )
+    r.assistant("Reviewer is on it.", dt=2.0)
+    r.completion_single(
+        "stage-2", goal="Review the diff of the dark-mode flag change for correctness",
+        summary="Diff is clean; two nits noted.",
+    )
+    r.assistant("Built, tested and reviewed. Two small nits noted.", dt=4.0)
+
+    s = _score(db, "s-staged")
+
+    assert s["mode"] == "staged"
+    assert s["accepted_dispatches"] == 2
+    assert s["staged_dispatches"] == 1
+    assert s["repair_dispatches"] == 0
+    assert s["tiers"] == ["code", "check"]
+    assert s["stage_verify_calls"] == [1]
+    assert s["premature_success"] == []
+
+
+@pytest.mark.parametrize("kind", ["internal_notification", "async_delegation_complete", None])
+def test_completion_row_recognised_for_every_gateway_row_type(db, kind):
+    """The gateway types the row internal_notification, the TUI/desktop gateway
+    async_delegation_complete; the body marker alone must also be enough."""
+    r = Recorder(db, f"s-kind-{kind}")
+    r.user("Write the report.")
+    r.delegate([{"goal": "Write the report"}], delegation_id="k1")
+    r.completion_single("k1", goal="Write the report", kind=kind)
+    r.delegate([{"goal": "Review the report for factual errors", "tier": "check"}],
+               delegation_id="k2")
+    r.completion_single("k2", goal="Review the report for factual errors", kind=kind)
+    r.assistant("Written and reviewed.", dt=2.0)
+
+    s = _score(db, f"s-kind-{kind}")
+
+    assert s["completion_turns"] == 2
+    assert s["mode"] == "staged"
+    assert dm.pending_work(db.get_messages(f"s-kind-{kind}")) == []
+
+
+def test_repair_redispatch_of_same_task_is_not_staged(db):
+    r = Recorder(db, "s-repair")
+    r.user("Write a 3000-word market report on EV chargers in Canada.")
+    r.delegate(
+        [{"goal": "Write the 3000-word EV charger report", "tier": "code"}],
+        delegation_id="try-1",
+    )
+    r.completion_single(
+        "try-1", goal="Write the 3000-word EV charger report",
+        status="error", summary="", error="worker crashed",
+    )
+    r.delegate(
+        [{"goal": "Write the 3000-word EV charger report", "tier": "code"}],
+        delegation_id="try-2",
+    )
+    r.completion_single("try-2", goal="Write the 3000-word EV charger report")
+    r.assistant("The report is attached.", dt=3.0)
+
+    s = _score(db, "s-repair")
+
+    assert s["mode"] == "single"
+    assert s["staged_dispatches"] == 0
+    assert s["repair_dispatches"] == 1
+    assert s["accepted_dispatches"] == 2
+
+
+def test_redo_of_a_succeeded_stage_with_same_goal_is_not_staged(db):
+    r = Recorder(db, "s-redo")
+    r.user("Build the landing page.")
+    r.delegate([{"goal": "Build the landing page for the bakery"}], delegation_id="a")
+    r.completion_single("a", goal="Build the landing page for the bakery")
+    r.delegate([{"goal": "Build the landing page for the bakery"}], delegation_id="b")
+    r.completion_single("b", goal="Build the landing page for the bakery")
+    r.assistant("Done.", dt=2.0)
+
+    s = _score(db, "s-redo")
+
+    assert s["mode"] == "single"
+    assert s["repair_dispatches"] == 1
+
+
+def test_rejected_dispatch_is_not_an_accepted_hand_off(db):
+    r = Recorder(db, "s-rej")
+    r.user("Transcode this video.")
+    r.delegate([{"goal": "Transcode the video"}], delegation_id="x", status="rejected")
+    r.work("terminal", {"command": "ffmpeg -i in.mov out.mp4"})
+    r.assistant("Transcoded.", dt=2.0)
+
+    s = _score(db, "s-rej")
+
+    assert s["mode"] == "direct"
+    assert s["rejected_dispatches"] == 1
+    assert s["accepted_dispatches"] == 0
+    # the attempt still counts for how early the root tried to hand off
+    assert s["first_dispatch_ordinal"] == 1
+
+
+def test_control_actions_and_legacy_goal_shape(db):
+    r = Recorder(db, "s-ctrl")
+    r.user("Do the thing.")
+    c = r.call("delegate_task", {"action": "list"})
+    r.assistant(None, [c])
+    r.tool_result(c["id"], "delegate_task", {"children": []})
+    legacy = r.call("delegate_task", {"goal": "Legacy single goal", "context": "ctx"})
+    r.assistant(None, [legacy])
+    r.tool_result(
+        legacy["id"], "delegate_task",
+        {"status": "dispatched", "mode": "background", "count": 1, "delegation_id": "leg"},
+    )
+
+    s = _score(db, "s-ctrl")
+
+    assert s["mode"] == "single"
+    assert s["accepted_dispatches"] == 1
+    assert s["first_dispatch_ordinal"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Tool-call position, tiers, user-visible hits, premature success
+# ---------------------------------------------------------------------------
+
+
+def test_tool_calls_before_first_dispatch_and_default_tier_label(db):
+    r = Recorder(db, "s-pos")
+    r.user("Clone the repo, run the full tests and summarise the failures.")
+    r.work("terminal", {"command": "git status"})
+    r.delegate([{"goal": "Clone, test, summarise"}], delegation_id="p1")
+
+    s = _score(db, "s-pos")
+
+    assert s["first_dispatch_ordinal"] == 2
+    assert s["tool_calls_before_first_dispatch"] == 1
+    assert s["tiers"] == ["(default)"]
+
+
+def test_limit_mention_in_user_visible_text_is_a_hit_but_tool_text_is_not(db):
+    r = Recorder(db, "s-limit")
+    r.user("25 best indie horror games.")
+    r.work("terminal", {"command": "sleep 1"}, result="request timeout after 30s, limit reached")
+    r.delegate([{"goal": "Research games"}], delegation_id="l1",
+               text="My first attempt timed out at the 5-minute limit, so a helper has it.")
+    r.completion_single("l1", goal="Research games")
+    r.assistant("Here is the ranked list.", dt=2.0)
+
+    s = _score(db, "s-limit")
+
+    matched = sorted(h["match"].lower() for h in s["limit_hits"])
+    assert matched == ["attempt", "limit", "timed out"]
+    assert all("timeout after 30s" not in h["snippet"] for h in s["limit_hits"])
+
+
+def test_clean_text_has_no_limit_hits(db):
+    r = Recorder(db, "s-clean")
+    r.user("Rewrite this paragraph.")
+    r.assistant("The meeting begins at nine, so please arrive a few minutes early.", dt=1.0)
+
+    assert _score(db, "s-clean")["limit_hits"] == []
+
+
+def test_premature_success_claim_before_results_return(db):
+    r = Recorder(db, "s-prem")
+    r.user("25 best indie horror games, ranked.")
+    r.delegate(
+        [{"goal": f"Research part {i}"} for i in range(5)],
+        delegation_id="pm",
+        text="All 25 games are done and ranked.",
+    )
+    r.completion_batch("pm", [f"Research part {i}" for i in range(5)])
+    r.assistant("Merged and checked: here is the final ranked list.", dt=3.0)
+
+    s = _score(db, "s-prem")
+
+    assert len(s["premature_success"]) == 1
+    assert "done and ranked" in s["premature_success"][0]["snippet"]
+
+
+def test_honest_acknowledgement_and_claim_after_results_are_not_premature(db):
+    r = Recorder(db, "s-honest")
+    r.user("Write the report.")
+    r.delegate(
+        [{"goal": "Write the report"}],
+        delegation_id="h1",
+        text="A helper is writing it; I will post it here when it is ready.",
+    )
+    r.assistant("I'll check it as soon as it lands.", dt=1.0)
+    r.completion_single("h1", goal="Write the report")
+    r.assistant("The report is done and checked. Here it is.", dt=3.0)
+
+    assert _score(db, "s-honest")["premature_success"] == []
+
+
+def test_premature_claim_after_second_stage_dispatch_is_caught(db):
+    r = Recorder(db, "s-prem2")
+    r.user("Build the page, then audit it.")
+    r.delegate([{"goal": "Build the landing page"}], delegation_id="b1")
+    r.completion_single("b1", goal="Build the landing page")
+    r.delegate(
+        [{"goal": "Audit the landing page for accessibility"}],
+        delegation_id="b2",
+        text="The audit is complete and the page passes.",
+    )
+    r.completion_single("b2", goal="Audit the landing page for accessibility")
+    r.assistant("Audit finished: two issues found.", dt=2.0)
+
+    s = _score(db, "s-prem2")
+
+    assert s["mode"] == "staged"
+    assert len(s["premature_success"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Per-case verdicts, overrides
+# ---------------------------------------------------------------------------
+
+
+def _case(**kw):
+    base = {
+        "id": "c", "prompt": "p", "expected_mode": "direct",
+        "live_evidence": False, "override": False,
+    }
+    base.update(kw)
+    return base
+
+
+def test_judge_run_override_respected(db):
+    r = Recorder(db, "s-ov-ok")
+    r.user("Do it yourself: list the 25 best indie horror games.")
+    r.work("web_search", {"query": "best indie horror"})
+    r.assistant("Here are 25 games.", dt=2.0)
+    case = _case(id="override-direct", override=True, expected_mode="direct")
+
+    verdict = dm.judge_run(_score(db, "s-ov-ok"), case)
+
+    assert verdict["correct"] is True
+    assert verdict["override_violated"] is False
+
+
+def test_judge_run_override_violated(db):
+    r = Recorder(db, "s-ov-bad")
+    r.user("Do it yourself: list the 25 best indie horror games.")
+    r.delegate([{"goal": "List the games"}], delegation_id="ov")
+    case = _case(id="override-direct", override=True, expected_mode="direct")
+
+    verdict = dm.judge_run(_score(db, "s-ov-bad"), case)
+
+    assert verdict["correct"] is False
+    assert verdict["override_violated"] is True
+
+
+def test_judge_run_dispatch_within_calls(db):
+    r = Recorder(db, "s-within")
+    r.user("25 horror games")
+    r.work("terminal")
+    r.work("web_search")
+    r.delegate([{"goal": f"part {i}"} for i in range(2)], delegation_id="w")
+    case = _case(expected_mode="parallel", dispatch_within_calls=2)
+
+    verdict = dm.judge_run(_score(db, "s-within"), case)
+
+    assert verdict["correct"] is True
+    assert verdict["dispatch_within_calls_ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# Pass bar
+# ---------------------------------------------------------------------------
+
+
+def _bar_fixture():
+    cases = dm.load_cases(CASES_PATH)
+    runs = []
+    for case in cases:
+        reps = 3 if case["live_evidence"] else 1
+        for rep in range(reps):
+            score = {
+                "mode": case["expected_mode"],
+                "limit_hits": [],
+                "premature_success": [],
+                "first_dispatch_ordinal": 1 if case["expected_mode"] != "direct" else None,
+            }
+            runs.append(
+                {"case_id": case["id"], "rep": rep, "error": None,
+                 "score": score, **dm.judge_run(score, case)}
+            )
+    return cases, runs
+
+
+def _check(result, name):
+    return next(c for c in result["checks"] if c["name"] == name)
+
+
+def test_bar_passes_on_perfect_run():
+    cases, runs = _bar_fixture()
+    result = dm.evaluate_bar(runs, cases)
+    assert result["passed"] is True, result
+
+
+def test_bar_allows_two_misses_but_not_three():
+    cases, runs = _bar_fixture()
+    plain = [c["id"] for c in cases if not c["live_evidence"] and not c["override"]]
+
+    def flip(ids):
+        out = []
+        for run in runs:
+            if run["case_id"] in ids:
+                run = {**run, "correct": False}
+            out.append(run)
+        return out
+
+    assert dm.evaluate_bar(flip(set(plain[:2])), cases)["passed"] is True
+    third = dm.evaluate_bar(flip(set(plain[:3])), cases)
+    assert third["passed"] is False
+    assert _check(third, "cases_correct")["ok"] is False
+
+
+def test_bar_override_miss_fails_even_with_enough_correct():
+    cases, runs = _bar_fixture()
+    ov = next(c["id"] for c in cases if c["override"])
+    runs = [{**r, "correct": False} if r["case_id"] == ov else r for r in runs]
+
+    result = dm.evaluate_bar(runs, cases)
+
+    assert result["passed"] is False
+    assert _check(result, "overrides_correct")["ok"] is False
+    assert _check(result, "cases_correct")["ok"] is True
+
+
+def test_bar_live_evidence_needs_every_rep():
+    cases, runs = _bar_fixture()
+    ev = next(c["id"] for c in cases if c["live_evidence"])
+    bad = False
+    out = []
+    for r in runs:
+        if r["case_id"] == ev and not bad:
+            r = {**r, "correct": False}
+            bad = True
+        out.append(r)
+
+    result = dm.evaluate_bar(out, cases)
+
+    assert result["passed"] is False
+    assert _check(result, "live_evidence_every_rep")["ok"] is False
+
+
+def test_bar_limit_mention_and_premature_success_are_zero_tolerance():
+    cases, runs = _bar_fixture()
+    runs[0] = {**runs[0], "score": {**runs[0]["score"], "limit_hits": [{"match": "limit"}]}}
+    result = dm.evaluate_bar(runs, cases)
+    assert _check(result, "limit_mentions")["ok"] is False
+
+    cases, runs = _bar_fixture()
+    runs[1] = {**runs[1], "score": {**runs[1]["score"], "premature_success": [{"snippet": "x"}]}}
+    result = dm.evaluate_bar(runs, cases)
+    assert _check(result, "premature_success")["ok"] is False
+
+
+def test_bar_horror_dispatch_position_and_run_errors():
+    cases, runs = _bar_fixture()
+    horror = next(c["id"] for c in cases if c.get("dispatch_within_calls"))
+    late = []
+    for r in runs:
+        if r["case_id"] == horror:
+            score = {**r["score"], "first_dispatch_ordinal": 5}
+            r = {**r, "score": score, **dm.judge_run(score, next(c for c in cases if c["id"] == horror))}
+        late.append(r)
+    result = dm.evaluate_bar(late, cases)
+    assert _check(result, "dispatch_within_calls")["ok"] is False
+
+    cases, runs = _bar_fixture()
+    runs[0] = {**runs[0], "error": "gateway exited"}
+    assert _check(dm.evaluate_bar(runs, cases), "run_errors")["ok"] is False
+
+
+def test_bar_is_configurable():
+    cases, runs = _bar_fixture()
+    runs[0] = {**runs[0], "score": {**runs[0]["score"], "limit_hits": [{"match": "limit"}]}}
+    bar = dm.parse_bar_overrides(["max_limit_mentions=1", "min_correct=10"])
+    assert bar == {"max_limit_mentions": 1, "min_correct": 10}
+
+    result = dm.evaluate_bar(runs, cases, bar)
+
+    assert _check(result, "limit_mentions")["ok"] is True
+    with pytest.raises(ValueError):
+        dm.parse_bar_overrides(["no_such_knob=1"])
+
+
+# ---------------------------------------------------------------------------
+# Case file contract
+# ---------------------------------------------------------------------------
+
+
+def test_case_file_contract():
+    cases = dm.load_cases(CASES_PATH)
+
+    ids = [c["id"] for c in cases]
+    assert len(ids) == len(set(ids))
+    assert len(cases) == dm.DEFAULT_BAR["of"]
+    assert {c["expected_mode"] for c in cases} <= set(dm.MODES)
+    assert all(c["prompt"].strip() for c in cases)
+    evidence = [c for c in cases if c["live_evidence"]]
+    overrides = [c for c in cases if c["override"]]
+    assert len(evidence) == 3
+    assert len(overrides) == 2
+    # every mode is represented, so no mode can silently go unmeasured
+    assert {c["expected_mode"] for c in cases} == set(dm.MODES)
+    # overrides force the opposite of what the same request would pick unaided
+    assert {c["expected_mode"] for c in overrides} == {"direct", "single"}
+    assert sum(1 for c in cases if c.get("dispatch_within_calls")) == 1
+
+
+def test_load_cases_rejects_bad_rows(tmp_path):
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text(json.dumps({"id": "x", "prompt": "p", "expected_mode": "swarm"}) + "\n")
+    with pytest.raises(ValueError):
+        dm.load_cases(bad)
+
+
+# ---------------------------------------------------------------------------
+# Settling, reader, event tracker
+# ---------------------------------------------------------------------------
+
+
+def test_pending_work_reports_unfinished_dispatch_and_open_tool_call(db):
+    r = Recorder(db, "s-pend")
+    r.user("Write the report.")
+    r.delegate([{"goal": "Write the report"}], delegation_id="pd")
+    r.assistant("A helper has it.", dt=1.0)
+
+    pending = dm.pending_work(db.get_messages("s-pend"))
+    assert any("pd" in p for p in pending)
+
+    r.completion_single("pd", goal="Write the report")
+    assert dm.pending_work(db.get_messages("s-pend"))  # root has not answered yet
+    r.assistant("Here is the report.", dt=2.0)
+    assert dm.pending_work(db.get_messages("s-pend")) == []
+
+    c = r.call("terminal", {"command": "ls"})
+    r.assistant(None, [c])
+    assert dm.pending_work(db.get_messages("s-pend"))
+
+
+def test_wait_settled_waits_for_quiet_and_idle(db):
+    r = Recorder(db, "s-wait")
+    r.user("hi")
+    r.assistant("hello", dt=1.0)
+    now = {"t": 0.0}
+    idle = {"v": False}
+
+    def clock():
+        return now["t"]
+
+    def sleep(dt):
+        now["t"] += dt
+        if now["t"] >= 10:
+            idle["v"] = True
+
+    ok = dm.wait_settled(
+        lambda: db.get_messages("s-wait"), lambda: idle["v"],
+        quiet_seconds=5, timeout=100, poll_seconds=1, clock=clock, sleep=sleep,
+    )
+    assert ok is True
+    assert now["t"] >= 10
+
+
+def test_wait_settled_times_out_when_helper_never_returns(db):
+    r = Recorder(db, "s-never")
+    r.user("do it")
+    r.delegate([{"goal": "x"}], delegation_id="nv")
+    r.assistant("A helper has it.", dt=1.0)
+    now = {"t": 0.0}
+
+    ok = dm.wait_settled(
+        lambda: db.get_messages("s-never"), lambda: True,
+        quiet_seconds=1, timeout=30, poll_seconds=5,
+        clock=lambda: now["t"], sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+    )
+    assert ok is False
+
+
+def test_read_transcript_reads_live_db_from_second_handle(db, tmp_path):
+    r = Recorder(db, "s-read")
+    r.user("hello")
+    r.assistant("hi", dt=1.0)
+
+    rows = dm.read_transcript(db.db_path, "s-read")
+
+    assert [m["role"] for m in rows] == ["user", "assistant"]
+    assert rows[0]["content"] == "hello"
+
+
+def test_rpc_event_tracker_counts_turns_for_its_session_only():
+    t = dm.RpcEventTracker("abc123")
+    t.feed({"jsonrpc": "2.0", "method": "event",
+            "params": {"type": "message.start", "session_id": "abc123"}})
+    t.feed({"jsonrpc": "2.0", "method": "event",
+            "params": {"type": "message.start", "session_id": "other"}})
+    assert t.running_turns == 1
+    assert t.completed_turns == 0
+    t.feed({"jsonrpc": "2.0", "method": "event",
+            "params": {"type": "message.complete", "session_id": "abc123",
+                       "payload": {"text": "done", "status": "complete"}}})
+    assert t.running_turns == 0
+    assert t.completed_turns == 1
+    t.feed({"jsonrpc": "2.0", "id": 7, "result": {"ok": True}})
+    assert t.responses[7] == {"result": {"ok": True}}
+    t.feed({"jsonrpc": "2.0", "method": "event",
+            "params": {"type": "error", "session_id": "abc123",
+                       "payload": {"message": "agent init failed"}}})
+    assert t.errors == ["agent init failed"]
+
+
+# ---------------------------------------------------------------------------
+# End to end: runner + report on recorded transcripts (fake driver only)
+# ---------------------------------------------------------------------------
+
+
+class _ReplaySession:
+    def __init__(self, db, sid, play):
+        self.stored_session_id = sid
+        self._db, self._play = db, play
+
+    def submit(self, prompt: str) -> None:
+        self._play(self._db, self.stored_session_id, prompt)
+
+    def wait_first_turn(self, timeout: float) -> bool:
+        return True
+
+    def idle(self) -> bool:
+        return True
+
+    def interrupt(self) -> None:
+        pass
+
+
+class _ReplayDriver:
+    """Plays a scripted transcript into the real SessionDB on submit."""
+
+    def __init__(self, db, script):
+        self.db, self.script = db, script
+        self.sessions: list[str] = []
+
+    def session(self, *, model, provider, cwd):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _cm():
+            sid = f"replay-{len(self.sessions)}"
+            self.sessions.append(sid)
+            yield _ReplaySession(self.db, sid, self.script)
+
+        return _cm()
+
+
+def _script(db, sid, prompt):
+    r = Recorder(db, sid)
+    r.user(prompt)
+    if "horror" in prompt.lower() and "yourself" not in prompt.lower():
+        r.delegate([{"goal": f"games {i}"} for i in range(5)], delegation_id=f"d-{sid}")
+        r.completion_batch(f"d-{sid}", [f"games {i}" for i in range(5)])
+        r.assistant("Merged, ranked list of 25.", dt=3.0)
+    else:
+        r.work("terminal", {"command": "true"})
+        r.assistant("Done, here is the answer.", dt=3.0)
+
+
+def test_run_eval_end_to_end_on_recorded_transcripts(db, tmp_path):
+    cases = [
+        _case(id="horror", prompt="25 best indie horror games, ranked",
+              expected_mode="parallel", live_evidence=True, dispatch_within_calls=2),
+        _case(id="disk", prompt="What is my disk usage by folder?", expected_mode="direct"),
+    ]
+    out = tmp_path / "out"
+    driver = _ReplayDriver(db, _script)
+    now = {"t": 0.0}
+
+    runs = dm.run_eval(
+        cases, driver,
+        reader=lambda sid: db.get_messages(sid),
+        root_model="fake-root", root_provider=None,
+        reps=1, evidence_reps=3, out_dir=out,
+        turn_timeout=10, settle_timeout=60, quiet_seconds=1, poll_seconds=1,
+        clock=lambda: now["t"],
+        sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+    )
+
+    assert [(r["case_id"], r["rep"]) for r in runs] == [
+        ("horror", 0), ("horror", 1), ("horror", 2), ("disk", 0),
+    ]
+    assert all(r["error"] is None and r["settled"] for r in runs)
+    assert all(r["correct"] for r in runs)
+    assert runs[0]["score"]["mode"] == "parallel"
+    assert runs[3]["score"]["mode"] == "direct"
+
+    bar = dm.evaluate_bar(runs, cases, {"min_correct": 2, "of": 2})
+    assert bar["passed"] is True
+    meta = {"profile": "dev", "root_model": "fake-root"}
+    dm.write_report(out, runs, cases, bar, meta)
+    data = json.loads((out / "results.json").read_text())
+    assert data["bar"]["passed"] is True
+    assert len(data["runs"]) == 4
+    summary = (out / "summary.txt").read_text()
+    assert "horror" in summary and "PASS" in summary
+
+
+def test_main_exit_codes_and_dry_run(tmp_path, monkeypatch, db, capsys):
+    home = tmp_path / "profile-home"
+    home.mkdir()
+    monkeypatch.setattr(dm, "resolve_profile_home", lambda name: home)
+
+    assert dm.main(
+        ["--profile", "dev", "--root-model", "m", "--out", str(tmp_path / "o"),
+         "--cases", str(CASES_PATH), "--dry-run"]
+    ) == 0
+    planned = capsys.readouterr().out
+    assert "horror" in planned.lower()
+
+    # a driver that fails every run → harness errors → exit 2, not a bar miss
+    class _Boom:
+        def session(self, **kw):
+            raise RuntimeError("gateway would not start")
+
+    rc = dm.main(
+        ["--profile", "dev", "--root-model", "m", "--out", str(tmp_path / "o2"),
+         "--cases", str(CASES_PATH), "--only", "disk-usage"],
+        driver_factory=lambda home, args: _Boom(),
+        reader_factory=lambda home: (lambda sid: []),
+    )
+    assert rc == 2
+    assert (tmp_path / "o2" / "results.json").exists()
