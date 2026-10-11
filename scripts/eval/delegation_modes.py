@@ -23,6 +23,10 @@ chat -q`` / ``--oneshot`` are NOT used: a non-TTY one-shot is exempt from the
 time limit and cannot receive a background completion, so it would measure a
 different agent.  Nothing here touches the gateway or messaging platforms.
 
+Each run also records what the delegation router said (mode, latency, tasks)
+from the profile's agent.log (``delegation_router {json}`` line written by
+``agent.delegation_router``), next to the mode the root actually chose.
+
 The scorer (``score_transcript``) is a pure function over SessionDB message
 rows; ``tests/eval/test_delegation_modes_eval.py`` exercises it on transcripts
 written through the real SessionDB.
@@ -697,6 +701,43 @@ def read_transcript(db_path: Path, session_id: str) -> List[Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
+# Router record (agent.log)
+# ---------------------------------------------------------------------------
+
+_ROUTER_LOG_RE = re.compile(r"delegation_router (\{.*\})\s*$")
+
+
+def parse_router_records(lines: Sequence[str], session_id: str) -> Optional[Dict[str, Any]]:
+    """The router's record for ``session_id`` (the first one: the human turn),
+    from agent.log lines; ``None`` when absent."""
+    for line in lines:
+        m = _ROUTER_LOG_RE.search(line)
+        if not m:
+            continue
+        try:
+            record = json.loads(m.group(1))
+        except ValueError:
+            continue
+        if isinstance(record, dict) and record.get("session_id") == session_id:
+            return record
+    return None
+
+
+def read_router_record(home: Path, session_id: str) -> Optional[Dict[str, Any]]:
+    """Read the profile's agent.log (and its first rotation) for the record."""
+    logs = Path(home) / "logs"
+    for name in ("agent.log", "agent.log.1"):
+        try:
+            lines = (logs / name).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        found = parse_router_records(lines, session_id)
+        if found is not None:
+            return found
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Driver: tui_gateway JSON-RPC over stdio
 # ---------------------------------------------------------------------------
 
@@ -936,6 +977,7 @@ def run_eval(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     progress: Optional[Callable[[str], None]] = None,
+    router_reader: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
 ) -> List[Dict[str, Any]]:
     out_dir = Path(out_dir)
     (out_dir / "transcripts").mkdir(parents=True, exist_ok=True)
@@ -976,6 +1018,8 @@ def run_eval(
                 messages = reader(run["session_id"])
                 run["score"] = score_transcript(messages)
                 run.update(judge_run(run["score"], case))
+                if router_reader is not None:
+                    run["router"] = router_reader(run["session_id"])
             except Exception as exc:  # one bad run must not lose the others
                 run["error"] = f"{type(exc).__name__}: {exc}"
                 if run["session_id"] and not messages:
@@ -1037,6 +1081,19 @@ def render_summary(
         )
     lines += ["", "  * live-evidence case   O explicit-override case",
               "  calls = position of the first delegate_task attempt among all tool calls", ""]
+    routed = [r for r in runs if isinstance(r.get("router"), dict)]
+    if routed:
+        lines.append("Router verdicts (mode the router sized / mode the root chose / router latency):")
+        for r in routed:
+            rec = r["router"]
+            ms = rec.get("latency_ms")
+            lines.append(
+                f"  {r['case_id']} r{r['rep']}: router={rec.get('mode') or 'none'}"
+                f" root={(r.get('score') or {}).get('mode') or '-'}"
+                f" {'-' if ms is None else str(ms) + ' ms'}"
+                + ("" if rec.get("ok", True) else f"  [{rec.get('error')}]")
+            )
+        lines.append("")
     problems = [r for r in runs if r.get("error") or not r.get("settled", True)]
     for r in problems:
         why = r.get("error") or "never settled (raise --settle-timeout and rerun this case)"
@@ -1151,6 +1208,7 @@ def main(
         turn_timeout=args.turn_timeout, settle_timeout=args.settle_timeout,
         quiet_seconds=args.quiet_seconds, poll_seconds=args.poll_seconds,
         progress=lambda m: print(m, file=sys.stderr, flush=True),
+        router_reader=lambda sid: read_router_record(home, sid),
     )
     bar_result = evaluate_bar(runs, cases, bar_over)
     meta = {
