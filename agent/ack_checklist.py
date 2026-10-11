@@ -257,12 +257,17 @@ class Checklist:
 
     # -- text ------------------------------------------------------------
 
-    def render(self, summary_chars: int = SUMMARY_CHARS, tool_cap: int = RECENT_TOOLS_MULTI) -> str:
+    def render(
+        self, summary_chars: int = SUMMARY_CHARS, tool_cap: int = RECENT_TOOLS_MULTI,
+        include_say: bool = True,
+    ) -> str:
         if unified():
             if self.kids:
-                return self.render_unified_multi(summary_chars=summary_chars, tool_cap=tool_cap)
-            return self.render_unified()
-        return self.render_classic()
+                return self.render_unified_multi(
+                    summary_chars=summary_chars, tool_cap=tool_cap, include_say=include_say,
+                )
+            return self.render_unified(include_say=include_say)
+        return self.render_classic(include_say=include_say)
 
     def _title_outcome(self) -> Tuple[str, str, str]:
         """(icon, title, outcome) of the header line."""
@@ -279,7 +284,7 @@ class Checklist:
             outcome = outcome.split(" \u00b7 ~", 1)[0]
         return icon, work.replace("*", "").strip(), outcome
 
-    def render_unified(self, now: Optional[float] = None) -> str:
+    def render_unified(self, now: Optional[float] = None, include_say: bool = True) -> str:
         icon, title, outcome = self._title_outcome()
         lines = [f"{icon} **{title}**"]
         quoted: List[str] = []
@@ -300,11 +305,11 @@ class Checklist:
             quoted.append(_SPACER)
             quoted += tail
         body = "\n".join(lines + [f"> {q}" for q in quoted if q])
-        return f"{self.say}\n\n{body}" if self.say else body
+        return f"{self.say}\n\n{body}" if (self.say and include_say) else body
 
     def render_unified_multi(
         self, now: Optional[float] = None, summary_chars: int = SUMMARY_CHARS,
-        tool_cap: int = RECENT_TOOLS_MULTI,
+        tool_cap: int = RECENT_TOOLS_MULTI, include_say: bool = True,
     ) -> str:
         """One block per helper: icon + title, its recent tool calls while it
         runs (its summary once over), its stats; a totals line at the end."""
@@ -333,16 +338,16 @@ class Checklist:
             foot.append("\u23f1 " + _duration(max(0.0, end - min(started))))
         quoted += [_SPACER, _italic(" \u00b7 ".join(foot))]
         body = "\n".join([head] + [f"> {q}" for q in quoted if q])
-        return f"{self.say}\n\n{body}" if self.say else body
+        return f"{self.say}\n\n{body}" if (self.say and include_say) else body
 
-    def render_classic(self) -> str:
+    def render_classic(self, include_say: bool = True) -> str:
         head = self.header
         if self.state != RUNNING:
             head = _END_ICON[self.state] + _after_icon(head)
         lines = [head]
         lines += [f"{_STEP_ICON[status]} {text}" for text, status in self.steps]
         body = "\n".join(lines)
-        return f"{self.say}\n\n{body}" if self.say else body
+        return f"{self.say}\n\n{body}" if (self.say and include_say) else body
 
 
 _SPACER = "\u2800"
@@ -893,7 +898,10 @@ class Card:
         self.target: Any = None  # set by the gateway: where the message is
         self.on_change: Any = None  # set by the gateway: schedule an edit
 
-    def render(self) -> str:
+    def render(self, include_say: bool = True) -> str:
+        """The whole message.  ``include_say=False`` leaves out the root's own
+        opener line(s): the card alone, for the message that follows the
+        bottom of the chat while the opener stays where it was sent."""
         with _LOCK:
             # Unified cards are multi-line blocks: keep two on one message apart.
             sep = "\n\n" if unified() else "\n"
@@ -901,10 +909,19 @@ class Card:
             # Over Telegram's limit: cut the helpers' summaries first, then
             # their tool lines.
             for summary_chars, tool_cap in _BUDGET_STEPS:
-                text = sep.join(p.checklist.render(summary_chars, tool_cap) for p in self.parts)
+                text = sep.join(
+                    p.checklist.render(summary_chars, tool_cap, include_say=include_say)
+                    for p in self.parts
+                )
                 if len(text) <= CARD_BUDGET:
                     break
             return text
+
+    def say_text(self) -> str:
+        """The root's opener line(s) of every part, in order ('' if none)."""
+        with _LOCK:
+            sep = "\n\n" if unified() else "\n"
+            return sep.join(p.checklist.say for p in self.parts if p.checklist.say)
 
     @property
     def finished(self) -> bool:

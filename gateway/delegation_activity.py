@@ -1487,12 +1487,21 @@ class AckCardEditor:
         self._last_repost = float("-inf")
         self._repost_timer: Any = None
         self._stale: List[str] = []
+        # Set once the opener line was split off: the original message keeps
+        # only the root's words, this editor owns a card-only message.
+        self._split = False
+        self._say_id: Optional[str] = None
         self._registered = False
         self._seq = next(_ACK_SEQ)
         # Shares the follow protocol with the 🔀 cards (follow_latest_message).
         self._combined = False
         card.on_change = self.notify
         self._register_live()
+
+    def _render(self) -> str:
+        """What the message this editor owns should say: the card alone once
+        the opener line was split off, the whole ack text before that."""
+        return self.card.render(include_say=not self._split)
 
     # any thread
     def notify(self) -> None:
@@ -1633,7 +1642,11 @@ class AckCardEditor:
         if not (last_out and _is_newer(last_out, self._message_id)):
             return 0  # already the newest message in the chat
         self._last_repost = self._clock()
-        text = self.card.render()
+        # First follow of a card with an opener line: the opener stays in the
+        # original message (edited down to just that line); only the card moves.
+        say = "" if self._split else self.card.say_text()
+        split_now = bool(say)
+        text = self.card.render(include_say=False) if (split_now or self._split) else self.card.render()
         if not text:
             return 0
         try:
@@ -1650,14 +1663,30 @@ class AckCardEditor:
         if not (getattr(result, "success", False) and new_id) or str(new_id) == "__no_edit__":
             return 0
         old_id = self._message_id
+        keep_old = False
+        if split_now:
+            if await self._edit_message(old_id, say):
+                keep_old = True
+                self._split = True
+                self._say_id = old_id
+            else:
+                # Could not trim the original to the opener line: move the
+                # whole message instead (the previous behaviour).
+                text = self.card.render()
+                if not await self._edit_message(str(new_id), text):
+                    try:
+                        await _maybe_await(self._adapter.delete_message(self._chat_id, str(new_id)))
+                    except Exception:
+                        logger.debug("ack card repost cleanup failed", exc_info=True)
+                    return 0
         self._message_id = str(new_id)
         self._last_text = text
         self._last_attempt = self._clock()
         self._failures = 0
         self._backoff_until = float("-inf")
         self.card.target = (id(self._adapter), self._chat_id, self._message_id)
-        for mid in [old_id] + list(self._stale):
-            if not mid or mid == self._message_id:
+        for mid in ([] if keep_old else [old_id]) + list(self._stale):
+            if not mid or mid == self._message_id or mid == self._say_id:
                 continue
             try:
                 await _maybe_await(self._adapter.delete_message(self._chat_id, mid))
@@ -1668,7 +1697,7 @@ class AckCardEditor:
                 if mid not in self._stale:
                     self._stale.append(mid)
         del self._stale[8:]
-        if self.card.render() != self._last_text:
+        if self._render() != self._last_text:
             self.notify()  # changed while we were sending
         return 1
 
@@ -1680,7 +1709,7 @@ class AckCardEditor:
             if delay > 0:
                 await asyncio.sleep(delay)
                 continue
-            text = self.card.render()
+            text = self._render()
             if text == self._last_text:
                 self._tick_later()
                 return
@@ -1688,14 +1717,36 @@ class AckCardEditor:
                 self._edit_lock = asyncio.Lock()
             async with self._edit_lock:
                 # A repost may have run while we waited: edit what is current.
-                ok = await self._edit(self.card.render())
+                ok = await self._edit(self._render())
             if not ok:
                 if self.gone or self._failures >= 8:
                     return
                 continue
-            if self.card.render() == self._last_text:
+            if self._render() == self._last_text:
                 self._tick_later()
                 return
+
+    async def _edit_message(self, message_id: str, text: str) -> bool:
+        """One plain edit of ``message_id`` (no bookkeeping); True on success."""
+        editor = getattr(self._adapter, "edit_message", None)
+        if not callable(editor):
+            return False
+        token = _CARD_SEND.set(True)
+        try:
+            kwargs: Dict[str, Any] = {"finalize": True}
+            if self._metadata is not None:
+                kwargs["metadata"] = self._metadata
+            try:
+                result = await _maybe_await(editor(self._chat_id, message_id, _fit_to_limit(text, 4000), **kwargs))
+            except TypeError:
+                kwargs.pop("metadata", None)
+                result = await _maybe_await(editor(self._chat_id, message_id, _fit_to_limit(text, 4000), **kwargs))
+            return bool(result is not None and getattr(result, "success", False))
+        except Exception as exc:
+            logger.debug("ack opener edit raised: %s", exc)
+            return False
+        finally:
+            _CARD_SEND.reset(token)
 
     async def _edit(self, text: str) -> bool:
         editor = getattr(self._adapter, "edit_message", None)
@@ -1768,7 +1819,7 @@ def bind_ack_card(adapter: Any, chat_id: Any, content: Any, result: Any, metadat
         _ACK_EDITORS[id(card)] = editor
         while len(_ACK_EDITORS) > 32:
             _ACK_EDITORS.pop(next(iter(_ACK_EDITORS)))
-        if card.render() != editor._last_text or card.finished:
+        if editor._render() != editor._last_text or card.finished:
             editor.notify()  # it already moved on between render and send
     except Exception:
         logger.debug("ack card bind failed", exc_info=True)

@@ -71,8 +71,10 @@ def _clean(monkeypatch):
     da._FOLLOW_TIMERS.clear()
 
 
-def _card(did=DID, head=HEAD):
-    r = fl.DispatchReceipt(delegation_id=did, seq=1, goals=("g",), summary=head, steps=("find", "fix"))
+def _card(did=DID, head=HEAD, say=""):
+    r = fl.DispatchReceipt(
+        delegation_id=did, seq=1, goals=("g",), summary=head, steps=("find", "fix"), say=say,
+    )
     return ac.card_for([r])
 
 
@@ -281,3 +283,108 @@ async def test_the_roster_card_sends_never_count_as_newer():
         da._CARD_SEND.reset(token)
     await _settle()
     assert len(chat.sends) == 2 and chat.deleted == [] and editor._message_id == "101"
+
+
+# -- the opener line stays put; only the card follows -------------------------
+
+SAY = "on it. send me a message while it runs"
+
+
+@pytest.mark.asyncio
+async def test_card_render_without_say_and_say_text():
+    card = _card(say=SAY)
+    assert card.initial_text.startswith(SAY + "\n\n")
+    assert card.say_text() == SAY
+    assert SAY not in card.render(include_say=False)
+    assert card.render(include_say=False) == card.initial_text[len(SAY) + 2:]
+    assert _card("deleg_x").say_text() == ""
+
+
+@pytest.mark.asyncio
+async def test_first_follow_trims_the_original_to_the_opener_and_posts_the_card_alone():
+    chat, card = _Chat(), _card(say=SAY)
+    editor = await _bind(chat, card)
+    first = editor._message_id
+    await chat.send("chat", "the parent's reply")
+    await _settle()
+    assert len(chat.sends) == 3, "ack, reply, card-only re-post"
+    assert chat.sends[-1]["text"] == card.render(include_say=False)
+    assert SAY not in chat.sends[-1]["text"]
+    assert {"id": first, "text": SAY} in chat.edits, "original edited down to the opener line"
+    assert chat.deleted == [], "the opener message is never deleted"
+    assert editor._message_id == chat.sends[-1]["id"] != first
+    assert card.target[2] == editor._message_id
+
+
+@pytest.mark.asyncio
+async def test_second_follow_deletes_only_the_previous_card_message():
+    now = [1000.0]
+    chat, card = _Chat(), _card(say=SAY)
+    editor = await _bind(chat, card, clock=lambda: now[0])
+    first = editor._message_id
+    await chat.send("chat", "reply 1")
+    await _settle()
+    card_one = editor._message_id
+    now[0] += da.ACK_REPOST_MIN_SECONDS + 0.1
+    await chat.send("chat", "reply 2")
+    await _settle()
+    assert editor._message_id not in (first, card_one)
+    assert chat.deleted == [card_one], "only the previous card message goes"
+    assert first not in chat.deleted
+    assert chat.sends[-1]["text"] == card.render(include_say=False)
+    say_edits = [e for e in chat.edits if e["id"] == first]
+    assert len(say_edits) == 1, "the opener message is edited once and never touched again"
+
+
+@pytest.mark.asyncio
+async def test_without_a_say_line_the_whole_message_moves_as_before():
+    chat, card = _Chat(), _card()
+    editor = await _bind(chat, card)
+    first = editor._message_id
+    await chat.send("chat", "reply")
+    await _settle()
+    assert chat.sends[-1]["text"] == card.render()
+    assert chat.deleted == [first] and chat.edits == []
+    assert editor._split is False
+
+
+@pytest.mark.asyncio
+async def test_a_failed_opener_edit_falls_back_to_moving_the_whole_message():
+    chat, card = _Chat(), _card(say=SAY)
+    editor = await _bind(chat, card)
+    first = editor._message_id
+
+    async def failing_edit(chat_id, message_id, content, *, finalize=False, metadata=None):
+        chat.edits.append({"id": message_id, "text": content})
+        if message_id == first:
+            return SendResult(success=False, error="boom")
+        return SendResult(success=True, message_id=message_id)
+
+    chat.edit_message = failing_edit  # type: ignore[assignment]
+    await chat.send("chat", "reply")
+    await _settle()
+    assert editor._split is False
+    assert chat.deleted == [first], "previous behaviour: the old message is deleted"
+    assert editor._message_id == chat.sends[-1]["id"]
+    assert card.render() in [e["text"] for e in chat.edits if e["id"] == editor._message_id], (
+        "the re-posted message is brought to the full text"
+    )
+    assert SAY in card.render()
+
+
+@pytest.mark.asyncio
+async def test_in_place_edits_after_the_split_use_the_card_only_text():
+    chat, card = _Chat(), _card(say=SAY)
+    editor = await _bind(chat, card)
+    first = editor._message_id
+    await chat.send("chat", "reply")
+    await _settle()
+    moved_to = editor._message_id
+    ac.on_child_event("subagent.tool", delegation_id=DID, tool_name="read_file", preview="x.py",
+                      args={"path": "x.py"}, tool_count=1)
+    await _settle()
+    last = chat.edits[-1]
+    assert last["id"] == moved_to and SAY not in last["text"]
+    assert last["text"] == card.render(include_say=False)
+    assert [e for e in chat.edits if e["id"] == first] == [{"id": first, "text": SAY}]
+    assert len(chat.sends) == 3 and chat.deleted == []
