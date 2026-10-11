@@ -80,6 +80,13 @@ describe('ingestBackendSkin', () => {
     expect($backendThemes.get().default).toBeUndefined()
   })
 
+  it('never registers boring (the plain backend skin) either', () => {
+    ingestBackendSkin(skin('boring'), { apply: true })
+
+    expect($backendThemes.get().boring).toBeUndefined()
+    expect($pendingSkinApply.get()).toBe('boring')
+  })
+
   it('does not apply default on the connect-time seed', () => {
     ingestBackendSkin(skin('default'), { apply: false })
 

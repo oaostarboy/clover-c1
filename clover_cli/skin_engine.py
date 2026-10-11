@@ -13,7 +13,7 @@ themes all three surfaces at once — the theme analogue of the plugin SDK.
 SKIN YAML SCHEMA
 ================
 
-All fields are optional. Missing values inherit from the ``default`` skin.
+All fields are optional. Missing values inherit from the plain (``boring``) skin.
 
 .. code-block:: yaml
 
@@ -164,7 +164,8 @@ USAGE
 BUILT-IN SKINS
 ==============
 
-- ``default`` — Classic Clover gold/kawaii (the current look)
+- ``default`` — Clo the clover sprite (kawaii faces, 🍀/🥀 marks, message pack)
+- ``boring``  — Plain Clover, no sprite (the classic ✅/❌ look)
 - ``ares``    — Crimson/bronze war-god theme with custom spinner wings
 - ``mono``    — Clean grayscale monochrome
 - ``slate``   — Cool blue developer-focused theme
@@ -241,9 +242,9 @@ class SkinConfig:
 # =============================================================================
 
 _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
-    "default": {
-        "name": "default",
-        "description": "Classic Clover - green and kawaii",
+    "boring": {
+        "name": "boring",
+        "description": "Plain Clover, no sprite",
         # Dark-authored. Values match the TUI's DARK_THEME so the classic CLI
         # and the TUI render the same Clover gold.
         "colors": {
@@ -325,10 +326,10 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         },
         "tool_prefix": "┊",
     },
-    "clover": {
-        "name": "clover",
+    "default": {
+        "name": "default",
         "description": "Clo the clover sprite - lucky leaves, growing seedlings (default)",
-        # Colors, prompt and banner inherit from the default skin.
+        # Colors, prompt and banner inherit from the boring (plain) skin.
         "spinner": {
             "flavor": "clover",  # opt in to agent/clover_flavor.py per-turn behavior
             "spinner_mode": "clover_growth",  # 🫘 -> 🌱 -> 🌿 -> ☘️ by turn time
@@ -878,9 +879,25 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
 }
 
 
-# Clo wears Clover's own palette: share the default skin's (dark + light) blocks.
-_BUILTIN_SKINS["clover"]["colors"] = _BUILTIN_SKINS["default"]["colors"]
-_BUILTIN_SKINS["clover"]["light_colors"] = _BUILTIN_SKINS["default"]["light_colors"]
+# Clo wears Clover's own palette: share the plain skin's (dark + light) blocks.
+_BUILTIN_SKINS["default"]["colors"] = _BUILTIN_SKINS["boring"]["colors"]
+_BUILTIN_SKINS["default"]["light_colors"] = _BUILTIN_SKINS["boring"]["light_colors"]
+
+# The plain look is the base every skin inherits missing keys from. Keep a
+# direct reference so it never depends on what the *name* "default" points at.
+_PLAIN_BASE_SKIN: Dict[str, Any] = _BUILTIN_SKINS["boring"]
+
+# Listing order: Clo first, then the plain look, then the rest.
+_BUILTIN_SKINS = {
+    "default": _BUILTIN_SKINS["default"],
+    "boring": _BUILTIN_SKINS["boring"],
+    **{k: v for k, v in _BUILTIN_SKINS.items() if k not in ("default", "boring")},
+}
+
+# Hidden aliases: accepted everywhere a skin name is read or set, resolved to
+# the canonical built-in, and never listed. "clover" was Clo's name before Clo
+# became "default"; every existing ``display.skin: clover`` keeps working.
+_SKIN_ALIASES: Dict[str, str] = {"clover": "default"}
 
 
 # Starter packs: built-in skins that are just a message pack on an existing palette.
@@ -1007,13 +1024,33 @@ for _name, _palette in (("butler", "slate"), ("minimal", "mono"), ("hype", "char
 # =============================================================================
 
 _active_skin: Optional[SkinConfig] = None
-DEFAULT_SKIN_NAME = "clover"
+DEFAULT_SKIN_NAME = "default"
 _active_skin_name: str = DEFAULT_SKIN_NAME
 
 
 def _skins_dir() -> Path:
     """User skins directory."""
     return get_clover_home() / "skins"
+
+
+def canonical_skin_name(name: str) -> str:
+    """Resolve a hidden alias (``clover`` -> ``default``) to its built-in name.
+
+    A user skin file with the exact name wins, so someone who authored their
+    own ``skins/clover.yaml`` keeps it. Any other name passes through as given.
+    """
+    if not isinstance(name, str):
+        return name
+    key = name.strip()
+    target = _SKIN_ALIASES.get(key.lower())
+    if target is None:
+        return name
+    try:
+        if (_skins_dir() / f"{key}.yaml").is_file():
+            return name
+    except Exception:
+        pass
+    return target
 
 
 def _load_skin_from_yaml(path: Path) -> Optional[Dict[str, Any]]:
@@ -1047,7 +1084,7 @@ def _mapping_or_empty(value: Any, *, section: str, skin_name: str) -> Dict[str, 
 def _build_skin_config(data: Dict[str, Any]) -> SkinConfig:
     """Build a SkinConfig from a raw dict (built-in or loaded from YAML)."""
     # Start with default values as base for missing keys
-    default = _BUILTIN_SKINS["default"]
+    default = _PLAIN_BASE_SKIN
     skin_name = str(data.get("name", "unknown"))
     color_overrides = _mapping_or_empty(data.get("colors"), section="colors", skin_name=skin_name)
     spinner_overrides = _mapping_or_empty(data.get("spinner"), section="spinner", skin_name=skin_name)
@@ -1119,6 +1156,9 @@ def list_skins() -> List[Dict[str, str]]:
 
 def load_skin(name: str) -> SkinConfig:
     """Load a skin by name. Checks user skins first, then built-in."""
+    # Hidden aliases (``clover`` -> ``default``) resolve before any lookup.
+    name = canonical_skin_name(name)
+
     # Check user skins directory
     skins_path = _skins_dir()
     user_file = skins_path / f"{name}.yaml"
@@ -1133,7 +1173,7 @@ def load_skin(name: str) -> SkinConfig:
 
     # Fallback to default
     logger.warning("Skin '%s' not found, using default", name)
-    return _build_skin_config(_BUILTIN_SKINS["default"])
+    return _build_skin_config(_BUILTIN_SKINS[DEFAULT_SKIN_NAME])
 
 
 def get_active_skin() -> SkinConfig:
@@ -1147,6 +1187,7 @@ def get_active_skin() -> SkinConfig:
 def set_active_skin(name: str) -> SkinConfig:
     """Switch the active skin. Returns the new SkinConfig."""
     global _active_skin, _active_skin_name
+    name = canonical_skin_name(name)
     _active_skin_name = name
     _active_skin = load_skin(name)
     return _active_skin

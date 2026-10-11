@@ -40,23 +40,23 @@ def test_set_edits_active_user_skin_in_place_preserving_everything_else():
 
 
 def test_set_forks_a_builtin_without_inventing_a_background():
-    _activate("default")  # a built-in — no file
+    _activate("boring")  # a built-in — no file
 
     assert skin_cmd._skin_set("ui_tool", "#00FFFF", None) == 0
 
-    fork = _skins() / "default-custom.yaml"
+    fork = _skins() / "boring-custom.yaml"
     assert fork.exists()
     data = yaml.safe_load(fork.read_text())
     assert data["colors"]["ui_tool"] == "#00FFFF"
-    # default has no background, so the fork must not invent one (terminal stays put).
+    # boring has no background, so the fork must not invent one (terminal stays put).
     assert "background" not in data["colors"]
     # full palette carried over, and it became active.
     assert data["colors"].get("banner_title")
-    assert (get_clover_home() / "config.yaml").read_text().find("default-custom") != -1
+    assert (get_clover_home() / "config.yaml").read_text().find("boring-custom") != -1
 
 
 def test_set_rejects_non_hex():
-    _activate("default")
+    _activate("boring")
     assert skin_cmd._skin_set("ui_tool", "teal", None) == 1
 
 

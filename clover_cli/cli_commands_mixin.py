@@ -3385,7 +3385,9 @@ class CLICommandsMixin:
             print(f"  Custom skins: drop a YAML file in {display_clover_home()}/skins/\n")
             return
 
-        new_skin = parts[1].strip().lower()
+        from clover_cli.skin_engine import canonical_skin_name
+
+        new_skin = canonical_skin_name(parts[1].strip().lower())
         available = {s["name"] for s in list_skins()}
         if new_skin not in available:
             print(f"  Unknown skin: {new_skin}")

@@ -44,7 +44,7 @@ SUBAGENT_SENTENCE = (
 @pytest.fixture(autouse=True)
 def clover_active(monkeypatch):
     monkeypatch.setattr(skin_engine, "_active_skin", None)
-    monkeypatch.setattr(skin_engine, "_active_skin_name", "clover")
+    monkeypatch.setattr(skin_engine, "_active_skin_name", "default")
     monkeypatch.setenv("CLOVER_LANGUAGE", "en")
     clover_flavor.reset()
     clover_acks.reset()
@@ -142,7 +142,7 @@ def test_stop_acks(stock, rest):
     assert text == f"{face} {line}. {rest}"
 
 
-@pytest.mark.parametrize("name", ["default", "ares"])
+@pytest.mark.parametrize("name", ["boring", "ares"])
 def test_other_skins_keep_stock_text_byte_for_byte(name):
     skin_engine.set_active_skin(name)
     stock = "⚡ Stopped. You can continue this session."
@@ -231,7 +231,7 @@ async def test_busy_handler_emits_clover_acks(monkeypatch, mode, kind):
 
 @pytest.mark.asyncio
 async def test_busy_handler_default_skin_unchanged(monkeypatch):
-    skin_engine.set_active_skin("default")
+    skin_engine.set_active_skin("boring")
     content = await _busy_ack(monkeypatch, "interrupt")
     head = content.split("\n\n", 1)[0]
     assert head.startswith("⚡ Interrupting current task")

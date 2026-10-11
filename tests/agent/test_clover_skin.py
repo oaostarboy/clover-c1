@@ -1,4 +1,4 @@
-"""Behavior tests for the built-in ``clover`` skin ("Clo" the clover sprite)."""
+"""Behavior tests for the built-in ``default`` skin ("Clo" the clover sprite)."""
 
 import io
 import sys
@@ -74,16 +74,16 @@ def _turn(**kw):
 # --- default + explicit skin -------------------------------------------------
 
 
-def test_default_skin_is_clover():
-    assert DEFAULT_CONFIG["display"]["skin"] == "clover"
+def test_default_skin_is_clo():
+    assert DEFAULT_CONFIG["display"]["skin"] == "default"
     skin_engine.init_skin_from_config({})
-    assert skin_engine.get_active_skin().name == "clover"
+    assert skin_engine.get_active_skin().name == "default"
     skin_engine.init_skin_from_config({"display": {"skin": ""}})
-    assert skin_engine.get_active_skin().name == "clover"
-    assert skin_engine.get_active_skin_name() == "clover"
+    assert skin_engine.get_active_skin().name == "default"
+    assert skin_engine.get_active_skin_name() == "default"
 
 
-@pytest.mark.parametrize("name", ["default", "ares", "mono"])
+@pytest.mark.parametrize("name", ["boring", "ares", "mono"])
 def test_explicit_skin_wins(name):
     skin_engine.init_skin_from_config({"display": {"skin": name}})
     assert skin_engine.get_active_skin().name == name
@@ -92,7 +92,7 @@ def test_explicit_skin_wins(name):
 
 
 def test_clover_skin_uses_leaf_faces_and_verbs():
-    skin = skin_engine.load_skin("clover")
+    skin = skin_engine.load_skin("default")
     assert all(f.startswith(LEAF) for f in skin.spinner["thinking_faces"])
     assert all(f.startswith(LEAF) for f in skin.spinner["waiting_faces"])
     assert "counting leaves (1, 2, 3... 4?!)" in KawaiiSpinner.get_thinking_verbs()
@@ -155,7 +155,7 @@ def test_spinner_uses_growth_mode_under_clover_skin():
 
 
 def test_other_skins_keep_their_spinner_type():
-    skin_engine.set_active_skin("default")
+    skin_engine.set_active_skin("boring")
     assert KawaiiSpinner("x", spinner_type="moon").spinner_type == "moon"
 
 
@@ -262,14 +262,14 @@ def test_unlisted_tools_keep_registry_or_default_emoji():
 
 def test_gateway_generic_fallback_is_a_leaf_under_clover_only():
     assert get_tool_emoji("no_such_tool_xyz", default="⚙️") == "☘️"
-    skin_engine.set_active_skin("default")
+    skin_engine.set_active_skin("boring")
     assert get_tool_emoji("no_such_tool_xyz", default="⚙️") == "⚙️"
 
 
 def test_completion_line_follows_skin_emoji():
     line = get_cute_tool_message("terminal", {"command": "ls"}, 1.0)
     assert "⌨️" in line and "💻" not in line
-    skin_engine.set_active_skin("default")
+    skin_engine.set_active_skin("boring")
     assert "💻" in get_cute_tool_message("terminal", {"command": "ls"}, 1.0)
 
 
@@ -277,7 +277,7 @@ def test_xai_video_tools_have_a_real_emoji():
     import tools.xai_video_tools  # noqa: F401  (registers on import)
     from tools.registry import registry
 
-    skin_engine.set_active_skin("default")
+    skin_engine.set_active_skin("boring")
     for name in ("xai_video_edit", "xai_video_extend"):
         assert registry.get_emoji(name) == "🎬"
         assert get_tool_emoji(name) == "🎬"
@@ -288,7 +288,7 @@ def test_xai_video_tools_have_a_real_emoji():
 
 def test_done_and_failed_marks_follow_skin():
     assert (get_done_mark(), get_fail_mark()) == ("🍀", "🥀")
-    skin_engine.set_active_skin("default")
+    skin_engine.set_active_skin("boring")
     assert (get_done_mark(), get_fail_mark()) == ("✅", "❌")
 
 
@@ -301,7 +301,7 @@ def test_delegation_card_marks_follow_skin():
     assert _state_icon("completed") == "🍀"
     assert _state_icon("failed") == "🥀"
     assert group_icon([Child()]) == "🍀"
-    skin_engine.set_active_skin("default")
+    skin_engine.set_active_skin("boring")
     assert _state_icon("completed") == "✅"
     assert group_icon([Child()]) == "✅"
 

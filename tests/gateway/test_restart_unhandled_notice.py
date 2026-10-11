@@ -417,7 +417,7 @@ def _set_skin(monkeypatch, name):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("skin", ["clover", "default"])
+@pytest.mark.parametrize("skin", ["default", "boring"])
 @pytest.mark.parametrize("mode", ["queue", "steer"])
 async def test_busy_handler_drain_reply_asks_to_resend_instead_of_promising(monkeypatch, mode, skin):
     _set_skin(monkeypatch, skin)
@@ -433,7 +433,7 @@ async def test_busy_handler_drain_reply_asks_to_resend_instead_of_promising(monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("skin", ["clover", "default"])
+@pytest.mark.parametrize("skin", ["default", "boring"])
 @pytest.mark.parametrize("mode", ["queue", "steer"])
 async def test_priority_path_drain_reply_asks_to_resend_instead_of_promising(monkeypatch, mode, skin):
     monkeypatch.setenv("CLOVER_TELEGRAM_FOLLOWUP_GRACE_SECONDS", "0")

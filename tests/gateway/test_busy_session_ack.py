@@ -39,7 +39,7 @@ def _classic_skin(monkeypatch):
     from clover_cli import skin_engine
 
     monkeypatch.setattr(skin_engine, "_active_skin", None)
-    monkeypatch.setattr(skin_engine, "_active_skin_name", "default")
+    monkeypatch.setattr(skin_engine, "_active_skin_name", "boring")
 
 
 # ---------------------------------------------------------------------------

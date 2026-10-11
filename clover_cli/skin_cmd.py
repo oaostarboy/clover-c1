@@ -46,7 +46,9 @@ def _skin_set(key: str, value: str, skin: str | None) -> int:
         print(f"✗ {value!r} is not a #rrggbb hex color", file=sys.stderr)
         return 1
 
-    name = skin or _active_skin()
+    from clover_cli.skin_engine import canonical_skin_name
+
+    name = canonical_skin_name(skin or _active_skin())
     path = _skins_dir() / f"{name}.yaml"
 
     if path.exists():
@@ -140,10 +142,10 @@ def apply_skin(name: str, save) -> str:
 
 def resolve_skin_arg(arg: str):
     """The skin a ``/skin <arg>`` names (a name, or a 1-based number from the list); None if unknown."""
-    from clover_cli.skin_engine import list_skins
+    from clover_cli.skin_engine import canonical_skin_name, list_skins
 
     names = [s["name"] for s in list_skins()]
-    arg = arg.strip()
+    arg = canonical_skin_name(arg.strip())
     if arg.isdigit() and 1 <= int(arg) <= len(names):
         return names[int(arg) - 1]
     lowered = {n.lower(): n for n in names}
@@ -157,7 +159,10 @@ def skin_command(args) -> None:
     if verb == "set":
         sys.exit(_skin_set(args.key, args.value, getattr(args, "skin", None)))
     elif verb == "use":
-        _use(args.name)
-        print(f"✓ active skin → {args.name} (live within ~1s)")
+        from clover_cli.skin_engine import canonical_skin_name
+
+        name = canonical_skin_name(args.name)
+        _use(name)
+        print(f"✓ active skin → {name} (live within ~1s)")
     else:  # list / default
         sys.exit(_skin_list())

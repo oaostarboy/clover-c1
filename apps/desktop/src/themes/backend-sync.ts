@@ -26,6 +26,9 @@ import type { DesktopTheme } from './types'
 /** Skins pushed by the backend, keyed by name. Merged by `listAllThemes`. */
 export const $backendThemes = atom<Record<string, DesktopTheme>>({})
 
+// Backend built-ins that carry no desktop palette of their own.
+const BACKEND_PALETTE_FREE = new Set(['default', 'boring'])
+
 /** One-shot skin name the ThemeProvider should switch to (it clears this). */
 export const $pendingSkinApply = atom<string | null>(null)
 
@@ -63,7 +66,9 @@ export function ingestBackendSkin(skin: CloverSkin | undefined | null, { apply }
   // skip the registry step here and let it flow through the apply logic below.
   // Built-in names (mono/slate/…) already have a hand-tuned desktop palette — we
   // never shadow it, but the name is still a valid apply target.
-  if (name !== 'default' && !BUILTIN_THEMES[name]) {
+  // The backend's built-in Clo ("default", formerly "clover") and plain ("boring")
+  // skins both defer to the desktop's own palette; neither is registered here.
+  if (!BACKEND_PALETTE_FREE.has(name) && !BUILTIN_THEMES[name]) {
     const theme = skinToDesktopTheme(skin as CloverSkin)
 
     if (!theme) {

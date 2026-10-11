@@ -1506,7 +1506,7 @@ DEFAULT_CONFIG = {
         # model — see clover_cli/focus_view.py.
         "focus_view": False,
         "focus_saved_tool_progress": "all",
-        "skin": "clover",
+        "skin": "default",
         # UI language for static user-facing messages (approval prompts, a
         # handful of gateway slash-command replies).  Does NOT affect agent
         # responses, log lines, tool outputs, or slash-command descriptions.

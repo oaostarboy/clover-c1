@@ -5,6 +5,7 @@ import { useTheme } from './context'
 // Retired skin names land on the canonical Clover skin so old muscle memory works.
 const ALIASES: Record<string, string> = {
   ares: 'ember',
+  boring: 'clover',
   default: 'clover',
   gold: 'clover',
   clover: 'clover',

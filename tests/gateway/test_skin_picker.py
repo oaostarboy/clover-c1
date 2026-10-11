@@ -26,7 +26,7 @@ TAIL = "Your task is paused; message me after and I'll resume."
 def _clean_skin_state(monkeypatch, tmp_path):
     monkeypatch.setenv("CLOVER_LANGUAGE", "en")
     monkeypatch.setattr(skin_engine, "_active_skin", None)
-    monkeypatch.setattr(skin_engine, "_active_skin_name", "clover")
+    monkeypatch.setattr(skin_engine, "_active_skin_name", "default")
     monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
     clover_acks.reset()
     yield
@@ -89,10 +89,10 @@ def test_starter_pack_marks():
 @pytest.mark.asyncio
 async def test_skin_lists_skins_and_marks_current_without_buttons():
     out = await _runner(object())._handle_skin_command(_event("/skin"))
-    assert "current: clover" in out
-    for name in ("clover", "butler", "minimal", "hype"):
+    assert "current: default" in out
+    for name in ("default", "boring", "butler", "minimal", "hype"):
         assert name in out
-    assert re.search(r"\d+\. clover ●", out)
+    assert re.search(r"\d+\. default ●", out)
     assert "butler ●" not in out
 
 
@@ -102,7 +102,7 @@ async def test_skin_sends_picker_when_platform_has_buttons():
     out = await _runner(adapter)._handle_skin_command(_event("/skin"))
     assert out is None
     call = adapter.calls[0]
-    assert call["current"] == "clover"
+    assert call["current"] == "default"
     assert {"butler", "minimal", "hype"} <= {s["name"] for s in call["skins"]}
     assert "restarting:" in call["preview"]("butler")
 
@@ -169,7 +169,7 @@ async def test_telegram_tap_previews_then_apply_applies(monkeypatch):
     adapter._bot.send_message = AsyncMock(return_value=SimpleNamespace(message_id=7))
     on_apply = AsyncMock(return_value="Skin set to hype.")
     res = await adapter.send_skin_picker(
-        chat_id="2", skins=[{"name": "clover"}, {"name": "hype"}], current="clover",
+        chat_id="2", skins=[{"name": "default"}, {"name": "hype"}], current="default",
         session_key="s", preview=lambda n: f"Preview: {n}", on_apply=on_apply,
     )
     assert res.success and "2" in adapter._skin_picker_state
@@ -195,7 +195,7 @@ async def test_telegram_cancel_and_expiry():
     await adapter._handle_skin_picker_callback(q, "sk:0", "2")
     assert "expired" in q.answer.call_args[1]["text"]
 
-    adapter._skin_picker_state["2"] = {"names": ["clover"], "preview": str, "on_apply": AsyncMock()}
+    adapter._skin_picker_state["2"] = {"names": ["default"], "preview": str, "on_apply": AsyncMock()}
     q = _query()
     await adapter._handle_skin_picker_callback(q, "sk:x", "2")
     assert "2" not in adapter._skin_picker_state
