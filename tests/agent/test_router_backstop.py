@@ -218,6 +218,17 @@ def test_control_plane_calls_do_not_count_or_get_refused(tmp_path, children, dis
     assert (tmp_path / 'a.txt').exists() and (tmp_path / 'b.txt').exists()
 
 
+def test_a_memory_note_past_the_threshold_never_hands_off(children, dispatches, clock):
+    agent = _root()
+    _arm(agent)
+    clock.t += 61
+
+    verdict = rb.refusal(agent, "memory", {"action": "add", "target": "memory", "content": "x"})
+
+    assert verdict is None
+    assert len(dispatches) == 0
+
+
 # ── refusal after the time threshold ───────────────────────────────────────
 
 def test_the_first_work_call_after_the_time_threshold_is_refused(tmp_path, children, dispatches, clock):

@@ -5,15 +5,16 @@ The ack a root's turn ends with is::
     on it, sorting the card bugs out now.
 
     🔄 fixing the helper-card bugs → test build + PR, ~10–25 min
-    ✅ found the bugs
+    🍀 found the bugs
     🔄 writing the fix
     ⬜ tests
     ⬜ test bot
 
 The first line is the root's own words (``handoff.say``) and is left out when
-it gave none.  When the helper reports, the header icon becomes ✅ / ❌ / ⏹ and
+it gave none.  When the helper reports, the header icon becomes 🍀 / 🍂 / ⏹ and
 the steps flip to their final icons (a step that was running when it failed
-shows ❌).  No result line is added: the root's own reply to the completion
+shows 🍂).  A helper that finished but says it did not do the job
+(``Result: not done``) counts as failed, never 🍀.  No result line is added: the root's own reply to the completion
 delivers the result as a normal message.  This module is
 pure state + rendering: the agent renders the first text (``render``), and the
 gateway keeps the same ``Checklist`` per delegation to edit that message in
@@ -26,6 +27,7 @@ from the helper's own ``todo`` list -- observed status, never guessed.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -42,8 +44,8 @@ STOPPED = "stopped"
 
 PENDING_ICON = "\u2b1c"  # ⬜
 ACTIVE_ICON = "\U0001f504"  # 🔄
-DONE_ICON = "\u2705"  # ✅
-FAILED_ICON = "\u274c"  # ❌
+DONE_ICON = "\U0001f340"  # 🍀
+FAILED_ICON = "\U0001f342"  # 🍂
 STOPPED_ICON = "\u23f9"  # ⏹
 
 _STEP_ICON = {
@@ -174,6 +176,20 @@ def _after_icon(header: str) -> str:
         if header.startswith(icon):
             return header[len(icon):]
     return " " + header
+
+
+_RESULT_LINE_RE = re.compile(
+    r"(?im)^\s*[*_]*\s*result\s*[*_]*\s*:\s*[*_]*\s*(done|not\s+done)\b"
+)
+
+
+def helper_outcome(text: Any) -> str:
+    """``"done"`` / ``"not_done"`` from the helper's own ``Result:`` line
+    (its last one wins), or ``""`` when it wrote none."""
+    found = _RESULT_LINE_RE.findall(str(text or ""))
+    if not found:
+        return ""
+    return "not_done" if found[-1].lower().startswith("not") else "done"
 
 
 def end_state_for(status: Any) -> str:
@@ -310,6 +326,9 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
         return False
     state = end_state_for(kw.get("status"))
     if str(kw.get("exit_reason") or "").lower() in {"max_iterations", "max_turns"}:
+        state = FAILED
+    if state == DONE and kw.get("outcome") == "not_done":
+        # The run ended cleanly but the helper says the job is not done.
         state = FAILED
     part.ended.append(state)
     if len(part.ended) < part.expected:

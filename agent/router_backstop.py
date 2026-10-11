@@ -152,6 +152,10 @@ class RouterTurn:
         self.settled = threading.Condition(self.lock)
 
 
+# Notes the root keeps for itself; never the work the plan is about.
+BOOKKEEPING_TOOLS = frozenset({"memory"})
+
+
 def _now() -> float:
     return _fl._now()
 
@@ -288,7 +292,7 @@ def note_result(agent: Any, function_name: str, function_args: Any, result: Any)
         from agent import delegation_checkpoint as dc
 
         name, args = dc.resolve_work_call(function_name, function_args)
-        if name in dc.CONTROL_PLANE_TOOLS:
+        if name in dc.CONTROL_PLANE_TOOLS or name in BOOKKEEPING_TOOLS:
             return
         snippet = goal_text(result)
         if len(snippet) > FINDING_CHARS:
@@ -591,7 +595,9 @@ def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str 
                 # In flight, not accepted: only the dispatch receipt says that.
                 state.spawning[(function_name, id(function_args))] = True
             return None
-        if name in dc.CONTROL_PLANE_TOOLS:
+        if name in dc.CONTROL_PLANE_TOOLS or name in BOOKKEEPING_TOOLS:
+            # Bookkeeping (a memory note after the answer) is not the
+            # user's work: it never trips a hand-off and is never refused.
             return None
         _wait_for_spawns(state, agent)
         if state.handoff is None:

@@ -39,6 +39,7 @@ from agent.interrupt_compat import request_hard_interrupt
 from agent.turn_notices import neutralize_marker as _neutralize_marker
 from agent.turn_notices import runtime_note as _runtime_note
 from agent.turn_notices import vouch_runtime_result as _vouch_runtime_result
+from agent.ack_checklist import helper_outcome as _helper_outcome
 
 # Sentinel value used by the runtime provider system for providers that are
 # not natively known (named custom providers, third-party aggregators, etc.).
@@ -1358,6 +1359,9 @@ def _build_child_system_prompt(
         "points over paragraphs, and don't replay your whole process. Your "
         "response is returned to the parent agent as a summary, and overlong "
         "summaries crowd out the parent's context window.\n\n"
+        "Just before that, write one line: 'Result: done' if you did what was "
+        "asked, or 'Result: not done' if you could not (blocked, wrong input, "
+        "only part of it). Never claim done for work you did not finish.\n\n"
         "End your answer with a line starting 'Plain summary:' followed by 2-3 "
         "short sentences for a non-technical reader, in Simplified Technical "
         "English: one idea per sentence, active voice, common words, no file "
@@ -3819,6 +3823,7 @@ def _run_single_child(
             "exit_reason": entry.get("exit_reason", ""),
             "duration_seconds": duration,
             "summary": summary[:500] if summary else entry.get("error", ""),
+            "outcome": _helper_outcome(summary),
             "input_tokens": (
                 int(_input_tokens) if isinstance(_input_tokens, (int, float)) else 0
             ),

@@ -76,7 +76,7 @@ def test_todo_statuses_map_to_icons_by_position():
     assert cl.apply_todos(_todos("completed", "in_progress", "pending", "pending"))
     body = cl.render().splitlines()[1:]
     assert body == [
-        "\u2705 found the bugs", "\U0001f504 writing the fix", "\u2b1c tests", "\u2b1c test bot",
+        "\U0001f340 found the bugs", "\U0001f504 writing the fix", "\u2b1c tests", "\u2b1c test bot",
     ]
     assert not cl.apply_todos(_todos("completed", "in_progress", "pending", "pending")), "no change"
 
@@ -100,8 +100,8 @@ def test_done_flips_header_and_every_step_and_adds_no_result_line():
     cl.apply_todos(_todos("completed", "in_progress", "pending", "pending"))
     assert cl.finish(ac.DONE)
     lines = cl.render().split("\n")
-    assert lines[0] == "on it." and lines[2].startswith("\u2705 fixing the helper-card bugs")
-    assert lines[3:] == [f"\u2705 {s}" for s in STEPS]
+    assert lines[0] == "on it." and lines[2].startswith("\U0001f340 fixing the helper-card bugs")
+    assert lines[3:] == [f"\U0001f340 {s}" for s in STEPS]
     assert len(lines) == 3 + len(STEPS), "no extra result line"
 
 
@@ -110,9 +110,9 @@ def test_failure_marks_the_failing_step_and_header_x_and_nothing_else():
     cl.apply_todos(_todos("completed", "in_progress", "pending", "pending"))
     cl.finish(ac.FAILED)
     lines = cl.render().splitlines()
-    assert lines[0].startswith("\u274c ")
+    assert lines[0].startswith("\U0001f342 ")
     assert lines[1:] == [
-        "\u2705 found the bugs", "\u274c writing the fix", "\u2b1c tests", "\u2b1c test bot",
+        "\U0001f340 found the bugs", "\U0001f342 writing the fix", "\u2b1c tests", "\u2b1c test bot",
     ]
 
 
@@ -149,18 +149,38 @@ def test_events_tick_the_card_and_complete_finishes_it():
     card.on_change = lambda: changed.append(card.render())
     assert ac.on_child_event("subagent.todo", delegation_id="d1",
                              todos=_todos("completed", "in_progress", "pending", "pending"))
-    assert "\u2705 found the bugs" in changed[-1]
+    assert "\U0001f340 found the bugs" in changed[-1]
     assert ac.on_child_event("subagent.complete", delegation_id="d1", status="completed")
     assert card.finished
-    assert changed[-1].splitlines()[0].startswith("\u2705 ")
+    assert changed[-1].splitlines()[0].startswith("\U0001f340 ")
     assert not ac.on_child_event("subagent.todo", delegation_id="other", todos=[])
+
+
+def test_a_helper_that_says_not_done_never_gets_a_clover():
+    card = ac.card_for([_receipt()])
+    assert ac.on_child_event("subagent.complete", delegation_id="d1",
+                             status="completed", outcome="not_done")
+    first = card.render().splitlines()[0]
+    assert first.startswith("\U0001f342 ") and not first.startswith("\U0001f340")
+
+
+@pytest.mark.parametrize("text, want", [
+    ("did it\nResult: done\nPlain summary: ok.", "done"),
+    ("Result: not done\nPlain summary: wrong folder.", "not_done"),
+    ("**Result:** Not done - blocked", "not_done"),
+    ("Result: done\n...\nResult: not done", "not_done"),
+    ("no line at all", ""),
+    (None, ""),
+])
+def test_helper_outcome_reads_the_result_line(text, want):
+    assert ac.helper_outcome(text) == want
 
 
 def test_events_that_arrive_before_the_receipt_are_replayed():
     ac.on_child_event("subagent.todo", delegation_id="d1",
                       todos=_todos("completed", "completed", "in_progress", "pending"))
     card = ac.card_for([_receipt()])
-    assert card.render().splitlines()[2] == "\u2705 writing the fix"
+    assert card.render().splitlines()[2] == "\U0001f340 writing the fix"
 
 
 def test_a_fan_out_finishes_only_when_every_child_reported():
@@ -169,7 +189,7 @@ def test_a_fan_out_finishes_only_when_every_child_reported():
     ac.on_child_event("subagent.complete", delegation_id="d1", status="completed")
     assert not card.finished
     ac.on_child_event("subagent.complete", delegation_id="d1", status="failed")
-    assert card.finished and card.render().startswith("\u274c ")
+    assert card.finished and card.render().startswith("\U0001f342 ")
 
 
 def test_multi_task_dispatch_never_gets_steps():
@@ -214,11 +234,11 @@ def test_child_todo_tool_result_ticks_the_checklist_through_the_real_relay():
     ]})
     cb("tool.completed", "todo", None, None, duration=0.1, is_error=False, result=todo_result)
     card = ac.card_for([_receipt()])
-    assert card.render().splitlines()[1:3] == ["\u2705 found the bugs", "\U0001f504 writing the fix"]
+    assert card.render().splitlines()[1:3] == ["\U0001f340 found the bugs", "\U0001f504 writing the fix"]
     assert "subagent.todo" not in seen, "the todo relay stays in-process"
 
     cb("subagent.complete", preview="done", status="completed", summary="All good.")
-    assert card.finished and card.render().startswith("\u2705 ")
+    assert card.finished and card.render().startswith("\U0001f340 ")
 
 
 def test_seeding_and_instruction_for_the_child():

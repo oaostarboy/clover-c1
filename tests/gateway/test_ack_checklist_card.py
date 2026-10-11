@@ -94,9 +94,9 @@ async def test_ticks_edit_the_same_message_and_never_send_again():
 
     assert len(adapter.sends) == 1, "ticks never post a new message"
     assert [e["id"] for e in adapter.edits] == ["m42"] * len(adapter.edits) and adapter.edits
-    assert adapter.edits[0]["text"].splitlines()[1] == "\u2705 find"
+    assert adapter.edits[0]["text"].splitlines()[1] == "\U0001f340 find"
     last = adapter.edits[-1]
-    assert last["text"].splitlines()[0].startswith("\u2705 ") and last["finalize"] is True
+    assert last["text"].splitlines()[0].startswith("\U0001f340 ") and last["finalize"] is True
 
 
 @pytest.mark.asyncio
@@ -119,7 +119,7 @@ async def test_a_burst_of_ticks_inside_the_interval_coalesces_into_one_edit():
     await asyncio.sleep(0.5)
     await _settle(editor)
     assert len(adapter.edits) == 2
-    assert adapter.edits[-1]["text"].splitlines()[1:] == ["\u2705 find", "\u2705 fix", "\U0001f504 test"]
+    assert adapter.edits[-1]["text"].splitlines()[1:] == ["\U0001f340 find", "\U0001f340 fix", "\U0001f504 test"]
     assert len(adapter.sends) == 1
 
 
