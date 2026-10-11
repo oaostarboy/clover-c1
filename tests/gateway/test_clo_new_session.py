@@ -28,7 +28,7 @@ def _set_skin(monkeypatch, name):
 
 @pytest.fixture(autouse=True)
 def clover_active(monkeypatch):
-    _set_skin(monkeypatch, "clover")
+    _set_skin(monkeypatch, "default")
     monkeypatch.setenv("CLOVER_LANGUAGE", "en")
     monkeypatch.setattr("gateway.run._resolve_gateway_model_context", lambda *a, **k: CTX)
     monkeypatch.setattr(tips, "get_random_tip", lambda *a, **k: "Try /compress when chats get long.")
@@ -242,7 +242,7 @@ STOCK_REPLY = (
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("skin", ["default", "ares", "mono"])
+@pytest.mark.parametrize("skin", ["boring", "ares", "mono"])
 async def test_classic_skins_are_byte_identical(monkeypatch, skin):
     _set_skin(monkeypatch, skin)
     assert await _reply() == STOCK_REPLY
@@ -250,7 +250,7 @@ async def test_classic_skins_are_byte_identical(monkeypatch, skin):
 
 @pytest.mark.asyncio
 async def test_classic_titled_and_topic_replies_unchanged(monkeypatch):
-    _set_skin(monkeypatch, "default")
+    _set_skin(monkeypatch, "boring")
     reply = await _reply("/new Plans", runner=_runner(AsyncMock()))
     assert reply.startswith("✨ New session started: Plans\n\n◆ Model:")
     runner = _runner()

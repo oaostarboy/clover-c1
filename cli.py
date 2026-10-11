@@ -514,7 +514,7 @@ def load_cli_config() -> Dict[str, Any]:
             # clarify) into scrollback so the decision survives the repaint.
             "persist_prompts": True,
 
-            "skin": "clover",
+            "skin": "default",
         },
         "clarify": {
             "timeout": 120,  # Seconds to wait for a clarify answer before auto-proceeding
@@ -4763,7 +4763,7 @@ def _build_compact_banner() -> str:
     title_color = _skin.get_color("banner_title", "#FFBF00") if _skin else "#FFBF00"
     dim_color = _skin.get_color("banner_dim", "#B8860B") if _skin else "#B8860B"
 
-    if skin_name == "default":
+    if skin_name == "boring":  # the plain classic look; Clo ("default") uses its branding
         line1 = "☘ CLOVER CLOVER - AI Agent Framework"
         tiny_line = "☘ CLOVER CLOVER"
     else:

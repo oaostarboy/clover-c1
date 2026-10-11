@@ -17,7 +17,7 @@ from gateway import clover_acks
 from gateway.config import PlatformConfig
 from plugins.platforms.telegram.adapter import TelegramAdapter
 
-OTHER_SKINS = ["default", "ares", "mono", "slate"]
+OTHER_SKINS = ["boring", "ares", "mono", "slate"]
 
 
 def _set_skin(monkeypatch, name):
@@ -27,7 +27,7 @@ def _set_skin(monkeypatch, name):
 
 @pytest.fixture(autouse=True)
 def clover_active(monkeypatch):
-    _set_skin(monkeypatch, "clover")
+    _set_skin(monkeypatch, "default")
     monkeypatch.setenv("CLOVER_LANGUAGE", "en")
     clover_flavor.reset()
     getattr(clover_flavor, "reset_status_lines", lambda: None)()

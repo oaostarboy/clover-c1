@@ -18,10 +18,10 @@ from clover_cli import skin_engine
 def _clover_skin(monkeypatch):
     monkeypatch.setattr(skin_engine, "_active_skin", None)
     monkeypatch.setattr(skin_engine, "_active_skin_name", skin_engine.DEFAULT_SKIN_NAME)
-    skin_engine.set_active_skin("clover")
+    skin_engine.set_active_skin("default")
     clover_flavor.reset_review_notices()
     yield
-    skin_engine.set_active_skin("default")
+    skin_engine.set_active_skin("boring")
     clover_flavor.reset_review_notices()
 
 
@@ -141,7 +141,7 @@ def test_no_repeat_even_with_a_stuck_rng():
 
 
 def test_default_skin_keeps_todays_text_byte_for_byte():
-    skin_engine.set_active_skin("default")
+    skin_engine.set_active_skin("boring")
     msgs = _mem("add", content="Likes tea") + _skill("create", "s1", "Skill created.",
                                                      change={"description": "brews"})
     assert _notice(msgs) is None

@@ -8,17 +8,17 @@ def reset_skin_state():
     """Reset skin engine state between tests."""
     from clover_cli import skin_engine
     skin_engine._active_skin = None
-    skin_engine._active_skin_name = "default"
+    skin_engine._active_skin_name = "boring"
     yield
     skin_engine._active_skin = None
-    skin_engine._active_skin_name = "default"
+    skin_engine._active_skin_name = "boring"
 
 
 class TestSkinConfig:
     def test_default_skin_has_required_fields(self):
         from clover_cli.skin_engine import load_skin
-        skin = load_skin("default")
-        assert skin.name == "default"
+        skin = load_skin("boring")
+        assert skin.name == "boring"
         assert skin.tool_prefix == "┊"
         assert "banner_title" in skin.colors
         assert "banner_border" in skin.colors
@@ -27,7 +27,7 @@ class TestSkinConfig:
 
     def test_get_spinner_wings_empty_for_default(self):
         from clover_cli.skin_engine import load_skin
-        skin = load_skin("default")
+        skin = load_skin("boring")
         assert skin.get_spinner_wings() == []
 
 
@@ -77,6 +77,7 @@ class TestSkinManagement:
         skins = list_skins()
         names = [s["name"] for s in skins]
         assert "default" in names
+        assert "boring" in names
         assert "ares" in names
         assert "mono" in names
         assert "slate" in names
@@ -270,3 +271,77 @@ class TestCliBrandingHelpers:
         overrides = get_prompt_toolkit_style_overrides()
         assert overrides["status-bar"] == f"bg:{skin.get_color('status_bar_bg')} {skin.get_color('banner_text')}"
         assert overrides["voice-status"] == f"bg:{skin.get_color('voice_status_bg')} {skin.get_color('ui_label')}"
+
+
+class TestCloIsDefaultInvariants:
+    """Clo is the built-in ``default``; the plain look is ``boring``; ``clover`` is a hidden alias."""
+
+    def _clo(self, skin):
+        return skin.spinner.get("flavor") == "clover" and skin.spinner.get("done_mark") == "🍀"
+
+    @pytest.mark.parametrize("name", ["default", "clover", "Clover", " clover "])
+    def test_clo_loads_under_default_and_the_clover_alias(self, name):
+        from clover_cli.skin_engine import init_skin_from_config, get_active_skin, get_active_skin_name
+
+        init_skin_from_config({"display": {"skin": name}})
+        skin = get_active_skin()
+        assert skin.name == "default"
+        assert get_active_skin_name() == "default"
+        assert self._clo(skin)
+        assert skin.spinner["fail_mark"] == "🥀"
+
+    def test_alias_loads_without_a_warning(self, caplog):
+        import logging
+        from clover_cli.skin_engine import load_skin
+
+        with caplog.at_level(logging.WARNING, logger="clover_cli.skin_engine"):
+            load_skin("clover")
+        assert not [r for r in caplog.records if "not found" in r.getMessage()]
+
+    def test_boring_renders_the_classic_marks(self):
+        from clover_cli.skin_engine import load_skin
+
+        skin = load_skin("boring")
+        assert skin.name == "boring"
+        assert not self._clo(skin)
+        assert skin.spinner.get("flavor") is None
+        assert not skin.spinner.get("done_mark")
+
+    def test_boring_card_marks_are_classic(self, monkeypatch):
+        from clover_cli.skin_engine import set_active_skin
+        from agent.display import get_done_mark, get_fail_mark
+
+        set_active_skin("boring")
+        assert (get_done_mark(), get_fail_mark()) == ("✅", "❌")
+        set_active_skin("clover")
+        assert (get_done_mark(), get_fail_mark()) == ("🍀", "🥀")
+
+    def test_picker_lists_default_and_boring_but_not_the_alias(self, tmp_path, monkeypatch):
+        from clover_cli import skin_engine
+        from clover_cli.skin_cmd import resolve_skin_arg
+
+        monkeypatch.setattr(skin_engine, "_skins_dir", lambda: tmp_path / "none")
+        names = [s["name"] for s in skin_engine.list_skins()]
+        assert names[:2] == ["default", "boring"]
+        assert "clover" not in names
+        # ...yet typing the old name still resolves to Clo.
+        assert resolve_skin_arg("clover") == "default"
+        assert resolve_skin_arg("boring") == "boring"
+
+    def test_user_skin_named_clover_is_not_hijacked_by_the_alias(self, tmp_path, monkeypatch):
+        import yaml
+        from clover_cli import skin_engine
+
+        d = tmp_path / "skins"
+        d.mkdir()
+        (d / "clover.yaml").write_text(yaml.safe_dump({"name": "clover", "colors": {"banner_title": "#123456"}}))
+        monkeypatch.setattr(skin_engine, "_skins_dir", lambda: d)
+        assert skin_engine.load_skin("clover").colors["banner_title"] == "#123456"
+
+    def test_missing_keys_still_inherit_the_plain_base(self):
+        from clover_cli.skin_engine import _build_skin_config, _BUILTIN_SKINS
+
+        skin = _build_skin_config({"name": "bare"})
+        assert skin.colors == _BUILTIN_SKINS["boring"]["colors"]
+        assert skin.tool_prefix == "┊"
+        assert not self._clo(skin)

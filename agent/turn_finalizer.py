@@ -532,7 +532,10 @@ def finalize_turn(
         _work_lifecycle.end_turn(agent)
     except Exception as _work_err:
         logger.debug("helper work status unavailable: %s", _work_err)
-    if _work_footer and final_response and not interrupted and not failed:
+    if (
+        _work_footer and final_response and not interrupted and not failed
+        and not _work_lifecycle.is_silent_reply(final_response)
+    ):
         final_response = final_response.rstrip() + "\n\n" + _work_footer
 
     # File-mutation verifier footer.

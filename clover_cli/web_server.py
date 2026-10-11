@@ -1279,7 +1279,7 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "display.skin": {
         "type": "select",
         "description": "CLI visual theme",
-        "options": ["default", "ares", "mono", "slate"],
+        "options": ["default", "boring", "ares", "mono", "slate"],
     },
     "dashboard.theme": {
         "type": "select",

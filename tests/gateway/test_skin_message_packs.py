@@ -59,7 +59,7 @@ def _install(monkeypatch, name, body):
     skins.mkdir(parents=True, exist_ok=True)
     (skins / f"{name}.yaml").write_text(body, encoding="utf-8")
     monkeypatch.setattr(skin_engine, "_active_skin", None)
-    monkeypatch.setattr(skin_engine, "_active_skin_name", "default")
+    monkeypatch.setattr(skin_engine, "_active_skin_name", "boring")
     skin_engine.set_active_skin(name)
 
 
@@ -195,7 +195,7 @@ def test_pack_without_hello_says_no_hello(monkeypatch, tmp_path):
     assert clover_acks.with_first_hello("hi", "telegram", "dm", "1", tmp_path) == "hi"
 
 
-@pytest.mark.parametrize("skin", ["plain", "default", "ares"])
+@pytest.mark.parametrize("skin", ["plain", "boring", "ares"])
 def test_skin_without_messages_is_stock_everywhere(monkeypatch, tmp_path, skin):
     _install(monkeypatch, "plain", PLAIN)
     skin_engine.set_active_skin(skin)
@@ -227,7 +227,7 @@ def test_malformed_messages_block_is_ignored_not_fatal(monkeypatch):
 
 def test_clover_skin_pack_is_the_built_in_pack(monkeypatch):
     monkeypatch.setattr(skin_engine, "_active_skin", None)
-    monkeypatch.setattr(skin_engine, "_active_skin_name", "clover")
+    monkeypatch.setattr(skin_engine, "_active_skin_name", "default")
     assert clover_flavor.active_pack() is clover_flavor.CLOVER_PACK
     faces, lines = clover_acks.ACK_POOLS["back_online"]
     assert all(f.startswith("🍀") for f in faces) and "I'm back!" in lines

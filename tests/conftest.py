@@ -575,11 +575,11 @@ def _isolate_clover_home(_hermetic_environment):
 
 @pytest.fixture(autouse=True)
 def _pin_classic_skin(request, monkeypatch):
-    """Run every test under the classic (pre-Clover) skin unless it opts in.
+    """Run every test under the plain ``boring`` skin unless it opts in.
 
-    The shipped default skin is ``clover`` (Clo faces, 🍀/🥀 marks, themed tool
+    The shipped default skin is ``default`` (Clo faces, 🍀/🥀 marks, themed tool
     emojis). Most display/card tests assert the classic ✅/❌/💻 output and are
-    about layout, not theming, so pin the classic skin here. Tests about the
+    about layout, not theming, so pin the plain skin here. Tests about the
     Clover skin itself set it explicitly (tests/agent/test_clover_skin.py,
     tests/gateway/test_busy_session_ack.py) or use ``@pytest.mark.clover_skin``.
     """
@@ -590,7 +590,7 @@ def _pin_classic_skin(request, monkeypatch):
     except Exception:
         return
     monkeypatch.setattr(_skin, "_active_skin", None, raising=False)
-    monkeypatch.setattr(_skin, "_active_skin_name", "default", raising=False)
+    monkeypatch.setattr(_skin, "_active_skin_name", "boring", raising=False)
 
 
 @pytest.fixture(autouse=True)

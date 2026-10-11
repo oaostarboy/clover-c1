@@ -27,7 +27,7 @@ STOCK = "stock text"
 @pytest.fixture(autouse=True)
 def clover_active(monkeypatch):
     monkeypatch.setattr(skin_engine, "_active_skin", None)
-    monkeypatch.setattr(skin_engine, "_active_skin_name", "clover")
+    monkeypatch.setattr(skin_engine, "_active_skin_name", "default")
     monkeypatch.setenv("CLOVER_LANGUAGE", "en")
     clover_flavor.reset()
     clover_acks.reset()
@@ -67,7 +67,7 @@ def test_notice_never_repeats_a_pair_back_to_back(kind):
 
 
 @pytest.mark.parametrize("kind", sorted(TAILS))
-@pytest.mark.parametrize("skin", ["default", "ares", "mono", "slate"])
+@pytest.mark.parametrize("skin", ["boring", "ares", "mono", "slate"])
 def test_other_skins_return_stock_exactly(monkeypatch, kind, skin):
     monkeypatch.setattr(skin_engine, "_active_skin", None)
     monkeypatch.setattr(skin_engine, "_active_skin_name", skin)
@@ -154,7 +154,7 @@ async def test_active_chat_shutdown_notice_is_clo_style(restart, kind, tail):
 
 @pytest.mark.asyncio
 async def test_active_chat_shutdown_notice_stock_on_other_skin(monkeypatch):
-    _set_skin(monkeypatch, "default")
+    _set_skin(monkeypatch, "boring")
     runner, adapter = make_restart_runner()
     runner._restart_requested = True
     runner._running_agents["agent:main:telegram:dm:123456"] = MagicMock()
@@ -214,7 +214,7 @@ async def test_cron_interrupted_notice_stock_on_other_skin(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("skin,clo", [("clover", True), ("default", False)])
+@pytest.mark.parametrize("skin,clo", [("default", True), ("boring", False)])
 async def test_home_channel_back_online(monkeypatch, tmp_path, skin, clo):
     _set_skin(monkeypatch, skin)
     monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
@@ -263,7 +263,7 @@ async def test_restart_command_reply_stock_on_other_skin(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("skin", ["clover", "default"])
+@pytest.mark.parametrize("skin", ["default", "boring"])
 async def test_restart_already_in_progress_and_draining(monkeypatch, tmp_path, skin):
     _set_skin(monkeypatch, skin)
     monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
@@ -277,7 +277,7 @@ async def test_restart_already_in_progress_and_draining(monkeypatch, tmp_path, s
     runner._running_agent_count = lambda: 2
     draining = str(await runner._handle_restart_command(event))
 
-    if skin == "clover":
+    if skin == "default":
         face, line = _face_line(in_progress, "restart_in_progress")
         assert in_progress == f"{face} {line}"
         face, line = _face_line(draining, "draining")
@@ -312,7 +312,7 @@ async def test_failed_receipt_with_post_update_sha_is_not_reported_as_success(mo
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("skin,clo", [("clover", True), ("default", False)])
+@pytest.mark.parametrize("skin,clo", [("default", True), ("boring", False)])
 async def test_update_rolled_back_notice(monkeypatch, tmp_path, skin, clo):
     _set_skin(monkeypatch, skin)
     monkeypatch.setattr(gateway_run, "_clover_home", tmp_path)
