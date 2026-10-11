@@ -788,6 +788,54 @@ def test_read_transcript_reads_live_db_from_second_handle(db, tmp_path):
     assert rows[0]["content"] == "hello"
 
 
+def test_read_transcript_waits_out_a_writer_holding_the_db_lock(db):
+    """The profile DB can be write-locked for seconds by a helper; that is not a verdict."""
+    import sqlite3
+    import threading
+
+    r = Recorder(db, "s-locked")
+    r.user("hello")
+    r.assistant("hi", dt=1.0)
+
+    locker = sqlite3.connect(
+        str(db.db_path), isolation_level=None, timeout=5, check_same_thread=False
+    )
+    locker.execute("BEGIN EXCLUSIVE")
+    release = threading.Timer(2.5, lambda: locker.execute("COMMIT"))
+    release.start()
+    try:
+        rows = dm.read_transcript(db.db_path, "s-locked", attempts=10, backoff=0.5)
+    finally:
+        release.join()
+        locker.close()
+
+    assert [m["role"] for m in rows] == ["user", "assistant"]
+
+
+def test_wait_settled_survives_a_locked_read(db):
+    import sqlite3
+
+    r = Recorder(db, "s-flaky")
+    r.user("hi")
+    r.assistant("hello", dt=1.0)
+    now = {"t": 0.0}
+    reads = {"n": 0}
+
+    def read():
+        reads["n"] += 1
+        if reads["n"] <= 2:
+            raise sqlite3.OperationalError("database is locked")
+        return db.get_messages("s-flaky")
+
+    ok = dm.wait_settled(
+        read, lambda: True, quiet_seconds=2, timeout=100, poll_seconds=1,
+        clock=lambda: now["t"], sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+    )
+
+    assert ok is True
+    assert reads["n"] >= 3
+
+
 def test_rpc_event_tracker_counts_turns_for_its_session_only():
     t = dm.RpcEventTracker("abc123")
     t.feed({"jsonrpc": "2.0", "method": "event",

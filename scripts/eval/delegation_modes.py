@@ -62,6 +62,7 @@ import os
 import queue
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -695,8 +696,18 @@ def wait_settled(
     start = clock()
     last_sig: Any = object()
     last_change = start
+    msgs: Sequence[Dict[str, Any]] = []
     while True:
-        msgs = read_messages()
+        try:
+            msgs = read_messages()
+        except sqlite3.OperationalError:
+            # The profile's DB is in rollback-journal mode on hosts whose SQLite
+            # is too old for WAL, so a helper's writer can lock a reader out for
+            # longer than the reader's own busy timeout.  Not a verdict: poll again.
+            if clock() - start >= timeout:
+                return False
+            sleep(poll_seconds)
+            continue
         if on_poll is not None:
             on_poll(msgs)
         sig = (len(msgs), msgs[-1].get("id") if msgs else None)
@@ -710,15 +721,35 @@ def wait_settled(
         sleep(poll_seconds)
 
 
-def read_transcript(db_path: Path, session_id: str) -> List[Dict[str, Any]]:
-    """Read one session's rows through the real SessionDB (read-only handle)."""
+def read_transcript(
+    db_path: Path,
+    session_id: str,
+    *,
+    attempts: int = 8,
+    backoff: float = 0.5,
+    sleep: Callable[[float], None] = time.sleep,
+) -> List[Dict[str, Any]]:
+    """Read one session's rows through the real SessionDB (read-only handle).
+
+    Retries ``database is locked``: with the journal in DELETE mode (SQLite
+    builds that cannot run WAL safely) a busy writer blocks even this reader.
+    """
     from clover_state import SessionDB
 
-    db = SessionDB(db_path=Path(db_path), read_only=True)
-    try:
-        return db.get_messages(session_id)
-    finally:
-        db.close()
+    for attempt in range(attempts):
+        db = None
+        try:
+            # Opening the handle reads the schema, so it can be locked out too.
+            db = SessionDB(db_path=Path(db_path), read_only=True)
+            return db.get_messages(session_id)
+        except sqlite3.OperationalError:
+            if attempt == attempts - 1:
+                raise
+        finally:
+            if db is not None:
+                db.close()
+        sleep(backoff * (attempt + 1))
+    return []  # unreachable: the last attempt returns or raises
 
 
 # ---------------------------------------------------------------------------
