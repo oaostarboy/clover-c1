@@ -13987,6 +13987,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             init_skin_from_config(_load_gateway_config())
         except Exception:
             logger.debug("skin init failed", exc_info=True)
+        # The first routed chat after a start should not pay the router's
+        # one-time imports (imports only, in a daemon thread).
+        try:
+            from agent.router_prewarm import start as _prewarm_router
+
+            _prewarm_router()
+        except Exception:
+            logger.debug("router prewarm unavailable", exc_info=True)
         # Enable faulthandler for stack dumps on freezes/crashes (#70344).
         # Falls back to a log file when sys.stderr is None (Windows VBS /
         # pythonw / detached service) — otherwise the gateway would die

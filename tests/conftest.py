@@ -594,6 +594,19 @@ def _pin_classic_skin(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_router_prewarm(monkeypatch):
+    """Constructing an agent must not start the router's background import
+    warm-up in the test process (it would load the plugin set behind the test's
+    back).  tests/agent/test_router_prewarm.py runs the real one in a fresh
+    subprocess."""
+    try:
+        from agent import router_prewarm
+    except Exception:
+        return
+    monkeypatch.setattr(router_prewarm, "start", lambda agent=None: False)
+
+
+@pytest.fixture(autouse=True)
 def _neutralize_kanban_memory_guard(request, monkeypatch):
     """Pin the kanban dispatcher's memory guard to "no data" for every test.
 
