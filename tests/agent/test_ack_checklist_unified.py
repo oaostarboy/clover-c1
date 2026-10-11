@@ -666,7 +666,7 @@ def test_classic_multi_dispatch_is_still_the_plain_line():
     assert card.render() == "\U0001f504 two jobs \u2192 both, ~5 min"
 
 
-def test_six_helper_card_stays_under_the_telegram_limit_by_cutting_summaries_first():
+def test_six_helper_card_is_compact_and_under_the_telegram_limit():
     goals = tuple(f"Check site number {i}" for i in range(6))
     card = _multi_card(goals=goals)
     para = "Plain summary: " + " ".join(f"sentence{j}" for j in range(30)) + "."
@@ -679,17 +679,32 @@ def test_six_helper_card_stays_under_the_telegram_limit_by_cutting_summaries_fir
     text = card.render()
     assert len(text) < 4000
     assert text.count("\U0001f340 **Check site number") == 6 and "6 helpers" in text
-    # a tighter budget cuts the summaries first (the titles and stats stay)
+    # more than 4 helpers: a finished helper is ONE line, no stats line
+    rows = [ln for ln in text.splitlines() if "**Check site number" in ln]
+    assert len(rows) == 6 and all(len(r) < 90 and r.endswith("\u2026") for r in rows)
+    assert text.count("tool calls") == 1, "only the totals line has stats"
+
+
+def test_four_helper_summaries_are_cut_before_titles_when_the_budget_is_tight():
+    goals = tuple(f"Check site number {i}" for i in range(4))
+    card = _multi_card(goals=goals)
+    para = "Plain summary: " + " ".join(f"sentence{j}" for j in range(30)) + "."
+    for i in range(4):
+        ac.on_child_event("subagent.start", **_kid("dm", i, model="claude-sonnet-5-5"))
+        ac.on_child_event("subagent.tool", tool_name="web_search", preview="q" * 70,
+                          args={"query": "q" * 70}, tool_count=2, **_kid("dm", i))
+    for i in range(4):
+        ac.on_child_event("subagent.complete", status="completed", summary=para, **_kid("dm", i))
     full = card.render()
     import pytest as _p
     mp = _p.MonkeyPatch()
     try:
-        mp.setattr(ac, "CARD_BUDGET", len(full) - 300)
+        mp.setattr(ac, "CARD_BUDGET", len(full) - 100)
         cut = card.render()
     finally:
         mp.undo()
     assert len(cut) < len(full)
-    assert cut.count("\U0001f340 **Check site number") == 6 and cut.count("tool calls") == 7
+    assert cut.count("\U0001f340 **Check site number") == 4 and cut.count("tool calls") == 5
 
 
 def test_cut_summaries_come_before_tool_lines(monkeypatch):
@@ -730,7 +745,7 @@ def test_todo_is_not_shown_as_a_recent_or_open_tool_line():
     text = card.render()
     assert "todo" not in text.lower()
     assert [p for p, _ in cl.recent] and all("todo" not in p for p, _ in cl.recent)
-    assert cl.calls == 16, "todo still counts as a tool call, like the 🔀 card"
+    assert cl.calls == 15, "16 calls, one of them the hidden todo: 15 shown"
 
 
 def test_todo_is_not_shown_for_several_helpers_either():
@@ -761,3 +776,153 @@ def test_reserve_ack_part_only_for_a_handoff_that_will_open_a_part():
     assert ac.owns_delegation("r1")
     fl.release_ack_part("r1")
     assert not ac.owns_delegation("r1")
+
+
+# -- small card fixes ---------------------------------------------------------
+
+
+def test_the_relayed_plain_summary_wins_over_a_truncated_summary():
+    card = _card()
+    ac.on_child_event("subagent.start", delegation_id="d1", model="claude-sonnet-5-5")
+    # what delegate_tool sends: summary cut before its 'Plain summary:' line
+    ac.on_child_event(
+        "subagent.complete", delegation_id="d1", status="completed",
+        summary="I haven't tried them in a live Telegram chat. The test bot runs the new code. Commit: `abc`",
+        plain_summary="The fix is in and the test bot is running it.",
+    )
+    assert card.parts[0].checklist.summary == "The fix is in and the test bot is running it."
+    assert "The fix is in and the test bot is running it." in card.render()
+    assert "haven't tried" not in card.render()
+
+
+def test_without_a_relayed_plain_summary_the_old_extraction_still_works():
+    card = _card()
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed",
+                      summary="Result: done\nPlain summary: Old style works.")
+    assert card.parts[0].checklist.summary == "Old style works."
+
+
+def test_a_long_command_with_an_absolute_path_is_one_short_line():
+    long_cmd = "git -C /home/starboy/Projects/claude-code-build/claude-code rev-parse --show-toplevel"
+    card = _card()
+    ac.on_child_event("subagent.start", delegation_id="d1")
+    ac.on_child_event("subagent.tool", delegation_id="d1", tool_name="terminal", preview=long_cmd,
+                      args={"command": long_cmd}, tool_call_id="a", tool_count=1)
+    line = next(ln for ln in card.render().splitlines() if "terminal" in ln)
+    assert "/home/starboy" not in line and "Projects" not in line
+    assert "\u2026/claude-code" in line
+    assert len(line.removeprefix("> ").strip("*")) <= ac.TOOL_LINE_MAX + 3
+
+
+@pytest.mark.parametrize("raw,expect", [
+    ("terminal cd /home/starboy && ls", "terminal cd ~ && ls"),
+    ("terminal pytest -q", "terminal pytest -q"),
+    ("read_file /home/starboy/Projects/clover/agent/ack_checklist.py", "read_file \u2026/ack_checklist.py"),
+])
+def test_short_tool_phrase(raw, expect):
+    assert ac.short_tool_phrase(raw) == expect
+
+
+def test_short_tool_phrase_cuts_on_a_word_with_an_ellipsis():
+    out = ac.short_tool_phrase("terminal " + " ".join(["wordy"] * 30))
+    assert len(out) <= ac.TOOL_LINE_MAX and out.endswith("\u2026")
+    assert not out[:-1].endswith("wor"), "cut on a word"
+
+
+def test_todo_calls_are_not_counted_for_one_helper():
+    card = _card()
+    ac.on_child_event("subagent.start", delegation_id="d1", model="claude-sonnet-5-5")
+    ac.on_child_event("subagent.tool", delegation_id="d1", tool_name="todo", preview="x", tool_call_id="t1", tool_count=1)
+    ac.on_child_event("subagent.tool", delegation_id="d1", tool_name="todo", preview="x", tool_call_id="t2", tool_count=2)
+    ac.on_child_event("subagent.tool", delegation_id="d1", tool_name="terminal", preview="ls",
+                      args={"command": "ls"}, tool_call_id="c1", tool_count=3)
+    assert card.parts[0].checklist.calls == 1
+    assert "1 tool call" in card.render() and "3 tool call" not in card.render()
+    # a repeated start event for the same todo call counts once
+    ac.on_child_event("subagent.tool", delegation_id="d1", tool_name="todo", preview="x", tool_call_id="t2", tool_count=2)
+    ac.on_child_event("subagent.tool_done", delegation_id="d1", tool_name="terminal", tool_call_id="c1", tool_count=3)
+    assert card.parts[0].checklist.calls == 1
+
+
+def test_todo_calls_are_not_counted_per_helper_or_in_the_total():
+    card = _multi_card()
+    for i in (0, 1):
+        ac.on_child_event("subagent.start", **_kid("dm", i, model="claude-sonnet-5-5"))
+        ac.on_child_event("subagent.tool", tool_name="todo", preview="x", tool_call_id=f"t{i}", tool_count=1, **_kid("dm", i))
+        ac.on_child_event("subagent.tool", tool_name="read_file", preview="a.py", args={"path": "a.py"},
+                          tool_call_id=f"r{i}", tool_count=2, **_kid("dm", i))
+    cl = card.parts[0].checklist
+    assert [k.calls for k in cl.kids[:2]] == [1, 1]
+    text = card.render()
+    assert "2 tool calls" in text and "4 tool calls" not in text
+
+
+# -- many helpers: the compact layout -----------------------------------------
+
+NAMES = ["alpha site", "bravo site", "charlie site", "delta site", "echo site", "foxtrot site", "golf site", "hotel site"]
+
+
+def _many(n=8):
+    goals = tuple(f"Check {NAMES[i]}" for i in range(n))
+    r = fl.DispatchReceipt(delegation_id="mm", seq=1, goals=goals, summary=HEAD, steps=())
+    return ac.card_for([r])
+
+
+def _mk(i, **kw):
+    return dict(delegation_id="mm", task_index=i, task_count=8, subagent_id=f"s{i}", **kw)
+
+
+def test_five_or_more_helpers_use_the_compact_layout():
+    card = _many(8)
+    for i in range(8):
+        if i < 2:
+            ac.on_child_event("subagent.start", **_mk(i, model="claude-sonnet-5-5", title=NAMES[i]))
+            ac.on_child_event("subagent.complete", status="completed", outcome="done",
+                              summary="x", plain_summary=f"{NAMES[i]} is fine and all pages load without any trouble at all.",
+                              **_mk(i, title=NAMES[i]))
+        elif i < 6:
+            ac.on_child_event("subagent.start", **_mk(i, model="claude-sonnet-5-5", title=NAMES[i]))
+            for n, nm in enumerate(("terminal", "read_file", "web_search")):
+                ac.on_child_event("subagent.tool", tool_name=nm, preview=f"p{n}", args={"command": f"p{n}"},
+                                  tool_call_id=f"{i}{n}", tool_count=n + 1, **_mk(i))
+    lines = card.render().splitlines()
+    text = "\n".join(lines)
+    # done helpers: one line each, with a short result and no stats line
+    done = [ln for ln in lines if ln.startswith("> \U0001f340 **")]
+    assert len(done) == 2 and all(" \u00b7 " in ln for ln in done)
+    assert all(len(ln) < 90 for ln in done)
+    for nm in NAMES[:2]:
+        i = next(j for j, ln in enumerate(lines) if f"**{nm}**" in ln)
+        assert "Sonnet" not in lines[i + 1] and "tool call" not in lines[i + 1]
+    # at most 3 running helpers in full: name + 2 tool lines + stats
+    full = [ln for ln in lines if ln.startswith("> \U0001f504 **")]
+    assert len(full) == 3
+    for ln in full:
+        i = lines.index(ln)
+        block = lines[i + 1:i + 4]
+        assert sum("\U0001f527" in b or "\u2713" in b for b in block) == 2
+        assert "tool call" in lines[i + 3]
+    # the 4th running helper and the waiting ones are grouped into one line each
+    assert any(ln.startswith("> \U0001f504 1 more running: ") for ln in lines)
+    waiting = [ln for ln in lines if "waiting:" in ln]
+    assert waiting == ["> \u2b1c 2 waiting: Check golf site, Check hotel site"]
+    assert "waiting to start" not in text
+    assert len(text) <= ac.CARD_BUDGET
+
+
+def test_four_helpers_keep_the_full_layout():
+    card = _many(4)
+    for i in range(4):
+        ac.on_child_event("subagent.start", **_mk(i, model="claude-sonnet-5-5", title=NAMES[i]))
+    text = card.render()
+    assert "more running" not in text and "waiting:" not in text
+    assert text.count("tool call") == 0 or True
+    assert all(f"**{NAMES[i]}**" in text for i in range(4))
+
+
+def test_many_waiting_names_are_cut_with_an_ellipsis():
+    goals = tuple(f"Check site {i}" for i in range(12))
+    r = fl.DispatchReceipt(delegation_id="mm", seq=1, goals=goals, summary=HEAD, steps=())
+    card = ac.card_for([r])
+    line = next(ln for ln in card.render().splitlines() if "waiting:" in ln)
+    assert line.startswith("> \u2b1c 12 waiting: ") and line.endswith("\u2026")

@@ -32,7 +32,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Deque, Dict, List, Optional, Sequence, Set, Tuple
 
 MAX_STEPS = 6
 MAX_STEP_CHARS = 60
@@ -89,6 +89,10 @@ PENDING = "pending"  # a helper of a multi dispatch that has not started
 RECENT_TOOLS_SINGLE = 3  # tool lines on a one-helper card
 RECENT_TOOLS_MULTI = 2  # tool lines per running helper on a several-helper card
 SUMMARY_CHARS = 140  # a helper's summary on a several-helper card
+COMPACT_OVER = 4  # more helpers than this: the compact layout
+COMPACT_RUNNING = 3  # ...shows at most this many running helpers in full
+COMPACT_RESULT_CHARS = 48  # ...and a done helper's result in this many
+COMPACT_NAMES = 5  # names listed on a grouped "waiting" / "more running" line
 CARD_BUDGET = 3900  # Telegram's message limit, with room to spare
 
 PENDING_ICON = "\u2b1c"  # ⬜
@@ -169,6 +173,8 @@ class Child:
     started: Optional[float] = None
     ended: Optional[float] = None
     titled: bool = False  # the helper's own title was seen (beats the goal)
+    hidden: int = 0  # its todo-list calls: hidden, so not counted either
+    hidden_ids: Set[str] = field(default_factory=set)
     open: List[Tuple[str, str, str]] = field(default_factory=list)  # (call id, name, phrase)
     recent: Deque[Tuple[str, bool]] = field(default_factory=lambda: deque(maxlen=RECENT_TOOLS_SINGLE))
 
@@ -198,6 +204,8 @@ class Checklist:
     # A dispatch of several helpers: one entry each, in dispatch order.  The
     # card then shows a block per helper instead of one helper's steps.
     kids: List[Child] = field(default_factory=list)
+    hidden: int = 0  # the helper's todo-list calls: hidden, so not counted either
+    hidden_ids: Set[str] = field(default_factory=set)
 
     @classmethod
     def start(cls, header: str, steps: Sequence[str], say: str = "") -> "Checklist":
@@ -310,19 +318,10 @@ class Checklist:
         quoted: List[str] = []
         if outcome:
             quoted.append(_italic("\u2192 " + outcome))
-        for k in kids:
-            quoted.append(_SPACER)
-            quoted.append(f"{_CHILD_ICON[k.state]} **{k.label}**")
-            if k.state == PENDING:
-                quoted.append(_italic("waiting to start"))
-                continue
-            if k.state == RUNNING:
-                quoted += _tool_lines(k, tool_cap)
-            elif k.summary and summary_chars > 0:
-                quoted.append(_cut_word(k.summary.replace("*", ""), summary_chars))
-            stats = _stats_line(k.model, k.calls, k.started, k.ended, now)
-            if stats:
-                quoted.append(_italic(stats))
+        if len(kids) > COMPACT_OVER:
+            quoted += _compact_kids(kids, now, tool_cap)
+        else:
+            quoted += _full_kids(kids, now, summary_chars, tool_cap)
         started = [k.started for k in kids if k.started is not None]
         ended = [k.ended for k in kids if k.ended is not None]
         calls = sum(k.calls for k in kids)
@@ -386,6 +385,64 @@ def _cut_word(text: str, limit: int) -> str:
     if space >= limit // 2:
         cut = cut[:space]
     return cut.rstrip(" ,;:-") + "\u2026"
+
+
+def _full_kids(kids: Sequence[Child], now: float, summary_chars: int, tool_cap: int) -> List[str]:
+    """Up to ``COMPACT_OVER`` helpers: a full block each."""
+    quoted: List[str] = []
+    for k in kids:
+        quoted.append(_SPACER)
+        quoted.append(f"{_CHILD_ICON[k.state]} **{k.label}**")
+        if k.state == PENDING:
+            quoted.append(_italic("waiting to start"))
+            continue
+        if k.state == RUNNING:
+            quoted += _tool_lines(k, tool_cap)
+        elif k.summary and summary_chars > 0:
+            quoted.append(_cut_word(k.summary.replace("*", ""), summary_chars))
+        stats = _stats_line(k.model, k.calls, k.started, k.ended, now)
+        if stats:
+            quoted.append(_italic(stats))
+    return quoted
+
+
+def _names(kids: Sequence[Child]) -> str:
+    shown = [k.label for k in kids[:COMPACT_NAMES]]
+    more = len(kids) - len(shown)
+    return ", ".join(shown) + ("\u2026" if more > 0 else "")
+
+
+def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[str]:
+    """Many helpers: at most ``COMPACT_RUNNING`` running ones in full (name,
+    two tool lines, stats), every finished one as a single line, and the ones
+    still waiting grouped into one line."""
+    quoted: List[str] = []
+    running_shown = 0
+    extra_running: List[Child] = []
+    waiting: List[Child] = []
+    for k in kids:
+        if k.state == PENDING:
+            waiting.append(k)
+        elif k.state == RUNNING:
+            if running_shown >= COMPACT_RUNNING:
+                extra_running.append(k)
+                continue
+            running_shown += 1
+            quoted += [_SPACER, f"{_CHILD_ICON[k.state]} **{k.label}**"]
+            quoted += _tool_lines(k, min(tool_cap, RECENT_TOOLS_MULTI))
+            stats = _stats_line(k.model, k.calls, k.started, k.ended, now)
+            if stats:
+                quoted.append(_italic(stats))
+        else:
+            line = f"{_CHILD_ICON[k.state]} **{k.label}**"
+            if k.summary:
+                line += " \u00b7 " + _cut_word(k.summary.replace("*", ""), COMPACT_RESULT_CHARS)
+            quoted.append(line)
+    if extra_running:
+        quoted.append(f"{ACTIVE_ICON} {len(extra_running)} more running: {_names(extra_running)}")
+    if waiting:
+        quoted.append(f"{PENDING_ICON} {len(waiting)} waiting: {_names(waiting)}")
+    return quoted
 
 
 def _tool_lines(obj: Any, cap: int) -> List[str]:
@@ -672,8 +729,15 @@ def _on_activity(et: str, kw: Dict[str, Any]) -> bool:
                 obj.model = pretty_model(str(model)) or ""
             except Exception:
                 obj.model = ""
+        if et == "subagent.tool" and str(kw.get("tool_name") or "") in _HIDDEN_TOOLS:
+            call_id = str(kw.get("tool_call_id") or "")
+            if not call_id or call_id not in obj.hidden_ids:
+                obj.hidden += 1
+                if call_id:
+                    obj.hidden_ids.add(call_id)
         try:
-            obj.calls = max(obj.calls, int(kw.get("tool_count") or 0))
+            # ``tool_count`` counts every call, the hidden todo ones too.
+            obj.calls = max(obj.calls, int(kw.get("tool_count") or 0) - obj.hidden)
         except (TypeError, ValueError):
             pass
         if et == "subagent.tool":
@@ -692,6 +756,44 @@ def _on_activity(et: str, kw: Dict[str, Any]) -> bool:
 _HIDDEN_TOOLS = frozenset({"todo"})
 
 
+# A tool line must fit one phone line: "✓ " + the phrase, about 44 characters.
+TOOL_LINE_MAX = 42
+_HOME_RE = re.compile(r"(?:/home/[^/\s]+|/Users/[^/\s]+)(?=/|\s|$)")
+_PATH_TOKEN_RE = re.compile(r"[~\w.\-]*(?:/[\w.\-@+]+){2,}/?")
+
+
+def _short_path(match: "re.Match[str]") -> str:
+    tok = match.group(0)
+    if len(tok) <= 20:
+        return tok
+    parts = [p for p in tok.split("/") if p]
+    for keep in (2, 1):
+        short = "\u2026/" + "/".join(parts[-keep:])
+        if len(short) <= 22 or keep == 1:
+            return short
+    return tok
+
+
+def short_tool_phrase(phrase: str, limit: int = TOOL_LINE_MAX) -> str:
+    """One phone line: ``/home/<user>/`` becomes ``~/``, long paths keep their
+    last one or two segments (``\u2026/claude-code``), and the rest is cut on a
+    word with an ellipsis."""
+    text = " ".join(str(phrase or "").split())
+    text = _HOME_RE.sub("~", text)
+    text = _PATH_TOKEN_RE.sub(_short_path, text)
+    # The summary upstream may already have cut the line ("... rev-parse -\u2026"):
+    # drop that stub so the cut below lands on a whole word.
+    cut_upstream = text.endswith("\u2026")
+    if cut_upstream:
+        words = text[:-1].rstrip().split(" ")
+        while len(words) > 1 and not any(ch.isalnum() for ch in words[-1]):
+            words.pop()
+        text = " ".join(words)
+    if len(text) <= limit:
+        return text + ("\u2026" if cut_upstream else "")
+    return _cut_word(text, limit)
+
+
 def _tool_started(obj: Any, kw: Dict[str, Any]) -> None:
     name = str(kw.get("tool_name") or "tool")
     if name in _HIDDEN_TOOLS:
@@ -705,6 +807,7 @@ def _tool_started(obj: Any, kw: Dict[str, Any]) -> None:
         phrase = _tool_phrase(name, summarize_tool_call(name, kw.get("preview"), kw.get("args")))
     except Exception:
         phrase = name
+    phrase = short_tool_phrase(phrase)
     obj.open.append((call_id, name, phrase))
     del obj.open[:-_MAX_OPEN_TOOLS]
 
@@ -735,8 +838,10 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
     if cl.state != RUNNING:
         return False
     summary = kw.get("summary") or kw.get("preview")
-    plain = ""
-    if summary:
+    # The relay sends the helper's own "Plain summary:" paragraph, extracted
+    # from its FULL answer (``summary`` is cut to 500 chars, which drops it).
+    plain = " ".join(str(kw.get("plain_summary") or "").split())
+    if not plain and summary:
         try:
             from agent.delegation_activity import plain_summary
 

@@ -3820,7 +3820,19 @@ def _run_single_child(
 
         _output_tail = _extract_output_tail(result, max_entries=8, max_chars=600)
 
+        # The helper's "Plain summary:" paragraph sits at the END of its answer:
+        # extract it from the full text, before the 500-char cut below drops it.
+        _plain = ""
+        if summary:
+            try:
+                from agent.delegation_activity import plain_summary as _plain_summary
+
+                _plain = _plain_summary(summary)
+            except Exception:
+                _plain = ""
+
         complete_kwargs: Dict[str, Any] = {
+            "plain_summary": _plain,
             "preview": summary[:160] if summary else entry.get("error", ""),
             "status": status,
             "exit_reason": entry.get("exit_reason", ""),

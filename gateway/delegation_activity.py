@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import inspect
+import itertools
 import logging
 import threading
 import time
@@ -75,6 +76,9 @@ _LIVE_MAX_PER_CHAT = 32
 # Newest outbound message id per chat (any message the bot sent), and the
 # pending debounced follow per chat.
 _LAST_OUT: Dict[Tuple[int, str], str] = {}
+# Newest outbound message per chat that is NOT a helper (ack) card: the only
+# kind of message a running unified card treats as "something newer".
+_LAST_PLAIN: Dict[Tuple[int, str], str] = {}
 _FOLLOW_TIMERS: Dict[Tuple[int, str], Any] = {}
 FOLLOW_DEBOUNCE_SECONDS = 1.5
 # True while a publisher itself is sending/editing cards, so its own posts
@@ -95,10 +99,22 @@ def _is_newer(a: Optional[str], b: Optional[str]) -> bool:
         return a != b
 
 
-def note_outbound(adapter: Any, chat_id: Any, message_id: Any = None) -> None:
+def _is_ack_card_text(content: Any) -> bool:
+    try:
+        from agent.ack_checklist import match_unbound
+
+        return content is not None and match_unbound(content) is not None
+    except Exception:
+        return False
+
+
+def note_outbound(adapter: Any, chat_id: Any, message_id: Any = None, content: Any = None) -> None:
     """Record that the bot just posted a message in this chat. When running
     subagent cards live there, move them below it after a short quiet window
-    (coalesces streaming bursts into one move). Never raises."""
+    (coalesces streaming bursts into one move). Never raises.
+
+    ``content`` (the text sent) lets a helper (ack) card's own first send be
+    told apart: it never counts as "something newer" for another card."""
     try:
         if _CARD_SEND.get() or adapter is None or chat_id in (None, ""):
             return
@@ -107,6 +123,10 @@ def note_outbound(adapter: Any, chat_id: Any, message_id: Any = None) -> None:
             prev = _LAST_OUT.get(key)
             if prev is None or _is_newer(str(message_id), prev):
                 _LAST_OUT[key] = str(message_id)
+            if not _is_ack_card_text(content):
+                prev = _LAST_PLAIN.get(key)
+                if prev is None or _is_newer(str(message_id), prev):
+                    _LAST_PLAIN[key] = str(message_id)
         with _LIVE_LOCK:
             pubs = [p for p in _LIVE.get(key, []) if not p._closed]
         if not pubs:
@@ -1428,6 +1448,7 @@ ACK_TICK_SECONDS = 15.0
 # but re-posts at most this often.
 ACK_REPOST_MIN_SECONDS = 4.0
 _ACK_EDITORS: Dict[int, "AckCardEditor"] = {}
+_ACK_SEQ = itertools.count(1)
 
 
 class AckCardEditor:
@@ -1467,6 +1488,7 @@ class AckCardEditor:
         self._repost_timer: Any = None
         self._stale: List[str] = []
         self._registered = False
+        self._seq = next(_ACK_SEQ)
         # Shares the follow protocol with the 🔀 cards (follow_latest_message).
         self._combined = False
         card.on_change = self.notify
@@ -1592,11 +1614,22 @@ class AckCardEditor:
         except RuntimeError:
             self._repost_timer = None
 
+    def _is_newest_running(self) -> bool:
+        """Only the newest running card in a chat follows; older ones stay put
+        (two cards chasing each other's messages would loop forever)."""
+        key = _inbox_key(self._adapter, self._chat_id)
+        with _LIVE_LOCK:
+            peers = [p for p in _LIVE.get(key, []) if isinstance(p, AckCardEditor) and not p._closed]
+        return all(p._seq <= self._seq for p in peers)
+
     async def _repost_locked(self) -> int:
         if self._closed:
             self._unregister_live()
             return 0
-        last_out = _LAST_OUT.get(_inbox_key(self._adapter, self._chat_id))
+        if not self._is_newest_running():
+            return 0
+        # Only a message that is not a helper card counts as "newer".
+        last_out = _LAST_PLAIN.get(_inbox_key(self._adapter, self._chat_id))
         if not (last_out and _is_newer(last_out, self._message_id)):
             return 0  # already the newest message in the chat
         self._last_repost = self._clock()

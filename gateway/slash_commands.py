@@ -2012,7 +2012,7 @@ class GatewaySlashCommandsMixin:
                 return _clover_acks.notice(
                     "draining", _event_chat_key(event),
                     t("gateway.draining", count=count),
-                    f"Finishing {count} task(s) first.")
+                    f"Finishing {count} {'task' if count == 1 else 'tasks'} first.")
             return EphemeralReply(_clover_acks.notice(
                 "restart_in_progress", _event_chat_key(event),
                 t("gateway.restart.in_progress")))
@@ -2100,7 +2100,7 @@ class GatewaySlashCommandsMixin:
             return _clover_acks.notice(
                 "draining", _event_chat_key(event),
                 t("gateway.draining", count=active_agents),
-                f"Finishing {active_agents} task(s) first.")
+                f"Finishing {active_agents} {'task' if active_agents == 1 else 'tasks'} first.")
         return EphemeralReply(_clover_acks.notice(
             "restart_requested", _event_chat_key(event),
             t("gateway.restart.restarting"),
