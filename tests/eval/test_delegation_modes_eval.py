@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -808,6 +809,65 @@ def test_rpc_event_tracker_counts_turns_for_its_session_only():
     assert t.errors == ["agent init failed"]
 
 
+def test_wait_settled_reports_each_poll_to_on_poll(db):
+    r = Recorder(db, "s-poll")
+    r.user("hi")
+    r.assistant("hello", dt=1.0)
+    now = {"t": 0.0}
+    seen: list[int] = []
+
+    ok = dm.wait_settled(
+        lambda: db.get_messages("s-poll"), lambda: True,
+        quiet_seconds=3, timeout=100, poll_seconds=1,
+        clock=lambda: now["t"], sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+        on_poll=lambda msgs: seen.append(len(msgs)),
+    )
+
+    assert ok is True
+    assert len(seen) >= 3 and set(seen) == {2}
+
+
+def test_rpc_event_tracker_counts_event_types_for_its_session_only():
+    t = dm.RpcEventTracker("abc123")
+    for sid, kind in [("abc123", "tool.start"), ("abc123", "tool.start"),
+                      ("other", "tool.start"), ("abc123", "thinking.delta")]:
+        t.feed({"jsonrpc": "2.0", "method": "event",
+                "params": {"type": kind, "session_id": sid}})
+    assert t.event_counts == {"tool.start": 2, "thinking.delta": 1}
+
+
+def test_gateway_connection_keeps_child_stderr_and_reports_progress(tmp_path):
+    """A real child process: its stderr must survive on disk and a quiet wait must say so."""
+    fake_root = tmp_path / "root"
+    pkg = fake_root / "tui_gateway"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "entry.py").write_text(
+        "import sys, time\n"
+        "print('{\"jsonrpc\": \"2.0\", \"method\": \"event\", \"params\": {\"type\": \"gateway.ready\"}}', flush=True)\n"
+        "print('child-warning: lockowners unavailable', file=sys.stderr, flush=True)\n"
+        "sys.stdin.read()\n"
+    )
+    log = tmp_path / "logs" / "case-r0.stderr.log"
+    beats: list[str] = []
+
+    conn = dm._GatewayConnection(
+        tmp_path, sys.executable, fake_root, ready_timeout=20,
+        log_path=log, progress=beats.append, heartbeat_seconds=0.0,
+    )
+    try:
+        conn.pump(0.1)
+        deadline = time.monotonic() + 10
+        while "child-warning" not in (log.read_text() if log.exists() else ""):
+            assert time.monotonic() < deadline, "stderr never reached the log"
+            conn.pump(0.1)
+    finally:
+        conn.close()
+
+    assert "child-warning: lockowners unavailable" in log.read_text()
+    assert beats and "running_turns=0" in beats[0]
+
+
 # ---------------------------------------------------------------------------
 # End to end: runner + report on recorded transcripts (fake driver only)
 # ---------------------------------------------------------------------------
@@ -899,6 +959,51 @@ def test_run_eval_end_to_end_on_recorded_transcripts(db, tmp_path):
     assert len(data["runs"]) == 4
     summary = (out / "summary.txt").read_text()
     assert "horror" in summary and "PASS" in summary
+
+
+def test_run_eval_snapshots_transcript_and_reports_while_waiting(db, tmp_path):
+    out = tmp_path / "out"
+    now = {"t": 0.0}
+    said: list[tuple[str, bool]] = []
+    snapshot = out / "transcripts" / "disk-r0.json"
+
+    class _SlowSession(_ReplaySession):
+        calls = 0
+
+        def idle(self) -> bool:
+            _SlowSession.calls += 1
+            return _SlowSession.calls > 8
+
+    class _SlowDriver(_ReplayDriver):
+        def session(self, *, model, provider, cwd):
+            from contextlib import contextmanager
+
+            @contextmanager
+            def _cm():
+                sid = "slow-0"
+                self.sessions.append(sid)
+                yield _SlowSession(self.db, sid, self.script)
+
+            return _cm()
+
+    def say(msg: str) -> None:
+        said.append((msg, snapshot.exists()))
+
+    runs = dm.run_eval(
+        [_case(id="disk", prompt="What is my disk usage by folder?", expected_mode="direct")],
+        _SlowDriver(db, _script),
+        reader=lambda sid: db.get_messages(sid),
+        root_model="fake-root", root_provider=None, reps=1, evidence_reps=3, out_dir=out,
+        turn_timeout=10, settle_timeout=600, quiet_seconds=1, poll_seconds=5,
+        clock=lambda: now["t"], sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+        progress=say, heartbeat_seconds=10,
+    )
+
+    assert runs[0]["settled"] and runs[0]["correct"]
+    assert any("session slow-0 started" in m for m, _ in said)
+    waiting = [(m, existed) for m, existed in said if " rows, " in m]
+    assert waiting, "no heartbeat while waiting for the run to settle"
+    assert all(existed for _, existed in waiting), "heartbeat came before the transcript snapshot"
 
 
 def test_main_exit_codes_and_dry_run(tmp_path, monkeypatch, db, capsys):
