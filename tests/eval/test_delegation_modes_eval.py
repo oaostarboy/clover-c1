@@ -11,6 +11,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -787,6 +788,54 @@ def test_read_transcript_reads_live_db_from_second_handle(db, tmp_path):
     assert rows[0]["content"] == "hello"
 
 
+def test_read_transcript_waits_out_a_writer_holding_the_db_lock(db):
+    """The profile DB can be write-locked for seconds by a helper; that is not a verdict."""
+    import sqlite3
+    import threading
+
+    r = Recorder(db, "s-locked")
+    r.user("hello")
+    r.assistant("hi", dt=1.0)
+
+    locker = sqlite3.connect(
+        str(db.db_path), isolation_level=None, timeout=5, check_same_thread=False
+    )
+    locker.execute("BEGIN EXCLUSIVE")
+    release = threading.Timer(2.5, lambda: locker.execute("COMMIT"))
+    release.start()
+    try:
+        rows = dm.read_transcript(db.db_path, "s-locked", attempts=10, backoff=0.5)
+    finally:
+        release.join()
+        locker.close()
+
+    assert [m["role"] for m in rows] == ["user", "assistant"]
+
+
+def test_wait_settled_survives_a_locked_read(db):
+    import sqlite3
+
+    r = Recorder(db, "s-flaky")
+    r.user("hi")
+    r.assistant("hello", dt=1.0)
+    now = {"t": 0.0}
+    reads = {"n": 0}
+
+    def read():
+        reads["n"] += 1
+        if reads["n"] <= 2:
+            raise sqlite3.OperationalError("database is locked")
+        return db.get_messages("s-flaky")
+
+    ok = dm.wait_settled(
+        read, lambda: True, quiet_seconds=2, timeout=100, poll_seconds=1,
+        clock=lambda: now["t"], sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+    )
+
+    assert ok is True
+    assert reads["n"] >= 3
+
+
 def test_rpc_event_tracker_counts_turns_for_its_session_only():
     t = dm.RpcEventTracker("abc123")
     t.feed({"jsonrpc": "2.0", "method": "event",
@@ -806,6 +855,65 @@ def test_rpc_event_tracker_counts_turns_for_its_session_only():
             "params": {"type": "error", "session_id": "abc123",
                        "payload": {"message": "agent init failed"}}})
     assert t.errors == ["agent init failed"]
+
+
+def test_wait_settled_reports_each_poll_to_on_poll(db):
+    r = Recorder(db, "s-poll")
+    r.user("hi")
+    r.assistant("hello", dt=1.0)
+    now = {"t": 0.0}
+    seen: list[int] = []
+
+    ok = dm.wait_settled(
+        lambda: db.get_messages("s-poll"), lambda: True,
+        quiet_seconds=3, timeout=100, poll_seconds=1,
+        clock=lambda: now["t"], sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+        on_poll=lambda msgs: seen.append(len(msgs)),
+    )
+
+    assert ok is True
+    assert len(seen) >= 3 and set(seen) == {2}
+
+
+def test_rpc_event_tracker_counts_event_types_for_its_session_only():
+    t = dm.RpcEventTracker("abc123")
+    for sid, kind in [("abc123", "tool.start"), ("abc123", "tool.start"),
+                      ("other", "tool.start"), ("abc123", "thinking.delta")]:
+        t.feed({"jsonrpc": "2.0", "method": "event",
+                "params": {"type": kind, "session_id": sid}})
+    assert t.event_counts == {"tool.start": 2, "thinking.delta": 1}
+
+
+def test_gateway_connection_keeps_child_stderr_and_reports_progress(tmp_path):
+    """A real child process: its stderr must survive on disk and a quiet wait must say so."""
+    fake_root = tmp_path / "root"
+    pkg = fake_root / "tui_gateway"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    (pkg / "entry.py").write_text(
+        "import sys, time\n"
+        "print('{\"jsonrpc\": \"2.0\", \"method\": \"event\", \"params\": {\"type\": \"gateway.ready\"}}', flush=True)\n"
+        "print('child-warning: lockowners unavailable', file=sys.stderr, flush=True)\n"
+        "sys.stdin.read()\n"
+    )
+    log = tmp_path / "logs" / "case-r0.stderr.log"
+    beats: list[str] = []
+
+    conn = dm._GatewayConnection(
+        tmp_path, sys.executable, fake_root, ready_timeout=20,
+        log_path=log, progress=beats.append, heartbeat_seconds=0.0,
+    )
+    try:
+        conn.pump(0.1)
+        deadline = time.monotonic() + 10
+        while "child-warning" not in (log.read_text() if log.exists() else ""):
+            assert time.monotonic() < deadline, "stderr never reached the log"
+            conn.pump(0.1)
+    finally:
+        conn.close()
+
+    assert "child-warning: lockowners unavailable" in log.read_text()
+    assert beats and "running_turns=0" in beats[0]
 
 
 # ---------------------------------------------------------------------------
@@ -901,6 +1009,51 @@ def test_run_eval_end_to_end_on_recorded_transcripts(db, tmp_path):
     assert "horror" in summary and "PASS" in summary
 
 
+def test_run_eval_snapshots_transcript_and_reports_while_waiting(db, tmp_path):
+    out = tmp_path / "out"
+    now = {"t": 0.0}
+    said: list[tuple[str, bool]] = []
+    snapshot = out / "transcripts" / "disk-r0.json"
+
+    class _SlowSession(_ReplaySession):
+        calls = 0
+
+        def idle(self) -> bool:
+            _SlowSession.calls += 1
+            return _SlowSession.calls > 8
+
+    class _SlowDriver(_ReplayDriver):
+        def session(self, *, model, provider, cwd):
+            from contextlib import contextmanager
+
+            @contextmanager
+            def _cm():
+                sid = "slow-0"
+                self.sessions.append(sid)
+                yield _SlowSession(self.db, sid, self.script)
+
+            return _cm()
+
+    def say(msg: str) -> None:
+        said.append((msg, snapshot.exists()))
+
+    runs = dm.run_eval(
+        [_case(id="disk", prompt="What is my disk usage by folder?", expected_mode="direct")],
+        _SlowDriver(db, _script),
+        reader=lambda sid: db.get_messages(sid),
+        root_model="fake-root", root_provider=None, reps=1, evidence_reps=3, out_dir=out,
+        turn_timeout=10, settle_timeout=600, quiet_seconds=1, poll_seconds=5,
+        clock=lambda: now["t"], sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+        progress=say, heartbeat_seconds=10,
+    )
+
+    assert runs[0]["settled"] and runs[0]["correct"]
+    assert any("session slow-0 started" in m for m, _ in said)
+    waiting = [(m, existed) for m, existed in said if " rows, " in m]
+    assert waiting, "no heartbeat while waiting for the run to settle"
+    assert all(existed for _, existed in waiting), "heartbeat came before the transcript snapshot"
+
+
 def test_main_exit_codes_and_dry_run(tmp_path, monkeypatch, db, capsys):
     home = tmp_path / "profile-home"
     home.mkdir()
@@ -926,3 +1079,413 @@ def test_main_exit_codes_and_dry_run(tmp_path, monkeypatch, db, capsys):
     )
     assert rc == 2
     assert (tmp_path / "o2" / "results.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Per-rep isolation: a disposable copy of ONE frozen baseline of the profile
+# ---------------------------------------------------------------------------
+
+
+def _make_profile(root: Path) -> Path:
+    """A real-looking profile home: config, secrets, skills with references,
+    memories, and a state.db that already holds a session."""
+    import yaml
+    from clover_state import SessionDB
+
+    home = root / "real-profile"
+    (home / "skills" / "research" / "product-comparison-research" / "references").mkdir(parents=True)
+    (home / "skills" / "research" / "product-comparison-research" / "SKILL.md").write_text(
+        "---\nname: product-comparison-research\ndescription: Compare products.\n---\nv1 steps\n")
+    (home / "skills" / "research" / "product-comparison-research" / "references" / "games.md").write_text(
+        "save cheap data first, then hand the slow part to a helper\n")
+    (home / "skills" / "devops" / "disk-triage").mkdir(parents=True)
+    (home / "skills" / "devops" / "disk-triage" / "SKILL.md").write_text("---\nname: disk-triage\n---\nbody\n")
+    (home / "memories").mkdir()
+    (home / "memories" / "MEMORY.md").write_text("likes terse answers\n")
+    (home / ".env").write_text("OPENROUTER_API_KEY=sk-not-real\n")
+    (home / "auth.json").write_text('{"providers": {}}\n')
+    (home / "config.yaml").write_text(yaml.safe_dump({
+        "model": {"default": "some/model", "provider": "openrouter"},
+        "approvals": {"mode": "off"},
+        "delegation": {"default_tier": "fast", "tiers": {"fast": {"model": "x/y"}}},
+        "auxiliary": {"vision": {"model": "v/m"}, "background_review": {"enabled": True}},
+        "curator": {"enabled": True, "interval_hours": 12},
+    }))
+    # A decoy: the real DB already holds a session with the id the replay
+    # driver will use, scoring as DIRECT where the rep's own run is PARALLEL.
+    real_db = SessionDB(db_path=home / "state.db")
+    Recorder(real_db, "replay-0").user("25 best indie horror games, ranked")
+    real_db.close()
+    return home
+
+
+def _tree(home: Path) -> dict:
+    """Every file under home -> (bytes, mtime_ns); detects any write at all."""
+    return {
+        str(p.relative_to(home)): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in sorted(home.rglob("*")) if p.is_file()
+    }
+
+
+class _CopyDriver(_ReplayDriver):
+    """Replay driver bound to ONE rep's home; the foreground 'learns' by
+    patching a skill in that home, as skill_manage would."""
+
+    def __init__(self, home: Path, script, touch_skill: bool = False):
+        from clover_state import SessionDB
+
+        super().__init__(SessionDB(db_path=home / "state.db"), script)
+        self.home, self.touch_skill = home, touch_skill
+
+    def session(self, *, model, provider, cwd):
+        if self.touch_skill:
+            skill = self.home / "skills" / "research" / "product-comparison-research" / "SKILL.md"
+            skill.write_text(skill.read_text() + "\nstep 6 added mid-eval\n")
+        return super().session(model=model, provider=provider, cwd=cwd)
+
+
+HORROR = dict(id="horror", prompt="25 best indie horror games, ranked",
+              expected_mode="parallel", live_evidence=True, dispatch_within_calls=2)
+
+
+def _run_isolated(tmp_path, profile, *, touch_skill=False, cases=None, evidence_reps=2):
+    baseline = dm.FrozenBaseline.freeze(profile, tmp_path / "out" / "baseline")
+    homes: list[Path] = []
+
+    def driver_factory(home):
+        homes.append(home)
+        return _CopyDriver(home, _script, touch_skill=touch_skill)
+
+    def reader_factory(home):
+        return lambda sid: dm.read_transcript(home / "state.db", sid)
+
+    now = {"t": 0.0}
+    runs = dm.run_eval(
+        cases or [_case(**HORROR)], None, reader=None,
+        rep_env=dm.make_rep_env(baseline, driver_factory, reader_factory),
+        root_model="fake-root", root_provider=None, reps=1, evidence_reps=evidence_reps,
+        out_dir=tmp_path / "out", turn_timeout=10, settle_timeout=60,
+        quiet_seconds=1, poll_seconds=1,
+        clock=lambda: now["t"], sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+    )
+    return baseline, runs, homes
+
+
+def test_every_rep_gets_its_own_copy_made_from_one_frozen_baseline(tmp_path):
+    profile = _make_profile(tmp_path)
+    baseline, runs, homes = _run_isolated(tmp_path, profile, touch_skill=True, evidence_reps=3)
+
+    assert len(runs) == 3 and all(r["error"] is None and r["settled"] for r in runs)
+    assert len(homes) == 3 and len(set(homes)) == 3
+    assert profile not in homes and all(profile not in h.parents for h in homes)
+    assert [r["home"] for r in runs] == [str(h) for h in homes]
+    skill = Path("skills/research/product-comparison-research/SKILL.md")
+    for h in homes:
+        assert (h / "skills" / "research" / "product-comparison-research" / "references" / "games.md").exists()
+        assert (h / "memories" / "MEMORY.md").read_text() == "likes terse answers\n"
+        assert (h / ".env").exists() and (h / "auth.json").exists()
+    # each rep's foreground patched ITS copy once; no rep saw another rep's
+    # patch, because every copy comes from the baseline, not from the last rep
+    for h in homes:
+        assert (h / skill).read_text().count("step 6 added mid-eval") == 1
+    assert "step 6" not in (baseline.root / skill).read_text()
+
+
+def test_the_copy_has_no_state_db_so_each_rep_gets_a_fresh_session_db(tmp_path):
+    profile = _make_profile(tmp_path)
+    baseline = dm.FrozenBaseline.freeze(profile, tmp_path / "out" / "baseline")
+    assert (profile / "state.db").exists()
+    assert not (baseline.root / "state.db").exists()
+    copy = baseline.make_home("horror-r0")
+    assert not (copy / "state.db").exists()
+
+
+def test_background_review_and_curator_are_off_in_the_copy_everything_else_kept(tmp_path):
+    import yaml
+
+    profile = _make_profile(tmp_path)
+    before = yaml.safe_load((profile / "config.yaml").read_text())
+    _, runs, homes = _run_isolated(tmp_path, profile)
+
+    for h in homes:
+        cfg = yaml.safe_load((h / "config.yaml").read_text())
+        assert cfg["auxiliary"]["background_review"]["enabled"] is False
+        assert cfg["curator"]["enabled"] is False
+        # keep everything else: model, delegation tiers, approvals, siblings
+        assert cfg["model"] == before["model"]
+        assert cfg["approvals"] == before["approvals"]
+        assert cfg["delegation"] == before["delegation"]
+        assert cfg["auxiliary"]["vision"] == before["auxiliary"]["vision"]
+        assert cfg["curator"]["interval_hours"] == 12
+    # and the real profile's config still has them on
+    after = yaml.safe_load((profile / "config.yaml").read_text())
+    assert after == before
+    assert after["auxiliary"]["background_review"]["enabled"] is True
+    assert after["curator"]["enabled"] is True
+
+
+@pytest.mark.parametrize("raw", [
+    None,                                   # no config.yaml at all
+    "model: {default: m}\n",                # no auxiliary / curator sections
+    "auxiliary: null\ncurator: 5\n",        # wrong shapes
+])
+def test_copy_disables_review_and_curator_whatever_the_config_looked_like(tmp_path, raw):
+    import yaml
+
+    profile = tmp_path / "bare"
+    profile.mkdir()
+    if raw is not None:
+        (profile / "config.yaml").write_text(raw)
+    baseline = dm.FrozenBaseline.freeze(profile, tmp_path / "baseline")
+    cfg = yaml.safe_load((baseline.make_home("c-r0") / "config.yaml").read_text())
+    assert cfg["auxiliary"]["background_review"]["enabled"] is False
+    assert cfg["curator"]["enabled"] is False
+
+
+def test_unreadable_config_is_a_harness_error_not_a_silent_review_on_run(tmp_path):
+    profile = tmp_path / "broken"
+    profile.mkdir()
+    (profile / "config.yaml").write_text("auxiliary: [unclosed\n")
+    baseline = dm.FrozenBaseline.freeze(profile, tmp_path / "baseline")
+    with pytest.raises(ValueError, match="config.yaml"):
+        baseline.make_home("c-r0")
+
+
+def test_the_real_profile_is_never_written(tmp_path):
+    profile = _make_profile(tmp_path)
+    before = _tree(profile)
+    _run_isolated(tmp_path, profile, touch_skill=True, evidence_reps=2)
+    assert _tree(profile) == before
+
+
+def test_scoring_reads_the_copys_session_db_not_the_real_one(tmp_path):
+    from clover_state import SessionDB
+
+    profile = _make_profile(tmp_path)
+    # the decoy in the real DB is a DIRECT-looking, never-dispatching session
+    real = SessionDB(db_path=profile / "state.db")
+    assert [m["role"] for m in real.get_messages("replay-0")] == ["user"]
+    real.close()
+
+    _, runs, homes = _run_isolated(tmp_path, profile)
+    assert all(r["session_id"] == "replay-0" for r in runs)
+    # parallel + correct could only come from the copy's own transcript
+    assert all(r["score"]["mode"] == "parallel" and r["correct"] for r in runs)
+    for h in homes:
+        copy_db = SessionDB(db_path=h / "state.db")
+        assert len(copy_db.get_messages("replay-0")) > 1
+        copy_db.close()
+
+
+def test_baseline_records_a_sha256_for_every_skill_md(tmp_path):
+    import hashlib
+
+    profile = _make_profile(tmp_path)
+    baseline = dm.FrozenBaseline.freeze(profile, tmp_path / "baseline")
+    rel = "skills/research/product-comparison-research/SKILL.md"
+    assert set(baseline.skill_sha256) == {rel, "skills/devops/disk-triage/SKILL.md"}
+    assert baseline.skill_sha256[rel] == hashlib.sha256((profile / rel).read_bytes()).hexdigest()
+    # frozen: editing the live profile afterwards changes neither the hashes
+    # nor the copies
+    (profile / rel).write_text("edited after the freeze\n")
+    assert baseline.skill_sha256[rel] != hashlib.sha256((profile / rel).read_bytes()).hexdigest()
+    assert "edited" not in (baseline.make_home("x-r0") / rel).read_text()
+
+
+def test_main_runs_every_rep_against_a_copy_and_records_the_skill_hashes(
+        tmp_path, monkeypatch, capsys):
+    profile = _make_profile(tmp_path)
+    monkeypatch.setattr(dm, "resolve_profile_home", lambda name: profile)
+    seen: list[Path] = []
+
+    def driver_factory(home, args):
+        seen.append(home)
+        return _CopyDriver(home, _script)
+
+    def reader_factory(home):
+        return lambda sid: dm.read_transcript(home / "state.db", sid)
+
+    out = tmp_path / "o"
+    rc = dm.main(
+        ["--profile", "dev", "--root-model", "m", "--out", str(out),
+         "--cases", str(CASES_PATH), "--only", "disk-usage", "--reps", "2",
+         "--quiet-seconds", "0", "--poll-seconds", "0"],
+        driver_factory=driver_factory, reader_factory=reader_factory,
+    )
+    capsys.readouterr()
+    assert rc in (0, 1)  # the pass bar is not the point here, isolation is
+    assert len(seen) == 2 and len(set(seen)) == 2 and profile not in seen
+    data = json.loads((out / "results.json").read_text())
+    assert data["meta"]["skill_sha256"] == {
+        "skills/research/product-comparison-research/SKILL.md": __import__("hashlib").sha256(
+            (profile / "skills/research/product-comparison-research/SKILL.md").read_bytes()
+        ).hexdigest(),
+        "skills/devops/disk-triage/SKILL.md": __import__("hashlib").sha256(
+            (profile / "skills/devops/disk-triage/SKILL.md").read_bytes()
+        ).hexdigest(),
+    }
+    assert [r["home"] for r in data["runs"]] == [str(h) for h in seen]
+    assert data["meta"]["isolation"]["background_review"] is False
+    assert data["meta"]["isolation"]["curator"] is False
+
+
+def test_baseline_refuses_a_directory_that_would_overwrite_the_profile(tmp_path):
+    profile = _make_profile(tmp_path)
+    before = _tree(profile)
+    for bad in (profile, profile / "skills", tmp_path):
+        with pytest.raises(ValueError, match="overlaps"):
+            dm.FrozenBaseline.freeze(profile, bad)
+    assert _tree(profile) == before
+
+
+# ---------------------------------------------------------------------------
+# Per-case fixtures: the files a prompt names must exist under {workdir}
+# ---------------------------------------------------------------------------
+
+FIXTURES = REPO_ROOT / "tests" / "eval" / "fixtures"
+
+
+def _pytest_in(directory: Path, *args: str):
+    import os
+    import subprocess
+
+    # A bare environment: the fixture suite must not inherit this run's pytest
+    # plugins, addopts or credentials, only what is needed to find python.
+    keep = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "PYTHONPATH", "PYTHONNOUSERSITE")
+    env = {k: os.environ[k] for k in keep if k in os.environ}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args],
+        cwd=directory, env=env, capture_output=True, text=True, timeout=120,
+    )
+    return done.returncode, done.stdout + done.stderr
+
+
+class _CwdRecordingDriver(_ReplayDriver):
+    """Records, at session start (before any prompt), what the rep's cwd holds."""
+
+    def __init__(self, db, script, probe):
+        super().__init__(db, script)
+        self.probe, self.cwds, self.seen = probe, [], []
+
+    def session(self, *, model, provider, cwd):
+        self.cwds.append(Path(cwd))
+        self.seen.append(self.probe(Path(cwd)))
+        return super().session(model=model, provider=provider, cwd=cwd)
+
+
+def _run_cases(db, tmp_path, cases, probe, *, reps=1):
+    driver = _CwdRecordingDriver(db, _script, probe)
+    now = {"t": 0.0}
+    said: list[str] = []
+    runs = dm.run_eval(
+        cases, driver, reader=lambda sid: db.get_messages(sid),
+        root_model="fake-root", root_provider=None, reps=reps, evidence_reps=reps,
+        out_dir=tmp_path / "out", turn_timeout=10, settle_timeout=60,
+        quiet_seconds=1, poll_seconds=1,
+        clock=lambda: now["t"], sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+        progress=said.append,
+    )
+    return driver, runs, said
+
+
+def test_every_case_that_names_files_has_a_fixture_or_generator():
+    cases = dm.load_cases(CASES_PATH)
+    by_id = {c["id"]: c for c in cases}
+    for case_id in ("fix-three-bugs", "feature-flag-review"):
+        assert "{workdir}/shop" in by_id[case_id]["prompt"]
+        assert (FIXTURES / case_id / "shop").is_dir()
+    assert "{workdir}/recordings/conference-day1.mov" in by_id["video-transcode"]["prompt"]
+
+
+def test_fixtures_are_copied_into_each_reps_workdir_before_the_prompt(db, tmp_path):
+    cases = [
+        _case(id="fix-three-bugs", prompt="fix {workdir}/shop", expected_mode="parallel"),
+        _case(id="disk", prompt="What is my disk usage by folder?", expected_mode="direct"),
+    ]
+    probe = lambda cwd: sorted(p.name for p in cwd.iterdir())  # noqa: E731
+    driver, runs, _ = _run_cases(db, tmp_path, cases, probe, reps=2)
+
+    assert all(r["error"] is None for r in runs)
+    bugs = [c for c in driver.cwds if c.name.startswith("fix-three-bugs")]
+    assert len(bugs) == 2 and len(set(bugs)) == 2
+    for cwd in bugs:
+        assert (cwd / "shop" / "cart" / "pricing.py").is_file()
+    assert [s for c, s in zip(driver.cwds, driver.seen) if c in bugs] == [["shop"], ["shop"]]
+    assert [s for c, s in zip(driver.cwds, driver.seen) if c not in bugs] == [[], []]
+
+    # copies, not links: a rep editing its workdir never reaches the fixture or another rep
+    original = (FIXTURES / "fix-three-bugs" / "shop" / "cart" / "pricing.py").read_text()
+    (bugs[0] / "shop" / "cart" / "pricing.py").write_text("# edited\n")
+    assert (bugs[1] / "shop" / "cart" / "pricing.py").read_text() == original
+    assert (FIXTURES / "fix-three-bugs" / "shop" / "cart" / "pricing.py").read_text() == original
+
+
+def test_shop_with_the_three_bugs_fails_in_each_area(tmp_path):
+    dm.seed_case_fixtures("fix-three-bugs", tmp_path)
+    shop = tmp_path / "shop"
+    # exit 1 is "tests ran and failed"; anything else would be a broken run, not a red suite
+    rc, out = _pytest_in(shop)
+    assert rc == 1, out
+    for area in ("pricing", "export", "throttle"):
+        rc, out = _pytest_in(shop, f"tests/test_{area}.py")
+        assert rc == 1, (area, out)
+
+
+def test_feature_flag_shop_is_the_fixed_shop_plus_a_config(tmp_path):
+    dm.seed_case_fixtures("feature-flag-review", tmp_path)
+    shop = tmp_path / "shop"
+    rc, out = _pytest_in(shop)
+    assert rc == 0, out
+    assert (shop / "config.py").is_file()
+
+    buggy, fixed = FIXTURES / "fix-three-bugs" / "shop", FIXTURES / "feature-flag-review" / "shop"
+    rel = lambda root: {p.relative_to(root) for p in root.rglob("*") if p.is_file()}  # noqa: E731
+    assert rel(fixed) - rel(buggy) == {Path("config.py")}
+    assert rel(buggy) <= rel(fixed)
+    changed = {
+        p for p in rel(buggy)
+        if (buggy / p).read_bytes() != (fixed / p).read_bytes()
+    }
+    assert changed == {Path("cart/pricing.py"), Path("reports/export.py"), Path("auth/throttle.py")}
+
+
+def test_video_fixture_is_skipped_cleanly_when_ffmpeg_is_absent(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(dm.shutil, "which", lambda name, *a, **k: None)
+    cases = [_case(id="video-transcode", prompt="transcode {workdir}/recordings/x.mov",
+                   expected_mode="single")]
+    driver, runs, said = _run_cases(db, tmp_path, cases, lambda cwd: sorted(cwd.iterdir()))
+
+    assert runs[0]["error"] is None
+    assert driver.seen == [[]]
+    assert any("video-transcode" in m and "ffmpeg" in m for m in said)
+    assert dm._make_video_fixture(tmp_path / "recordings" / "a.mov") is False
+    assert not (tmp_path / "recordings").exists()
+
+
+def test_failed_ffmpeg_leaves_no_partial_clip(tmp_path, monkeypatch):
+    # an executable that rejects every argument stands in for a broken ffmpeg
+    monkeypatch.setattr(dm.shutil, "which", lambda name, *a, **k: sys.executable)
+    dest = tmp_path / "recordings" / "conference-day1.mov"
+    assert dm._make_video_fixture(dest) is False
+    assert not dest.exists()
+
+
+def test_video_fixture_is_a_4k_clip_with_audio_when_ffmpeg_is_present(tmp_path):
+    import shutil
+    import subprocess
+
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        pytest.skip("ffmpeg/ffprobe not installed")
+    dm.seed_case_fixtures("video-transcode", tmp_path)
+    clip = tmp_path / "recordings" / "conference-day1.mov"
+    assert clip.is_file() and 0 < clip.stat().st_size < 50_000_000
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height",
+         "-of", "json", str(clip)],
+        capture_output=True, text=True, timeout=60, check=True,
+    )
+    streams = json.loads(probe.stdout)["streams"]
+    video = [s for s in streams if s["codec_type"] == "video"]
+    assert [(v["width"], v["height"]) for v in video] == [(3840, 2160)]
+    assert any(s["codec_type"] == "audio" for s in streams)

@@ -31,7 +31,30 @@ The scorer (``score_transcript``) is a pure function over SessionDB message
 rows; ``tests/eval/test_delegation_modes_eval.py`` exercises it on transcripts
 written through the real SessionDB.
 
-Exit status: 0 pass bar met, 1 pass bar missed, 2 harness error (a run could
+Isolation: every rep runs against its OWN disposable copy of the profile home,
+all made from ONE baseline frozen when the harness starts (config.yaml, .env,
+the auth files the profile uses, skills/ with references, memories/; never
+state.db, so each copy gets a fresh SessionDB and scoring reads that copy's
+DB).  In the copy, ``auxiliary.background_review.enabled`` and
+``curator.enabled`` are false, so neither a background review fork nor the
+curator can rewrite a skill under the next rep; everything else (model,
+delegation tiers, approvals) is kept.  A foreground ``skill_manage`` still
+lands, in that rep's copy only.  The real profile is never written, and
+results.json records the sha256 of every baseline SKILL.md.  Links in the
+profile are dereferenced (a dangling one is skipped and listed in results.json),
+and an unusable config.yaml is reported by exception type and line/column only,
+never with its contents.  Caveat: an OAuth refresh inside a copy stays in the
+copy.
+
+Fleet cases: ``tests/eval/delegation_fleet.jsonl`` holds two production
+incidents (a premature combined verdict while helpers are out, and foreground
+work after a hand-off).  They run in the same invocation but are scored apart
+(``score_fleet`` / ``evaluate_fleet``): each carries a ``fleet_check``, never
+reaches the 13/15 mode bar, and has its own verdict and ``FLEET RESULT``.
+``--no-fleet`` runs the 15 only.  A case whose prompt names committed fixture
+files (``CASE_FIXTURE_FILES``) errors the rep if one is missing from the workdir.
+
+Exit status: 0 pass bar (and fleet bar) met, 1 a bar missed, 2 harness error (a run could
 not be driven, or never settled).  The eval profile must not stop on approval
 prompts (``approvals.mode: off`` or equivalent) or a turn will hang until the
 turn timeout; pending approvals are counted in the run record.
@@ -40,11 +63,14 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import math
 import os
 import queue
 import re
+import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -52,10 +78,12 @@ import time
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Sequence, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CASES = REPO_ROOT / "tests" / "eval" / "delegation_modes.jsonl"
+DEFAULT_FLEET_CASES = REPO_ROOT / "tests" / "eval" / "delegation_fleet.jsonl"
+FIXTURES_DIR = REPO_ROOT / "tests" / "eval" / "fixtures"
 
 MODES = ("direct", "single", "parallel", "staged")
 
@@ -151,6 +179,9 @@ def load_cases(path: Path) -> List[Dict[str, Any]]:
         within = case.get("dispatch_within_calls")
         if within is not None and (not isinstance(within, int) or isinstance(within, bool) or within < 1):
             raise ValueError(f"{path}:{lineno}: dispatch_within_calls must be a positive int")
+        check = case.get("fleet_check")
+        if check is not None and check not in FLEET_CHECKS:
+            raise ValueError(f"{path}:{lineno}: fleet_check {check!r} not in {FLEET_CHECKS}")
         case["live_evidence"] = bool(case.get("live_evidence", False))
         case["override"] = bool(case.get("override", False))
         cases.append(case)
@@ -435,7 +466,8 @@ def _walk(messages: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         text = row["text"].strip()
         if text:
             visible.append({"row": row["i"], "text": text, "has_calls": bool(row["calls"]),
-                            "ts": row["ts"]})
+                            "ts": row["ts"], "turn": turn_kind, "pending": sorted(pending),
+                            "failed_completions": sum(1 for c in completions if not c["ok"])})
             for m in LIMIT_RE.finditer(text):
                 limit_hits.append(
                     {"row": row["i"], "match": m.group(0), "snippet": _snippet(text, m.start(), m.end())}
@@ -564,6 +596,199 @@ def judge_run(score: Optional[Dict[str, Any]], case: Dict[str, Any]) -> Dict[str
 
 
 # ---------------------------------------------------------------------------
+# Fleet cases: two production incidents, scored apart from the 15
+# ---------------------------------------------------------------------------
+#
+# A case carrying ``fleet_check`` is not about the delegation MODE; it is about
+# what the root does around a hand-off, so it has its own verdict
+# (``score_fleet``) and its own bar (``evaluate_fleet``).  ``run["correct"]``
+# for such a run is the fleet verdict, and ``evaluate_bar`` is never given
+# them: the 13/15 bar and the 15 cases stay exactly as frozen.
+#
+#   premature_verdict          a root that hands a multi-part check to helpers
+#                              must not give a combined final verdict (or call
+#                              the work done) while any of them is still out,
+#                              nor present a failed helper as a clean result.
+#                              A new unrelated answer or an explicitly scoped
+#                              partial finding is fine.
+#   foreground_after_dispatch  once the root has handed work off it must
+#                              acknowledge in words and return: no further
+#                              foreground tool work in that turn, and a bounded
+#                              number of checking calls on a completion turn.
+
+FLEET_CHECKS = ("premature_verdict", "foreground_after_dispatch")
+
+# Calls that do not occupy the root: more hand-offs, and its own task list.
+_FLEET_BOOKKEEPING_TOOLS = frozenset({"delegate_task", "todo"})
+
+# Tool calls a root may spend checking a returned helper before the work counts
+# as a foreground session (a case may set ``max_completion_turn_calls``).
+FLEET_MAX_COMPLETION_TURN_CALLS = 8
+
+# Wording of a finding about the WHOLE question ...
+_VERDICT_RES = (
+    re.compile(r"\bno\s+(?:spying|spies|intruders?|intrusions?|breach(?:es)?|compromise[sd]?|"
+               r"malware|threats?|suspicious|unauthori[sz]ed|signs?\s+of)\b", re.IGNORECASE),
+    re.compile(r"\bnothing\s+(?:suspicious|unusual|wrong|odd|concerning|malicious|found|"
+               r"detected|to\s+worry)\b", re.IGNORECASE),
+    re.compile(r"\ball\s+clear\b|\bclean\s+bill\s+of\s+health\b|\bnot\s+on\s+fire\b",
+               re.IGNORECASE),
+    re.compile(r"\b(?:you(?:'re|\s+are)|(?:the\s+)?(?:network|system|machine|computer|house|"
+               r"everything)\s+(?:is|looks|seems)?|everything's|it(?:'s|\s+is))\s+"
+               r"(?:all\s+)?(?:safe|secure|clean|fine|healthy|okay|ok)\b", re.IGNORECASE),
+)
+# ... unless the same message scopes itself to what has actually reported.
+_SCOPED_RE = re.compile(
+    r"\b(?:so\s+far|for\s+now|for\s+the\s+moment|at\s+the\s+moment|not\s+yet|yet|still|"
+    r"pending|waiting|once\s+(?:they|the|all|each)|until|when\s+(?:they|the|all|each)|"
+    r"preliminary|partial(?:ly)?|haven'?t|hasn'?t|in\s+progress|running|working\s+on|"
+    r"checking|outstanding)\b",
+    re.IGNORECASE,
+)
+_FAILURE_ACK_RE = re.compile(
+    r"\b(?:fail(?:ed|ure|s)?|couldn'?t|could\s+not|unable|error(?:ed)?|didn'?t|did\s+not|"
+    r"no\s+result|incomplete|never\s+(?:finished|reported|came)|ran\s+out)\b", re.IGNORECASE)
+
+
+def _states_verdict(text: str) -> Optional[str]:
+    """The sentence of ``text`` that delivers a finding on the whole question."""
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
+        if any(r.search(sentence) for r in _VERDICT_RES):
+            return sentence.strip()
+    return None
+
+
+def _scoped(text: str) -> bool:
+    return bool(_SCOPED_RE.search(text))
+
+
+def _fleet_foreground(messages: Sequence[Dict[str, Any]], dispatches: Sequence[Dict[str, Any]]
+                      ) -> Dict[str, Any]:
+    """Tool work done by the root after a hand-off, split by turn kind.
+
+    ``after_dispatch``: calls in the same root turn that follow an accepted
+    dispatch (including calls made alongside it in the same assistant row).
+    ``completion_turns``: per completion turn, the non-bookkeeping calls made.
+    """
+    accepted = {d["ordinal"] for d in dispatches if d["accepted"]}
+    after: List[Dict[str, Any]] = []
+    comp_turns: List[Dict[str, Any]] = []
+    ordinal = 0
+    turn_kind = "root"
+    dispatched = False
+    current: Optional[Dict[str, Any]] = None
+    for row in _rows(messages):
+        if row["role"] == "user":
+            if _COMPLETION_MARKER_RE.search(row["text"][:600]):
+                turn_kind = "completion"
+                current = {"row": row["i"], "calls": []}
+                comp_turns.append(current)
+            elif row["kind"] in _INTERNAL_KINDS:
+                turn_kind, current = "internal", None
+            else:
+                turn_kind, current, dispatched = "root", None, False
+            continue
+        if row["role"] != "assistant":
+            continue
+        for call in row["calls"]:
+            ordinal += 1
+            name = call["name"] or "?"
+            if turn_kind == "root" and ordinal in accepted:
+                dispatched = True
+                continue
+            if name in _FLEET_BOOKKEEPING_TOOLS:
+                continue
+            if turn_kind == "root" and dispatched:
+                after.append({"row": row["i"], "tool": name, "ordinal": ordinal})
+            elif turn_kind == "completion" and current is not None:
+                current["calls"].append(name)
+    return {"after_dispatch": after, "completion_turns": comp_turns}
+
+
+def score_fleet(messages: Sequence[Dict[str, Any]], case: Dict[str, Any]) -> Dict[str, Any]:
+    """Verdict of one fleet case on one recorded session.  Pure.
+
+    ``status`` is ``pass``, ``fail`` or ``not_exercised`` (the root never handed
+    work to a helper, so the behaviour under test could not occur: that is
+    neither a pass nor a regression, and the bar counts it as not passing).
+    """
+    check = case.get("fleet_check")
+    if check not in FLEET_CHECKS:
+        raise ValueError(f"case {case.get('id')!r} has no fleet_check")
+    w = _walk(messages)
+    accepted = [d for d in w["dispatches"] if d["accepted"]]
+    helpers = sum(d["n_tasks"] for d in accepted)
+    out: Dict[str, Any] = {
+        "check": check, "helpers_dispatched": helpers, "reasons": [], "evidence": [],
+    }
+    if not accepted or (check == "premature_verdict" and helpers < 2):
+        out["status"] = "not_exercised"
+        out["reasons"].append(
+            "no helper was started" if not accepted
+            else "only one helper was started; a combined verdict needs two or more")
+        return out
+
+    fails: List[str] = []
+    if check == "premature_verdict":
+        for v in w["visible"]:
+            sentence = _states_verdict(v["text"])
+            if sentence and not _scoped(v["text"]):
+                if v["pending"]:
+                    fails.append("combined verdict while helpers had not reported")
+                    out["evidence"].append({"row": v["row"], "text": sentence[:240],
+                                            "pending": v["pending"]})
+                elif v["failed_completions"] and not _FAILURE_ACK_RE.search(v["text"]):
+                    fails.append("a helper that failed was presented as a clean result")
+                    out["evidence"].append({"row": v["row"], "text": sentence[:240],
+                                            "failed_completions": v["failed_completions"]})
+        for p in w["premature"]:
+            if not _scoped(p["snippet"]):
+                fails.append("work called done while helpers had not reported")
+                out["evidence"].append({"row": p["row"], "text": p["snippet"][:240],
+                                        "pending": p["pending"]})
+    else:
+        fg = _fleet_foreground(messages, w["dispatches"])
+        if fg["after_dispatch"]:
+            tools = sorted({c["tool"] for c in fg["after_dispatch"]})
+            fails.append(f"{len(fg['after_dispatch'])} foreground call(s) after the hand-off "
+                         f"in the same turn ({', '.join(tools)})")
+            out["evidence"] += fg["after_dispatch"][:10]
+        cap = int(case.get("max_completion_turn_calls") or FLEET_MAX_COMPLETION_TURN_CALLS)
+        for t in fg["completion_turns"]:
+            if len(t["calls"]) > cap:
+                fails.append(f"{len(t['calls'])} foreground calls in one completion turn (max {cap})")
+                out["evidence"].append({"row": t["row"], "calls": t["calls"][:20]})
+        # Acknowledged in words: some visible text at or after the first hand-off.
+        first = w["first_attempt_row"]
+        if first is not None and not any(v["row"] >= first for v in w["visible"]):
+            fails.append("hand-off was never acknowledged in words")
+    out["reasons"] = fails
+    out["status"] = "fail" if fails else "pass"
+    return out
+
+
+def evaluate_fleet(
+    runs: Sequence[Dict[str, Any]], cases: Sequence[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """The fleet bar: every rep of every fleet case passes, and no limit wording."""
+    checks: List[Dict[str, Any]] = []
+    for case in cases:
+        rs = [r for r in runs if r["case_id"] == case["id"]]
+        states = [((r.get("fleet") or {}).get("status") or "error") for r in rs]
+        ok = bool(rs) and all(s == "pass" for s in states)
+        checks.append({"name": case["id"], "ok": ok,
+                       "detail": f"{states.count('pass')}/{len(rs)} reps pass"
+                                 + ("" if ok else f" ({', '.join(states) or 'no reps'})")})
+    hits = sum(len((r.get("score") or {}).get("limit_hits") or []) for r in runs)
+    checks.append({"name": "limit_mentions", "ok": hits == 0,
+                   "detail": f"{hits} internal-limit mention(s) in user-visible text (max 0)"})
+    errs = sum(1 for r in runs if r.get("error") or not r.get("settled", True))
+    checks.append({"name": "run_errors", "ok": errs == 0,
+                   "detail": f"{errs} run(s) errored or never settled (max 0)"})
+    return {"passed": all(c["ok"] for c in checks), "checks": checks}
+
+
+# ---------------------------------------------------------------------------
 # Pass bar
 # ---------------------------------------------------------------------------
 
@@ -666,6 +891,7 @@ def wait_settled(
     poll_seconds: float,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    on_poll: Optional[Callable[[Sequence[Dict[str, Any]]], None]] = None,
 ) -> bool:
     """Wait until the root and every helper it started have gone quiet.
 
@@ -676,8 +902,20 @@ def wait_settled(
     start = clock()
     last_sig: Any = object()
     last_change = start
+    msgs: Sequence[Dict[str, Any]] = []
     while True:
-        msgs = read_messages()
+        try:
+            msgs = read_messages()
+        except sqlite3.OperationalError:
+            # The profile's DB is in rollback-journal mode on hosts whose SQLite
+            # is too old for WAL, so a helper's writer can lock a reader out for
+            # longer than the reader's own busy timeout.  Not a verdict: poll again.
+            if clock() - start >= timeout:
+                return False
+            sleep(poll_seconds)
+            continue
+        if on_poll is not None:
+            on_poll(msgs)
         sig = (len(msgs), msgs[-1].get("id") if msgs else None)
         now = clock()
         if sig != last_sig:
@@ -689,15 +927,35 @@ def wait_settled(
         sleep(poll_seconds)
 
 
-def read_transcript(db_path: Path, session_id: str) -> List[Dict[str, Any]]:
-    """Read one session's rows through the real SessionDB (read-only handle)."""
+def read_transcript(
+    db_path: Path,
+    session_id: str,
+    *,
+    attempts: int = 8,
+    backoff: float = 0.5,
+    sleep: Callable[[float], None] = time.sleep,
+) -> List[Dict[str, Any]]:
+    """Read one session's rows through the real SessionDB (read-only handle).
+
+    Retries ``database is locked``: with the journal in DELETE mode (SQLite
+    builds that cannot run WAL safely) a busy writer blocks even this reader.
+    """
     from clover_state import SessionDB
 
-    db = SessionDB(db_path=Path(db_path), read_only=True)
-    try:
-        return db.get_messages(session_id)
-    finally:
-        db.close()
+    for attempt in range(attempts):
+        db = None
+        try:
+            # Opening the handle reads the schema, so it can be locked out too.
+            db = SessionDB(db_path=Path(db_path), read_only=True)
+            return db.get_messages(session_id)
+        except sqlite3.OperationalError:
+            if attempt == attempts - 1:
+                raise
+        finally:
+            if db is not None:
+                db.close()
+        sleep(backoff * (attempt + 1))
+    return []  # unreachable: the last attempt returns or raises
 
 
 # ---------------------------------------------------------------------------
@@ -754,6 +1012,7 @@ class RpcEventTracker:
         self.errors: List[str] = []
         self.responses: Dict[Any, Dict[str, Any]] = {}
         self.last_complete: Dict[str, Any] = {}
+        self.event_counts: Dict[str, int] = {}
 
     def feed(self, frame: Dict[str, Any]) -> None:
         if not isinstance(frame, dict):
@@ -771,6 +1030,7 @@ class RpcEventTracker:
         if self.session_id is None or params.get("session_id") != self.session_id:
             return
         payload = params.get("payload") or {}
+        self.event_counts[str(kind)] = self.event_counts.get(str(kind), 0) + 1
         if kind == "message.start":
             self.running_turns += 1
         elif kind == "message.complete":
@@ -789,6 +1049,154 @@ def resolve_profile_home(profile: str) -> Path:
     if not profile_exists(profile):
         raise SystemExit(f"profile {profile!r} does not exist")
     return Path(get_profile_dir(profile))
+
+
+# Root-level files of a profile home the eval needs: settings, secrets, and the
+# auth stores a provider reads.  state.db is deliberately absent.
+BASELINE_FILES = ("config.yaml", ".env", "auth.json", ".anthropic_oauth.json")
+BASELINE_DIRS = ("skills", "memories")
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _eval_config(raw: str) -> Dict[str, Any]:
+    """Parse a profile's config.yaml and switch off what rewrites skills.
+
+    A parser's message quotes the offending source line, and config.yaml can
+    hold secrets, so on failure only the exception type and the line/column go
+    into the ``ValueError`` (which reaches progress output and results.json),
+    and the parser's own exception is not chained to it.
+    """
+    import yaml
+
+    failure = ""
+    data: Any = None
+    try:
+        data = yaml.safe_load(raw) if raw.strip() else {}
+    except Exception as exc:  # parser errors quote file contents
+        mark = getattr(exc, "problem_mark", None)
+        where = (f" at line {int(mark.line) + 1}, column {int(mark.column) + 1}"
+                 if mark is not None and hasattr(mark, "line") else "")
+        failure = f"config.yaml could not be parsed ({type(exc).__name__}{where})"
+    if failure:
+        raise ValueError(failure)  # outside the except block: no chained excerpt
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError("config.yaml is not a mapping")
+    for path in (("auxiliary", "background_review"), ("curator",)):
+        node = data
+        for key in path:
+            if not isinstance(node.get(key), dict):
+                node[key] = {}
+            node = node[key]
+        node["enabled"] = False
+    return data
+
+
+def _copy_dereferenced(src: Path, dst: Path, rel: str, skipped: List[Dict[str, str]]) -> None:
+    """Copy ``src`` (a file or directory) to ``dst`` with every link replaced
+    by an independent copy of what it points at, so nothing written under
+    ``dst`` can reach the profile through a link.  A link that points nowhere
+    (or loops) is skipped and recorded in ``skipped`` by its profile-relative
+    path; no file content and no link target is recorded."""
+    def one(s: Path, d: Path, r: str, stack: frozenset) -> None:
+        if not os.path.exists(s):  # lexists-but-not-exists: dangling or looping
+            skipped.append({"path": r, "reason": "dangling link"})
+            return
+        if s.is_dir():
+            real = os.path.realpath(s)
+            if real in stack:
+                skipped.append({"path": r, "reason": "link cycle"})
+                return
+            d.mkdir(parents=True, exist_ok=True)
+            for name in sorted(os.listdir(s)):
+                one(s / name, d / name, f"{r}/{name}", stack | {real})
+        elif s.is_file():
+            d.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(s, d)  # follows a link: a regular file results
+        else:
+            skipped.append({"path": r, "reason": "not a regular file"})
+
+    one(Path(src), Path(dst), rel, frozenset())
+
+
+class FrozenBaseline:
+    """One frozen snapshot of the profile, from which every rep's home is made.
+
+    ``freeze`` copies the files above into ``root`` once, at harness start, and
+    hashes every SKILL.md.  Links are dereferenced (a skill library may link
+    references from elsewhere), so no copy shares bytes with the profile or with
+    another copy; ``skipped_links`` lists the ones that could not be followed.
+    ``make_home`` then copies that snapshot (never the live profile) to a fresh
+    directory and rewrites its config.yaml.  The real profile is only ever
+    read, and only by ``freeze``.
+    """
+
+    def __init__(self, root: Path, source: Path, skill_sha256: Dict[str, str],
+                 skipped_links: Optional[List[Dict[str, str]]] = None):
+        self.root = Path(root)
+        self.source = Path(source)
+        self.skill_sha256 = dict(skill_sha256)
+        self.skipped_links = list(skipped_links or [])
+
+    @classmethod
+    def freeze(cls, source_home: Path, root: Path) -> "FrozenBaseline":
+        source, root = Path(source_home), Path(root)
+        src_abs, root_abs = source.resolve(), root.resolve()
+        if src_abs == root_abs or src_abs in root_abs.parents or root_abs in src_abs.parents:
+            # a stale baseline is replaced below; never the profile itself
+            raise ValueError(f"baseline dir {root} overlaps the profile home {source}")
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True)
+        skipped: List[Dict[str, str]] = []
+        for name in (*BASELINE_FILES, *BASELINE_DIRS):
+            if os.path.lexists(source / name):
+                _copy_dereferenced(source / name, root / name, name, skipped)
+        hashes = {
+            p.relative_to(root).as_posix(): _sha256(p)
+            for p in sorted((root / "skills").rglob("SKILL.md")) if p.is_file()
+        }
+        return cls(root, source, hashes, skipped)
+
+    def make_home(self, label: str) -> Path:
+        """A disposable home for one rep; ``ValueError`` if config.yaml is unusable."""
+        import yaml
+
+        # Parse first: a config that cannot be used leaves no copy behind, and
+        # a read error is reported by type only (see _eval_config).
+        cfg_src = self.root / "config.yaml"
+        raw, failure = "", ""
+        try:
+            raw = cfg_src.read_text(encoding="utf-8") if cfg_src.exists() else ""
+        except Exception as exc:
+            failure = f"config.yaml could not be read ({type(exc).__name__})"
+        if failure:
+            raise ValueError(failure)
+        cfg = _eval_config(raw)
+        home = self.root.parent / "homes" / re.sub(r"[^A-Za-z0-9_.-]", "_", label)
+        if home.exists():
+            shutil.rmtree(home)
+        shutil.copytree(self.root, home, symlinks=False)
+        (home / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+        return home
+
+
+def make_rep_env(
+    baseline: FrozenBaseline,
+    driver_factory: Callable[[Path], Any],
+    reader_factory: Callable[[Path], Callable[[str], Sequence[Dict[str, Any]]]],
+) -> Callable[[str], Tuple[Any, Callable[[str], Sequence[Dict[str, Any]]], Path]]:
+    """``run_eval``'s ``rep_env``: label -> (driver, reader, home) over a fresh copy."""
+
+    def _env(label: str):
+        home = baseline.make_home(label)
+        return driver_factory(home), reader_factory(home), home
+
+    return _env
 
 
 class _GatewaySession:
@@ -831,7 +1239,17 @@ class _GatewaySession:
 
 
 class _GatewayConnection:
-    def __init__(self, home: Path, python: str, repo_root: Path, ready_timeout: float):
+    def __init__(self, home: Path, python: str, repo_root: Path, ready_timeout: float,
+                 log_path: Optional[Path] = None,
+                 progress: Optional[Callable[[str], None]] = None,
+                 heartbeat_seconds: float = 30.0):
+        self._progress = progress
+        self._heartbeat_seconds = heartbeat_seconds
+        self._last_beat = time.monotonic()
+        self._log: Any = None
+        if log_path is not None:
+            Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+            self._log = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)
         env = {k: v for k, v in os.environ.items()
                if k not in ("CLOVER_DESKTOP", "CLOVER_DESKTOP_TERMINAL")}
         env["CLOVER_HOME"] = str(home)
@@ -877,11 +1295,30 @@ class _GatewayConnection:
     def _read_stderr(self) -> None:
         for line in self.proc.stderr:  # type: ignore[union-attr]
             self._stderr.append(line.rstrip())
+            if self._log is not None:
+                try:
+                    self._log.write(line if line.endswith("\n") else line + "\n")
+                except (OSError, ValueError):
+                    pass
 
     def _tail(self) -> str:
         return " | ".join(list(self._stderr)[-8:]) or "(no stderr)"
 
+    def _beat(self) -> None:
+        if self._progress is None:
+            return
+        now = time.monotonic()
+        if now - self._last_beat < self._heartbeat_seconds:
+            return
+        self._last_beat = now
+        tr = self.tracker
+        self._progress(
+            f"  gateway: running_turns={tr.running_turns} completed_turns={tr.completed_turns} "
+            f"approvals={tr.approvals} events={dict(sorted(tr.event_counts.items()))}"
+        )
+
     def pump(self, wait: float) -> None:
+        self._beat()
         try:
             frame = self._frames.get(timeout=wait) if wait > 0 else self._frames.get_nowait()
         except queue.Empty:
@@ -923,21 +1360,32 @@ class _GatewayConnection:
                 self.proc.wait(timeout=5)
             except Exception:
                 self.proc.kill()
+        if self._log is not None:
+            try:
+                self._log.close()
+            except OSError:
+                pass
 
 
 class TuiGatewayDriver:
     """One gateway process per run, so completion queues never cross cases."""
 
     def __init__(self, home: Path, *, python: Optional[str] = None,
-                 repo_root: Path = REPO_ROOT, ready_timeout: float = 90.0):
+                 repo_root: Path = REPO_ROOT, ready_timeout: float = 90.0,
+                 log_dir: Optional[Path] = None,
+                 progress: Optional[Callable[[str], None]] = None):
         self.home = Path(home)
         self.python = python or sys.executable
         self.repo_root = repo_root
         self.ready_timeout = ready_timeout
+        self.log_dir = Path(log_dir) if log_dir is not None else None
+        self.progress = progress
 
     @contextmanager
     def session(self, *, model: str, provider: Optional[str], cwd: str) -> Iterator[_GatewaySession]:
-        conn = _GatewayConnection(self.home, self.python, self.repo_root, self.ready_timeout)
+        log_path = self.log_dir / f"{Path(cwd).name}.stderr.log" if self.log_dir else None
+        conn = _GatewayConnection(self.home, self.python, self.repo_root, self.ready_timeout,
+                                  log_path=log_path, progress=self.progress)
         try:
             params: Dict[str, Any] = {"model": model, "cwd": cwd, "cols": 120}
             if provider:
@@ -956,6 +1404,84 @@ class TuiGatewayDriver:
 
 
 # ---------------------------------------------------------------------------
+# Per-case fixtures
+# ---------------------------------------------------------------------------
+
+
+def _make_video_fixture(dest: Path, *, timeout: float = 180.0) -> bool:
+    """Write a 10 s 3840x2160 test-pattern clip with a sine track to ``dest``.
+
+    A small stand-in for the long recording the video-transcode prompt names.
+    Returns False (leaving nothing behind) when ffmpeg is missing or fails.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg, "-y", "-loglevel", "error",
+        "-f", "lavfi", "-i", "testsrc=size=3840x2160:rate=15:duration=10",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=10",
+        "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "2M", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "64k", "-shortest", str(dest),
+    ]
+    try:
+        done = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        done = None
+    if done is None or done.returncode != 0 or not dest.is_file():
+        dest.unlink(missing_ok=True)
+        return False
+    return True
+
+
+# The committed files each case's prompt names, relative to {workdir}.  Explicit
+# on purpose: other prompts name paths the agent is meant to create (the bakery
+# page) or fetch (the click clone), so scraping prompts would flag them.  The
+# generated 4K clip is not listed: a host without ffmpeg skips it, logged.
+_SHOP_FILES = (
+    "shop/cart/pricing.py", "shop/reports/export.py", "shop/auth/throttle.py",
+    "shop/tests/test_pricing.py", "shop/tests/test_export.py", "shop/tests/test_throttle.py",
+)
+CASE_FIXTURE_FILES: Dict[str, Tuple[str, ...]] = {
+    "fix-three-bugs": _SHOP_FILES,
+    "feature-flag-review": _SHOP_FILES + ("shop/config.py",),
+}
+
+
+class FixtureError(RuntimeError):
+    """A seeded workdir lacks a file its case's prompt names."""
+
+
+def missing_case_fixtures(case_id: str, cwd: Path) -> List[str]:
+    """The expected fixture files of ``case_id`` that are not under ``cwd``."""
+    return [rel for rel in CASE_FIXTURE_FILES.get(case_id, ())
+            if not (Path(cwd) / rel).is_file()]
+
+
+def seed_case_fixtures(
+    case_id: str,
+    cwd: Path,
+    *,
+    fixtures_dir: Path = FIXTURES_DIR,
+    say: Optional[Callable[[str], None]] = None,
+) -> None:
+    """Put the files a case's prompt refers to under ``{workdir}``.
+
+    ``<fixtures_dir>/<case_id>/`` is copied verbatim when present; the one
+    media file too big to commit is generated instead.
+    """
+    say = say or (lambda _m: None)
+    src = Path(fixtures_dir) / case_id
+    if src.is_dir():
+        shutil.copytree(src, cwd, dirs_exist_ok=True)
+    if case_id == "video-transcode":
+        clip = Path(cwd) / "recordings" / "conference-day1.mov"
+        if not _make_video_fixture(clip):
+            say(f"{case_id}: no 4K clip generated (ffmpeg missing or failed); prompt file will not exist")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -964,7 +1490,7 @@ def run_eval(
     cases: Sequence[Dict[str, Any]],
     driver: Any,
     *,
-    reader: Callable[[str], Sequence[Dict[str, Any]]],
+    reader: Optional[Callable[[str], Sequence[Dict[str, Any]]]],
     root_model: str,
     root_provider: Optional[str],
     reps: int,
@@ -978,7 +1504,16 @@ def run_eval(
     sleep: Callable[[float], None] = time.sleep,
     progress: Optional[Callable[[str], None]] = None,
     router_reader: Optional[Callable[[str], Optional[Dict[str, Any]]]] = None,
+    heartbeat_seconds: float = 30.0,
+    rep_env: Optional[Callable[[str], Tuple[Any, Callable[[str], Sequence[Dict[str, Any]]], Path]]] = None,
+    router_reader_factory: Optional[
+        Callable[[Path], Callable[[str], Optional[Dict[str, Any]]]]] = None,
 ) -> List[Dict[str, Any]]:
+    """Run every case.  With ``rep_env`` (see ``make_rep_env``) each rep gets its
+    own (driver, reader, home) built from the frozen baseline; otherwise the one
+    ``driver``/``reader`` is shared by all reps."""
+    if rep_env is None and (driver is None or reader is None):
+        raise ValueError("run_eval needs a driver and reader, or a rep_env")
     out_dir = Path(out_dir)
     (out_dir / "transcripts").mkdir(parents=True, exist_ok=True)
     runs: List[Dict[str, Any]] = []
@@ -988,45 +1523,87 @@ def run_eval(
         for rep in range(n):
             run: Dict[str, Any] = {
                 "case_id": case["id"], "rep": rep, "expected_mode": case["expected_mode"],
-                "session_id": None, "error": None, "settled": False,
+                "session_id": None, "error": None, "settled": False, "home": None,
                 "turn_seconds": None, "approvals": 0, "score": None,
                 "correct": False, "override_violated": bool(case.get("override")),
                 "dispatch_within_calls_ok": case.get("dispatch_within_calls") is None,
             }
             messages: Sequence[Dict[str, Any]] = []
+            rep_driver, rep_reader, rep_router = driver, reader, router_reader
             try:
+                if rep_env is not None:
+                    rep_driver, rep_reader, rep_home = rep_env(f"{case['id']}-r{rep}")
+                    run["home"] = str(rep_home)
+                    if router_reader_factory is not None:
+                        rep_router = router_reader_factory(rep_home)
                 cwd = out_dir / "work" / f"{case['id']}-r{rep}"
                 cwd.mkdir(parents=True, exist_ok=True)
+                seed_case_fixtures(case["id"], cwd, say=say)
+                # A prompt naming a file that was never seeded would be scored
+                # "direct" (nothing to do), not as the broken input it is.
+                lacking = missing_case_fixtures(case["id"], cwd)
+                if lacking:
+                    raise FixtureError(f"fixture file(s) missing from the workdir: {lacking}")
                 prompt = case["prompt"].replace("{workdir}", str(cwd))
-                with driver.session(model=root_model, provider=root_provider, cwd=str(cwd)) as sess:
+                with rep_driver.session(model=root_model, provider=root_provider, cwd=str(cwd)) as sess:
                     sid = sess.stored_session_id
                     run["session_id"] = sid
                     t0 = clock()
+                    say(f"{case['id']} r{rep}: session {sid} started")
+                    beat = {"at": t0}
+                    snapshot = out_dir / "transcripts" / f"{case['id']}-r{rep}.json"
+
+                    def on_poll(msgs: Sequence[Dict[str, Any]], _beat=beat, _snap=snapshot,
+                                _label=f"{case['id']} r{rep}") -> None:
+                        # A killed or stuck run still leaves its transcript on disk.
+                        now = clock()
+                        if now - _beat["at"] < heartbeat_seconds:
+                            return
+                        _beat["at"] = now
+                        try:
+                            _snap.write_text(json.dumps(list(msgs), indent=1, default=str),
+                                             encoding="utf-8")
+                        except OSError:
+                            pass
+                        say(f"{_label}: {now - t0:.0f}s, {len(msgs)} rows, "
+                            f"{len(pending_work(msgs))} open")
+
                     sess.submit(prompt)
                     ended = sess.wait_first_turn(turn_timeout)
                     run["turn_seconds"] = round(clock() - t0, 2)
                     if not ended:
                         run["error"] = f"root turn did not end within {turn_timeout:.0f}s"
+                    say(f"{case['id']} r{rep}: root turn "
+                        f"{'ended' if ended else 'NOT ended'} after {run['turn_seconds']}s")
                     run["settled"] = wait_settled(
-                        lambda: reader(sid), sess.idle,
+                        lambda: rep_reader(sid), sess.idle,
                         quiet_seconds=quiet_seconds, timeout=settle_timeout,
                         poll_seconds=poll_seconds, clock=clock, sleep=sleep,
+                        on_poll=on_poll,
                     )
                     if not run["settled"]:
                         sess.interrupt()
                     run["approvals"] = getattr(sess, "approvals", 0)
-                messages = reader(run["session_id"])
+                messages = rep_reader(run["session_id"])
                 run["score"] = score_transcript(messages)
                 run.update(judge_run(run["score"], case))
-                if router_reader is not None:
-                    run["router"] = router_reader(run["session_id"])
+                if case.get("fleet_check"):
+                    run["fleet"] = score_fleet(messages, case)
+                    run["correct"] = run["fleet"]["status"] == "pass"
+                    run["override_violated"] = False
+                if rep_router is not None:
+                    run["router"] = rep_router(run["session_id"])
             except Exception as exc:  # one bad run must not lose the others
                 run["error"] = f"{type(exc).__name__}: {exc}"
                 if run["session_id"] and not messages:
                     try:
-                        messages = reader(run["session_id"])
+                        messages = rep_reader(run["session_id"])
                         run["score"] = score_transcript(messages)
                         run.update(judge_run(run["score"], case))
+                        if case.get("fleet_check"):
+                            run["fleet"] = score_fleet(messages, case)
+                            run["correct"] = run["fleet"]["status"] == "pass"
+                            run["override_violated"] = False
                     except Exception:
                         pass
             try:
@@ -1050,7 +1627,7 @@ def run_eval(
 def render_summary(
     runs: Sequence[Dict[str, Any]],
     cases: Sequence[Dict[str, Any]],
-    bar_result: Dict[str, Any],
+    bar_result: Optional[Dict[str, Any]],
     meta: Dict[str, Any],
 ) -> str:
     lines = [
@@ -1106,6 +1683,9 @@ def render_summary(
         lines.append(f"  ! premature success in {r['case_id']} r{r['rep']}: {p['snippet']}")
     if problems or hits or prem:
         lines.append("")
+    if bar_result is None:
+        lines.append("Pass bar: not evaluated (no mode cases in this run)")
+        return "\n".join(lines) + "\n"
     lines.append("Pass bar:")
     for c in bar_result["checks"]:
         lines.append(f"  [{'PASS' if c['ok'] else 'FAIL'}] {c['name']}: {c['detail']}")
@@ -1113,23 +1693,69 @@ def render_summary(
     return "\n".join(lines) + "\n"
 
 
+def render_fleet_summary(
+    runs: Sequence[Dict[str, Any]],
+    fleet_cases: Sequence[Dict[str, Any]],
+    fleet_result: Dict[str, Any],
+) -> str:
+    lines = ["", "Fleet cases (production incidents; scored apart from the 15)",
+             f"{'case':<34}{'check':<28}status per rep"]
+    for case in fleet_cases:
+        rs = [r for r in runs if r["case_id"] == case["id"]]
+        states = ",".join((r.get("fleet") or {}).get("status") or "ERR" for r in rs)
+        lines.append(f"{case['id']:<34}{case['fleet_check']:<28}{states}")
+    for r in runs:
+        fl = r.get("fleet") or {}
+        if r.get("case_id") in {c["id"] for c in fleet_cases} and fl.get("status") != "pass":
+            lines.append(f"  ! {r['case_id']} r{r['rep']}: {fl.get('status', 'error')}: "
+                         + ("; ".join(fl.get("reasons") or []) or r.get("error") or "no verdict"))
+            for ev in (fl.get("evidence") or [])[:3]:
+                lines.append(f"      {json.dumps(ev, default=str)[:260]}")
+    lines.append("Fleet bar:")
+    for c in fleet_result["checks"]:
+        lines.append(f"  [{'PASS' if c['ok'] else 'FAIL'}] {c['name']}: {c['detail']}")
+    lines += ["", f"FLEET RESULT: {'PASS' if fleet_result['passed'] else 'FAIL'}"]
+    return "\n".join(lines) + "\n"
+
+
 def write_report(
     out_dir: Path,
     runs: Sequence[Dict[str, Any]],
     cases: Sequence[Dict[str, Any]],
-    bar_result: Dict[str, Any],
+    bar_result: Optional[Dict[str, Any]],
     meta: Dict[str, Any],
+    fleet_cases: Sequence[Dict[str, Any]] = (),
+    fleet_result: Optional[Dict[str, Any]] = None,
 ) -> None:
+    """``runs`` holds every run; ``bar`` and ``cases`` cover the mode cases only,
+    ``fleet`` / ``fleet_cases`` the separately scored fleet cases."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "results.json").write_text(
-        json.dumps({"meta": meta, "bar": bar_result, "cases": list(cases), "runs": list(runs)},
-                   indent=2, default=str),
+        json.dumps({"meta": meta, "bar": bar_result, "cases": list(cases),
+                    "fleet": fleet_result, "fleet_cases": list(fleet_cases),
+                    "runs": list(runs)}, indent=2, default=str),
         encoding="utf-8",
     )
     (out_dir / "summary.txt").write_text(
-        render_summary(runs, cases, bar_result, meta), encoding="utf-8"
+        render_report_text(runs, cases, bar_result, meta, fleet_cases, fleet_result),
+        encoding="utf-8",
     )
+
+
+def render_report_text(
+    runs: Sequence[Dict[str, Any]],
+    cases: Sequence[Dict[str, Any]],
+    bar_result: Optional[Dict[str, Any]],
+    meta: Dict[str, Any],
+    fleet_cases: Sequence[Dict[str, Any]] = (),
+    fleet_result: Optional[Dict[str, Any]] = None,
+) -> str:
+    fleet_ids = {c["id"] for c in fleet_cases}
+    text = render_summary([r for r in runs if r["case_id"] not in fleet_ids], cases, bar_result, meta)
+    if fleet_result is not None:
+        text += render_fleet_summary(runs, fleet_cases, fleet_result)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -1159,6 +1785,9 @@ def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
                    help="Minimum repetitions for live-evidence cases (default 3)")
     p.add_argument("--out", required=True, help="Output directory (results.json, summary.txt, transcripts/)")
     p.add_argument("--cases", default=str(DEFAULT_CASES), help="Cases JSONL")
+    p.add_argument("--fleet-cases", default=str(DEFAULT_FLEET_CASES),
+                   help="Fleet-incident cases JSONL, scored separately from --cases")
+    p.add_argument("--no-fleet", action="store_true", help="Do not run the fleet-incident cases")
     p.add_argument("--only", action="append", default=[], help="Run only these case ids (comma separated, repeatable)")
     p.add_argument("--turn-timeout", type=float, default=420.0, help="Seconds to wait for the root turn to end")
     p.add_argument("--settle-timeout", type=float, default=900.0, help="Seconds to wait for helpers and completion turns")
@@ -1178,51 +1807,93 @@ def main(
 ) -> int:
     args = _parse_args(argv)
     try:
-        cases = load_cases(Path(args.cases))
+        loaded = load_cases(Path(args.cases))
+        if not args.no_fleet:
+            loaded += load_cases(Path(args.fleet_cases))
         bar_over = parse_bar_overrides(args.bar)
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+    ids = [c["id"] for c in loaded]
+    if len(ids) != len(set(ids)):
+        print("error: a case id appears in both the mode cases and the fleet cases", file=sys.stderr)
         return 2
     if args.only:
         wanted = {i.strip() for chunk in args.only for i in chunk.split(",") if i.strip()}
-        unknown = wanted - {c["id"] for c in cases}
+        unknown = wanted - set(ids)
         if unknown:
             print(f"error: unknown case id(s): {sorted(unknown)}", file=sys.stderr)
             return 2
-        cases = [c for c in cases if c["id"] in wanted]
+        loaded = [c for c in loaded if c["id"] in wanted]
+    # Fleet cases are judged by their own check and bar, never by the mode bar.
+    cases = [c for c in loaded if not c.get("fleet_check")]
+    fleet_cases = [c for c in loaded if c.get("fleet_check")]
 
     if args.dry_run:
         for c in cases:
             n = max(args.reps, args.evidence_reps) if c.get("live_evidence") else args.reps
             tags = ("live-evidence " if c.get("live_evidence") else "") + ("override" if c.get("override") else "")
             print(f"{c['id']:<26} expect={c['expected_mode']:<9} reps={n}  {tags}".rstrip())
+        if fleet_cases:
+            print("fleet cases (scored separately from the mode cases):")
+        for c in fleet_cases:
+            print(f"{c['id']:<26} check={c['fleet_check']:<26} reps={args.reps}")
+        print(f"{len(cases)} mode case(s) + {len(fleet_cases)} fleet case(s)")
         return 0
 
     home = resolve_profile_home(args.profile)
-    driver = (driver_factory or (lambda h, a: TuiGatewayDriver(h)))(home, args)
-    reader = (reader_factory or (lambda h: (lambda sid: read_transcript(h / "state.db", sid))))(home)
     out_dir = Path(args.out)
+
+    def _progress(msg: str) -> None:
+        print(msg, file=sys.stderr, flush=True)
+
+    # The real profile is read once, here; every rep runs on a copy of this.
+    try:
+        baseline = FrozenBaseline.freeze(home, out_dir / "baseline")
+    except (OSError, ValueError) as exc:
+        print(f"error: could not freeze the profile baseline: {exc}", file=sys.stderr)
+        return 2
+    _progress(f"baseline frozen: {len(baseline.skill_sha256)} SKILL.md hashed"
+              + (f", {len(baseline.skipped_links)} unfollowable link(s) skipped"
+                 if baseline.skipped_links else ""))
+
+    make_driver = driver_factory or (lambda h, a: TuiGatewayDriver(
+        h, log_dir=out_dir / "gateway-logs", progress=_progress))
+    make_reader = reader_factory or (lambda h: (lambda sid: read_transcript(h / "state.db", sid)))
     runs = run_eval(
-        cases, driver, reader=reader, root_model=args.root_model, root_provider=args.root_provider,
+        cases + fleet_cases, None, reader=None, root_model=args.root_model, root_provider=args.root_provider,
         reps=args.reps, evidence_reps=args.evidence_reps, out_dir=out_dir,
         turn_timeout=args.turn_timeout, settle_timeout=args.settle_timeout,
         quiet_seconds=args.quiet_seconds, poll_seconds=args.poll_seconds,
-        progress=lambda m: print(m, file=sys.stderr, flush=True),
-        router_reader=lambda sid: read_router_record(home, sid),
+        progress=_progress,
+        # each rep logs into its own home, so the router record is read from there
+        router_reader_factory=lambda rep_home: (lambda sid: read_router_record(rep_home, sid)),
+        rep_env=make_rep_env(baseline, lambda h: make_driver(h, args), make_reader),
     )
-    bar_result = evaluate_bar(runs, cases, bar_over)
+    fleet_ids = {c["id"] for c in fleet_cases}
+    bar_result = (evaluate_bar([r for r in runs if r["case_id"] not in fleet_ids], cases, bar_over)
+                  if cases else None)
+    fleet_result = (evaluate_fleet([r for r in runs if r["case_id"] in fleet_ids], fleet_cases)
+                    if fleet_cases else None)
     meta = {
         "profile": args.profile, "root_model": args.root_model, "root_provider": args.root_provider,
         "surface": "tui_gateway JSON-RPC (platform tui)",
         "reps": args.reps, "evidence_reps": args.evidence_reps,
-        "delegation_config": _delegation_config(home),
+        "delegation_config": _delegation_config(baseline.root),
+        "skill_sha256": baseline.skill_sha256,
+        "skipped_links": baseline.skipped_links,
+        "isolation": {
+            "per_rep_copy": True, "state_db": "fresh per rep",
+            "background_review": False, "curator": False,
+        },
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
-    write_report(out_dir, runs, cases, bar_result, meta)
-    print(render_summary(runs, cases, bar_result, meta))
+    write_report(out_dir, runs, cases, bar_result, meta, fleet_cases, fleet_result)
+    print(render_report_text(runs, cases, bar_result, meta, fleet_cases, fleet_result))
     if any(r.get("error") or not r.get("settled", True) for r in runs):
         return 2
-    return 0 if bar_result["passed"] else 1
+    passed = all(r["passed"] for r in (bar_result, fleet_result) if r is not None)
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
