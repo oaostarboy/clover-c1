@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 ROUTER_SCRIPT = REPO_ROOT / "scripts" / "eval" / "delegation_router.py"
 MODES_SCRIPT = REPO_ROOT / "scripts" / "eval" / "delegation_modes.py"
 CASES_PATH = REPO_ROOT / "tests" / "eval" / "delegation_modes.jsonl"
+HELDOUT_PATH = REPO_ROOT / "tests" / "eval" / "delegation_router_heldout.jsonl"
 
 
 def _load(name: str, path: Path):
@@ -259,3 +260,67 @@ def test_the_summary_lists_router_verdicts_when_present_and_is_unchanged_otherwi
 
     assert "router" not in without.lower()
     assert "router" in with_router.lower() and "812" in with_router and "parallel" in with_router
+
+
+# ── the held-out set and the warm-up ───────────────────────────────────────
+
+def test_the_held_out_set_is_a_real_held_out_set():
+    """Different texts, every mode covered, no override cases (those never reach
+    the model) and the same loader: it can be fed straight to the eval."""
+    held = rt.load_cases(HELDOUT_PATH)
+    main = rt.load_cases(CASES_PATH)
+    assert len(held) >= 10
+    assert {c["id"] for c in held}.isdisjoint({c["id"] for c in main})
+    assert {c["prompt"] for c in held}.isdisjoint({c["prompt"] for c in main})
+    assert {c["expected_mode"] for c in held} == set(rt.MODES)
+    assert not any(c.get("override") for c in held)
+    # Paraphrases, not copies: the same intended mode, different wording.
+    for case in held:
+        assert case["prompt"].strip() and case["id"].startswith("h-")
+
+
+def test_an_injected_router_is_not_warmed_up(tmp_path):
+    calls = []
+
+    def route(message, recent_turns=()):
+        calls.append(message)
+        return FakeVerdict("direct")
+
+    rt.main(["--cases", str(CASES_PATH), "--only", "pc-diagnostic", "--reps", "1",
+             "--out", str(tmp_path / "o")], route_fn=route)
+    assert calls == ["Full PC diagnostic"]
+
+
+def _real_path(monkeypatch, tmp_path, argv):
+    """Run ``main`` on the real-router path with ``route`` faked; returns the
+    ``(message, settings)`` of every router call."""
+    import agent.delegation_router as router_module
+
+    seen = []
+
+    def route(message, recent_turns=(), *, settings=None, max_tasks=None):
+        seen.append((message, settings))
+        return FakeVerdict("direct")
+
+    monkeypatch.setattr(router_module, "route", route)
+    monkeypatch.setattr(router_module, "load_settings",
+                        lambda: router_module.RouterSettings(timeout_seconds=5.0))
+    rt.main(["--cases", str(CASES_PATH), "--only", "pc-diagnostic", "--reps", "1",
+             "--out", str(tmp_path / "o"), *argv])
+    return seen
+
+
+def test_the_real_router_path_warms_up_with_a_long_deadline_and_does_not_count_it(
+        monkeypatch, tmp_path):
+    seen = _real_path(monkeypatch, tmp_path, [])
+    assert len(seen) == 2
+    (_, warm), (message, measured) = seen
+    assert message == "Full PC diagnostic"
+    assert warm.timeout_seconds >= 60 and measured.timeout_seconds == 5.0
+    results = json.loads((tmp_path / "o" / "results.json").read_text())
+    assert len(results["runs"]) == 1
+
+
+def test_no_warmup_times_the_first_call(monkeypatch, tmp_path):
+    seen = _real_path(monkeypatch, tmp_path, ["--no-warmup"])
+    assert [m for m, _ in seen] == ["Full PC diagnostic"]
