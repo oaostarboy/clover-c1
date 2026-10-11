@@ -711,3 +711,53 @@ def test_two_unified_cards_in_one_message_are_separated_by_a_blank_line():
     text = card.render()
     assert "\n\n\U0001f504 **fixing the bugs**" in text
     assert text.count("\U0001f504 **fixing the bugs**") == 2
+
+
+# -- the helper's own todo bookkeeping is not a tool line ----------------------
+
+
+def test_todo_is_not_shown_as_a_recent_or_open_tool_line():
+    card = _running_card()
+    did = "d1"
+    kw = dict(delegation_id=did, model="claude-sonnet-5-5")
+    ac.on_child_event("subagent.tool", tool_name="todo", preview="updating 3 task(s)",
+                      args={"todos": []}, tool_call_id="t1", tool_count=15, **kw)
+    cl = card.parts[0].checklist
+    assert [name for _, name, _ in cl.open] == ["terminal"], "todo never becomes the doing line"
+    assert "todo" not in cl.doing
+    ac.on_child_event("subagent.tool_done", tool_name="todo", tool_call_id="t1", tool_count=15, **kw)
+    ac.on_child_event("subagent.tool_done", tool_name="terminal", tool_count=16, **kw)
+    text = card.render()
+    assert "todo" not in text.lower()
+    assert [p for p, _ in cl.recent] and all("todo" not in p for p, _ in cl.recent)
+    assert cl.calls == 16, "todo still counts as a tool call, like the 🔀 card"
+
+
+def test_todo_is_not_shown_for_several_helpers_either():
+    r = fl.DispatchReceipt(delegation_id="d2", seq=1, goals=("a", "b"), summary=HEAD)
+    card = ac.card_for([r])
+    kw = dict(delegation_id="d2", task_index=0)
+    ac.on_child_event("subagent.start", **kw)
+    ac.on_child_event("subagent.tool", tool_name="todo", preview="x", args={}, tool_call_id="t", **kw)
+    ac.on_child_event("subagent.tool_done", tool_name="todo", tool_call_id="t", **kw)
+    assert "todo" not in card.render().lower()
+
+
+def test_reserve_makes_the_delegation_owned_before_the_part_opens():
+    assert not ac.owns_delegation("early1")
+    assert ac.reserve("early1") is True
+    assert ac.owns_delegation("early1")
+    ac.release("early1")
+    assert not ac.owns_delegation("early1")
+    ac.reserve("early2")
+    ac.open_part("early2", HEAD, STEPS)
+    assert ac.owns_delegation("early2")
+
+
+def test_reserve_ack_part_only_for_a_handoff_that_will_open_a_part():
+    assert fl.reserve_ack_part("r1", None) is False
+    assert not ac.owns_delegation("r1")
+    assert fl.reserve_ack_part("r1", {"work": "fixing the bugs", "outcome": "test build", "steps": ["a"]}) is True
+    assert ac.owns_delegation("r1")
+    fl.release_ack_part("r1")
+    assert not ac.owns_delegation("r1")

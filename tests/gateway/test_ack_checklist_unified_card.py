@@ -287,7 +287,7 @@ async def test_multi_helper_events_edit_the_one_message_in_place():
     assert adapter.edits and adapter.edits[-1]["id"] == "m42"
     text = adapter.edits[-1]["text"]
     assert "\U0001f527 *terminal npm test*" in text and "\u2b1c **check a**" in text
-    assert adapter.edits[-1]["finalize"] is False
+    assert adapter.edits[-1]["finalize"] is True  # live edits are formatted
     for i in (0, 1):
         ac.on_child_event("subagent.complete", delegation_id="dm", task_index=i, status="completed",
                           summary="Plain summary: ok.")
@@ -313,3 +313,98 @@ async def test_classic_editor_text_is_unchanged_for_a_multi_dispatch():
     card = _multi("dm")
     ac.set_style_for_tests("classic")
     assert card.render() == HEAD
+
+
+# -- live edits keep their formatting ---------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_editor_always_edits_with_finalize_true_so_telegram_formats_it():
+    adapter, card = _Adapter(), _card()
+    editor = await _bind(adapter, card)
+    ac.on_child_event("subagent.todo", delegation_id=OWNED, todos=[{"id": "s1", "status": "in_progress"}])
+    ac.on_child_event("subagent.tool", delegation_id=OWNED, tool_name="read_file", preview="x.py",
+                      args={"path": "x.py"}, tool_count=1)
+    await _settle(editor)
+    assert adapter.edits and not card.finished
+    assert all(e["finalize"] is True for e in adapter.edits), "mid-run edits must be formatted"
+    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed", summary="Plain summary: ok.")
+    await _settle(editor)
+    assert all(e["finalize"] is True for e in adapter.edits)
+
+
+def _telegram_format(text: str) -> str:
+    from gateway.config import PlatformConfig
+    from plugins.platforms.telegram.adapter import TelegramAdapter
+
+    return TelegramAdapter(PlatformConfig(enabled=True, token="fake-token")).format_message(text)
+
+
+def test_a_live_card_renders_without_raw_markdown_through_telegram_format():
+    card = _card()
+    ac.on_child_event("subagent.start", delegation_id=OWNED, model="claude-sonnet-5-5")
+    ac.on_child_event("subagent.todo", delegation_id=OWNED, todos=[
+        {"id": "s1", "status": "completed"}, {"id": "s2", "status": "in_progress"}, {"id": "s3", "status": "pending"}])
+    ac.on_child_event("subagent.tool", delegation_id=OWNED, tool_name="skill_view", preview="github",
+                      args={"name": "github"}, tool_call_id="a", tool_count=1)
+    ac.on_child_event("subagent.tool_done", delegation_id=OWNED, tool_name="skill_view", tool_call_id="a")
+    ac.on_child_event("subagent.tool", delegation_id=OWNED, tool_name="terminal", preview="pytest -q",
+                      args={"command": "pytest -q"}, tool_call_id="b", tool_count=2)
+    raw = card.render()
+    out = _telegram_format(raw)
+    assert "**" not in out, out
+    assert "\\*\\*" not in out, "bold must be real bold, not escaped asterisks"
+    bare = [ln for ln in out.splitlines() if ln.strip() in (">", "\\>")]
+    assert bare == [], f"a bare quote-bar line would show as a lone '>': {out!r}"
+    assert any(ln.startswith(">") for ln in out.splitlines()), "the body is quoted"
+    assert "\u2800" in raw and "\n>\n" not in raw + "\n"
+    assert "todo" not in raw.lower()
+
+
+# -- no early 🔀 card for an owned helper ----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reserved_delegation_never_gets_a_roster_card_from_its_first_events():
+    # The dispatch reserved the id; the part only opens afterwards.
+    ac.reserve(OWNED)
+    adapter = FakeTelegramAdapter()
+    pub = _make_publisher(adapter)
+    runner = _turn_runner(pub)
+    cb = _child_cb(runner, delegation_id=OWNED)
+    cb("subagent.queued", preview="Read the Windows check result")
+    cb("subagent.start", preview="Read the Windows check result")
+    await pub.drain()
+    ac.open_part(OWNED, HEAD, STEPS)
+    cb("tool.started", "read_file", "x.py", {"path": "x.py"})
+    await pub.drain()
+    assert adapter.status_calls == [] and adapter.sends == []
+    assert pub.tracker.group_ids() == []
+    await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_a_roster_card_already_posted_is_removed_once_the_delegation_is_owned():
+    adapter = FakeTelegramAdapter()
+    pub = _make_publisher(adapter)
+    runner = _turn_runner(pub)
+    cb = _child_cb(runner, delegation_id=OWNED)
+    cb("subagent.start", preview="Read the Windows check result")
+    await pub.drain()
+    assert adapter.status_calls, "precondition: the early 🔀 card was posted"
+    posted = list(adapter.status_calls)
+    # ownership arrives late (the old race)
+    _card()
+    cb("tool.started", "read_file", "x.py", {"path": "x.py"})
+    for _ in range(5):
+        await asyncio.sleep(0)
+    await pub.drain()
+    assert adapter.deleted, "the live 🔀 card was taken down"
+    assert adapter.cards == {}
+    cb("subagent.complete", status="completed", summary="Plain summary: All good.", duration_seconds=3)
+    await pub.drain()
+    pub.end_turn()
+    await pub.drain()
+    assert adapter.sends == [], "no summary message for an owned delegation"
+    assert len(adapter.status_calls) == len(posted), "nothing more was posted for it"
+    await pub.aclose()

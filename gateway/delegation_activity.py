@@ -233,6 +233,9 @@ class _CardState:
     # Combined mode: finished after its turn; parked for the next turn card.
     in_inbox: bool = False
     inbox_expired: bool = False
+    # The unified helper card took this delegation over after a 🔀 card was
+    # already (being) posted: that card is removed, nothing more is posted.
+    retired: bool = False
 
 
 # ── One live board per chat ───────────────────────────────────────────────
@@ -598,7 +601,10 @@ class DelegationActivityPublisher:
 
             if owns_delegation(kwargs.get("delegation_id")):
                 # The unified helper card (the ack message) shows this
-                # helper's activity and result: no separate 🔀 card.
+                # helper's activity and result: no separate 🔀 card.  If an
+                # earlier event already started one (ownership was registered
+                # late), take it back down.
+                self._retire_owned(str(kwargs.get("delegation_id")))
                 return
         except Exception:
             pass
@@ -623,6 +629,41 @@ class DelegationActivityPublisher:
                     card.backoff_until = float("-inf")
             self._pending_alerts.extend((gid, text) for text in alerts)
         self._schedule()
+
+    def _retire_owned(self, gid: str) -> None:
+        """The unified card owns ``gid`` but a 🔀 card for it may already be up
+        (or in flight): remove it and make sure nothing more is posted, no
+        summary either.  Idempotent; any thread."""
+        with self._state_lock:
+            card = self._cards.get(gid)
+            known = card is not None or gid in self.tracker.group_ids()
+            if not known:
+                return
+            if card is None:
+                card = self._cards.setdefault(gid, _CardState())
+            if card.retired:
+                return
+            card.retired = card.suppressed = card.summary_posted = True
+            card.dirty = False
+            mid = card.message_id
+            self._pending_alerts = [a for a in self._pending_alerts if a[0] != gid]
+        self.tracker.drop_group(gid)
+        self._remove_later(gid, mid)
+
+    def _remove_later(self, gid: str, message_id: Optional[str]) -> None:
+        async def _go() -> None:
+            token = _CARD_SEND.set(True)
+            try:
+                await self._remove_live_card(gid, message_id)
+                if self._board_mode:
+                    _board_for(self).schedule(0.0)
+            finally:
+                _CARD_SEND.reset(token)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_go(), self._loop)
+        except RuntimeError:
+            pass  # loop closed (gateway shutting down)
 
     def _schedule(self) -> None:
         try:
@@ -1005,6 +1046,11 @@ class DelegationActivityPublisher:
             result = await self._send_card(gid, card, text, final)
         except Exception as exc:
             self._record_failure(card, None, f"{type(exc).__name__}: {exc}")
+            return
+        if card.retired:
+            # The unified card took this group over while the post was in
+            # flight: take the card that just landed back down.
+            await self._remove_live_card(gid, card.message_id)
             return
         if result is not None and getattr(result, "success", False):
             with self._state_lock:
@@ -1482,7 +1528,11 @@ class AckCardEditor:
             return False
         token = _CARD_SEND.set(True)
         try:
-            kwargs: Dict[str, Any] = {"finalize": self.card.finished}
+            # Always finalize=True: Telegram only formats (MarkdownV2) on the
+            # finalize path; finalize=False is the plain-text streaming path and
+            # would show literal ``**`` / ``>`` on every live edit. The text is
+            # already fitted, so the overflow split never triggers.
+            kwargs: Dict[str, Any] = {"finalize": True}
             if self._metadata is not None:
                 kwargs["metadata"] = self._metadata
             try:

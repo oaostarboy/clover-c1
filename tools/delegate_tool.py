@@ -5274,32 +5274,42 @@ def delegate_task(
         from tools.async_delegation import _new_delegation_id
         _batch_delegation_id = live_deleg_id or _new_delegation_id()
         _fanout_mode = _get_fanout_delivery()
-        dispatch = dispatch_async_delegation_batch(
-            goals=_goals,
-            context=context,
-            # Metadata for the completion block only; subagents inherit the
-            # parent's toolsets (no model-facing toolsets arg).
-            toolsets=None,
-            role=top_role,
-            model=creds["model"],
-            session_key=_session_key,
-            origin_ui_session_id=_origin_ui_session_id,
-            origin_session_id=_wake_sid,
-            parent_session_id=_parent_session_id,
-            runner=_batch_runner,
-            interrupt_fn=_batch_interrupt,
-            max_async_children=_get_max_async_children(),
-            # Reuse the live-transcript directory's id (when created) so the
-            # returned delegation_id matches cache/delegation/live/<id>/.
-            delegation_id=_batch_delegation_id,
-            progress_fn=_batch_progress,
-            fanout_delivery=_fanout_mode,
-            request_identity=dict(_admitted_identity),
-            straggler_seconds=(
-                _get_fanout_straggler_seconds() if _fanout_mode == "joined" else 0
-            ),
-            straggler_notify=_straggler_notify,
-        )
+        # Helpers start inside the dispatch call: claim the unified card for
+        # this delegation first, so their first events never get a separate
+        # 🔀 roster card (note_own_dispatch opens the real part afterwards).
+        _fg_limit.reserve_ack_part(_batch_delegation_id, handoff, _goals)
+        try:
+            dispatch = dispatch_async_delegation_batch(
+                goals=_goals,
+                context=context,
+                # Metadata for the completion block only; subagents inherit the
+                # parent's toolsets (no model-facing toolsets arg).
+                toolsets=None,
+                role=top_role,
+                model=creds["model"],
+                session_key=_session_key,
+                origin_ui_session_id=_origin_ui_session_id,
+                origin_session_id=_wake_sid,
+                parent_session_id=_parent_session_id,
+                runner=_batch_runner,
+                interrupt_fn=_batch_interrupt,
+                max_async_children=_get_max_async_children(),
+                # Reuse the live-transcript directory's id (when created) so the
+                # returned delegation_id matches cache/delegation/live/<id>/.
+                delegation_id=_batch_delegation_id,
+                progress_fn=_batch_progress,
+                fanout_delivery=_fanout_mode,
+                request_identity=dict(_admitted_identity),
+                straggler_seconds=(
+                    _get_fanout_straggler_seconds() if _fanout_mode == "joined" else 0
+                ),
+                straggler_notify=_straggler_notify,
+            )
+        except BaseException:
+            _fg_limit.release_ack_part(_batch_delegation_id)
+            raise
+        if dispatch.get("status") != "dispatched":
+            _fg_limit.release_ack_part(_batch_delegation_id)
 
         if dispatch.get("status") == "dispatched":
             # This instance made the dispatch: its own completion turn may earn

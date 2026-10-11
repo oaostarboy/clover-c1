@@ -474,6 +474,9 @@ _CARDS: List["Card"] = []
 _EARLY: Dict[str, List[Tuple[str, Dict[str, Any]]]] = {}  # events before the part
 _MAX_PARTS = 64
 _MAX_CARDS = 32
+# Delegation ids promised a part: the dispatch is about to start its helpers,
+# whose first events can fire before the receipt opens the part.
+_RESERVED: Dict[str, float] = {}
 BIND_WINDOW_SECONDS = 180.0
 
 
@@ -499,6 +502,7 @@ def open_part(
     if not did or not str(header or "").strip():
         return None
     with _LOCK:
+        _RESERVED.pop(did, None)
         part = _PARTS.pop(did, None)
         if part is None:
             n = max(1, int(expected or 1))
@@ -517,6 +521,27 @@ def open_part(
             else:
                 _record_complete(part, kw)
         return part
+
+
+def reserve(delegation_id: Any) -> bool:
+    """Claim ``delegation_id`` for the unified card before its helpers start,
+    so ``owns_delegation`` is true from their very first event (and the
+    gateway never posts a separate 🔀 card).  ``open_part`` fulfils the
+    reservation; ``release`` drops it when the dispatch is not accepted."""
+    did = str(delegation_id or "").strip()
+    if not did:
+        return False
+    with _LOCK:
+        _RESERVED[did] = time.monotonic()
+        while len(_RESERVED) > _MAX_PARTS:
+            _RESERVED.pop(next(iter(_RESERVED)))
+    return True
+
+
+def release(delegation_id: Any) -> None:
+    did = str(delegation_id or "").strip()
+    with _LOCK:
+        _RESERVED.pop(did, None)
 
 
 def _nth(items: Any, i: int) -> Any:
@@ -663,8 +688,14 @@ def _on_activity(et: str, kw: Dict[str, Any]) -> bool:
     return changed
 
 
+# The helper's own todo bookkeeping: the steps already show it.
+_HIDDEN_TOOLS = frozenset({"todo"})
+
+
 def _tool_started(obj: Any, kw: Dict[str, Any]) -> None:
     name = str(kw.get("tool_name") or "tool")
+    if name in _HIDDEN_TOOLS:
+        return
     call_id = str(kw.get("tool_call_id") or "")
     if call_id and any(c == call_id for c, _, _ in obj.open):
         return  # a repeated start for a call that is already open
@@ -686,6 +717,8 @@ def _tool_finished(obj: Any, kw: Dict[str, Any]) -> None:
         return
     call_id = str(kw.get("tool_call_id") or "")
     name = str(kw.get("tool_name") or "")
+    if name in _HIDDEN_TOOLS:
+        return
     pick = -1
     if call_id:
         pick = next((i for i, (c, _, _) in enumerate(obj.open) if c == call_id), -1)
@@ -843,8 +876,7 @@ def owns_delegation(delegation_id: Any) -> bool:
     if not did or not unified():
         return False
     with _LOCK:
-        part = _PARTS.get(did)
-        return part is not None
+        return did in _PARTS or did in _RESERVED
 
 
 def reset_for_tests() -> None:
@@ -854,3 +886,4 @@ def reset_for_tests() -> None:
         _PARTS.clear()
         _CARDS.clear()
         _EARLY.clear()
+        _RESERVED.clear()

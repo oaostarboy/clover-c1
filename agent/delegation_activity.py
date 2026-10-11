@@ -487,6 +487,11 @@ class DelegationActivityTracker:
             group = self._groups.get(group_id)
             return bool(group and group.finished)
 
+    def drop_group(self, group_id: str) -> bool:
+        """Forget a group (its card now lives elsewhere)."""
+        with self._lock:
+            return self._groups.pop(group_id, None) is not None
+
     def active_group_ids(self) -> List[str]:
         with self._lock:
             return [gid for gid, g in self._groups.items() if not g.finished]

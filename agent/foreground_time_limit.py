@@ -336,6 +336,31 @@ def _open_ack_part(did: str, receipt: "DispatchReceipt") -> None:
         pass
 
 
+def reserve_ack_part(delegation_id: Any, handoff: Any, goals: Any = ()) -> bool:
+    """Before a background dispatch starts its helpers: claim the delegation
+    id for the unified card when the handoff will open a part (it has a
+    summary), so no helper event can slip a separate 🔀 card out first.
+    Pair with ``release_ack_part`` if the dispatch is not accepted."""
+    try:
+        did = str(delegation_id or "").strip()
+        if not did or not _handoff_summary(handoff):
+            return False
+        from agent.ack_checklist import reserve
+
+        return reserve(did)
+    except Exception:
+        return False
+
+
+def release_ack_part(delegation_id: Any) -> None:
+    try:
+        from agent.ack_checklist import release
+
+        release(delegation_id)
+    except Exception:
+        pass
+
+
 def note_own_dispatch(
     agent: Any,
     delegation_id: Any,
