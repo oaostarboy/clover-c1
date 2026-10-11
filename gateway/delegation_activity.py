@@ -1357,3 +1357,155 @@ def build_turn_publisher(
         # turn's own card; "separate" restores standalone summary cards.
         combined=is_telegram and turn_card != "separate",
     )
+
+
+# ── The ack message as a live checklist ────────────────────────────────────
+# The final reply of a turn that handed its work to a helper is the checklist
+# text of ``agent.ack_checklist``.  When an adapter sends that text, the
+# message it became is bound to its card here, and every later change of the
+# checklist (a helper todo ticked, the helper finished) edits that same
+# message.  Never a new message; never blocks or kills the helper: a missing
+# edit transport or a deleted message just leaves the last text in place.
+
+ACK_MIN_INTERVAL = DEFAULT_MIN_INTERVAL
+_ACK_EDITORS: Dict[int, "AckCardEditor"] = {}
+
+
+class AckCardEditor:
+    """Edits one sent ack message to follow its checklist (coalesced, throttled)."""
+
+    def __init__(
+        self,
+        card: Any,
+        adapter: Any,
+        chat_id: Any,
+        message_id: str,
+        loop: asyncio.AbstractEventLoop,
+        metadata: Optional[Dict[str, Any]] = None,
+        *,
+        min_interval: float = ACK_MIN_INTERVAL,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.card = card
+        self._adapter = adapter
+        self._chat_id = str(chat_id)
+        self._message_id = str(message_id)
+        self._loop = loop
+        self._metadata = metadata
+        self._min_interval = max(0.0, float(min_interval))
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._last_text = card.render()
+        # Let the message settle first: a stream consumer may still finalize it.
+        self._last_attempt = clock()
+        self._backoff_until = float("-inf")
+        self._failures = 0
+        self._task: Optional[asyncio.Task] = None
+        self.gone = False
+        card.on_change = self.notify
+
+    # any thread
+    def notify(self) -> None:
+        if self.gone:
+            return
+        try:
+            self._loop.call_soon_threadsafe(self._ensure_task)
+        except RuntimeError:
+            pass  # loop closed: gateway shutting down
+
+    def _ensure_task(self) -> None:
+        if self._task is None or self._task.done():
+            self._task = self._loop.create_task(self._run())
+
+    def _delay(self) -> float:
+        return max(0.0, self._last_attempt + self._min_interval - self._clock(),
+                   self._backoff_until - self._clock())
+
+    async def _run(self) -> None:
+        # Bursts of ticks collapse: sleep out the gate, then render the latest.
+        while not self.gone:
+            delay = self._delay()
+            if delay > 0:
+                await asyncio.sleep(delay)
+                continue
+            text = self.card.render()
+            if text == self._last_text:
+                return
+            if not await self._edit(text):
+                if self.gone or self._failures >= 8:
+                    return
+                continue
+            if self.card.render() == self._last_text:
+                return
+
+    async def _edit(self, text: str) -> bool:
+        editor = getattr(self._adapter, "edit_message", None)
+        self._last_attempt = self._clock()
+        if not callable(editor):
+            self.gone = True  # no edit transport: the static text stays
+            return False
+        token = _CARD_SEND.set(True)
+        try:
+            kwargs: Dict[str, Any] = {"finalize": self.card.finished}
+            if self._metadata is not None:
+                kwargs["metadata"] = self._metadata
+            try:
+                result = await _maybe_await(
+                    editor(self._chat_id, self._message_id, _fit_to_limit(text, 4000), **kwargs)
+                )
+            except TypeError:
+                kwargs.pop("metadata", None)
+                result = await _maybe_await(
+                    editor(self._chat_id, self._message_id, _fit_to_limit(text, 4000), **kwargs)
+                )
+        except Exception as exc:
+            result = None
+            logger.debug("ack checklist edit raised: %s", exc)
+        finally:
+            _CARD_SEND.reset(token)
+        if result is not None and getattr(result, "success", False):
+            self._last_text = text
+            self._failures = 0
+            self._backoff_until = float("-inf")
+            return True
+        if _message_gone(result):
+            self.gone = True
+            return False
+        self._failures += 1
+        retry_after = getattr(result, "retry_after", None) if result is not None else None
+        try:
+            retry_after = float(retry_after) if retry_after is not None else None
+        except (TypeError, ValueError):
+            retry_after = None
+        wait = retry_after if retry_after and retry_after > 0 else min(_MAX_ERROR_BACKOFF, 2.0 ** self._failures)
+        self._backoff_until = self._clock() + wait
+        return False
+
+
+def bind_ack_card(adapter: Any, chat_id: Any, content: Any, result: Any, metadata: Any = None) -> None:
+    """Called after an adapter sent ``content``: if it is an ack checklist that
+    is not yet placed, remember where it landed and keep it current.  Never raises."""
+    try:
+        if adapter is None or chat_id in (None, "") or not getattr(result, "success", False):
+            return
+        message_id = getattr(result, "message_id", None)
+        if not message_id or str(message_id) == "__no_edit__":
+            return
+        from agent.ack_checklist import match_unbound
+
+        card = match_unbound(content)
+        if card is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        editor = AckCardEditor(card, adapter, chat_id, str(message_id), loop, metadata)
+        card.target = (id(adapter), str(chat_id), str(message_id))
+        _ACK_EDITORS[id(card)] = editor
+        while len(_ACK_EDITORS) > 32:
+            _ACK_EDITORS.pop(next(iter(_ACK_EDITORS)))
+        if card.render() != editor._last_text or card.finished:
+            editor.notify()  # it already moved on between render and send
+    except Exception:
+        logger.debug("ack card bind failed", exc_info=True)

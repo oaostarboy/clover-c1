@@ -1027,6 +1027,16 @@ def _ack_text(receipts: List["_fl.DispatchReceipt"]) -> str:
     summary of each dispatch, never the helper's raw task text."""
     lines = [r.summary for r in receipts if getattr(r, "summary", "")]
     if lines:
+        try:
+            from agent.ack_checklist import card_for
+
+            card = card_for(receipts)
+            if card is not None:
+                # The same text, with the steps under each header; the gateway
+                # edits the message this becomes as the helper works.
+                return card.render()
+        except Exception:
+            logger.debug("ack checklist unavailable; plain summary lines", exc_info=True)
         return "\n".join(lines)
     count = sum(len(r.goals) for r in receipts) or sum(len(r.subagent_ids) for r in receipts) or 1
     if count == 1:

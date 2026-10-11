@@ -280,6 +280,11 @@ class DispatchReceipt:
     # ``handoff`` line), shown in the chat acknowledgement.  Empty when the
     # dispatch carried none.
     summary: str = ""
+    # The short steps the root promised (single-task dispatches only); the
+    # ack shows them as a live checklist.
+    steps: Tuple[str, ...] = ()
+    # The root's own opening sentence(s) for the ack (``handoff.say``).
+    say: str = ""
 
 
 def _handoff_summary(handoff: Any) -> str:
@@ -291,6 +296,44 @@ def _handoff_summary(handoff: Any) -> str:
         return ack_summary_line(handoff)
     except Exception:
         return ""
+
+
+def _handoff_steps(handoff: Any, goals: Any) -> Tuple[str, ...]:
+    # One helper, one todo list: with several tasks there is no single list to
+    # mirror, so only the header is shown.
+    if not isinstance(handoff, dict) or len([g for g in (goals or ()) if g]) != 1:
+        return ()
+    try:
+        from agent.ack_checklist import clean_steps
+
+        return clean_steps(handoff.get("steps"))
+    except Exception:
+        return ()
+
+
+def _handoff_say(handoff: Any) -> str:
+    if not isinstance(handoff, dict):
+        return ""
+    try:
+        from agent.ack_checklist import clean_say
+
+        return clean_say(handoff.get("say"))
+    except Exception:
+        return ""
+
+
+def _open_ack_part(did: str, receipt: "DispatchReceipt") -> None:
+    if not receipt.summary:
+        return
+    try:
+        from agent.ack_checklist import open_part
+
+        open_part(
+            did, receipt.summary, receipt.steps,
+            expected=max(1, len(receipt.goals)), say=receipt.say,
+        )
+    except Exception:
+        pass
 
 
 def note_own_dispatch(
@@ -332,7 +375,10 @@ def note_own_dispatch(
             goals=tuple(str(g) for g in (goals or ()) if g),
             subagent_ids=tuple(str(s) for s in (subagent_ids or ()) if s),
             summary=_handoff_summary(handoff),
+            steps=_handoff_steps(handoff, goals),
+            say=_handoff_say(handoff),
         )
+        _open_ack_part(did, own[did])
         while len(own) > _OWN_DISPATCH_CAP:
             own.pop(next(iter(own)))
     except Exception:
