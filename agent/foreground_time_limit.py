@@ -459,6 +459,13 @@ def _detached_delivery_available() -> bool:
         return False
 
 
+def detached_delivery_available() -> bool:
+    """Public form of the scope test above, for the delegation router: a
+    hand-off to a background helper is only real where its result can come
+    back to this session."""
+    return _detached_delivery_available()
+
+
 # ── notice (80%) ───────────────────────────────────────────────────────────
 
 def _duration(seconds: float) -> str:

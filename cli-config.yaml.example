@@ -811,6 +811,14 @@ prompt_caching:
 #     timeout: 30
 #     language: ""           # empty = match the user's language; or e.g. "English"
 #
+#   # Delegation router (see delegation.router below): sizes each human
+#   # message before the main chat agent starts. One small JSON reply.
+#   delegation_router:
+#     provider: "auto"
+#     model: "auto"          # auto = the provider's fast model when it has one, else your main model
+#     prefer_fast_model: true
+#     timeout: 5
+#
 #   # Session search — summarizes matching past sessions
 #   session_search:
 #     provider: "auto"
@@ -1617,6 +1625,15 @@ delegation:
   # verify_time_limit_seconds: 120            # A short checking window when a background helper this agent started reports back
                                               # after the time limit above is spent (default: 120; 0/null/false = off). Once per
                                               # helper; helpers started in it stay in the background. Off when the limit above is off.
+  # router:                                   # Delegation router: sizes each human message (direct / single helper / parallel
+  #                                           # helpers / staged) with a fast auxiliary model (auxiliary.delegation_router) and puts
+  #                                           # the plan on that turn's message. Same scope as the time limit above (chat agents
+  #                                           # that can deliver a background helper's result later).
+  #   enabled: true                           # false = no sizing call, no plan, no backstop
+  #   timeout_seconds: 5                      # budget for the sizing call; on timeout or bad output the turn runs as before
+  #   backstop_calls: 2                       # not-direct plan: after this many work tool calls the agent made itself ...
+  #   backstop_seconds: 60                    # ... or this many seconds, the runtime hands the plan to helpers (nothing running is
+  #                                           # stopped). "Do it yourself" in the message is never overridden.
   # checkpoint:                               # Optional delegation checkpoint for conversational roots with todo + delegate_task (off by default: no cap)
   #   enabled: false                          # true = opt in: gate work tools until a delegation choice is recorded
   #   max_work_tools: 5                       # parent work calls one direct/delegate choice covers (positive integer)

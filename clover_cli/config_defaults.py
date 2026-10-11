@@ -1222,6 +1222,18 @@ DEFAULT_CONFIG = {
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
             "language": "",
         },
+        # Delegation router (delegation.router): sizes a human message before
+        # the root starts. Small JSON reply, 5 s budget, so it prefers the
+        # provider's fast tier; ``auto`` otherwise resolves like title_generation.
+        "delegation_router": {
+            "provider": "auto",
+            "model": "auto",
+            "prefer_fast_model": True,
+            "base_url": "",
+            "api_key": "",
+            "timeout": 5,
+            "extra_body": {},
+        },
         "memory_query_rewrite": {
             "provider": "auto",
             "model": "",
@@ -2140,6 +2152,21 @@ DEFAULT_CONFIG = {
         # the background. Seconds; 0/null/false = off. Off too whenever
         # foreground_time_limit_seconds is off.
         "verify_time_limit_seconds": 120,
+        # Delegation router: before a root chat agent starts a human message, a
+        # fast auxiliary model sizes it (direct / single / parallel / staged)
+        # and the plan is put on that turn's message. If the agent then keeps
+        # doing a not-direct job itself -- more than ``backstop_calls`` work
+        # tool calls or ``backstop_seconds`` -- the runtime hands the plan to
+        # helpers instead (nothing already running is stopped). Applies only
+        # where the foreground time limit does; "do it yourself" is never
+        # overridden. ``timeout_seconds`` bounds the sizing call; on any
+        # failure the turn runs exactly as without the router.
+        "router": {
+            "enabled": True,
+            "timeout_seconds": 5,
+            "backstop_calls": 2,
+            "backstop_seconds": 60,
+        },
         "max_iterations": 250,  # per-subagent iteration cap (each subagent gets its own budget,
                                # independent of the parent's max_iterations)
         # When a subagent runs out of steps mid-task, refresh its budget and
