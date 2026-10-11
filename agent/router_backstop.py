@@ -1039,8 +1039,10 @@ def _ack_text(receipts: List["_fl.DispatchReceipt"]) -> str:
             card = card_for(receipts)
             if card is not None:
                 # The same text, with the steps under each header; the gateway
-                # edits the message this becomes as the helper works.
-                return card.render()
+                # edits the message this becomes as the helper works.  The
+                # text it was created with (the live card shows a running
+                # clock, so a fresh render could no longer be matched).
+                return card.initial_text
         except Exception:
             logger.debug("ack checklist unavailable; plain summary lines", exc_info=True)
         return "\n".join(lines)

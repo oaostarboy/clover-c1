@@ -37,6 +37,47 @@ MAX_STEPS = 6
 MAX_STEP_CHARS = 60
 MAX_SAY_CHARS = 200
 
+# ``display.helper_card``: ``unified`` (default) puts the helper's live
+# activity -- current tool, model, tool calls, time and, when done, its plain
+# summary -- inside this one message and the separate 🔀 roster card is not
+# posted for that dispatch.  ``classic`` is the previous look: this checklist
+# plus the separate 🔀 card.  Read from config (cached briefly), so switching
+# back is one ``clover config set display.helper_card classic``.
+STYLE_UNIFIED = "unified"
+STYLE_CLASSIC = "classic"
+_STYLE_TTL = 15.0
+_style_cache: List[Any] = [None, 0.0]
+_style_override: List[Optional[str]] = [None]
+
+
+def card_style() -> str:
+    if _style_override[0]:
+        return _style_override[0]
+    now = time.monotonic()
+    if _style_cache[0] is not None and now - _style_cache[1] < _STYLE_TTL:
+        return _style_cache[0]
+    style = STYLE_UNIFIED
+    try:
+        from clover_cli.config import load_config_readonly
+
+        cfg = load_config_readonly() or {}
+        raw = str(((cfg.get("display") or {}).get("helper_card") or "")).strip().lower()
+        if raw == STYLE_CLASSIC:
+            style = STYLE_CLASSIC
+    except Exception:
+        pass
+    _style_cache[0], _style_cache[1] = style, now
+    return style
+
+
+def set_style_for_tests(style: Optional[str]) -> None:
+    _style_override[0] = style
+    _style_cache[0] = None
+
+
+def unified() -> bool:
+    return card_style() == STYLE_UNIFIED
+
 RUNNING = "running"
 DONE = "done"
 FAILED = "failed"
@@ -109,6 +150,16 @@ class Checklist:
     steps: List[List[str]] = field(default_factory=list)  # [text, status]
     state: str = RUNNING
     say: str = ""
+    # Live activity for the unified card (observed, never guessed).
+    model: str = ""
+    calls: int = 0
+    doing: str = ""
+    summary: str = ""
+    started: Optional[float] = None
+    ended: Optional[float] = None
+    # One helper owns the unified card.  A dispatch of several helpers keeps
+    # the classic checklist plus the 🔀 roster, which shows each of them.
+    solo: bool = True
 
     @classmethod
     def start(cls, header: str, steps: Sequence[str], say: str = "") -> "Checklist":
@@ -161,6 +212,62 @@ class Checklist:
     # -- text ------------------------------------------------------------
 
     def render(self) -> str:
+        if self.solo and unified():
+            return self.render_unified()
+        return self.render_classic()
+
+    def render_unified(self, now: Optional[float] = None) -> str:
+        icon, rest = ACTIVE_ICON, self.header
+        for ic in (ACTIVE_ICON, DONE_ICON, FAILED_ICON, STOPPED_ICON):
+            if rest.startswith(ic):
+                rest = rest[len(ic):].strip()
+                break
+        if self.state != RUNNING:
+            icon = _END_ICON[self.state]
+        work, _, outcome = rest.partition(" \u2192 ")
+        outcome = outcome.replace(", ~", " \u00b7 ~", 1)
+        if self.state != RUNNING and " \u00b7 ~" in outcome:
+            outcome = outcome.split(" \u00b7 ~", 1)[0]
+        title = work.replace("*", "").strip()
+        lines = [f"{icon} **{title}**"]
+        quoted: List[str] = []
+        if outcome:
+            quoted.append(_italic("\u2192 " + outcome))
+        if self.steps:
+            quoted.append(_SPACER)
+            quoted += [f"{_STEP_ICON[status]} {text}" for text, status in self.steps]
+        tail: List[str] = []
+        if self.state == RUNNING:
+            if self.doing:
+                tail.append(f"\U0001f527 {_italic(self.doing)}")
+        elif self.summary:
+            tail.append(self.summary.replace("*", ""))
+        stats = self._stats(now)
+        if stats:
+            tail.append(_italic(stats))
+        if tail:
+            quoted.append(_SPACER)
+            quoted += tail
+        body = "\n".join(lines + [f"> {q}" for q in quoted if q])
+        return f"{self.say}\n\n{body}" if self.say else body
+
+    def _stats(self, now: Optional[float]) -> str:
+        parts: List[str] = []
+        if self.model:
+            parts.append(self.model)
+        if self.calls:
+            parts.append(f"\U0001f6e0 {self.calls} tool call{'s' if self.calls != 1 else ''}")
+        if self.started is not None:
+            end = self.ended if self.ended is not None else (now if now is not None else time.monotonic())
+            try:
+                from agent.delegation_activity import short_duration
+
+                parts.append(f"\u23f1 {short_duration(max(0.0, end - self.started))}")
+            except Exception:
+                pass
+        return " \u00b7 ".join(parts)
+
+    def render_classic(self) -> str:
         head = self.header
         if self.state != RUNNING:
             head = _END_ICON[self.state] + _after_icon(head)
@@ -168,6 +275,14 @@ class Checklist:
         lines += [f"{_STEP_ICON[status]} {text}" for text, status in self.steps]
         body = "\n".join(lines)
         return f"{self.say}\n\n{body}" if self.say else body
+
+
+_SPACER = "\u2800"
+
+
+def _italic(text: str) -> str:
+    text = (text or "").replace("*", "").strip()
+    return f"*{text}*" if text else ""
 
 
 def _after_icon(header: str) -> str:
@@ -274,6 +389,7 @@ def open_part(
         part = _PARTS.pop(did, None)
         if part is None:
             part = Part(did, Checklist.start(header, steps, say), max(1, int(expected or 1)))
+            part.checklist.solo = part.expected == 1
         _PARTS[did] = part
         while len(_PARTS) > _MAX_PARTS:
             _PARTS.pop(next(iter(_PARTS)))
@@ -296,6 +412,8 @@ def on_child_event(event_type: Any, **kw: Any) -> bool:
     """
     try:
         et = str(event_type or "")
+        if et in _ACTIVITY_EVENTS:
+            return _on_activity(et, kw)
         if et not in ("subagent.todo", "subagent.complete"):
             return False
         did = str(kw.get("delegation_id") or "")
@@ -306,7 +424,7 @@ def on_child_event(event_type: Any, **kw: Any) -> bool:
                     early = _EARLY.setdefault(did, [])
                     if et == "subagent.todo":
                         early[:] = [e for e in early if e[0] != "subagent.todo"]
-                    early.append((et, {k: kw.get(k) for k in ("todos", "status", "exit_reason")}))
+                    early.append((et, {k: kw.get(k) for k in ("todos", "status", "exit_reason", "outcome", "summary", "preview")}))
                     while len(_EARLY) > _MAX_PARTS:
                         _EARLY.pop(next(iter(_EARLY)))
                 return False
@@ -321,9 +439,61 @@ def on_child_event(event_type: Any, **kw: Any) -> bool:
         return False
 
 
+_ACTIVITY_EVENTS = frozenset({"subagent.start", "subagent.tool", "subagent.tool_done"})
+
+
+def _on_activity(et: str, kw: Dict[str, Any]) -> bool:
+    """Live activity for the unified card.  Recorded whatever the style (it
+    is cheap), so switching styles mid-run shows the right numbers."""
+    did = str(kw.get("delegation_id") or "")
+    with _LOCK:
+        part = _PARTS.get(did)
+        if part is None:
+            return False
+        cl = part.checklist
+        if cl.state != RUNNING:
+            return False
+        before = (cl.model, cl.calls, cl.doing)
+        if cl.started is None:
+            cl.started = time.monotonic()
+        model = kw.get("model")
+        if model and not cl.model:
+            try:
+                from agent.delegation_activity import pretty_model
+
+                cl.model = pretty_model(str(model)) or ""
+            except Exception:
+                cl.model = ""
+        try:
+            cl.calls = max(cl.calls, int(kw.get("tool_count") or 0))
+        except (TypeError, ValueError):
+            pass
+        if et == "subagent.tool":
+            try:
+                from agent.delegation_activity import _tool_phrase, summarize_tool_call
+
+                name = str(kw.get("tool_name") or "tool")
+                cl.doing = _tool_phrase(name, summarize_tool_call(name, kw.get("preview"), kw.get("args")))
+            except Exception:
+                cl.doing = str(kw.get("tool_name") or "")
+        changed = (cl.model, cl.calls, cl.doing) != before
+    if changed and cl.solo and unified():
+        part._changed()
+    return changed
+
+
 def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
     if part.checklist.state != RUNNING:
         return False
+    cl = part.checklist
+    summary = kw.get("summary") or kw.get("preview")
+    if summary and not cl.summary:
+        try:
+            from agent.delegation_activity import plain_summary
+
+            cl.summary = plain_summary(summary)
+        except Exception:
+            cl.summary = ""
     state = end_state_for(kw.get("status"))
     if str(kw.get("exit_reason") or "").lower() in {"max_iterations", "max_turns"}:
         state = FAILED
@@ -334,6 +504,8 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
     if len(part.ended) < part.expected:
         return False
     final = FAILED if FAILED in part.ended else STOPPED if STOPPED in part.ended else DONE
+    if cl.started is not None:
+        cl.ended = time.monotonic()
     return part.checklist.finish(final)
 
 
@@ -349,7 +521,10 @@ class Card:
 
     def render(self) -> str:
         with _LOCK:
-            return "\n".join(p.checklist.render() for p in self.parts)
+            rendered = [p.checklist.render() for p in self.parts]
+            # Unified cards are multi-line blocks: keep two on one message apart.
+            unified_parts = unified() and any(p.checklist.solo for p in self.parts)
+            return ("\n\n" if unified_parts else "\n").join(rendered)
 
     @property
     def finished(self) -> bool:
@@ -417,7 +592,20 @@ def match_unbound(content: Any) -> Optional[Card]:
     return None
 
 
+def owns_delegation(delegation_id: Any) -> bool:
+    """True when the unified card is on and this dispatch has a checklist
+    message: the gateway then skips its separate 🔀 roster card for it."""
+    did = str(delegation_id or "")
+    if not did or not unified():
+        return False
+    with _LOCK:
+        part = _PARTS.get(did)
+        return part is not None and part.checklist.solo
+
+
 def reset_for_tests() -> None:
+    _style_override[0] = None
+    _style_cache[0] = None
     with _LOCK:
         _PARTS.clear()
         _CARDS.clear()

@@ -1641,13 +1641,16 @@ def _build_child_progress_callback(
     ):
         payload = _identity_kwargs()
         payload.update(kwargs)  # caller overrides (e.g. status, duration_seconds)
-        if event_type in ("subagent.todo", "subagent.complete"):
+        if event_type in ("subagent.todo", "subagent.complete", "subagent.start",
+                          "subagent.tool", "subagent.tool_done"):
             # The ack message's live checklist follows the helper whether or not
-            # a roster card is attached to this turn.
+            # a roster card is attached to this turn (and, in the unified card,
+            # its current tool, tool calls and time too).
             try:
                 from agent.ack_checklist import on_child_event
 
-                on_child_event(event_type, **payload)
+                on_child_event(event_type, **{**payload, "tool_name": tool_name,
+                                              "preview": preview, "args": args})
             except Exception as e:
                 logger.debug("ack checklist update failed: %s", e)
         # ``subagent.todo`` feeds the ack checklist in-process only: the roster

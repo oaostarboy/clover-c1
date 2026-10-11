@@ -593,6 +593,15 @@ class DelegationActivityPublisher:
             return
         if not kwargs.get("delegation_id"):
             kwargs["delegation_id"] = self._fallback_group
+        try:
+            from agent.ack_checklist import owns_delegation
+
+            if owns_delegation(kwargs.get("delegation_id")):
+                # The unified helper card (the ack message) shows this
+                # helper's activity and result: no separate 🔀 card.
+                return
+        except Exception:
+            pass
         self._ensure_live()
         try:
             group_id, alerts = self.tracker.observe(
@@ -1368,6 +1377,7 @@ def build_turn_publisher(
 # edit transport or a deleted message just leaves the last text in place.
 
 ACK_MIN_INTERVAL = DEFAULT_MIN_INTERVAL
+ACK_TICK_SECONDS = 15.0
 _ACK_EDITORS: Dict[int, "AckCardEditor"] = {}
 
 
@@ -1401,6 +1411,7 @@ class AckCardEditor:
         self._backoff_until = float("-inf")
         self._failures = 0
         self._task: Optional[asyncio.Task] = None
+        self._ticking = False
         self.gone = False
         card.on_change = self.notify
 
@@ -1417,6 +1428,31 @@ class AckCardEditor:
         if self._task is None or self._task.done():
             self._task = self._loop.create_task(self._run())
 
+    def _tick_later(self) -> None:
+        """The unified card shows a running clock: refresh it now and then
+        while the helper works, even when nothing else changed."""
+        if self.gone or self.card.finished or self._ticking:
+            return
+        try:
+            from agent.ack_checklist import unified
+
+            if not unified() or not any(
+                getattr(p.checklist, "solo", True) for p in self.card.parts
+            ):
+                return
+        except Exception:
+            return
+
+        def _go() -> None:
+            self._ticking = False
+            self.notify()
+
+        self._ticking = True
+        try:
+            self._loop.call_later(ACK_TICK_SECONDS, _go)
+        except RuntimeError:
+            self._ticking = False
+
     def _delay(self) -> float:
         return max(0.0, self._last_attempt + self._min_interval - self._clock(),
                    self._backoff_until - self._clock())
@@ -1430,12 +1466,14 @@ class AckCardEditor:
                 continue
             text = self.card.render()
             if text == self._last_text:
+                self._tick_later()
                 return
             if not await self._edit(text):
                 if self.gone or self._failures >= 8:
                     return
                 continue
             if self.card.render() == self._last_text:
+                self._tick_later()
                 return
 
     async def _edit(self, text: str) -> bool:
