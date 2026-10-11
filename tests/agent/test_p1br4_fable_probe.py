@@ -17,8 +17,12 @@ BIG = ('big-raw-p1br4 ' * 12000)  # ~168K chars, above the default persist thres
 
 
 def fact(*a):
-    with open(FACTS, 'a') as fh:
-        fh.write(' '.join(str(x) for x in a) + '\n')
+    # Diagnostic side-channel from the review sandbox; never required to pass.
+    try:
+        with open(FACTS, 'a') as fh:
+            fh.write(' '.join(str(x) for x in a) + '\n')
+    except OSError:
+        pass
 
 
 def leaks(s):
