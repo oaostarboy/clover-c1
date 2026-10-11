@@ -17,9 +17,9 @@ HOW TO EDIT (by hand, at release time)
 
 ## 1.5.0 | Clover C1.5 | TBD
 <!-- draft -->
-- Big jobs go to helpers right away, so you can keep chatting; quick questions are still answered directly.
-- Jobs with many parts are split across several helpers that report back together in one message.
-- Clover checks a helper's work before telling you it's done, and never talks about internal time limits.
+- Big jobs can be handed to helpers so you can keep chatting; quick questions are still answered directly.
+- When several helpers run at once, they report back together in one message.
+- Clover gets time to check a helper's work before saying it's done, and never mentions internal time limits.
 - Asking for a helper works in any chat again, even before the bot has run a command there.
 - After /update you see what's new whenever the new version is actually running.
 
