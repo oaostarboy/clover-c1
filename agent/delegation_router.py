@@ -349,11 +349,43 @@ def _fold(text: str) -> str:
     return text.lower().replace("’", "'").replace("‘", "'")
 
 
+# Text that quotes someone else's words is not the user's instruction: a fenced
+# or inline code span, a markdown blockquote line, a quoted span.  Stripped
+# before the override patterns run, so "review this: \"do it yourself\"" or a
+# pasted log containing "use helpers" never forces a mode.
+_FENCE_CLOSED = re.compile(r"(?ms)^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$")
+_FENCE_OPEN = re.compile(r"(?ms)^[ \t]*(?:```|~~~).*\Z")
+_INLINE_CODE = re.compile(r"`[^`\n]*`")
+_BLOCKQUOTE = re.compile(r"(?m)^[ \t]{0,3}>.*$")
+# Same-line pairs only, so one stray quote mark cannot swallow later text; a
+# single quote counts only where it is not an apostrophe inside a word.
+_QUOTED_SPANS = tuple(re.compile(p) for p in (
+    r'"[^"\n]*"',
+    r"\u201c[^\u201d\n]*\u201d",
+    r"\u00ab[^\u00bb\n]*\u00bb",
+    r"(?<![\w])'[^'\n]*'(?![\w])",
+))
+
+
+def authentic_text(message: str) -> str:
+    """``message`` without quoted / fenced / blockquoted source text."""
+    text = message or ""
+    text = _FENCE_CLOSED.sub(" ", text)
+    text = _FENCE_OPEN.sub(" ", text)
+    text = _INLINE_CODE.sub(" ", text)
+    text = _BLOCKQUOTE.sub(" ", text)
+    for pattern in _QUOTED_SPANS:
+        text = pattern.sub(" ", text)
+    return text
+
+
 def explicit_override(message: str) -> Optional[str]:
     """``"self"`` for "do it yourself", ``"helpers"`` for "use helpers", else
     ``None``.  The user's explicit wording wins; "self" beats "helpers" so
-    "do it yourself, no helpers" is never read as a request for helpers."""
-    folded = _fold(message or "")
+    "do it yourself, no helpers" is never read as a request for helpers.
+    Only the user's own words count (:func:`authentic_text`)."""
+    # Fold first: curly single quotes must pair like straight ones.
+    folded = authentic_text(_fold(message or ""))
     if any(p.search(folded) for p in _SELF_PATTERNS):
         return "self"
     if any(p.search(folded) for p in _HELPER_PATTERNS):

@@ -161,8 +161,7 @@ def test_parallel_turn_is_handed_off_after_two_calls_and_the_turn_ends_cleanly(
     provider.queue[:] = [
         _write(tmp_path / 'a.txt', 'a', 'c1'), _write(tmp_path / 'b.txt', 'b', 'c2'),
         _write(tmp_path / 'c.txt', 'c', 'c3'),     # refused: the runtime hands off here
-        text('Helpers are on it; I will report back.'),
-    ]
+    ]   # no fourth reply: the runtime ends the turn itself
     db = SessionDB(tmp_path / 'state.db')
     agent = make_agent(provider, session_db=db, session_id='e2e-parallel')
 
@@ -170,7 +169,11 @@ def test_parallel_turn_is_handed_off_after_two_calls_and_the_turn_ends_cleanly(
         'Compare the pricing of Notion, Linear and Asana in one table.',
         conversation_history=[], task_id='e2e-p')
 
-    assert result['final_response'] == 'Helpers are on it; I will report back.'
+    # the runtime's own acknowledgment, not whatever the model might have said
+    assert result['final_response'].startswith('Helpers are on it')
+    assert 'Notion' in result['final_response']
+    assert result['turn_exit_reason'] == 'delegation_handoff'
+    assert result['work_status'] == 'dispatch_ack'
     assert (tmp_path / 'a.txt').exists() and (tmp_path / 'b.txt').exists()
     assert not (tmp_path / 'c.txt').exists()
     # the plan told the model to dispatch; the runtime did, once, via the handler
@@ -179,10 +182,11 @@ def test_parallel_turn_is_handed_off_after_two_calls_and_the_turn_ends_cleanly(
     assert len(dispatches[0]['tasks']) == 3
     _wait_started(children, 3)
     assert len(children) == 3
-    # the model saw the hand-off as the refused call's own result, then ended
-    last_tools = _tool_texts(provider.captured[-1])
-    assert any('Handed off to helpers' in t and 'end your turn' in t for t in last_tools)
-    assert len(provider.captured) == 4
+    # the refused call's own result is the hand-off; the turn ended without
+    # asking the model again
+    handed = [m['content'] for m in result['messages'] if m.get('role') == 'tool']
+    assert any('Handed off to helpers' in t and 'end your turn' in t for t in handed)
+    assert len(provider.captured) == 3
     _roles_ok(result['messages'])
     # nothing the user can read mentions the plumbing
     assert 'limit' not in result['final_response'].lower()
@@ -204,7 +208,6 @@ def test_staged_turn_dispatches_stage_one_and_names_the_next_stage(
     provider.queue[:] = [
         _write(tmp_path / 'a.txt', 'a', 'c1'), _write(tmp_path / 'b.txt', 'b', 'c2'),
         _write(tmp_path / 'c.txt', 'c', 'c3'),
-        text('Building it now; review follows.'),
     ]
     agent = make_agent(provider, session_id='e2e-staged')
 
@@ -212,7 +215,9 @@ def test_staged_turn_dispatches_stage_one_and_names_the_next_stage(
         'Add a feature flag with tests, then review the diff before saying done.',
         conversation_history=[], task_id='e2e-s')
 
-    assert result['final_response'] == 'Building it now; review follows.'
+    assert result['final_response'].startswith('Helpers are on it')
+    assert 'feature flag' in result['final_response']
+    assert result['work_status'] == 'dispatch_ack'
     wire_user = _wire_users(provider.captured[0])[-1]
     assert f'{MARKER} staged' in wire_user
     assert wire_user.index('Write the feature flag') < wire_user.index('Review the whole diff')
@@ -223,8 +228,8 @@ def test_staged_turn_dispatches_stage_one_and_names_the_next_stage(
         'Review the whole diff of the feature flag module')
     _wait_started(children, 1)
     assert len(children) == 1
-    handed = json.loads(next(t for t in _tool_texts(provider.captured[-1])
-                             if 'Handed off to helpers' in t))
+    handed = json.loads(next(m['content'] for m in result['messages']
+                             if m.get('role') == 'tool' and 'Handed off to helpers' in m['content']))
     assert handed['next_stage']['goal'] == 'Review the whole diff of the feature flag module'
     _roles_ok(result['messages'])
     assert not (tmp_path / 'c.txt').exists()

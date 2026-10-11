@@ -260,12 +260,39 @@ def _internal_kinds() -> frozenset:
 
 # ── per-turn lifecycle ─────────────────────────────────────────────────────
 
-def note_own_dispatch(agent: Any, delegation_id: Any) -> None:
+@dataclass(frozen=True)
+class DispatchReceipt:
+    """What THIS agent instance knows about one accepted background dispatch.
+
+    ``seq`` orders receipts within the instance; ``turn_id`` / ``request_id`` /
+    ``generation`` are the request identity the durable row was written with,
+    so a receipt can be matched to its request-scoped durable result.
+    """
+
+    delegation_id: str
+    seq: int
+    turn_id: str = ""
+    request_id: str = ""
+    generation: Optional[int] = None
+    goals: Tuple[str, ...] = ()
+    subagent_ids: Tuple[str, ...] = ()
+
+
+def note_own_dispatch(
+    agent: Any,
+    delegation_id: Any,
+    *,
+    goals: Any = (),
+    subagent_ids: Any = (),
+    request_identity: Optional[Dict[str, Any]] = None,
+) -> None:
     """Remember that THIS agent instance dispatched ``delegation_id``.
 
     Called by ``delegate_task`` once a background dispatch was accepted.  Only
     ids noted here can ever earn a verification episode, so a rebuilt agent
-    (previous generation), cron and other profiles own nothing.
+    (previous generation), cron and other profiles own nothing.  The receipt
+    also carries the turn/request identity and the goals, which is what lets
+    the router tell "a helper was accepted this turn" from older work.
     """
     try:
         did = str(delegation_id or "").strip()
@@ -275,12 +302,39 @@ def note_own_dispatch(agent: Any, delegation_id: Any) -> None:
         if not isinstance(own, dict):
             own = {}
             agent._fg_own_dispatches = own
+        identity = request_identity if isinstance(request_identity, dict) else {}
+        generation = identity.get("generation")
+        seq = int(getattr(agent, "_fg_dispatch_seq", 0) or 0) + 1
+        agent._fg_dispatch_seq = seq
         own.pop(did, None)
-        own[did] = True
+        own[did] = DispatchReceipt(
+            delegation_id=did,
+            seq=seq,
+            turn_id=str(identity.get("turn_id") or ""),
+            request_id=str(identity.get("request_id") or ""),
+            generation=generation if isinstance(generation, int) else None,
+            goals=tuple(str(g) for g in (goals or ()) if g),
+            subagent_ids=tuple(str(s) for s in (subagent_ids or ()) if s),
+        )
         while len(own) > _OWN_DISPATCH_CAP:
             own.pop(next(iter(own)))
     except Exception:
         logger.debug("could not record own dispatch", exc_info=True)
+
+
+def dispatch_seq(agent: Any) -> int:
+    """Receipts noted so far by this instance (a high-water mark)."""
+    value = getattr(agent, "_fg_dispatch_seq", 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def own_dispatch_receipts(agent: Any, *, after: int = 0) -> List[DispatchReceipt]:
+    """This instance's accepted dispatches newer than ``after``, oldest first."""
+    own = getattr(agent, "_fg_own_dispatches", None)
+    if not isinstance(own, dict):
+        return []
+    found = [r for r in list(own.values()) if isinstance(r, DispatchReceipt) and r.seq > after]
+    return sorted(found, key=lambda r: r.seq)
 
 
 def _claim_verification(agent: Any, completion_ids: Any) -> Optional[float]:
@@ -616,7 +670,9 @@ def refusal(agent: Any, function_name: str, function_args: Any):
         payload["recovery"] = {"tool": "delegate_task", "background": True}
     return dc.Verdict(
         # Clover wrote this string; keep the marker through the result funnel.
-        block_result=vouch_runtime_result(json.dumps(payload, ensure_ascii=False)),
+        block_result=vouch_runtime_result(
+            json.dumps(payload, ensure_ascii=False), function_name
+        ),
         block_code=BLOCK_CODE,
         block_message=message,
     )

@@ -1234,12 +1234,19 @@ def _durable_receipts_ready(receipt_ids: Any) -> Any:
 def completion_directive(agent: Any) -> Optional[Directive]:
     """The conversation loop's question after a tool round: end the turn now?
 
-    Reads existing state only; agents without a checkpoint never end early.
+    Reads existing state only.  The checkpoint's own directive (when it is on
+    and has one) wins; otherwise a helper the router's turn got accepted ends
+    the turn with its deterministic acknowledgment -- independent of the
+    checkpoint's budget and opt-in default (``agent.router_backstop``).
     """
     checkpoint = getattr(agent, "_delegation_checkpoint", None)
-    if not isinstance(checkpoint, DelegationCheckpoint):
-        return None
-    return checkpoint.take_completion_directive()
+    if isinstance(checkpoint, DelegationCheckpoint):
+        directive = checkpoint.take_completion_directive()
+        if directive is not None:
+            return directive
+    from agent import router_backstop
+
+    return router_backstop.completion_directive(agent)
 
 
 def resolve_work_call(function_name: str, function_args: Any) -> tuple:

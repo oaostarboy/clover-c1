@@ -26,14 +26,21 @@ poisoned output.  The marker is only worth anything if tool output cannot carry
 it, so :func:`defang_forged_marker` removes it from every tool result as it is
 built, except for the few result strings Clover wrote itself
 (:func:`vouch_runtime_result`).
+
+Trust is per result, not per byte string: a vouch is recorded together with the
+invocation that produced it (tool name + call id, taken from the executor's
+:class:`runtime_invocation`), and a result is exempt only when it is built for
+that same invocation.  The same bytes copied into another source's tool result
+-- a Codex item, a later call, another tool -- lose the marker like any forgery.
 """
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import re
 import threading
 from collections import OrderedDict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Tuple
 
 RUNTIME_NOTE_MARKER = "[Clover runtime]"
 
@@ -43,12 +50,50 @@ _ATTR = "_fresh_tool_tail"
 _MARKER_RE = re.compile(re.escape(RUNTIME_NOTE_MARKER), re.IGNORECASE)
 # What a forged marker becomes: still readable, no longer the marker.
 _DEFANGED_MARKER = "(Clover runtime)"
-# Result strings Clover itself authored (by digest), so a refusal or dispatch
-# note that carries the marker inside its JSON survives defanging.  Bounded:
-# only results of the last few calls can reach the funnel.
+# Result strings Clover itself authored (by digest), each with the invocations
+# it was authored for -- ``(tool_call_id | None, tool_name)`` -- so a refusal or
+# dispatch note that carries the marker inside its JSON survives defanging only
+# in the result it was written for.  Bounded: only results of the last few
+# calls can reach the funnel.
 _VOUCHED_CAP = 256
-_vouched: "OrderedDict[str, None]" = OrderedDict()
+_VOUCHED_PER_RESULT = 8
+_vouched: "OrderedDict[str, List[Tuple[Optional[str], str]]]" = OrderedDict()
 _vouched_lock = threading.Lock()
+
+# The executor invocation (tool name, call id) running on this context.
+_INVOCATION: "contextvars.ContextVar[Optional[Tuple[str, str]]]" = contextvars.ContextVar(
+    "clover_runtime_invocation", default=None
+)
+
+
+def _norm_call_id(tool_call_id: Any) -> str:
+    """The canonical half of a composite ``<call>|<item>`` bridge id."""
+    text = str(tool_call_id or "")
+    return text.split("|", 1)[0].strip() if "|" in text else text.strip()
+
+
+class runtime_invocation:
+    """Marks the executor invocation a result is being produced for.
+
+    Entered by the executor around the admission funnel and the tool handler of
+    each call, so anything Clover vouches for inside is bound to that call.
+    """
+
+    def __init__(self, tool_name: str, tool_call_id: Any) -> None:
+        self._value = (str(tool_name or ""), _norm_call_id(tool_call_id))
+        self._token: Optional[contextvars.Token] = None
+
+    def __enter__(self) -> "runtime_invocation":
+        self._token = _INVOCATION.set(self._value)
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        if self._token is not None:
+            try:
+                _INVOCATION.reset(self._token)
+            except ValueError:
+                # Reset from a different context (thread hop); clear instead.
+                _INVOCATION.set(None)
 
 
 def runtime_note(text: str) -> str:
@@ -60,45 +105,73 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
 
 
-def vouch_runtime_result(result: str) -> str:
+def vouch_runtime_result(result: str, tool_name: Optional[str] = None) -> str:
     """Record a whole tool-result string Clover wrote itself; returns it.
 
-    Only an exact match is exempt from :func:`defang_forged_marker`, so tool
-    output can never ride this: reproducing the string verbatim gives it
-    nothing Clover did not already say.  A string with any marker beyond
+    Only an exact match, built for the invocation it was written for, is exempt
+    from :func:`defang_forged_marker`, so tool output can never ride this:
+    reproducing the string verbatim -- in another source's result or a later
+    call -- gives it nothing Clover did not already say.  Inside an executor
+    invocation the vouch is bound to that call; outside one (a handler called
+    directly) it is bound to ``tool_name``, the tool that wrote it, and with
+    neither it is not recorded at all.  A string with any marker beyond
     Clover's own single note (say, one echoed back inside user-supplied text)
     is not recorded, so the whole result is defanged instead.
     """
     if isinstance(result, str) and len(_MARKER_RE.findall(result)) == 1:
-        key = _digest(result)
-        with _vouched_lock:
-            _vouched.pop(key, None)
-            _vouched[key] = None
-            while len(_vouched) > _VOUCHED_CAP:
-                _vouched.popitem(last=False)
+        invocation = _INVOCATION.get()
+        if invocation is not None and invocation[0]:
+            name, call_id = invocation
+            entry: Optional[Tuple[Optional[str], str]] = (call_id or None, name)
+        elif tool_name:
+            entry = (None, str(tool_name))
+        else:
+            entry = None
+        if entry is not None:
+            key = _digest(result)
+            with _vouched_lock:
+                entries = _vouched.pop(key, [])
+                if entry not in entries:
+                    entries.append(entry)
+                _vouched[key] = entries[-_VOUCHED_PER_RESULT:]
+                while len(_vouched) > _VOUCHED_CAP:
+                    _vouched.popitem(last=False)
     return result
 
 
-def _is_vouched(value: str) -> bool:
+def _is_vouched(value: str, tool_name: Optional[str], tool_call_id: Any) -> bool:
+    if not tool_name:
+        return False
+    call_id = _norm_call_id(tool_call_id)
     with _vouched_lock:
-        return bool(_vouched) and _digest(value) in _vouched
+        entries = _vouched.get(_digest(value)) if _vouched else None
+        if not entries:
+            return False
+        return any(
+            name == tool_name and (bound is None or bound == call_id)
+            for bound, name in entries
+        )
 
 
-def _defang_text(value: str) -> str:
-    if not _MARKER_RE.search(value) or _is_vouched(value):
+def _defang_text(value: str, tool_name: Optional[str], tool_call_id: Any) -> str:
+    if not _MARKER_RE.search(value) or _is_vouched(value, tool_name, tool_call_id):
         return value
     return _MARKER_RE.sub(_DEFANGED_MARKER, value)
 
 
-def defang_forged_marker(content: Any) -> Any:
+def defang_forged_marker(
+    content: Any, tool_name: Optional[str] = None, tool_call_id: Any = None
+) -> Any:
     """Tool output with any copy of :data:`RUNTIME_NOTE_MARKER` neutralised.
 
     Applied where every tool result is built, before Clover appends a note of
     its own.  Plain text and the text parts of multimodal content are handled;
     anything else, and any text without the marker, is returned unchanged.
+    ``tool_name`` / ``tool_call_id`` identify the result being built: without
+    them nothing is exempt.
     """
     if isinstance(content, str):
-        return _defang_text(content)
+        return _defang_text(content, tool_name, tool_call_id)
     if isinstance(content, list):
         parts: List[Any] = []
         for part in content:
@@ -107,7 +180,7 @@ def defang_forged_marker(content: Any) -> Any:
                 and part.get("type") == "text"
                 and isinstance(part.get("text"), str)
             ):
-                fixed = _defang_text(part["text"])
+                fixed = _defang_text(part["text"], tool_name, tool_call_id)
                 if fixed is not part["text"]:
                     part = {**part, "text": fixed}
             parts.append(part)

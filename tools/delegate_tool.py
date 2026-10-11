@@ -5228,7 +5228,16 @@ def delegate_task(
         if dispatch.get("status") == "dispatched":
             # This instance made the dispatch: its own completion turn may earn
             # the short verification window (agent.foreground_time_limit).
-            _fg_limit.note_own_dispatch(parent_agent, dispatch.get("delegation_id"))
+            _sids = [
+                getattr(_c, "_subagent_id", None) for _c in _child_agents
+            ]
+            _fg_limit.note_own_dispatch(
+                parent_agent,
+                dispatch.get("delegation_id"),
+                goals=_goals,
+                subagent_ids=[s for s in _sids if isinstance(s, str) and s],
+                request_identity=_request_identity(parent_agent, _checkpoint_ticket),
+            )
             n = len(_goals)
             note = _background_dispatch_note(n, joined=_fanout_mode == "joined")
             if _fg_forced_background:
@@ -5253,9 +5262,6 @@ def delegate_task(
             }
             if _fg_forced_background:
                 payload["foreground_time_limit"] = True
-            _sids = [
-                getattr(_c, "_subagent_id", None) for _c in _child_agents
-            ]
             if _checkpoint_ticket is not None:
                 # The accepted job owns this request's remaining phase. A
                 # ticket that no longer has the authority gets False and the
@@ -5292,7 +5298,7 @@ def delegate_task(
             _result = json.dumps(payload, ensure_ascii=False)
             # Clover wrote the marked note in it: keep the marker through the
             # tool-result funnel (which defangs any other copy).
-            return _vouch_runtime_result(_result) if _fg_forced_background else _result
+            return _vouch_runtime_result(_result, "delegate_task") if _fg_forced_background else _result
 
         if _strict_background:
             # The async unit was never accepted: nothing is running, so

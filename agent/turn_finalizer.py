@@ -769,6 +769,17 @@ def finalize_turn(
     }
     if agent._tool_guardrail_halt_decision is not None:
         result["guardrail"] = agent._tool_guardrail_halt_decision.to_metadata()
+    # ``completed`` is whether the TURN finished; ``work_status`` is what the
+    # helpers accepted for it support (dispatch_ack / partial / incomplete /
+    # verified_completion), from the durable rows.  Absent when none were.
+    try:
+        from agent.router_backstop import work_status as _work_status
+
+        _work = _work_status(agent)
+        if _work:
+            result["work_status"] = _work
+    except Exception:
+        pass
     # Persistence failures already set failed=True + an explanation in
     # final_response; also stamp `error` so gateway surfaces status="error"
     # (and desktop can toast the cause) instead of a quiet complete frame.

@@ -8,6 +8,17 @@ through the real ``delegate_task`` registry handler.  The refused call's result
 is the hand-off itself, and the root is told to end its turn.  Nothing already
 running is stopped: only a call that has not started is refused.
 
+The turn does not rely on the root obeying that note.  Once a helper was
+*accepted* for this turn -- by the runtime, or by the root's own
+``delegate_task`` -- the runtime refuses the root's later work calls
+(``refusal``) and ends the turn with a deterministic acknowledgment
+(``completion_directive``, consumed by the conversation loop's normal exit), so
+the root cannot answer "done" while the durable helper is still running.  The
+acceptance signal is the dispatch receipt (``foreground_time_limit
+.note_own_dispatch``), never the model's call or its text.  ``work_status``
+reports what the turn's receipts support: ``dispatch_ack``, ``partial``,
+``incomplete`` or ``verified_completion``.
+
 Ported from reference code (MIT):
 
 * langgraph-supervisor-py/langgraph_supervisor/handoff.py -- (c) 2025
@@ -28,6 +39,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional, Tuple
@@ -50,6 +62,17 @@ REQUEST_CHARS = 4000
 CONTEXT_CHARS = 7800
 _ARGS_CHARS = 160
 _REASON_CHARS = 200
+_ACK_GOALS = 3
+_ACK_GOAL_CHARS = 90
+# How long a work call waits for the root's own delegate_task (admitted just
+# before it) to settle, so "was a helper accepted?" is answered, not guessed.
+_SPAWN_SETTLE_SECONDS = 15.0
+
+WORK_DISPATCH_ACK = "dispatch_ack"
+WORK_PARTIAL = "partial"
+WORK_INCOMPLETE = "incomplete"
+WORK_VERIFIED = "verified_completion"
+EXIT_REASON = "delegation_handoff"
 
 
 @dataclass
@@ -61,10 +84,16 @@ class RouterTurn:
     settings: RouterSettings
     started_at: float
     work_calls: int = 0
-    # The root called delegate_task itself: the backstop has nothing to do.
-    spawned: bool = False
-    # Set once, by the call that tripped the backstop; later refused calls in
-    # the turn reuse it (one hand-off per turn).
+    # Dispatch receipts of this instance numbered above this belong to this
+    # turn (the instance keeps its receipts across turns).
+    receipt_floor: int = 0
+    # The root's own delegate_task calls admitted but not finished: the backstop
+    # must not dispatch a second time beside one, and a work call waits for it
+    # to settle.  Keyed like ``running``.
+    spawning: Dict[Tuple[str, int], bool] = field(default_factory=dict)
+    # Set once, by the call that tripped the backstop (or from the receipt of
+    # the root's own accepted dispatch); later refused calls in the turn reuse
+    # it (one hand-off per turn).
     handoff: Optional[Dict[str, Any]] = None
     failure: Optional[str] = None
     findings: Deque[Tuple[str, str, str]] = field(
@@ -75,6 +104,10 @@ class RouterTurn:
     # earlier ones are still running, so a hand-off can find calls in flight.
     running: Dict[Tuple[str, int], str] = field(default_factory=dict)
     lock: threading.RLock = field(default_factory=threading.RLock)
+    settled: threading.Condition = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self.settled = threading.Condition(self.lock)
 
 
 def _now() -> float:
@@ -90,6 +123,7 @@ def begin(agent: Any, verdict: PlanVerdict, user_message: str, settings: RouterS
         setattr(agent, _ATTR, RouterTurn(
             verdict=verdict, user_message=str(user_message or ""),
             settings=settings, started_at=_now(),
+            receipt_floor=_fl.dispatch_seq(agent),
         ))
     except Exception:
         logger.debug("could not arm the router backstop", exc_info=True)
@@ -125,8 +159,11 @@ def note_result(agent: Any, function_name: str, function_args: Any, result: Any)
     state = _state(agent)
     if state is None:
         return
+    key = (function_name, id(function_args))
     with state.lock:
-        state.running.pop((function_name, id(function_args)), None)
+        state.running.pop(key, None)
+        if state.spawning.pop(key, None) is not None:
+            state.settled.notify_all()
     if not isinstance(result, str) or not result.strip():
         return
     try:
@@ -250,9 +287,15 @@ def _decode(raw: Any) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _dispatch(agent: Any, state: RouterTurn) -> Dict[str, Any]:
-    """Dispatch the first stage; returns ``{"ok": bool, ...}``."""
-    from tools.registry import registry
+def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
+    """Dispatch the first stage; returns ``{"ok": bool, ...}``.
+
+    The call goes through the same authorization funnel as a ``delegate_task``
+    the model made (plugin pre-tool hooks, guardrails, the delegation
+    checkpoint): a policy that denies one denies the other, and the refusal
+    comes back as an honest error, never as a started helper.
+    """
+    from agent.tool_executor import dispatch_generated_tool
 
     verdict = state.verdict
     stages = verdict.stages()
@@ -268,7 +311,7 @@ def _dispatch(agent: Any, state: RouterTurn) -> Dict[str, Any]:
     if follow:
         args["follow_through"] = follow
     try:
-        raw = registry.dispatch("delegate_task", args, parent_agent=agent)
+        raw = dispatch_generated_tool(agent, "delegate_task", args, task_id=task_id)
     except Exception as exc:
         logger.warning("router backstop dispatch raised: %s", exc)
         return {"ok": False, "reason": f"{type(exc).__name__}"}
@@ -284,6 +327,16 @@ def _dispatch(agent: Any, state: RouterTurn) -> Dict[str, Any]:
         }
     reason = data.get("error") or data.get("reason") or "the helpers were not accepted"
     return {"ok": False, "reason": _one_line(str(reason), _REASON_CHARS)}
+
+
+def _handoff_from(receipt: "_fl.DispatchReceipt") -> Dict[str, Any]:
+    """The hand-off record of a dispatch the root made itself and got accepted."""
+    return {
+        "delegation_id": receipt.delegation_id,
+        "subagent_ids": list(receipt.subagent_ids),
+        "later": [],
+        "next_stage": None,
+    }
 
 
 def _handoff_text(info: Dict[str, Any]) -> str:
@@ -333,19 +386,35 @@ def _verdict_for(state: RouterTurn, tool_name: str):
         code = FAILED_CODE
     return dc.Verdict(
         # Clover wrote this string; keep the marker through the result funnel.
-        block_result=vouch_runtime_result(json.dumps(payload, ensure_ascii=False)),
+        block_result=vouch_runtime_result(
+            json.dumps(payload, ensure_ascii=False), tool_name
+        ),
         block_code=code,
         block_message=message,
     )
 
 
-def refusal(agent: Any, function_name: str, function_args: Any):
+def _wait_for_spawns(state: RouterTurn) -> None:
+    """Hold a work call until the root's own ``delegate_task`` (admitted before
+    it, so already started) has settled.  Caller holds ``state.lock``."""
+    deadline = time.monotonic() + _SPAWN_SETTLE_SECONDS
+    while state.spawning:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return
+        state.settled.wait(left)
+
+
+def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str = ""):
     """A blocked :class:`~agent.delegation_checkpoint.Verdict`, or ``None``.
 
     Evaluated in the executor's admission funnel, in emission order, for every
     tool call of the root.  ``None`` means "admitted": the plan is direct,
-    there is no plan, the root already handed off itself, the call is control
-    plane, or the thresholds are not reached.
+    there is no plan, the call is control plane, no helper was accepted for
+    this turn yet, or the thresholds are not reached.  Once a helper was
+    accepted -- by the runtime or by the root's own ``delegate_task`` -- every
+    later work call of the turn is refused; calls already admitted are never
+    interrupted.
     """
     state = _state(agent)
     if state is None:
@@ -356,14 +425,26 @@ def refusal(agent: Any, function_name: str, function_args: Any):
     with state.lock:
         if name == "delegate_task":
             if dc._is_spawn_dispatch(args):
-                state.spawned = True
+                # In flight, not accepted: only the dispatch receipt says that.
+                state.spawning[(function_name, id(function_args))] = True
             return None
-        if name in dc.CONTROL_PLANE_TOOLS or state.spawned:
+        if name in dc.CONTROL_PLANE_TOOLS:
             return None
-        if state.handoff is not None or state.failure is not None:
-            # Once the runtime handed off, the root stays out of work for the
-            # turn; once it could not, the root simply carries on.
-            return _verdict_for(state, name) if state.handoff is not None else None
+        _wait_for_spawns(state)
+        if state.handoff is None:
+            owned = _fl.own_dispatch_receipts(agent, after=state.receipt_floor)
+            if owned:
+                state.handoff = _handoff_from(owned[0])
+        if state.handoff is not None:
+            # Once a helper owns the work, the root stays out of it for the
+            # turn; once the runtime could not start one, the root carries on.
+            return _verdict_for(state, name)
+        if state.failure is not None:
+            return None
+        if state.spawning:
+            # The root's own dispatch never settled (timeout): do not add a
+            # second one on top of it.
+            return None
         seconds = state.settings.backstop_seconds
         elapsed = _now() - state.started_at
         if state.work_calls < state.settings.backstop_calls and not (
@@ -372,7 +453,7 @@ def refusal(agent: Any, function_name: str, function_args: Any):
             state.work_calls += 1
             state.running[(function_name, id(function_args))] = _brief_args(args)
             return None
-        info = _dispatch(agent, state)
+        info = _dispatch(agent, state, task_id)
         if info.get("ok"):
             state.handoff = info
             logger.info(
@@ -385,3 +466,91 @@ def refusal(agent: Any, function_name: str, function_args: Any):
             state.failure = info.get("reason") or "the helpers were not accepted"
             logger.warning("router backstop: dispatch failed: %s", state.failure)
         return _verdict_for(state, name)
+
+
+# ── ending the turn, and what the turn's receipts support ──────────────────
+
+def _turn_receipts(agent: Any) -> List["_fl.DispatchReceipt"]:
+    state = _state(agent)
+    if state is None:
+        return []
+    return _fl.own_dispatch_receipts(agent, after=state.receipt_floor)
+
+
+def _ack_text(receipts: List["_fl.DispatchReceipt"]) -> str:
+    goals = [g for r in receipts for g in r.goals]
+    titles = [_one_line(g, _ACK_GOAL_CHARS) for g in goals[:_ACK_GOALS]]
+    head = "Helpers are on it"
+    if titles:
+        head += ": " + "; ".join(titles)
+        if len(goals) > _ACK_GOALS:
+            head += f" (and {len(goals) - _ACK_GOALS} more)"
+    return head + ". They're still working; I'll report back here when they finish."
+
+
+def completion_directive(agent: Any):
+    """The deterministic end of a turn whose helpers were accepted, or ``None``.
+
+    Asked once per assistant message, after every tool result of that message
+    is canonical.  It never calls a provider, never cancels anything and does
+    not depend on the delegation checkpoint being on: the receipt of an
+    accepted dispatch is the whole condition, so a failed dispatch (no receipt)
+    never acknowledges, and a dispatch of an earlier turn never ends this one.
+    """
+    receipts = _turn_receipts(agent)
+    if not receipts:
+        return None
+    from agent import delegation_checkpoint as dc
+
+    return dc.Directive(EXIT_REASON, _ack_text(receipts))
+
+
+def _row_outcome(row: Optional[Dict[str, Any]]) -> str:
+    """``pending`` / ``ok`` / ``bad`` for one durable delegation row."""
+    if row is None:
+        return "pending"
+    state = str(row.get("state") or "")
+    if state in ("running", "finalizing", "stalling", ""):
+        return "pending"
+    if state != "completed":
+        return "bad"
+    result = row.get("result")
+    if isinstance(result, dict) and (
+        result.get("incomplete") or str(result.get("status") or "") in (
+            "failed", "error", "interrupted", "cancelled", "incomplete",
+        )
+    ):
+        return "bad"
+    return "ok"
+
+
+def work_status(agent: Any) -> Optional[str]:
+    """What this turn's accepted helpers support saying about the work.
+
+    ``None`` when no helper was accepted for the turn.  ``dispatch_ack``: all
+    still running.  ``partial``: some finished, some pending or not yet
+    checked.  ``incomplete``: any failed, stopped or lost.
+    ``verified_completion``: every durable result is a clean success AND was
+    handed to a consumer (claimed/delivered) -- a finished result nobody has
+    read is not verification.  Read from the durable rows, never from text.
+    """
+    receipts = _turn_receipts(agent)
+    if not receipts:
+        return None
+    try:
+        from tools.async_delegation import get_durable_delegation, owned_receipts_ready
+
+        ids = [r.delegation_id for r in receipts]
+        outcomes = [_row_outcome(get_durable_delegation(i)) for i in ids]
+        if "bad" in outcomes:
+            return WORK_INCOMPLETE
+        if all(o == "pending" for o in outcomes):
+            return WORK_DISPATCH_ACK
+        if "pending" in outcomes:
+            return WORK_PARTIAL
+        if set(owned_receipts_ready(ids)) >= set(ids):
+            return WORK_VERIFIED
+        return WORK_PARTIAL
+    except Exception:
+        logger.debug("router work status unavailable", exc_info=True)
+        return WORK_DISPATCH_ACK

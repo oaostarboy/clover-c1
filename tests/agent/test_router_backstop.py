@@ -252,18 +252,35 @@ def test_thresholds_come_from_settings(tmp_path, children, dispatches):
 
 # ── the root already handed off ────────────────────────────────────────────
 
-def test_a_root_that_calls_delegate_task_itself_is_left_alone(tmp_path, children, dispatches):
+def test_a_root_that_calls_delegate_task_itself_gets_no_second_dispatch_and_stays_out_of_work(
+        tmp_path, children, dispatches):
     agent = _root()
     _arm(agent)
 
     results = run_batch(agent, [('delegate_task', {'goal': 'audit lane A'})]
                         + [_write(tmp_path, f'{i}.txt') for i in range(4)])
 
-    assert not any(_is_handoff(r) for r in results)
-    assert all((tmp_path / f'{i}.txt').exists() for i in range(4))
+    # The accepted dispatch owns the work: the runtime does not dispatch again,
+    # and the root's later foreground writes are refused with that same hand-off.
+    assert results[0]['status'] == 'dispatched'
+    assert all(_is_handoff(r) for r in results[1:]), results
+    assert not any((tmp_path / f'{i}.txt').exists() for i in range(4))
+    assert {r['delegation_id'] for r in results[1:]} == {results[0]['delegation_id']}
     assert dispatches == [], 'the root\'s own call is not a runtime dispatch'
     _wait_started(children, 1)
     assert len(children) == 1
+
+
+def test_a_root_dispatch_that_was_not_accepted_leaves_the_backstop_armed(tmp_path, children, dispatches):
+    agent = _root()
+    _arm(agent)
+
+    # Not a spawn: lists live helpers, never starts one, so nothing was accepted.
+    results = run_batch(agent, [('delegate_task', {'action': 'list'})]
+                        + [_write(tmp_path, f'{i}.txt') for i in range(3)])
+
+    assert [_is_handoff(r) for r in results[1:]] == [False, False, True]
+    assert len(dispatches) == 1, 'the backstop still hands off'
 
 
 # ── not direct only ────────────────────────────────────────────────────────
