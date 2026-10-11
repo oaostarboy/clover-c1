@@ -55,10 +55,21 @@ logger = logging.getLogger(__name__)
 OK = "ok"
 PENDING = "pending"
 BAD = "bad"
+STOPPED = "stopped"  # stopped on purpose (Stop / the parent took over): not a failure
 
 _RUNNING_STATES = frozenset({"running", "finalizing", "stalling", ""})
 _CLEAN_STATUSES = frozenset({"completed", "success"})
-_FAILED_EXITS = frozenset({"max_iterations", "interrupted", "error", "timeout", "failed"})
+_FAILED_EXITS = frozenset({"max_iterations", "error", "timeout", "failed"})
+_STOPPED_WORDS = frozenset({"interrupted", "cancelled", "canceled", "stopped"})
+
+# Whole-reply markers meaning "send nothing" (same set as
+# gateway.response_filters.LIVE_GATEWAY_SILENT_MARKERS; agent/ never imports
+# gateway/).  No footer is ever glued onto one: it would break the silence.
+_SILENT_REPLIES = frozenset({"[SILENT]", "SILENT", "NO_REPLY", "NO REPLY"})
+
+
+def is_silent_reply(text: Any) -> bool:
+    return " ".join(str(text or "").strip().upper().split()) in _SILENT_REPLIES
 _GOAL_CHARS = 80
 _LISTED_GOALS = 4
 
@@ -113,6 +124,11 @@ def classify_result(entry: Any) -> str:
     returns a summary, and so does one whose turn was cut off by a refusal."""
     if not isinstance(entry, dict):
         return BAD
+    if (
+        str(entry.get("exit_reason") or "") in _STOPPED_WORDS
+        or str(entry.get("status") or "") in _STOPPED_WORDS
+    ):
+        return STOPPED
     if entry.get("incomplete") or entry.get("truncated"):
         return BAD
     if str(entry.get("exit_reason") or "") in _FAILED_EXITS:
@@ -134,7 +150,10 @@ def _row(delegation_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _terminal_outcome(row: Dict[str, Any]) -> str:
-    if str(row.get("state") or "") != "completed":
+    state = str(row.get("state") or "")
+    if state in _STOPPED_WORDS:
+        return STOPPED
+    if state != "completed":
         return BAD
     result = row.get("result")
     return classify_result(result) if isinstance(result, dict) else OK
@@ -201,7 +220,7 @@ def slots_for(delegation_id: str, goals: Sequence[str] = ()) -> List[Slot]:
 
 
 def _aggregate(slots: Sequence[Slot], ids: Sequence[str]) -> str:
-    if any(s.outcome == BAD for s in slots):
+    if any(s.outcome in (BAD, STOPPED) for s in slots):
         return WORK_INCOMPLETE
     if slots and all(s.outcome == PENDING for s in slots):
         return WORK_DISPATCH_ACK
@@ -349,11 +368,17 @@ def status_footer(work: Optional[WorkReport], exit_reason: Any = "") -> str:
     total = len(work.slots)
     pending = work.goals(PENDING)
     bad = work.goals(BAD)
+    stopped = work.goals(STOPPED)
     parts: List[str] = []
     if bad:
         parts.append(
             f"{len(bad)} of {total} helper task{'s' if total != 1 else ''} did not "
             f"finish properly: {_listed(bad)}. Treat that part as not done."
+        )
+    if stopped:
+        parts.append(
+            f"{len(stopped)} of {total} helper task{'s' if total != 1 else ''} "
+            f"{'was' if len(stopped) == 1 else 'were'} stopped: {_listed(stopped)}."
         )
     if pending:
         parts.append(
@@ -377,6 +402,9 @@ def status_note(work: Optional[WorkReport]) -> str:
         lines.append(f"Still running: {_listed(pending)}.")
     if bad:
         lines.append(f"Did not finish properly: {_listed(bad)}.")
+    stopped = work.goals(STOPPED)
+    if stopped:
+        lines.append(f"Stopped before finishing (not a failure): {_listed(stopped)}.")
     lines.append(
         "Report only what has come back, say plainly what is still running or "
         "not done, and do not give a final overall conclusion over it."
