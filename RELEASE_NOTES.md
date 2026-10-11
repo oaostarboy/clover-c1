@@ -15,12 +15,13 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
-## 1.4.0 | Clover C1.4 | TBD
+## 1.5.0 | Clover C1.5 | TBD
 <!-- draft -->
+- Big jobs go to helpers right away, so you can keep chatting; quick questions are still answered directly.
+- Jobs with many parts are split across several helpers that report back together in one message.
+- Clover checks a helper's work before telling you it's done, and never talks about internal time limits.
 - Asking for a helper works in any chat again, even before the bot has run a command there.
-- After /update you see what's new whenever the new version is actually running, even if part of the update reported a problem.
-- Big jobs go to a background helper right away, so you can keep chatting; a reply that still runs long hands off after about 5 minutes.
-- When a helper finishes after the limit, the bot reports its result but starts no new heavy work in that reply.
+- After /update you see what's new whenever the new version is actually running.
 
 ## 1.3.0 | Clover C1.3 | 2026-10-10
 - A busy database or a website firewall no longer cuts off replies or blames your API key.
