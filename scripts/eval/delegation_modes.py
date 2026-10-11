@@ -1426,7 +1426,7 @@ def _make_video_fixture(dest: Path, *, timeout: float = 180.0) -> bool:
         "-c:a", "aac", "-b:a", "64k", "-shortest", str(dest),
     ]
     try:
-        done = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        done = subprocess.run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout)
     except (OSError, subprocess.SubprocessError):
         done = None
     if done is None or done.returncode != 0 or not dest.is_file():
