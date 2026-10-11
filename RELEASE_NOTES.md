@@ -15,6 +15,13 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.5.1 | Clover C1.5.1 | 2026-10-11
+- When a helper takes over, you get a short line and a checklist that ticks itself off as it works.
+- Done steps get a 🍀, and a 🍂 shows when a helper couldn't finish the job.
+- Clo, the clover sprite, is now the default look; the old plain look is called "boring".
+- Saving a quick note no longer starts an extra helper or sends a second message.
+- Stopped helpers say "stopped" instead of "not done", and quiet replies stay quiet.
+
 ## 1.5.0 | Clover C1.5 | 2026-10-11
 - Each request is sized up for you: quick questions get a direct answer, big jobs go to helpers.
 - Independent parts run at the same time; steps that need earlier results run one after another.
