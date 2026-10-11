@@ -484,3 +484,85 @@ def test_a_straggler_slot_with_no_result_yet_is_pending_not_failed(clock, tmp_pa
     with ad._DB_LOCK, ad._transaction() as conn:
         conn.execute("UPDATE async_delegations SET state='stalled' WHERE delegation_id=?", (batch,))
     assert [s.outcome for s in slots_for(batch, ['first task', 'second task'])] == [OK, BAD]
+
+
+# ── the hand-back's completion answers for the work it integrated ──────────
+
+def _hand_back(agent, provider, tmp_path, batch, task_id):
+    """The completion turn of ``batch`` hands the integration to a helper; that
+    helper finishes cleanly and its completion is claimed.  Returns its id."""
+    provider.queue[:] = _work_script(tmp_path, 3) + [text('UNUSED')]
+    completion_turn(agent, [batch], task_id=task_id)
+    integration = fl.own_dispatch_receipts(agent)[-1].delegation_id
+    assert integration != batch
+    wait_row(integration)
+    claim(integration)
+    provider.captured.clear()
+    return integration
+
+
+def test_a_clean_hand_back_does_not_verify_failed_original_work(
+        clock, provider, children, dispatches, config, tmp_path):
+    config('joined')
+    agent = _agent(provider, tmp_path, 'wl-lineage-failed')
+    batch = dispatch_batch(agent, provider, GOALS)
+    children.outcomes[1] = {'status': 'failed', 'summary': '', 'exit_reason': 'error'}
+    children.release(0, 1, 2)
+    wait_row(batch)
+    claim(batch)
+    integration = _hand_back(agent, provider, tmp_path, batch, 'c-handback')
+    assert len(dispatches) == 1
+
+    provider.queue[:] = [text('All three original checks are verified; no intruder.')]
+    final = completion_turn(agent, [integration], task_id='c-final')
+
+    assert final['work_status'] == 'incomplete', final
+    assert 'did not finish properly' in final['final_response']
+    assert 'Review the router posture' in final['final_response']
+    assert 'Scan the LAN' not in final['final_response'].split('did not finish properly', 1)[1]
+    assert len(dispatches) == 1, 'still no second hand-back'
+    # the root was told the same facts on this turn
+    assert STATUS_NOTE in last_user_wire(provider.captured[0])
+
+
+def test_a_clean_hand_back_does_not_clear_a_still_running_original(
+        clock, provider, children, dispatches, config, tmp_path):
+    config('each')
+    agent = _agent(provider, tmp_path, 'wl-lineage-pending')
+    batch = dispatch_batch(agent, provider, GOALS)
+    child0 = f'{batch}:child:0'
+    children.release(0)  # the other two keep running
+    wait_row(child0)
+    claim(child0)
+    provider.queue[:] = _work_script(tmp_path, 3) + [text('UNUSED')]
+    completion_turn(agent, [child0], task_id='c-partial')
+    assert len(dispatches) == 1
+    integration = fl.own_dispatch_receipts(agent)[-1].delegation_id
+    assert integration != batch
+    wait_row(integration)
+    claim(integration)
+    provider.captured.clear()
+
+    provider.queue[:] = [text('Everything is checked and verified.')]
+    final = completion_turn(agent, [integration], task_id='c-final')
+
+    assert final['work_status'] == 'partial', final
+    assert 'still running' in final['final_response']
+    assert 'Review the router posture' in final['final_response']
+
+
+def test_a_clean_hand_back_of_clean_work_is_verified_without_a_footer(
+        clock, provider, children, dispatches, config, tmp_path):
+    config('joined')
+    agent = _agent(provider, tmp_path, 'wl-lineage-clean')
+    batch = dispatch_batch(agent, provider, GOALS)
+    children.release(0, 1, 2)
+    wait_row(batch)
+    claim(batch)
+    integration = _hand_back(agent, provider, tmp_path, batch, 'c-handback')
+
+    provider.queue[:] = [text('All three checks agree.')]
+    final = completion_turn(agent, [integration], task_id='c-final')
+
+    assert final['work_status'] == 'verified_completion', final
+    assert final['final_response'] == 'All three checks agree.'

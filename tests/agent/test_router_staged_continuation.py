@@ -13,11 +13,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from agent import delegation_router as dr, router_backstop as rb
+from agent import delegation_router as dr, router_backstop as rb, work_lifecycle as wl
 from agent import foreground_time_limit as fl
 from tests.agent.test_delegation_checkpoint import run_batch
 from tests.agent.test_delegation_router import T, aux  # noqa: F401  (aux fixture)
-from tests.agent.test_handoff_completion_seam import _text
+from tests.agent.test_handoff_completion_seam import _call, _text, _tools
 from tests.agent.test_router_sol_review import root_agent, writes
 import tools.async_delegation as ad
 
@@ -494,3 +494,90 @@ def test_a_bound_chain_refuses_the_roots_later_spawn_of_the_same_stage(
     _wait(lambda: _stage_two_helpers(helpers) == 1, 'stage two helper')
     time.sleep(0.3)
     assert _stage_two_helpers(helpers) == 1
+
+
+# ── the lifecycle hand-back never replaces a running continuation ──────────
+
+def _stage_one_delivered(agent, tmp_path, helpers, *stages):
+    first = _dispatch_stage_one(agent, tmp_path, _staged(*stages))
+    _finish_and_deliver(helpers, first)
+    helpers.gate.clear()  # stage two (and anything else started) stays running
+    return first
+
+
+def test_lifecycle_leaves_the_staged_continuation_turn_as_the_router_armed_it(
+        aux, tmp_path, helpers):
+    agent = root_agent([], tmp_path)
+    first = _stage_one_delivered(
+        agent, tmp_path, helpers,
+        (STAGE_ONE, ()), (STAGE_TWO, (0,)), (STAGE_THREE, (1,)))
+    agent._router_completion_ids = (first,)
+    fl.begin_turn(agent, 'internal_notification')
+    note = dr.plan_for_turn(agent, 'helper finished', [], 'internal_notification')
+    assert 'stage 2 is now running on helpers' in note, note
+    armed = rb._state(agent)
+    floor, receipts = armed.receipt_floor, [r.delegation_id for r in rb.turn_receipts(agent)]
+    assert armed.no_spawn and armed.handoff and rb.turn_is_armed(agent)
+    assert len(receipts) == 1
+
+    wl.begin_turn(agent, 'helper finished', 'internal_notification', [first])
+
+    assert rb._state(agent) is armed
+    assert (armed.receipt_floor, armed.no_spawn) == (floor, True)
+    assert [r.delegation_id for r in rb.turn_receipts(agent)] == receipts
+    directive = rb.completion_directive(agent)
+    assert directive is not None and directive.reason == rb.EXIT_REASON
+
+
+def test_a_running_next_stage_gets_no_integration_helper_beside_it(aux, tmp_path, helpers):
+    agent = root_agent([], tmp_path)
+    first = _stage_one_delivered(
+        agent, tmp_path, helpers,
+        (STAGE_ONE, ()), (STAGE_TWO, (0,)), (STAGE_THREE, (1,)))
+    agent._router_completion_ids = (first,)
+    fl.begin_turn(agent, 'internal_notification')
+    dr.plan_for_turn(agent, 'helper finished', [], 'internal_notification')
+    wl.begin_turn(agent, 'helper finished', 'internal_notification', [first])
+    before = set(_all_ids())
+
+    rows = run_batch(agent, writes(tmp_path, 4, 'late'))
+
+    assert _new_dispatch_ids(before) == [], rows
+    assert all(r.get('error_type') == rb.HANDOFF_CODE for r in rows), rows
+
+
+def test_completion_entry_does_not_verify_while_the_next_stage_runs(aux, tmp_path, helpers):
+    agent = root_agent([], tmp_path)
+    first = _stage_one_delivered(agent, tmp_path, helpers, (STAGE_ONE, ()), (STAGE_TWO, (0,)))
+    before = set(_all_ids())
+
+    result = _completion_turn(agent, first, 'Everything is verified.')
+
+    started = _new_dispatch_ids(before)
+    assert len(started) == 1
+    assert ad.get_durable_delegation(started[0])['state'] == 'running'
+    assert result.get('work_status') == 'dispatch_ack', result  # the new stage is accepted, running
+
+
+def test_root_work_on_a_staged_completion_turn_is_refused_not_handed_back(
+        aux, tmp_path, helpers):
+    """Real loop: three foreground writes after stage 2 started.  The turn ends
+    at the stage-two acknowledgment; no write runs and no "final report"
+    helper starts beside the review stage."""
+    agent = root_agent([], tmp_path)
+    first = _stage_one_delivered(agent, tmp_path, helpers, (STAGE_ONE, ()), (STAGE_TWO, (0,)))
+    before = set(_all_ids())
+    agent.client.chat.completions.create.side_effect = [
+        _tools(_call('write_file', {'path': str(tmp_path / f'k{i}.txt'), 'content': 'x'}))
+        for i in range(3)
+    ] + [_text('All stages are done and verified.')] + [_text('extra')] * 3
+
+    agent.run_conversation(
+        f'[helper {first} finished]', persist_user_display_kind='internal_notification',
+        completion_delegation_ids=[first],
+    )
+
+    assert len(_new_dispatch_ids(before)) == 1  # stage two only
+    assert [i for i in range(3) if (tmp_path / f'k{i}.txt').exists()] == []
+    assert not any(wl.HANDBACK_GOAL[:30] in g['user'] for g in helpers.goals)
+    assert rb._state(agent).no_spawn is True

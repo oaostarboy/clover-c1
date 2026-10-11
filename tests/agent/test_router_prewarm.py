@@ -107,3 +107,76 @@ def test_prewarm_never_blocks_and_the_first_route_fits_the_default_timeout(tmp_p
     assert out["first_route_seconds"] < out["default_timeout"], out
     assert out["got_plan"] is True, out  # a verdict, not a missed deadline
     assert out["model_calls"] == ["delegation_router"], out  # one call: the route
+
+
+_SCOPE_SCRIPT = textwrap.dedent(
+    """
+    import json, sys
+    from types import SimpleNamespace
+
+    sys.path.insert(0, {repo!r})
+
+    from agent import router_prewarm
+    from agent import foreground_time_limit as fl
+    from agent.delegation_context import delegated_child_context
+
+    router_prewarm._MODULES = ()  # nothing to import: only whether a thread starts
+
+    def root(**kw):
+        base = dict(valid_tool_names={{"delegate_task"}}, platform="telegram",
+                    _delegate_depth=0, _subagent_id=None, session_id="s")
+        base.update(kw)
+        return SimpleNamespace(**base)
+
+    out = {{}}
+    out["subagent"] = router_prewarm.start(root(_delegate_depth=1, _subagent_id="sa-1"))
+    with delegated_child_context():
+        # how delegate_task builds a child: the constructor runs in this context
+        out["child_under_construction"] = router_prewarm.start(root())
+    out["cron"] = router_prewarm.start(root(platform="cron"))
+    out["exempt"] = router_prewarm.start(root(_delegation_checkpoint_exempt="oneshot"))
+    out["started_by_the_cases_above"] = router_prewarm._thread is not None
+
+    mode = {mode!r}
+    if mode == "suppressed":
+        router_prewarm.suppress()
+    out["root"] = router_prewarm.start(root())
+    print(json.dumps(out))
+    """
+)
+
+
+def _scope_run(tmp_path, mode):
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env = dict(os.environ)
+    env.update({"HOME": str(tmp_path), "CLOVER_HOME": str(home),
+                "PYTHONDONTWRITEBYTECODE": "1"})
+    env.pop("CLOVER_IGNORE_USER_CONFIG", None)
+    env.pop("CLOVER_KANBAN_TASK", None)
+    proc = subprocess.run(
+        [sys.executable, "-c", _SCOPE_SCRIPT.format(repo=str(REPO), mode=mode)],
+        env=env, capture_output=True, text=True, timeout=120,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_prewarm_is_not_started_for_subagents_cron_or_exempt_roots(tmp_path):
+    out = _scope_run(tmp_path, "control")
+
+    assert out["subagent"] is False
+    assert out["child_under_construction"] is False
+    assert out["cron"] is False
+    assert out["exempt"] is False
+    assert out["started_by_the_cases_above"] is False
+    assert out["root"] is True  # the gate is not simply closed
+
+
+def test_an_entry_point_that_suppressed_the_prewarm_never_starts_it(tmp_path):
+    """One-shot, batch and ``chat -q`` mark their agent exempt only after the
+    constructor returns, so they suppress the start before building it."""
+    out = _scope_run(tmp_path, "suppressed")
+
+    assert out["root"] is False
+    assert out["started_by_the_cases_above"] is False

@@ -690,14 +690,6 @@ def init_agent(
     agent.tool_progress_mode = tool_progress_mode
     agent.ephemeral_system_prompt = ephemeral_system_prompt
     agent.platform = platform  # "cli", "telegram", "discord", "whatsapp", etc.
-    # Overlap the delegation router's one-time imports with the rest of init
-    # (imports only: no model call, no prompt or tool change).
-    try:
-        from agent.router_prewarm import start as _prewarm_router
-
-        _prewarm_router(agent)
-    except Exception:
-        logger.debug("router prewarm unavailable", exc_info=True)
     agent._user_id = user_id  # Platform user identifier (gateway sessions)
     agent._user_id_alt = user_id_alt  # Optional stable alternate platform identifier
     agent._user_name = user_name
@@ -1071,6 +1063,16 @@ def init_agent(
     # from message text.
     agent._is_background_review_fork = False
     agent._delegation_checkpoint_exempt = None
+    # Overlap the delegation router's one-time imports with the rest of init
+    # (imports only: no model call, no prompt or tool change).  After the
+    # delegation fields above exist; callers that mark the agent exempt later
+    # call ``router_prewarm.suppress()`` before constructing it.
+    try:
+        from agent.router_prewarm import start as _prewarm_router
+
+        _prewarm_router(agent)
+    except Exception:
+        logger.debug("router prewarm unavailable", exc_info=True)
     # Registry generation the current tool snapshot was derived from. Lets a
     # late/concurrent refresh reject a stale (older-generation) rebuild instead
     # of clobbering a newer one. Set adjacent to the tool snapshot below.

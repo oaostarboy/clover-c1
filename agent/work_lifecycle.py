@@ -22,7 +22,12 @@ instance noted -- never from model text:
   once the root has made ``delegation.router.backstop_calls`` work calls the
   runtime itself dispatches that task to a helper and ends the turn.  The
   completion turn of such a hand-back (or of any dispatch made on a completion
-  turn) is never armed again, so there is no acknowledge/dispatch loop.
+  turn) is never armed again, so there is no acknowledge/dispatch loop.  A
+  completion turn the router already armed (a staged plan's next stage was just
+  started) keeps the router's arming: the hand-back never replaces it.  Such a
+  dispatch remembers the work it integrates, so its completion still answers
+  for an original helper that failed or is still running: integration success
+  alone never clears either.
 
 Transport ``completed`` is untouched: cron and the gateway read ``False`` as a
 failed run.  ``work_status`` is the truth about the work.
@@ -60,7 +65,7 @@ _LISTED_GOALS = 4
 # Per-instance state (agent attributes, like the receipts themselves).
 _FLOOR = "_wl_floor"
 _COMPLETION_IDS = "_wl_completion_ids"
-_HANDBACK_IDS = "_wl_handback_dispatches"
+_HANDBACK_IDS = "_wl_handback_dispatches"  # dispatch id -> receipts it integrates
 
 HANDBACK_GOAL = (
     "Put the finished helper results together, check them, and write the "
@@ -208,13 +213,17 @@ def _aggregate(slots: Sequence[Slot], ids: Sequence[str]) -> str:
     return WORK_PARTIAL
 
 
-def build_report(receipts: Sequence["_fl.DispatchReceipt"]) -> Optional[WorkReport]:
+def build_report(
+    receipts: Sequence["_fl.DispatchReceipt"], carried: Sequence[Slot] = (),
+) -> Optional[WorkReport]:
+    """``carried`` are unresolved slots of the work these receipts integrate."""
     if not receipts:
         return None
     try:
         slots: List[Slot] = []
         for r in receipts:
             slots.extend(slots_for(r.delegation_id, r.goals))
+        slots.extend(carried)
         status = _aggregate(slots, [r.delegation_id for r in receipts])
         return WorkReport(tuple(slots), status)
     except Exception:
@@ -262,6 +271,38 @@ def _turn_receipts(agent: Any, floor: int) -> List["_fl.DispatchReceipt"]:
     return _fl.own_dispatch_receipts(agent, after=floor)
 
 
+def _lineage(agent: Any) -> Dict[str, Tuple["_fl.DispatchReceipt", ...]]:
+    sources = getattr(agent, _HANDBACK_IDS, None)
+    if not isinstance(sources, dict):
+        sources = {}
+        try:
+            setattr(agent, _HANDBACK_IDS, sources)
+        except Exception:
+            pass
+    return sources
+
+
+def _carried(agent: Any, receipts: Sequence["_fl.DispatchReceipt"]) -> List[Slot]:
+    """Slots of the original work that ``receipts`` integrate and that are still
+    failed or running, read live from the ledger.  A finished clean original
+    carries nothing; a hand-back's own clean result clears neither a failure nor
+    a pending sibling."""
+    lineage = _lineage(agent)
+    seen = {r.delegation_id for r in receipts}
+    queue = [r.delegation_id for r in receipts]
+    carried: List[Slot] = []
+    while queue:
+        for source in lineage.get(queue.pop(), ()):
+            if source.delegation_id in seen:
+                continue
+            seen.add(source.delegation_id)
+            queue.append(source.delegation_id)
+            carried.extend(
+                s for s in slots_for(source.delegation_id, source.goals) if s.outcome != OK
+            )
+    return carried
+
+
 def report(agent: Any) -> Optional[WorkReport]:
     """What this turn may say about its helpers, or ``None`` when it has none.
 
@@ -275,10 +316,11 @@ def report(agent: Any) -> Optional[WorkReport]:
         return None
     turn = _turn_receipts(agent, floor)
     if turn:
-        return build_report(turn)
+        return build_report(turn, _carried(agent, turn))
     ids = _completion_ids(agent)
     if ids:
-        return build_report(completion_group(agent, ids))
+        group = completion_group(agent, ids)
+        return build_report(group, _carried(agent, group))
     return None
 
 
@@ -339,23 +381,17 @@ def status_note(work: Optional[WorkReport]) -> str:
 
 # ── turn entry / exit ──────────────────────────────────────────────────────
 
-def _handback_ids(agent: Any) -> set:
-    ids = getattr(agent, _HANDBACK_IDS, None)
-    if not isinstance(ids, set):
-        ids = set()
-        try:
-            setattr(agent, _HANDBACK_IDS, ids)
-        except Exception:
-            pass
-    return ids
-
-
 def _arm_handback(agent: Any, message: str, group: Sequence["_fl.DispatchReceipt"]) -> bool:
     """Arm the router backstop with the one-task integration plan."""
     from agent import delegation_router as dr
 
-    if any(r.delegation_id in _handback_ids(agent) for r in group):
+    if any(r.delegation_id in _lineage(agent) for r in group):
         return False  # the result of a hand-back is final here: no second one
+    if router_backstop.turn_is_armed(agent):
+        # The router already armed this turn (a staged plan's next stage was
+        # just started: hand-off, no spawn, a receipt floor below it).  Arming
+        # again would replace that and let the root run beside the stage.
+        return False
     settings = dr.load_settings()
     digest = dr.goal_text(message)
     if dr.skip_reason(agent, digest or "x", None, settings=settings):
@@ -402,7 +438,7 @@ def begin_turn(
         text = message if isinstance(message, str) else ""
         if text.strip():
             _arm_handback(agent, text, group)
-        return status_note(build_report(group)) if may_note else ""
+        return status_note(build_report(group, _carried(agent, group))) if may_note else ""
     except Exception:
         logger.debug("helper-work lifecycle unavailable", exc_info=True)
         return ""
@@ -419,6 +455,9 @@ def end_turn(agent: Any) -> None:
             return
         made = _turn_receipts(agent, floor)
         if made:
-            _handback_ids(agent).update(r.delegation_id for r in made)
+            integrated = tuple(completion_group(agent, _completion_ids(agent)))
+            lineage = _lineage(agent)
+            for r in made:
+                lineage[r.delegation_id] = integrated
     except Exception:
         logger.debug("could not mark hand-back dispatches", exc_info=True)

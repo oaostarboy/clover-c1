@@ -998,6 +998,20 @@ def turn_receipts(agent: Any) -> List["_fl.DispatchReceipt"]:
 _turn_receipts = turn_receipts
 
 
+def turn_is_armed(agent: Any) -> bool:
+    """Did the router (or a staged continuation) already arm this turn?
+
+    ``True`` when the turn carries a plan or a hand-off: a later arming step
+    must leave it as it is -- replacing it would drop the continuation's
+    ``no_spawn``, its hand-off and its receipt floor.  A turn that only carries
+    a receipt floor (a direct verdict, a skip) is not armed.
+    """
+    state = _state(agent)
+    return state is not None and bool(
+        state.planned or state.handoff is not None or state.no_spawn
+    )
+
+
 def _ack_text(receipts: List["_fl.DispatchReceipt"]) -> str:
     goals = [g for r in receipts for g in r.goals]
     titles = [_one_line(g, _ACK_GOAL_CHARS) for g in goals[:_ACK_GOALS]]

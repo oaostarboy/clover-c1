@@ -495,6 +495,11 @@ class CLIAgentSetupMixin:
             effective_model_pinned = bool(model_override) or bool(
                 getattr(self, "_explicit_model_override", False)
             )
+            if getattr(self, "_single_query_mode", False):
+                # `clover chat -q` answers once and exits: no router warm-up.
+                from agent.router_prewarm import suppress as _suppress_router_prewarm
+
+                _suppress_router_prewarm()
             self.agent = AIAgent(
                 model=effective_model,
                 model_pinned=effective_model_pinned,

@@ -33,6 +33,18 @@ _MODULES = (
 
 _lock = threading.Lock()
 _thread: Optional[threading.Thread] = None
+_suppressed = False
+
+
+def suppress() -> None:
+    """Never start the warm-up in this process.
+
+    A noninteractive entry point (one-shot, batch worker, ``chat -q``) marks
+    its agent exempt only AFTER the constructor returns -- too late for the
+    start inside it -- so it calls this before building the agent.
+    """
+    global _suppressed
+    _suppressed = True
 
 
 def _warm() -> None:
@@ -52,12 +64,16 @@ def _warm() -> None:
 def start(agent: Any = None) -> bool:
     """Start the warm-up once per process when the router is enabled.
 
-    ``agent`` (when given) must be one the router would route: a subagent or a
-    cron/batch root never starts it.  Never blocks and never raises; returns
-    whether a thread was started.
+    ``agent`` (when given) must be one the router would route: a subagent
+    (built inside the delegated-child context) or a cron root never starts it,
+    and an entry point that called ``suppress`` (one-shot, batch, single-query)
+    never does.  Never blocks and never raises; returns whether a thread was
+    started.
     """
     global _thread
     try:
+        if _suppressed:
+            return False
         from agent import foreground_time_limit as fl
         from agent.delegation_router import load_settings
 
