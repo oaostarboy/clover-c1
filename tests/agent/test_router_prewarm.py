@@ -60,6 +60,7 @@ _SCRIPT = textwrap.dedent(
     started = router_prewarm.start(agent)
     start_seconds = time.monotonic() - t0
     again = router_prewarm.start(agent)
+    time.sleep(1.2)  # the rest of agent construction / the user typing
 
     t1 = time.monotonic()
     note = dr.plan_for_turn(agent, "audit the whole repo and report", [])
@@ -100,7 +101,9 @@ def test_prewarm_never_blocks_and_the_first_route_fits_the_default_timeout(tmp_p
     assert out["started_again"] is False  # once per process
     assert out["start_seconds"] < 0.5, out  # construction is never blocked
     assert out["slow_loaded"] is True
-    # The route waited out the warm import (1.5 s) and still fit the timeout.
+    # The 1.5 s import overlapped the 1.2 s before the first turn: the route
+    # only waited for what was left of it, and fit the timeout.
+    assert out["first_route_seconds"] < 1.0, out
     assert out["first_route_seconds"] < out["default_timeout"], out
     assert out["got_plan"] is True, out  # a verdict, not a missed deadline
     assert out["model_calls"] == ["delegation_router"], out  # one call: the route
