@@ -662,6 +662,7 @@ def wait_settled(
     poll_seconds: float,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    on_poll: Optional[Callable[[Sequence[Dict[str, Any]]], None]] = None,
 ) -> bool:
     """Wait until the root and every helper it started have gone quiet.
 
@@ -674,6 +675,8 @@ def wait_settled(
     last_change = start
     while True:
         msgs = read_messages()
+        if on_poll is not None:
+            on_poll(msgs)
         sig = (len(msgs), msgs[-1].get("id") if msgs else None)
         now = clock()
         if sig != last_sig:
@@ -713,6 +716,7 @@ class RpcEventTracker:
         self.errors: List[str] = []
         self.responses: Dict[Any, Dict[str, Any]] = {}
         self.last_complete: Dict[str, Any] = {}
+        self.event_counts: Dict[str, int] = {}
 
     def feed(self, frame: Dict[str, Any]) -> None:
         if not isinstance(frame, dict):
@@ -730,6 +734,7 @@ class RpcEventTracker:
         if self.session_id is None or params.get("session_id") != self.session_id:
             return
         payload = params.get("payload") or {}
+        self.event_counts[str(kind)] = self.event_counts.get(str(kind), 0) + 1
         if kind == "message.start":
             self.running_turns += 1
         elif kind == "message.complete":
@@ -790,7 +795,17 @@ class _GatewaySession:
 
 
 class _GatewayConnection:
-    def __init__(self, home: Path, python: str, repo_root: Path, ready_timeout: float):
+    def __init__(self, home: Path, python: str, repo_root: Path, ready_timeout: float,
+                 log_path: Optional[Path] = None,
+                 progress: Optional[Callable[[str], None]] = None,
+                 heartbeat_seconds: float = 30.0):
+        self._progress = progress
+        self._heartbeat_seconds = heartbeat_seconds
+        self._last_beat = time.monotonic()
+        self._log: Any = None
+        if log_path is not None:
+            Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+            self._log = open(log_path, "a", encoding="utf-8", errors="replace", buffering=1)
         env = {k: v for k, v in os.environ.items()
                if k not in ("CLOVER_DESKTOP", "CLOVER_DESKTOP_TERMINAL")}
         env["CLOVER_HOME"] = str(home)
@@ -836,11 +851,30 @@ class _GatewayConnection:
     def _read_stderr(self) -> None:
         for line in self.proc.stderr:  # type: ignore[union-attr]
             self._stderr.append(line.rstrip())
+            if self._log is not None:
+                try:
+                    self._log.write(line if line.endswith("\n") else line + "\n")
+                except (OSError, ValueError):
+                    pass
 
     def _tail(self) -> str:
         return " | ".join(list(self._stderr)[-8:]) or "(no stderr)"
 
+    def _beat(self) -> None:
+        if self._progress is None:
+            return
+        now = time.monotonic()
+        if now - self._last_beat < self._heartbeat_seconds:
+            return
+        self._last_beat = now
+        tr = self.tracker
+        self._progress(
+            f"  gateway: running_turns={tr.running_turns} completed_turns={tr.completed_turns} "
+            f"approvals={tr.approvals} events={dict(sorted(tr.event_counts.items()))}"
+        )
+
     def pump(self, wait: float) -> None:
+        self._beat()
         try:
             frame = self._frames.get(timeout=wait) if wait > 0 else self._frames.get_nowait()
         except queue.Empty:
@@ -882,21 +916,32 @@ class _GatewayConnection:
                 self.proc.wait(timeout=5)
             except Exception:
                 self.proc.kill()
+        if self._log is not None:
+            try:
+                self._log.close()
+            except OSError:
+                pass
 
 
 class TuiGatewayDriver:
     """One gateway process per run, so completion queues never cross cases."""
 
     def __init__(self, home: Path, *, python: Optional[str] = None,
-                 repo_root: Path = REPO_ROOT, ready_timeout: float = 90.0):
+                 repo_root: Path = REPO_ROOT, ready_timeout: float = 90.0,
+                 log_dir: Optional[Path] = None,
+                 progress: Optional[Callable[[str], None]] = None):
         self.home = Path(home)
         self.python = python or sys.executable
         self.repo_root = repo_root
         self.ready_timeout = ready_timeout
+        self.log_dir = Path(log_dir) if log_dir is not None else None
+        self.progress = progress
 
     @contextmanager
     def session(self, *, model: str, provider: Optional[str], cwd: str) -> Iterator[_GatewaySession]:
-        conn = _GatewayConnection(self.home, self.python, self.repo_root, self.ready_timeout)
+        log_path = self.log_dir / f"{Path(cwd).name}.stderr.log" if self.log_dir else None
+        conn = _GatewayConnection(self.home, self.python, self.repo_root, self.ready_timeout,
+                                  log_path=log_path, progress=self.progress)
         try:
             params: Dict[str, Any] = {"model": model, "cwd": cwd, "cols": 120}
             if provider:
@@ -936,6 +981,7 @@ def run_eval(
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
     progress: Optional[Callable[[str], None]] = None,
+    heartbeat_seconds: float = 30.0,
 ) -> List[Dict[str, Any]]:
     out_dir = Path(out_dir)
     (out_dir / "transcripts").mkdir(parents=True, exist_ok=True)
@@ -960,15 +1006,37 @@ def run_eval(
                     sid = sess.stored_session_id
                     run["session_id"] = sid
                     t0 = clock()
+                    say(f"{case['id']} r{rep}: session {sid} started")
+                    beat = {"at": t0}
+                    snapshot = out_dir / "transcripts" / f"{case['id']}-r{rep}.json"
+
+                    def on_poll(msgs: Sequence[Dict[str, Any]], _beat=beat, _snap=snapshot,
+                                _label=f"{case['id']} r{rep}") -> None:
+                        # A killed or stuck run still leaves its transcript on disk.
+                        now = clock()
+                        if now - _beat["at"] < heartbeat_seconds:
+                            return
+                        _beat["at"] = now
+                        try:
+                            _snap.write_text(json.dumps(list(msgs), indent=1, default=str),
+                                             encoding="utf-8")
+                        except OSError:
+                            pass
+                        say(f"{_label}: {now - t0:.0f}s, {len(msgs)} rows, "
+                            f"{len(pending_work(msgs))} open")
+
                     sess.submit(prompt)
                     ended = sess.wait_first_turn(turn_timeout)
                     run["turn_seconds"] = round(clock() - t0, 2)
                     if not ended:
                         run["error"] = f"root turn did not end within {turn_timeout:.0f}s"
+                    say(f"{case['id']} r{rep}: root turn "
+                        f"{'ended' if ended else 'NOT ended'} after {run['turn_seconds']}s")
                     run["settled"] = wait_settled(
                         lambda: reader(sid), sess.idle,
                         quiet_seconds=quiet_seconds, timeout=settle_timeout,
                         poll_seconds=poll_seconds, clock=clock, sleep=sleep,
+                        on_poll=on_poll,
                     )
                     if not run["settled"]:
                         sess.interrupt()
@@ -1142,15 +1210,20 @@ def main(
         return 0
 
     home = resolve_profile_home(args.profile)
-    driver = (driver_factory or (lambda h, a: TuiGatewayDriver(h)))(home, args)
-    reader = (reader_factory or (lambda h: (lambda sid: read_transcript(h / "state.db", sid))))(home)
     out_dir = Path(args.out)
+
+    def _progress(msg: str) -> None:
+        print(msg, file=sys.stderr, flush=True)
+
+    driver = (driver_factory or (lambda h, a: TuiGatewayDriver(
+        h, log_dir=out_dir / "gateway-logs", progress=_progress)))(home, args)
+    reader = (reader_factory or (lambda h: (lambda sid: read_transcript(h / "state.db", sid))))(home)
     runs = run_eval(
         cases, driver, reader=reader, root_model=args.root_model, root_provider=args.root_provider,
         reps=args.reps, evidence_reps=args.evidence_reps, out_dir=out_dir,
         turn_timeout=args.turn_timeout, settle_timeout=args.settle_timeout,
         quiet_seconds=args.quiet_seconds, poll_seconds=args.poll_seconds,
-        progress=lambda m: print(m, file=sys.stderr, flush=True),
+        progress=_progress,
     )
     bar_result = evaluate_bar(runs, cases, bar_over)
     meta = {
