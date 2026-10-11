@@ -1223,7 +1223,7 @@ DEFAULT_CONFIG = {
             "language": "",
         },
         # Delegation router (delegation.router): sizes a human message before
-        # the root starts. Small JSON reply, 5 s budget, so it prefers the
+        # the root starts. Small JSON reply, 8 s budget, so it prefers the
         # provider's fast tier; ``auto`` otherwise resolves like title_generation.
         "delegation_router": {
             "provider": "auto",
@@ -1231,7 +1231,7 @@ DEFAULT_CONFIG = {
             "prefer_fast_model": True,
             "base_url": "",
             "api_key": "",
-            "timeout": 5,
+            "timeout": 8,
             "extra_body": {},
         },
         "memory_query_rewrite": {
@@ -2163,7 +2163,7 @@ DEFAULT_CONFIG = {
         # failure the turn runs exactly as without the router.
         "router": {
             "enabled": True,
-            "timeout_seconds": 5,
+            "timeout_seconds": 8,
             "backstop_calls": 2,
             "backstop_seconds": 60,
         },

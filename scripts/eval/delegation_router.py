@@ -163,6 +163,9 @@ def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
     p.add_argument("--reps", type=int, default=3, help="Repetitions per case (default 3)")
     p.add_argument("--only", action="append", default=[], help="Run only these case ids (comma separated)")
     p.add_argument("--out", required=True, help="Output directory (results.json, summary.txt)")
+    p.add_argument("--no-warmup", action="store_true",
+                   help="Time the first model call too (it pays the one-time SDK imports and "
+                        "client set-up, which a long-lived gateway pays once at start-up)")
     p.add_argument("--min-accuracy", type=float, default=0.0,
                    help="Exit 1 when accuracy is below this fraction (default 0 = report only)")
     return p.parse_args(argv)
@@ -205,6 +208,17 @@ def main(
 
         def route_fn(message: str, recent_turns: Sequence[Any] = ()) -> Any:  # noqa: F811
             return route(message, recent_turns, settings=settings)
+
+        if not args.no_warmup:
+            # One untimed call so the measured runs see the steady state a
+            # long-lived gateway process sees, not the process's first call.
+            from dataclasses import replace
+
+            t0 = time.perf_counter()
+            route("Which city is the capital of France?", [],
+                  settings=replace(settings, timeout_seconds=max(settings.timeout_seconds, 180.0)))
+            print(f"warm-up call took {time.perf_counter() - t0:.1f}s (not measured)",
+                  file=sys.stderr, flush=True)
 
     runs = run_router_eval(
         cases, route_fn, reps=args.reps,

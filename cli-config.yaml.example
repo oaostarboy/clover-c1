@@ -817,7 +817,7 @@ prompt_caching:
 #     provider: "auto"
 #     model: "auto"          # auto = the provider's fast model when it has one, else your main model
 #     prefer_fast_model: true
-#     timeout: 5
+#     timeout: 8
 #
 #   # Session search — summarizes matching past sessions
 #   session_search:
@@ -1630,7 +1630,7 @@ delegation:
   #                                           # the plan on that turn's message. Same scope as the time limit above (chat agents
   #                                           # that can deliver a background helper's result later).
   #   enabled: true                           # false = no sizing call, no plan, no backstop
-  #   timeout_seconds: 5                      # budget for the sizing call; on timeout or bad output the turn runs as before
+  #   timeout_seconds: 8                      # budget for the sizing call; on timeout or bad output the turn runs as before
   #   backstop_calls: 2                       # not-direct plan: after this many work tool calls the agent made itself ...
   #   backstop_seconds: 60                    # ... or this many seconds, the runtime hands the plan to helpers (nothing running is
   #                                           # stopped). "Do it yourself" in the message is never overridden.

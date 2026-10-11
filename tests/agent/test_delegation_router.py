@@ -9,6 +9,7 @@ production code.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -490,7 +491,7 @@ def test_defaults_match_the_documented_values(monkeypatch):
     monkeypatch.setenv('CLOVER_IGNORE_USER_CONFIG', '1')
     s = dr.load_settings()
     assert s.enabled is True
-    assert s.timeout_seconds == 5.0
+    assert s.timeout_seconds == dr.DEFAULT_TIMEOUT_SECONDS
     assert s.backstop_calls == 2
     assert s.backstop_seconds == 60.0
 
@@ -519,7 +520,7 @@ def test_garbage_settings_fall_back_to_defaults(monkeypatch):
                                   'backstop_calls': 'many', 'backstop_seconds': True}},
     }))
     s = dr.load_settings()
-    assert s.timeout_seconds == 5.0 and s.backstop_calls == 2
+    assert s.timeout_seconds == dr.DEFAULT_TIMEOUT_SECONDS and s.backstop_calls == 2
     assert s.backstop_seconds == 60.0
 
 
@@ -531,3 +532,128 @@ def test_shipped_defaults_declare_the_router_and_its_aux_task():
     assert set(router) >= {'enabled', 'timeout_seconds', 'backstop_calls', 'backstop_seconds'}
     aux = DEFAULT_CONFIG['auxiliary']['delegation_router']
     assert aux['provider'] == 'auto' and aux['model'] in ('', 'auto')
+
+
+# ── calibration: the deadline, the reply size, the prompt's stability ──────
+
+def test_every_timeout_default_agrees_and_the_user_never_waits_long():
+    """The sizing call is on the user's critical path.  The router's default
+    deadline, the shipped config and the aux task's own budget must all say the
+    same thing, and it must stay a short wait (a verdict that arrives after
+    this is dropped anyway)."""
+    from clover_cli.config_defaults import DEFAULT_CONFIG
+
+    shipped = DEFAULT_CONFIG['delegation']['router']['timeout_seconds']
+    aux = DEFAULT_CONFIG['auxiliary']['delegation_router']['timeout']
+    assert float(shipped) == dr.DEFAULT_TIMEOUT_SECONDS == float(aux)
+    assert dr.DEFAULT_TIMEOUT_SECONDS <= 8.0
+
+
+def test_the_system_prompt_is_byte_stable_across_messages_and_turns():
+    """Same cap -> same system message, whatever the user wrote or the history
+    held: a provider that caches the prompt prefix keeps hitting it."""
+    first = dr._build_messages('fix the cart bug', [], 3)[0]
+    second = dr._build_messages(
+        'compare six pricing pages', [{'role': 'user', 'content': 'earlier'}], 3)[0]
+    assert first == second
+    assert first['role'] == 'system'
+    assert '{max_tasks}' not in first['content'] and '{{' not in first['content']
+    assert 'at most 3 tasks' in first['content'].lower()
+
+
+def test_the_reply_budget_fits_a_full_plan_of_terse_tasks():
+    """A full-size plan in the terse shape the prompt asks for (no acceptance,
+    short goals, short reason) is far below the token budget; ~4 chars/token."""
+    tasks = [T(f'Look up the plans and limits for product {i} and return a table row.', [], '')
+             for i in range(dr.MAX_TASKS)]
+    for task in tasks:
+        task.pop('acceptance')
+    reply = json.dumps({'mode': 'parallel', 'reason': 'Independent pages, one each.',
+                        'tasks': tasks})
+    assert len(reply) / 4 < dr.ROUTER_MAX_TOKENS
+
+
+def test_a_terse_reply_without_acceptance_or_reason_is_a_valid_plan():
+    v = dr.parse_verdict({'mode': 'staged', 'tasks': [
+        {'goal': 'Build the landing page.'},
+        {'goal': 'Audit the page for accessibility.', 'depends_on': [0]},
+    ]})
+    assert v.mode == 'staged'
+    assert [t.acceptance for t in v.tasks] == ['', '']
+    assert v.reason == ''
+    assert 'done when' not in dr.work_plan_note(v)
+
+
+def test_a_reply_that_drops_every_dependency_is_not_read_as_staged():
+    """The mode comes from the DAG, never from the model's word (the router
+    prompt asks for ``depends_on`` on every task for this reason)."""
+    v = dr.parse_verdict({'mode': 'staged', 'tasks': [
+        {'goal': 'Build the landing page.'}, {'goal': 'Audit the page for accessibility.'}]})
+    assert v.mode == 'parallel'
+
+
+# ── hedging: a silent call gets one twin, the first answer wins ────────────
+
+def test_a_slow_call_is_hedged_and_the_first_answer_wins(aux, monkeypatch):
+    monkeypatch.setattr(dr, 'HEDGE_AFTER_SECONDS', 0.05)
+    release = threading.Event()
+    aux.replies[:] = [
+        lambda: (release.wait(5), verdict_json('direct'))[1],   # stuck
+        verdict_json('single', [T('do task alpha')]),           # the twin answers
+    ]
+    t0 = time.monotonic()
+    try:
+        v = dr.route('build the thing', [], settings=SETTINGS)
+    finally:
+        release.set()
+    assert v is not None and v.mode == 'single'
+    assert len(aux.router_calls) == 2
+    assert time.monotonic() - t0 < 2.0
+
+
+def test_a_prompt_answer_is_never_hedged(aux, monkeypatch):
+    monkeypatch.setattr(dr, 'HEDGE_AFTER_SECONDS', 0.3)
+    aux.replies[:] = [verdict_json('direct')]
+    assert dr.route('what time is it in Tokyo', [], settings=SETTINGS).mode == 'direct'
+    time.sleep(0.5)
+    assert len(aux.router_calls) == 1
+
+
+def test_an_error_before_the_hedge_is_raised_not_hedged(aux, monkeypatch):
+    monkeypatch.setattr(dr, 'HEDGE_AFTER_SECONDS', 0.3)
+    aux.replies[:] = [RuntimeError('503 upstream')]
+    assert dr.route('build the thing', [], settings=SETTINGS) is None
+    time.sleep(0.5)
+    assert len(aux.router_calls) == 1
+
+
+def test_an_error_from_one_of_two_calls_waits_for_the_other(aux, monkeypatch):
+    monkeypatch.setattr(dr, 'HEDGE_AFTER_SECONDS', 0.05)
+
+    def slow_failure():
+        time.sleep(0.3)
+        raise RuntimeError('connection reset')
+
+    aux.replies[:] = [slow_failure, lambda: (time.sleep(0.5), verdict_json('direct'))[1]]
+    v = dr.route('build the thing', [], settings=SETTINGS)
+    assert v is not None and v.mode == 'direct'
+    assert len(aux.router_calls) == 2
+
+
+def test_two_stuck_calls_still_end_at_the_deadline(aux, monkeypatch):
+    monkeypatch.setattr(dr, 'HEDGE_AFTER_SECONDS', 0.05)
+    release = threading.Event()
+    aux.replies[:] = [lambda: (release.wait(5), verdict_json('direct'))[1]] * 2
+    quick = dr.RouterSettings(enabled=True, timeout_seconds=0.8, backstop_calls=2,
+                              backstop_seconds=60.0)
+    t0 = time.monotonic()
+    try:
+        assert dr.route('build the thing', [], settings=quick) is None
+    finally:
+        release.set()
+    assert time.monotonic() - t0 < 2.0
+    assert len(aux.router_calls) == 2
+
+
+def test_the_default_hedge_point_sits_inside_the_default_deadline():
+    assert 0 < dr.HEDGE_AFTER_SECONDS < dr.DEFAULT_TIMEOUT_SECONDS - dr._MIN_RETRY_SECONDS

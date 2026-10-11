@@ -19,6 +19,15 @@ the tool schemas) says how to treat that plan; the four ways to work are:
 | **Parallel helpers** | Many items each needing their own research, or independent parts | One task per part, each with its own plan, grouped within tool capacity. |
 | **Staged** | Later work needs earlier output (build, then review) | Dispatches the first stage only; when its result returns, checks the artifacts, then dispatches the next stage, carrying scope, acceptance checks and artifact references forward. |
 
+- **What it picks.** The default is direct. Parallel is for fifteen or more
+  items that each need their own facts, five or more named products or pages
+  each read separately, or unrelated fixes; staged is build -> test -> review
+  chains; single is one large cohesive job (long report, a command that runs
+  for minutes). A closing merge, ranking, table or test run is never a task of
+  its own. Calibrate with `scripts/eval/delegation_router.py` against
+  `tests/eval/delegation_modes.jsonl` and the held-out paraphrases in
+  `tests/eval/delegation_router_heldout.jsonl` (the rubric is tuned on the
+  first only).
 - **The user's words win.** "Do it yourself" means direct even for a big job;
   "use helpers" means a helper even for a small one.
 - **Signals for big:** more than a couple of minutes - a dozen or more items
@@ -58,8 +67,10 @@ completions, multimodal messages, or a bare greeting / thank-you.
   is schema-validated and the mode is derived from the task DAG in code - no
   tasks is direct, one is single, several independent are parallel, any
   dependency is staged - never taken on the model's word. One retry on an
-  invalid reply, a `timeout_seconds` (5) budget, then no plan and the turn runs
-  exactly as it did before the router.
+  invalid reply, a `timeout_seconds` (8) budget, then no plan and the turn runs
+  exactly as it did before the router. A warm call answers in about 1.5 s
+  (p95 about 3 s); the first call in a fresh process also pays one-time SDK
+  imports and can miss the budget, which is the "no plan" path.
 - **The user's words win.** "Do it yourself" is direct with no sizing call and
   no backstop; "use helpers" is at least single.
 - **Delivery.** The plan is a `[Clover runtime] work plan:` block on the API
@@ -83,7 +94,7 @@ completions, multimodal messages, or a bare greeting / thank-you.
 delegation:
   router:
     enabled: true
-    timeout_seconds: 5
+    timeout_seconds: 8
     backstop_calls: 2
     backstop_seconds: 60
 auxiliary:
