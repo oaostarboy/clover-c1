@@ -52,7 +52,7 @@ def test_running_card_shape():
     assert card.render().splitlines() == [
         "on it",
         "",
-        "\U0001f504 **fixing the bugs**",
+        "\U0001f340 **fixing the bugs**",
         "> *\u2192 test build + PR \u00b7 ~10\u201325 min*",
         f"> {SPACER}",
         "> \U0001f340 find",
@@ -67,7 +67,7 @@ def test_running_card_shape():
 def test_initial_text_has_the_say_title_outcome_and_steps_but_no_activity():
     card = _card(say="got it")
     lines = card.initial_text.splitlines()
-    assert lines[:3] == ["got it", "", "\U0001f504 **fixing the bugs**"]
+    assert lines[:3] == ["got it", "", "\U0001f340 **fixing the bugs**"]
     assert lines[3] == "> *\u2192 test build + PR \u00b7 ~10\u201325 min*"
     assert "\U0001f527" not in card.initial_text and "tool call" not in card.initial_text
 
@@ -75,7 +75,7 @@ def test_initial_text_has_the_say_title_outcome_and_steps_but_no_activity():
 def test_card_without_steps_is_header_and_outcome_only():
     card = _card(steps=())
     assert card.initial_text.splitlines() == [
-        "\U0001f504 **fixing the bugs**",
+        "\U0001f340 **fixing the bugs**",
         "> *\u2192 test build + PR \u00b7 ~10\u201325 min*",
     ]
 
@@ -489,7 +489,7 @@ def test_multi_card_shape_while_running():
     cl.kids[1].started -= 72
     lines = card.render().splitlines()
     assert lines[:4] == [
-        "on it", "", "\U0001f504 **checking the 3 sites** \u00b7 1 of 3 done",
+        "on it", "", "\U0001f340 **checking the 3 sites** \u00b7 1 of 3 done",
         "> *\u2192 outcome \u00b7 ~5 min*",
     ]
     assert "> \U0001f340 **nice & tidy site**" in lines
@@ -724,8 +724,8 @@ def test_two_unified_cards_in_one_message_are_separated_by_a_blank_line():
     r2 = fl.DispatchReceipt(delegation_id="b", seq=2, goals=("g",), summary=HEAD, steps=("two",))
     card = ac.card_for([r1, r2])
     text = card.render()
-    assert "\n\n\U0001f504 **fixing the bugs**" in text
-    assert text.count("\U0001f504 **fixing the bugs**") == 2
+    assert "\n\n\U0001f340 **fixing the bugs**" in text
+    assert text.count("\U0001f340 **fixing the bugs**") == 2
 
 
 # -- the helper's own todo bookkeeping is not a tool line ----------------------

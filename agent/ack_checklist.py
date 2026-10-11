@@ -97,6 +97,7 @@ CARD_BUDGET = 3900  # Telegram's message limit, with room to spare
 
 PENDING_ICON = "\u2b1c"  # ⬜
 ACTIVE_ICON = "\U0001f504"  # 🔄
+HEADER_RUNNING_ICON = "\U0001f340"  # 🍀 on a running unified card's title
 DONE_ICON = "\U0001f340"  # 🍀
 FAILED_ICON = "\U0001f342"  # 🍂
 STOPPED_ICON = "\u23f9"  # ⏹
@@ -271,7 +272,9 @@ class Checklist:
 
     def _title_outcome(self) -> Tuple[str, str, str]:
         """(icon, title, outcome) of the header line."""
-        icon, rest = ACTIVE_ICON, self.header
+        # Ant: the card title carries a 🍀 while it runs (steps keep 🔄);
+        # it ends 🍀 / 🍂 / ⏹.
+        icon, rest = HEADER_RUNNING_ICON, self.header
         for ic in (ACTIVE_ICON, DONE_ICON, FAILED_ICON, STOPPED_ICON):
             if rest.startswith(ic):
                 rest = rest[len(ic):].strip()
