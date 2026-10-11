@@ -3000,11 +3000,14 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 logging.debug("Tool output risk callback error: %s", cb_err)
 
         if not agent.quiet_mode and getattr(agent, "tool_progress_mode", "all") != "off":
-            _fr_str = _multimodal_text_summary(display_function_result)
+            # Post-persistence result (same as the model sees), with only
+            # foreground-limit refusals neutralised; format otherwise unchanged.
+            _preview_result = display_result(function_result)
             if agent.verbose_logging:
                 print(f"  {get_done_mark()} Tool {i} completed in {tool_duration:.2f}s")
-                print(agent._wrap_verbose("Result: ", _fr_str))
+                print(agent._wrap_verbose("Result: ", _preview_result))
             else:
+                _fr_str = _preview_result if isinstance(_preview_result, str) else str(_preview_result)
                 response_preview = _fr_str[:agent.log_prefix_chars] + "..." if len(_fr_str) > agent.log_prefix_chars else _fr_str
                 print(f"  {get_done_mark()} Tool {i} completed in {tool_duration:.2f}s - {response_preview}")
 
