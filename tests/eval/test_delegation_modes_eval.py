@@ -1031,3 +1031,260 @@ def test_main_exit_codes_and_dry_run(tmp_path, monkeypatch, db, capsys):
     )
     assert rc == 2
     assert (tmp_path / "o2" / "results.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Per-rep isolation: a disposable copy of ONE frozen baseline of the profile
+# ---------------------------------------------------------------------------
+
+
+def _make_profile(root: Path) -> Path:
+    """A real-looking profile home: config, secrets, skills with references,
+    memories, and a state.db that already holds a session."""
+    import yaml
+    from clover_state import SessionDB
+
+    home = root / "real-profile"
+    (home / "skills" / "research" / "product-comparison-research" / "references").mkdir(parents=True)
+    (home / "skills" / "research" / "product-comparison-research" / "SKILL.md").write_text(
+        "---\nname: product-comparison-research\ndescription: Compare products.\n---\nv1 steps\n")
+    (home / "skills" / "research" / "product-comparison-research" / "references" / "games.md").write_text(
+        "save cheap data first, then hand the slow part to a helper\n")
+    (home / "skills" / "devops" / "disk-triage").mkdir(parents=True)
+    (home / "skills" / "devops" / "disk-triage" / "SKILL.md").write_text("---\nname: disk-triage\n---\nbody\n")
+    (home / "memories").mkdir()
+    (home / "memories" / "MEMORY.md").write_text("likes terse answers\n")
+    (home / ".env").write_text("OPENROUTER_API_KEY=sk-not-real\n")
+    (home / "auth.json").write_text('{"providers": {}}\n')
+    (home / "config.yaml").write_text(yaml.safe_dump({
+        "model": {"default": "some/model", "provider": "openrouter"},
+        "approvals": {"mode": "off"},
+        "delegation": {"default_tier": "fast", "tiers": {"fast": {"model": "x/y"}}},
+        "auxiliary": {"vision": {"model": "v/m"}, "background_review": {"enabled": True}},
+        "curator": {"enabled": True, "interval_hours": 12},
+    }))
+    # A decoy: the real DB already holds a session with the id the replay
+    # driver will use, scoring as DIRECT where the rep's own run is PARALLEL.
+    real_db = SessionDB(db_path=home / "state.db")
+    Recorder(real_db, "replay-0").user("25 best indie horror games, ranked")
+    real_db.close()
+    return home
+
+
+def _tree(home: Path) -> dict:
+    """Every file under home -> (bytes, mtime_ns); detects any write at all."""
+    return {
+        str(p.relative_to(home)): (p.read_bytes(), p.stat().st_mtime_ns)
+        for p in sorted(home.rglob("*")) if p.is_file()
+    }
+
+
+class _CopyDriver(_ReplayDriver):
+    """Replay driver bound to ONE rep's home; the foreground 'learns' by
+    patching a skill in that home, as skill_manage would."""
+
+    def __init__(self, home: Path, script, touch_skill: bool = False):
+        from clover_state import SessionDB
+
+        super().__init__(SessionDB(db_path=home / "state.db"), script)
+        self.home, self.touch_skill = home, touch_skill
+
+    def session(self, *, model, provider, cwd):
+        if self.touch_skill:
+            skill = self.home / "skills" / "research" / "product-comparison-research" / "SKILL.md"
+            skill.write_text(skill.read_text() + "\nstep 6 added mid-eval\n")
+        return super().session(model=model, provider=provider, cwd=cwd)
+
+
+HORROR = dict(id="horror", prompt="25 best indie horror games, ranked",
+              expected_mode="parallel", live_evidence=True, dispatch_within_calls=2)
+
+
+def _run_isolated(tmp_path, profile, *, touch_skill=False, cases=None, evidence_reps=2):
+    baseline = dm.FrozenBaseline.freeze(profile, tmp_path / "out" / "baseline")
+    homes: list[Path] = []
+
+    def driver_factory(home):
+        homes.append(home)
+        return _CopyDriver(home, _script, touch_skill=touch_skill)
+
+    def reader_factory(home):
+        return lambda sid: dm.read_transcript(home / "state.db", sid)
+
+    now = {"t": 0.0}
+    runs = dm.run_eval(
+        cases or [_case(**HORROR)], None, reader=None,
+        rep_env=dm.make_rep_env(baseline, driver_factory, reader_factory),
+        root_model="fake-root", root_provider=None, reps=1, evidence_reps=evidence_reps,
+        out_dir=tmp_path / "out", turn_timeout=10, settle_timeout=60,
+        quiet_seconds=1, poll_seconds=1,
+        clock=lambda: now["t"], sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+    )
+    return baseline, runs, homes
+
+
+def test_every_rep_gets_its_own_copy_made_from_one_frozen_baseline(tmp_path):
+    profile = _make_profile(tmp_path)
+    baseline, runs, homes = _run_isolated(tmp_path, profile, touch_skill=True, evidence_reps=3)
+
+    assert len(runs) == 3 and all(r["error"] is None and r["settled"] for r in runs)
+    assert len(homes) == 3 and len(set(homes)) == 3
+    assert profile not in homes and all(profile not in h.parents for h in homes)
+    assert [r["home"] for r in runs] == [str(h) for h in homes]
+    skill = Path("skills/research/product-comparison-research/SKILL.md")
+    for h in homes:
+        assert (h / "skills" / "research" / "product-comparison-research" / "references" / "games.md").exists()
+        assert (h / "memories" / "MEMORY.md").read_text() == "likes terse answers\n"
+        assert (h / ".env").exists() and (h / "auth.json").exists()
+    # each rep's foreground patched ITS copy once; no rep saw another rep's
+    # patch, because every copy comes from the baseline, not from the last rep
+    for h in homes:
+        assert (h / skill).read_text().count("step 6 added mid-eval") == 1
+    assert "step 6" not in (baseline.root / skill).read_text()
+
+
+def test_the_copy_has_no_state_db_so_each_rep_gets_a_fresh_session_db(tmp_path):
+    profile = _make_profile(tmp_path)
+    baseline = dm.FrozenBaseline.freeze(profile, tmp_path / "out" / "baseline")
+    assert (profile / "state.db").exists()
+    assert not (baseline.root / "state.db").exists()
+    copy = baseline.make_home("horror-r0")
+    assert not (copy / "state.db").exists()
+
+
+def test_background_review_and_curator_are_off_in_the_copy_everything_else_kept(tmp_path):
+    import yaml
+
+    profile = _make_profile(tmp_path)
+    before = yaml.safe_load((profile / "config.yaml").read_text())
+    _, runs, homes = _run_isolated(tmp_path, profile)
+
+    for h in homes:
+        cfg = yaml.safe_load((h / "config.yaml").read_text())
+        assert cfg["auxiliary"]["background_review"]["enabled"] is False
+        assert cfg["curator"]["enabled"] is False
+        # keep everything else: model, delegation tiers, approvals, siblings
+        assert cfg["model"] == before["model"]
+        assert cfg["approvals"] == before["approvals"]
+        assert cfg["delegation"] == before["delegation"]
+        assert cfg["auxiliary"]["vision"] == before["auxiliary"]["vision"]
+        assert cfg["curator"]["interval_hours"] == 12
+    # and the real profile's config still has them on
+    after = yaml.safe_load((profile / "config.yaml").read_text())
+    assert after == before
+    assert after["auxiliary"]["background_review"]["enabled"] is True
+    assert after["curator"]["enabled"] is True
+
+
+@pytest.mark.parametrize("raw", [
+    None,                                   # no config.yaml at all
+    "model: {default: m}\n",                # no auxiliary / curator sections
+    "auxiliary: null\ncurator: 5\n",        # wrong shapes
+])
+def test_copy_disables_review_and_curator_whatever_the_config_looked_like(tmp_path, raw):
+    import yaml
+
+    profile = tmp_path / "bare"
+    profile.mkdir()
+    if raw is not None:
+        (profile / "config.yaml").write_text(raw)
+    baseline = dm.FrozenBaseline.freeze(profile, tmp_path / "baseline")
+    cfg = yaml.safe_load((baseline.make_home("c-r0") / "config.yaml").read_text())
+    assert cfg["auxiliary"]["background_review"]["enabled"] is False
+    assert cfg["curator"]["enabled"] is False
+
+
+def test_unreadable_config_is_a_harness_error_not_a_silent_review_on_run(tmp_path):
+    profile = tmp_path / "broken"
+    profile.mkdir()
+    (profile / "config.yaml").write_text("auxiliary: [unclosed\n")
+    baseline = dm.FrozenBaseline.freeze(profile, tmp_path / "baseline")
+    with pytest.raises(ValueError, match="config.yaml"):
+        baseline.make_home("c-r0")
+
+
+def test_the_real_profile_is_never_written(tmp_path):
+    profile = _make_profile(tmp_path)
+    before = _tree(profile)
+    _run_isolated(tmp_path, profile, touch_skill=True, evidence_reps=2)
+    assert _tree(profile) == before
+
+
+def test_scoring_reads_the_copys_session_db_not_the_real_one(tmp_path):
+    from clover_state import SessionDB
+
+    profile = _make_profile(tmp_path)
+    # the decoy in the real DB is a DIRECT-looking, never-dispatching session
+    real = SessionDB(db_path=profile / "state.db")
+    assert [m["role"] for m in real.get_messages("replay-0")] == ["user"]
+    real.close()
+
+    _, runs, homes = _run_isolated(tmp_path, profile)
+    assert all(r["session_id"] == "replay-0" for r in runs)
+    # parallel + correct could only come from the copy's own transcript
+    assert all(r["score"]["mode"] == "parallel" and r["correct"] for r in runs)
+    for h in homes:
+        copy_db = SessionDB(db_path=h / "state.db")
+        assert len(copy_db.get_messages("replay-0")) > 1
+        copy_db.close()
+
+
+def test_baseline_records_a_sha256_for_every_skill_md(tmp_path):
+    import hashlib
+
+    profile = _make_profile(tmp_path)
+    baseline = dm.FrozenBaseline.freeze(profile, tmp_path / "baseline")
+    rel = "skills/research/product-comparison-research/SKILL.md"
+    assert set(baseline.skill_sha256) == {rel, "skills/devops/disk-triage/SKILL.md"}
+    assert baseline.skill_sha256[rel] == hashlib.sha256((profile / rel).read_bytes()).hexdigest()
+    # frozen: editing the live profile afterwards changes neither the hashes
+    # nor the copies
+    (profile / rel).write_text("edited after the freeze\n")
+    assert baseline.skill_sha256[rel] != hashlib.sha256((profile / rel).read_bytes()).hexdigest()
+    assert "edited" not in (baseline.make_home("x-r0") / rel).read_text()
+
+
+def test_main_runs_every_rep_against_a_copy_and_records_the_skill_hashes(
+        tmp_path, monkeypatch, capsys):
+    profile = _make_profile(tmp_path)
+    monkeypatch.setattr(dm, "resolve_profile_home", lambda name: profile)
+    seen: list[Path] = []
+
+    def driver_factory(home, args):
+        seen.append(home)
+        return _CopyDriver(home, _script)
+
+    def reader_factory(home):
+        return lambda sid: dm.read_transcript(home / "state.db", sid)
+
+    out = tmp_path / "o"
+    rc = dm.main(
+        ["--profile", "dev", "--root-model", "m", "--out", str(out),
+         "--cases", str(CASES_PATH), "--only", "disk-usage", "--reps", "2",
+         "--quiet-seconds", "0", "--poll-seconds", "0"],
+        driver_factory=driver_factory, reader_factory=reader_factory,
+    )
+    capsys.readouterr()
+    assert rc in (0, 1)  # the pass bar is not the point here, isolation is
+    assert len(seen) == 2 and len(set(seen)) == 2 and profile not in seen
+    data = json.loads((out / "results.json").read_text())
+    assert data["meta"]["skill_sha256"] == {
+        "skills/research/product-comparison-research/SKILL.md": __import__("hashlib").sha256(
+            (profile / "skills/research/product-comparison-research/SKILL.md").read_bytes()
+        ).hexdigest(),
+        "skills/devops/disk-triage/SKILL.md": __import__("hashlib").sha256(
+            (profile / "skills/devops/disk-triage/SKILL.md").read_bytes()
+        ).hexdigest(),
+    }
+    assert [r["home"] for r in data["runs"]] == [str(h) for h in seen]
+    assert data["meta"]["isolation"]["background_review"] is False
+    assert data["meta"]["isolation"]["curator"] is False
+
+
+def test_baseline_refuses_a_directory_that_would_overwrite_the_profile(tmp_path):
+    profile = _make_profile(tmp_path)
+    before = _tree(profile)
+    for bad in (profile, profile / "skills", tmp_path):
+        with pytest.raises(ValueError, match="overlaps"):
+            dm.FrozenBaseline.freeze(profile, bad)
+    assert _tree(profile) == before
