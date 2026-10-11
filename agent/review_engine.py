@@ -267,6 +267,10 @@ def start_review(
         background=True,
         parent_agent=parent_agent,
         credentials_cfg=credentials_cfg,
+        # Reviews are main-model-first: auxiliary.review when configured,
+        # otherwise the delegation pin or the parent model. They never take
+        # delegation.default_tier, configured review route or not.
+        apply_default_tier=False,
     )
     try:
         result = json.loads(raw)

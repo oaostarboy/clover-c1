@@ -2087,6 +2087,15 @@ DEFAULT_CONFIG = {
             "check": ["xai/grok-4.7", "xai-oauth/grok-4.7", "gemini/gemini-3.8-pro"],
             "fast": ["gemini/gemini-3.8-flash-high", "openai-codex/gpt-6-luna"],
         },
+        # Tier name (a key of `tiers`) applied to every delegated task that
+        # names no `tier` of its own, e.g. "code". An explicit task tier always
+        # wins. Empty = off (children inherit the parent, as before).
+        # default_tier applies only when no delegation.provider/model pin is
+        # set; a pin routes every untiered task, so the default is ignored. A
+        # name that does not resolve to an authenticated candidate silently
+        # falls back to the same path. /review never uses it. Applied at
+        # dispatch only; it never changes the delegate_task tool schema.
+        "default_tier": "",
         "base_url": "",    # direct OpenAI-compatible endpoint for subagents
         "api_key": "",     # API key for delegation.base_url (falls back to OPENAI_API_KEY)
         "api_mode": "",    # wire protocol for delegation.base_url: "chat_completions",

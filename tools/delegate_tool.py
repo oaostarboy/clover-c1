@@ -4224,6 +4224,7 @@ def delegate_task(
     parent_agent=None,
     credentials_cfg: Optional[Dict[str, Any]] = None,
     parent_task_id: Optional[str] = None,
+    apply_default_tier: bool = True,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks, or control
@@ -4523,6 +4524,23 @@ def delegate_task(
                 "capacity", "Async delegation capacity reached."
             )
 
+    # delegation.default_tier: the tier for tasks that name none. Resolved once
+    # per dispatch (local credential probe only, no network) and only when some
+    # task actually needs it. Internal callers opt out with
+    # ``apply_default_tier=False`` (the review engine; never model-facing), and a
+    # per-call ``credentials_cfg`` route is explicit already. Dispatch-time
+    # only: nothing here touches the tool schema.
+    _default_tier = None
+    if (
+        apply_default_tier
+        and not credentials_cfg
+        and any(
+            not (isinstance(t.get("tier"), str) and t["tier"].strip())
+            for t in task_list
+        )
+    ):
+        _default_tier = _resolve_default_tier(cfg, parent_agent)
+
     # Build all child agents on the main thread (thread-safe construction).
     # _build_child_preserving_parent_tools saves/restores the parent's
     # resolved tool names around each construction under a lock, so child
@@ -4570,6 +4588,29 @@ def delegate_task(
                             f"tier '{tier_name}' credential resolution failed "
                             f"({exc}); using the default model."
                         )
+            elif _default_tier is not None:
+                # Configured default for a task that named no tier. Any
+                # failure keeps the batch-level creds and is logged only
+                # (no task_tier_fallback: it would surface in the result).
+                _default_name, _default_match = _default_tier
+                # delegation.request_overrides is part of the route's request
+                # settings, not of which model runs: hand it through so it
+                # merges exactly as it does on the pin / inherit path.
+                _default_route = dict(_default_match)
+                _explicit_overrides = cfg.get("request_overrides")
+                if isinstance(_explicit_overrides, dict) and _explicit_overrides:
+                    _default_route["request_overrides"] = _explicit_overrides
+                try:
+                    task_creds = _resolve_delegation_credentials(
+                        _default_route, parent_agent
+                    )
+                except ValueError as exc:
+                    logger.info(
+                        "delegation.default_tier '%s' credential resolution "
+                        "failed (%s); using the parent model",
+                        _default_name,
+                        exc,
+                    )
 
             try:
                 child = _build_child_preserving_parent_tools(
@@ -5623,6 +5664,64 @@ def _resolve_tier(
         if _provider_authenticated_cached(provider_id):
             return {"provider": provider_id, "model": model_id}
     return None
+
+
+def _delegation_pin_configured(cfg: dict) -> bool:
+    """True when ``delegation.provider`` / ``model`` / ``base_url`` is set.
+
+    Any of them routes every untiered child onto one explicit endpoint; that
+    blanket route is the user's choice and outranks ``default_tier``.
+    """
+    return any(str(cfg.get(key) or "").strip() for key in ("provider", "model", "base_url"))
+
+
+def _resolve_default_tier(
+    cfg: dict, parent_agent=None
+) -> Optional[tuple[str, Dict[str, str]]]:
+    """Resolve ``delegation.default_tier`` for tasks that named no tier.
+
+    Returns ``(tier_name, match)``, or ``None`` when the setting is empty, a
+    ``delegation.provider/model`` pin is configured (the pin wins), or the name
+    does not resolve to an authenticated candidate. The ``None`` cases other
+    than "empty" are logged only: the caller falls back to today's
+    pin-or-inherit path and the tool result says nothing about it (the model
+    would narrate it to the user).
+    """
+    raw = cfg.get("default_tier")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    name = raw.strip()
+    if _delegation_pin_configured(cfg):
+        logger.info(
+            "delegation.default_tier '%s' ignored: a delegation.provider/model "
+            "pin is configured and applies to untiered tasks",
+            name,
+        )
+        return None
+    tiers = _effective_tiers(cfg)
+    if not tiers:
+        logger.info(
+            "delegation.default_tier '%s' ignored: delegation.tiers is empty "
+            "or disabled; using the parent model",
+            name,
+        )
+        return None
+    if name not in tiers:
+        logger.info(
+            "delegation.default_tier '%s' is not a tier in delegation.tiers; "
+            "using the parent model",
+            name,
+        )
+        return None
+    match = _resolve_tier(name, cfg, parent_agent)
+    if match is None:
+        logger.info(
+            "delegation.default_tier '%s' has no authenticated candidate; "
+            "using the parent model",
+            name,
+        )
+        return None
+    return name, match
 
 
 def _resolved_tiers(cfg: dict, parent_agent=None) -> Dict[str, Dict[str, str]]:

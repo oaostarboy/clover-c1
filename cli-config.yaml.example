@@ -1635,6 +1635,16 @@ delegation:
   #                                           # Setting a tier name here REPLACES the built-in list of the same
   #                                           # name (lists don't merge); add your own tier names freely.
   #                                           # Set `tiers: {}` to disable tiering entirely.
+  #
+  # Default worker tier: the tier name used for every delegated task that
+  # doesn't pass its own `tier`. An explicit task tier always wins. Empty (the
+  # default) keeps today's behaviour. default_tier applies only when no
+  # delegation.provider/model pin is set (a pin already routes every untiered
+  # task, so the default is ignored). A name that isn't in `tiers`, or has no
+  # authenticated candidate, quietly falls back to parent inheritance. /review
+  # never uses it. It is applied when the task is dispatched and never changes
+  # the tool schema the model sees.
+  # default_tier: ""                          # e.g. "code"
 
 # =============================================================================
 # Honcho Integration (Cross-Session User Modeling)
