@@ -68,9 +68,14 @@ _COMPLETION_IDS = "_wl_completion_ids"
 _HANDBACK_IDS = "_wl_handback_dispatches"  # dispatch id -> receipts it integrates
 
 HANDBACK_GOAL = (
-    "Put the finished helper results together, check them, and write the "
-    "final report for the user."
+    "Finish checking the helper results (rerun or fix whatever did not come "
+    "back right) and report the outcome."
 )
+# A completion turn may run this many direct tool calls to check what came
+# back before the rest goes to a helper.  The router's default (2) is meant
+# for a fresh request, and is too tight for "look at what the helpers
+# produced".
+HANDBACK_CHECK_CALLS = 6
 HANDBACK_ACCEPTANCE = (
     "Every statement in the report is backed by a helper result or a check "
     "you ran, and anything unfinished is named."
@@ -406,7 +411,10 @@ def _arm_handback(agent: Any, message: str, group: Sequence["_fl.DispatchReceipt
     # the verification episode, so the time trigger is left to it.
     router_backstop.begin(
         agent, verdict, _HANDBACK_REQUEST_LEAD + digest,
-        dataclasses.replace(settings, backstop_seconds=None),
+        dataclasses.replace(
+            settings, backstop_seconds=None,
+            backstop_calls=max(settings.backstop_calls, HANDBACK_CHECK_CALLS),
+        ),
     )
     return True
 

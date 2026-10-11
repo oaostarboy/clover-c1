@@ -39,6 +39,7 @@ from agent.interrupt_compat import request_hard_interrupt
 from agent.turn_notices import neutralize_marker as _neutralize_marker
 from agent.turn_notices import runtime_note as _runtime_note
 from agent.turn_notices import vouch_runtime_result as _vouch_runtime_result
+from agent.ack_checklist import helper_outcome as _helper_outcome
 
 # Sentinel value used by the runtime provider system for providers that are
 # not natively known (named custom providers, third-party aggregators, etc.).
@@ -1358,6 +1359,9 @@ def _build_child_system_prompt(
         "points over paragraphs, and don't replay your whole process. Your "
         "response is returned to the parent agent as a summary, and overlong "
         "summaries crowd out the parent's context window.\n\n"
+        "Just before that, write one line: 'Result: done' if you did what was "
+        "asked, or 'Result: not done' if you could not (blocked, wrong input, "
+        "only part of it). Never claim done for work you did not finish.\n\n"
         "End your answer with a line starting 'Plain summary:' followed by 2-3 "
         "short sentences for a non-technical reader, in Simplified Technical "
         "English: one idea per sentence, active voice, common words, no file "
@@ -1635,10 +1639,21 @@ def _build_child_progress_callback(
     def _relay(
         event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs
     ):
-        if not parent_cb:
-            return
         payload = _identity_kwargs()
         payload.update(kwargs)  # caller overrides (e.g. status, duration_seconds)
+        if event_type in ("subagent.todo", "subagent.complete"):
+            # The ack message's live checklist follows the helper whether or not
+            # a roster card is attached to this turn.
+            try:
+                from agent.ack_checklist import on_child_event
+
+                on_child_event(event_type, **payload)
+            except Exception as e:
+                logger.debug("ack checklist update failed: %s", e)
+        # ``subagent.todo`` feeds the ack checklist in-process only: the roster
+        # card and the TUI have no use for it, so it is not forwarded.
+        if not parent_cb or event_type == "subagent.todo":
+            return
         try:
             parent_cb(event_type, tool_name, preview, args, **payload)
         except Exception as e:
@@ -1730,6 +1745,20 @@ def _build_child_progress_callback(
             return
 
         if event == DelegateEvent.TASK_TOOL_COMPLETED:
+            if tool_name == "todo":
+                # The helper's checklist (task state, not tool output): relayed
+                # so the ack message can tick its steps.  Only the statuses.
+                try:
+                    from agent.ack_checklist import todos_from_result
+
+                    _todos = todos_from_result(kwargs.get("result"))
+                    if _todos is not None:
+                        _relay("subagent.todo", todos=[
+                            {"id": str(t.get("id") or ""), "status": str(t.get("status") or "")}
+                            for t in _todos
+                        ])
+                except Exception as e:
+                    logger.debug("todo relay failed: %s", e)
             # Outcome only — never the tool's output. Raw output stays in the
             # redacted live transcript (tools/delegation_live_log.py).
             _relay(
@@ -3794,6 +3823,7 @@ def _run_single_child(
             "exit_reason": entry.get("exit_reason", ""),
             "duration_seconds": duration,
             "summary": summary[:500] if summary else entry.get("error", ""),
+            "outcome": _helper_outcome(summary),
             "input_tokens": (
                 int(_input_tokens) if isinstance(_input_tokens, (int, float)) else 0
             ),
@@ -4652,6 +4682,16 @@ def delegate_task(
     # resolved tool names around each construction under a lock, so child
     # toolset resolution never leaks into the parent (shared with the plugin
     # subagent-lifecycle API).
+    # One helper, one checklist: the steps the root promised the user are the
+    # helper's starting todo list, and it is told to keep that list current.
+    _ack_steps: tuple = ()
+    if n_tasks == 1 and isinstance(handoff, dict):
+        try:
+            from agent.ack_checklist import clean_steps
+
+            _ack_steps = clean_steps(handoff.get("steps"))
+        except Exception:
+            _ack_steps = ()
     children = []
     try:
         for i, t in enumerate(task_list):
@@ -4662,6 +4702,12 @@ def delegate_task(
             # so the child knows the expected output shape before it starts.
             _task_schema = task_schemas[i] if i < len(task_schemas) else None
             _child_context = t.get("context")
+            if _ack_steps:
+                from agent.ack_checklist import child_instruction
+
+                _child_context = (
+                    f"{_child_context}\n\n" if _child_context else ""
+                ) + child_instruction(_ack_steps)
             if _task_schema is not None:
                 from tools.delegation_output_schema import append_output_contract
 
@@ -4752,6 +4798,13 @@ def delegate_task(
             # From here the child is owned by `children`, so a failure while wiring
             # it up releases it with the rest.
             children.append((i, t, child))
+            if _ack_steps:
+                try:
+                    from agent.ack_checklist import seed_todos
+
+                    child._todo_store.write(seed_todos(_ack_steps))
+                except Exception:
+                    logger.debug("seeding the helper's todo list failed", exc_info=True)
             if task_tier_fallback:
                 child._delegate_tier_fallback = task_tier_fallback
             # Attach the validated schema for the completion-side validation
@@ -5257,6 +5310,7 @@ def delegate_task(
                 goals=_goals,
                 subagent_ids=[s for s in _sids if isinstance(s, str) and s],
                 request_identity=dict(_admitted_identity),
+                handoff=handoff,
             )
             n = len(_goals)
             note = _background_dispatch_note(n, joined=_fanout_mode == "joined")
@@ -6264,6 +6318,8 @@ DELEGATE_TASK_SCHEMA = {
                     "outcome": {"type": "string", "description": "Short description of the intended result."},
                     "estimated_minutes_min": {"type": "number", "exclusiveMinimum": 0},
                     "estimated_minutes_max": {"type": "number", "exclusiveMinimum": 0},
+                    "steps": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 60}, "description": "Single task only: 1-6 short steps the user watches tick off."},
+                    "say": {"type": "string", "maxLength": 200, "description": "One or two casual sentences in your own voice, shown first."},
                 },
                 "required": ["work", "outcome"],
             },

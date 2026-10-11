@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import logging
 import sys
 from pathlib import Path
@@ -177,8 +178,9 @@ def test_parallel_turn_is_handed_off_after_two_calls_and_the_turn_ends_cleanly(
         conversation_history=[], task_id='e2e-p')
 
     # the runtime's own acknowledgment, not whatever the model might have said
-    assert result['final_response'].startswith('Helpers are on it')
-    assert 'Notion' in result['final_response']
+    assert re.match(r'^\U0001f504 ', result['final_response'])
+    assert 'report back here' in result['final_response'] or '\u2192' in result['final_response']
+    assert 'Notion' not in result['final_response'], 'the ack never quotes the task goal'
     assert result['turn_exit_reason'] == 'delegation_handoff'
     assert result['work_status'] == 'dispatch_ack'
     assert (tmp_path / 'a.txt').exists() and (tmp_path / 'b.txt').exists()
@@ -222,8 +224,9 @@ def test_staged_turn_dispatches_stage_one_and_carries_the_next_stage(
         'Add a feature flag with tests, then review the diff before saying done.',
         conversation_history=[], task_id='e2e-s')
 
-    assert result['final_response'].startswith('Helpers are on it')
-    assert 'feature flag' in result['final_response']
+    assert re.match(r'^\U0001f504 ', result['final_response'])
+    assert 'report back here' in result['final_response'] or '\u2192' in result['final_response']
+    assert 'feature flag' not in result['final_response'], 'the ack never quotes the task goal'
     assert result['work_status'] == 'dispatch_ack'
     wire_user = _wire_users(provider.captured[0])[-1]
     assert f'{MARKER} staged' in wire_user

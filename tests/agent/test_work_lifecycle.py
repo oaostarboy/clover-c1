@@ -27,6 +27,7 @@ import pytest
 
 import tools.async_delegation as ad
 from agent import foreground_time_limit as fl
+from agent.work_lifecycle import HANDBACK_CHECK_CALLS
 from tests.agent.test_foreground_verification_episode import (  # noqa: F401
     INTERNAL, _clean_async_state, _defaults, _write_config, all_tool_text,
     clock, completion_turn, make_agent, provider, text, tool,
@@ -262,6 +263,9 @@ def test_a_failed_child_is_reported_as_not_done(
 
 # ── Octavia: substantial integration goes back to a helper ─────────────────
 
+OVER_ALLOWANCE = HANDBACK_CHECK_CALLS + 1  # one more call than a completion turn may check directly
+
+
 def _work_script(tmp_path, n):
     return [tool('terminal', {'command': f'touch {tmp_path / f"w{i}.txt"}'}, f't{i}')
             for i in range(n)]
@@ -281,26 +285,28 @@ def test_substantial_integration_on_the_completion_turn_goes_to_a_helper(
     claim(batch)
 
     children.gate(0).clear()  # the hand-back's helper (task 0 of its own batch) keeps running
-    provider.queue[:] = _work_script(tmp_path, 3) + [text('SHOULD NOT BE REACHED')]
+    provider.queue[:] = _work_script(tmp_path, OVER_ALLOWANCE) + [text('SHOULD NOT BE REACHED')]
     result = completion_turn(agent, [batch], task_id='c-octavia')
 
-    # two short checks ran in this chat; the third was handed to a helper
-    assert (tmp_path / 'w0.txt').exists() and (tmp_path / 'w1.txt').exists()
-    assert not (tmp_path / 'w2.txt').exists()
+    # the short checks ran in this chat; the one past the allowance went to a helper
+    assert all((tmp_path / f'w{i}.txt').exists() for i in range(wl.HANDBACK_CHECK_CALLS))
+    assert not (tmp_path / f'w{wl.HANDBACK_CHECK_CALLS}.txt').exists()
     assert len(dispatches) == 1
     handed = dispatches[0]['tasks']
     assert len(handed) == 1 and handed[0]['goal'] == wl.HANDBACK_GOAL
-    assert result['final_response'].startswith('Helpers are on it')
+    assert re.match(r'^\U0001f504 ', result['final_response'])
+    assert 'report back here' in result['final_response'] or '\u2192' in result['final_response']
     assert result['turn_exit_reason'] == 'delegation_handoff'
     assert result['completed'] is True
     assert result['work_status'] == 'dispatch_ack'
-    assert len(provider.captured) == 3, 'the runtime ended the turn; no fourth model call'
+    assert len(provider.captured) == OVER_ALLOWANCE, 'the runtime ended the turn; no fourth model call'
     roles = [m['role'] for m in result['messages']]
     assert all(not (a == b == 'user') for a, b in zip(roles, roles[1:]))
 
 
+@pytest.mark.parametrize('calls', [2, 3, 6])
 def test_a_short_check_on_the_completion_turn_stays_direct(
-        clock, provider, children, dispatches, config, tmp_path):
+        clock, provider, children, dispatches, config, tmp_path, calls):
     config('joined')
     agent = _agent(provider, tmp_path, 'p5-short')
     batch = dispatch_batch(agent, provider, GOALS)
@@ -308,10 +314,10 @@ def test_a_short_check_on_the_completion_turn_stays_direct(
     wait_row(batch)
     claim(batch)
 
-    provider.queue[:] = _work_script(tmp_path, 2) + [text('Checked: all three agree.')]
+    provider.queue[:] = _work_script(tmp_path, calls) + [text('Checked: all three agree.')]
     result = completion_turn(agent, [batch], task_id='c-short')
 
-    assert (tmp_path / 'w0.txt').exists() and (tmp_path / 'w1.txt').exists()
+    assert all((tmp_path / f'w{i}.txt').exists() for i in range(calls))
     assert dispatches == [], 'no hand-back for a short check'
     assert result['final_response'] == 'Checked: all three agree.'
     assert result['work_status'] == 'verified_completion'
@@ -325,7 +331,7 @@ def test_the_hand_backs_own_completion_is_never_handed_back_again(
     children.release(0, 1, 2)
     wait_row(batch)
     claim(batch)
-    provider.queue[:] = _work_script(tmp_path, 3) + [text('unused')]
+    provider.queue[:] = _work_script(tmp_path, OVER_ALLOWANCE) + [text('unused')]
     completion_turn(agent, [batch], task_id='c-first')
     assert len(dispatches) == 1
     integration = fl.own_dispatch_receipts(agent)[-1].delegation_id
@@ -336,12 +342,12 @@ def test_the_hand_backs_own_completion_is_never_handed_back_again(
 
     # the integration helper reports; the root now does MORE than a short check
     more = [tool('terminal', {'command': f'touch {tmp_path / f"m{i}.txt"}'}, f'm{i}')
-            for i in range(4)]
+            for i in range(OVER_ALLOWANCE)]
     provider.queue[:] = more + [text('Final report: all verified.')]
     result = completion_turn(agent, [integration], task_id='c-second')
 
     assert len(dispatches) == 1, 'no acknowledge/dispatch loop'
-    assert all((tmp_path / f'm{i}.txt').exists() for i in range(4))
+    assert all((tmp_path / f'm{i}.txt').exists() for i in range(OVER_ALLOWANCE))
     assert result['final_response'] == 'Final report: all verified.'
     assert result['turn_exit_reason'] != 'delegation_handoff'
 
@@ -491,7 +497,7 @@ def test_a_straggler_slot_with_no_result_yet_is_pending_not_failed(clock, tmp_pa
 def _hand_back(agent, provider, tmp_path, batch, task_id):
     """The completion turn of ``batch`` hands the integration to a helper; that
     helper finishes cleanly and its completion is claimed.  Returns its id."""
-    provider.queue[:] = _work_script(tmp_path, 3) + [text('UNUSED')]
+    provider.queue[:] = _work_script(tmp_path, OVER_ALLOWANCE) + [text('UNUSED')]
     completion_turn(agent, [batch], task_id=task_id)
     integration = fl.own_dispatch_receipts(agent)[-1].delegation_id
     assert integration != batch
@@ -534,7 +540,7 @@ def test_a_clean_hand_back_does_not_clear_a_still_running_original(
     children.release(0)  # the other two keep running
     wait_row(child0)
     claim(child0)
-    provider.queue[:] = _work_script(tmp_path, 3) + [text('UNUSED')]
+    provider.queue[:] = _work_script(tmp_path, OVER_ALLOWANCE) + [text('UNUSED')]
     completion_turn(agent, [child0], task_id='c-partial')
     assert len(dispatches) == 1
     integration = fl.own_dispatch_receipts(agent)[-1].delegation_id

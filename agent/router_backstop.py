@@ -152,6 +152,10 @@ class RouterTurn:
         self.settled = threading.Condition(self.lock)
 
 
+# Notes the root keeps for itself; never the work the plan is about.
+BOOKKEEPING_TOOLS = frozenset({"memory"})
+
+
 def _now() -> float:
     return _fl._now()
 
@@ -288,7 +292,7 @@ def note_result(agent: Any, function_name: str, function_args: Any, result: Any)
         from agent import delegation_checkpoint as dc
 
         name, args = dc.resolve_work_call(function_name, function_args)
-        if name in dc.CONTROL_PLANE_TOOLS:
+        if name in dc.CONTROL_PLANE_TOOLS or name in BOOKKEEPING_TOOLS:
             return
         snippet = goal_text(result)
         if len(snippet) > FINDING_CHARS:
@@ -405,6 +409,14 @@ def _decode(raw: Any) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _runtime_handoff(verdict: Any) -> Dict[str, str]:
+    """The short summary a runtime-started helper is dispatched with, so the
+    chat acknowledgement says what is happening without quoting the task."""
+    if getattr(verdict, "source", "") == "lifecycle":
+        return {"work": "finishing the check on the helper results", "outcome": "the final answer"}
+    return {"work": "taking over the rest of your request", "outcome": "the finished result"}
+
+
 def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
     """Dispatch the first stage; returns ``{"ok": bool, ...}``.
 
@@ -428,6 +440,7 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     follow = _follow_through_for(state, stages)
     if follow:
         args["follow_through"] = follow
+    args["handoff"] = _runtime_handoff(verdict)
     try:
         raw = dispatch_generated_tool(agent, "delegate_task", args, task_id=task_id)
     except Exception as exc:
@@ -582,7 +595,9 @@ def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str 
                 # In flight, not accepted: only the dispatch receipt says that.
                 state.spawning[(function_name, id(function_args))] = True
             return None
-        if name in dc.CONTROL_PLANE_TOOLS:
+        if name in dc.CONTROL_PLANE_TOOLS or name in BOOKKEEPING_TOOLS:
+            # Bookkeeping (a memory note after the answer) is not the
+            # user's work: it never trips a hand-off and is never refused.
             return None
         _wait_for_spawns(state, agent)
         if state.handoff is None:
@@ -855,6 +870,7 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
              "context": _helper_context(pseudo, i, number, findings)}
             for i in index
         ]}
+        args["handoff"] = _runtime_handoff(verdict)
     except Exception:
         logger.warning("router stages: stage plan unreadable", exc_info=True)
         return _note(
@@ -1013,14 +1029,25 @@ def turn_is_armed(agent: Any) -> bool:
 
 
 def _ack_text(receipts: List["_fl.DispatchReceipt"]) -> str:
-    goals = [g for r in receipts for g in r.goals]
-    titles = [_one_line(g, _ACK_GOAL_CHARS) for g in goals[:_ACK_GOALS]]
-    head = "Helpers are on it"
-    if titles:
-        head += ": " + "; ".join(titles)
-        if len(goals) > _ACK_GOALS:
-            head += f" (and {len(goals) - _ACK_GOALS} more)"
-    return head + ". They're still working; I'll report back here when they finish."
+    """What the user is told when helpers took over: the root's own short
+    summary of each dispatch, never the helper's raw task text."""
+    lines = [r.summary for r in receipts if getattr(r, "summary", "")]
+    if lines:
+        try:
+            from agent.ack_checklist import card_for
+
+            card = card_for(receipts)
+            if card is not None:
+                # The same text, with the steps under each header; the gateway
+                # edits the message this becomes as the helper works.
+                return card.render()
+        except Exception:
+            logger.debug("ack checklist unavailable; plain summary lines", exc_info=True)
+        return "\n".join(lines)
+    count = sum(len(r.goals) for r in receipts) or sum(len(r.subagent_ids) for r in receipts) or 1
+    if count == 1:
+        return "\U0001f504 on it, i'll report back here when it's done"
+    return f"\U0001f504 {count} helpers on it, i'll report back here when they're done"
 
 
 def completion_directive(agent: Any):
