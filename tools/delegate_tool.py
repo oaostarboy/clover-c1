@@ -3562,8 +3562,15 @@ def _run_single_child(
         # it instead of silently accepting zero-content "success".
         _empty_sentinel = summary.strip() == "(empty)"
 
+        # A child turn that ENDED failed (a content-policy block, an exhausted
+        # retry, a persistence failure) still carries user-facing text in
+        # ``final_response``; that text is the refusal, not the work.
+        _turn_failed = bool(result.get("failed")) or bool(result.get("error"))
+
         if interrupted:
             status = "interrupted"
+        elif _turn_failed:
+            status = "failed"
         elif summary and not _empty_sentinel:
             # A summary means the subagent produced usable output.
             # exit_reason ("completed" vs "max_iterations") already
@@ -3613,6 +3620,10 @@ def _run_single_child(
         # Determine exit reason
         if interrupted:
             exit_reason = "interrupted"
+        elif _turn_failed:
+            # Distinct from "max_iterations": the turn ended on an error, it
+            # did not run out of steps.
+            exit_reason = "error"
         elif completed:
             exit_reason = "completed"
         else:
@@ -3686,7 +3697,11 @@ def _run_single_child(
         if isinstance(_tier_fallback, str) and _tier_fallback:
             entry["tier_fallback"] = _tier_fallback
         if status == "failed":
-            entry["error"] = result.get("error", "Subagent did not produce a response.")
+            entry["error"] = (
+                result.get("error")
+                or result.get("failure_reason")
+                or "Subagent did not produce a response."
+            )
 
         # T1-24: schema-validation outcome — emitted ONLY when a schema was
         # requested, so legacy (schema-less) payloads keep their exact shape.
@@ -4568,6 +4583,10 @@ def delegate_task(
     from agent.delegation_checkpoint import ticket_for as _checkpoint_ticket_for
 
     _checkpoint_ticket = _checkpoint_ticket_for(parent_agent)
+    # The request this batch answers, read once here on the calling thread:
+    # a dispatch that settles after the parent began a later turn must still
+    # carry the turn it was admitted in, never the parent's current one.
+    _admitted_identity = _request_identity(parent_agent, _checkpoint_ticket)
     # Capture on the trusted caller, before child construction and before any
     # thread handoff. Queued work must not re-read a later turn's parent/cwd.
     _parent_workspace = _capture_parent_workspace(parent_agent, parent_task_id)
@@ -5219,7 +5238,7 @@ def delegate_task(
             delegation_id=_batch_delegation_id,
             progress_fn=_batch_progress,
             fanout_delivery=_fanout_mode,
-            request_identity=_request_identity(parent_agent, _checkpoint_ticket),
+            request_identity=dict(_admitted_identity),
             straggler_seconds=(
                 _get_fanout_straggler_seconds() if _fanout_mode == "joined" else 0
             ),
@@ -5237,7 +5256,7 @@ def delegate_task(
                 dispatch.get("delegation_id"),
                 goals=_goals,
                 subagent_ids=[s for s in _sids if isinstance(s, str) and s],
-                request_identity=_request_identity(parent_agent, _checkpoint_ticket),
+                request_identity=dict(_admitted_identity),
             )
             n = len(_goals)
             note = _background_dispatch_note(n, joined=_fanout_mode == "joined")

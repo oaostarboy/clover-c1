@@ -117,6 +117,10 @@ class RouterTurn:
     # Dispatch receipts of this instance numbered above this belong to this
     # turn (the instance keeps its receipts across turns).
     receipt_floor: int = 0
+    # Who this turn is, captured once when it was admitted (``_capture_identity``):
+    # a receipt belongs to the turn only if it also carries this identity, so a
+    # late receipt of an older request cannot end or block this one.
+    identity: Dict[str, Any] = field(default_factory=dict)
     # The root's own delegate_task calls admitted but not finished: the backstop
     # must not dispatch a second time beside one, and a work call waits for it
     # to settle.  Keyed like ``running``.
@@ -152,6 +156,57 @@ def _now() -> float:
     return _fl._now()
 
 
+def _capture_identity(agent: Any) -> Dict[str, Any]:
+    """The turn's identity, read once at admission and never again.
+
+    ``turn_id`` is the root turn; ``generation`` is the delegation checkpoint's
+    generation when one is attached (it only moves forward within a request).
+    ``request_id`` is kept for the record but is not matched on: a dispatch
+    made in an integration window is attributed to the request it answers.
+    """
+    identity: Dict[str, Any] = {}
+    try:
+        turn_id = str(getattr(agent, "_current_turn_id", "") or "")
+        if turn_id:
+            identity["turn_id"] = turn_id
+        from agent import delegation_checkpoint as dc
+
+        checkpoint = getattr(agent, "_delegation_checkpoint", None)
+        if isinstance(checkpoint, dc.DelegationCheckpoint):
+            identity["generation"] = checkpoint.current_generation()
+            identity["request_id"] = str(checkpoint.request_id or "")
+    except Exception:
+        logger.debug("could not capture the turn's identity", exc_info=True)
+    return identity
+
+
+def _receipt_in_turn(state: RouterTurn, receipt: "_fl.DispatchReceipt") -> bool:
+    """Was ``receipt`` accepted for the turn ``state`` belongs to?
+
+    Sequence says "after the floor"; identity says "for this request".  A
+    receipt that carries no identity (an older caller) is judged by sequence
+    alone, never dropped.
+    """
+    turn_id = state.identity.get("turn_id")
+    if turn_id and receipt.turn_id and receipt.turn_id != turn_id:
+        return False
+    generation = state.identity.get("generation")
+    if (
+        isinstance(generation, int) and isinstance(receipt.generation, int)
+        and receipt.generation < generation
+    ):
+        return False
+    return True
+
+
+def _state_receipts(agent: Any, state: RouterTurn) -> List["_fl.DispatchReceipt"]:
+    """This turn's accepted dispatches: above the floor AND of this request."""
+    return [
+        r for r in _fl.own_dispatch_receipts(agent, after=state.receipt_floor)
+        if _receipt_in_turn(state, r)
+    ]
+
+
 def mark_turn(agent: Any, settings: RouterSettings) -> None:
     """Record this turn's receipt floor without arming the backstop.
 
@@ -165,6 +220,7 @@ def mark_turn(agent: Any, settings: RouterSettings) -> None:
             verdict=PlanVerdict(mode="direct", tasks=()), user_message="",
             settings=settings, started_at=_now(),
             receipt_floor=_fl.dispatch_seq(agent), planned=False,
+            identity=_capture_identity(agent),
         ))
     except Exception:
         logger.debug("could not record the turn's receipt floor", exc_info=True)
@@ -181,6 +237,7 @@ def begin(agent: Any, verdict: PlanVerdict, user_message: str, settings: RouterS
             verdict=verdict, user_message=str(user_message or ""),
             settings=settings, started_at=_now(),
             receipt_floor=_fl.dispatch_seq(agent),
+            identity=_capture_identity(agent),
         ))
     except Exception:
         logger.debug("could not arm the router backstop", exc_info=True)
@@ -525,7 +582,7 @@ def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str 
             return None
         _wait_for_spawns(state, agent)
         if state.handoff is None:
-            owned = _fl.own_dispatch_receipts(agent, after=state.receipt_floor)
+            owned = _state_receipts(agent, state)
             if owned:
                 _adopt(agent, state)
                 state.handoff = _handoff_from(
@@ -631,7 +688,7 @@ def _adopt(agent: Any, state: RouterTurn) -> None:
     stages = verdict.stages()
     if len(stages) < 2:
         return
-    for receipt in _fl.own_dispatch_receipts(agent, after=state.receipt_floor):
+    for receipt in _state_receipts(agent, state):
         did = receipt.delegation_id
         with state.lock:
             if did in state.bound:
@@ -884,6 +941,7 @@ def continue_staged(agent: Any, completion_ids: Any, settings: RouterSettings) -
             setattr(agent, _ATTR, RouterTurn(
                 verdict=verdict, user_message=request, settings=settings,
                 started_at=_now(), receipt_floor=floor, handoff=armed, no_spawn=True,
+                identity=_capture_identity(agent),
             ))
         return "\n".join(notes)
     except Exception:
@@ -906,11 +964,11 @@ def turn_receipt_floor(agent: Any) -> Optional[int]:
 
 
 def turn_receipts(agent: Any) -> List["_fl.DispatchReceipt"]:
-    """The helpers this instance had accepted since this turn's floor."""
-    floor = turn_receipt_floor(agent)
-    if floor is None:
+    """The helpers accepted for THIS turn: above its floor and of its request."""
+    state = _state(agent)
+    if state is None:
         return []
-    return _fl.own_dispatch_receipts(agent, after=floor)
+    return _state_receipts(agent, state)
 
 
 _turn_receipts = turn_receipts
@@ -935,7 +993,12 @@ def completion_directive(agent: Any):
     not depend on the delegation checkpoint being on: the receipt of an
     accepted dispatch is the whole condition, so a failed dispatch (no receipt)
     never acknowledges, and a dispatch of an earlier turn never ends this one.
+
+    A pending human Stop wins: the turn is finalized as interrupted by the
+    loop's own path, and the helpers that were accepted stay in the receipts.
     """
+    if _stop_pending(agent):
+        return None
     receipts = _turn_receipts(agent)
     if not receipts:
         return None

@@ -1245,7 +1245,13 @@ def completion_directive(agent: Any) -> Optional[Directive]:
     and has one) wins; otherwise a helper the router's turn got accepted ends
     the turn with its deterministic acknowledgment -- independent of the
     checkpoint's budget and opt-in default (``agent.router_backstop``).
+
+    A pending human Stop outranks both: the turn is about to be finalized as
+    interrupted, and an acknowledgment must not replace that exit.  Nothing is
+    cancelled or cleared here -- the receipts stay for the finalizer.
     """
+    if getattr(agent, "_interrupt_requested", False) is True:
+        return None
     checkpoint = getattr(agent, "_delegation_checkpoint", None)
     if isinstance(checkpoint, DelegationCheckpoint):
         directive = checkpoint.take_completion_directive()

@@ -361,14 +361,22 @@ _FENCE_CLOSED = re.compile(r"(?ms)^[ \t]*(```|~~~).*?^[ \t]*\1[ \t]*$")
 _FENCE_OPEN = re.compile(r"(?ms)^[ \t]*(?:```|~~~).*\Z")
 _INLINE_CODE = re.compile(r"`[^`\n]*`")
 _BLOCKQUOTE = re.compile(r"(?m)^[ \t]{0,3}>.*$")
-# Same-line pairs only, so one stray quote mark cannot swallow later text; a
-# single quote counts only where it is not an apostrophe inside a word.
-_QUOTED_SPANS = tuple(re.compile(p) for p in (
-    r'"[^"\n]*"',
-    r"\u201c[^\u201d\n]*\u201d",
-    r"\u00ab[^\u00bb\n]*\u00bb",
-    r"(?<![\w])'[^'\n]*'(?![\w])",
-))
+# A pair of double quotes may wrap onto up to four more short, non-blank lines
+# (a pasted multi-line passage); never across a blank line, so one stray quote
+# mark cannot swallow later paragraphs.  A single quote counts only on one line
+# and only where it is not an apostrophe inside a word.
+def _wrapped_pair(opener: str, closer: str) -> "re.Pattern[str]":
+    body = "[^" + re.escape(closer) + r"\n]"
+    more = r"(?:\n[ \t]*[^ \t" + re.escape(closer) + r"\n]" + body + r"{0,299}){0,4}"
+    return re.compile(re.escape(opener) + body + "*" + more + re.escape(closer))
+
+
+_QUOTED_SPANS = (
+    _wrapped_pair('"', '"'),
+    _wrapped_pair("\u201c", "\u201d"),
+    _wrapped_pair("\u00ab", "\u00bb"),
+    re.compile(r"(?<![\w])'[^'\n]*'(?![\w])"),
+)
 
 
 def authentic_text(message: str) -> str:
