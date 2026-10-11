@@ -277,7 +277,7 @@ async def test_restart_already_in_progress_and_draining(monkeypatch, tmp_path, s
     runner._running_agent_count = lambda: 2
     draining = str(await runner._handle_restart_command(event))
 
-    if skin == "clover":
+    if skin == "default":
         face, line = _face_line(in_progress, "restart_in_progress")
         assert in_progress == f"{face} {line}"
         face, line = _face_line(draining, "draining")

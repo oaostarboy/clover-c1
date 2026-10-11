@@ -17,7 +17,7 @@ from gateway import clover_acks
 from gateway.config import PlatformConfig
 from plugins.platforms.telegram.adapter import TelegramAdapter
 
-OTHER_SKINS = ["default", "ares", "mono", "slate"]
+OTHER_SKINS = ["boring", "ares", "mono", "slate"]
 
 
 def _set_skin(monkeypatch, name):
