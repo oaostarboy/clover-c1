@@ -496,11 +496,13 @@ def test_helpers_spawned_in_the_episode_are_background_even_after_expiry(
     agent = make_agent(provider)
     did = hand_off(agent, provider)
     clock.advance(400)
+    # Two quiet rounds run the episode out; the dispatch comes after expiry.  A
+    # dispatch on a completion turn is the hand-back of the integration: the
+    # runtime acknowledges it and ends the turn (agent.work_lifecycle).
     provider.queue[:] = [
-        tool('delegate_task', {'goal': 'deeper check', 'background': False}, 'e1'),
-        tool('todo', {'todos': [{'id': '1', 'content': 'x', 'status': 'pending'}]}, 'e2'),
-        tool('delegate_task', {'goal': 'one more', 'background': False}, 'e3'),
-        text('A helper is checking further and will report back.'),
+        tool('todo', {'todos': [{'id': '1', 'content': 'x', 'status': 'pending'}]}, 'e1'),
+        tool('todo', {'todos': [{'id': '1', 'content': 'x', 'status': 'in_progress'}]}, 'e2'),
+        tool('delegate_task', {'goal': 'deeper check', 'background': False}, 'e3'),
     ]
     seen: list[tuple[bool, bool]] = []  # (episode expired, forced background)
     original = agent._execute_tool_calls
@@ -515,11 +517,15 @@ def test_helpers_spawned_in_the_episode_are_background_even_after_expiry(
 
     result = completion_turn(agent, [did], task_id='bg')
 
-    results = all_tool_text(provider)
-    assert results.count('"mode": "background"') >= 2, results
-    assert any(expired for expired, _ in seen), 'the episode must have run out'
+    # the turn ended on the dispatch, so its result is in the transcript, not
+    # in a later request
+    results = '\n'.join(str(m.get('content')) for m in result['messages']
+                        if m.get('role') == 'tool')
+    assert results.count('"mode": "background"') >= 1, results
+    assert seen[-1][0], 'the episode must have run out before the dispatch'
     assert all(forced for _, forced in seen), seen  # background before AND after expiry
-    assert result['final_response'].startswith('A helper is checking further')
+    assert result['final_response'].startswith('Helpers are on it')
+    assert result['turn_exit_reason'] == 'delegation_handoff'
 
 
 def test_no_limit_or_timeout_wording_reaches_the_user_reply(

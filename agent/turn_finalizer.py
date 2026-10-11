@@ -518,6 +518,23 @@ def finalize_turn(
     else:
         logger.info(_diag_msg, *_diag_args)
 
+    # What the turn's helpers support saying (agent.work_lifecycle): read once,
+    # from the durable ledger.  Stamped on the result below, and -- when helper
+    # work is still running or did not finish -- stated to the user in one line
+    # so no reply reads as a combined verdict over it.
+    _work_report = None
+    _work_footer = ""
+    try:
+        from agent import work_lifecycle as _work_lifecycle
+
+        _work_report = _work_lifecycle.report(agent)
+        _work_footer = _work_lifecycle.status_footer(_work_report, _turn_exit_reason)
+        _work_lifecycle.end_turn(agent)
+    except Exception as _work_err:
+        logger.debug("helper work status unavailable: %s", _work_err)
+    if _work_footer and final_response and not interrupted and not failed:
+        final_response = final_response.rstrip() + "\n\n" + _work_footer
+
     # File-mutation verifier footer.
     # If one or more ``write_file`` / ``patch`` calls failed during this
     # turn and were never superseded by a successful write to the same
@@ -772,14 +789,8 @@ def finalize_turn(
     # ``completed`` is whether the TURN finished; ``work_status`` is what the
     # helpers accepted for it support (dispatch_ack / partial / incomplete /
     # verified_completion), from the durable rows.  Absent when none were.
-    try:
-        from agent.router_backstop import work_status as _work_status
-
-        _work = _work_status(agent)
-        if _work:
-            result["work_status"] = _work
-    except Exception:
-        pass
+    if _work_report is not None:
+        result["work_status"] = _work_report.status
     # Persistence failures already set failed=True + an explanation in
     # final_response; also stamp `error` so gateway surfaces status="error"
     # (and desktop can toast the cause) instead of a quiet complete frame.
