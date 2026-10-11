@@ -40,8 +40,11 @@ DB).  In the copy, ``auxiliary.background_review.enabled`` and
 curator can rewrite a skill under the next rep; everything else (model,
 delegation tiers, approvals) is kept.  A foreground ``skill_manage`` still
 lands, in that rep's copy only.  The real profile is never written, and
-results.json records the sha256 of every baseline SKILL.md.  Caveat: an OAuth
-refresh inside a copy stays in the copy.
+results.json records the sha256 of every baseline SKILL.md.  Links in the
+profile are dereferenced (a dangling one is skipped and listed in results.json),
+and an unusable config.yaml is reported by exception type and line/column only,
+never with its contents.  Caveat: an OAuth refresh inside a copy stays in the
+copy.
 
 Exit status: 0 pass bar met, 1 pass bar missed, 2 harness error (a run could
 not be driven, or never settled).  The eval profile must not stop on approval
@@ -821,13 +824,26 @@ def _sha256(path: Path) -> str:
 
 
 def _eval_config(raw: str) -> Dict[str, Any]:
-    """Parse a profile's config.yaml and switch off what rewrites skills."""
+    """Parse a profile's config.yaml and switch off what rewrites skills.
+
+    A parser's message quotes the offending source line, and config.yaml can
+    hold secrets, so on failure only the exception type and the line/column go
+    into the ``ValueError`` (which reaches progress output and results.json),
+    and the parser's own exception is not chained to it.
+    """
     import yaml
 
+    failure = ""
+    data: Any = None
     try:
         data = yaml.safe_load(raw) if raw.strip() else {}
-    except yaml.YAMLError as exc:
-        raise ValueError(f"config.yaml is not valid YAML: {exc}") from exc
+    except Exception as exc:  # parser errors quote file contents
+        mark = getattr(exc, "problem_mark", None)
+        where = (f" at line {int(mark.line) + 1}, column {int(mark.column) + 1}"
+                 if mark is not None and hasattr(mark, "line") else "")
+        failure = f"config.yaml could not be parsed ({type(exc).__name__}{where})"
+    if failure:
+        raise ValueError(failure)  # outside the except block: no chained excerpt
     if data is None:
         data = {}
     if not isinstance(data, dict):
@@ -842,19 +858,51 @@ def _eval_config(raw: str) -> Dict[str, Any]:
     return data
 
 
+def _copy_dereferenced(src: Path, dst: Path, rel: str, skipped: List[Dict[str, str]]) -> None:
+    """Copy ``src`` (a file or directory) to ``dst`` with every link replaced
+    by an independent copy of what it points at, so nothing written under
+    ``dst`` can reach the profile through a link.  A link that points nowhere
+    (or loops) is skipped and recorded in ``skipped`` by its profile-relative
+    path; no file content and no link target is recorded."""
+    def one(s: Path, d: Path, r: str, stack: frozenset) -> None:
+        if not os.path.exists(s):  # lexists-but-not-exists: dangling or looping
+            skipped.append({"path": r, "reason": "dangling link"})
+            return
+        if s.is_dir():
+            real = os.path.realpath(s)
+            if real in stack:
+                skipped.append({"path": r, "reason": "link cycle"})
+                return
+            d.mkdir(parents=True, exist_ok=True)
+            for name in sorted(os.listdir(s)):
+                one(s / name, d / name, f"{r}/{name}", stack | {real})
+        elif s.is_file():
+            d.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(s, d)  # follows a link: a regular file results
+        else:
+            skipped.append({"path": r, "reason": "not a regular file"})
+
+    one(Path(src), Path(dst), rel, frozenset())
+
+
 class FrozenBaseline:
     """One frozen snapshot of the profile, from which every rep's home is made.
 
     ``freeze`` copies the files above into ``root`` once, at harness start, and
-    hashes every SKILL.md.  ``make_home`` then copies that snapshot (never the
-    live profile) to a fresh directory and rewrites its config.yaml.  The real
-    profile is only ever read, and only by ``freeze``.
+    hashes every SKILL.md.  Links are dereferenced (a skill library may link
+    references from elsewhere), so no copy shares bytes with the profile or with
+    another copy; ``skipped_links`` lists the ones that could not be followed.
+    ``make_home`` then copies that snapshot (never the live profile) to a fresh
+    directory and rewrites its config.yaml.  The real profile is only ever
+    read, and only by ``freeze``.
     """
 
-    def __init__(self, root: Path, source: Path, skill_sha256: Dict[str, str]):
+    def __init__(self, root: Path, source: Path, skill_sha256: Dict[str, str],
+                 skipped_links: Optional[List[Dict[str, str]]] = None):
         self.root = Path(root)
         self.source = Path(source)
         self.skill_sha256 = dict(skill_sha256)
+        self.skipped_links = list(skipped_links or [])
 
     @classmethod
     def freeze(cls, source_home: Path, root: Path) -> "FrozenBaseline":
@@ -866,29 +914,36 @@ class FrozenBaseline:
         if root.exists():
             shutil.rmtree(root)
         root.mkdir(parents=True)
-        for name in BASELINE_FILES:
-            if (source / name).is_file():
-                shutil.copy2(source / name, root / name)
-        for name in BASELINE_DIRS:
-            if (source / name).is_dir():
-                shutil.copytree(source / name, root / name, symlinks=True)
+        skipped: List[Dict[str, str]] = []
+        for name in (*BASELINE_FILES, *BASELINE_DIRS):
+            if os.path.lexists(source / name):
+                _copy_dereferenced(source / name, root / name, name, skipped)
         hashes = {
             p.relative_to(root).as_posix(): _sha256(p)
             for p in sorted((root / "skills").rglob("SKILL.md")) if p.is_file()
         }
-        return cls(root, source, hashes)
+        return cls(root, source, hashes, skipped)
 
     def make_home(self, label: str) -> Path:
         """A disposable home for one rep; ``ValueError`` if config.yaml is unusable."""
         import yaml
 
+        # Parse first: a config that cannot be used leaves no copy behind, and
+        # a read error is reported by type only (see _eval_config).
+        cfg_src = self.root / "config.yaml"
+        raw, failure = "", ""
+        try:
+            raw = cfg_src.read_text(encoding="utf-8") if cfg_src.exists() else ""
+        except Exception as exc:
+            failure = f"config.yaml could not be read ({type(exc).__name__})"
+        if failure:
+            raise ValueError(failure)
+        cfg = _eval_config(raw)
         home = self.root.parent / "homes" / re.sub(r"[^A-Za-z0-9_.-]", "_", label)
         if home.exists():
             shutil.rmtree(home)
-        shutil.copytree(self.root, home, symlinks=True)
-        cfg_path = home / "config.yaml"
-        raw = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else ""
-        cfg_path.write_text(yaml.safe_dump(_eval_config(raw), sort_keys=False), encoding="utf-8")
+        shutil.copytree(self.root, home, symlinks=False)
+        (home / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
         return home
 
 
@@ -1402,7 +1457,9 @@ def main(
     except (OSError, ValueError) as exc:
         print(f"error: could not freeze the profile baseline: {exc}", file=sys.stderr)
         return 2
-    _progress(f"baseline frozen: {len(baseline.skill_sha256)} SKILL.md hashed")
+    _progress(f"baseline frozen: {len(baseline.skill_sha256)} SKILL.md hashed"
+              + (f", {len(baseline.skipped_links)} unfollowable link(s) skipped"
+                 if baseline.skipped_links else ""))
 
     make_driver = driver_factory or (lambda h, a: TuiGatewayDriver(
         h, log_dir=out_dir / "gateway-logs", progress=_progress))
@@ -1424,6 +1481,7 @@ def main(
         "reps": args.reps, "evidence_reps": args.evidence_reps,
         "delegation_config": _delegation_config(baseline.root),
         "skill_sha256": baseline.skill_sha256,
+        "skipped_links": baseline.skipped_links,
         "isolation": {
             "per_rep_copy": True, "state_db": "fresh per rep",
             "background_review": False, "curator": False,
