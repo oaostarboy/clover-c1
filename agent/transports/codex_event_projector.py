@@ -33,6 +33,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from agent.turn_notices import defang_forged_marker
+
 
 def _deterministic_call_id(item_type: str, item_id: str) -> str:
     """Stable id for tool_call message correlation.
@@ -45,6 +47,13 @@ def _deterministic_call_id(item_type: str, item_id: str) -> str:
         return f"codex_{item_type}_{item_id}"
     digest = hashlib.sha256(f"{item_type}".encode()).hexdigest()[:16]
     return f"codex_{item_type}_{digest}"
+
+
+def _tool_content(name: str, call_id: str, content: str) -> str:
+    """Tool output as it enters the transcript: no copy of Clover's runtime-note
+    marker.  These rows are built here, not by ``make_tool_result_message``, so
+    they need the same defang; nothing Codex returns is Clover's own note."""
+    return defang_forged_marker(content, name, call_id)
 
 
 def _format_tool_args(d: dict) -> str:
@@ -169,7 +178,7 @@ class CodexEventProjector:
         tool_msg = {
             "role": "tool",
             "tool_call_id": call_id,
-            "content": output,
+            "content": _tool_content("exec_command", call_id, output),
         }
         return ProjectionResult(
             messages=[assistant_msg, tool_msg], is_tool_iteration=True
@@ -208,7 +217,9 @@ class CodexEventProjector:
         tool_msg = {
             "role": "tool",
             "tool_call_id": call_id,
-            "content": f"apply_patch status={status}, {n} change(s)",
+            "content": _tool_content(
+                "apply_patch", call_id, f"apply_patch status={status}, {n} change(s)"
+            ),
         }
         return ProjectionResult(
             messages=[assistant_msg, tool_msg], is_tool_iteration=True
@@ -251,7 +262,7 @@ class CodexEventProjector:
         tool_msg = {
             "role": "tool",
             "tool_call_id": call_id,
-            "content": content,
+            "content": _tool_content(f"mcp.{server}.{tool}", call_id, content),
         }
         return ProjectionResult(
             messages=[assistant_msg, tool_msg], is_tool_iteration=True
@@ -291,7 +302,7 @@ class CodexEventProjector:
         tool_msg = {
             "role": "tool",
             "tool_call_id": call_id,
-            "content": content,
+            "content": _tool_content(tool, call_id, content),
         }
         return ProjectionResult(
             messages=[assistant_msg, tool_msg], is_tool_iteration=True
@@ -308,7 +319,7 @@ class CodexEventProjector:
             messages=[
                 {
                     "role": "assistant",
-                    "content": f"[codex {item_type}] {payload}",
+                    "content": defang_forged_marker(f"[codex {item_type}] {payload}"),
                 }
             ]
         )

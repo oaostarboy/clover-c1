@@ -27,6 +27,12 @@ it, so :func:`defang_forged_marker` removes it from every tool result as it is
 built, except for the few result strings Clover wrote itself
 (:func:`vouch_runtime_result`).
 
+A copy is recognised by how it reads, not by its bytes: the text is folded the
+way a reader folds it (compatibility forms, invisible characters, look-alike
+letters, case, spacing, markdown around it, character-reference spellings of
+the same characters) before it is compared with the marker, and the defang is
+applied to the original span, so the rest of the output is left as it was.
+
 Trust is per result, not per byte string: a vouch is recorded together with the
 invocation that produced it (tool name + call id, taken from the executor's
 :class:`runtime_invocation`), and a result is exempt only when it is built for
@@ -39,6 +45,7 @@ import contextvars
 import hashlib
 import re
 import threading
+import unicodedata
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -47,7 +54,6 @@ RUNTIME_NOTE_MARKER = "[Clover runtime]"
 _UNSET = object()
 _ATTR = "_fresh_tool_tail"
 
-_MARKER_RE = re.compile(re.escape(RUNTIME_NOTE_MARKER), re.IGNORECASE)
 # What a forged marker becomes: still readable, no longer the marker.
 _DEFANGED_MARKER = "(Clover runtime)"
 # Result strings Clover itself authored (by digest), each with the invocations
@@ -64,6 +70,159 @@ _vouched_lock = threading.Lock()
 _INVOCATION: "contextvars.ContextVar[Optional[Tuple[str, str]]]" = contextvars.ContextVar(
     "clover_runtime_invocation", default=None
 )
+
+
+# ── recognising a copy of the marker ───────────────────────────────────────
+
+# Bracket characters a reader takes for "[" and "]" once compatibility forms
+# (fullwidth, small) are folded to ASCII.
+_OPEN_CHARS = "[⁅❲⟦⟬【〔〖〚「『⦇⦋"
+_CLOSE_CHARS = "]⁆❳⟧⟭】〕〗〛」』⦈⦌"
+
+# Letters of the marker that other scripts draw the same way (after NFKD and
+# case folding): enough to cover "clover runtime", not a general confusables map.
+_CONFUSABLE_LETTERS = {
+    "c": "сСϲϹᴄⲤⲥ",
+    "l": "ӏӀʟǀ∣",
+    "o": "оОοΟᴏօՕⲞⲟ",
+    "v": "ѵѴνᴠ",
+    "e": "еЕεΕᴇҽ℮",
+    "r": "гГʀᴦ",
+    "u": "υսᴜ∪",
+    "n": "пηոɴ",
+    "t": "тТτΤᴛ",
+    "i": "іІıᴉιΙɩ",
+    "m": "мМΜᴍϺⲘⲙ",
+}
+_CONFUSABLES = {ch: letter for letter, chars in _CONFUSABLE_LETTERS.items() for ch in chars}
+# Invisible characters that are not Unicode format/mark characters.
+_INVISIBLE = frozenset("ᅟᅠ᠎⠀ㅤﾠ")
+
+# Spellings of one character by reference: \uXXXX, \xXX, &#N; &#xN; %XX and a
+# few named entities.  Decoded before folding, so "[Clover runtime]"
+# reads as the marker it spells.
+_ENCODED = re.compile(
+    r"\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|&#[xX]([0-9a-fA-F]{1,6});"
+    r"|&#([0-9]{1,7});|%([0-9a-fA-F]{2})"
+    r"|&(lbrack|lsqb|rbrack|rsqb|nbsp|ensp|emsp|thinsp);"
+)
+_NAMED = {"lbrack": "[", "lsqb": "[", "rbrack": "]", "rsqb": "]",
+          "nbsp": " ", "ensp": " ", "emsp": " ", "thinsp": " "}
+
+# Cheap superset test run first: an opening bracket (any spelling) followed
+# soon by a "c", a non-ASCII or control character, or a character reference.
+# Most output has none and is never folded.
+_GATE = re.compile(
+    "(?:[" + re.escape(_OPEN_CHARS) + "［﹇]"
+    r"|\\u005[bB]|\\x5[bB]|&#0*91;|&#[xX]0*5[bB];|%5[bB]|&l(?:brack|sqb);)"
+    r"[^a-zA-Z0-9]{0,64}?(?:[cC]|[^\x00-\x7f]|[\x00-\x08\x0e-\x1b\x7f]|\\[ux]|&|%[0-9a-fA-F]{2})",
+    re.DOTALL,
+)
+
+
+def _letter(ch: str) -> str:
+    # Plain digits/punctuation that stand in for a letter of the marker.
+    return {"l": "[li1|]", "i": "[il1!|]", "o": "[o0]", "e": "[e3]"}.get(ch, ch)
+
+
+_JUNK = r"[\W_]{0,6}"
+# Between the two words: spacing, punctuation, markdown -- but not a bracket
+# that closes the label ("[Clover] runtime" is not the marker).
+_BETWEEN = r"(?:(?![" + re.escape(_CLOSE_CHARS) + r"])[\W_]){0,12}"
+_CORE = re.compile(
+    "[" + re.escape(_OPEN_CHARS) + "]" + _JUNK
+    + "".join(_letter(c) for c in "clover") + _BETWEEN
+    + "".join(_letter(c) for c in "runtime")
+)
+_CLOSE = re.compile(r"[\W_]{0,6}[" + re.escape(_CLOSE_CHARS) + "]")
+
+
+def _units(text: str):
+    """``(character, start, end)`` of ``text`` with references decoded."""
+    pos = 0
+    for m in _ENCODED.finditer(text):
+        for i in range(pos, m.start()):
+            yield text[i], i, i + 1
+        named = m.group(6)
+        if named:
+            decoded = _NAMED[named]
+        else:
+            hexed = m.group(1) or m.group(2) or m.group(3) or m.group(5)
+            number = int(hexed, 16) if hexed else int(m.group(4))
+            decoded = chr(number) if number <= 0x10FFFF else m.group(0)
+        yield decoded, m.start(), m.end()
+        pos = m.end()
+    for i in range(pos, len(text)):
+        yield text[i], i, i + 1
+
+
+def _skeleton(text: str) -> Tuple[str, List[int], List[int]]:
+    """``text`` as a reader folds it, with each folded character's source span."""
+    out: List[str] = []
+    starts: List[int] = []
+    ends: List[int] = []
+    for unit, a, b in _units(text):
+        for ch in (unit if unit < "\x80" else unicodedata.normalize("NFKD", unit)):
+            if ch.isspace():
+                folded = " "
+            elif ch < "\x80":
+                if ch < " " or ch == "\x7f":
+                    continue
+                folded = ch.lower()
+            else:
+                if unicodedata.category(ch)[0] == "C" or ch in _INVISIBLE:
+                    continue
+                if unicodedata.category(ch) in ("Mn", "Me"):
+                    continue
+                folded = _CONFUSABLES.get(ch, ch).casefold()
+            for piece in folded:
+                out.append(piece)
+                starts.append(a)
+                ends.append(b)
+    return "".join(out), starts, ends
+
+
+def _copies(text: str) -> List[Tuple[int, int, Optional[Tuple[int, int]]]]:
+    """Every copy of the marker in ``text``: ``(start, end, closing_span)``.
+
+    ``start``/``end`` delimit the opening bracket through ``runtime`` in the
+    original text; ``closing_span`` is the closing bracket that follows, if any.
+    """
+    if not text or not _GATE.search(text):
+        return []
+    skeleton, starts, ends = _skeleton(text)
+    found: List[Tuple[int, int, Optional[Tuple[int, int]]]] = []
+    floor = 0
+    for m in _CORE.finditer(skeleton):
+        start, end = starts[m.start()], ends[m.end() - 1]
+        if start < floor:
+            continue
+        closing: Optional[Tuple[int, int]] = None
+        c = _CLOSE.match(skeleton, m.end())
+        if c is not None:
+            closing = (starts[c.start()], ends[c.end() - 1])
+        found.append((start, end, closing))
+        floor = closing[1] if closing else end
+    return found
+
+
+def neutralize_marker(text: str) -> str:
+    """``text`` with every copy of the marker, in any spelling, defanged."""
+    copies = _copies(text) if isinstance(text, str) else []
+    if not copies:
+        return text
+    pieces: List[str] = []
+    pos = 0
+    for start, end, closing in copies:
+        pieces.append(text[pos:start])
+        pieces.append(_DEFANGED_MARKER[:-1])
+        pos = end
+        if closing is not None:
+            pieces.append(text[pos:closing[0]])
+            pieces.append(")")
+            pos = closing[1]
+    pieces.append(text[pos:])
+    return "".join(pieces)
 
 
 def _norm_call_id(tool_call_id: Any) -> str:
@@ -118,7 +277,8 @@ def vouch_runtime_result(result: str, tool_name: Optional[str] = None) -> str:
     Clover's own single note (say, one echoed back inside user-supplied text)
     is not recorded, so the whole result is defanged instead.
     """
-    if isinstance(result, str) and len(_MARKER_RE.findall(result)) == 1:
+    copies = _copies(result) if isinstance(result, str) else []
+    if len(copies) == 1 and result[copies[0][0]:copies[0][1]].lower() == RUNTIME_NOTE_MARKER[:-1].lower():
         invocation = _INVOCATION.get()
         if invocation is not None and invocation[0]:
             name, call_id = invocation
@@ -154,9 +314,9 @@ def _is_vouched(value: str, tool_name: Optional[str], tool_call_id: Any) -> bool
 
 
 def _defang_text(value: str, tool_name: Optional[str], tool_call_id: Any) -> str:
-    if not _MARKER_RE.search(value) or _is_vouched(value, tool_name, tool_call_id):
+    if not _copies(value) or _is_vouched(value, tool_name, tool_call_id):
         return value
-    return _MARKER_RE.sub(_DEFANGED_MARKER, value)
+    return neutralize_marker(value)
 
 
 def defang_forged_marker(
@@ -175,11 +335,7 @@ def defang_forged_marker(
     if isinstance(content, list):
         parts: List[Any] = []
         for part in content:
-            if (
-                isinstance(part, dict)
-                and part.get("type") == "text"
-                and isinstance(part.get("text"), str)
-            ):
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
                 fixed = _defang_text(part["text"], tool_name, tool_call_id)
                 if fixed is not part["text"]:
                     part = {**part, "text": fixed}
