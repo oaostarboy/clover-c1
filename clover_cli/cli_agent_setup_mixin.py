@@ -495,6 +495,11 @@ class CLIAgentSetupMixin:
             effective_model_pinned = bool(model_override) or bool(
                 getattr(self, "_explicit_model_override", False)
             )
+            if getattr(self, "_single_query_mode", False):
+                # `clover chat -q` answers once and exits: no router warm-up.
+                from agent.router_prewarm import suppress as _suppress_router_prewarm
+
+                _suppress_router_prewarm()
             self.agent = AIAgent(
                 model=effective_model,
                 model_pinned=effective_model_pinned,
@@ -573,6 +578,10 @@ class CLIAgentSetupMixin:
             # Route agent status output through prompt_toolkit so ANSI escape
             # sequences aren't garbled by patch_stdout's StdoutProxy (#2262).
             self.agent._print_fn = _cprint
+            if getattr(self, "_single_query_mode", False):
+                # `clover chat -q` answers once and exits: no foreground time
+                # limit (agent/foreground_time_limit.py).
+                self.agent._foreground_limit_exempt = "single_query"
             self._active_agent_route_signature = (
                 effective_model,
                 runtime.get("provider"),

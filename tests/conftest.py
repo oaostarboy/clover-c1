@@ -594,6 +594,19 @@ def _pin_classic_skin(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_router_prewarm(monkeypatch):
+    """Constructing an agent must not start the router's background import
+    warm-up in the test process (it would load the plugin set behind the test's
+    back).  tests/agent/test_router_prewarm.py runs the real one in a fresh
+    subprocess."""
+    try:
+        from agent import router_prewarm
+    except Exception:
+        return
+    monkeypatch.setattr(router_prewarm, "start", lambda agent=None: False)
+
+
+@pytest.fixture(autouse=True)
 def _neutralize_kanban_memory_guard(request, monkeypatch):
     """Pin the kanban dispatcher's memory guard to "no data" for every test.
 
@@ -1830,6 +1843,35 @@ def _stub_update_preflight(request, monkeypatch):
         yield
         return
     monkeypatch.setattr(_pf, "run_update_preflight", lambda **_kw: _pf.PreflightReport())
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _stub_delegation_router(request, monkeypatch):
+    """Default the delegation router to "no plan" for every test.
+
+    The router makes one auxiliary-model call at the start of each human turn
+    of a root chat agent. Left live, every test that drives a real root against
+    a scripted provider would have its first scripted response eaten by the
+    sizing call and see an extra request. Tests of the router, its note on the
+    user turn, and its backstop opt out with
+    ``@pytest.mark.real_delegation_router``.
+    """
+    if request.node.get_closest_marker("real_delegation_router"):
+        yield
+        return
+    try:
+        import agent.delegation_router as _router
+        import agent.router_backstop as _backstop
+    except Exception:
+        yield
+        return
+
+    def _no_plan(agent, user_message=None, history=None, display_kind=None):
+        _backstop.clear(agent)
+        return ""
+
+    monkeypatch.setattr(_router, "plan_for_turn", _no_plan)
     yield
 
 

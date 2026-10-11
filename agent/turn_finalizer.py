@@ -518,6 +518,23 @@ def finalize_turn(
     else:
         logger.info(_diag_msg, *_diag_args)
 
+    # What the turn's helpers support saying (agent.work_lifecycle): read once,
+    # from the durable ledger.  Stamped on the result below, and -- when helper
+    # work is still running or did not finish -- stated to the user in one line
+    # so no reply reads as a combined verdict over it.
+    _work_report = None
+    _work_footer = ""
+    try:
+        from agent import work_lifecycle as _work_lifecycle
+
+        _work_report = _work_lifecycle.report(agent)
+        _work_footer = _work_lifecycle.status_footer(_work_report, _turn_exit_reason)
+        _work_lifecycle.end_turn(agent)
+    except Exception as _work_err:
+        logger.debug("helper work status unavailable: %s", _work_err)
+    if _work_footer and final_response and not interrupted and not failed:
+        final_response = final_response.rstrip() + "\n\n" + _work_footer
+
     # File-mutation verifier footer.
     # If one or more ``write_file`` / ``patch`` calls failed during this
     # turn and were never superseded by a successful write to the same
@@ -769,6 +786,11 @@ def finalize_turn(
     }
     if agent._tool_guardrail_halt_decision is not None:
         result["guardrail"] = agent._tool_guardrail_halt_decision.to_metadata()
+    # ``completed`` is whether the TURN finished; ``work_status`` is what the
+    # helpers accepted for it support (dispatch_ack / partial / incomplete /
+    # verified_completion), from the durable rows.  Absent when none were.
+    if _work_report is not None:
+        result["work_status"] = _work_report.status
     # Persistence failures already set failed=True + an explanation in
     # final_response; also stamp `error` so gateway surfaces status="error"
     # (and desktop can toast the cause) instead of a quiet complete frame.
@@ -796,6 +818,11 @@ def finalize_turn(
     _leftover_steer = agent._drain_pending_steer()
     if _leftover_steer:
         result["pending_steer"] = _leftover_steer
+    # The foreground time limit's turn is over: stray tool calls between turns
+    # are not limited. The episode itself stays for a following internal turn.
+    from agent import foreground_time_limit as _fg_limit
+
+    _fg_limit.end_turn(agent)
     agent._response_was_previewed = False
 
     # Include interrupt message if one triggered the interrupt

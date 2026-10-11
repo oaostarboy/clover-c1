@@ -322,6 +322,9 @@ def _process_single_prompt(
         
         # Initialize agent with sampled toolsets and log prefix for identification
         log_prefix = f"[B{batch_num}:P{prompt_index}]"
+        from agent.router_prewarm import suppress as _suppress_router_prewarm
+
+        _suppress_router_prewarm()  # noninteractive worker: no router warm-up
         agent = AIAgent(
             base_url=config.get("base_url"),
             api_key=config.get("api_key"),

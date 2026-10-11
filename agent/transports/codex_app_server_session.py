@@ -83,7 +83,14 @@ class TurnResult:
     # of riding a CPU-spinning or auth-broken process. Mirrors openclaw
     # beta.8's "retire timed-out app-server clients" fix.
     should_retire: bool = False
+    # The caller's bound (``foreground_deadline=True``, the per-message
+    # foreground time limit) expired before codex finished. Not a wedge: the
+    # turn was interrupted on purpose and the session stays usable.
+    deadline_hit: bool = False
 
+
+# Default per-turn ceiling; the per-message foreground time limit may lower it.
+DEFAULT_TURN_TIMEOUT_SECONDS = 600.0
 
 # Markers we accept as terminal even when codex never emits turn/completed.
 # Some codex versions stream `<turn_aborted>` as raw text in agentMessage
@@ -471,9 +478,10 @@ class CodexAppServerSession:
         self,
         user_input: Any,
         *,
-        turn_timeout: float = 600.0,
+        turn_timeout: float = DEFAULT_TURN_TIMEOUT_SECONDS,
         notification_poll_timeout: float = 0.25,
         post_tool_quiet_timeout: float = 90.0,
+        foreground_deadline: bool = False,
     ) -> TurnResult:
         """Send a user message and block until turn/completed, while
         forwarding server-initiated approval requests and projecting items
@@ -484,6 +492,12 @@ class CodexAppServerSession:
         `turn/completed`, fast-fail and mark the session for retirement.
         Mirrors openclaw beta.8's post-tool completion watchdog (#81697)
         so a wedged codex doesn't burn the full turn deadline.
+
+        foreground_deadline: ``turn_timeout`` is the remaining time of the
+        per-message foreground time limit rather than a wedge detector. On
+        expiry the turn is interrupted through the normal interrupt path and
+        reported with ``deadline_hit`` (no error, session not retired); any
+        assistant text already produced is kept as the answer.
         """
         # Pre-create the result so startup failures (codex subprocess can't
         # spawn, initialize handshake rejects, thread/start blows up) surface
@@ -762,6 +776,10 @@ class CodexAppServerSession:
             and not result.interrupted
             and result.final_text
             and result.error is None
+            # A foreground-limit expiry always interrupts the native turn, even
+            # when an assistant message was already emitted: leaving codex
+            # running after the reply is delivered would orphan its work.
+            and not foreground_deadline
         ):
             logger.warning(
                 "codex app-server turn reached deadline after a completed "
@@ -769,6 +787,14 @@ class CodexAppServerSession:
                 "the assistant text as the terminal response"
             )
             turn_complete = True
+
+        if not turn_complete and not result.interrupted and foreground_deadline:
+            # The foreground time limit ran out: stop codex through the same
+            # interrupt a user stop uses. The session is healthy, so no
+            # retirement and no error -- the caller renders the answer.
+            self._issue_interrupt(result.turn_id)
+            result.interrupted = True
+            result.deadline_hit = True
 
         if not turn_complete and not result.interrupted:
             # Hit the deadline. Issue interrupt to stop wasted compute, and

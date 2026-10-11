@@ -811,6 +811,14 @@ prompt_caching:
 #     timeout: 30
 #     language: ""           # empty = match the user's language; or e.g. "English"
 #
+#   # Delegation router (see delegation.router below): sizes each human
+#   # message before the main chat agent starts. One small JSON reply.
+#   delegation_router:
+#     provider: "auto"
+#     model: "auto"          # auto = the provider's fast model when it has one, else your main model
+#     prefer_fast_model: true
+#     timeout: 8
+#
 #   # Session search — summarizes matching past sessions
 #   session_search:
 #     provider: "auto"
@@ -1590,10 +1598,42 @@ delegation:
                                               # Raise to 2 to allow workers to spawn their own subagents.
                                               # Requires role="orchestrator" on intermediate agents.
   # orchestrator_enabled: true                # Kill switch for role="orchestrator" children (default: true).
+  # fanout_delivery: joined                   # How a background fan-out reports back (default: joined).
+                                              # joined: ONE combined report once the helpers are done, results in task order;
+                                              #   a helper that did not finish is marked incomplete and, if it finishes later,
+                                              #   its result is delivered once as a late result for the same fan-out.
+                                              # each: every helper reports on its own, as soon as it finishes.
+  # fanout_straggler_seconds: 300             # joined mode: once all but one helper are done, wait at most this long for the
+                                              # last one, then send the combined report with it marked incomplete (its result
+                                              # follows once if it finishes later). 0 = never cut the wait short.
   # subagent_auto_approve: false              # When a subagent hits a dangerous-command approval prompt, auto-deny (default: false)
                                               # or auto-approve "once" (true) instead of blocking on stdin.
                                               # The parent TUI owns stdin, so blocking would deadlock; non-interactive resolution is required.
                                               # Both choices emit a logger.warning audit line. Flip to true only for cron/batch pipelines.
+  # foreground_time_limit_seconds: 300        # Per-message time limit for the main chat agent (default: 300; 0/null/false = off).
+                                              # Applies in chats where the bot can run a background helper and deliver its result later
+                                              # (Telegram and other messaging, CLI/TUI). The API server is unchanged: no limit there.
+                                              # At 80% the agent is told to hand the rest to a background helper (delegate_task,
+                                              # background=true); at 100% terminal, execute_code, browser, web, file writes, MCP tools
+                                              # and process wait are refused until the next user message.
+                                              # delegate_task (background), cronjob, todo, memory, clarify, process poll/log, reads stay open.
+                                              # Hard stop: 60 s after the limit or 3 more model iterations the turn ends with one final
+                                              # no-tools call. That call carries no tool schema, so it costs ONE prompt-cache miss
+                                              # (once per hard stop). While the limit applies every delegate_task is a background helper.
+                                              # A follow-up message gets a fresh limit.
+                                              # Never applies to subagents, cron, --oneshot, non-TTY -q/-Q or batch runs.
+  # verify_time_limit_seconds: 120            # A short checking window when a background helper this agent started reports back
+                                              # after the time limit above is spent (default: 120; 0/null/false = off). Once per
+                                              # helper; helpers started in it stay in the background. Off when the limit above is off.
+  # router:                                   # Delegation router: sizes each human message (direct / single helper / parallel
+  #                                           # helpers / staged) with a fast auxiliary model (auxiliary.delegation_router) and puts
+  #                                           # the plan on that turn's message. Same scope as the time limit above (chat agents
+  #                                           # that can deliver a background helper's result later).
+  #   enabled: true                           # false = no sizing call, no plan, no backstop
+  #   timeout_seconds: 8                      # budget for the sizing call; on timeout or bad output the turn runs as before
+  #   backstop_calls: 2                       # not-direct plan: after this many work tool calls the agent made itself ...
+  #   backstop_seconds: 60                    # ... or this many seconds, the runtime hands the plan to helpers (nothing running is
+  #                                           # stopped). "Do it yourself" in the message is never overridden.
   # checkpoint:                               # Optional delegation checkpoint for conversational roots with todo + delegate_task (off by default: no cap)
   #   enabled: false                          # true = opt in: gate work tools until a delegation choice is recorded
   #   max_work_tools: 5                       # parent work calls one direct/delegate choice covers (positive integer)
@@ -1623,6 +1663,16 @@ delegation:
   #                                           # Setting a tier name here REPLACES the built-in list of the same
   #                                           # name (lists don't merge); add your own tier names freely.
   #                                           # Set `tiers: {}` to disable tiering entirely.
+  #
+  # Default worker tier: the tier name used for every delegated task that
+  # doesn't pass its own `tier`. An explicit task tier always wins. Empty (the
+  # default) keeps today's behaviour. default_tier applies only when no
+  # delegation.provider/model pin is set (a pin already routes every untiered
+  # task, so the default is ignored). A name that isn't in `tiers`, or has no
+  # authenticated candidate, quietly falls back to parent inheritance. /review
+  # never uses it. It is applied when the task is dispatched and never changes
+  # the tool schema the model sees.
+  # default_tier: ""                          # e.g. "code"
 
 # =============================================================================
 # Honcho Integration (Cross-Session User Modeling)

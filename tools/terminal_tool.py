@@ -1279,6 +1279,31 @@ def clear_session_cwd(session_key: str) -> None:
         _session_cwd.pop(session_key, None)
 
 
+# The folder a gateway chat's FIRST terminal command starts in, frozen once by
+# the gateway process at startup (``gateway.run`` normalizes terminal.cwd, then
+# publishes it here before any cron job can touch the process-global
+# ``TERMINAL_CWD``). ``None`` everywhere else (CLI, TUI, ACP, cron), which keeps
+# every consumer below inert outside the messaging gateway.
+_gateway_start_cwd: Optional[str] = None
+
+
+def capture_gateway_start_cwd(cwd: Optional[str]) -> bool:
+    """Freeze the gateway's start folder. Write-once; absolute paths only."""
+    global _gateway_start_cwd
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        return False
+    with _session_cwd_lock:
+        if _gateway_start_cwd is not None:
+            return False
+        _gateway_start_cwd = cwd
+    return True
+
+
+def get_gateway_start_cwd() -> Optional[str]:
+    """Return the frozen gateway start folder, or ``None`` outside the gateway."""
+    return _gateway_start_cwd
+
+
 def register_task_env_overrides(task_id: str, overrides: Dict[str, Any]):
     """
     Register environment overrides for a specific task/rollout.
@@ -2780,6 +2805,74 @@ def _resolve_command_cwd(
     return recorded or default_cwd
 
 
+def _resolve_task_default_cwd(
+    task_id: Optional[str],
+    *,
+    default_cwd: str,
+    env_type: Optional[str],
+    host_cwd: Optional[str] = None,
+) -> str:
+    """Return the cwd a task's environment is seeded with. Side-effect free.
+
+    A per-task cwd override (registered by the gateway/TUI for workspace
+    tracking, or by RL/benchmark envs) wins, then the task id's own cwd record,
+    then *default_cwd* (the terminal config / ``TERMINAL_CWD`` value).
+
+    *default_cwd* was already sanitized for container backends in
+    ``_get_env_config()`` while an override is raw. On a container backend a
+    raw host path (e.g. a Windows desktop session's C:\\Users\\<user>, or a
+    POSIX /home/<user>) reaches ``docker run -w <host-path>`` and the container
+    fails to start (exit 125). Re-apply the same host/relative path guard to
+    the *resolved* cwd so the override can't bypass it. When the host path IS
+    this session's mounted workspace, remap it to /workspace (where the mount
+    lands) instead of discarding it. Valid in-container override paths
+    (RL/benchmark sandboxes that set cwd to /workspace, /root, etc.) are
+    absolute non-host paths and pass through untouched.
+    """
+    cwd = (
+        resolve_task_overrides(task_id).get("cwd")
+        or get_session_cwd(task_id)
+        or default_cwd
+    )
+    if _is_container_backend(env_type) and _is_unusable_container_cwd(cwd):
+        remapped = "/workspace" if host_cwd else default_cwd
+        if cwd != remapped:
+            logger.info(
+                "Remapping host/relative cwd override %r for %s backend "
+                "(won't exist in sandbox). Using %r instead.",
+                cwd, env_type, remapped,
+            )
+        cwd = remapped
+    return cwd
+
+
+def resolve_first_command_cwd(
+    task_id: Optional[str],
+    session_key: Optional[str],
+    *,
+    default_cwd: str,
+    env_type: Optional[str],
+) -> str:
+    """Return the folder a session's next terminal command would start in.
+
+    Side-effect free and built from the same two pieces ``terminal_tool`` uses
+    (``_resolve_task_default_cwd`` for the environment seed, then
+    ``_resolve_command_cwd`` for the session-key record), so a caller that
+    needs to know the answer ahead of time — ``delegate_task`` for a chat that
+    has not run a command yet — cannot drift from the terminal. The caller
+    supplies *default_cwd*: the terminal passes its live config value, the
+    gateway helper path passes the frozen startup snapshot.
+    """
+    return _resolve_command_cwd(
+        workdir=None,
+        default_cwd=_resolve_task_default_cwd(
+            task_id, default_cwd=default_cwd, env_type=env_type
+        ),
+        session_key=session_key,
+        env_type=env_type,
+    )
+
+
 def _report_checkpoint_nonexecution() -> None:
     """Private receipt: this terminal call was denied/pending, so it never ran."""
     try:
@@ -2883,33 +2976,16 @@ def terminal_tool(
         else:
             image = ""
 
-        cwd = overrides.get("cwd") or get_session_cwd(task_id) or config["cwd"]
         # Session-scoped mount resolution (single owner: _resolve_task_host_cwd).
         # Under per-session isolation a fresh session must not inherit the
         # process-global TERMINAL_CWD mount left behind by a previous session.
         host_cwd = _resolve_task_host_cwd(config, task_id)
-        # A per-task cwd override (registered by the gateway/TUI for workspace
-        # tracking, or by RL/benchmark envs) wins over config["cwd"] — but
-        # config["cwd"] was already sanitized for container backends in
-        # _get_env_config() while the override is raw. On a container backend a
-        # raw host path (e.g. a Windows desktop session's C:\Users\<user>, or a
-        # POSIX /home/<user>) reaches `docker run -w <host-path>` and the
-        # container fails to start (exit 125). Re-apply the same host/relative
-        # path guard to the *resolved* cwd so the override can't bypass it.
-        # When the host path IS this session's mounted workspace, remap it to
-        # /workspace (where the mount lands) instead of discarding it.
-        # Valid in-container override paths (RL/benchmark sandboxes that set
-        # cwd to /workspace, /root, etc.) are absolute non-host paths and pass
-        # through untouched.
-        if _is_container_backend(env_type) and _is_unusable_container_cwd(cwd):
-            remapped = "/workspace" if host_cwd else config["cwd"]
-            if cwd != remapped:
-                logger.info(
-                    "Remapping host/relative cwd override %r for %s backend "
-                    "(won't exist in sandbox). Using %r instead.",
-                    cwd, env_type, remapped,
-                )
-            cwd = remapped
+        cwd = _resolve_task_default_cwd(
+            task_id,
+            default_cwd=config["cwd"],
+            env_type=env_type,
+            host_cwd=host_cwd,
+        )
         default_timeout = config["timeout"]
 
         # Validate an explicit timeout before it flows into deadline math.

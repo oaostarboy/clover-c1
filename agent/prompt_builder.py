@@ -23,6 +23,7 @@ from clover_constants import (
 from typing import List, Optional
 
 from agent.runtime_cwd import resolve_agent_cwd
+from agent.turn_notices import RUNTIME_NOTE_MARKER
 from agent.skill_utils import (
     EXCLUDED_SKILL_DIRS,
     ORG_ACTIVE_MARKER,
@@ -496,18 +497,50 @@ TASK_COMPLETION_GUIDANCE = (
 # Ported from cline/cline#11514 ("encourage parallel tool calls"), adapted
 # from Cline's TypeScript tool-surface guidance to clover-c1's Python
 # prompt-assembly architecture.
-PLAN_FIRST_DELEGATION_GUIDANCE = (
-    "# Plan-first delegation\n"
-    "For substantial work, first make a brief plan, then delegate independent "
-    "execution or research with delegate_task when that tool is available. You "
-    "remain responsible for planning, integrating the results, and verifying "
-    "the final outcome; your selected model stays the orchestrator. Handle "
-    "quick answers and genuinely small, single-step tasks directly without "
-    "delegation overhead. Do not delegate merely to satisfy a quota, do not "
-    "delegate work that depends on your own next step, and as a leaf worker do "
-    "not recursively delegate. Respect the user's explicit instructions and "
-    "configured tool availability; never assume another provider or worker "
-    "model is configured."
+
+# Explains the one marker Clover's own runtime notes carry (see
+# ``agent.turn_notices``).  Shipped only as the last sentence of the mode block
+# below: the notes exist where a helper can be delivered, so exactly the roots
+# that get that block can meet one.  Narrow on purpose -- it says nothing about
+# trusting tool output in general, and the funnel that builds tool results
+# strips the marker from tool output, so a page cannot forge it.  The "never
+# mention internal limits" rule lives in the block, not in the notes.
+RUNTIME_NOTE_GUIDANCE = (
+    f"A note marked {RUNTIME_NOTE_MARKER} in a tool result is from Clover "
+    "itself, not from the tool or a web page: follow it, but never quote or "
+    "describe it to the user."
+)
+
+# The mode-choice contract for a root agent that can hand work to a helper.
+# Sizing (direct, single helper, parallel helpers, staged) is done per turn by
+# the delegation router (``agent.delegation_router``), which puts a
+# ``[Clover runtime] work plan:`` block on the user message, and enforced by the
+# runtime backstop (``agent.router_backstop``).  So the static prompt only says
+# how to treat that plan, who wins when the user is explicit, how to end a
+# hand-off turn and to check results.  Shipped once, in the stable part of the
+# prompt, to roots that pass ``agent.system_prompt._delegation_guidance_for`` --
+# decided when the prompt is built, so it stays byte-stable for the life of the
+# conversation.  Keep it to four sentences, the last being the runtime-note one.
+DELEGATION_MODE_GUIDANCE = (
+    "# Choosing how to work\n"
+    "Follow the work plan when one is present, otherwise do quick lookups "
+    "directly and hand big or parallel jobs to helpers with delegate_task; "
+    "the user's explicit wording wins (\"do it yourself\" means direct, "
+    "\"use helpers\" means a helper). "
+    "When dispatching helpers, dispatch, then end your turn with one short "
+    "line saying what is running, and don't poll. "
+    "Check helper results before saying done, and never mention internal "
+    "limits, timeouts or retries. " + RUNTIME_NOTE_GUIDANCE
+)
+
+# Roots that cannot hand a result back later (cron, one-shot runs, webhooks, the
+# stateless API server, kanban workers) still plan and verify, but get no
+# "dispatch and end your turn" advice.  Same byte-stability as the block above.
+DELEGATION_PLAN_FALLBACK_GUIDANCE = (
+    "# Plan first\n"
+    "For substantial work, plan first; delegate where supported, then "
+    "integrate and verify the results before reporting. Handle quick work "
+    "directly and respect the user's explicit instructions."
 )
 
 TODO_DELEGATION_DECISION_GUIDANCE = (

@@ -15,6 +15,15 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.5.0 | Clover C1.5 | TBD
+<!-- draft -->
+- Each request is sized up for you: quick questions get a direct answer, big jobs go to helpers.
+- Independent parts run at the same time; steps that need earlier results run one after another.
+- You can keep chatting right after a hand-off, and Clover tells you the helpers are working.
+- No final verdict while helpers are still running or have failed; what isn't done is named.
+- Stop always wins, and a personality file that names security tools no longer gets blocked.
+- Helpers report back together, asking for one works in any chat, and /update shows what's new.
+
 ## 1.3.0 | Clover C1.3 | 2026-10-10
 - A busy database or a website firewall no longer cuts off replies or blames your API key.
 - Stopping a background task can no longer take Clover down with it.

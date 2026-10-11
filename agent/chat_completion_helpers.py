@@ -3104,9 +3104,31 @@ def try_substitute_unknown_model(agent, *, requested_model: str, provider: str):
     return substitute
 
 
-def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
-    """Request a summary when max iterations are reached. Returns the final response text."""
-    warning = f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary..."
+# What the user reads when the time-limit hard stop yields no summary: honest
+# (the reply stopped) and silent about why.
+_TIME_LIMIT_STOPPED_REPLY = (
+    "I've stopped here for now. Send 'continue' and I'll pick it back up."
+)
+
+
+def handle_max_iterations(
+    agent, messages: list, api_call_count: int, *, reason: str = "iterations"
+) -> str:
+    """Request a summary when max iterations are reached. Returns the final response text.
+
+    ``reason="time_limit"`` is the foreground time limit's hard stop
+    (``agent.foreground_time_limit``): the same single no-tools call, with its
+    own summary request (compaction recognizes its text).  The user never
+    hears about the limit: the request tells the model not to mention it and
+    the warning and fallback wording are neutral.
+    """
+    _time_limit = reason == "time_limit"
+    if _time_limit:
+        warning = "📝  Putting together where this stands so far..."
+        _no_summary = _TIME_LIMIT_STOPPED_REPLY
+    else:
+        warning = f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary..."
+        _no_summary = "I reached the iteration limit and couldn't generate a summary."
     if getattr(agent, "suppress_status_output", False):
         # Strict machine-readable mode (clover chat -Q, oneshot, background
         # review): keep diagnostics out of stdout so wrappers receive only
@@ -3148,10 +3170,21 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     # Shared constant so compaction recognizers can identify this runtime nudge
     # by its stable content after SessionDB projection strips metadata flags
     # (see MAX_ITERATIONS_SUMMARY_REQUEST / _is_synthetic_compression_user_turn).
-    from agent.context_compressor import MAX_ITERATIONS_SUMMARY_REQUEST
+    from agent.context_compressor import (
+        MAX_ITERATIONS_SUMMARY_REQUEST,
+        TIME_LIMIT_SUMMARY_REQUEST,
+    )
 
-    summary_request = MAX_ITERATIONS_SUMMARY_REQUEST
-    append_message(messages, {"role": "user", "content": summary_request})
+    summary_request = (
+        TIME_LIMIT_SUMMARY_REQUEST if _time_limit else MAX_ITERATIONS_SUMMARY_REQUEST
+    )
+    # Runtime scaffolding stored as a user row: ``display_kind="hidden"`` keeps
+    # it out of every human transcript projection (TUI / desktop / CLI resume,
+    # export) while the provider still replays it as a plain user message.
+    append_message(
+        messages,
+        {"role": "user", "content": summary_request, "display_kind": "hidden"},
+    )
 
     try:
         # Build API messages, stripping internal-only fields
@@ -3172,8 +3205,13 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
             # tool_name (SQLite FTS bookkeeping), the codex_* reasoning carriers,
             # timestamp (preserved on gateway user replay entries for the
             # stale-confirmation expiry check — #47868 rejection class),
+            # display_kind / display_metadata (transcript presentation, incl.
+            # the hidden summary request appended above),
             # and every Clover-internal underscore-prefixed scaffolding key.
-            for schema_foreign in ("tool_name", "codex_reasoning_items", "codex_message_items", "timestamp"):
+            for schema_foreign in (
+                "tool_name", "codex_reasoning_items", "codex_message_items",
+                "timestamp", "display_kind", "display_metadata",
+            ):
                 api_msg.pop(schema_foreign, None)
             # api_content (the persist-what-you-send sidecar) carries the
             # exact bytes every main-loop call sent for this message —
@@ -3375,7 +3413,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                     {"role": "assistant", "content": final_response},
                 )
             else:
-                final_response = "I reached the iteration limit and couldn't generate a summary."
+                final_response = _no_summary
         else:
             # Retry summary generation
             if agent.api_mode == "codex_responses":
@@ -3440,13 +3478,18 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                         {"role": "assistant", "content": final_response},
                     )
                 else:
-                    final_response = "I reached the iteration limit and couldn't generate a summary."
+                    final_response = _no_summary
             else:
-                final_response = "I reached the iteration limit and couldn't generate a summary."
+                final_response = _no_summary
 
     except Exception as e:
         logger.warning("Failed to get summary response: %s", e)
-        final_response = f"I reached the maximum iterations ({agent.max_iterations}) but couldn't summarize. Error: {str(e)}"
+        if _time_limit:
+            # Details stay in the log above; the user never reads an error,
+            # a timeout or a failed attempt for the hard stop.
+            final_response = _TIME_LIMIT_STOPPED_REPLY
+        else:
+            final_response = f"I reached the maximum iterations ({agent.max_iterations}) but couldn't summarize. Error: {str(e)}"
     finally:
         from agent import relay_llm
 

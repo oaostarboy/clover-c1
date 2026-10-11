@@ -1222,6 +1222,18 @@ DEFAULT_CONFIG = {
             "reasoning_effort": "",  # per-task thinking level: none|minimal|low|medium|high|xhigh|max|ultra (empty = provider default)
             "language": "",
         },
+        # Delegation router (delegation.router): sizes a human message before
+        # the root starts. Small JSON reply, 8 s budget, so it prefers the
+        # provider's fast tier; ``auto`` otherwise resolves like title_generation.
+        "delegation_router": {
+            "provider": "auto",
+            "model": "auto",
+            "prefer_fast_model": True,
+            "base_url": "",
+            "api_key": "",
+            "timeout": 8,
+            "extra_body": {},
+        },
         "memory_query_rewrite": {
             "provider": "auto",
             "model": "",
@@ -2087,6 +2099,15 @@ DEFAULT_CONFIG = {
             "check": ["xai/grok-4.7", "xai-oauth/grok-4.7", "gemini/gemini-3.8-pro"],
             "fast": ["gemini/gemini-3.8-flash-high", "openai-codex/gpt-6-luna"],
         },
+        # Tier name (a key of `tiers`) applied to every delegated task that
+        # names no `tier` of its own, e.g. "code". An explicit task tier always
+        # wins. Empty = off (children inherit the parent, as before).
+        # default_tier applies only when no delegation.provider/model pin is
+        # set; a pin routes every untiered task, so the default is ignored. A
+        # name that does not resolve to an authenticated candidate silently
+        # falls back to the same path. /review never uses it. Applied at
+        # dispatch only; it never changes the delegate_task tool schema.
+        "default_tier": "",
         "base_url": "",    # direct OpenAI-compatible endpoint for subagents
         "api_key": "",     # API key for delegation.base_url (falls back to OPENAI_API_KEY)
         "api_mode": "",    # wire protocol for delegation.base_url: "chat_completions",
@@ -2108,6 +2129,44 @@ DEFAULT_CONFIG = {
         # extras" without silently stripping MCP tools the parent already has.
         # Set to false for strict intersection.
         "inherit_mcp_toolsets": True,
+        # Per-message time limit for the main chat agent. Applies to root
+        # conversational agents in chats where a background helper can be run
+        # and delivered later (messaging platforms, the interactive CLI/TUI);
+        # the API server is unchanged, and subagents, cron, --oneshot, non-TTY
+        # -q and batch runs are never limited. At 80% the agent is told to hand
+        # the rest to a background helper (delegate_task, background=true); at
+        # 100% heavy work tools (terminal, execute_code, browser, web, file
+        # writes, MCP) and process wait are refused until the next user
+        # message, while background delegate_task, cronjob, todo, memory,
+        # clarify, process poll/log and reads stay open. Hard stop: 60 s after
+        # the limit or 3 more model iterations the turn ends with one final
+        # no-tools call (that call has no tool schema: ONE prompt-cache miss
+        # per hard stop, accepted). Seconds; 0/null/false = off. Independent of
+        # delegation.checkpoint.
+        "foreground_time_limit_seconds": 300,
+        # A short checking window for a helper's OWN result coming back: when
+        # the completion turn of a hand-off this agent dispatched arrives after
+        # the foreground limit is spent, it gets a fresh episode of this many
+        # seconds (once per dispatch, also across restart) so the agent can
+        # verify the result before answering; helpers it spawns there stay in
+        # the background. Seconds; 0/null/false = off. Off too whenever
+        # foreground_time_limit_seconds is off.
+        "verify_time_limit_seconds": 120,
+        # Delegation router: before a root chat agent starts a human message, a
+        # fast auxiliary model sizes it (direct / single / parallel / staged)
+        # and the plan is put on that turn's message. If the agent then keeps
+        # doing a not-direct job itself -- more than ``backstop_calls`` work
+        # tool calls or ``backstop_seconds`` -- the runtime hands the plan to
+        # helpers instead (nothing already running is stopped). Applies only
+        # where the foreground time limit does; "do it yourself" is never
+        # overridden. ``timeout_seconds`` bounds the sizing call; on any
+        # failure the turn runs exactly as without the router.
+        "router": {
+            "enabled": True,
+            "timeout_seconds": 8,
+            "backstop_calls": 2,
+            "backstop_seconds": 60,
+        },
         "max_iterations": 250,  # per-subagent iteration cap (each subagent gets its own budget,
                                # independent of the parent's max_iterations)
         # When a subagent runs out of steps mid-task, refresh its budget and
@@ -2148,6 +2207,20 @@ DEFAULT_CONFIG = {
         # raise deliberately, each level multiplies API cost.
         "max_spawn_depth": 1,        # depth (1 = flat [default], 2 = orchestrator→leaf, 3+ = deeper)
         "orchestrator_enabled": True,  # kill switch for role="orchestrator"
+        # How a background fan-out (several helpers in one delegate_task call)
+        # reports back. "joined" (default): each helper's result is saved as it
+        # finishes and the chat hears ONE combined report, results in task
+        # order, a helper that did not finish marked incomplete; a straggler
+        # that finishes later is delivered once as a late result for the same
+        # fan-out. "each": every helper reports on its own (the original
+        # behaviour).
+        "fanout_delivery": "joined",
+        # joined mode only: once every helper but one has finished, wait at
+        # most this many seconds for the last one, then send the combined
+        # report with it marked incomplete (its result follows once if it
+        # finishes later). The card shows "waiting on helper N" meanwhile.
+        # 0 = never cut the wait short (only the stall monitor bounds it).
+        "fanout_straggler_seconds": 300,
         # When a subagent hits a dangerous-command approval prompt, the parent's
         # prompt_toolkit TUI owns stdin — a thread-local input() call from the
         # subagent worker would deadlock the parent UI. To avoid the deadlock,

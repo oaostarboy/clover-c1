@@ -1432,6 +1432,12 @@ def _trim_error(msg: str) -> str:
     return msg
 
 
+# error_type values of calls the runtime declined to run: the model-facing
+# foreground-limit refusal and its neutral display form (see
+# ``agent.foreground_time_limit.display_result``).
+_SKIPPED_ERROR_TYPES = frozenset({"foreground_time_limit_reached", "skipped"})
+
+
 def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]:
     """Inspect a tool result string for signs of failure.
 
@@ -1446,6 +1452,11 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
         return False, ""
 
     data = safe_json_loads(result)
+
+    # A call the runtime declined to run (foreground time limit): a neutral
+    # label, never the model-facing refusal text.
+    if isinstance(data, dict) and data.get("error_type") in _SKIPPED_ERROR_TYPES:
+        return True, " [skipped]"
 
     # Terminal: non-zero exit code is the canonical failure signal.
     if tool_name == "terminal":

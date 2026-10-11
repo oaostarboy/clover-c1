@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional
 
 from agent.prompt_builder import (
     DEFAULT_AGENT_IDENTITY,
+    DELEGATION_MODE_GUIDANCE,
+    DELEGATION_PLAN_FALLBACK_GUIDANCE,
     EXECUTION_GUIDANCE_MODELS,
     GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     CLOVER_AGENT_HELP_GUIDANCE,
@@ -42,7 +44,6 @@ from agent.prompt_builder import (
     USER_PROFILE_GUIDANCE,
     OPENAI_MODEL_EXECUTION_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE,
-    PLAN_FIRST_DELEGATION_GUIDANCE,
     PLATFORM_HINTS,
     SESSION_SEARCH_GUIDANCE,
     SKILLS_GUIDANCE,
@@ -433,6 +434,57 @@ def _profile_name_for_home(home: Path) -> str:
         return "default"
 
 
+def _delegation_guidance_for(agent: Any) -> Optional[str]:
+    """Which delegation guidance, if any, belongs in this agent's prompt?
+
+    * ``DELEGATION_MODE_GUIDANCE`` -- a root conversational agent with
+      ``delegate_task`` on a surface that can deliver a detached helper's
+      result later (messaging platforms, CLI / TUI).
+    * ``DELEGATION_PLAN_FALLBACK_GUIDANCE`` -- any other root with
+      ``delegate_task`` (cron, one-shot / batch runs, webhooks, kanban workers,
+      the stateless API server): "dispatch, end your turn" is wrong there, but
+      planning and verifying is not.
+    * ``None`` -- no ``delegate_task``, or a subagent / delegated-child context.
+
+    Independent of the foreground time limit's config.  Called once, when the
+    prompt is built, so the choice is byte-stable for the conversation.
+    """
+    if "delegate_task" not in (getattr(agent, "valid_tool_names", None) or ()):
+        return None
+    try:
+        from agent.delegation_context import is_delegated_child_context
+
+        if (
+            is_delegated_child_context()
+            or getattr(agent, "_delegate_depth", 0)
+            or getattr(agent, "_subagent_id", None)
+            or getattr(agent, "_is_background_review_fork", False) is True
+        ):
+            return None
+    except Exception:
+        return None
+    try:
+        from agent.foreground_time_limit import applies
+
+        if not applies(agent):
+            return DELEGATION_PLAN_FALLBACK_GUIDANCE
+    except Exception:
+        return DELEGATION_PLAN_FALLBACK_GUIDANCE
+    try:
+        from gateway.session_context import async_delivery_supported
+
+        # The unbound default is True: an agent built where no gateway session
+        # is bound (e.g. an API-server agent built off its request path)
+        # would carry the full block.  Stateless channels (API server, cron,
+        # one-shot) declare False when they bind, and a session's binding does
+        # not change for its life, so the answer is byte-stable per session.
+        deliverable = bool(async_delivery_supported())
+    except Exception:
+        # Unknown surface: assume a helper can be delivered, as the limit does.
+        deliverable = True
+    return DELEGATION_MODE_GUIDANCE if deliverable else DELEGATION_PLAN_FALLBACK_GUIDANCE
+
+
 def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) -> Dict[str, str]:
     """Assemble the system prompt as three ordered cache tiers.
 
@@ -507,11 +559,12 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if getattr(agent, "_task_completion_guidance", True) and agent.valid_tool_names:
         stable_parts.append(TASK_COMPLETION_GUIDANCE)
 
-    if "delegate_task" in agent.valid_tool_names:
-        from agent.delegation_context import is_delegated_child_context
-
-        if not is_delegated_child_context():
-            stable_parts.append(PLAN_FIRST_DELEGATION_GUIDANCE)
+    # Decided once, here, so the prompt never varies turn to turn: the mode
+    # block for roots that can hand work to a detached helper, a short
+    # plan-and-verify note for roots that cannot, nothing for children.
+    _delegation_guidance = _delegation_guidance_for(agent)
+    if _delegation_guidance:
+        stable_parts.append(_delegation_guidance)
 
     from tools.todo_tool import delegation_check_for_agent
 

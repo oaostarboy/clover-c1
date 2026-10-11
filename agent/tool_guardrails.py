@@ -725,14 +725,24 @@ class ToolCallGuardrailController:
 
 
 def toolguard_synthetic_result(decision: ToolGuardrailDecision) -> str:
-    """Build a synthetic role=tool content string for a blocked tool call."""
-    return json.dumps(
+    """Build a synthetic role=tool content string for a blocked tool call.
+
+    Clover wrote this refusal, so it is marked as the runtime's own note and
+    vouched for this call (like the delegation checkpoint's refusal): the
+    result funnel then keeps the marker, while any other copy of it -- in a
+    tool's output, in a later call -- is defanged.
+    """
+    from agent.turn_notices import runtime_note, vouch_runtime_result
+
+    message = decision.message
+    result = json.dumps(
         {
-            "error": decision.message,
+            "error": runtime_note(message) if message else message,
             "guardrail": decision.to_metadata(),
         },
         ensure_ascii=False,
     )
+    return vouch_runtime_result(result, decision.tool_name or None) if message else result
 
 
 def append_toolguard_guidance(result: str, decision: ToolGuardrailDecision) -> str:

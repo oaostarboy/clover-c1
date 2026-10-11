@@ -208,7 +208,10 @@ def test_dispatch_copy_matches_per_child_delivery():
     assert "as soon as that child finishes" in note
     assert "second combined message" in note
     assert "once ALL" not in note
-    assert "not as one combined" in schema
+    # C1.5: the static schema no longer claims per-child delivery; the
+    # per-call dispatch note (mode-aware) is the source of truth.
+    assert "not as one combined" not in schema
+    assert "the dispatch note says how each call reports" in schema
     assert "one consolidated message" not in schema
 
 

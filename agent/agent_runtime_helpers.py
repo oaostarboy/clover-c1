@@ -3735,7 +3735,11 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
         _checkpoint.resolve_work_name(function_name, function_args),
         tool_call_id or "",
     ) is None:
-        _verdict = _checkpoint.admit(
+        from agent import foreground_time_limit as _fg_limit
+
+        _verdict = _fg_limit.refusal(
+            agent, function_name, function_args
+        ) or _checkpoint.admit(
             agent, function_name, function_args, tool_call_id or ""
         )
         if _verdict.blocked:

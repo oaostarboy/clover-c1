@@ -2740,7 +2740,11 @@ os.environ["CLOVER_QUIET"] = "1"
 # see gateway/cwd_placeholder.py for the three-case contract (local vs docker
 # mount-off vs docker mount-on).  MESSAGING_CWD is a backward-compat fallback.
 from gateway import clover_acks as _clover_acks
-from gateway.cwd_placeholder import CWD_PLACEHOLDERS, resolve_placeholder_terminal_cwd
+from gateway.cwd_placeholder import (
+    CWD_PLACEHOLDERS,
+    resolve_placeholder_terminal_cwd,
+    startup_terminal_cwd,
+)
 from gateway.stream_consumer import format_thought
 from gateway.progress_cleanup import (
     collapse_or_delete as _collapse_or_delete_bubbles,
@@ -2763,6 +2767,17 @@ if not _configured_cwd or _configured_cwd in CWD_PLACEHOLDERS:
         os.environ.pop("TERMINAL_CWD", None)
     else:
         os.environ["TERMINAL_CWD"] = _resolved_cwd
+
+# Freeze where a chat's first terminal command starts, now, before anything
+# (workdir cron jobs above all) rewrites the process-global TERMINAL_CWD.
+# delegate_task reads it for a chat that has not run a command yet, so required
+# worktree isolation has a real folder to check instead of blocking the helper.
+# Published to tools.terminal_tool by start_gateway(), not here: importing this
+# module from the CLI/serve must not make those processes look like a gateway.
+try:
+    _GATEWAY_START_CWD = startup_terminal_cwd(os.environ, os.getcwd())
+except OSError:  # cwd deleted/unreadable at startup: no snapshot, helpers keep refusing
+    _GATEWAY_START_CWD = None
 
 from gateway.config import (
     ChannelOverride,
@@ -4034,18 +4049,40 @@ def _get_channel_override(
     return None
 
 
-def _update_whats_new_text(*marker_paths: Path) -> str:
-    """Version name + "what's new" for a SUCCESSFUL /update's completion message.
+def _update_run_rolled_back(*marker_paths: Path) -> bool:
+    """True when THIS /update run's receipt says it was rolled back. Never raises."""
+    try:
+        from clover_cli.release_notes import this_run_rolled_back
 
-    Rendered by whichever gateway sends the completion message; after a chat
-    ``/update`` that is the restarted gateway, i.e. the NEW code, so even a
-    first hop from an older release shows it. Read before the pending markers
-    are deleted. Returns "" on any problem (the message is then unchanged).
+        return this_run_rolled_back(_clover_home, marker_paths)
+    except Exception:
+        return False
+
+
+def _update_whats_new_text(
+    *marker_paths: Path,
+    succeeded: bool = True,
+    refused: bool = False,
+    rolled_back: bool = False,
+) -> str:
+    """Version name + "what's new" for a /update completion message.
+
+    The one gate for all three places the gateway reports an update's end
+    (streaming watcher, updater-died conclusion, legacy notifier), for
+    success, partial, failed and timed-out runs alike. Notes appear iff the
+    run was not refused or rolled back and this process's immutable boot
+    identity differs from the origin the pending marker recorded (see
+    ``clover_cli.release_notes.update_whats_new_section``). Read before the
+    pending markers are deleted. Returns "" on any problem or when there is
+    no proof (the message is then unchanged).
     """
     try:
-        from clover_cli.release_notes import section_for_update_markers
+        from clover_cli.release_notes import update_whats_new_section
 
-        return section_for_update_markers(_clover_home, marker_paths)
+        return update_whats_new_section(
+            _clover_home, marker_paths,
+            succeeded=succeeded, refused=refused, rolled_back=rolled_back,
+        )
     except Exception:
         return ""
 
@@ -6919,6 +6956,12 @@ class TurnRunner:
                 # stripped from provider-bound payloads in conversation_loop.
                 _conversation_kwargs["persist_user_display_kind"] = (
                     ctx.persist_user_display_kind
+                )
+            if ctx.completion_delegation_ids:
+                # Trusted ids of the helper completion this turn delivers: the
+                # foreground time limit's verification window keys on them.
+                _conversation_kwargs["completion_delegation_ids"] = (
+                    ctx.completion_delegation_ids
                 )
             if ctx.moa_config is not None:
                 _conversation_kwargs["moa_config"] = ctx.moa_config
@@ -13944,6 +13987,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             init_skin_from_config(_load_gateway_config())
         except Exception:
             logger.debug("skin init failed", exc_info=True)
+        # The first routed chat after a start should not pay the router's
+        # one-time imports (imports only, in a daemon thread).
+        try:
+            from agent.router_prewarm import start as _prewarm_router
+
+            _prewarm_router()
+        except Exception:
+            logger.debug("router prewarm unavailable", exc_info=True)
         # Enable faulthandler for stack dumps on freezes/crashes (#70344).
         # Falls back to a log file when sys.stderr is None (Windows VBS /
         # pythonw / detached service) — otherwise the gateway would die
@@ -21542,6 +21593,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_display_kind = (
             "internal_notification" if getattr(event, "internal", False) else None
         )
+        completion_delegation_ids = self._completion_ids_for_event(event)
         try:
             _pcfg = _load_gateway_config()
             _redact_pii = bool((_pcfg.get("privacy") or {}).get("redact_pii", False))
@@ -22886,6 +22938,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # session_entry.session_id while the old run is still unwinding.
             _run_start_session_id = session_entry.session_id
             _turn_started_monotonic = time.monotonic()
+            # Passed only when present, so a stand-in ``_run_agent`` with the
+            # older signature keeps working for every ordinary turn.
+            _completion_kwargs = (
+                {"completion_delegation_ids": completion_delegation_ids}
+                if completion_delegation_ids else {}
+            )
             agent_result = await self._run_agent(
                 message=message_text,
                 context_prompt=context_prompt,
@@ -22901,6 +22959,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_timestamp=persist_user_timestamp,
                 persist_user_display_kind=persist_user_display_kind,
                 message_type=event.message_type,
+                **_completion_kwargs,
             )
             _turn_seconds = time.monotonic() - _turn_started_monotonic
 
@@ -25317,6 +25376,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     # Reload from disk — do not reuse the startup snapshot (#60955).
                     fallback_model=self._refresh_fallback_model(),
                 )
+                # A /background task is itself the hand-off: never time-limited.
+                agent._foreground_limit_exempt = "background"
                 try:
                     return agent.run_conversation(
                         user_message=enriched_prompt,
@@ -26832,9 +26893,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             metadata=_non_conversational_metadata(metadata, platform=platform),
                         )
                     else:
+                        from clover_cli.update_contract import UPDATE_EXIT_REFUSED
+
+                        _fail_text = "❌ Clover update failed (exit code {}).".format(exit_code)
+                        # A partial/failed run can still have restarted onto
+                        # new code; the helper proves that from the boot
+                        # identity and is silent for refused runs.
+                        _whats_new = _update_whats_new_text(
+                            claimed_path, pending_path,
+                            succeeded=False,
+                            refused=exit_code == UPDATE_EXIT_REFUSED,
+                            rolled_back=_update_run_rolled_back(claimed_path, pending_path),
+                        )
+                        if _whats_new:
+                            _fail_text += "\n\n" + _whats_new
                         await adapter.send(
                             chat_id,
-                            "❌ Clover update failed (exit code {}).".format(exit_code),
+                            _fail_text,
                             metadata=_non_conversational_metadata(metadata, platform=platform),
                         )
                     logger.info("Update finished (exit=%s), notified %s", exit_code, session_key)
@@ -26960,10 +27035,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             logger.warning("Update watcher timed out after %.0fs", timeout)
             exit_code_path.write_text("124", encoding="utf-8")
             await _flush_buffer()
+            # A restarted gateway that resumed a hung updater may already run
+            # the new code; same gate, never a success one-liner.
+            _timeout_text = "❌ Clover update timed out after 30 minutes."
+            _whats_new = _update_whats_new_text(
+                claimed_path, pending_path,
+                succeeded=False,
+                rolled_back=_update_run_rolled_back(claimed_path, pending_path),
+            )
+            if _whats_new:
+                _timeout_text += "\n\n" + _whats_new
             try:
                 await adapter.send(
                     chat_id,
-                    "❌ Clover update timed out after 30 minutes.",
+                    _timeout_text,
                     metadata=_non_conversational_metadata(metadata, platform=platform),
                 )
             except Exception:
@@ -27111,12 +27196,26 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 f"❌ Clover update did not complete (updater died; last "
                 f"recorded outcome: {detail}). Run `clover doctor` or retry."
             )
+            from clover_cli.release_notes import is_rollback_outcome
+
+            _whats_new = _update_whats_new_text(
+                claimed_path, pending_path,
+                succeeded=False, refused=detail == "refused",
+                rolled_back=is_rollback_outcome(detail),
+            )
+            if _whats_new:
+                text += "\n\n" + _whats_new
         else:
             text = (
                 "⚠️ The update process ended without reporting a result. The "
                 "gateway restarted fine — run `clover --version` or retry the "
                 "update to confirm."
             )
+            _whats_new = _update_whats_new_text(
+                claimed_path, pending_path, succeeded=False
+            )
+            if _whats_new:
+                text += "\n\n" + _whats_new
 
         if adapter is not None and chat_id:
             try:
@@ -27247,9 +27346,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     UPDATE_REFUSED_HEADLINE,
                 )
 
-                _whats_new = (
-                    _update_whats_new_text(claimed_path, pending_path)
-                    if exit_code == 0 else ""
+                _whats_new = _update_whats_new_text(
+                    claimed_path, pending_path,
+                    succeeded=exit_code == 0,
+                    refused=exit_code == UPDATE_EXIT_REFUSED,
+                    rolled_back=_update_run_rolled_back(claimed_path, pending_path),
                 )
                 _whats_new_block = f"\n\n{_whats_new}" if _whats_new else ""
                 if output:
@@ -27260,7 +27361,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     elif exit_code == UPDATE_EXIT_REFUSED:
                         msg = f"{UPDATE_REFUSED_HEADLINE}\n\n```\n{output}\n```"
                     else:
-                        msg = f"❌ Clover update failed.\n\n```\n{output}\n```"
+                        msg = f"❌ Clover update failed.{_whats_new_block}\n\n```\n{output}\n```"
                 elif exit_code == 0:
                     msg = f"✅ Clover update finished successfully.{_whats_new_block}"
                 elif exit_code == UPDATE_EXIT_REFUSED:
@@ -27276,7 +27377,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         _refusal = None
                     msg = f"{UPDATE_REFUSED_HEADLINE}\n\n{update_refused_detail(_refusal)}"
                 else:
-                    msg = "❌ Clover update failed. Check the gateway logs or run `clover update` manually for details."
+                    msg = (
+                        "❌ Clover update failed. Check the gateway logs or run "
+                        f"`clover update` manually for details.{_whats_new_block}"
+                    )
                 await adapter.send(
                     chat_id,
                     msg,
@@ -28313,10 +28417,27 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     metadata["completion_kind"],
                     metadata["completion_title"],
                 ) = _identity
+            # The trusted originating-request tuple of a joined / late
+            # fan-out result: session pinning alone does not say WHICH
+            # request (turn / generation) the result answers.
+            for _req_key in (
+                "request_turn_id", "request_id", "request_generation",
+                "batch_delegation_id",
+            ):
+                if evt.get(_req_key) not in (None, ""):
+                    metadata[_req_key] = evt[_req_key]
+            if evt.get("late_result"):
+                metadata["late_result"] = True
             if evt.get("_coalesced_siblings"):
                 metadata["completion_inbox_siblings"] = [
                     list(sib) for sib in evt["_coalesced_siblings"]
                 ]
+            # Trusted ids of the helper results this turn delivers (producer
+            # event fields, never the notification text): the foreground time
+            # limit keys its one verification window on them.
+            _completion_ids = self._completion_delegation_ids(evt)
+            if _completion_ids:
+                metadata["completion_delegation_ids"] = _completion_ids
             synth_event = MessageEvent(
                 text=synth_text,
                 message_type=MessageType.TEXT,
@@ -28400,6 +28521,41 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if route is None:
             return None
         return route, await self._resolve_completion_owner(parent_session_id, route)
+
+    @staticmethod
+    def _completion_ids_for_event(event) -> Optional[tuple]:
+        """Validated completion ids carried by ONE gateway event, or ``None``.
+
+        Only a gateway-built internal event can carry them; a human message's
+        metadata is never consulted.  Every turn derives its ids from its own
+        event (top-level and queued follow-up alike) -- never from the previous
+        turn.
+        """
+        if not getattr(event, "internal", False):
+            return None
+        ids = (getattr(event, "metadata", None) or {}).get("completion_delegation_ids")
+        if not isinstance(ids, (list, tuple)):
+            return None
+        return tuple(i for i in ids if isinstance(i, str) and i.strip()) or None
+
+    @staticmethod
+    def _completion_delegation_ids(evt: dict) -> list:
+        """Delegation ids a completion event (and its coalesced siblings) carries."""
+        ids: list = []
+
+        def add(value) -> None:
+            value = str(value or "").strip()
+            if value and value not in ids:
+                ids.append(value)
+
+        if evt.get("type") == "async_delegation":
+            add(evt.get("delegation_id"))
+            add(evt.get("batch_delegation_id"))
+        for sibling in evt.get("_coalesced_siblings") or ():
+            key = str(sibling[0] or "") if sibling else ""
+            if key.startswith("deleg:"):
+                add(key[len("deleg:"):])
+        return ids
 
     @staticmethod
     def _completion_inbox_identity(evt: dict):
@@ -31263,6 +31419,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_timestamp: Optional[float] = None,
         persist_user_display_kind: Optional[str] = None,
         message_type: Optional[str] = None,
+        completion_delegation_ids: Optional[tuple] = None,
     ) -> Dict[str, Any]:
         """Profile-scoping wrapper around the agent run.
 
@@ -31283,6 +31440,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_timestamp=persist_user_timestamp,
                 persist_user_display_kind=persist_user_display_kind,
                 message_type=message_type,
+                completion_delegation_ids=completion_delegation_ids,
             )
 
         profile_home = self._resolve_profile_home_for_source(source)
@@ -31296,6 +31454,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_timestamp=persist_user_timestamp,
                 persist_user_display_kind=persist_user_display_kind,
                 message_type=message_type,
+                completion_delegation_ids=completion_delegation_ids,
             )
 
     def _profile_name_for_source(self, source: SessionSource) -> Optional[str]:
@@ -31439,6 +31598,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_timestamp: Optional[float] = None,
         persist_user_display_kind: Optional[str] = None,
         message_type: Optional[str] = None,
+        completion_delegation_ids: Optional[tuple] = None,
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
@@ -31802,6 +31962,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             persist_user_message=persist_user_message,
             persist_user_timestamp=persist_user_timestamp,
             persist_user_display_kind=persist_user_display_kind,
+            completion_delegation_ids=completion_delegation_ids,
         )
         turn_runner = TurnRunner(self, turn_ctx)
         # Callback invoked by agent on tool lifecycle events — extracted to
@@ -33127,8 +33288,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # recursive call so queued voice turns can stream TTS and
                 # re-mark the generation for the final delivered turn.
                 next_message_type = None
+                # A queued internal event (a helper completion drained
+                # in-band) keeps its identity: typed as an internal
+                # notification and carrying ITS OWN trusted completion ids,
+                # same rules as the top-level handler.  A genuine queued human
+                # message gets neither (a fresh human turn).
+                next_display_kind = None
+                next_completion_ids = None
                 if pending_event is not None:
                     next_source = getattr(pending_event, "source", None) or source
+                    if getattr(pending_event, "internal", False):
+                        next_display_kind = "internal_notification"
+                        next_completion_ids = self._completion_ids_for_event(pending_event)
                     if self._is_goal_continuation_event(pending_event) and not self._goal_still_active_for_session(session_id):
                         logger.info(
                             "Discarding stale goal continuation for session %s — goal is no longer active",
@@ -33202,6 +33373,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # what the follow-up's guard will consult.  Fail-safe in helper.
                 await self._refresh_agent_cache_message_count(session_key, session_id)
 
+                # Passed only for a queued internal event, so a genuine human
+                # follow-up call is exactly what it always was.
+                _next_identity: Dict[str, Any] = {}
+                if next_display_kind:
+                    _next_identity["persist_user_display_kind"] = next_display_kind
+                if next_completion_ids:
+                    _next_identity["completion_delegation_ids"] = next_completion_ids
                 followup_result = await self._run_agent(
                     message=next_message,
                     context_prompt=context_prompt,
@@ -33214,6 +33392,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     event_message_id=next_message_id,
                     channel_prompt=next_channel_prompt,
                     message_type=next_message_type,
+                    **_next_identity,
                 )
                 return _preserve_queued_followup_history_offset(result, followup_result)
         finally:
@@ -34063,6 +34242,18 @@ def _is_fresh_post_update_gateway(pid: int) -> bool:
         return False
 
 
+def _publish_gateway_start_cwd() -> None:
+    """Hand the startup snapshot to the terminal layer (gateway process only).
+
+    Runs at the top of ``start_gateway()``, ahead of the cron provider, so the
+    value is in place before any scheduled job can run. Write-once.
+    """
+    if _GATEWAY_START_CWD:
+        from tools.terminal_tool import capture_gateway_start_cwd
+
+        capture_gateway_start_cwd(_GATEWAY_START_CWD)
+
+
 async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = False, verbosity: Optional[int] = 0) -> bool:
     """
     Start the gateway and run until interrupted.
@@ -34081,6 +34272,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # platforms. Set here (not at module import) so incidental imports of
     # gateway.run from CLI/tool code do not poison CLOVER_EXEC_ASK.
     os.environ["CLOVER_EXEC_ASK"] = "1"
+    _publish_gateway_start_cwd()
     # A gateway relaunched by an update's hand-off child inherits that
     # child's CLOVER_UPDATE_REEXEC; nothing this gateway starts (a chat
     # /update above all) may think it is that hand-off child.
@@ -34101,6 +34293,15 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # in-memory module.
     from gateway.code_skew import record_boot_fingerprint
     record_boot_fingerprint()
+
+    # Same moment, different question: which code did THIS process load?
+    # The post-/update "what's new" proof compares against it, so it must be
+    # taken before any update can pull under us and never be refreshed.
+    try:
+        from clover_cli.build_info import capture_boot_identity
+        capture_boot_identity()
+    except Exception:
+        logger.debug("Boot identity capture failed", exc_info=True)
 
     # ── Duplicate-instance guard ──────────────────────────────────────
     # Prevent two gateways from running under the same CLOVER_HOME.

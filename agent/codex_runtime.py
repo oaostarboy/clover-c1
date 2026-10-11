@@ -772,8 +772,25 @@ def run_codex_app_server_turn(
     # standard run_conversation() flow (line ~11823) before the early
     # return reaches us. Do NOT append again — that would duplicate.
 
+    # Per-message foreground time limit: codex runs its own tools, so Clover
+    # cannot refuse them mid-turn; the turn is bounded instead. The turn
+    # timeout becomes min(its own, the episode's remaining time) and at expiry
+    # the turn is interrupted and answered below (never silently unbounded).
+    _run_kwargs: dict = {}
     try:
-        turn = agent._codex_session.run_turn(user_input=user_message)
+        from agent import foreground_time_limit as _fg_limit
+
+        _fg_budget = _fg_limit.codex_turn_budget(agent)
+    except Exception:
+        _fg_budget = None
+    if _fg_budget is not None:
+        from agent.transports.codex_app_server_session import DEFAULT_TURN_TIMEOUT_SECONDS
+
+        if _fg_budget < DEFAULT_TURN_TIMEOUT_SECONDS:
+            _run_kwargs = {"turn_timeout": _fg_budget, "foreground_deadline": True}
+
+    try:
+        turn = agent._codex_session.run_turn(user_input=user_message, **_run_kwargs)
     except Exception as exc:
         logger.exception("codex app-server turn failed")
         # Crash → unconditionally drop the session so the next turn
@@ -838,6 +855,21 @@ def run_codex_app_server_turn(
         except Exception:
             pass
         agent._codex_session = None
+
+    # The foreground limit interrupted codex: the user still gets an answer.
+    # Prefer what codex already said; otherwise say plainly what happened. The
+    # text is projected like any assistant message so it is persisted and the
+    # transcript stays well-formed.
+    _fg_deadline_hit = bool(getattr(turn, "deadline_hit", False))
+    if _fg_deadline_hit and not turn.final_text:
+        turn.final_text = (
+            "I stopped Codex here before it finished. What it had done so "
+            "far is in the transcript above; send a follow-up message to "
+            "continue."
+        )
+        turn.projected_messages = list(turn.projected_messages or []) + [
+            {"role": "assistant", "content": turn.final_text}
+        ]
 
     # Splice projected messages into the conversation. The projector emits
     # standard {role, content, tool_calls, tool_call_id} entries, which
@@ -944,8 +976,8 @@ def run_codex_app_server_turn(
         "final_response": turn.final_text,
         "messages": messages,
         "api_calls": api_calls,
-        "completed": not turn.interrupted and turn.error is None,
-        "partial": turn.interrupted or turn.error is not None,
+        "completed": (not turn.interrupted or _fg_deadline_hit) and turn.error is None,
+        "partial": (turn.interrupted and not _fg_deadline_hit) or turn.error is not None,
         "interrupted": _user_interrupted,
         **(
             {"interrupt_message": _interrupt_message}
@@ -967,6 +999,11 @@ def run_codex_app_server_turn(
         "agent_persisted": True,
         "codex_thread_id": turn.thread_id,
         "codex_turn_id": turn.turn_id,
+        **(
+            {"turn_exit_reason": "foreground_time_limit_hard_stop"}
+            if _fg_deadline_hit
+            else {}
+        ),
         **usage_result,
     }
 

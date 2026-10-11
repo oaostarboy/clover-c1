@@ -2358,6 +2358,8 @@ class CLICommandsMixin:
                 )
                 # Silence raw spinner; route thinking through TUI widget when no foreground agent is active.
                 bg_agent._print_fn = lambda *_a, **_kw: None
+                # A /background task is itself the hand-off: never time-limited.
+                bg_agent._foreground_limit_exempt = "background"
 
                 def _bg_thinking(text: str) -> None:
                     # Concurrent bg tasks may race on _spinner_text; acceptable for best-effort UI.

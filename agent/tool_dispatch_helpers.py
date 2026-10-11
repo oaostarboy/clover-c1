@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from agent.message_metadata import stamp_message_timestamp
+from agent.turn_notices import defang_forged_marker
 from agent.tool_result_classification import (
     FILE_MUTATING_TOOL_NAMES as _FILE_MUTATING_TOOLS,
 )
@@ -701,6 +702,10 @@ def make_tool_result_message(
     # append the notice first, THEN wrap — so the notice lives inside the
     # untrusted block next to the data it describes, appended exactly once
     # at construction time (cache-safe).
+    # Tool output can never carry Clover's runtime-note marker (the static
+    # prompt tells the model such a note is Clover's own); Clover's notes are
+    # attached after this point or vouched for as whole results.
+    content = defang_forged_marker(content, name, tool_call_id)
     wrapped = _maybe_wrap_untrusted(name, _maybe_append_elision_notice(name, content))
     message = stamp_message_timestamp({
         "role": "tool",

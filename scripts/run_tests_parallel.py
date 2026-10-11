@@ -77,6 +77,11 @@ _DEFAULT_ROOTS = ["tests"]
 #                        setup. The dedicated job sidesteps both costs.
 _SKIP_PARTS = {"integration", "e2e", "docker"}
 
+
+def _is_eval_fixture(path: Path) -> bool:
+    parts = path.parts
+    return any(parts[i] == "eval" and parts[i + 1] == "fixtures" for i in range(len(parts) - 1))
+
 # Per-file wall-clock cap. Override
 # via --file-timeout or CLOVER_TEST_FILE_TIMEOUT.
 #
@@ -236,6 +241,12 @@ def _discover_files(roots: List[Path]) -> List[Path]:
         effective_skips = _SKIP_PARTS - root_skip_overrides
         for path in root.rglob("test_*.py"):
             if any(part in effective_skips for part in path.parts):
+                continue
+            # Eval seed projects (tests/eval/fixtures/<case>/...) ship their own
+            # pytest files, some failing on purpose; they are harness inputs,
+            # excluded from collection by tests/eval/conftest.py's
+            # collect_ignore, which a per-file subprocess bypasses.
+            if _is_eval_fixture(path):
                 continue
             real = path.resolve()
             if real in seen:

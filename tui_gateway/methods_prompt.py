@@ -1346,9 +1346,12 @@ def _(rid, params: dict) -> dict:
                 else None
             )
             try:
-                result = AIAgent(
+                _bg_agent = AIAgent(
                     **_background_agent_kwargs(session["agent"], task_id)
-                ).run_conversation(
+                )
+                # A background task is itself the hand-off: never time-limited.
+                _bg_agent._foreground_limit_exempt = "background"
+                result = _bg_agent.run_conversation(
                     user_message=text,
                     task_id=task_id,
                 )
@@ -1547,10 +1550,12 @@ def _(rid, params: dict) -> dict:
                 else None
             )
             try:
-                result = AIAgent(
+                _preview_agent = AIAgent(
                     **_ephemeral_preview_agent_kwargs(session["agent"], task_id),
                     **_preview_restart_callbacks(parent, task_id),
-                ).run_conversation(
+                )
+                _preview_agent._foreground_limit_exempt = "background"
+                result = _preview_agent.run_conversation(
                     user_message=prompt,
                     task_id=task_id,
                     conversation_history=parent_history or None,

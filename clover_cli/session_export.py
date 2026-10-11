@@ -75,11 +75,18 @@ def iter_user_prompt_records(
     sessions: Iterable[Dict[str, Any]]
 ) -> Iterator[Dict[str, Any]]:
     """Yield one normalized record for each user-authored prompt."""
+    # The shared human-turn view (compression, undo, resume use it too): runtime
+    # scaffolding persisted under role="user" -- compaction handoffs, the
+    # max-iterations / hard-stop summary request -- is not something the user
+    # wrote. Composite carriers export only their live ask.
+    from agent.context_compressor import user_originated_turn_view
+
     for session in sessions:
         session_id = str(session.get("id") or session.get("session_id") or "")
         index = 0
         for message in _messages(session):
-            if message.get("role") != "user":
+            view = user_originated_turn_view(message)
+            if view is None:
                 continue
             index += 1
             record: Dict[str, Any] = {
@@ -87,7 +94,7 @@ def iter_user_prompt_records(
                 "index": index,
                 "created_at": _format_timestamp(message.get("timestamp")),
                 "role": "user",
-                "text": _message_text(message.get("content")),
+                "text": _message_text(view.get("content")),
             }
             message_id = message.get("id")
             if message_id is not None:
@@ -182,9 +189,26 @@ def _append_session_messages(
     lines: List[str], session: Dict[str, Any], *, heading_level: int
 ) -> None:
     marker = "#" * heading_level
-    visible_messages = [
-        message for message in _messages(session) if message.get("role") != "system"
-    ]
+    # A human-readable transcript: runtime scaffolding persisted under
+    # role="user" (compaction handoffs, hard-stop / max-iterations requests,
+    # typed synthetic rows) and rows declared hidden are not shown, so nothing
+    # is attributed to the user that they did not write. The raw JSON / JSONL
+    # export stays an archive of every row.
+    from agent.context_compressor import user_originated_turn_view
+
+    visible_messages = []
+    for message in _messages(session):
+        role = message.get("role")
+        if role == "system":
+            continue
+        if role == "user":
+            view = user_originated_turn_view(message)
+            if view is None:
+                continue
+            message = {**message, "content": view.get("content")}
+        elif message.get("display_kind") == "hidden":
+            continue
+        visible_messages.append(message)
     if not visible_messages:
         lines.append("_No messages found._")
         lines.append("")

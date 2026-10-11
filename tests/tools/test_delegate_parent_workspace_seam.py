@@ -293,3 +293,228 @@ def test_model_workspace_authority_fields_are_not_forwarded(seam):
     assert output["status"] == "dispatched", output
     assert s.done.wait(25)
     assert s.selected == [str(project)]
+
+
+# ── Fresh gateway chat: no recorded cwd yet (C1.4 P2) ────────────────────────
+#
+# A bound gateway session that has not run a terminal command has no cwd
+# record. Its first command would start in the folder the gateway captured at
+# startup, so a helper must start there too instead of being blocked.
+
+
+def _start_folder(monkeypatch, path):
+    """Install the gateway's startup snapshot the way start_gateway() does."""
+    monkeypatch.setattr(tt, "_gateway_start_cwd", str(path) if path else None, raising=False)
+
+
+def _blank(s, name="chat-home"):
+    path = s.tmp / name
+    path.mkdir()
+    return path
+
+
+def _set_backend(s, backend):
+    s.config.write_text(s.config.read_text().replace("backend: local", f"backend: {backend}"))
+
+
+def test_fresh_gateway_chat_helper_starts_in_resolved_non_git_dir(seam, monkeypatch):
+    s = seam
+    chat_home = _blank(s)
+    _start_folder(monkeypatch, chat_home)
+    assert tt.get_session_cwd(s.key) is None
+    results = dispatch(s)
+    assert s.selected == [str(chat_home)], results
+    iso = results[0]["workspace_isolation"]
+    assert iso["status"] == "shared" and iso.get("no_checkout") is True, results
+    # The child really ran, and started in the resolved folder.
+    assert s.calls == [str(chat_home)]
+    # Snapshot lands on the CHILD only: the chat itself still has no record.
+    assert tt.get_session_cwd(s.key) is None
+    assert tt.get_session_cwd(s.task) is None
+    assert tt.get_session_cwd("default") is None
+
+
+def test_fresh_gateway_chat_resolved_git_repo_gets_a_real_worktree(seam, monkeypatch):
+    s = seam
+    project = repo(s.tmp / "project")
+    _start_folder(monkeypatch, project)
+    results = dispatch(s)
+    assert s.selected == [str(project)], results
+    iso = results[0]["workspace_isolation"]
+    assert iso["status"] == "isolated", results
+    worktree = Path(iso["path"])
+    assert worktree.parent.resolve() == (project / ".worktrees").resolve()
+    assert iso["branch"].startswith("clover-subagent/")
+    # The child's own `pwd` ran inside that worktree (clean ones are pruned
+    # afterwards, so existence on disk is not the proof).
+    assert s.calls == [str(worktree)]
+    assert tt.get_session_cwd(s.key) is None
+
+
+def test_fresh_gateway_chat_symlink_to_repo_gets_a_real_worktree(seam, monkeypatch):
+    s = seam
+    project = repo(s.tmp / "project")
+    link = s.tmp / "chat-link"
+    link.symlink_to(project, target_is_directory=True)
+    _start_folder(monkeypatch, link)
+    results = dispatch(s)
+    iso = results[0]["workspace_isolation"]
+    assert iso["status"] == "isolated", results
+    assert Path(iso["path"]).parent.resolve() == (project / ".worktrees").resolve()
+    assert tt.get_session_cwd(s.key) is None
+
+
+def test_fresh_gateway_chat_symlink_to_non_git_dir_still_runs(seam, monkeypatch):
+    s = seam
+    target = _blank(s, "plain")
+    link = s.tmp / "plain-link"
+    link.symlink_to(target, target_is_directory=True)
+    _start_folder(monkeypatch, link)
+    results = dispatch(s)
+    assert results[0]["workspace_isolation"]["status"] == "shared", results
+    assert len(s.calls) == 1
+
+
+def test_fresh_gateway_chat_unavailable_start_folder_stays_blocked(seam, monkeypatch):
+    s = seam
+    # A real repo sits at home and in the process env: neither may be borrowed.
+    home_repo = repo(Path.home() / "home-repo")
+    monkeypatch.setenv("TERMINAL_CWD", str(home_repo))
+    _start_folder(monkeypatch, s.tmp / "deleted-since-startup")
+    results = dispatch(s)
+    assert s.selected == [None], results
+    assert results[0]["workspace_isolation"]["status"] == "blocked"
+    assert s.calls == []
+    assert tt.get_session_cwd(s.key) is None
+
+
+def test_fresh_gateway_chat_without_snapshot_stays_blocked(seam, monkeypatch):
+    s = seam
+    _start_folder(monkeypatch, None)
+    results = dispatch(s)
+    assert s.selected == [None], results
+    assert results[0]["workspace_isolation"]["status"] == "blocked"
+    assert s.calls == []
+
+
+def test_cron_mutated_terminal_cwd_does_not_move_the_start_folder(seam, monkeypatch):
+    s = seam
+    chat_home = _blank(s)
+    cron_job_dir = repo(s.tmp / "cron-workdir")
+    _start_folder(monkeypatch, chat_home)
+    # A workdir cron job overwrites the process-global env for its whole run.
+    monkeypatch.setenv("TERMINAL_CWD", str(cron_job_dir))
+    results = dispatch(s)
+    assert s.selected == [str(chat_home)], results
+    assert results[0]["workspace_isolation"]["status"] == "shared"
+    assert not (cron_job_dir / ".worktrees").exists()
+
+
+def test_non_local_backend_still_refuses_with_a_start_folder(seam, monkeypatch):
+    s = seam
+    project = repo(s.tmp / "project")
+    _start_folder(monkeypatch, project)
+    _set_backend(s, "docker")
+    results = dispatch(s)
+    assert results[0]["workspace_isolation"]["status"] == "blocked", results
+    assert "backend" in results[0]["workspace_isolation"]["reason"]
+    assert s.calls == []
+    assert not (project / ".worktrees").exists()
+
+
+def test_interleaved_sessions_each_keep_their_own_start_folder(seam, monkeypatch):
+    s = seam
+    from gateway.session_context import set_session_vars
+    chat_home = _blank(s)
+    other_project = repo(s.tmp / "other-project")
+    other_key = "agent:main:telegram:dm:other-chat"
+    _start_folder(monkeypatch, chat_home)
+
+    def capture_as(key):
+        token = approval.set_current_session_key(key)
+        try:
+            set_session_vars(platform="telegram", source="telegram",
+                             session_key=key, session_id=s.task)
+            return dt._capture_parent_workspace(s.parent, s.task)[1]
+        finally:
+            approval.reset_current_session_key(token)
+            set_session_vars(platform="telegram", source="telegram",
+                             session_key=s.key, session_id=s.task)
+
+    # Chat B has run a command and moved; chat A is still fresh.
+    tt.record_session_cwd(other_key, str(other_project))
+    try:
+        assert capture_as(s.key) == str(chat_home)
+        assert capture_as(other_key) == str(other_project)
+        assert capture_as(s.key) == str(chat_home)
+        # Neither capture wrote a record for the other.
+        assert tt.get_session_cwd(s.key) is None
+        assert tt.get_session_cwd(other_key) == str(other_project)
+    finally:
+        tt.clear_session_cwd(other_key)
+    # And a real dispatch from the still-fresh chat uses its own folder.
+    results = dispatch(s)
+    assert s.selected == [str(chat_home)], results
+
+
+def test_recorded_chat_keeps_its_own_cwd_over_the_start_folder(seam, monkeypatch):
+    s = seam
+    chat_home, project = _blank(s), repo(s.tmp / "project")
+    _start_folder(monkeypatch, chat_home)
+    cd(s, project)
+    results = dispatch(s)
+    assert s.selected == [str(project)], results
+    assert results[0]["workspace_isolation"]["status"] == "isolated"
+
+
+def test_start_folder_is_not_used_below_depth_zero(seam, monkeypatch):
+    s = seam
+    _start_folder(monkeypatch, _blank(s))
+    s.parent._delegate_depth = 1
+    assert dt._capture_parent_workspace(s.parent, "orchestrator-child-task")[1] is None
+
+
+def test_start_folder_is_not_used_for_the_cli(seam, monkeypatch):
+    s = seam
+    from gateway.session_context import set_session_vars
+    start = _blank(s)
+    _start_folder(monkeypatch, start)
+    s.parent.platform = "cli"
+    approval.set_current_session_key("")
+    set_session_vars(platform="cli", source="cli", session_id=s.task)
+    # The CLI keeps its own startup-directory hint; the gateway snapshot is
+    # never consulted for it.
+    assert dt._capture_parent_workspace(s.parent, s.task)[1] != str(start)
+
+
+@pytest.mark.parametrize("with_override", [False, True])
+def test_terminal_first_command_runs_where_the_helper_resolver_says(seam, monkeypatch, with_override):
+    """Parity: the delegate fallback and the terminal share one resolver."""
+    s = seam
+    start = _blank(s, "start-folder")
+    monkeypatch.setenv("TERMINAL_CWD", str(start))
+    _start_folder(monkeypatch, start)
+    expected = str(start)
+    if with_override:
+        overridden = _blank(s, "workspace-override")
+        tt.register_task_env_overrides(s.task, {"cwd": str(overridden)})
+        expected = str(overridden)
+    resolved = tt.resolve_first_command_cwd(
+        s.task, s.key, default_cwd=str(start), env_type="local")
+    assert resolved == expected
+    out = json.loads(s.parent._invoke_tool(
+        "terminal", {"command": "pwd", "timeout": 10}, s.task))
+    assert out["exit_code"] == 0, out
+    assert out["output"].strip() == resolved
+
+
+def test_capture_gateway_start_cwd_is_write_once_and_absolute_only(monkeypatch):
+    monkeypatch.setattr(tt, "_gateway_start_cwd", None, raising=False)
+    assert tt.get_gateway_start_cwd() is None
+    assert tt.capture_gateway_start_cwd("") is False
+    assert tt.capture_gateway_start_cwd("relative/dir") is False
+    assert tt.capture_gateway_start_cwd(None) is False
+    assert tt.get_gateway_start_cwd() is None
+    assert tt.capture_gateway_start_cwd("/first/folder") is True
+    assert tt.capture_gateway_start_cwd("/second/folder") is False
+    assert tt.get_gateway_start_cwd() == "/first/folder"

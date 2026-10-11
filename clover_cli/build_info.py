@@ -25,15 +25,23 @@ Behaviour:
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from typing import Optional
 
 # Path is resolved relative to this module so it works regardless of cwd —
 # matches the pattern used by ``banner._resolve_repo_dir``.
-_BUILD_SHA_FILE = Path(__file__).parent.parent / ".clover_build_sha"
+_PROJECT_ROOT = Path(__file__).parent.parent
+_BUILD_SHA_FILE = _PROJECT_ROOT / ".clover_build_sha"
 
 
 _code_identity_cache: Optional[dict] = None
+# The identity this process loaded at startup.  Unlike ``_code_identity_cache``
+# it is never refreshed: ``get_code_identity(refresh=True)`` re-reads on-disk
+# HEAD after an update pulled new code, which is exactly when "what is this
+# process running?" must not change.  Written once by ``capture_boot_identity``.
+_boot_identity: Optional[dict] = None
+_boot_identity_lock = threading.Lock()
 
 
 def _resolve_git_head_sha(project_root: Path) -> Optional[str]:
@@ -98,29 +106,11 @@ def _resolve_git_head_sha(project_root: Path) -> Optional[str]:
     return None
 
 
-def get_code_identity(refresh: bool = False) -> dict:
-    """Return the running checkout's code identity as a dict.
-
-    Shape: ``{"sha": full-or-short sha | None, "short_sha": str | None,
-    "version": pyproject version | None, "source": "git" | "build-file" |
-    "unknown"}``.
-
-    Resolution order mirrors the banner/dump callsites: live ``git
-    rev-parse`` for source installs, the baked ``.clover_build_sha`` for
-    Docker images (no ``.git`` inside the published image), else unknown.
-
-    Cached per process — code identity cannot change while a process is
-    running (an updated checkout requires a restart to take effect, which
-    is exactly the property the fleet version verification relies on).
-    Never raises; every field degrades to ``None`` independently.
-    """
-    global _code_identity_cache
-    if _code_identity_cache is not None and not refresh:
-        return dict(_code_identity_cache)
-
+def _resolve_code_identity() -> dict:
+    """Read the checkout's code identity from disk right now (no caching)."""
     sha: Optional[str] = None
     source = "unknown"
-    project_root = Path(__file__).parent.parent
+    project_root = _PROJECT_ROOT
     resolved = _resolve_git_head_sha(project_root)
     if resolved:
         sha = resolved
@@ -141,13 +131,64 @@ def get_code_identity(refresh: bool = False) -> dict:
     except Exception:
         version = None
 
-    _code_identity_cache = {
+    return {
         "sha": sha,
         "short_sha": sha[:8] if sha else None,
         "version": version,
         "source": source,
     }
+
+
+def get_code_identity(refresh: bool = False) -> dict:
+    """Return the running checkout's code identity as a dict.
+
+    Shape: ``{"sha": full-or-short sha | None, "short_sha": str | None,
+    "version": pyproject version | None, "source": "git" | "build-file" |
+    "unknown"}``.
+
+    Resolution order mirrors the banner/dump callsites: live ``git
+    rev-parse`` for source installs, the baked ``.clover_build_sha`` for
+    Docker images (no ``.git`` inside the published image), else unknown.
+
+    Cached per process — code identity cannot change while a process is
+    running (an updated checkout requires a restart to take effect, which
+    is exactly the property the fleet version verification relies on).
+    ``refresh=True`` re-reads disk: the update paths use it to learn what
+    was just pulled, so after that the cache describes the CHECKOUT, not
+    necessarily this process; ask ``get_boot_identity()`` for the latter.
+    Never raises; every field degrades to ``None`` independently.
+    """
+    global _code_identity_cache
+    if _code_identity_cache is not None and not refresh:
+        return dict(_code_identity_cache)
+
+    _code_identity_cache = _resolve_code_identity()
     return dict(_code_identity_cache)
+
+
+def capture_boot_identity() -> dict:
+    """Record the code identity this process started on.  First call wins.
+
+    Call once, early in a long-lived process (the gateway does it in
+    ``start_gateway``), while on-disk HEAD still matches the modules being
+    imported.  Reads disk directly rather than the refreshable cache, and is
+    never changed afterwards.  Returns a copy.  Never raises.
+    """
+    global _boot_identity
+    with _boot_identity_lock:
+        if _boot_identity is None:
+            try:
+                _boot_identity = _resolve_code_identity()
+            except Exception:
+                _boot_identity = {"sha": None, "short_sha": None, "version": None, "source": "unknown"}
+        return dict(_boot_identity)
+
+
+def get_boot_identity() -> Optional[dict]:
+    """The identity captured by ``capture_boot_identity``, or ``None`` if this
+    process never captured one (callers must treat that as "unknown")."""
+    with _boot_identity_lock:
+        return dict(_boot_identity) if _boot_identity is not None else None
 
 
 def get_build_sha(short: int = 8) -> Optional[str]:

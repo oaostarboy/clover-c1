@@ -36,6 +36,9 @@ from urllib.parse import urlsplit, urlunsplit
 
 from toolsets import TOOLSETS
 from agent.interrupt_compat import request_hard_interrupt
+from agent.turn_notices import neutralize_marker as _neutralize_marker
+from agent.turn_notices import runtime_note as _runtime_note
+from agent.turn_notices import vouch_runtime_result as _vouch_runtime_result
 
 # Sentinel value used by the runtime provider system for providers that are
 # not natively known (named custom providers, third-party aggregators, etc.).
@@ -1073,6 +1076,62 @@ def _get_orchestrator_enabled() -> bool:
     return True
 
 
+def _get_fanout_delivery() -> str:
+    """How a background fan-out reports back: ``joined`` (default) or ``each``.
+
+    ``joined`` re-enters the root once, with every helper's result in task
+    order; ``each`` is the original one-turn-per-helper behaviour. Anything
+    unrecognised keeps the default.
+    """
+    cfg = _load_config()
+    value = cfg.get("fanout_delivery", "joined")
+    if isinstance(value, str) and value.strip().lower() == "each":
+        return "each"
+    return "joined"
+
+
+_DEFAULT_FANOUT_STRAGGLER_SECONDS = 300.0
+
+
+def _get_fanout_straggler_seconds() -> float:
+    """Joined fan-out: how long to wait for the LAST helper once the others
+    are done (``delegation.fanout_straggler_seconds``; 0 = never cut a wait
+    short, the stall monitor alone bounds it). Invalid values keep the default."""
+    cfg = _load_config()
+    value = cfg.get("fanout_straggler_seconds", _DEFAULT_FANOUT_STRAGGLER_SECONDS)
+    if isinstance(value, bool):
+        return _DEFAULT_FANOUT_STRAGGLER_SECONDS
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_FANOUT_STRAGGLER_SECONDS
+    return seconds if seconds > 0 else 0.0
+
+
+def _request_identity(parent_agent, ticket) -> Dict[str, Any]:
+    """The originating request a background batch answers.
+
+    ``turn_id`` is the root turn that dispatched it; ``request_id`` and
+    ``generation`` come from the delegation checkpoint ticket when one is
+    active. Persisted with the batch so a result is delivered to, and framed
+    as the answer to, that request rather than whatever chat is newest.
+    """
+    identity: Dict[str, Any] = {}
+    turn_id = str(getattr(parent_agent, "_current_turn_id", "") or "")
+    if turn_id:
+        identity["turn_id"] = turn_id
+    if ticket is not None:
+        generation = getattr(ticket, "generation", None)
+        if isinstance(generation, int):
+            identity["generation"] = generation
+        request_id = str(
+            getattr(getattr(ticket, "checkpoint", None), "request_id", "") or ""
+        )
+        if request_id:
+            identity["request_id"] = request_id
+    return identity
+
+
 def _get_inherit_mcp_toolsets() -> bool:
     """Whether narrowed child toolsets should keep the parent's MCP toolsets."""
     cfg = _load_config()
@@ -1359,13 +1418,57 @@ def _capture_parent_workspace(parent_agent, task_id: Optional[str] = None):
         session_key = raw_task
     key = session_key or raw_task
     cwd = get_session_cwd(key) if key else None
+    platform = getattr(parent_agent, "platform", None)
     if cwd is None and not session_key:
-        platform = getattr(parent_agent, "platform", None)
         if platform in (None, "", "cli"):
             # Single-session CLI only; capture now, never inside queued work.
             cwd = get_session_cwd("default") if not key else None
             cwd = cwd or _resolve_workspace_hint(parent_agent)
+    if (
+        cwd is None
+        and key
+        and platform not in (None, "", "cli")
+        and not (isinstance(depth, int) and depth > 0)
+    ):
+        # A bound gateway/API chat that has not run a terminal command yet has
+        # no record, but its first command would start in the gateway's
+        # startup folder. Resolve that same answer now (child-only: the chat
+        # itself is not given a record).
+        cwd = _resolve_fresh_gateway_chat_cwd(raw_task, key)
     return (raw_task or session_key or None, cwd)
+
+
+def _resolve_fresh_gateway_chat_cwd(
+    task_id: str, session_key: str
+) -> Optional[str]:
+    """Where a gateway chat with no cwd record would run its first command.
+
+    Uses the terminal tool's own resolver with the folder the gateway process
+    froze at startup, never the live ``TERMINAL_CWD`` (cron rewrites it) and
+    never home. Returns ``None`` — today's behaviour, required isolation
+    blocks — unless the process is the gateway, the backend is local, and the
+    result is an existing absolute directory.
+    """
+    from tools import subagent_worktree
+    from tools.terminal_tool import get_gateway_start_cwd, resolve_first_command_cwd
+
+    start = get_gateway_start_cwd()
+    # An empty/"default" key would read the shared CLI record, which belongs
+    # to no gateway chat. Never resolve on its behalf.
+    if session_key in ("", "default"):
+        return None
+    if not start or not subagent_worktree.local_backend_active():
+        return None
+    try:
+        cwd = resolve_first_command_cwd(
+            task_id or session_key, session_key, default_cwd=start, env_type="local"
+        )
+    except Exception as exc:
+        logger.debug("fresh gateway chat cwd resolution failed: %s", exc)
+        return None
+    if isinstance(cwd, str) and os.path.isabs(cwd) and os.path.isdir(cwd):
+        return cwd
+    return None
 
 
 def _resolve_workspace_hint(parent_agent) -> Optional[str]:
@@ -1563,6 +1666,18 @@ def _build_child_progress_callback(
 
         if event_type == "subagent.complete":
             _relay("subagent.complete", preview=preview, **kwargs)
+            return
+
+        if event_type == "subagent.awaiting":
+            # The root is waiting on this helper (every other one is done), or
+            # has stopped waiting. Card-only signal, like late_result.
+            _relay("subagent.awaiting", awaiting=bool(kwargs.get("awaiting", True)))
+            return
+
+        if event_type == "subagent.late_result":
+            # Fan-out helper finished after the combined report went out.
+            # Card-only signal (see tui_gateway _GATEWAY_ONLY_SUBAGENT_EVENTS).
+            _relay("subagent.late_result")
             return
 
         if event_type == "subagent.queued":
@@ -3447,8 +3562,15 @@ def _run_single_child(
         # it instead of silently accepting zero-content "success".
         _empty_sentinel = summary.strip() == "(empty)"
 
+        # A child turn that ENDED failed (a content-policy block, an exhausted
+        # retry, a persistence failure) still carries user-facing text in
+        # ``final_response``; that text is the refusal, not the work.
+        _turn_failed = bool(result.get("failed")) or bool(result.get("error"))
+
         if interrupted:
             status = "interrupted"
+        elif _turn_failed:
+            status = "failed"
         elif summary and not _empty_sentinel:
             # A summary means the subagent produced usable output.
             # exit_reason ("completed" vs "max_iterations") already
@@ -3498,6 +3620,10 @@ def _run_single_child(
         # Determine exit reason
         if interrupted:
             exit_reason = "interrupted"
+        elif _turn_failed:
+            # Distinct from "max_iterations": the turn ended on an error, it
+            # did not run out of steps.
+            exit_reason = "error"
         elif completed:
             exit_reason = "completed"
         else:
@@ -3571,7 +3697,11 @@ def _run_single_child(
         if isinstance(_tier_fallback, str) and _tier_fallback:
             entry["tier_fallback"] = _tier_fallback
         if status == "failed":
-            entry["error"] = result.get("error", "Subagent did not produce a response.")
+            entry["error"] = (
+                result.get("error")
+                or result.get("failure_reason")
+                or "Subagent did not produce a response."
+            )
 
         # T1-24: schema-validation outcome — emitted ONLY when a schema was
         # requested, so legacy (schema-less) payloads keep their exact shape.
@@ -4143,8 +4273,24 @@ def _validate_batch_tasks(task_list: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
-def _background_dispatch_note(n: int) -> str:
-    """Model-facing note returned when a background delegation is accepted."""
+def _background_dispatch_note(n: int, joined: bool = False) -> str:
+    """Model-facing note returned when a background delegation is accepted.
+
+    ``joined`` (``delegation.fanout_delivery: joined``) tells the model the
+    parallel results come back together, not one by one. This is a per-call
+    tool result, so it never touches the cached prompt or tool schemas.
+    """
+    if n > 1 and joined:
+        return (
+            f"{n} subagents are running in parallel in the background. You "
+            f"and the user can keep working. Their results come back to you "
+            f"together, once, in task order, when they have finished — a "
+            f"helper with no result is marked incomplete there, and a "
+            f"straggler's result follows separately. Do not wait or poll — "
+            f"just continue. If you already told the user a result from a "
+            f"live transcript, do not announce that same result again when "
+            f"the combined results arrive."
+        )
     if n == 1:
         return (
             "Subagent is running in the background. You and the user can "
@@ -4180,6 +4326,7 @@ def delegate_task(
     parent_agent=None,
     credentials_cfg: Optional[Dict[str, Any]] = None,
     parent_task_id: Optional[str] = None,
+    apply_default_tier: bool = True,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks, or control
@@ -4235,6 +4382,19 @@ def delegate_task(
     # own before siblings finish. The join does not send a second message when
     # every child was already published.
     background = is_truthy_value(background, default=False) if background is not None else False
+
+    # Per-message foreground time limit (agent.foreground_time_limit). It only
+    # applies to a root turn on a surface that can deliver a detached helper,
+    # so while it applies EVERY spawn is a background helper: no foreground
+    # child wait exists in a limited turn. (The root dispatcher already passes
+    # background=True; this covers direct callers.)
+    from agent import foreground_time_limit as _fg_limit
+
+    _fg_limited = _fg_limit.remaining_seconds(parent_agent) is not None
+    _fg_forced_background = False
+    if not background and _fg_limit.forces_background(parent_agent):
+        background = True
+        _fg_forced_background = True
 
     # Depth limit — configurable via delegation.max_spawn_depth,
     # default 2 for parity with the original MAX_DEPTH constant.
@@ -4423,6 +4583,10 @@ def delegate_task(
     from agent.delegation_checkpoint import ticket_for as _checkpoint_ticket_for
 
     _checkpoint_ticket = _checkpoint_ticket_for(parent_agent)
+    # The request this batch answers, read once here on the calling thread:
+    # a dispatch that settles after the parent began a later turn must still
+    # carry the turn it was admitted in, never the parent's current one.
+    _admitted_identity = _request_identity(parent_agent, _checkpoint_ticket)
     # Capture on the trusted caller, before child construction and before any
     # thread handoff. Queued work must not re-read a later turn's parent/cwd.
     _parent_workspace = _capture_parent_workspace(parent_agent, parent_task_id)
@@ -4432,7 +4596,12 @@ def delegate_task(
     # batch inline instead. Other callers keep the historical fallbacks.
     from agent.delegation_checkpoint import checkpoint_applies as _checkpoint_applies
 
-    _strict_background = bool(background) and _checkpoint_applies(parent_agent)
+    # A time-limited root is held to the same rule: a helper that cannot be
+    # accepted (capacity, persistence, scheduling, construction) is an error
+    # the model sees, never an inline wait past the limit.
+    _strict_background = bool(background) and (
+        _checkpoint_applies(parent_agent) or _fg_limited
+    )
 
     def _reject_background(reason: str, error: str, built=()) -> str:
         return _strict_background_rejection(
@@ -4460,6 +4629,23 @@ def delegate_task(
             return _reject_background(
                 "capacity", "Async delegation capacity reached."
             )
+
+    # delegation.default_tier: the tier for tasks that name none. Resolved once
+    # per dispatch (local credential probe only, no network) and only when some
+    # task actually needs it. Internal callers opt out with
+    # ``apply_default_tier=False`` (the review engine; never model-facing), and a
+    # per-call ``credentials_cfg`` route is explicit already. Dispatch-time
+    # only: nothing here touches the tool schema.
+    _default_tier = None
+    if (
+        apply_default_tier
+        and not credentials_cfg
+        and any(
+            not (isinstance(t.get("tier"), str) and t["tier"].strip())
+            for t in task_list
+        )
+    ):
+        _default_tier = _resolve_default_tier(cfg, parent_agent)
 
     # Build all child agents on the main thread (thread-safe construction).
     # _build_child_preserving_parent_tools saves/restores the parent's
@@ -4508,6 +4694,29 @@ def delegate_task(
                             f"tier '{tier_name}' credential resolution failed "
                             f"({exc}); using the default model."
                         )
+            elif _default_tier is not None:
+                # Configured default for a task that named no tier. Any
+                # failure keeps the batch-level creds and is logged only
+                # (no task_tier_fallback: it would surface in the result).
+                _default_name, _default_match = _default_tier
+                # delegation.request_overrides is part of the route's request
+                # settings, not of which model runs: hand it through so it
+                # merges exactly as it does on the pin / inherit path.
+                _default_route = dict(_default_match)
+                _explicit_overrides = cfg.get("request_overrides")
+                if isinstance(_explicit_overrides, dict) and _explicit_overrides:
+                    _default_route["request_overrides"] = _explicit_overrides
+                try:
+                    task_creds = _resolve_delegation_credentials(
+                        _default_route, parent_agent
+                    )
+                except ValueError as exc:
+                    logger.info(
+                        "delegation.default_tier '%s' credential resolution "
+                        "failed (%s); using the parent model",
+                        _default_name,
+                        exc,
+                    )
 
             try:
                 child = _build_child_preserving_parent_tools(
@@ -4934,9 +5143,18 @@ def delegate_task(
                         logger.debug("Live transcript finalize failed", exc_info=True)
                     if idx < len(live_paths):
                         entry["live_transcript"] = live_paths[idx]
-                publish_batch_child_completion(
+                outcome = publish_batch_child_completion(
                     entry, delegation_id=_batch_delegation_id
                 )
+                if outcome == "late":
+                    # The combined report already went out without this
+                    # helper; leave a note on its card (card-only event).
+                    late_cb = getattr(children[idx][2], "tool_progress_callback", None)
+                    if callable(late_cb):
+                        try:
+                            late_cb("subagent.late_result")
+                        except Exception:
+                            logger.debug("Late-result card note failed", exc_info=True)
 
             return _execute_and_aggregate(
                 honor_parent_interrupt=False, on_child_complete=_publish_child
@@ -4983,9 +5201,23 @@ def delegate_task(
                     parts.append(None)
             return tuple(parts), in_tool
 
+        def _straggler_notify(indexes, waiting):
+            # Card note: "waiting on helper N" while the root holds the
+            # combined report for the last helper (card-only event).
+            for idx in indexes:
+                if not (isinstance(idx, int) and 0 <= idx < len(children)):
+                    continue
+                cb = getattr(children[idx][2], "tool_progress_callback", None)
+                if callable(cb):
+                    try:
+                        cb("subagent.awaiting", awaiting=bool(waiting))
+                    except Exception:
+                        logger.debug("Straggler card note failed", exc_info=True)
+
         _goals = [t["goal"] for t in task_list]
         from tools.async_delegation import _new_delegation_id
         _batch_delegation_id = live_deleg_id or _new_delegation_id()
+        _fanout_mode = _get_fanout_delivery()
         dispatch = dispatch_async_delegation_batch(
             goals=_goals,
             context=context,
@@ -5005,22 +5237,53 @@ def delegate_task(
             # returned delegation_id matches cache/delegation/live/<id>/.
             delegation_id=_batch_delegation_id,
             progress_fn=_batch_progress,
+            fanout_delivery=_fanout_mode,
+            request_identity=dict(_admitted_identity),
+            straggler_seconds=(
+                _get_fanout_straggler_seconds() if _fanout_mode == "joined" else 0
+            ),
+            straggler_notify=_straggler_notify,
         )
 
         if dispatch.get("status") == "dispatched":
+            # This instance made the dispatch: its own completion turn may earn
+            # the short verification window (agent.foreground_time_limit).
+            _sids = [
+                getattr(_c, "_subagent_id", None) for _c in _child_agents
+            ]
+            _fg_limit.note_own_dispatch(
+                parent_agent,
+                dispatch.get("delegation_id"),
+                goals=_goals,
+                subagent_ids=[s for s in _sids if isinstance(s, str) and s],
+                request_identity=dict(_admitted_identity),
+            )
             n = len(_goals)
-            note = _background_dispatch_note(n)
+            note = _background_dispatch_note(n, joined=_fanout_mode == "joined")
+            if _fg_forced_background:
+                note = (
+                    _runtime_note(
+                        "The foreground time limit applies to this message, "
+                        "so background=true was applied for you: this ran as "
+                        "a background helper, not in the foreground. Tell the "
+                        "user briefly what the helper is doing and that it "
+                        "will report back."
+                    )
+                    + " "
+                    + note
+                )
             payload = {
                 "status": "dispatched",
                 "mode": "background",
                 "count": n,
                 "delegation_id": dispatch["delegation_id"],
-                "goals": _goals,
+                # Echoed back to the model: a copy of the marker (in any
+                # spelling) in a goal must not read as Clover's own note.
+                "goals": [_neutralize_marker(g) if isinstance(g, str) else g for g in _goals],
                 "note": note,
             }
-            _sids = [
-                getattr(_c, "_subagent_id", None) for _c in _child_agents
-            ]
+            if _fg_forced_background:
+                payload["foreground_time_limit"] = True
             if _checkpoint_ticket is not None:
                 # The accepted job owns this request's remaining phase. A
                 # ticket that no longer has the authority gets False and the
@@ -5054,7 +5317,10 @@ def delegate_task(
                     "task). Read or `tail -f` these paths at any time to watch "
                     "a child work while it runs."
                 )
-            return json.dumps(payload, ensure_ascii=False)
+            _result = json.dumps(payload, ensure_ascii=False)
+            # Clover wrote the marked note in it: keep the marker through the
+            # tool-result funnel (which defangs any other copy).
+            return _vouch_runtime_result(_result, "delegate_task") if _fg_forced_background else _result
 
         if _strict_background:
             # The async unit was never accepted: nothing is running, so
@@ -5553,6 +5819,64 @@ def _resolve_tier(
     return None
 
 
+def _delegation_pin_configured(cfg: dict) -> bool:
+    """True when ``delegation.provider`` / ``model`` / ``base_url`` is set.
+
+    Any of them routes every untiered child onto one explicit endpoint; that
+    blanket route is the user's choice and outranks ``default_tier``.
+    """
+    return any(str(cfg.get(key) or "").strip() for key in ("provider", "model", "base_url"))
+
+
+def _resolve_default_tier(
+    cfg: dict, parent_agent=None
+) -> Optional[tuple[str, Dict[str, str]]]:
+    """Resolve ``delegation.default_tier`` for tasks that named no tier.
+
+    Returns ``(tier_name, match)``, or ``None`` when the setting is empty, a
+    ``delegation.provider/model`` pin is configured (the pin wins), or the name
+    does not resolve to an authenticated candidate. The ``None`` cases other
+    than "empty" are logged only: the caller falls back to today's
+    pin-or-inherit path and the tool result says nothing about it (the model
+    would narrate it to the user).
+    """
+    raw = cfg.get("default_tier")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    name = raw.strip()
+    if _delegation_pin_configured(cfg):
+        logger.info(
+            "delegation.default_tier '%s' ignored: a delegation.provider/model "
+            "pin is configured and applies to untiered tasks",
+            name,
+        )
+        return None
+    tiers = _effective_tiers(cfg)
+    if not tiers:
+        logger.info(
+            "delegation.default_tier '%s' ignored: delegation.tiers is empty "
+            "or disabled; using the parent model",
+            name,
+        )
+        return None
+    if name not in tiers:
+        logger.info(
+            "delegation.default_tier '%s' is not a tier in delegation.tiers; "
+            "using the parent model",
+            name,
+        )
+        return None
+    match = _resolve_tier(name, cfg, parent_agent)
+    if match is None:
+        logger.info(
+            "delegation.default_tier '%s' has no authenticated candidate; "
+            "using the parent model",
+            name,
+        )
+        return None
+    return name, match
+
+
 def _resolved_tiers(cfg: dict, parent_agent=None) -> Dict[str, Dict[str, str]]:
     """Every tier name that currently resolves, in fixed display order."""
     tiers = _effective_tiers(cfg)
@@ -5669,16 +5993,17 @@ def _build_top_level_description(
         "you. Pass every task in `tasks` — one entry spawns one subagent, "
         "several run in parallel (limit in the tasks description).\n\n"
         "Runs in the background: dispatch returns immediately with live "
-        "transcript paths. One subagent's result re-enters on its own. "
-        "Each returns when finished, not as one combined "
-        "message at the end. Do NOT wait or poll; continue other work. "
+        "transcript paths. Several tasks in one call report back together "
+        "by default (the dispatch note says how each call reports). "
+        "Do NOT wait or poll; continue other work. "
         "While children run, `action` "
         "(list/steer/stop) controls them live — steer when a transcript shows "
         "a child drifting.\n\n"
-        "USE FOR: reasoning-heavy subtasks, work that would flood your context "
-        "with intermediate data, or independent parallel workstreams.\n"
+        "USE FOR: reasoning-heavy subtasks, work flooding your context with "
+        "intermediate data, independent parallel workstreams, long scripts, "
+        "many lookups.\n"
         "DO NOT USE FOR (use these instead):\n"
-        "- Mechanical multi-step work with no reasoning needed -> execute_code\n"
+        "- Short mechanical steps (a few lines) -> execute_code\n"
         "- A single tool call -> call the tool directly\n"
         "- Tasks needing user interaction -> subagents cannot ask questions\n"
         "- Durable work that must survive this session -> cronjob or "
@@ -5699,19 +6024,17 @@ def _build_top_level_description(
     )
 
     # Plan-first delegation guidance applies regardless of tiers; the
-    # value-routing sentence only makes sense when at least one tier
-    # actually resolves for this user (see _resolved_tiers).
+    # tier sentence only makes sense when at least one tier actually
+    # resolves for this user (see _resolved_tiers).
     plan_first = (
-        "\n\nPLAN FIRST, THEN DELEGATE: decide the approach yourself, then "
-        "give each child the concrete plan in `context`: exact files/paths, "
-        "steps, constraints, and how to verify done. Children should "
-        "execute, not re-plan; this saves tokens."
+        "\n\nPLAN FIRST, THEN DELEGATE: decide the approach, then give each "
+        "child its plan in `context`: exact paths, steps, constraints, how "
+        "to verify done. Children execute, not re-plan."
     )
     if resolved_tiers:
         plan_first += (
-            " Pick `tier` per task for value: code for coding, read for "
-            "large reading, check for adversarial review, fast for quick "
-            "chores, deep only for genuinely hard problems."
+            " Omit `tier` unless clearly review (check) or clearly hard "
+            "(deep); the configured default is used otherwise."
         )
 
     return base_description + plan_first
@@ -5959,8 +6282,10 @@ def _model_background_value(args: dict, parent_agent=None) -> bool:
 
     Delegations from the top-level agent always run in the background — the
     model does not choose. A single task re-enters as one result. A fan-out
-    publishes each child as it finishes and does not send a second combined
-    message when every child was already published. The one
+    reports back per ``delegation.fanout_delivery``: together, once, in task
+    order (``joined``, the default) or each child as it finishes (``each``,
+    with no second combined message when every child was already published).
+    The one
     exception is a delegation from an orchestrator subagent (depth > 0), which
     needs its workers' results within its own turn. The live path is
     ``run_agent._dispatch_delegate_task``; this lambda mirrors it for the rare

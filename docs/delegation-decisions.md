@@ -5,6 +5,217 @@ work, it plans first and delegates useful independent execution or research
 without requiring you to request subagents. Small tasks can stay direct, and
 explicit requests not to use subagents take precedence.
 
+## Choosing how to work: four modes
+
+Each human message is sized before the root starts (see "The router and its
+backstop" below) and the root follows the resulting work plan. One short block
+in the system prompt (built once, byte-stable for the conversation, along with
+the tool schemas) says how to treat that plan; the four ways to work are:
+
+| Mode | When | What the root does |
+| --- | --- | --- |
+| **Direct** | A quick answer, or brief lookups finished in a couple of minutes with a handful of tool calls; not sustained research or builds | Does it in the chat. |
+| **Single helper** | A big job with one thread of work (long report, build, long-running command) | Dispatches one `delegate_task` task with the whole plan in `context`, says in a sentence or two what is running, and ends the turn. |
+| **Parallel helpers** | Many items each needing their own research, or independent parts | One task per part, each with its own plan, grouped within tool capacity. |
+| **Staged** | Later work needs earlier output (build, then review) | Dispatches the first stage only; when its result returns, checks the artifacts, then dispatches the next stage, carrying scope, acceptance checks and artifact references forward. |
+
+- **What it picks.** The default is direct. Parallel is for fifteen or more
+  items that each need their own facts, five or more named products or pages
+  each read separately, or unrelated fixes; staged is build -> test -> review
+  chains; single is one large cohesive job (long report, a command that runs
+  for minutes). A closing merge, ranking, table or test run is never a task of
+  its own. Calibrate with `scripts/eval/delegation_router.py` against
+  `tests/eval/delegation_modes.jsonl` and the held-out paraphrases in
+  `tests/eval/delegation_router_heldout.jsonl` (the rubric is tuned on the
+  first only).
+- **The user's words win.** "Do it yourself" means direct even for a big job;
+  "use helpers" means a helper even for a small one.
+- **Signals for big:** more than a couple of minutes - a dozen or more items
+  each needing lookups, commands that run for minutes, multi-step research or
+  builds. They live in the router's sizing prompt, not in the system prompt.
+- **Every worker is briefed:** scope, inputs, acceptance checks and ownership
+  go in the task's `context`.
+- **After an accepted dispatch** the root acknowledges and ends the turn; it
+  does not poll. A rejected dispatch is not a hand-off: the job is still the
+  root's. It verifies the results before saying the work is done.
+- **Private internals, honest blockers.** Limits, timeouts and retries are never
+  mentioned to the user; a genuine blocker is reported plainly.
+- **Who gets what:** a root agent with `delegate_task`, on a surface that can
+  deliver a helper's result later (messaging platforms, CLI / TUI), gets the
+  block. A root that cannot (cron, one-shot / batch runs, kanban workers,
+  webhooks, the API server without a session to wake) gets a short
+  delivery-neutral note instead - plan first, delegate where supported,
+  integrate and verify, handle quick work directly - with no "end your turn" or
+  "don't poll". Subagents, delegated children and agents without
+  `delegate_task` get neither. Each is decided once when the prompt is built,
+  and none depends on the time limit's setting.
+- **Tool description.** `delegate_task` tells the model to omit `tier` unless
+  the task is clearly review (`check`) or clearly hard (`deep`), and that long
+  scripts, long code cells and many lookups are reasons to hand off rather than
+  run inline.
+
+## The router and its backstop
+
+`delegation.router` (on by default) applies exactly where the foreground time
+limit does: a root chat agent with `delegate_task` on a surface that can
+deliver a helper's result later, with the limit on. It never runs for helper
+completions, multimodal messages, or a bare greeting / thank-you.
+
+- **Sizing.** Before the first model call of a human message, a fast auxiliary
+  model (`auxiliary.delegation_router`, preferring the provider's fast tier)
+  returns `{mode, tasks: [{goal, depends_on, acceptance}], reason}`. The reply
+  is schema-validated and the mode is derived from the task DAG in code - no
+  tasks is direct, one is single, several independent are parallel, any
+  dependency is staged - never taken on the model's word. One retry on an
+  invalid reply, a `timeout_seconds` (8) budget, then no plan and the turn runs
+  exactly as it did before the router. A warm call answers in about 1.5 s
+  (p95 about 3 s); the first call in a fresh process also pays one-time SDK
+  imports and can miss the budget, which is the "no plan" path.
+- **The user's words win.** "Do it yourself" is direct with no sizing call and
+  no backstop; "use helpers" is at least single.
+- **Delivery.** The plan is a `[Clover runtime] work plan:` block on the API
+  copy of that turn's user message, persisted beside the stored text like
+  prefetch context. The stored text stays clean, no message is added, and the
+  cached prefix is untouched.
+- **Backstop.** When a not-direct plan's root keeps doing the work itself - more
+  than `backstop_calls` (2) work tool calls or `backstop_seconds` (60) without
+  calling `delegate_task` - its next work call is refused and the runtime
+  dispatches the plan through the `delegate_task` handler: one call for all
+  independent tasks; for a staged plan the first stage, with the next stage
+  bound through `follow_through` where that mechanism can hold it (one task,
+  then one task). The refused call's result is the hand-off ("Handed off to
+  helpers ..."), after which the root ends its turn. Nothing already running is
+  stopped, and what the turn had already gathered goes into each helper's
+  context. If the dispatch fails the result says so and the root carries on
+  under the time limit below.
+- **Direct and no plan** are untouched: the time limit stays the only bound.
+
+```yaml
+delegation:
+  router:
+    enabled: true
+    timeout_seconds: 8
+    backstop_calls: 2
+    backstop_seconds: 60
+auxiliary:
+  delegation_router:
+    provider: auto
+    model: auto
+```
+
+## The foreground time limit
+
+Instead of a work-call cap, the main chat agent gets a **time limit per user
+message**: `delegation.foreground_time_limit_seconds`, default **300** (5
+minutes). `0`, `null`, `false`, a boolean or any invalid value turns it off.
+The goal: a message gets a final answer close to that limit, and whatever is
+left is already running in a background helper.
+
+```yaml
+delegation:
+  foreground_time_limit_seconds: 300
+```
+
+- **Clock.** Monotonic; it starts when a turn that consumes a human message
+  begins. Helper completions, watches and restart wake-ups
+  (`internal_notification` turns) never start a clock: they inherit the
+  episode's remaining time, and when none is left (or a freshly restarted
+  process has no episode at all) they run in finish mode from the start, which
+  still allows reads and the final answer so a helper's result can be
+  integrated. Steering or redirecting a running turn does not reset it; a
+  follow-up message gets a fresh 5 minutes when it is consumed as its own turn.
+- **Up front, and quiet.** The limit is a backstop. The mode-choice block
+  (above) already tells the agent to hand clearly big jobs to a background
+  helper at the start and to do quick things itself. Every model-facing limit
+  text (notice, refusal, forced-background result) tells the model not to
+  mention the limit, timeouts or failed attempts to the user. The hard-stop
+  request asks for a plain summary that keeps internal mechanics out of the
+  reply; it is stored with `display_kind="hidden"` (like the max-iterations
+  request) so no transcript, resume or export shows it as something the user
+  wrote, while the provider still replays it unchanged. The hard-stop fallback
+  wording the user can read is neutral and never carries an error message. A
+  refused tool shows as "skipped" on the CLI activity feed and in TUI /
+  desktop tool rows; only the model reads the refusal text.
+- **80%.** One notice, attached only to a tool result produced by the current
+  iteration that has not been sent yet (never to an earlier turn or a
+  caller-owned message): hand the rest to a background helper with
+  `delegate_task` (`background=true`, full context), tell the user, and end the
+  reply, unless the rest is a quick finish. Without `delegate_task` the notice
+  says to finish now.
+- **100% ("finish mode").** For the rest of the turn the following are refused:
+  heavy work tools (`terminal` in the foreground, `execute_code`, browser and
+  computer use, `web_search` / `web_extract`, `write_file` / `patch`, MCP
+  tools), a foreground `delegate_task`, and `process wait`. Always open:
+  background `delegate_task`, `cronjob`, `todo`, `memory`, `clarify`,
+  `process` poll / log / kill / list, `read_file` / `search_files`,
+  `skill_view`, message-sending tools, a background `terminal` command, and the
+  final text answer. Helpers cannot use `cronjob`, so the root keeps it for
+  jobs such as "update me every 30 minutes".
+- **Hard stop.** 60 seconds after the limit, or 3 more model iterations,
+  whichever comes first, the loop makes one final no-tools call (the same
+  summary path as the max-iterations limit, with its own exit reason
+  `foreground_time_limit_hard_stop`) and ends the turn. Tools admitted before
+  the limit run to completion under their own timeouts; the stop applies at
+  the next iteration boundary. A composed answer a verification gate was
+  holding back is used instead of a new call; queued steer / human input and
+  transcript persistence behave as on any other turn end.
+  **Cache note:** that final call carries no tool schema, so it is the one
+  provider request of the turn whose prefix differs from the earlier ones - one
+  prompt-cache miss, accepted once per hard stop. (It is a miss for the whole
+  prefix, not just the tool list: the summary path re-serializes earlier tool
+  calls' arguments from their raw strings, while the loop sends the canonical
+  form, so even the message bytes differ.) Turns that finish on their own never
+  pay it.
+- **Checking a helper's result.** `delegation.verify_time_limit_seconds`
+  (default **120**; `0`, `null` or `false` = off, and off whenever the
+  foreground limit is off). When the completion turn of a helper THIS agent
+  started arrives after the limit is spent, the agent gets one fresh episode of
+  that length - enough for a short terminal check - and then the usual finish
+  mode. It is granted only from the gateway's own completion metadata (the
+  helper's delegation id), never from notification text or session identity;
+  each helper's allowance is spent once, also across restarts; a restarted or
+  rebuilt agent, cron, another profile and unrelated internal turns keep the
+  start-expired behaviour above. Helpers started in the window are background
+  helpers for all of it, expiry included, and a human message during or after
+  it gets its own fresh clock. Nothing about the window is shown to the user.
+  Several helpers finishing together share one window and spend one allowance.
+  Existing limitation: the API-server wake path (`gateway/wake.py`) re-enters as
+  an ordinary request with no completion ids, so no verification window exists
+  there.
+- **Where it applies.** The limit exists to hand work to a background helper,
+  so it applies only in chats where the bot can actually run one and deliver
+  its result later: Telegram and the other messaging platforms, and the
+  interactive CLI / TUI (including `-q` on a real terminal, which seeds an
+  interactive session). Where a background helper cannot be delivered - the
+  API server, unless the request carries a session id it can be woken by - the
+  limit is simply **off** for that message: no notice, no refusals, no hard
+  stop, and delegation behaves exactly as before. That decision is made once
+  when the human message starts and is inherited by the helper-completion
+  turns that follow it.
+- **Whole-turn hand-off.** While the limit applies to a turn, every
+  `delegate_task` of the root runs as a background helper (the tool result says
+  so). A helper that cannot be started (capacity, persistence, scheduling,
+  construction) is reported as an error to the model; it is never silently run
+  inline.
+- **Codex app-server.** Codex runs its own tools, so they cannot be refused
+  mid-turn; the whole turn is bounded instead. Its turn timeout becomes
+  `min(its own 600 s, the episode's remaining time)` (never less than the
+  60-second finish window). At expiry the native turn is interrupted through
+  the normal interrupt path - even if it had already emitted an assistant
+  message - and answered with the last assistant text Codex produced (or a
+  plain "stopped at the time limit" note), without retiring the session or
+  losing the user's next message.
+- **Scope.** Only root conversational agents are limited: gateway messaging
+  sessions and the interactive CLI / TUI. Subagents, cron runs,
+  `--oneshot` / `-z` runs, `-q` / `-Q` without a terminal, batch and eval
+  runners, review forks and kanban workers are never limited. The limit holds
+  even if `delegate_task` is not available to the agent; the notice then says
+  to finish now.
+
+It is independent of the checkpoint below (either can be on alone) and of
+`agent.run_budget_seconds`, which keeps its existing behavior for `--run-budget`
+workers and evals (its notice uses the same unsent-tool-result channel).
+
 ## The optional checkpoint
 
 The checkpoint is **off by default**: the foreground agent has no cap on work

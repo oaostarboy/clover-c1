@@ -20,6 +20,7 @@ import os
 import random
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -34,6 +35,7 @@ from agent.display import (
     _detect_tool_failure,
 )
 from agent import clover_flavor
+from agent.foreground_time_limit import display_result
 from agent.message_sanitization import coalesce_tool_call_id
 from agent.tool_dispatch_helpers import (
     _NEVER_PARALLEL_TOOLS,
@@ -595,6 +597,56 @@ def _run_agent_tool_execution_middleware(agent, **kwargs) -> "_ManagedToolResult
         return _run_agent_tool_execution_middleware_impl(agent, **kwargs)
 
 
+def dispatch_generated_tool(
+    agent, function_name: str, function_args: dict, *, task_id: str = ""
+) -> str:
+    """Run a call the RUNTIME generates through the executor's authorization.
+
+    The router backstop dispatches helpers on the model's behalf.  That call
+    must be refused wherever the model's own call of the same tool would be:
+    Relay and request middleware, plugin ``pre_tool_call`` hooks (a deny comes
+    back as the block message), guardrails, scope blocks and the delegation
+    checkpoint all run, exactly as in ``_run_agent_tool_execution_middleware``.
+    It deliberately does not take part in the batch start order or the
+    concurrent authorization gate: the caller is already inside one call's
+    admission, and re-entering either could wait on itself.
+
+    Returns the tool's result string, or the JSON error of whichever stage
+    refused it.  ``post_tool_call`` is emitted for it like for any call.
+    """
+    tool_call_id = f"clover-runtime-{uuid.uuid4().hex[:16]}"
+    started = time.time()
+
+    def _execute(next_args: dict) -> Any:
+        from tools.registry import registry
+
+        return registry.dispatch(function_name, next_args, parent_agent=agent)
+
+    managed = _run_agent_tool_execution_middleware(
+        agent,
+        function_name=function_name,
+        function_args=dict(function_args),
+        effective_task_id=task_id or "",
+        tool_call_id=tool_call_id,
+        execute=_execute,
+        generated=True,
+    )
+    result = managed.result
+    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
+    if managed.dispatched and not managed.blocked:
+        _emit_terminal_post_tool_call(
+            agent,
+            function_name=function_name,
+            function_args=managed.args,
+            result=text,
+            effective_task_id=task_id or "",
+            tool_call_id=tool_call_id,
+            duration_ms=int((time.time() - started) * 1000),
+            middleware_trace=managed.middleware_trace,
+        )
+    return text
+
+
 def _run_agent_tool_execution_middleware_impl(
     agent,
     *,
@@ -608,8 +660,14 @@ def _run_agent_tool_execution_middleware_impl(
     middleware_trace: list[dict[str, Any]] | None = None,
     begin_execution=None,
     authorization_gate: _ConcurrentToolAuthorizationGate | None = None,
+    generated: bool = False,
 ) -> _ManagedToolResult:
-    """Run Relay rewrites before Clover policy and dispatch exactly once."""
+    """Run Relay rewrites before Clover policy and dispatch exactly once.
+
+    ``generated`` marks a call the runtime itself issues (see
+    :func:`dispatch_generated_tool`): it passes every authorization stage a
+    model's call passes, but shows no tool row, since the model never made it.
+    """
     from agent import relay_tools
     from clover_cli.middleware import (
         apply_tool_request_middleware,
@@ -636,6 +694,8 @@ def _run_agent_tool_execution_middleware_impl(
             state["args"] = final_args
 
         def _begin() -> None:
+            if generated:
+                return
             _begin_tool_execution(
                 agent,
                 function_name=function_name,
@@ -729,18 +789,36 @@ def _run_agent_tool_execution_middleware_impl(
         checkpoint_state: dict[str, Any] = {"verdict": None}
 
         def _admit_then_begin() -> None:
-            from agent import delegation_checkpoint
-
-            verdict = delegation_checkpoint.admit(
-                agent, function_name, final_args, tool_call_id
+            from agent import (
+                delegation_checkpoint,
+                foreground_time_limit,
+                router_backstop,
             )
+            from agent.turn_notices import runtime_invocation
+
+            # Router backstop first: a not-direct plan the root keeps doing
+            # itself is handed to helpers by the runtime. Then the per-message
+            # foreground time limit (independent of the checkpoint): a refused
+            # call reserves no checkpoint budget.
+            with runtime_invocation(function_name, tool_call_id):
+                verdict = router_backstop.refusal(
+                    agent, function_name, final_args, task_id=effective_task_id or ""
+                ) or foreground_time_limit.refusal(
+                    agent, function_name, final_args
+                ) or delegation_checkpoint.admit(
+                    agent, function_name, final_args, tool_call_id
+                )
             checkpoint_state["verdict"] = verdict
-            if not verdict.blocked:
+            if verdict.blocked:
+                # Never executed: free whatever the router's admission reserved.
+                router_backstop.note_result(agent, function_name, final_args, None)
+            else:
                 try:
                     _begin()
                 except BaseException:
                     if verdict.admission is not None:
                         verdict.admission.checkpoint.refund(verdict.admission)
+                    router_backstop.note_result(agent, function_name, final_args, None)
                     raise
 
         _advance_start_order(_admit_then_begin)
@@ -783,10 +861,21 @@ def _run_agent_tool_execution_middleware_impl(
         )
         _hb_thread.start()
         try:
+            from agent import router_backstop
             from agent.delegation_checkpoint import admitted
+            from agent.turn_notices import runtime_invocation
 
-            with admitted(admission):
-                return execute(final_args)
+            with runtime_invocation(function_name, tool_call_id), admitted(admission):
+                result = None
+                try:
+                    result = execute(final_args)
+                    return result
+                finally:
+                    # What an admitted call found travels with a later
+                    # hand-off; a call that raised just frees its slot.
+                    router_backstop.note_result(
+                        agent, function_name, final_args, result
+                    )
         finally:
             _hb_stop.set()
             _hb_thread.join(timeout=2.0)
@@ -1983,7 +2072,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
         _status_suffix = " (error)" if is_error else ""
         agent._touch_activity(f"tool completed: {name} ({tool_duration:.1f}s){_status_suffix}")
 
-        display_function_result = function_result
+        display_function_result = display_result(function_result)
         function_result = maybe_persist_tool_result(
             content=function_result,
             tool_name=name,
@@ -2914,7 +3003,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             _log_result = _multimodal_text_summary(function_result)
             logging.debug("Tool result (%d chars): %s", len(_log_result), _log_result)
 
-        display_function_result = function_result
+        display_function_result = display_result(function_result)
         function_result = maybe_persist_tool_result(
             content=function_result,
             tool_name=function_name,
@@ -2995,11 +3084,14 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 logging.debug("Tool output risk callback error: %s", cb_err)
 
         if not agent.quiet_mode and getattr(agent, "tool_progress_mode", "all") != "off":
+            # Post-persistence result (same as the model sees), with only
+            # foreground-limit refusals neutralised; format otherwise unchanged.
+            _preview_result = display_result(function_result)
             if agent.verbose_logging:
                 print(f"  {get_done_mark()} Tool {i} completed in {tool_duration:.2f}s")
-                print(agent._wrap_verbose("Result: ", function_result))
+                print(agent._wrap_verbose("Result: ", _preview_result))
             else:
-                _fr_str = function_result if isinstance(function_result, str) else str(function_result)
+                _fr_str = _preview_result if isinstance(_preview_result, str) else str(_preview_result)
                 response_preview = _fr_str[:agent.log_prefix_chars] + "..." if len(_fr_str) > agent.log_prefix_chars else _fr_str
                 print(f"  {get_done_mark()} Tool {i} completed in {tool_duration:.2f}s - {response_preview}")
 

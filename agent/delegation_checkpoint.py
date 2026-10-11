@@ -44,6 +44,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
+from agent.turn_notices import runtime_note, vouch_runtime_result
+
 logger = logging.getLogger(__name__)
 
 UNDECIDED = "undecided"
@@ -807,6 +809,9 @@ class DelegationCheckpoint:
                 "then call delegate_task."
             )
             recovery = _direct_recovery()
+        # Clover wrote this refusal: mark it as the runtime's own note and keep
+        # the marker through the result funnel (which defangs any other copy).
+        message = runtime_note(message)
         payload = {
             "error": message,
             "error_type": code,
@@ -814,7 +819,9 @@ class DelegationCheckpoint:
             "recovery": recovery,
         }
         return Verdict(
-            block_result=json.dumps(payload, ensure_ascii=False),
+            block_result=vouch_runtime_result(
+                json.dumps(payload, ensure_ascii=False), tool_name
+            ),
             block_code=code,
             block_message=message,
         )
@@ -1234,12 +1241,25 @@ def _durable_receipts_ready(receipt_ids: Any) -> Any:
 def completion_directive(agent: Any) -> Optional[Directive]:
     """The conversation loop's question after a tool round: end the turn now?
 
-    Reads existing state only; agents without a checkpoint never end early.
+    Reads existing state only.  The checkpoint's own directive (when it is on
+    and has one) wins; otherwise a helper the router's turn got accepted ends
+    the turn with its deterministic acknowledgment -- independent of the
+    checkpoint's budget and opt-in default (``agent.router_backstop``).
+
+    A pending human Stop outranks both: the turn is about to be finalized as
+    interrupted, and an acknowledgment must not replace that exit.  Nothing is
+    cancelled or cleared here -- the receipts stay for the finalizer.
     """
-    checkpoint = getattr(agent, "_delegation_checkpoint", None)
-    if not isinstance(checkpoint, DelegationCheckpoint):
+    if getattr(agent, "_interrupt_requested", False) is True:
         return None
-    return checkpoint.take_completion_directive()
+    checkpoint = getattr(agent, "_delegation_checkpoint", None)
+    if isinstance(checkpoint, DelegationCheckpoint):
+        directive = checkpoint.take_completion_directive()
+        if directive is not None:
+            return directive
+    from agent import router_backstop
+
+    return router_backstop.completion_directive(agent)
 
 
 def resolve_work_call(function_name: str, function_args: Any) -> tuple:

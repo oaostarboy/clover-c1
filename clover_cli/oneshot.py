@@ -611,6 +611,10 @@ def _run_agent(
         # gateway sessions.
         _fb = get_fallback_chain(cfg)
 
+        # No router warm-up for a run that answers once and exits.
+        from agent.router_prewarm import suppress as _suppress_router_prewarm
+
+        _suppress_router_prewarm()
         agent = AIAgent(
             api_key=runtime.get("api_key"),
             base_url=runtime.get("base_url"),

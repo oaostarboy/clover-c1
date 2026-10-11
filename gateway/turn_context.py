@@ -112,6 +112,9 @@ class TurnContext:
     # "internal_notification" for async-delegation/background notifications
     # (#82888). DB-only presentation metadata; never sent to the provider.
     persist_user_display_kind: Optional[str] = None
+    # Trusted delegation ids of the helper completion this internal turn
+    # delivers (from the producer event's metadata; empty for human turns).
+    completion_delegation_ids: Optional[tuple] = None
     user_config: Any = None
     enabled_toolsets: Any = None
     disabled_toolsets: Any = None

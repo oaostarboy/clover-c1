@@ -82,6 +82,13 @@ _ICONS = {
     "cancelled": "⏹",
 }
 
+# Terminal mark for a worker that exited cleanly but whose result could not be
+# verified: neither the done mark (false success) nor the "still waiting" ⏳.
+_UNVERIFIED_ICON = "❔"
+_UNVERIFIED_BODY = "exited, result not verified"
+# A helper whose result arrived after its fan-out's combined report went out.
+_LATE_BODY = "finished after the combined report:"
+
 # delegate_task / _run_single_child completion statuses -> lifecycle state.
 _COMPLETE_STATUS = {
     "completed": "completed",
@@ -328,6 +335,17 @@ class ChildActivity:
     # while it waits on the provider between actions.
     last_action: Optional[str] = None
     summary: Optional[str] = None
+    # An ``incomplete`` worker that exited cleanly but whose success could not
+    # be verified (lifecycle-only parser, or no result record). Distinct from
+    # running out of steps: it is rendered "exited, result not verified".
+    exited_unverified: bool = False
+    # Finished after the fan-out's combined report already went out; its
+    # result is delivered separately (card note only, never a state change).
+    late_result: bool = False
+    # The root is holding the fan-out's combined report for this helper (every
+    # other helper is done): "waiting on helper N" until it ends or the wait
+    # is given up.
+    awaited: bool = False
     files_written: List[str] = field(default_factory=list)
     duration_s: Optional[float] = None
     alerted: Set[str] = field(default_factory=set)
@@ -377,6 +395,9 @@ class ChildActivity:
             "tools_failed": self.tools_failed,
             "note": self.note,
             "summary": self.summary,
+            "exited_unverified": self.exited_unverified,
+            "late_result": self.late_result,
+            "awaited": self.awaited,
             "files_written": list(self.files_written),
             "duration_s": self.duration_s,
         }
@@ -489,12 +510,30 @@ class DelegationActivityTracker:
             group_id = str(kw.get("delegation_id") or "delegation")
             group = self._groups.get(group_id)
             if group is None:
-                if et in {"subagent.progress", "subagent.text"}:
+                if et in {
+                    "subagent.progress", "subagent.text",
+                    "subagent.late_result", "subagent.awaiting",
+                }:
                     return None, []
                 group = DelegationGroup(group_id=group_id, created_at=now)
                 self._groups[group_id] = group
             child = self._child_for(group, kw, now)
             self._refresh_identity(child, kw)
+            if et == "subagent.late_result":
+                # A note on a worker that already ended: terminal state is
+                # never touched, and a replay changes nothing.
+                if child.late_result:
+                    return None, []
+                child.late_result = True
+                child.last_event_at = now
+                return group_id, []
+            if et == "subagent.awaiting":
+                awaiting = bool(kw.get("awaiting", True))
+                if child.state in TERMINAL_STATES or child.awaited == awaiting:
+                    return None, []
+                child.awaited = awaiting
+                child.last_event_at = now
+                return group_id, []
             if child.state in TERMINAL_STATES:
                 return None, []  # final: late/replayed events cannot regress it
             alerts: List[str] = []
@@ -687,6 +726,7 @@ class DelegationActivityTracker:
         if str(kw.get("exit_reason") or "").lower() in {"max_iterations", "max_turns"}:
             state = "incomplete"
         child.state = state
+        child.exited_unverified = state == "incomplete" and bool(kw.get("exited_unverified"))
         child.ended_at = now
         _close_open_tools(child)
         dur = _as_float(kw.get("duration_seconds"))
@@ -1006,13 +1046,15 @@ def _worker_rows(child: ChildActivity, now: float, *, live: bool) -> List[str]:
     if live:
         icon = WORKER_ICON
     else:
-        icon = WORKER_ICON if child.state == "completed" else _state_icon(child.state, "•")
+        icon = WORKER_ICON if child.state == "completed" else _child_icon(child, "•")
     title = f"{icon} {_bold_title(child, _ROW_TITLE_MAX)}"
     calls = _calls(child, live=live)
     bits = [pretty_model(child.model)]
     if calls:
         bits.append(f"🛠 {calls} tool call{'s' if calls != 1 else ''}")
     if live:
+        if child.awaited and child.state not in TERMINAL_STATES:
+            bits.append(f"⏳ waiting on helper {child.index + 1}")
         bits.append(_doing(child, now).replace("🔧 ", ""))
     else:
         bits.append(f"⏱ {_elapsed(child, now)}")
@@ -1039,7 +1081,7 @@ def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
             label += " · stopped"
         head = _stats_head("🔀", label, _calls(child, live=True), elapsed)
         if settled:
-            quoted = [_bold_title(child), f"{_state_icon(child.state)} {child.reason or child.state}"]
+            quoted = [_bold_title(child), f"{_child_icon(child)} {child.reason or child.state}"]
         else:
             quoted = [_bold_title(child), _doing(child, now)]
         if child.note and child.open_tools and child.visibility != "lifecycle":
@@ -1169,7 +1211,10 @@ def _quote(lines: List[str]) -> List[str]:
 
 def _final_body(child: ChildActivity, limit: int) -> str:
     if child.state == "completed":
-        return _truncate_words(child.summary or "", limit)
+        body = _truncate_words(child.summary or "", limit)
+        return f"{_LATE_BODY} {body}".strip() if child.late_result else body
+    if child.exited_unverified:
+        return _UNVERIFIED_BODY
     if child.state == "incomplete":
         return "ran out of steps before finishing"
     if child.state == "cancelled":
@@ -1181,7 +1226,7 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
     children = group.ordered()
     if len(children) == 1:
         child = children[0]
-        icon = _state_icon(child.state, "•")
+        icon = _child_icon(child, "•")
         head = _stats_head(icon, pretty_model(child.model) or "Subagent",
                            _calls(child, live=False), _elapsed(child, now),
                            child.tools_failed)
@@ -1215,12 +1260,15 @@ def _state_counts(children: List[ChildActivity]) -> str:
     done = sum(1 for c in children if c.state == "completed")
     failed = sum(1 for c in children if c.state == "failed")
     cancelled = sum(1 for c in children if c.state == "cancelled")
-    incomplete = sum(1 for c in children if c.state == "incomplete")
-    if failed == 0 and cancelled == 0 and incomplete == 0:
+    unverified = sum(1 for c in children if getattr(c, "exited_unverified", False))
+    incomplete = sum(1 for c in children if c.state == "incomplete") - unverified
+    if failed == 0 and cancelled == 0 and incomplete == 0 and unverified == 0:
         return ""
     parts = [f"{done} done"] if done else []
     if incomplete:
         parts.append(f"{incomplete} unfinished")
+    if unverified:
+        parts.append(f"{unverified} unverified")
     if failed:
         parts.append(f"{failed} failed")
     if cancelled:
@@ -1239,6 +1287,14 @@ def _state_icon(state: str, default: Optional[str] = None) -> str:
     return _ICONS[state] if default is None else _ICONS.get(state, default)
 
 
+def _child_icon(child: ChildActivity, default: Optional[str] = None) -> str:
+    """Card icon for one worker: like ``_state_icon``, but a clean exit whose
+    result could not be verified gets its own terminal mark, not ⏳."""
+    if child.exited_unverified:
+        return _UNVERIFIED_ICON
+    return _state_icon(child.state, default)
+
+
 def group_icon(children: List[ChildActivity]) -> str:
     """❌ only for a real failure; running out of steps is ⏳, not red."""
     from agent.display import get_done_mark, get_fail_mark
@@ -1246,8 +1302,10 @@ def group_icon(children: List[ChildActivity]) -> str:
     states = {c.state for c in children}
     if "failed" in states:
         return get_fail_mark()
-    if "incomplete" in states:
+    if any(c.state == "incomplete" and not getattr(c, "exited_unverified", False) for c in children):
         return "⏳"
+    if any(getattr(c, "exited_unverified", False) for c in children):
+        return _UNVERIFIED_ICON
     if "cancelled" in states:
         return "⏹"
     return get_done_mark()

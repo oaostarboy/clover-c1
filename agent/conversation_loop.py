@@ -24,7 +24,7 @@ import re
 import ssl
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from agent.codex_responses_adapter import _summarize_user_message_for_log
 from agent.conversation_compression import (
@@ -48,6 +48,7 @@ from agent.turn_context import (
     compose_user_api_content,
     reanchor_current_turn_user_idx,
 )
+from agent.turn_notices import runtime_note
 from agent.turn_retry_state import TurnRetryState
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.message_sanitization import (
@@ -129,8 +130,7 @@ _INTERRUPT_SCAFFOLD_MARKER = "[This response was interrupted by a user correctio
 # One-time wrap-up notice appended when a wall-clock run budget crosses its
 # 80% threshold (agent.run_budget_seconds / --run-budget). Mirrors the Codex
 # CLI budget wrap-up template: stop new work, deliver from current state.
-RUN_BUDGET_WRAPUP_NOTICE = (
-    "[SYSTEM NOTICE — run time budget nearly exhausted] "
+RUN_BUDGET_WRAPUP_NOTICE = runtime_note(
     "Run time budget nearly exhausted. Stop new discovery/verification work "
     "now. Produce the required final deliverable (answer/JSON/summary) from "
     "the state you already have, completing only mandatory writes."
@@ -205,12 +205,13 @@ def _review_input_budget_exhausted(agent: Any) -> bool:
 def _maybe_inject_run_budget_wrapup(agent: Any, messages: List[Dict[str, Any]]) -> bool:
     """Inject the one-time wall-clock wrap-up notice when past 80% of budget.
 
-    Cache-safe delivery: the notice is appended to the NEWEST ``role:"tool"``
-    message (the same channel /steer uses) — no synthetic user message is
-    inserted mid-loop and no past context is rewritten, so role alternation
-    and the prompt-cache prefix survive.  Latches ``_run_budget_wrapup_injected``
-    only on a successful append, so a first iteration without tool results
-    retries on the next iteration.  Returns True when the notice was injected.
+    Cache-safe delivery: the notice is appended to the newest ``role:"tool"``
+    message of THIS iteration that has not been sent yet — no synthetic user
+    message is inserted mid-loop and no past context is rewritten, so role
+    alternation and the prompt-cache prefix survive.  Latches
+    ``_run_budget_wrapup_injected`` only on a successful append, so an
+    iteration without a fresh tool result retries on the next one.  Returns
+    True when the notice was injected.
 
     Dormant unless ``agent.run_budget_seconds`` is set AND the turn stamped
     ``_run_budget_started_at`` (see ``turn_context.prepare_conversation_turn``).
@@ -225,28 +226,21 @@ def _maybe_inject_run_budget_wrapup(agent: Any, messages: List[Dict[str, Any]]) 
         return False
     if (time.time() - started) < 0.8 * float(budget):
         return False
-    for i in range(len(messages) - 1, -1, -1):
-        msg = messages[i]
-        if isinstance(msg, dict) and msg.get("role") == "tool":
-            existing = msg.get("content", "")
-            if isinstance(existing, str):
-                msg["content"] = existing + f"\n\n{RUN_BUDGET_WRAPUP_NOTICE}"
-            else:
-                # Multimodal content blocks — append a text block.
-                try:
-                    blocks = list(existing) if existing else []
-                    blocks.append({"type": "text", "text": RUN_BUDGET_WRAPUP_NOTICE})
-                    msg["content"] = blocks
-                except Exception:
-                    return False
-            agent._run_budget_wrapup_injected = True
-            logger.info(
-                "Run budget wrap-up notice injected (budget=%.0fs, elapsed=%.0fs)",
-                float(budget),
-                time.time() - started,
-            )
-            return True
-    return False
+    # Only a tool result this iteration produced and the provider has not seen
+    # yet may carry the notice (agent.turn_notices): a tool-less iteration, an
+    # empty-response nudge or a post-compaction continue defers it instead of
+    # rewriting an earlier row. The row is copied, never mutated in place.
+    from agent.turn_notices import attach_to_fresh_tool_result
+
+    if not attach_to_fresh_tool_result(agent, messages, RUN_BUDGET_WRAPUP_NOTICE):
+        return False
+    agent._run_budget_wrapup_injected = True
+    logger.info(
+        "Run budget wrap-up notice injected (budget=%.0fs, elapsed=%.0fs)",
+        float(budget),
+        time.time() - started,
+    )
+    return True
 
 
 def _restore_user_after_reference_handoff(
@@ -1877,6 +1871,7 @@ def run_conversation(
     persist_user_display_kind: Optional[str] = None,
     persist_user_display_metadata: Optional[Dict[str, Any]] = None,
     moa_config: Optional[dict[str, Any]] = None,
+    completion_delegation_ids: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """
     Run a complete conversation with tool calling until completion.
@@ -1901,6 +1896,11 @@ def run_conversation(
             the message unchanged.
         persist_user_display_metadata: Optional payload for that event
             (e.g. a delegation's task count).
+        completion_delegation_ids: Trusted delegation ids of the helper
+            completion an ``internal_notification`` turn delivers (set by the
+            gateway from the producer event, never parsed from text). Only
+            the foreground time limit reads them, to decide whether this
+            turn earns its one short verification window.
                 or queuing follow-up prefetch work.
 
     Returns:
@@ -1934,6 +1934,15 @@ def run_conversation(
     except Exception:
         logger.debug("per-turn env credential refresh failed", exc_info=True)
 
+    # The delegation router reads the trusted completion ids of this turn (a
+    # staged plan's next stage is started from the completion that finishes
+    # the one before it).
+    agent._router_completion_ids = (
+        tuple(str(c) for c in completion_delegation_ids if c)
+        if isinstance(completion_delegation_ids, (list, tuple, set, frozenset))
+        else ()
+    )
+
     # ── Per-turn setup (the prologue) ──
     # All once-per-turn setup — stdio guarding, retry-counter resets, user
     # message sanitization, todo/nudge hydration, system-prompt restore-or-
@@ -1953,6 +1962,7 @@ def run_conversation(
         persist_user_timestamp,
         persist_user_display_kind=persist_user_display_kind,
         persist_user_display_metadata=persist_user_display_metadata,
+        completion_delegation_ids=completion_delegation_ids,
         restore_or_build_system_prompt=_restore_or_build_system_prompt,
         install_safe_stdio=_install_safe_stdio,
         sanitize_surrogates=_sanitize_surrogates,
@@ -1975,6 +1985,7 @@ def run_conversation(
     _should_review_memory = _ctx.should_review_memory
     _plugin_user_context = _ctx.plugin_user_context
     _ext_prefetch_cache = _ctx.ext_prefetch_cache
+    _work_plan = _ctx.work_plan
 
     # Commentary deduplication spans all provider continuations and tool calls
     # within one user turn, but must not suppress the same phrase next turn.
@@ -2101,6 +2112,28 @@ def run_conversation(
                 )
             break
         
+        # ── Per-message foreground time limit: hard stop ───────────────
+        # Past the limit + grace (or 3 model iterations into finish mode) the
+        # loop ends the turn with ONE final no-tools call -- the max-iterations
+        # summary path, explicit here because the finalizer's own fallback is
+        # gated on other exit reasons. Tools admitted before the limit have
+        # already finished (this is the iteration boundary); a composed pending
+        # answer is preferred to a fresh call; queued steer / human input and
+        # transcript persistence are left to finalize_turn as on any exit.
+        if getattr(agent, "_fg_turn_active", False) is True:
+            from agent import foreground_time_limit as _fg_limit
+
+            if _fg_limit.hard_stop_due(
+                agent, messages, pending_answer=bool(_pending_verification_response)
+            ):
+                final_response, _turn_exit_reason = _fg_limit.run_hard_stop(
+                    agent, messages, api_call_count,
+                    pending_answer=_pending_verification_response,
+                    pending_previewed=_pending_verification_response_previewed,
+                )
+                break
+            _fg_limit.note_model_call(agent)
+
         api_call_count += 1
         agent._api_call_count = api_call_count
         agent._touch_activity(f"starting API call #{api_call_count}")
@@ -2209,6 +2242,18 @@ def run_conversation(
         # result); dormant when no budget is set.
         if getattr(agent, "run_budget_seconds", None):
             _maybe_inject_run_budget_wrapup(agent, messages)
+
+        # ── Per-message foreground time limit notice ───────────────────
+        # One-shot at 80% of delegation.foreground_time_limit_seconds, same
+        # cache-safe channel (this iteration's unsent tool result only).
+        # Dormant unless begin_turn started an episode.
+        if getattr(agent, "_fg_turn_active", False) is True:
+            from agent.foreground_time_limit import maybe_inject_notice
+            maybe_inject_notice(agent, messages)
+        # The request below carries this iteration's tool results: from here
+        # on they are "sent" and no notice may rewrite them.
+        from agent.turn_notices import consume_fresh_tool_tail
+        consume_fresh_tool_tail(agent)
 
         # Prepare messages for API call
         # If we have an ephemeral system prompt, prepend it to the messages
@@ -2354,6 +2399,7 @@ def run_conversation(
                         api_msg.get("content", ""),
                         _ext_prefetch_cache,
                         _plugin_user_context,
+                        _work_plan,
                     )
                     if _composed is not None:
                         api_msg["content"] = _composed
@@ -7594,7 +7640,10 @@ def run_conversation(
                     except Exception:
                         pass
 
+                _fresh_tool_start = len(messages)
                 agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
+                from agent.turn_notices import note_fresh_tool_results
+                note_fresh_tool_results(agent, messages, _fresh_tool_start)
 
                 if getattr(agent, "_incremental_persistence_failed", False):
                     # A tool result could not be made canonical. Do not send
