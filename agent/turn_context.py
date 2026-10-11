@@ -1529,6 +1529,33 @@ def build_turn_context(
         except Exception:
             pass
 
+    # ── helper-work lifecycle ──
+    # Marks where this turn's own dispatches begin (so ``work_status`` is read
+    # from the ledger, not from the router's state) and, on a trusted
+    # helper-completion turn, tells the root which helpers have not finished
+    # and arms the hand-back of substantial integration (agent.work_lifecycle).
+    # The note rides the same API-copy slot as the work plan, so it needs the
+    # same guard: a note can never exist without being sent.
+    try:
+        from agent.work_lifecycle import begin_turn as _begin_work_turn
+
+        _work_note = _begin_work_turn(
+            agent,
+            _router_user_msg.get("content") if isinstance(_router_user_msg, dict) else "",
+            persist_user_display_kind,
+            completion_delegation_ids,
+            may_note=(
+                not moa_active
+                and getattr(agent, "api_mode", None) != "codex_app_server"
+                and isinstance(_router_user_msg, dict)
+                and _router_user_msg.get("role") == "user"
+            ),
+        )
+        if _work_note and not work_plan:
+            work_plan = _work_note
+    except Exception:
+        logger.debug("helper-work lifecycle unavailable", exc_info=True)
+
     # ── api_content sidecar: persist what you send ──
     # The prefetch/plugin context above is injected into the API copy of this
     # turn's user message, never into the stored content — so on the next
