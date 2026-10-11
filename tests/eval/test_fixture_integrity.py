@@ -41,7 +41,12 @@ dm = _load_module()
 
 
 def _fixture_files() -> list[Path]:
-    return sorted(p for p in FIXTURES.rglob("*") if p.is_file())
+    # Bytecode caches appear whenever a fixture's own tests are imported
+    # (locally or on CI); they are build output, never fixture content.
+    return sorted(
+        p for p in FIXTURES.rglob("*")
+        if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"
+    )
 
 
 def test_every_file_a_case_expects_is_in_its_fixture_tree():
