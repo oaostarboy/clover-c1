@@ -42,6 +42,7 @@ from agent.prompt_builder import (
     USER_PROFILE_GUIDANCE,
     OPENAI_MODEL_EXECUTION_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE,
+    FOREGROUND_HANDOFF_GUIDANCE,
     PLAN_FIRST_DELEGATION_GUIDANCE,
     PLATFORM_HINTS,
     SESSION_SEARCH_GUIDANCE,
@@ -512,6 +513,14 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
 
         if not is_delegated_child_context():
             stable_parts.append(PLAN_FIRST_DELEGATION_GUIDANCE)
+
+            from agent.foreground_time_limit import handoff_guidance_applies
+
+            # Decided once, here: the chat-freeing hand-off rule goes only to
+            # roots the foreground limit applies to, so the prompt never
+            # varies turn to turn.
+            if handoff_guidance_applies(agent):
+                stable_parts.append(FOREGROUND_HANDOFF_GUIDANCE)
 
     from tools.todo_tool import delegation_check_for_agent
 

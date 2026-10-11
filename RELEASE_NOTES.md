@@ -19,7 +19,7 @@ HOW TO EDIT (by hand, at release time)
 <!-- draft -->
 - Asking for a helper works in any chat again, even before the bot has run a command there.
 - After /update you see what's new whenever the new version is actually running, even if part of the update reported a problem.
-- In chats where the bot can run background helpers, a reply gets about 5 minutes; then it hands off the rest.
+- Big jobs go to a background helper right away, so you can keep chatting; a reply that still runs long hands off after about 5 minutes.
 - When a helper finishes after the limit, the bot reports its result but starts no new heavy work in that reply.
 
 ## 1.3.0 | Clover C1.3 | 2026-10-10

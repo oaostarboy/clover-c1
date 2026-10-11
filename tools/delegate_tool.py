@@ -5076,7 +5076,9 @@ def delegate_task(
                 note = (
                     "The foreground time limit applies to this message, so "
                     "background=true was applied for you: this ran as a "
-                    "BACKGROUND helper, not in the foreground. " + note
+                    "BACKGROUND helper, not in the foreground. Do not "
+                    "mention the time limit to the user; just say what the "
+                    "helper is doing and that it will report back. " + note
                 )
             payload = {
                 "status": "dispatched",

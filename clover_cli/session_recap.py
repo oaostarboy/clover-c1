@@ -117,6 +117,17 @@ def _iter_assistant_tool_calls(
                 yield name, args
 
 
+def _is_human_turn(msg: Mapping[str, Any]) -> bool:
+    """A user row the person actually wrote (the shared human-turn predicate).
+
+    Runtime scaffolding persisted under ``role="user"`` -- compaction handoffs,
+    the hard-stop / max-iterations summary request -- is not shown as an ask.
+    """
+    from agent.context_compressor import is_user_originated_turn
+
+    return is_user_originated_turn(dict(msg))
+
+
 def _count_visible_turns(
     messages: Sequence[Mapping[str, Any]],
 ) -> Tuple[int, int, int]:
@@ -127,7 +138,7 @@ def _count_visible_turns(
             continue
         role = msg.get("role")
         if role == "user":
-            users += 1
+            users += 1 if _is_human_turn(msg) else 0
         elif role == "assistant":
             assistants += 1
         elif role == "tool":
@@ -139,7 +150,11 @@ def _latest_user_prompt(
     messages: Sequence[Mapping[str, Any]],
 ) -> Optional[str]:
     for msg in reversed(messages):
-        if isinstance(msg, Mapping) and msg.get("role") == "user":
+        if (
+            isinstance(msg, Mapping)
+            and msg.get("role") == "user"
+            and _is_human_turn(msg)
+        ):
             text = _coerce_text(msg.get("content")).strip()
             if text:
                 return text

@@ -273,6 +273,23 @@ MAX_ITERATIONS_SUMMARY_REQUEST = (
     "Please provide a final response summarizing what you've found and accomplished so far, "
     "without calling any more tools."
 )
+# The foreground time limit's hard stop asks for its summary with this instead
+# (same recognizer class). Persisted hidden from human display, but worded so
+# it reads neutrally even where a client shows it anyway.
+TIME_LIMIT_SUMMARY_REQUEST = (
+    "Pause here and write the final reply for this message, without calling "
+    "any more tools: summarize what is done and what is left in plain words, "
+    "keep internal mechanics out of the reply, and offer to continue."
+)
+# The hard-stop request's first wording (shipped on an integration branch, so
+# rows persisted with it may exist with no display kind). Kept recognized as
+# synthetic scaffolding, never a user turn, a title or an exported prompt.
+LEGACY_TIME_LIMIT_SUMMARY_REQUEST = (
+    "Time to wrap up this reply. Please give a final response summarizing "
+    "what you've found and accomplished so far and what is left, without "
+    "calling any more tools. Do not mention time limits, timeouts or failed "
+    "attempts to the user; just say plainly where things stand."
+)
 _BACKGROUND_PROCESS_NOTIFICATION_PREFIX = "[IMPORTANT: Background process "
 
 
@@ -5577,6 +5594,8 @@ This compaction should PRIORITISE preserving all information related to the focu
             COMPRESSION_CONTINUATION_USER_CONTENT,
             _LEGACY_COMPRESSION_CONTINUATION_USER_CONTENT,
             MAX_ITERATIONS_SUMMARY_REQUEST,
+            TIME_LIMIT_SUMMARY_REQUEST,
+            LEGACY_TIME_LIMIT_SUMMARY_REQUEST,
             _CODEX_INCOMPLETE_NUDGE,
             _CODEX_ACK_CONTINUATION_NUDGE,
             _DROPPED_TOOLCALL_NUDGE_CONTENT,

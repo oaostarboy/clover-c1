@@ -863,9 +863,9 @@ def run_codex_app_server_turn(
     _fg_deadline_hit = bool(getattr(turn, "deadline_hit", False))
     if _fg_deadline_hit and not turn.final_text:
         turn.final_text = (
-            "The time limit for this reply was reached before Codex finished, "
-            "so I stopped it here. What it had done so far is in the "
-            "transcript above; send a follow-up message to continue."
+            "I stopped Codex here before it finished. What it had done so "
+            "far is in the transcript above; send a follow-up message to "
+            "continue."
         )
         turn.projected_messages = list(turn.projected_messages or []) + [
             {"role": "assistant", "content": turn.final_text}

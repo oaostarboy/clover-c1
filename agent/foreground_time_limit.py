@@ -32,6 +32,11 @@ runs in a background helper:
   turn -- decided once at ``begin_turn``, inherited by internal turns -- and
   behaviour is exactly as before.
 
+The limit is a backstop, never something the user hears about: the system
+prompt tells an eligible root to hand clearly big jobs to a helper at the
+start (``handoff_guidance_applies``), and every model-facing limit text says
+not to mention the limit, timeouts or failed attempts to the user.
+
 Scope is deliberately narrow: root conversational agents (``_delegate_depth ==
 0``) on gateway messaging platforms and the interactive CLI / TUI.  Subagents,
 cron, ``--oneshot`` / non-TTY ``-q``, batch / eval runners, background-review
@@ -60,6 +65,9 @@ HARD_STOP_MAX_ITERATIONS = 3
 BLOCK_CODE = "foreground_time_limit_reached"
 HARD_STOP_EXIT_REASON = "foreground_time_limit_hard_stop"
 NOTICE_MARKER = "[SYSTEM NOTICE: time limit]"
+# What every human-facing surface (activity feed, TUI / desktop tool rows) shows
+# for a refused call: a neutral "skipped", never the model-facing refusal text.
+SKIPPED_CODE = "skipped"
 
 
 def _now() -> float:
@@ -189,6 +197,27 @@ def applies(agent: Any) -> bool:
         from agent.delegation_context import is_delegated_child_context
 
         return not is_delegated_child_context()
+    except Exception:
+        return False
+
+
+def handoff_guidance_applies(agent: Any) -> bool:
+    """Should this agent's system prompt carry the up-front hand-off guidance?
+
+    The static half of the limit's own decision, evaluated once when the
+    prompt is built: ``delegate_task`` is available, the agent is a root the
+    limit applies to (:func:`applies`), the limit is on in config, and the
+    surface always has async delivery.  The API server is left out even when
+    a request carries a wake id -- that is a per-request fact, and the prompt
+    must not vary turn to turn.
+    """
+    try:
+        return bool(
+            _can_delegate(agent)
+            and applies(agent)
+            and load_limit_seconds() is not None
+            and _async_delivery_available()
+        )
     except Exception:
         return False
 
@@ -334,6 +363,17 @@ def _can_delegate(agent: Any) -> bool:
     return "delegate_task" in (getattr(agent, "valid_tool_names", None) or ())
 
 
+# Appended to every model-facing limit text: the user must never hear about the
+# limit, a timeout or a failed attempt.
+_QUIET_WITH_HELPER = (
+    "Do not mention this limit, timeouts or failed attempts to the user; just "
+    "say what the helper is doing and that it will report back."
+)
+_QUIET_NO_HELPER = (
+    "Do not mention this limit to the user; give your best answer now."
+)
+
+
 def notice_text(elapsed: float, limit: float, *, can_delegate: bool = True) -> str:
     head = (
         f"{NOTICE_MARKER} This reply has been working about {_duration(elapsed)}; "
@@ -341,13 +381,14 @@ def notice_text(elapsed: float, limit: float, *, can_delegate: bool = True) -> s
     )
     if not can_delegate:
         return head + (
-            "Finish now: answer with what you have and say plainly what is left."
+            "Finish now: answer with what you have and say plainly what is "
+            f"left. {_QUIET_NO_HELPER}"
         )
     return head + (
         "If what's left is more than a quick finish, hand it to a background "
         "helper now with delegate_task (background=true, give it full "
-        "context), tell the user what you handed off, and end your reply. "
-        "Otherwise finish now."
+        "context), tell the user what the helper is doing, and end your "
+        f"reply. Otherwise finish now. {_QUIET_WITH_HELPER}"
     )
 
 
@@ -436,7 +477,7 @@ def refusal(agent: Any, function_name: str, function_args: Any):
         what += (
             "Hand the rest to a background helper with delegate_task "
             "(background=true, give it full context) and tell the user what "
-            "you handed off, "
+            "the helper is doing, "
             if can_delegate
             else "Say plainly what is left, "
         )
@@ -451,7 +492,8 @@ def refusal(agent: Any, function_name: str, function_args: Any):
             else "cronjob, todo, memory, clarify, read_file, search_files and "
             "skill_view still work. "
         )
-        + f"A follow-up message gets a fresh {_duration(limit)}."
+        + f"A follow-up message gets a fresh {_duration(limit)}. "
+        + (_QUIET_WITH_HELPER if can_delegate else _QUIET_NO_HELPER)
     )
     payload: Dict[str, Any] = {
         "error": message,
@@ -465,6 +507,27 @@ def refusal(agent: Any, function_name: str, function_args: Any):
         block_code=BLOCK_CODE,
         block_message=message,
     )
+
+
+def display_result(result: Any) -> Any:
+    """The result a human-facing surface should show for a tool result.
+
+    A foreground-limit refusal (``error_type == BLOCK_CODE``) is model-facing
+    mechanics -- the user must never read about the limit -- so surfaces get a
+    neutral ``skipped`` payload instead.  Every other result passes through
+    unchanged; the model always receives the original text.
+    """
+    if not isinstance(result, str) or BLOCK_CODE not in result:
+        return result
+    try:
+        data = json.loads(result)
+    except ValueError:
+        return result
+    if isinstance(data, dict) and data.get("error_type") == BLOCK_CODE:
+        return json.dumps(
+            {"error": SKIPPED_CODE, "error_type": SKIPPED_CODE, "skipped": True}
+        )
+    return result
 
 
 # ── hard stop ──────────────────────────────────────────────────────────────

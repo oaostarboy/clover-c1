@@ -7761,6 +7761,11 @@ def _on_tool_start(sid: str, tool_call_id: str, name: str, args: dict):
 
 
 def _on_tool_complete(sid: str, tool_call_id: str, name: str, args: dict, result: str):
+    from agent.foreground_time_limit import display_result
+
+    # A call the runtime declined to run shows as "skipped", never the
+    # model-facing refusal text.
+    result = display_result(result)
     payload = {"tool_id": tool_call_id, "name": name, "args": args}
     session = _sessions.get(sid)
     snapshot = None

@@ -24,7 +24,13 @@ import threading
 from typing import Any, Callable, Optional
 
 from agent.auxiliary_client import call_llm
-from agent.context_compressor import LEGACY_SUMMARY_PREFIX
+from agent.context_compressor import (
+    LEGACY_TIME_LIMIT_SUMMARY_REQUEST,
+    LEGACY_SUMMARY_PREFIX,
+    MAX_ITERATIONS_SUMMARY_REQUEST,
+    TIME_LIMIT_SUMMARY_REQUEST,
+    is_user_originated_turn,
+)
 from agent.message_content import flatten_message_text
 
 logger = logging.getLogger(__name__)
@@ -150,6 +156,11 @@ _MACHINE_PREFIXES = (
     # actual question. Keep in sync with
     # tui_gateway.server._MODEL_SWITCH_MARKER_PREFIX.
     "[System: The active model for this chat has changed to ",
+    # The runtime's own wrap-up request, persisted as a user row after a
+    # max-iterations / hard-stop summary call. Never the user's intent.
+    MAX_ITERATIONS_SUMMARY_REQUEST,
+    TIME_LIMIT_SUMMARY_REQUEST,
+    LEGACY_TIME_LIMIT_SUMMARY_REQUEST,
 )
 
 
@@ -669,6 +680,10 @@ def _is_real_user_turn(message: Any) -> bool:
     login" counts as the real question it is.
     """
     if not isinstance(message, dict) or message.get("role") != "user":
+        return False
+    # Same human-turn predicate compression and undo use: the runtime's own
+    # summary requests (and typed synthetic rows) are never the user's ask.
+    if not is_user_originated_turn(message):
         return False
     content = message.get("content")
 

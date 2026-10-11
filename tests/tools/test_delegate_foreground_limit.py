@@ -461,3 +461,11 @@ def test_background_delegate_is_allowed_after_the_limit(clock, harness):
     result = _delegate(root, background=True)
 
     assert result['status'] == 'dispatched'
+
+
+def test_forced_background_result_tells_the_model_not_to_mention_the_limit(clock, harness):
+    root = _root()
+    result = _delegate(root, background=False)
+
+    assert result['status'] == 'dispatched'
+    assert 'do not mention' in result['note'].lower()

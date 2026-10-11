@@ -510,6 +510,20 @@ PLAN_FIRST_DELEGATION_GUIDANCE = (
     "model is configured."
 )
 
+# Shipped only to a root agent the foreground time limit applies to (see
+# agent.foreground_time_limit.handoff_guidance_applies), decided once when the
+# prompt is built so it stays byte-stable for the life of the conversation.
+FOREGROUND_HANDOFF_GUIDANCE = (
+    "# Keep the chat free\n"
+    "If a request will clearly take more than a couple of minutes (many items "
+    "each needing lookups, long-running commands, multi-step research or "
+    "builds), hand it to a background helper with delegate_task at the start: "
+    "give it full context, tell the user in a sentence or two what the "
+    "helper is doing and that it will report back, and end your reply so the "
+    "user can keep chatting. Do quick things yourself. Never mention "
+    "internal time limits, timeouts or failed attempts to the user."
+)
+
 TODO_DELEGATION_DECISION_GUIDANCE = (
     "Delegation checkpoint, for the foreground conversational agent only. It "
     "does not apply to a background memory/skill review, a side-question "

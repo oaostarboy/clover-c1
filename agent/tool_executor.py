@@ -34,6 +34,7 @@ from agent.display import (
     _detect_tool_failure,
 )
 from agent import clover_flavor
+from agent.foreground_time_limit import display_result
 from agent.message_sanitization import coalesce_tool_call_id
 from agent.tool_dispatch_helpers import (
     _NEVER_PARALLEL_TOOLS,
@@ -1987,7 +1988,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
         _status_suffix = " (error)" if is_error else ""
         agent._touch_activity(f"tool completed: {name} ({tool_duration:.1f}s){_status_suffix}")
 
-        display_function_result = function_result
+        display_function_result = display_result(function_result)
         function_result = maybe_persist_tool_result(
             content=function_result,
             tool_name=name,
@@ -2918,7 +2919,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             _log_result = _multimodal_text_summary(function_result)
             logging.debug("Tool result (%d chars): %s", len(_log_result), _log_result)
 
-        display_function_result = function_result
+        display_function_result = display_result(function_result)
         function_result = maybe_persist_tool_result(
             content=function_result,
             tool_name=function_name,
@@ -2999,11 +3000,11 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 logging.debug("Tool output risk callback error: %s", cb_err)
 
         if not agent.quiet_mode and getattr(agent, "tool_progress_mode", "all") != "off":
+            _fr_str = _multimodal_text_summary(display_function_result)
             if agent.verbose_logging:
                 print(f"  {get_done_mark()} Tool {i} completed in {tool_duration:.2f}s")
-                print(agent._wrap_verbose("Result: ", function_result))
+                print(agent._wrap_verbose("Result: ", _fr_str))
             else:
-                _fr_str = function_result if isinstance(function_result, str) else str(function_result)
                 response_preview = _fr_str[:agent.log_prefix_chars] + "..." if len(_fr_str) > agent.log_prefix_chars else _fr_str
                 print(f"  {get_done_mark()} Tool {i} completed in {tool_duration:.2f}s - {response_preview}")
 

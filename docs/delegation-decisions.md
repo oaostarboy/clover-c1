@@ -26,6 +26,21 @@ delegation:
   still allows reads and the final answer so a helper's result can be
   integrated. Steering or redirecting a running turn does not reset it; a
   follow-up message gets a fresh 5 minutes when it is consumed as its own turn.
+- **Up front, and quiet.** The limit is a backstop. Where it applies, the
+  system prompt (built once, so it stays byte-stable for the conversation)
+  tells the agent to hand clearly big jobs - many items each needing lookups,
+  long-running commands, multi-step research - to a background helper at the
+  start and say in a sentence or two what the helper is doing and that it will
+  report back, and to do quick things itself. Every model-facing limit text
+  (notice, refusal, forced-background result) tells the model not to mention
+  the limit, timeouts or failed attempts to the user. The hard-stop request
+  asks for a plain summary that keeps internal mechanics out of the reply; it
+  is stored with `display_kind="hidden"` (like the max-iterations request) so
+  no transcript, resume or export shows it as something the user wrote, while
+  the provider still replays it unchanged. The hard-stop fallback wording the
+  user can read is neutral and never carries an error message. A refused tool
+  shows as "skipped" on the CLI activity feed and in TUI / desktop tool rows;
+  only the model reads the refusal text.
 - **80%.** One notice, attached only to a tool result produced by the current
   iteration that has not been sent yet (never to an earlier turn or a
   caller-owned message): hand the rest to a background helper with
