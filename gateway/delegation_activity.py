@@ -1424,6 +1424,9 @@ def build_turn_publisher(
 
 ACK_MIN_INTERVAL = DEFAULT_MIN_INTERVAL
 ACK_TICK_SECONDS = 15.0
+# A running unified card follows the bottom of the chat like the 🔀 card did,
+# but re-posts at most this often.
+ACK_REPOST_MIN_SECONDS = 4.0
 _ACK_EDITORS: Dict[int, "AckCardEditor"] = {}
 
 
@@ -1459,7 +1462,15 @@ class AckCardEditor:
         self._task: Optional[asyncio.Task] = None
         self._ticking = False
         self.gone = False
+        self._edit_lock: Optional[asyncio.Lock] = None
+        self._last_repost = float("-inf")
+        self._repost_timer: Any = None
+        self._stale: List[str] = []
+        self._registered = False
+        # Shares the follow protocol with the 🔀 cards (follow_latest_message).
+        self._combined = False
         card.on_change = self.notify
+        self._register_live()
 
     # any thread
     def notify(self) -> None:
@@ -1501,8 +1512,136 @@ class AckCardEditor:
         return max(0.0, self._last_attempt + self._min_interval - self._clock(),
                    self._backoff_until - self._clock())
 
+    # -- follow the bottom of the chat (running unified cards only) ----------
+
+    @property
+    def _closed(self) -> bool:
+        """Not eligible to follow: gone, or finished (a done card stays put)."""
+        if self.gone:
+            return True
+        try:
+            return bool(self.card.finished)
+        except Exception:
+            return True
+
+    def _register_live(self) -> None:
+        if self._registered or self._closed:
+            return
+        try:
+            from agent.ack_checklist import unified
+
+            if not unified() or not _adapter_can_delete(self._adapter):
+                return
+        except Exception:
+            return
+        key = _inbox_key(self._adapter, self._chat_id)
+        with _LIVE_LOCK:
+            pubs = _LIVE.setdefault(key, [])
+            if self not in pubs:
+                pubs.append(self)
+                if len(pubs) > _LIVE_MAX_PER_CHAT:
+                    del pubs[: len(pubs) - _LIVE_MAX_PER_CHAT]
+        self._registered = True
+
+    def _unregister_live(self) -> None:
+        if not self._registered:
+            return
+        self._registered = False
+        key = _inbox_key(self._adapter, self._chat_id)
+        with _LIVE_LOCK:
+            pubs = _LIVE.get(key)
+            if pubs and self in pubs:
+                pubs.remove(self)
+                if not pubs:
+                    _LIVE.pop(key, None)
+
+    async def repost_live_cards(self) -> int:
+        """Re-post the card at the bottom when something newer was sent after
+        it, delete the old message, and keep editing the new one. Throttled;
+        a finished card never moves. Returns 1 if it moved."""
+        if self._closed:
+            self._unregister_live()
+            return 0
+        if self._edit_lock is None:
+            self._edit_lock = asyncio.Lock()
+        wait = self._last_repost + ACK_REPOST_MIN_SECONDS - self._clock()
+        if wait > 0:
+            self._repost_later(wait)
+            return 0
+        token = _CARD_SEND.set(True)
+        try:
+            async with self._edit_lock:
+                return await self._repost_locked()
+        except Exception:
+            logger.debug("ack card repost failed", exc_info=True)
+            return 0
+        finally:
+            _CARD_SEND.reset(token)
+
+    def _repost_later(self, delay: float) -> None:
+        if self._repost_timer is not None:
+            return
+
+        def _go() -> None:
+            self._repost_timer = None
+            if not self._closed:
+                self._loop.create_task(self.repost_live_cards())
+
+        try:
+            self._repost_timer = self._loop.call_later(max(0.0, delay), _go)
+        except RuntimeError:
+            self._repost_timer = None
+
+    async def _repost_locked(self) -> int:
+        if self._closed:
+            self._unregister_live()
+            return 0
+        last_out = _LAST_OUT.get(_inbox_key(self._adapter, self._chat_id))
+        if not (last_out and _is_newer(last_out, self._message_id)):
+            return 0  # already the newest message in the chat
+        self._last_repost = self._clock()
+        text = self.card.render()
+        if not text:
+            return 0
+        try:
+            kwargs: Dict[str, Any] = {}
+            if self._metadata is not None:
+                kwargs["metadata"] = self._metadata
+            result = await _maybe_await(
+                self._adapter.send(self._chat_id, _fit_to_limit(text, 4000), **kwargs)
+            )
+        except Exception:
+            logger.debug("ack card repost send failed", exc_info=True)
+            return 0
+        new_id = getattr(result, "message_id", None)
+        if not (getattr(result, "success", False) and new_id) or str(new_id) == "__no_edit__":
+            return 0
+        old_id = self._message_id
+        self._message_id = str(new_id)
+        self._last_text = text
+        self._last_attempt = self._clock()
+        self._failures = 0
+        self._backoff_until = float("-inf")
+        self.card.target = (id(self._adapter), self._chat_id, self._message_id)
+        for mid in [old_id] + list(self._stale):
+            if not mid or mid == self._message_id:
+                continue
+            try:
+                await _maybe_await(self._adapter.delete_message(self._chat_id, mid))
+                if mid in self._stale:
+                    self._stale.remove(mid)
+            except Exception:
+                logger.debug("old ack card delete failed", exc_info=True)
+                if mid not in self._stale:
+                    self._stale.append(mid)
+        del self._stale[8:]
+        if self.card.render() != self._last_text:
+            self.notify()  # changed while we were sending
+        return 1
+
     async def _run(self) -> None:
         # Bursts of ticks collapse: sleep out the gate, then render the latest.
+        self._register_live()
         while not self.gone:
             delay = self._delay()
             if delay > 0:
@@ -1512,7 +1651,12 @@ class AckCardEditor:
             if text == self._last_text:
                 self._tick_later()
                 return
-            if not await self._edit(text):
+            if self._edit_lock is None:
+                self._edit_lock = asyncio.Lock()
+            async with self._edit_lock:
+                # A repost may have run while we waited: edit what is current.
+                ok = await self._edit(self.card.render())
+            if not ok:
                 if self.gone or self._failures >= 8:
                     return
                 continue
