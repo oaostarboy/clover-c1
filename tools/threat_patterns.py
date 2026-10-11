@@ -58,6 +58,31 @@ MAX_SCAN_CHARS = 65_536
 # bypasses without introducing unbounded repetition.
 _FILLER = r"(?:\w+\s+){0,8}"
 
+# Operational C2 shapes for the tool-brand patterns.  Same-line only
+# (``[ \t]``, never ``\s``), base-form imperative verbs only (so "connected
+# to", "registers with" in prose don't count), bounded filler.
+_C2_BRANDS = r'(?:cobalt[ \t]*strike|sliver|havoc|mythic|metasploit)'
+_C2_DET = r'(?:(?:the|a|an|our|its|your|this|that|new|remote|my)[ \t]+)*'
+_C2_ROLE = r'(?:team[ \t]*server|server|c2|listener|controller|handler|operator|node|channel|infrastructure|callback|endpoint)'
+
+# Agent-side hand-shake: "connect to / register with / check in with / report
+# back to <the> <brand> <server-ish noun or host>".  Needs the role noun or a
+# host so "connect to Metasploit RPC" (tool integration) stays harmless.
+_C2_JOIN = (
+    r'\b(?:connect|register|beacon|check[ \t\-]?in|report|call[ \t]+back|phone[ \t]+home'
+    r'|join|enroll|authenticate|handshake)\b[ \t]+(?:back[ \t]+)?'
+    r'(?:to|with|at|from|into|via)[ \t]+' + _C2_DET + r'(?:\w+[ \t]+){0,2}?'
+    + _C2_BRANDS + r'\b(?:[ \t]+(?:\w+[ \t]+)?' + _C2_ROLE
+    + r'\b|[ \t]+(?:at|on|@)[ \t]+(?:https?://|\d{1,3}\.\d{1,3}))'
+)
+
+# Implant-side: "install/deploy/run the <brand> implant|beacon|agent|stager".
+_C2_IMPLANT = (
+    r'\b(?:install|deploy|launch|spawn|inject|drop|stage|execute|run|start|load)\b[ \t]+'
+    + _C2_DET + r'(?:\w+[ \t]+){0,2}?' + _C2_BRANDS
+    + r'\b[ \t]+(?:implants?|beacons?|stagers?|demons?|grunts?|agents?)\b'
+)
+
 # Each entry: (regex, pattern_id, scope)
 # scope ∈ {"all", "context", "strict"}
 _PATTERNS: List[Tuple[str, str, str]] = [
@@ -112,7 +137,15 @@ _PATTERNS: List[Tuple[str, str, str]] = [
     # blocked. "praxis" was removed for exactly this reason — it's a common
     # word and a legitimate agent name (Greek for practice/action), not a
     # C2-specific tell like the brands below.
-    (r'\b(?:cobalt\s*strike|sliver|havoc|mythic|metasploit|brainworm)\b', "known_c2_framework", "context"),
+    #
+    # A bare tool name is DESCRIPTIVE ("Installed: nmap, metasploit, burp"),
+    # and sliver/havoc/mythic are also plain English, so only the operational
+    # shapes below match: the agent being told to join/report to a C2 server,
+    # or to install/run an implant.  "brainworm" is the documented promptware
+    # name and stays an unconditional tell.
+    (r'\bbrainworm\b', "known_c2_framework", "context"),
+    (_C2_JOIN, "known_c2_framework", "context"),
+    (_C2_IMPLANT, "known_c2_framework", "context"),
     (r'\bc2\s+(?:server|channel|infrastructure|beacon)\b', "c2_explicit", "context"),
     (r'\bcommand\s+and\s+control\b', "c2_explicit_long", "context"),
 
