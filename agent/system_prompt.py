@@ -714,6 +714,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
             available_toolsets=avail_toolsets,
             compact_categories=_compact_cats or None,
             skills_dir_override=_agent_skills_dir(agent),
+            # Same decision as the mode block above (made once, byte-stable):
+            # only a root that carries the block gets the skills-section note.
+            delegation_mode_block=_delegation_guidance == DELEGATION_MODE_GUIDANCE,
         )
     else:
         skills_prompt = ""

@@ -506,7 +506,8 @@ TASK_COMPLETION_GUIDANCE = (
 # Replaces the older plan-first and "keep the chat free" paragraphs.
 DELEGATION_MODE_GUIDANCE = (
     "# Choosing how to work\n"
-    "Pick before any work tool. Direct: a quick answer, or brief lookups (a "
+    "Pick the mode from the user's request before any tool call, including "
+    "loading a skill. Direct: a quick answer, or brief lookups (a "
     "couple of minutes, a handful of tool calls); not sustained research or "
     "builds. Single helper: a big job with one thread of work; one "
     "delegate_task task. Parallel helpers: big work with many items each needing research, "
@@ -516,9 +517,17 @@ DELEGATION_MODE_GUIDANCE = (
     "needing lookups, commands that run for minutes, multi-step research or "
     "builds. Never pick direct because it is faster to start. \"Do it "
     "yourself\" means direct even if big; \"use helpers\" means a helper even "
-    "if small. Give every worker the plan, scope, inputs, acceptance checks "
-    "and ownership; carry them into later stages. After an accepted "
-    "dispatch, say in a sentence what is running, end your turn, don't poll. "
+    "if small. A skill says HOW the work is done, not WHO does it; its step "
+    "order is never a reason to start the work yourself. When the mode uses "
+    "helpers, call delegate_task within your first two tool calls for that "
+    "request (at most one skill load first): no research, workspace "
+    "inspection or data prep before it; give those to the helpers, and name "
+    "the skill and its reference files in each task so they load it. For "
+    "parallel work, dispatch the independent tasks in that one call; for "
+    "staged work, the first stage. Give every worker the plan, scope, inputs, "
+    "acceptance checks and ownership; carry them into later stages. After an "
+    "accepted dispatch, say in a sentence what is running, end your turn, "
+    "don't poll. "
     "If rejected, the job is still yours. Verify results before claiming "
     "done. Never mention internal limits, timeouts or retries; report "
     "genuine blockers honestly."
@@ -532,6 +541,16 @@ DELEGATION_PLAN_FALLBACK_GUIDANCE = (
     "For substantial work, plan first; delegate where supported, then "
     "integrate and verify the results before reporting. Handle quick work "
     "directly and respect the user's explicit instructions."
+)
+
+# One sentence in the skills section, ONLY on surfaces that carry the mode block
+# above (``agent.system_prompt._delegation_guidance_for``): the skills text says
+# "you MUST load it ... and follow its instructions", and nothing there said the
+# mode decision outranks a skill's own steps.  It names the block's heading so
+# the two stay one contract.  Static, so the prompt stays byte-stable.
+SKILLS_MODE_CHOICE_NOTE = (
+    "Loading a skill does not change who does the work; it guides you or the "
+    "helpers you dispatch under \"Choosing how to work\"."
 )
 
 TODO_DELEGATION_DECISION_GUIDANCE = (
@@ -1848,6 +1867,7 @@ def build_skills_system_prompt(
     available_toolsets: "set[str] | None" = None,
     compact_categories: "frozenset[str] | None" = None,
     skills_dir_override: "Path | None" = None,
+    delegation_mode_block: bool = False,
 ) -> str:
     """Build a compact skill index for the system prompt.
 
@@ -1868,6 +1888,10 @@ def build_skills_system_prompt(
     the rendered index. Nothing is ever hidden: every skill name stays
     visible and loadable via ``skill_view`` / ``skills_list``; only the
     descriptions are dropped, and a footer note explains the demotion.
+
+    ``delegation_mode_block`` is True only for a root whose prompt carries
+    ``DELEGATION_MODE_GUIDANCE``; the intro then adds ``SKILLS_MODE_CHOICE_NOTE``
+    so a skill's steps never read as deciding who does the work.
     """
     # Home resolution is EXPLICIT when a caller passes skills_dir_override
     # (the agent knows its own profile home from its session_db path). This
@@ -1903,6 +1927,7 @@ def build_skills_system_prompt(
             available_toolsets,
             effective_compact_categories,
             project_dirs=project_dirs,
+            delegation_mode_block=delegation_mode_block,
         )
     finally:
         if _home_token is not None:
@@ -1916,6 +1941,7 @@ def _build_skills_system_prompt_inner(
     available_toolsets: "set[str] | None",
     compact_categories: "frozenset[str] | None",
     project_dirs: "list[Path] | None" = None,
+    delegation_mode_block: bool = False,
 ) -> str:
     # Include the resolved platform so per-platform disabled-skill lists
     # produce distinct cache entries (gateway serves multiple platforms).
@@ -1931,6 +1957,7 @@ def _build_skills_system_prompt_inner(
         _platform_hint,
         tuple(sorted(disabled)),
         tuple(sorted(compact_categories or ())),
+        bool(delegation_mode_block),
     )
     with _SKILLS_PROMPT_CACHE_LOCK:
         cached = _SKILLS_PROMPT_CACHE.get(cache_key)
@@ -2198,6 +2225,7 @@ def _build_skills_system_prompt_inner(
             "## Skills\n"
             "Before replying, scan the skills below. If a skill matches or is even partially relevant "
             "to your task, you MUST load it with skill_view(name) and follow its instructions. "
+            + (SKILLS_MODE_CHOICE_NOTE + " " if delegation_mode_block else "") +
             "Err on the side of loading — it is always better to have context you don't need "
             "than to miss critical steps, pitfalls, or established workflows. "
             "Skills contain specialized knowledge — API endpoints, tool-specific commands, "

@@ -23,6 +23,13 @@ with the tool schemas) names the four ways to work:
 - **Signals for big:** more than a couple of minutes - a dozen or more items
   each needing lookups, commands that run for minutes, multi-step research or
   builds. The root never picks direct just because it is faster to start.
+- **A skill says how, not who.** The mode is picked from the request before
+  any tool call, loading a skill included. A loaded skill never moves the work
+  onto the root; when the mode uses helpers the root calls `delegate_task`
+  within its first two tool calls (at most one skill load first), with no
+  research, workspace inspection or data prep before it, and names the skill and
+  its reference files in each task. The skills section of the prompt repeats
+  this in one sentence, on the surfaces that get the block only.
 - **Every worker is briefed:** scope, inputs, acceptance checks and ownership
   go in the task's `context`.
 - **After an accepted dispatch** the root acknowledges and ends the turn; it

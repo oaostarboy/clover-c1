@@ -15,6 +15,10 @@ mock provider over HTTP and a fake monotonic clock.  Contract:
 * The system prompt AND the tool schemas the provider receives are
   byte-identical across an ordinary turn, a helper-completion turn and a
   rebuilt agent for the same session.
+* A skill says how the work is done, never who does it: the mode is picked
+  before any tool call (loading a skill included), and on a surface that gets
+  the mode block the skills section says so too; on the fallback / none
+  surfaces the skills section is unchanged.
 """
 from __future__ import annotations
 
@@ -62,7 +66,7 @@ def _block() -> str:
 def test_block_is_short_and_has_no_numbers():
     block = _block()
     assert block.startswith(HEADING)
-    assert len(block.split()) <= 180
+    assert len(block.split()) <= 285
     assert not re.search(r'\d', block)
 
 
@@ -98,6 +102,47 @@ def test_block_keeps_internal_limits_private_but_blockers_honest():
     lowered = _block().lower()
     assert 'never mention' in lowered
     assert 'blocker' in lowered
+
+
+def test_block_picks_the_mode_before_any_tool_call_including_a_skill_load():
+    block = _block()
+    assert (
+        "Pick the mode from the user's request before any tool call, "
+        "including loading a skill."
+    ) in block
+    assert 'Pick before any work tool.' not in block
+
+
+def test_block_says_a_skill_decides_how_not_who():
+    block = _block()
+    assert 'A skill says HOW the work is done, not WHO does it' in block
+    assert 'its step order is never a reason to start the work yourself' in block
+    # it must come after the user-override sentence, as one decided paragraph
+    assert block.index('means a helper even if small.') < block.index('A skill says HOW')
+
+
+def test_block_sets_the_dispatch_deadline_for_helper_modes_and_names_the_skill():
+    lowered = _block().lower()
+    assert 'within your first two tool calls' in lowered
+    assert 'at most one skill load first' in lowered
+    assert 'no research, workspace inspection or data prep before it' in lowered
+    assert 'name the skill and its reference files in each task' in lowered
+    # parallel: independent tasks in the ONE call; staged: the first stage
+    assert 'independent tasks in that one call' in lowered
+    assert 'for staged work, the first stage' in lowered
+
+
+def test_the_user_override_and_direct_rules_are_untouched():
+    block = _block()
+    for sentence in (
+        'Never pick direct because it is faster to start.',
+        '"Do it yourself" means direct even if big; "use helpers" means a helper even if small.',
+        'After an accepted dispatch, say in a sentence what is running, end your turn, don\'t poll.',
+        'If rejected, the job is still yours.',
+        'Verify results before claiming done.',
+        'Never mention internal limits, timeouts or retries; report genuine blockers honestly.',
+    ):
+        assert ' '.join(sentence.split()) in ' '.join(block.split()), sentence
 
 
 # ── who gets it ────────────────────────────────────────────────────────────
@@ -240,6 +285,141 @@ def test_choosing_a_mode_does_not_depend_on_the_time_limit(provider, value):
     _write_limit(value)
     agent = make_agent(provider)
     assert HEADING in _prompt(agent)
+
+
+# ── the skills section follows the mode block, never the other way round ───
+
+SKILLS_MODE_SENTENCE = (
+    'Loading a skill does not change who does the work; it guides you or the '
+    'helpers you dispatch under "Choosing how to work".'
+)
+SKILLS_TOOLSETS = ['todo', 'delegation', 'file', 'terminal', 'cronjob', 'clarify', 'skills']
+
+
+@pytest.fixture
+def one_skill():
+    """A real skills index (the live failure was a do-it-yourself research skill)."""
+    from agent.prompt_builder import clear_skills_system_prompt_cache
+    from clover_constants import get_clover_home
+
+    skill = get_clover_home() / 'skills' / 'research' / 'product-comparison-research'
+    skill.mkdir(parents=True)
+    (skill / 'SKILL.md').write_text(
+        '---\nname: product-comparison-research\n'
+        'description: Compare products from several sources.\n---\n'
+        '# Product comparison\nDo the steps yourself, in order.\n'
+    )
+    clear_skills_system_prompt_cache(clear_snapshot=True)
+    yield
+    clear_skills_system_prompt_cache(clear_snapshot=True)
+
+
+def _skills_agent(provider, platform='telegram', **kw):
+    return make_agent(provider, platform=platform, enabled_toolsets=SKILLS_TOOLSETS, **kw)
+
+
+def _skills_section(prompt: str) -> str:
+    start = prompt.index('## Skills\n')
+    return prompt[start:prompt.index('<available_skills>', start)]
+
+
+@pytest.mark.parametrize('platform', ['telegram', 'discord', 'slack', 'cli', 'tui'])
+def test_skills_section_carries_the_sentence_on_full_mode_surfaces(
+        provider, one_skill, platform):
+    prompt = _prompt(_skills_agent(provider, platform=platform))
+    assert _which(prompt) == {'mode'}
+    section = _skills_section(prompt)
+    assert prompt.count(SKILLS_MODE_SENTENCE) == 1
+    # right after the MUST-load sentence, before the rest of the skills text
+    assert (
+        'you MUST load it with skill_view(name) and follow its instructions. '
+        + SKILLS_MODE_SENTENCE
+    ) in section
+
+
+@pytest.mark.parametrize('how', ['cron', 'api_server', 'kanban', 'oneshot'])
+def test_skills_sentence_is_absent_on_fallback_surfaces(
+        provider, one_skill, monkeypatch, how):
+    from gateway.session_context import declare_stateless_channel
+
+    if how == 'kanban':
+        monkeypatch.setenv('CLOVER_KANBAN_TASK', 't-1')
+        agent = _skills_agent(provider, platform='cli')
+    elif how == 'oneshot':
+        agent = _skills_agent(provider, platform='cli')
+        agent._delegation_checkpoint_exempt = 'oneshot'
+        agent._foreground_limit_exempt = 'single_query'
+    else:
+        declare_stateless_channel()
+        agent = _skills_agent(provider, platform=how)
+    prompt = _prompt(agent)
+    assert _which(prompt) == {'fallback'}
+    assert SKILLS_MODE_SENTENCE not in prompt
+    # exactly today's text: the MUST-load sentence runs straight into the next
+    assert 'follow its instructions. Err on the side of loading' in _skills_section(prompt)
+
+
+def test_skills_sentence_is_absent_where_there_is_no_guidance_at_all(
+        provider, one_skill):
+    from agent.delegation_context import delegated_child_context
+
+    child = _skills_agent(provider)
+    with delegated_child_context():
+        child_prompt = _prompt(child)
+    assert _which(child_prompt) == set()
+    assert SKILLS_MODE_SENTENCE not in child_prompt
+    assert 'follow its instructions. Err on the side of loading' in _skills_section(child_prompt)
+
+    no_tool = make_agent(
+        provider, enabled_toolsets=['todo', 'file', 'terminal', 'skills'])
+    assert 'delegate_task' not in no_tool.valid_tool_names
+    no_tool_prompt = _prompt(no_tool)
+    assert _which(no_tool_prompt) == set()
+    assert SKILLS_MODE_SENTENCE not in no_tool_prompt
+    assert 'follow its instructions. Err on the side of loading' in _skills_section(no_tool_prompt)
+
+
+def test_the_skills_index_cache_does_not_mix_the_two_variants(provider, one_skill):
+    # Same skills dir, same tools, same process: a full-mode root and a
+    # fallback root must each get their own text from the in-process cache,
+    # whichever was built first.
+    import gateway.session_context as sc
+    from gateway.session_context import declare_stateless_channel
+
+    full = _prompt(_skills_agent(provider))
+    declare_stateless_channel()
+    fallback = _prompt(_skills_agent(provider, platform='cron'))
+    sc._SESSION_ASYNC_DELIVERY.set(sc._UNSET)
+    full_again = _prompt(_skills_agent(provider))
+
+    assert _which(full) == {'mode'} and _which(full_again) == {'mode'}
+    assert _which(fallback) == {'fallback'}
+    assert SKILLS_MODE_SENTENCE in full and SKILLS_MODE_SENTENCE in full_again
+    assert SKILLS_MODE_SENTENCE not in fallback
+    assert _skills_section(full_again) == _skills_section(full)
+
+
+def test_prompt_with_skills_is_byte_identical_across_turns_and_rebuilds(
+        clock, provider, one_skill):
+    session_id = 'mode-skills-stable-1'
+    agent = _skills_agent(provider, session_id=session_id)
+    provider.queue[:] = [text('first answer'), text('integrated'), text('after rebuild')]
+
+    first = agent.run_conversation('big job', conversation_history=[], task_id='sk-1')
+    clock.advance(400)
+    second = agent.run_conversation(
+        'helper finished', conversation_history=first['messages'], task_id='sk-2',
+        persist_user_display_kind='internal_notification')
+    rebuilt = _skills_agent(provider, session_id=session_id)
+    rebuilt.run_conversation(
+        'one more', conversation_history=second['messages'], task_id='sk-3')
+
+    systems = [_system_content(r) for r in provider.captured]
+    tools = [_tools_bytes(r) for r in provider.captured]
+    assert len(systems) == 3
+    assert SKILLS_MODE_SENTENCE in systems[0] and HEADING in systems[0]
+    assert all(s == systems[0] for s in systems), 'system prompt changed mid-conversation'
+    assert all(t == tools[0] for t in tools), 'tool schemas changed mid-conversation'
 
 
 # ── cache safety ───────────────────────────────────────────────────────────
