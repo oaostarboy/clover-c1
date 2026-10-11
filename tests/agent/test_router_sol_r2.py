@@ -74,7 +74,9 @@ def test_real_loop_stop_after_dispatch_is_not_replaced_by_handoff(aux, tmp_path,
     monkeypatch.setattr(agent, '_execute_tool_calls', stop_after_acceptance)
     result = agent.run_conversation('Audit local posture and verify results.')
     assert result['turn_exit_reason'] != 'delegation_handoff'
-    assert "They're still working" not in result['final_response']
+    # An interrupted turn may have no final text at all (None): that is the
+    # existing finalization, and what the probe must not see is the ack.
+    assert "They're still working" not in (result['final_response'] or '')
     # The existing interruption finalization is what ends the turn.
     assert result.get('interrupted') is True
 
