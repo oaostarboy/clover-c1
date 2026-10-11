@@ -2180,6 +2180,20 @@ DEFAULT_CONFIG = {
         # raise deliberately, each level multiplies API cost.
         "max_spawn_depth": 1,        # depth (1 = flat [default], 2 = orchestrator→leaf, 3+ = deeper)
         "orchestrator_enabled": True,  # kill switch for role="orchestrator"
+        # How a background fan-out (several helpers in one delegate_task call)
+        # reports back. "joined" (default): each helper's result is saved as it
+        # finishes and the chat hears ONE combined report, results in task
+        # order, a helper that did not finish marked incomplete; a straggler
+        # that finishes later is delivered once as a late result for the same
+        # fan-out. "each": every helper reports on its own (the original
+        # behaviour).
+        "fanout_delivery": "joined",
+        # joined mode only: once every helper but one has finished, wait at
+        # most this many seconds for the last one, then send the combined
+        # report with it marked incomplete (its result follows once if it
+        # finishes later). The card shows "waiting on helper N" meanwhile.
+        # 0 = never cut the wait short (only the stall monitor bounds it).
+        "fanout_straggler_seconds": 300,
         # When a subagent hits a dangerous-command approval prompt, the parent's
         # prompt_toolkit TUI owns stdin — a thread-local input() call from the
         # subagent worker would deadlock the parent UI. To avoid the deadlock,

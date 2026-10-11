@@ -1590,6 +1590,14 @@ delegation:
                                               # Raise to 2 to allow workers to spawn their own subagents.
                                               # Requires role="orchestrator" on intermediate agents.
   # orchestrator_enabled: true                # Kill switch for role="orchestrator" children (default: true).
+  # fanout_delivery: joined                   # How a background fan-out reports back (default: joined).
+                                              # joined: ONE combined report once the helpers are done, results in task order;
+                                              #   a helper that did not finish is marked incomplete and, if it finishes later,
+                                              #   its result is delivered once as a late result for the same fan-out.
+                                              # each: every helper reports on its own, as soon as it finishes.
+  # fanout_straggler_seconds: 300             # joined mode: once all but one helper are done, wait at most this long for the
+                                              # last one, then send the combined report with it marked incomplete (its result
+                                              # follows once if it finishes later). 0 = never cut the wait short.
   # subagent_auto_approve: false              # When a subagent hits a dangerous-command approval prompt, auto-deny (default: false)
                                               # or auto-approve "once" (true) instead of blocking on stdin.
                                               # The parent TUI owns stdin, so blocking would deadlock; non-interactive resolution is required.

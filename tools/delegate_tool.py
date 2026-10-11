@@ -1073,6 +1073,62 @@ def _get_orchestrator_enabled() -> bool:
     return True
 
 
+def _get_fanout_delivery() -> str:
+    """How a background fan-out reports back: ``joined`` (default) or ``each``.
+
+    ``joined`` re-enters the root once, with every helper's result in task
+    order; ``each`` is the original one-turn-per-helper behaviour. Anything
+    unrecognised keeps the default.
+    """
+    cfg = _load_config()
+    value = cfg.get("fanout_delivery", "joined")
+    if isinstance(value, str) and value.strip().lower() == "each":
+        return "each"
+    return "joined"
+
+
+_DEFAULT_FANOUT_STRAGGLER_SECONDS = 300.0
+
+
+def _get_fanout_straggler_seconds() -> float:
+    """Joined fan-out: how long to wait for the LAST helper once the others
+    are done (``delegation.fanout_straggler_seconds``; 0 = never cut a wait
+    short, the stall monitor alone bounds it). Invalid values keep the default."""
+    cfg = _load_config()
+    value = cfg.get("fanout_straggler_seconds", _DEFAULT_FANOUT_STRAGGLER_SECONDS)
+    if isinstance(value, bool):
+        return _DEFAULT_FANOUT_STRAGGLER_SECONDS
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_FANOUT_STRAGGLER_SECONDS
+    return seconds if seconds > 0 else 0.0
+
+
+def _request_identity(parent_agent, ticket) -> Dict[str, Any]:
+    """The originating request a background batch answers.
+
+    ``turn_id`` is the root turn that dispatched it; ``request_id`` and
+    ``generation`` come from the delegation checkpoint ticket when one is
+    active. Persisted with the batch so a result is delivered to, and framed
+    as the answer to, that request rather than whatever chat is newest.
+    """
+    identity: Dict[str, Any] = {}
+    turn_id = str(getattr(parent_agent, "_current_turn_id", "") or "")
+    if turn_id:
+        identity["turn_id"] = turn_id
+    if ticket is not None:
+        generation = getattr(ticket, "generation", None)
+        if isinstance(generation, int):
+            identity["generation"] = generation
+        request_id = str(
+            getattr(getattr(ticket, "checkpoint", None), "request_id", "") or ""
+        )
+        if request_id:
+            identity["request_id"] = request_id
+    return identity
+
+
 def _get_inherit_mcp_toolsets() -> bool:
     """Whether narrowed child toolsets should keep the parent's MCP toolsets."""
     cfg = _load_config()
@@ -1607,6 +1663,18 @@ def _build_child_progress_callback(
 
         if event_type == "subagent.complete":
             _relay("subagent.complete", preview=preview, **kwargs)
+            return
+
+        if event_type == "subagent.awaiting":
+            # The root is waiting on this helper (every other one is done), or
+            # has stopped waiting. Card-only signal, like late_result.
+            _relay("subagent.awaiting", awaiting=bool(kwargs.get("awaiting", True)))
+            return
+
+        if event_type == "subagent.late_result":
+            # Fan-out helper finished after the combined report went out.
+            # Card-only signal (see tui_gateway _GATEWAY_ONLY_SUBAGENT_EVENTS).
+            _relay("subagent.late_result")
             return
 
         if event_type == "subagent.queued":
@@ -4187,8 +4255,24 @@ def _validate_batch_tasks(task_list: List[Dict[str, Any]]) -> Optional[str]:
     return None
 
 
-def _background_dispatch_note(n: int) -> str:
-    """Model-facing note returned when a background delegation is accepted."""
+def _background_dispatch_note(n: int, joined: bool = False) -> str:
+    """Model-facing note returned when a background delegation is accepted.
+
+    ``joined`` (``delegation.fanout_delivery: joined``) tells the model the
+    parallel results come back together, not one by one. This is a per-call
+    tool result, so it never touches the cached prompt or tool schemas.
+    """
+    if n > 1 and joined:
+        return (
+            f"{n} subagents are running in parallel in the background. You "
+            f"and the user can keep working. Their results come back to you "
+            f"together, once, in task order, when they have finished — a "
+            f"helper with no result is marked incomplete there, and a "
+            f"straggler's result follows separately. Do not wait or poll — "
+            f"just continue. If you already told the user a result from a "
+            f"live transcript, do not announce that same result again when "
+            f"the combined results arrive."
+        )
     if n == 1:
         return (
             "Subagent is running in the background. You and the user can "
@@ -5037,9 +5121,18 @@ def delegate_task(
                         logger.debug("Live transcript finalize failed", exc_info=True)
                     if idx < len(live_paths):
                         entry["live_transcript"] = live_paths[idx]
-                publish_batch_child_completion(
+                outcome = publish_batch_child_completion(
                     entry, delegation_id=_batch_delegation_id
                 )
+                if outcome == "late":
+                    # The combined report already went out without this
+                    # helper; leave a note on its card (card-only event).
+                    late_cb = getattr(children[idx][2], "tool_progress_callback", None)
+                    if callable(late_cb):
+                        try:
+                            late_cb("subagent.late_result")
+                        except Exception:
+                            logger.debug("Late-result card note failed", exc_info=True)
 
             return _execute_and_aggregate(
                 honor_parent_interrupt=False, on_child_complete=_publish_child
@@ -5086,9 +5179,23 @@ def delegate_task(
                     parts.append(None)
             return tuple(parts), in_tool
 
+        def _straggler_notify(indexes, waiting):
+            # Card note: "waiting on helper N" while the root holds the
+            # combined report for the last helper (card-only event).
+            for idx in indexes:
+                if not (isinstance(idx, int) and 0 <= idx < len(children)):
+                    continue
+                cb = getattr(children[idx][2], "tool_progress_callback", None)
+                if callable(cb):
+                    try:
+                        cb("subagent.awaiting", awaiting=bool(waiting))
+                    except Exception:
+                        logger.debug("Straggler card note failed", exc_info=True)
+
         _goals = [t["goal"] for t in task_list]
         from tools.async_delegation import _new_delegation_id
         _batch_delegation_id = live_deleg_id or _new_delegation_id()
+        _fanout_mode = _get_fanout_delivery()
         dispatch = dispatch_async_delegation_batch(
             goals=_goals,
             context=context,
@@ -5108,6 +5215,12 @@ def delegate_task(
             # returned delegation_id matches cache/delegation/live/<id>/.
             delegation_id=_batch_delegation_id,
             progress_fn=_batch_progress,
+            fanout_delivery=_fanout_mode,
+            request_identity=_request_identity(parent_agent, _checkpoint_ticket),
+            straggler_seconds=(
+                _get_fanout_straggler_seconds() if _fanout_mode == "joined" else 0
+            ),
+            straggler_notify=_straggler_notify,
         )
 
         if dispatch.get("status") == "dispatched":
@@ -5115,7 +5228,7 @@ def delegate_task(
             # the short verification window (agent.foreground_time_limit).
             _fg_limit.note_own_dispatch(parent_agent, dispatch.get("delegation_id"))
             n = len(_goals)
-            note = _background_dispatch_note(n)
+            note = _background_dispatch_note(n, joined=_fanout_mode == "joined")
             if _fg_forced_background:
                 note = (
                     "The foreground time limit applies to this message, so "
@@ -6132,8 +6245,10 @@ def _model_background_value(args: dict, parent_agent=None) -> bool:
 
     Delegations from the top-level agent always run in the background — the
     model does not choose. A single task re-enters as one result. A fan-out
-    publishes each child as it finishes and does not send a second combined
-    message when every child was already published. The one
+    reports back per ``delegation.fanout_delivery``: together, once, in task
+    order (``joined``, the default) or each child as it finishes (``each``,
+    with no second combined message when every child was already published).
+    The one
     exception is a delegation from an orchestrator subagent (depth > 0), which
     needs its workers' results within its own turn. The live path is
     ``run_agent._dispatch_delegate_task``; this lambda mirrors it for the rare

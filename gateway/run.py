@@ -28409,6 +28409,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     metadata["completion_kind"],
                     metadata["completion_title"],
                 ) = _identity
+            # The trusted originating-request tuple of a joined / late
+            # fan-out result: session pinning alone does not say WHICH
+            # request (turn / generation) the result answers.
+            for _req_key in (
+                "request_turn_id", "request_id", "request_generation",
+                "batch_delegation_id",
+            ):
+                if evt.get(_req_key) not in (None, ""):
+                    metadata[_req_key] = evt[_req_key]
+            if evt.get("late_result"):
+                metadata["late_result"] = True
             if evt.get("_coalesced_siblings"):
                 metadata["completion_inbox_siblings"] = [
                     list(sib) for sib in evt["_coalesced_siblings"]

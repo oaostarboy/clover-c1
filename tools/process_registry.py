@@ -3233,7 +3233,31 @@ def _format_async_delegation(evt: dict) -> str:
         goals = evt.get("goals") or []
         n = len(results) if results else len(goals)
         total_dur = evt.get("total_duration_seconds", duration)
-        if evt.get("partial_child_delivery"):
+        joined = evt.get("fanout_delivery") == "joined"
+        missing = evt.get("incomplete_indexes") or []
+        if joined:
+            binding = (
+                "These results answer the request you dispatched this fan-out "
+                "for (the context below), which may not be what the user is "
+                "asking about now. Report them as the answer to that request."
+            )
+            if missing:
+                intro = (
+                    f"A background fan-out of {n} subagent(s) you dispatched "
+                    f"earlier has reported back, in task order. {len(missing)} "
+                    "of them have no result yet (marked INCOMPLETE below). "
+                    "Report what you have, say plainly which part is still "
+                    "missing, and do not invent it. If one of them finishes "
+                    "later, its result arrives separately as a late result "
+                    f"for this same fan-out. {binding}"
+                )
+            else:
+                intro = (
+                    f"A background fan-out of {n} subagent(s) you dispatched "
+                    "earlier has finished. Their results are below, in task "
+                    f"order. {binding}"
+                )
+        elif evt.get("partial_child_delivery"):
             intro = (
                 "Some children in this fan-out already re-entered on their own. "
                 "The results below are only the ones that were not published "
@@ -3278,6 +3302,15 @@ def _format_async_delegation(evt: dict) -> str:
             r_summary = r.get("summary")
             r_error = r.get("error")
             r_goal = goals[idx] if idx < len(goals) else r.get("goal", "")
+            if r.get("incomplete"):
+                lines.append("")
+                lines.append(
+                    f"--- ⏳ TASK {idx + 1}/{n}"
+                    + (f": {r_goal}" if r_goal else "")
+                    + "  (INCOMPLETE) ---"
+                )
+                lines.append("(no result recorded for this helper yet)")
+                continue
             r_truncated = r.get("truncated") or r.get("exit_reason") == "max_iterations"
             icon = "⚠" if r_truncated else ("✓" if r_status in ("completed", "success") else "✗")
             lines.append("")
@@ -3324,13 +3357,30 @@ def _format_async_delegation(evt: dict) -> str:
     if isinstance(dispatched_at, (int, float)):
         age = f" ({_format_age(completed_at - dispatched_at)} ago)"
 
-    lines = [
-        f"[ASYNC DELEGATION COMPLETE — {deleg_id}]",
-        "A background subagent you dispatched earlier has finished. You may "
-        "have moved on since dispatching it; the full task source is below so "
-        "you can act on the result or re-dispatch if things have changed.",
-        "",
-    ]
+    if evt.get("late_result"):
+        _late_index = evt.get("task_index")
+        _late_of = (
+            f" (helper {_late_index + 1} of {evt['task_count']})"
+            if isinstance(_late_index, int) and isinstance(evt.get("task_count"), int)
+            else ""
+        )
+        lines = [
+            f"[ASYNC DELEGATION LATE RESULT — {deleg_id}]",
+            f"A helper{_late_of} from fan-out {evt.get('batch_delegation_id')} "
+            "finished after you were already given that fan-out's combined "
+            "results, where it was marked INCOMPLETE. This is the missing "
+            "part of that earlier answer, not a new request: report it "
+            "briefly as such and do not repeat what you already reported.",
+            "",
+        ]
+    else:
+        lines = [
+            f"[ASYNC DELEGATION COMPLETE — {deleg_id}]",
+            "A background subagent you dispatched earlier has finished. You may "
+            "have moved on since dispatching it; the full task source is below so "
+            "you can act on the result or re-dispatch if things have changed.",
+            "",
+        ]
     if isinstance(dispatched_at, (int, float)):
         ts = _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(dispatched_at))
         lines.append(f"Dispatched: {ts}{age}")

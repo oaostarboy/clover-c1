@@ -86,6 +86,8 @@ _ICONS = {
 # verified: neither the done mark (false success) nor the "still waiting" ⏳.
 _UNVERIFIED_ICON = "❔"
 _UNVERIFIED_BODY = "exited, result not verified"
+# A helper whose result arrived after its fan-out's combined report went out.
+_LATE_BODY = "finished after the combined report:"
 
 # delegate_task / _run_single_child completion statuses -> lifecycle state.
 _COMPLETE_STATUS = {
@@ -337,6 +339,13 @@ class ChildActivity:
     # be verified (lifecycle-only parser, or no result record). Distinct from
     # running out of steps: it is rendered "exited, result not verified".
     exited_unverified: bool = False
+    # Finished after the fan-out's combined report already went out; its
+    # result is delivered separately (card note only, never a state change).
+    late_result: bool = False
+    # The root is holding the fan-out's combined report for this helper (every
+    # other helper is done): "waiting on helper N" until it ends or the wait
+    # is given up.
+    awaited: bool = False
     files_written: List[str] = field(default_factory=list)
     duration_s: Optional[float] = None
     alerted: Set[str] = field(default_factory=set)
@@ -387,6 +396,8 @@ class ChildActivity:
             "note": self.note,
             "summary": self.summary,
             "exited_unverified": self.exited_unverified,
+            "late_result": self.late_result,
+            "awaited": self.awaited,
             "files_written": list(self.files_written),
             "duration_s": self.duration_s,
         }
@@ -499,12 +510,30 @@ class DelegationActivityTracker:
             group_id = str(kw.get("delegation_id") or "delegation")
             group = self._groups.get(group_id)
             if group is None:
-                if et in {"subagent.progress", "subagent.text"}:
+                if et in {
+                    "subagent.progress", "subagent.text",
+                    "subagent.late_result", "subagent.awaiting",
+                }:
                     return None, []
                 group = DelegationGroup(group_id=group_id, created_at=now)
                 self._groups[group_id] = group
             child = self._child_for(group, kw, now)
             self._refresh_identity(child, kw)
+            if et == "subagent.late_result":
+                # A note on a worker that already ended: terminal state is
+                # never touched, and a replay changes nothing.
+                if child.late_result:
+                    return None, []
+                child.late_result = True
+                child.last_event_at = now
+                return group_id, []
+            if et == "subagent.awaiting":
+                awaiting = bool(kw.get("awaiting", True))
+                if child.state in TERMINAL_STATES or child.awaited == awaiting:
+                    return None, []
+                child.awaited = awaiting
+                child.last_event_at = now
+                return group_id, []
             if child.state in TERMINAL_STATES:
                 return None, []  # final: late/replayed events cannot regress it
             alerts: List[str] = []
@@ -1024,6 +1053,8 @@ def _worker_rows(child: ChildActivity, now: float, *, live: bool) -> List[str]:
     if calls:
         bits.append(f"🛠 {calls} tool call{'s' if calls != 1 else ''}")
     if live:
+        if child.awaited and child.state not in TERMINAL_STATES:
+            bits.append(f"⏳ waiting on helper {child.index + 1}")
         bits.append(_doing(child, now).replace("🔧 ", ""))
     else:
         bits.append(f"⏱ {_elapsed(child, now)}")
@@ -1180,7 +1211,8 @@ def _quote(lines: List[str]) -> List[str]:
 
 def _final_body(child: ChildActivity, limit: int) -> str:
     if child.state == "completed":
-        return _truncate_words(child.summary or "", limit)
+        body = _truncate_words(child.summary or "", limit)
+        return f"{_LATE_BODY} {body}".strip() if child.late_result else body
     if child.exited_unverified:
         return _UNVERIFIED_BODY
     if child.state == "incomplete":

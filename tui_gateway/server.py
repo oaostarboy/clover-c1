@@ -7824,7 +7824,12 @@ def _on_tool_complete(sid: str, tool_call_id: str, name: str, args: dict, result
         _emit("todo.updated", sid, todo_state)
 
 
-_GATEWAY_ONLY_SUBAGENT_EVENTS = frozenset({"subagent.queued", "subagent.tool_done"})
+_GATEWAY_ONLY_SUBAGENT_EVENTS = frozenset(
+    {
+        "subagent.queued", "subagent.tool_done", "subagent.late_result",
+        "subagent.awaiting",
+    }
+)
 
 
 def _on_tool_progress(
