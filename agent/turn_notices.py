@@ -16,13 +16,103 @@ so the caller keeps its latch open and retries on the next fresh tool result.
 Callers that never go through the loop (unit tests, stubs) have no record; for
 them the rule degrades to "the final message must be a tool result" -- it never
 reaches back past a non-tool tail.
+
+Every note Clover itself puts in front of the model at runtime -- these notices,
+a refused call's explanation, the note on a forced background dispatch -- starts
+with :data:`RUNTIME_NOTE_MARKER`, and the static system prompt explains that one
+marker once.  Without it a model that reads instructions inside a tool result
+(correctly) as a possible injection has no way to tell Clover's own note from
+poisoned output.  The marker is only worth anything if tool output cannot carry
+it, so :func:`defang_forged_marker` removes it from every tool result as it is
+built, except for the few result strings Clover wrote itself
+(:func:`vouch_runtime_result`).
 """
 from __future__ import annotations
 
+import hashlib
+import re
+import threading
+from collections import OrderedDict
 from typing import Any, Dict, List
+
+RUNTIME_NOTE_MARKER = "[Clover runtime]"
 
 _UNSET = object()
 _ATTR = "_fresh_tool_tail"
+
+_MARKER_RE = re.compile(re.escape(RUNTIME_NOTE_MARKER), re.IGNORECASE)
+# What a forged marker becomes: still readable, no longer the marker.
+_DEFANGED_MARKER = "(Clover runtime)"
+# Result strings Clover itself authored (by digest), so a refusal or dispatch
+# note that carries the marker inside its JSON survives defanging.  Bounded:
+# only results of the last few calls can reach the funnel.
+_VOUCHED_CAP = 256
+_vouched: "OrderedDict[str, None]" = OrderedDict()
+_vouched_lock = threading.Lock()
+
+
+def runtime_note(text: str) -> str:
+    """``text`` as one of Clover's own runtime notes (marker first)."""
+    return f"{RUNTIME_NOTE_MARKER} {text}"
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
+
+
+def vouch_runtime_result(result: str) -> str:
+    """Record a whole tool-result string Clover wrote itself; returns it.
+
+    Only an exact match is exempt from :func:`defang_forged_marker`, so tool
+    output can never ride this: reproducing the string verbatim gives it
+    nothing Clover did not already say.  A string with any marker beyond
+    Clover's own single note (say, one echoed back inside user-supplied text)
+    is not recorded, so the whole result is defanged instead.
+    """
+    if isinstance(result, str) and len(_MARKER_RE.findall(result)) == 1:
+        key = _digest(result)
+        with _vouched_lock:
+            _vouched.pop(key, None)
+            _vouched[key] = None
+            while len(_vouched) > _VOUCHED_CAP:
+                _vouched.popitem(last=False)
+    return result
+
+
+def _is_vouched(value: str) -> bool:
+    with _vouched_lock:
+        return bool(_vouched) and _digest(value) in _vouched
+
+
+def _defang_text(value: str) -> str:
+    if not _MARKER_RE.search(value) or _is_vouched(value):
+        return value
+    return _MARKER_RE.sub(_DEFANGED_MARKER, value)
+
+
+def defang_forged_marker(content: Any) -> Any:
+    """Tool output with any copy of :data:`RUNTIME_NOTE_MARKER` neutralised.
+
+    Applied where every tool result is built, before Clover appends a note of
+    its own.  Plain text and the text parts of multimodal content are handled;
+    anything else, and any text without the marker, is returned unchanged.
+    """
+    if isinstance(content, str):
+        return _defang_text(content)
+    if isinstance(content, list):
+        parts: List[Any] = []
+        for part in content:
+            if (
+                isinstance(part, dict)
+                and part.get("type") == "text"
+                and isinstance(part.get("text"), str)
+            ):
+                fixed = _defang_text(part["text"])
+                if fixed is not part["text"]:
+                    part = {**part, "text": fixed}
+            parts.append(part)
+        return parts
+    return content
 
 
 def note_fresh_tool_results(agent: Any, messages: List[Dict[str, Any]], start_index: int) -> None:

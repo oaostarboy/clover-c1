@@ -47,8 +47,11 @@ runs in a background helper:
 
 The limit is a backstop, never something the user hears about: the system
 prompt tells an eligible root to hand clearly big jobs to a helper at the
-start (the delegation mode block), and every model-facing limit text says not
-to mention the limit, timeouts or failed attempts to the user.
+start and never to mention internal limits, timeouts or retries (the
+delegation mode block).  The model-facing texts here are plain notes marked
+``[Clover runtime]`` (``agent.turn_notices``) that say what to do; the same
+block explains the marker once.  They never ask to be hidden: a note that did
+read as an injection to a careful model, and the user heard about it.
 
 Scope is deliberately narrow: root conversational agents (``_delegate_depth ==
 0``) on gateway messaging platforms and the interactive CLI / TUI.  Subagents,
@@ -69,6 +72,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from agent.turn_notices import RUNTIME_NOTE_MARKER, runtime_note, vouch_runtime_result
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_LIMIT_SECONDS = 300.0
@@ -80,7 +85,9 @@ HARD_STOP_GRACE_SECONDS = 60.0
 HARD_STOP_MAX_ITERATIONS = 3
 BLOCK_CODE = "foreground_time_limit_reached"
 HARD_STOP_EXIT_REASON = "foreground_time_limit_hard_stop"
-NOTICE_MARKER = "[SYSTEM NOTICE: time limit]"
+# Opens the 80% notice; the loop counts notices by it, so it stays distinct
+# from every other runtime note (e.g. the run-budget wrap-up).
+NOTICE_MARKER = f"{RUNTIME_NOTE_MARKER} Time check:"
 # What every human-facing surface (activity feed, TUI / desktop tool rows) shows
 # for a refused call: a neutral "skipped", never the model-facing refusal text.
 SKIPPED_CODE = "skipped"
@@ -466,32 +473,21 @@ def _can_delegate(agent: Any) -> bool:
     return "delegate_task" in (getattr(agent, "valid_tool_names", None) or ())
 
 
-# Appended to every model-facing limit text: the user must never hear about the
-# limit, a timeout or a failed attempt.
-_QUIET_WITH_HELPER = (
-    "Do not mention this limit, timeouts or failed attempts to the user; just "
-    "say what the helper is doing and that it will report back."
-)
-_QUIET_NO_HELPER = (
-    "Do not mention this limit to the user; give your best answer now."
-)
-
-
 def notice_text(elapsed: float, limit: float, *, can_delegate: bool = True) -> str:
     head = (
         f"{NOTICE_MARKER} This reply has been working about {_duration(elapsed)}; "
-        f"the limit is {_duration(limit)}. "
+        f"the time limit is {_duration(limit)}. "
     )
     if not can_delegate:
         return head + (
-            "Finish now: answer with what you have and say plainly what is "
-            f"left. {_QUIET_NO_HELPER}"
+            "Finish now: give your best answer with what you have and say "
+            "plainly what is left."
         )
     return head + (
         "If what's left is more than a quick finish, hand it to a background "
         "helper now with delegate_task (background=true, give it full "
-        "context), tell the user what the helper is doing, and end your "
-        f"reply. Otherwise finish now. {_QUIET_WITH_HELPER}"
+        "context), tell the user briefly what the helper is doing and that "
+        "it will report back, and end your reply. Otherwise finish now."
     )
 
 
@@ -579,8 +575,8 @@ def refusal(agent: Any, function_name: str, function_args: Any):
         what = f"{lead}so '{name}' was not run. "
         what += (
             "Hand the rest to a background helper with delegate_task "
-            "(background=true, give it full context) and tell the user what "
-            "the helper is doing, "
+            "(background=true, give it full context) and tell the user "
+            "briefly what the helper is doing and that it will report back, "
             if can_delegate
             else "Say plainly what is left, "
         )
@@ -595,9 +591,9 @@ def refusal(agent: Any, function_name: str, function_args: Any):
             else "cronjob, todo, memory, clarify, read_file, search_files and "
             "skill_view still work. "
         )
-        + f"A follow-up message gets a fresh {_duration(episode.fresh_limit or limit)}. "
-        + (_QUIET_WITH_HELPER if can_delegate else _QUIET_NO_HELPER)
+        + f"A follow-up message gets a fresh {_duration(episode.fresh_limit or limit)}."
     )
+    message = runtime_note(message)
     payload: Dict[str, Any] = {
         "error": message,
         "error_type": BLOCK_CODE,
@@ -606,7 +602,8 @@ def refusal(agent: Any, function_name: str, function_args: Any):
     if can_delegate:
         payload["recovery"] = {"tool": "delegate_task", "background": True}
     return dc.Verdict(
-        block_result=json.dumps(payload, ensure_ascii=False),
+        # Clover wrote this string; keep the marker through the result funnel.
+        block_result=vouch_runtime_result(json.dumps(payload, ensure_ascii=False)),
         block_code=BLOCK_CODE,
         block_message=message,
     )

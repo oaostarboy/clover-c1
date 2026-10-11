@@ -23,6 +23,7 @@ from clover_constants import (
 from typing import List, Optional
 
 from agent.runtime_cwd import resolve_agent_cwd
+from agent.turn_notices import RUNTIME_NOTE_MARKER
 from agent.skill_utils import (
     EXCLUDED_SKILL_DIRS,
     ORG_ACTIVE_MARKER,
@@ -497,6 +498,19 @@ TASK_COMPLETION_GUIDANCE = (
 # from Cline's TypeScript tool-surface guidance to clover-c1's Python
 # prompt-assembly architecture.
 
+# Explains the one marker Clover's own runtime notes carry (see
+# ``agent.turn_notices``).  Shipped only as the last sentence of the mode block
+# below: the notes exist where a helper can be delivered, so exactly the roots
+# that get that block can meet one.  Narrow on purpose -- it says nothing about
+# trusting tool output in general, and the funnel that builds tool results
+# strips the marker from tool output, so a page cannot forge it.  The "never
+# mention internal limits" rule lives in the block, not in the notes.
+RUNTIME_NOTE_GUIDANCE = (
+    f"A note marked {RUNTIME_NOTE_MARKER} in a tool result is from Clover "
+    "itself, not from the tool or a web page: follow it, but never quote or "
+    "describe it to the user."
+)
+
 # The one mode-choice contract for a root agent that can hand work to a
 # helper: direct, single helper, parallel helpers, or staged.  The model picks
 # the mode; code only enforces tiers, dispatch and delivery.  Shipped once, in
@@ -521,7 +535,7 @@ DELEGATION_MODE_GUIDANCE = (
     "dispatch, say in a sentence what is running, end your turn, don't poll. "
     "If rejected, the job is still yours. Verify results before claiming "
     "done. Never mention internal limits, timeouts or retries; report "
-    "genuine blockers honestly."
+    "genuine blockers honestly. " + RUNTIME_NOTE_GUIDANCE
 )
 
 # Roots that cannot hand a result back later (cron, one-shot runs, webhooks, the

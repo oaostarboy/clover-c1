@@ -48,6 +48,7 @@ from agent.turn_context import (
     compose_user_api_content,
     reanchor_current_turn_user_idx,
 )
+from agent.turn_notices import runtime_note
 from agent.turn_retry_state import TurnRetryState
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.message_sanitization import (
@@ -129,8 +130,7 @@ _INTERRUPT_SCAFFOLD_MARKER = "[This response was interrupted by a user correctio
 # One-time wrap-up notice appended when a wall-clock run budget crosses its
 # 80% threshold (agent.run_budget_seconds / --run-budget). Mirrors the Codex
 # CLI budget wrap-up template: stop new work, deliver from current state.
-RUN_BUDGET_WRAPUP_NOTICE = (
-    "[SYSTEM NOTICE — run time budget nearly exhausted] "
+RUN_BUDGET_WRAPUP_NOTICE = runtime_note(
     "Run time budget nearly exhausted. Stop new discovery/verification work "
     "now. Produce the required final deliverable (answer/JSON/summary) from "
     "the state you already have, completing only mandatory writes."

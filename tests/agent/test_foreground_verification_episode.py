@@ -537,10 +537,12 @@ def test_no_limit_or_timeout_wording_reaches_the_user_reply(
     result = completion_turn(agent, [did], task_id='quiet')
 
     assert result['final_response'] == 'Everything checks out.'
-    # any model-facing refusal text must tell the model to stay quiet about it
+    # any model-facing refusal text is a marked Clover note that never asks to
+    # be hidden (the keep-quiet rule is in the static prompt)
     for t in tool_texts(provider.captured[-1]):
         if fl.BLOCK_CODE in t:
-            assert 'Do not mention this limit' in t
+            assert '[Clover runtime]' in t
+            assert 'do not mention' not in t.lower()
 
 
 # ── human clocks and cache stability ───────────────────────────────────────

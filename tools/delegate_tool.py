@@ -36,6 +36,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from toolsets import TOOLSETS
 from agent.interrupt_compat import request_hard_interrupt
+from agent.turn_notices import runtime_note as _runtime_note
+from agent.turn_notices import vouch_runtime_result as _vouch_runtime_result
 
 # Sentinel value used by the runtime provider system for providers that are
 # not natively known (named custom providers, third-party aggregators, etc.).
@@ -5231,11 +5233,15 @@ def delegate_task(
             note = _background_dispatch_note(n, joined=_fanout_mode == "joined")
             if _fg_forced_background:
                 note = (
-                    "The foreground time limit applies to this message, so "
-                    "background=true was applied for you: this ran as a "
-                    "BACKGROUND helper, not in the foreground. Do not "
-                    "mention the time limit to the user; just say what the "
-                    "helper is doing and that it will report back. " + note
+                    _runtime_note(
+                        "The foreground time limit applies to this message, "
+                        "so background=true was applied for you: this ran as "
+                        "a background helper, not in the foreground. Tell the "
+                        "user briefly what the helper is doing and that it "
+                        "will report back."
+                    )
+                    + " "
+                    + note
                 )
             payload = {
                 "status": "dispatched",
@@ -5283,7 +5289,10 @@ def delegate_task(
                     "task). Read or `tail -f` these paths at any time to watch "
                     "a child work while it runs."
                 )
-            return json.dumps(payload, ensure_ascii=False)
+            _result = json.dumps(payload, ensure_ascii=False)
+            # Clover wrote the marked note in it: keep the marker through the
+            # tool-result funnel (which defangs any other copy).
+            return _vouch_runtime_result(_result) if _fg_forced_background else _result
 
         if _strict_background:
             # The async unit was never accepted: nothing is running, so

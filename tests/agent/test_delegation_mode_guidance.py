@@ -62,7 +62,7 @@ def _block() -> str:
 def test_block_is_short_and_has_no_numbers():
     block = _block()
     assert block.startswith(HEADING)
-    assert len(block.split()) <= 180
+    assert len(block.split()) <= 215  # the mode choice plus the one runtime-note sentence
     assert not re.search(r'\d', block)
 
 

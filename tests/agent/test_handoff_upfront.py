@@ -11,8 +11,9 @@ mock provider over HTTP and a fake monotonic clock.  Contract:
   for the life of the conversation.
 * Everything else (subagents, cron, one-shot runs, no ``delegate_task``, API
   server) gets no such guidance.
-* Nothing the user can read mentions the limit, a timeout or a failed attempt,
-  and everything the model reads about the limit tells it not to.
+* Nothing the user can read mentions the limit, a timeout or a failed attempt.
+  The keep-quiet rule is in the static prompt; the model-facing notes are
+  marked ``[Clover runtime]`` and say what to do, never "don't mention this".
 """
 from __future__ import annotations
 
@@ -197,16 +198,27 @@ def test_the_limit_setting_makes_no_difference_to_the_stable_prompt(provider):
 # ── model-facing limit text tells the model to keep quiet ──────────────────
 
 @pytest.mark.parametrize('can_delegate', [True, False])
-def test_notice_tells_the_model_not_to_mention_the_limit(can_delegate):
+def test_notice_is_a_marked_plain_note_not_a_hidden_instruction(can_delegate):
+    # The keep-quiet rule lives in the static prompt (the mode block); the note
+    # itself must not ask to be hidden, or a careful model reads it as an
+    # injection and tells the user so (C1.5 LEAKFIX).
     notice = fl.notice_text(240.0, 300.0, can_delegate=can_delegate)
     assert fl.NOTICE_MARKER in notice
-    assert 'do not mention' in notice.lower()
+    lowered = notice.lower()
+    assert 'do not mention' not in lowered
+    assert 'system notice' not in lowered
+
+
+def test_the_keep_quiet_rule_is_in_the_static_prompt_not_the_notes():
+    from agent.prompt_builder import DELEGATION_MODE_GUIDANCE
+
+    assert 'never mention internal limits' in DELEGATION_MODE_GUIDANCE.lower()
 
 
 def test_notice_with_delegate_says_what_to_tell_the_user():
     notice = fl.notice_text(240.0, 300.0, can_delegate=True).lower()
     assert 'report back' in notice
-    assert 'failed attempt' in notice or 'failed attempts' in notice
+    assert 'tell the user' in notice
 
 
 def test_notice_without_delegate_asks_for_the_best_answer_now():
@@ -218,7 +230,7 @@ def test_notice_without_delegate_asks_for_the_best_answer_now():
     (['todo', 'delegation', 'file', 'terminal'], True),
     (['todo', 'file', 'terminal'], False),
 ])
-def test_refusal_tells_the_model_not_to_mention_the_limit(
+def test_refusal_is_marked_and_does_not_ask_to_be_hidden(
         clock, provider, tools_enabled, delegate):
     agent = make_agent(provider, enabled_toolsets=tools_enabled)
     assert ('delegate_task' in agent.valid_tool_names) is delegate
@@ -229,8 +241,10 @@ def test_refusal_tells_the_model_not_to_mention_the_limit(
                        ('process', {'action': 'wait', 'session_id': 'p1'})):
         verdict = fl.refusal(agent, name, args)
         assert verdict is not None
-        assert 'do not mention' in verdict.block_message.lower()
-        assert 'do not mention' in verdict.block_result.lower()
+        for body in (verdict.block_message, verdict.block_result):
+            assert 'do not mention' not in body.lower()
+            assert 'system notice' not in body.lower()
+        assert verdict.block_message.startswith('[Clover runtime]')
 
 
 # ── nothing the user can read mentions the limit ───────────────────────────
@@ -604,7 +618,8 @@ def _assert_refused_for_the_model(result):
     lowered = body.lower()
     assert fl.BLOCK_CODE in body, body
     assert 'time limit' in lowered
-    assert 'do not mention' in lowered
+    assert '[clover runtime]' in lowered
+    assert 'do not mention' not in lowered
 
 
 @pytest.mark.parametrize('name,args', REFUSED)
