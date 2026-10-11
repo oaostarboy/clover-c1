@@ -1,7 +1,10 @@
-"""Plan-first delegation guidance is scoped to capable root agents."""
+"""Delegation mode guidance is scoped to capable root agents."""
 
 from agent.delegation_context import delegated_child_context
 from agent.system_prompt import build_system_prompt_parts
+
+HEADING = "# Choosing how to work"
+FALLBACK_HEADING = "# Plan first"
 
 
 def _prompt(tool_names, *, child=False, model="chosen/provider-model"):
@@ -34,23 +37,28 @@ def _prompt(tool_names, *, child=False, model="chosen/provider-model"):
     return stable
 
 
-def test_root_with_delegate_gets_plan_first_without_changing_selected_model():
+def test_root_with_delegate_gets_mode_guidance_without_changing_selected_model():
     prompt = _prompt(["delegate_task"], model="chosen/provider-model")
-    assert "first make a brief plan" in prompt
-    assert "selected model stays the orchestrator" in prompt
+    assert HEADING in prompt
+    assert "delegate_task" in prompt.split(HEADING, 1)[1]
 
 
 def test_leaf_worker_does_not_get_root_delegation_guidance():
     prompt = _prompt(["delegate_task"], child=True)
-    assert "# Plan-first delegation" not in prompt
+    assert HEADING not in prompt
+    assert FALLBACK_HEADING not in prompt
 
 
 def test_agent_without_delegation_tool_gets_no_delegation_guidance():
     prompt = _prompt(["terminal", "read_file"])
-    assert "# Plan-first delegation" not in prompt
+    assert HEADING not in prompt
+    assert FALLBACK_HEADING not in prompt
 
 
-def test_guidance_preserves_quick_task_and_provider_independence_exceptions():
-    prompt = _prompt(["delegate_task"])
-    assert "quick answers" in prompt
-    assert "never assume another provider or worker model is configured" in prompt
+def test_guidance_lets_quick_tasks_and_explicit_instructions_stay_direct():
+    from agent.prompt_builder import DELEGATION_MODE_GUIDANCE
+
+    lowered = DELEGATION_MODE_GUIDANCE.lower()
+    assert "direct" in lowered
+    assert "do it yourself" in lowered
+    assert "use helpers" in lowered

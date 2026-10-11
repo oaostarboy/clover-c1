@@ -1,15 +1,16 @@
-"""Hand clearly big jobs to a helper up front; never talk about the time limit (C1.4 P1b).
+"""Hand clearly big jobs to a helper up front; never talk about the time limit (C1.4 P1b, C1.5 A1).
 
 Real ``AIAgent`` roots, the real prompt builder and conversation loop, a local
 mock provider over HTTP and a fake monotonic clock.  Contract:
 
-* A root agent that the foreground limit applies to, on a surface that can
-  deliver a detached helper, with ``delegate_task`` available, is told in its
-  system prompt to hand clearly big jobs to a helper at the start and to keep
-  the chat free.  The decision is made once at prompt build, so the prompt is
-  byte-stable for the life of the conversation.
-* Everything else (subagents, cron, one-shot runs, limit off, no
-  ``delegate_task``, API server) gets no such guidance.
+* A root agent on a surface that can deliver a detached helper, with
+  ``delegate_task`` available, is told in its system prompt (the one
+  mode-choice block, see ``test_delegation_mode_guidance``) to hand clearly big
+  jobs to a helper at the start.  The decision is made once at prompt build,
+  and the time limit's config does not change it, so the prompt is byte-stable
+  for the life of the conversation.
+* Everything else (subagents, cron, one-shot runs, no ``delegate_task``, API
+  server) gets no such guidance.
 * Nothing the user can read mentions the limit, a timeout or a failed attempt,
   and everything the model reads about the limit tells it not to.
 """
@@ -33,7 +34,7 @@ from tests.agent.test_foreground_time_limit_loop import (  # noqa: F401
     TODO,
 )
 
-HEADING = '# Keep the chat free'
+HEADING = '# Choosing how to work'
 # Words a user must never read about an internal limit.
 LIMIT_WORDS = ('limit', 'timed out', 'time out', 'timeout', '5 minutes', 'five minutes')
 BANNED = ('limit', 'timed out', 'time out', 'timeout', '5 minutes', 'five minutes',
@@ -69,15 +70,13 @@ def test_root_agent_with_the_limit_on_and_delegate_task_gets_the_guidance(provid
     assert HEADING in _prompt(agent)
 
 
-def test_guidance_is_short_and_has_no_minute_numbers():
-    from agent.prompt_builder import FOREGROUND_HANDOFF_GUIDANCE
+def test_guidance_tells_the_model_to_keep_limits_private():
+    from agent.prompt_builder import DELEGATION_MODE_GUIDANCE
 
-    assert FOREGROUND_HANDOFF_GUIDANCE.startswith(HEADING)
-    assert len(FOREGROUND_HANDOFF_GUIDANCE.split()) <= 90
-    assert not re.search(r'\d', FOREGROUND_HANDOFF_GUIDANCE)
-    lowered = FOREGROUND_HANDOFF_GUIDANCE.lower()
+    lowered = DELEGATION_MODE_GUIDANCE.lower()
     assert 'delegate_task' in lowered
     assert 'never mention' in lowered
+    assert not re.search(r'\d', DELEGATION_MODE_GUIDANCE)
 
 
 def test_guidance_sits_in_the_stable_part_of_the_prompt(provider):
@@ -118,13 +117,6 @@ def test_cron_gets_no_guidance(provider):
 def test_oneshot_and_other_noninteractive_runs_get_no_guidance(provider, attr, value):
     agent = make_agent(provider, platform='cli')
     setattr(agent, attr, value)
-    assert HEADING not in _prompt(agent)
-
-
-@pytest.mark.parametrize('value', [0, None, False, 'off'])
-def test_limit_off_gets_no_guidance(provider, value):
-    _write_limit(value)
-    agent = make_agent(provider)
     assert HEADING not in _prompt(agent)
 
 
@@ -195,14 +187,11 @@ def test_system_prompt_is_byte_identical_across_turns_of_one_conversation(clock,
     assert third['final_response'] == 'third answer'
 
 
-def test_guidance_is_the_only_difference_the_limit_makes_to_the_stable_prompt(provider):
-    from agent.prompt_builder import FOREGROUND_HANDOFF_GUIDANCE
-
+def test_the_limit_setting_makes_no_difference_to_the_stable_prompt(provider):
     on = make_agent(provider)._build_system_prompt_parts()['stable']
     _write_limit(0)
     off = make_agent(provider)._build_system_prompt_parts()['stable']
-    assert FOREGROUND_HANDOFF_GUIDANCE in on
-    assert on.replace('\n\n' + FOREGROUND_HANDOFF_GUIDANCE, '') == off
+    assert on == off
 
 
 # ── model-facing limit text tells the model to keep quiet ──────────────────

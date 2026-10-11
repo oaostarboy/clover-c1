@@ -34,8 +34,8 @@ runs in a background helper:
 
 The limit is a backstop, never something the user hears about: the system
 prompt tells an eligible root to hand clearly big jobs to a helper at the
-start (``handoff_guidance_applies``), and every model-facing limit text says
-not to mention the limit, timeouts or failed attempts to the user.
+start (the delegation mode block), and every model-facing limit text says not
+to mention the limit, timeouts or failed attempts to the user.
 
 Scope is deliberately narrow: root conversational agents (``_delegate_depth ==
 0``) on gateway messaging platforms and the interactive CLI / TUI.  Subagents,
@@ -197,27 +197,6 @@ def applies(agent: Any) -> bool:
         from agent.delegation_context import is_delegated_child_context
 
         return not is_delegated_child_context()
-    except Exception:
-        return False
-
-
-def handoff_guidance_applies(agent: Any) -> bool:
-    """Should this agent's system prompt carry the up-front hand-off guidance?
-
-    The static half of the limit's own decision, evaluated once when the
-    prompt is built: ``delegate_task`` is available, the agent is a root the
-    limit applies to (:func:`applies`), the limit is on in config, and the
-    surface always has async delivery.  The API server is left out even when
-    a request carries a wake id -- that is a per-request fact, and the prompt
-    must not vary turn to turn.
-    """
-    try:
-        return bool(
-            _can_delegate(agent)
-            and applies(agent)
-            and load_limit_seconds() is not None
-            and _async_delivery_available()
-        )
     except Exception:
         return False
 

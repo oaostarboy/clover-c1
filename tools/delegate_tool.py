@@ -5846,10 +5846,11 @@ def _build_top_level_description(
         "While children run, `action` "
         "(list/steer/stop) controls them live — steer when a transcript shows "
         "a child drifting.\n\n"
-        "USE FOR: reasoning-heavy subtasks, work that would flood your context "
-        "with intermediate data, or independent parallel workstreams.\n"
+        "USE FOR: reasoning-heavy subtasks, work flooding your context with "
+        "intermediate data, independent parallel workstreams, long scripts, "
+        "many lookups.\n"
         "DO NOT USE FOR (use these instead):\n"
-        "- Mechanical multi-step work with no reasoning needed -> execute_code\n"
+        "- Short mechanical steps (a few lines) -> execute_code\n"
         "- A single tool call -> call the tool directly\n"
         "- Tasks needing user interaction -> subagents cannot ask questions\n"
         "- Durable work that must survive this session -> cronjob or "
@@ -5870,19 +5871,17 @@ def _build_top_level_description(
     )
 
     # Plan-first delegation guidance applies regardless of tiers; the
-    # value-routing sentence only makes sense when at least one tier
-    # actually resolves for this user (see _resolved_tiers).
+    # tier sentence only makes sense when at least one tier actually
+    # resolves for this user (see _resolved_tiers).
     plan_first = (
-        "\n\nPLAN FIRST, THEN DELEGATE: decide the approach yourself, then "
-        "give each child the concrete plan in `context`: exact files/paths, "
-        "steps, constraints, and how to verify done. Children should "
-        "execute, not re-plan; this saves tokens."
+        "\n\nPLAN FIRST, THEN DELEGATE: decide the approach, then give each "
+        "child its plan in `context`: exact paths, steps, constraints, how "
+        "to verify done. Children execute, not re-plan."
     )
     if resolved_tiers:
         plan_first += (
-            " Pick `tier` per task for value: code for coding, read for "
-            "large reading, check for adversarial review, fast for quick "
-            "chores, deep only for genuinely hard problems."
+            " Omit `tier` unless clearly review (check) or clearly hard "
+            "(deep); the configured default is used otherwise."
         )
 
     return base_description + plan_first

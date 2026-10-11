@@ -14,6 +14,8 @@ import json
 import threading
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import tools.delegate_tool as dt
 from tools.delegate_tool import (
     _build_child_agent,
@@ -233,18 +235,52 @@ class TestDynamicSchemaTierProperty:
 
 
 class TestTopLevelDescriptionPlanFirst:
+    _RESOLVED = {"code": {"provider": "anthropic", "model": "claude-sonnet-5"}}
+
     def test_plan_first_present_even_with_zero_resolved_tiers(self, monkeypatch):
         monkeypatch.setattr(dt, "_provider_authenticated_cached", lambda p: False)
         desc = dt._build_top_level_description(resolved_tiers={})
         assert "PLAN FIRST, THEN DELEGATE" in desc
-        assert "Pick `tier`" not in desc
+        assert "omit `tier`" not in desc
 
-    def test_tier_pick_sentence_only_when_tiers_resolve(self):
-        desc = dt._build_top_level_description(
-            resolved_tiers={"code": {"provider": "anthropic", "model": "claude-sonnet-5"}}
-        )
+    def test_tier_advice_is_to_omit_it_unless_review_or_hard(self):
+        desc = dt._build_top_level_description(resolved_tiers=self._RESOLVED)
         assert "PLAN FIRST, THEN DELEGATE" in desc
-        assert "Pick `tier`" in desc
+        lowered = desc.lower()
+        assert "omit `tier`" in lowered
+        assert "check" in lowered and "deep" in lowered
+        assert "default" in lowered
+
+    def test_no_per_task_tier_menu_in_the_top_level_description(self):
+        # Per-task value routing ("code for coding, fast for chores") made the
+        # model pick a tier on every task; the configured default does that now.
+        desc = dt._build_top_level_description(resolved_tiers=self._RESOLVED)
+        for tier in ("code", "read", "fast"):
+            assert f"{tier} for" not in desc
+
+    @pytest.mark.parametrize("orchestrator", [False, True])
+    @pytest.mark.parametrize("tiers", [False, True])
+    def test_every_variant_stays_under_the_length_ceiling(
+        self, monkeypatch, orchestrator, tiers
+    ):
+        # Nesting adds a rule to the top-level text; the budget must hold with
+        # it (and with tiers) too, not just on the default install.
+        monkeypatch.setattr(dt, "_get_max_spawn_depth", lambda: 3 if orchestrator else 1)
+        monkeypatch.setattr(dt, "_get_orchestrator_enabled", lambda: orchestrator)
+        desc = dt._build_top_level_description(
+            resolved_tiers=self._RESOLVED if tiers else {}
+        )
+        assert len(desc) <= 2200
+
+    def test_long_scripts_and_many_lookups_are_a_reason_to_hand_off(self):
+        desc = dt._build_top_level_description(resolved_tiers={})
+        use_for, _, avoid = desc.partition("DO NOT USE FOR")
+        assert avoid, "description lost its routing section"
+        lowered_use = use_for.lower()
+        assert "script" in lowered_use and "lookups" in lowered_use
+        # execute_code stays the answer only for short mechanical steps.
+        mechanical = next(line for line in avoid.splitlines() if "execute_code" in line)
+        assert "short" in mechanical.lower()
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ def test_restart_preserves_prompt(provider, tmp_path, initial, later):
     second = b.run_conversation('hello again', conversation_history=db.get_messages_as_conversation('stable'))
     prompts = _system_contents(provider.captured)
     assert len(prompts) == 2
-    assert ('# Keep the chat free' in prompts[0]) == initial
+    assert ('# Choosing how to work' in prompts[0]) == initial
     assert prompts[0] == prompts[1]
     assert second['final_response'] == 'second'
     db.close()

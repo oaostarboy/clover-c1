@@ -496,32 +496,42 @@ TASK_COMPLETION_GUIDANCE = (
 # Ported from cline/cline#11514 ("encourage parallel tool calls"), adapted
 # from Cline's TypeScript tool-surface guidance to clover-c1's Python
 # prompt-assembly architecture.
-PLAN_FIRST_DELEGATION_GUIDANCE = (
-    "# Plan-first delegation\n"
-    "For substantial work, first make a brief plan, then delegate independent "
-    "execution or research with delegate_task when that tool is available. You "
-    "remain responsible for planning, integrating the results, and verifying "
-    "the final outcome; your selected model stays the orchestrator. Handle "
-    "quick answers and genuinely small, single-step tasks directly without "
-    "delegation overhead. Do not delegate merely to satisfy a quota, do not "
-    "delegate work that depends on your own next step, and as a leaf worker do "
-    "not recursively delegate. Respect the user's explicit instructions and "
-    "configured tool availability; never assume another provider or worker "
-    "model is configured."
+
+# The one mode-choice contract for a root agent that can hand work to a
+# helper: direct, single helper, parallel helpers, or staged.  The model picks
+# the mode; code only enforces tiers, dispatch and delivery.  Shipped once, in
+# the stable part of the prompt, to roots that pass
+# ``agent.system_prompt._delegation_guidance_for`` -- decided when the prompt
+# is built, so it stays byte-stable for the life of the conversation.
+# Replaces the older plan-first and "keep the chat free" paragraphs.
+DELEGATION_MODE_GUIDANCE = (
+    "# Choosing how to work\n"
+    "Pick before any work tool. Direct: a quick answer, or brief lookups (a "
+    "couple of minutes, a handful of tool calls); not sustained research or "
+    "builds. Single helper: a big job with one thread of work; one "
+    "delegate_task task. Parallel helpers: big work with many items each needing research, "
+    "or independent parts; one task per part, grouped within tool capacity. "
+    "Staged: later work needs earlier output; dispatch one stage, then the "
+    "next once its artifacts check out. Big: a dozen or more items each "
+    "needing lookups, commands that run for minutes, multi-step research or "
+    "builds. Never pick direct because it is faster to start. \"Do it "
+    "yourself\" means direct even if big; \"use helpers\" means a helper even "
+    "if small. Give every worker the plan, scope, inputs, acceptance checks "
+    "and ownership; carry them into later stages. After an accepted "
+    "dispatch, say in a sentence what is running, end your turn, don't poll. "
+    "If rejected, the job is still yours. Verify results before claiming "
+    "done. Never mention internal limits, timeouts or retries; report "
+    "genuine blockers honestly."
 )
 
-# Shipped only to a root agent the foreground time limit applies to (see
-# agent.foreground_time_limit.handoff_guidance_applies), decided once when the
-# prompt is built so it stays byte-stable for the life of the conversation.
-FOREGROUND_HANDOFF_GUIDANCE = (
-    "# Keep the chat free\n"
-    "If a request will clearly take more than a couple of minutes (many items "
-    "each needing lookups, long-running commands, multi-step research or "
-    "builds), hand it to a background helper with delegate_task at the start: "
-    "give it full context, tell the user in a sentence or two what the "
-    "helper is doing and that it will report back, and end your reply so the "
-    "user can keep chatting. Do quick things yourself. Never mention "
-    "internal time limits, timeouts or failed attempts to the user."
+# Roots that cannot hand a result back later (cron, one-shot runs, webhooks, the
+# stateless API server, kanban workers) still plan and verify, but get no
+# "dispatch and end your turn" advice.  Same byte-stability as the block above.
+DELEGATION_PLAN_FALLBACK_GUIDANCE = (
+    "# Plan first\n"
+    "For substantial work, plan first; delegate where supported, then "
+    "integrate and verify the results before reporting. Handle quick work "
+    "directly and respect the user's explicit instructions."
 )
 
 TODO_DELEGATION_DECISION_GUIDANCE = (

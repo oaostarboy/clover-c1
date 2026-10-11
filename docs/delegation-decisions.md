@@ -5,6 +5,45 @@ work, it plans first and delegates useful independent execution or research
 without requiring you to request subagents. Small tasks can stay direct, and
 explicit requests not to use subagents take precedence.
 
+## Choosing how to work: four modes
+
+The root model picks the mode; code never classifies requests by keyword. One
+block in the system prompt (built once, byte-stable for the conversation, along
+with the tool schemas) names the four ways to work:
+
+| Mode | When | What the root does |
+| --- | --- | --- |
+| **Direct** | A quick answer, or brief lookups finished in a couple of minutes with a handful of tool calls; not sustained research or builds | Does it in the chat. |
+| **Single helper** | A big job with one thread of work (long report, build, long-running command) | Dispatches one `delegate_task` task with the whole plan in `context`, says in a sentence or two what is running, and ends the turn. |
+| **Parallel helpers** | Many items each needing their own research, or independent parts | One task per part, each with its own plan, grouped within tool capacity. |
+| **Staged** | Later work needs earlier output (build, then review) | Dispatches the first stage only; when its result returns, checks the artifacts, then dispatches the next stage, carrying scope, acceptance checks and artifact references forward. |
+
+- **The user's words win.** "Do it yourself" means direct even for a big job;
+  "use helpers" means a helper even for a small one.
+- **Signals for big:** more than a couple of minutes - a dozen or more items
+  each needing lookups, commands that run for minutes, multi-step research or
+  builds. The root never picks direct just because it is faster to start.
+- **Every worker is briefed:** scope, inputs, acceptance checks and ownership
+  go in the task's `context`.
+- **After an accepted dispatch** the root acknowledges and ends the turn; it
+  does not poll. A rejected dispatch is not a hand-off: the job is still the
+  root's. It verifies the results before saying the work is done.
+- **Private internals, honest blockers.** Limits, timeouts and retries are never
+  mentioned to the user; a genuine blocker is reported plainly.
+- **Who gets what:** a root agent with `delegate_task`, on a surface that can
+  deliver a helper's result later (messaging platforms, CLI / TUI), gets the
+  block. A root that cannot (cron, one-shot / batch runs, kanban workers,
+  webhooks, the API server without a session to wake) gets a short
+  delivery-neutral note instead - plan first, delegate where supported,
+  integrate and verify, handle quick work directly - with no "end your turn" or
+  "don't poll". Subagents, delegated children and agents without
+  `delegate_task` get neither. Each is decided once when the prompt is built,
+  and none depends on the time limit's setting.
+- **Tool description.** `delegate_task` tells the model to omit `tier` unless
+  the task is clearly review (`check`) or clearly hard (`deep`), and that long
+  scripts, long code cells and many lookups are reasons to hand off rather than
+  run inline.
+
 ## The foreground time limit
 
 Instead of a work-call cap, the main chat agent gets a **time limit per user
@@ -26,21 +65,18 @@ delegation:
   still allows reads and the final answer so a helper's result can be
   integrated. Steering or redirecting a running turn does not reset it; a
   follow-up message gets a fresh 5 minutes when it is consumed as its own turn.
-- **Up front, and quiet.** The limit is a backstop. Where it applies, the
-  system prompt (built once, so it stays byte-stable for the conversation)
-  tells the agent to hand clearly big jobs - many items each needing lookups,
-  long-running commands, multi-step research - to a background helper at the
-  start and say in a sentence or two what the helper is doing and that it will
-  report back, and to do quick things itself. Every model-facing limit text
-  (notice, refusal, forced-background result) tells the model not to mention
-  the limit, timeouts or failed attempts to the user. The hard-stop request
-  asks for a plain summary that keeps internal mechanics out of the reply; it
-  is stored with `display_kind="hidden"` (like the max-iterations request) so
-  no transcript, resume or export shows it as something the user wrote, while
-  the provider still replays it unchanged. The hard-stop fallback wording the
-  user can read is neutral and never carries an error message. A refused tool
-  shows as "skipped" on the CLI activity feed and in TUI / desktop tool rows;
-  only the model reads the refusal text.
+- **Up front, and quiet.** The limit is a backstop. The mode-choice block
+  (above) already tells the agent to hand clearly big jobs to a background
+  helper at the start and to do quick things itself. Every model-facing limit
+  text (notice, refusal, forced-background result) tells the model not to
+  mention the limit, timeouts or failed attempts to the user. The hard-stop
+  request asks for a plain summary that keeps internal mechanics out of the
+  reply; it is stored with `display_kind="hidden"` (like the max-iterations
+  request) so no transcript, resume or export shows it as something the user
+  wrote, while the provider still replays it unchanged. The hard-stop fallback
+  wording the user can read is neutral and never carries an error message. A
+  refused tool shows as "skipped" on the CLI activity feed and in TUI /
+  desktop tool rows; only the model reads the refusal text.
 - **80%.** One notice, attached only to a tool result produced by the current
   iteration that has not been sent yet (never to an earlier turn or a
   caller-owned message): hand the rest to a background helper with
