@@ -161,5 +161,5 @@ def log_write_lock_holders(db_path, patience_s: float) -> None:
     else:
         return  # no /proc/locks on this platform: nothing truthful to say
     logger.warning(
-        "state.db write lock unavailable for %.0fs (%s): %s", patience_s, Path(db_path).name, detail
+        "state.db write lock unavailable for %gs (%s): %s", round(float(patience_s), 1), Path(db_path).name, detail
     )
