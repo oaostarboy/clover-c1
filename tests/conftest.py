@@ -1834,6 +1834,35 @@ def _stub_update_preflight(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stub_delegation_router(request, monkeypatch):
+    """Default the delegation router to "no plan" for every test.
+
+    The router makes one auxiliary-model call at the start of each human turn
+    of a root chat agent. Left live, every test that drives a real root against
+    a scripted provider would have its first scripted response eaten by the
+    sizing call and see an extra request. Tests of the router, its note on the
+    user turn, and its backstop opt out with
+    ``@pytest.mark.real_delegation_router``.
+    """
+    if request.node.get_closest_marker("real_delegation_router"):
+        yield
+        return
+    try:
+        import agent.delegation_router as _router
+        import agent.router_backstop as _backstop
+    except Exception:
+        yield
+        return
+
+    def _no_plan(agent, user_message=None, history=None, display_kind=None):
+        _backstop.clear(agent)
+        return ""
+
+    monkeypatch.setattr(_router, "plan_for_turn", _no_plan)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_delegation_card_registries():
     """Per-chat card registries (live publishers, boards, last outbound id)
     are module globals keyed by id(adapter); a recycled id from an earlier

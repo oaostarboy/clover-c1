@@ -106,12 +106,15 @@ def compose_user_api_content(
     content: Any,
     ext_prefetch_cache: str,
     plugin_user_context: str,
+    work_plan: str = "",
 ) -> Optional[str]:
     """Compose the API-bound content of the current turn's user message.
 
     Sources: memory-manager prefetch + ``pre_llm_call`` plugin context with
-    target="user_message" (the default). Both are appended to the *API copy*
-    of the user message only — the stored content stays clean.
+    target="user_message" (the default), then the delegation router's
+    ``[Clover runtime] work plan:`` block (``agent.delegation_router``). All
+    are appended to the *API copy* of the user message only — the stored
+    content stays clean.
 
     This is the single source of that composition. The prologue stamps the
     result onto the live message as ``api_content`` (persisted alongside the
@@ -132,6 +135,8 @@ def compose_user_api_content(
             injections.append(fenced)
     if plugin_user_context:
         injections.append(plugin_user_context)
+    if work_plan:
+        injections.append(work_plan)
     if not injections:
         return None
     return content + "\n\n" + "\n\n".join(injections)
@@ -501,6 +506,9 @@ class TurnContext:
     plugin_user_context: str = ""
     # External-memory prefetch result, reused across loop iterations.
     ext_prefetch_cache: str = ""
+    # The delegation router's ``[Clover runtime] work plan:`` block for this
+    # turn (API copy of the user message only); "" when there is no plan.
+    work_plan: str = ""
     # Turn-start preflight already proved an immediate retry ineffective.
     preflight_compression_blocked: bool = False
 
@@ -1481,6 +1489,46 @@ def build_turn_context(
             except Exception:
                 pass
 
+    # ── delegation router ──
+    # Size the human message once, before the first model call, and carry the
+    # verdict as one more block on the API copy of THIS user message (beside the
+    # prefetch/plugin context): the stored text stays clean, no message is
+    # added, the cached prefix is untouched, and the sidecar below persists the
+    # exact bytes so a later turn replays them. Skipped wherever the sidecar is
+    # not stamped (MoA, codex app-server), so a plan can never exist without
+    # being sent. Never raises: the router must not be able to break a turn.
+    work_plan = ""
+    _router_user_msg = (
+        messages[current_turn_user_idx]
+        if 0 <= current_turn_user_idx < len(messages)
+        else None
+    )
+    if (
+        not moa_active
+        and getattr(agent, "api_mode", None) != "codex_app_server"
+        and isinstance(_router_user_msg, dict)
+        and _router_user_msg.get("role") == "user"
+    ):
+        try:
+            from agent.delegation_router import plan_for_turn
+
+            work_plan = plan_for_turn(
+                agent,
+                _router_user_msg.get("content"),
+                messages[:current_turn_user_idx],
+                persist_user_display_kind,
+            )
+        except Exception:
+            logger.debug("delegation router unavailable", exc_info=True)
+            work_plan = ""
+    else:
+        try:
+            from agent.router_backstop import clear as _clear_router_turn
+
+            _clear_router_turn(agent)
+        except Exception:
+            pass
+
     # ── api_content sidecar: persist what you send ──
     # The prefetch/plugin context above is injected into the API copy of this
     # turn's user message, never into the stored content — so on the next
@@ -1506,7 +1554,10 @@ def build_turn_context(
     ):
         _turn_user_msg = messages[current_turn_user_idx]
         _api_content = compose_user_api_content(
-            _turn_user_msg.get("content", ""), ext_prefetch_cache, plugin_user_context
+            _turn_user_msg.get("content", ""),
+            ext_prefetch_cache,
+            plugin_user_context,
+            work_plan,
         )
         if _api_content is not None and _api_content != _turn_user_msg.get("content"):
             _turn_user_msg["api_content"] = _api_content
@@ -1602,5 +1653,6 @@ def build_turn_context(
         should_review_memory=should_review_memory,
         plugin_user_context=plugin_user_context,
         ext_prefetch_cache=ext_prefetch_cache,
+        work_plan=work_plan,
         preflight_compression_blocked=_preflight_compression_blocked,
     )
