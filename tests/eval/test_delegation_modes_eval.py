@@ -1288,3 +1288,156 @@ def test_baseline_refuses_a_directory_that_would_overwrite_the_profile(tmp_path)
         with pytest.raises(ValueError, match="overlaps"):
             dm.FrozenBaseline.freeze(profile, bad)
     assert _tree(profile) == before
+
+
+# ---------------------------------------------------------------------------
+# Per-case fixtures: the files a prompt names must exist under {workdir}
+# ---------------------------------------------------------------------------
+
+FIXTURES = REPO_ROOT / "tests" / "eval" / "fixtures"
+
+
+def _pytest_in(directory: Path, *args: str):
+    import os
+    import subprocess
+
+    # A bare environment: the fixture suite must not inherit this run's pytest
+    # plugins, addopts or credentials, only what is needed to find python.
+    keep = ("PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "PYTHONPATH", "PYTHONNOUSERSITE")
+    env = {k: os.environ[k] for k in keep if k in os.environ}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args],
+        cwd=directory, env=env, capture_output=True, text=True, timeout=120,
+    )
+    return done.returncode, done.stdout + done.stderr
+
+
+class _CwdRecordingDriver(_ReplayDriver):
+    """Records, at session start (before any prompt), what the rep's cwd holds."""
+
+    def __init__(self, db, script, probe):
+        super().__init__(db, script)
+        self.probe, self.cwds, self.seen = probe, [], []
+
+    def session(self, *, model, provider, cwd):
+        self.cwds.append(Path(cwd))
+        self.seen.append(self.probe(Path(cwd)))
+        return super().session(model=model, provider=provider, cwd=cwd)
+
+
+def _run_cases(db, tmp_path, cases, probe, *, reps=1):
+    driver = _CwdRecordingDriver(db, _script, probe)
+    now = {"t": 0.0}
+    said: list[str] = []
+    runs = dm.run_eval(
+        cases, driver, reader=lambda sid: db.get_messages(sid),
+        root_model="fake-root", root_provider=None, reps=reps, evidence_reps=reps,
+        out_dir=tmp_path / "out", turn_timeout=10, settle_timeout=60,
+        quiet_seconds=1, poll_seconds=1,
+        clock=lambda: now["t"], sleep=lambda dt: now.__setitem__("t", now["t"] + dt),
+        progress=said.append,
+    )
+    return driver, runs, said
+
+
+def test_every_case_that_names_files_has_a_fixture_or_generator():
+    cases = dm.load_cases(CASES_PATH)
+    by_id = {c["id"]: c for c in cases}
+    for case_id in ("fix-three-bugs", "feature-flag-review"):
+        assert "{workdir}/shop" in by_id[case_id]["prompt"]
+        assert (FIXTURES / case_id / "shop").is_dir()
+    assert "{workdir}/recordings/conference-day1.mov" in by_id["video-transcode"]["prompt"]
+
+
+def test_fixtures_are_copied_into_each_reps_workdir_before_the_prompt(db, tmp_path):
+    cases = [
+        _case(id="fix-three-bugs", prompt="fix {workdir}/shop", expected_mode="parallel"),
+        _case(id="disk", prompt="What is my disk usage by folder?", expected_mode="direct"),
+    ]
+    probe = lambda cwd: sorted(p.name for p in cwd.iterdir())  # noqa: E731
+    driver, runs, _ = _run_cases(db, tmp_path, cases, probe, reps=2)
+
+    assert all(r["error"] is None for r in runs)
+    bugs = [c for c in driver.cwds if c.name.startswith("fix-three-bugs")]
+    assert len(bugs) == 2 and len(set(bugs)) == 2
+    for cwd in bugs:
+        assert (cwd / "shop" / "cart" / "pricing.py").is_file()
+    assert [s for c, s in zip(driver.cwds, driver.seen) if c in bugs] == [["shop"], ["shop"]]
+    assert [s for c, s in zip(driver.cwds, driver.seen) if c not in bugs] == [[], []]
+
+    # copies, not links: a rep editing its workdir never reaches the fixture or another rep
+    original = (FIXTURES / "fix-three-bugs" / "shop" / "cart" / "pricing.py").read_text()
+    (bugs[0] / "shop" / "cart" / "pricing.py").write_text("# edited\n")
+    assert (bugs[1] / "shop" / "cart" / "pricing.py").read_text() == original
+    assert (FIXTURES / "fix-three-bugs" / "shop" / "cart" / "pricing.py").read_text() == original
+
+
+def test_shop_with_the_three_bugs_fails_in_each_area(tmp_path):
+    dm.seed_case_fixtures("fix-three-bugs", tmp_path)
+    shop = tmp_path / "shop"
+    # exit 1 is "tests ran and failed"; anything else would be a broken run, not a red suite
+    rc, out = _pytest_in(shop)
+    assert rc == 1, out
+    for area in ("pricing", "export", "throttle"):
+        rc, out = _pytest_in(shop, f"tests/test_{area}.py")
+        assert rc == 1, (area, out)
+
+
+def test_feature_flag_shop_is_the_fixed_shop_plus_a_config(tmp_path):
+    dm.seed_case_fixtures("feature-flag-review", tmp_path)
+    shop = tmp_path / "shop"
+    rc, out = _pytest_in(shop)
+    assert rc == 0, out
+    assert (shop / "config.py").is_file()
+
+    buggy, fixed = FIXTURES / "fix-three-bugs" / "shop", FIXTURES / "feature-flag-review" / "shop"
+    rel = lambda root: {p.relative_to(root) for p in root.rglob("*") if p.is_file()}  # noqa: E731
+    assert rel(fixed) - rel(buggy) == {Path("config.py")}
+    assert rel(buggy) <= rel(fixed)
+    changed = {
+        p for p in rel(buggy)
+        if (buggy / p).read_bytes() != (fixed / p).read_bytes()
+    }
+    assert changed == {Path("cart/pricing.py"), Path("reports/export.py"), Path("auth/throttle.py")}
+
+
+def test_video_fixture_is_skipped_cleanly_when_ffmpeg_is_absent(db, tmp_path, monkeypatch):
+    monkeypatch.setattr(dm.shutil, "which", lambda name, *a, **k: None)
+    cases = [_case(id="video-transcode", prompt="transcode {workdir}/recordings/x.mov",
+                   expected_mode="single")]
+    driver, runs, said = _run_cases(db, tmp_path, cases, lambda cwd: sorted(cwd.iterdir()))
+
+    assert runs[0]["error"] is None
+    assert driver.seen == [[]]
+    assert any("video-transcode" in m and "ffmpeg" in m for m in said)
+    assert dm._make_video_fixture(tmp_path / "recordings" / "a.mov") is False
+    assert not (tmp_path / "recordings").exists()
+
+
+def test_failed_ffmpeg_leaves_no_partial_clip(tmp_path, monkeypatch):
+    # an executable that rejects every argument stands in for a broken ffmpeg
+    monkeypatch.setattr(dm.shutil, "which", lambda name, *a, **k: sys.executable)
+    dest = tmp_path / "recordings" / "conference-day1.mov"
+    assert dm._make_video_fixture(dest) is False
+    assert not dest.exists()
+
+
+def test_video_fixture_is_a_4k_clip_with_audio_when_ffmpeg_is_present(tmp_path):
+    import shutil
+    import subprocess
+
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        pytest.skip("ffmpeg/ffprobe not installed")
+    dm.seed_case_fixtures("video-transcode", tmp_path)
+    clip = tmp_path / "recordings" / "conference-day1.mov"
+    assert clip.is_file() and 0 < clip.stat().st_size < 50_000_000
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height",
+         "-of", "json", str(clip)],
+        capture_output=True, text=True, timeout=60, check=True,
+    )
+    streams = json.loads(probe.stdout)["streams"]
+    video = [s for s in streams if s["codec_type"] == "video"]
+    assert [(v["width"], v["height"]) for v in video] == [(3840, 2160)]
+    assert any(s["codec_type"] == "audio" for s in streams)

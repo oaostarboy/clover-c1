@@ -73,6 +73,7 @@ from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Sequenc
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CASES = REPO_ROOT / "tests" / "eval" / "delegation_modes.jsonl"
+FIXTURES_DIR = REPO_ROOT / "tests" / "eval" / "fixtures"
 
 MODES = ("direct", "single", "parallel", "staged")
 
@@ -1166,6 +1167,60 @@ class TuiGatewayDriver:
 
 
 # ---------------------------------------------------------------------------
+# Per-case fixtures
+# ---------------------------------------------------------------------------
+
+
+def _make_video_fixture(dest: Path, *, timeout: float = 180.0) -> bool:
+    """Write a 10 s 3840x2160 test-pattern clip with a sine track to ``dest``.
+
+    A small stand-in for the long recording the video-transcode prompt names.
+    Returns False (leaving nothing behind) when ffmpeg is missing or fails.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return False
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        ffmpeg, "-y", "-loglevel", "error",
+        "-f", "lavfi", "-i", "testsrc=size=3840x2160:rate=15:duration=10",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=10",
+        "-c:v", "libx264", "-preset", "ultrafast", "-b:v", "2M", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "64k", "-shortest", str(dest),
+    ]
+    try:
+        done = subprocess.run(cmd, capture_output=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        done = None
+    if done is None or done.returncode != 0 or not dest.is_file():
+        dest.unlink(missing_ok=True)
+        return False
+    return True
+
+
+def seed_case_fixtures(
+    case_id: str,
+    cwd: Path,
+    *,
+    fixtures_dir: Path = FIXTURES_DIR,
+    say: Optional[Callable[[str], None]] = None,
+) -> None:
+    """Put the files a case's prompt refers to under ``{workdir}``.
+
+    ``<fixtures_dir>/<case_id>/`` is copied verbatim when present; the one
+    media file too big to commit is generated instead.
+    """
+    say = say or (lambda _m: None)
+    src = Path(fixtures_dir) / case_id
+    if src.is_dir():
+        shutil.copytree(src, cwd, dirs_exist_ok=True)
+    if case_id == "video-transcode":
+        clip = Path(cwd) / "recordings" / "conference-day1.mov"
+        if not _make_video_fixture(clip):
+            say(f"{case_id}: no 4K clip generated (ffmpeg missing or failed); prompt file will not exist")
+
+
+# ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
 
@@ -1222,6 +1277,7 @@ def run_eval(
                         rep_router = router_reader_factory(rep_home)
                 cwd = out_dir / "work" / f"{case['id']}-r{rep}"
                 cwd.mkdir(parents=True, exist_ok=True)
+                seed_case_fixtures(case["id"], cwd, say=say)
                 prompt = case["prompt"].replace("{workdir}", str(cwd))
                 with rep_driver.session(model=root_model, provider=root_provider, cwd=str(cwd)) as sess:
                     sid = sess.stored_session_id
