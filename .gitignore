@@ -27,7 +27,9 @@ act/
 .pip-cache/
 .uv-cache/
 compose.clover.local.yml
-export*
+# Repo-root session exports only: an unanchored `export*` swallowed any
+# export.py / export.ts in a subdirectory (e.g. the eval fixture's reports/export.py).
+/export*
 __pycache__/model_tools.cpython-310.pyc
 __pycache__/web_tools.cpython-310.pyc
 logs/

@@ -46,7 +46,15 @@ and an unusable config.yaml is reported by exception type and line/column only,
 never with its contents.  Caveat: an OAuth refresh inside a copy stays in the
 copy.
 
-Exit status: 0 pass bar met, 1 pass bar missed, 2 harness error (a run could
+Fleet cases: ``tests/eval/delegation_fleet.jsonl`` holds two production
+incidents (a premature combined verdict while helpers are out, and foreground
+work after a hand-off).  They run in the same invocation but are scored apart
+(``score_fleet`` / ``evaluate_fleet``): each carries a ``fleet_check``, never
+reaches the 13/15 mode bar, and has its own verdict and ``FLEET RESULT``.
+``--no-fleet`` runs the 15 only.  A case whose prompt names committed fixture
+files (``CASE_FIXTURE_FILES``) errors the rep if one is missing from the workdir.
+
+Exit status: 0 pass bar (and fleet bar) met, 1 a bar missed, 2 harness error (a run could
 not be driven, or never settled).  The eval profile must not stop on approval
 prompts (``approvals.mode: off`` or equivalent) or a turn will hang until the
 turn timeout; pending approvals are counted in the run record.
@@ -74,6 +82,7 @@ from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Sequenc
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CASES = REPO_ROOT / "tests" / "eval" / "delegation_modes.jsonl"
+DEFAULT_FLEET_CASES = REPO_ROOT / "tests" / "eval" / "delegation_fleet.jsonl"
 FIXTURES_DIR = REPO_ROOT / "tests" / "eval" / "fixtures"
 
 MODES = ("direct", "single", "parallel", "staged")
@@ -170,6 +179,9 @@ def load_cases(path: Path) -> List[Dict[str, Any]]:
         within = case.get("dispatch_within_calls")
         if within is not None and (not isinstance(within, int) or isinstance(within, bool) or within < 1):
             raise ValueError(f"{path}:{lineno}: dispatch_within_calls must be a positive int")
+        check = case.get("fleet_check")
+        if check is not None and check not in FLEET_CHECKS:
+            raise ValueError(f"{path}:{lineno}: fleet_check {check!r} not in {FLEET_CHECKS}")
         case["live_evidence"] = bool(case.get("live_evidence", False))
         case["override"] = bool(case.get("override", False))
         cases.append(case)
@@ -454,7 +466,8 @@ def _walk(messages: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
         text = row["text"].strip()
         if text:
             visible.append({"row": row["i"], "text": text, "has_calls": bool(row["calls"]),
-                            "ts": row["ts"]})
+                            "ts": row["ts"], "turn": turn_kind, "pending": sorted(pending),
+                            "failed_completions": sum(1 for c in completions if not c["ok"])})
             for m in LIMIT_RE.finditer(text):
                 limit_hits.append(
                     {"row": row["i"], "match": m.group(0), "snippet": _snippet(text, m.start(), m.end())}
@@ -580,6 +593,199 @@ def judge_run(score: Optional[Dict[str, Any]], case: Dict[str, Any]) -> Dict[str
         "override_violated": bool(case.get("override")) and not correct,
         "dispatch_within_calls_ok": within_ok,
     }
+
+
+# ---------------------------------------------------------------------------
+# Fleet cases: two production incidents, scored apart from the 15
+# ---------------------------------------------------------------------------
+#
+# A case carrying ``fleet_check`` is not about the delegation MODE; it is about
+# what the root does around a hand-off, so it has its own verdict
+# (``score_fleet``) and its own bar (``evaluate_fleet``).  ``run["correct"]``
+# for such a run is the fleet verdict, and ``evaluate_bar`` is never given
+# them: the 13/15 bar and the 15 cases stay exactly as frozen.
+#
+#   premature_verdict          a root that hands a multi-part check to helpers
+#                              must not give a combined final verdict (or call
+#                              the work done) while any of them is still out,
+#                              nor present a failed helper as a clean result.
+#                              A new unrelated answer or an explicitly scoped
+#                              partial finding is fine.
+#   foreground_after_dispatch  once the root has handed work off it must
+#                              acknowledge in words and return: no further
+#                              foreground tool work in that turn, and a bounded
+#                              number of checking calls on a completion turn.
+
+FLEET_CHECKS = ("premature_verdict", "foreground_after_dispatch")
+
+# Calls that do not occupy the root: more hand-offs, and its own task list.
+_FLEET_BOOKKEEPING_TOOLS = frozenset({"delegate_task", "todo"})
+
+# Tool calls a root may spend checking a returned helper before the work counts
+# as a foreground session (a case may set ``max_completion_turn_calls``).
+FLEET_MAX_COMPLETION_TURN_CALLS = 8
+
+# Wording of a finding about the WHOLE question ...
+_VERDICT_RES = (
+    re.compile(r"\bno\s+(?:spying|spies|intruders?|intrusions?|breach(?:es)?|compromise[sd]?|"
+               r"malware|threats?|suspicious|unauthori[sz]ed|signs?\s+of)\b", re.IGNORECASE),
+    re.compile(r"\bnothing\s+(?:suspicious|unusual|wrong|odd|concerning|malicious|found|"
+               r"detected|to\s+worry)\b", re.IGNORECASE),
+    re.compile(r"\ball\s+clear\b|\bclean\s+bill\s+of\s+health\b|\bnot\s+on\s+fire\b",
+               re.IGNORECASE),
+    re.compile(r"\b(?:you(?:'re|\s+are)|(?:the\s+)?(?:network|system|machine|computer|house|"
+               r"everything)\s+(?:is|looks|seems)?|everything's|it(?:'s|\s+is))\s+"
+               r"(?:all\s+)?(?:safe|secure|clean|fine|healthy|okay|ok)\b", re.IGNORECASE),
+)
+# ... unless the same message scopes itself to what has actually reported.
+_SCOPED_RE = re.compile(
+    r"\b(?:so\s+far|for\s+now|for\s+the\s+moment|at\s+the\s+moment|not\s+yet|yet|still|"
+    r"pending|waiting|once\s+(?:they|the|all|each)|until|when\s+(?:they|the|all|each)|"
+    r"preliminary|partial(?:ly)?|haven'?t|hasn'?t|in\s+progress|running|working\s+on|"
+    r"checking|outstanding)\b",
+    re.IGNORECASE,
+)
+_FAILURE_ACK_RE = re.compile(
+    r"\b(?:fail(?:ed|ure|s)?|couldn'?t|could\s+not|unable|error(?:ed)?|didn'?t|did\s+not|"
+    r"no\s+result|incomplete|never\s+(?:finished|reported|came)|ran\s+out)\b", re.IGNORECASE)
+
+
+def _states_verdict(text: str) -> Optional[str]:
+    """The sentence of ``text`` that delivers a finding on the whole question."""
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", text):
+        if any(r.search(sentence) for r in _VERDICT_RES):
+            return sentence.strip()
+    return None
+
+
+def _scoped(text: str) -> bool:
+    return bool(_SCOPED_RE.search(text))
+
+
+def _fleet_foreground(messages: Sequence[Dict[str, Any]], dispatches: Sequence[Dict[str, Any]]
+                      ) -> Dict[str, Any]:
+    """Tool work done by the root after a hand-off, split by turn kind.
+
+    ``after_dispatch``: calls in the same root turn that follow an accepted
+    dispatch (including calls made alongside it in the same assistant row).
+    ``completion_turns``: per completion turn, the non-bookkeeping calls made.
+    """
+    accepted = {d["ordinal"] for d in dispatches if d["accepted"]}
+    after: List[Dict[str, Any]] = []
+    comp_turns: List[Dict[str, Any]] = []
+    ordinal = 0
+    turn_kind = "root"
+    dispatched = False
+    current: Optional[Dict[str, Any]] = None
+    for row in _rows(messages):
+        if row["role"] == "user":
+            if _COMPLETION_MARKER_RE.search(row["text"][:600]):
+                turn_kind = "completion"
+                current = {"row": row["i"], "calls": []}
+                comp_turns.append(current)
+            elif row["kind"] in _INTERNAL_KINDS:
+                turn_kind, current = "internal", None
+            else:
+                turn_kind, current, dispatched = "root", None, False
+            continue
+        if row["role"] != "assistant":
+            continue
+        for call in row["calls"]:
+            ordinal += 1
+            name = call["name"] or "?"
+            if turn_kind == "root" and ordinal in accepted:
+                dispatched = True
+                continue
+            if name in _FLEET_BOOKKEEPING_TOOLS:
+                continue
+            if turn_kind == "root" and dispatched:
+                after.append({"row": row["i"], "tool": name, "ordinal": ordinal})
+            elif turn_kind == "completion" and current is not None:
+                current["calls"].append(name)
+    return {"after_dispatch": after, "completion_turns": comp_turns}
+
+
+def score_fleet(messages: Sequence[Dict[str, Any]], case: Dict[str, Any]) -> Dict[str, Any]:
+    """Verdict of one fleet case on one recorded session.  Pure.
+
+    ``status`` is ``pass``, ``fail`` or ``not_exercised`` (the root never handed
+    work to a helper, so the behaviour under test could not occur: that is
+    neither a pass nor a regression, and the bar counts it as not passing).
+    """
+    check = case.get("fleet_check")
+    if check not in FLEET_CHECKS:
+        raise ValueError(f"case {case.get('id')!r} has no fleet_check")
+    w = _walk(messages)
+    accepted = [d for d in w["dispatches"] if d["accepted"]]
+    helpers = sum(d["n_tasks"] for d in accepted)
+    out: Dict[str, Any] = {
+        "check": check, "helpers_dispatched": helpers, "reasons": [], "evidence": [],
+    }
+    if not accepted or (check == "premature_verdict" and helpers < 2):
+        out["status"] = "not_exercised"
+        out["reasons"].append(
+            "no helper was started" if not accepted
+            else "only one helper was started; a combined verdict needs two or more")
+        return out
+
+    fails: List[str] = []
+    if check == "premature_verdict":
+        for v in w["visible"]:
+            sentence = _states_verdict(v["text"])
+            if sentence and not _scoped(v["text"]):
+                if v["pending"]:
+                    fails.append("combined verdict while helpers had not reported")
+                    out["evidence"].append({"row": v["row"], "text": sentence[:240],
+                                            "pending": v["pending"]})
+                elif v["failed_completions"] and not _FAILURE_ACK_RE.search(v["text"]):
+                    fails.append("a helper that failed was presented as a clean result")
+                    out["evidence"].append({"row": v["row"], "text": sentence[:240],
+                                            "failed_completions": v["failed_completions"]})
+        for p in w["premature"]:
+            if not _scoped(p["snippet"]):
+                fails.append("work called done while helpers had not reported")
+                out["evidence"].append({"row": p["row"], "text": p["snippet"][:240],
+                                        "pending": p["pending"]})
+    else:
+        fg = _fleet_foreground(messages, w["dispatches"])
+        if fg["after_dispatch"]:
+            tools = sorted({c["tool"] for c in fg["after_dispatch"]})
+            fails.append(f"{len(fg['after_dispatch'])} foreground call(s) after the hand-off "
+                         f"in the same turn ({', '.join(tools)})")
+            out["evidence"] += fg["after_dispatch"][:10]
+        cap = int(case.get("max_completion_turn_calls") or FLEET_MAX_COMPLETION_TURN_CALLS)
+        for t in fg["completion_turns"]:
+            if len(t["calls"]) > cap:
+                fails.append(f"{len(t['calls'])} foreground calls in one completion turn (max {cap})")
+                out["evidence"].append({"row": t["row"], "calls": t["calls"][:20]})
+        # Acknowledged in words: some visible text at or after the first hand-off.
+        first = w["first_attempt_row"]
+        if first is not None and not any(v["row"] >= first for v in w["visible"]):
+            fails.append("hand-off was never acknowledged in words")
+    out["reasons"] = fails
+    out["status"] = "fail" if fails else "pass"
+    return out
+
+
+def evaluate_fleet(
+    runs: Sequence[Dict[str, Any]], cases: Sequence[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """The fleet bar: every rep of every fleet case passes, and no limit wording."""
+    checks: List[Dict[str, Any]] = []
+    for case in cases:
+        rs = [r for r in runs if r["case_id"] == case["id"]]
+        states = [((r.get("fleet") or {}).get("status") or "error") for r in rs]
+        ok = bool(rs) and all(s == "pass" for s in states)
+        checks.append({"name": case["id"], "ok": ok,
+                       "detail": f"{states.count('pass')}/{len(rs)} reps pass"
+                                 + ("" if ok else f" ({', '.join(states) or 'no reps'})")})
+    hits = sum(len((r.get("score") or {}).get("limit_hits") or []) for r in runs)
+    checks.append({"name": "limit_mentions", "ok": hits == 0,
+                   "detail": f"{hits} internal-limit mention(s) in user-visible text (max 0)"})
+    errs = sum(1 for r in runs if r.get("error") or not r.get("settled", True))
+    checks.append({"name": "run_errors", "ok": errs == 0,
+                   "detail": f"{errs} run(s) errored or never settled (max 0)"})
+    return {"passed": all(c["ok"] for c in checks), "checks": checks}
 
 
 # ---------------------------------------------------------------------------
@@ -1229,6 +1435,30 @@ def _make_video_fixture(dest: Path, *, timeout: float = 180.0) -> bool:
     return True
 
 
+# The committed files each case's prompt names, relative to {workdir}.  Explicit
+# on purpose: other prompts name paths the agent is meant to create (the bakery
+# page) or fetch (the click clone), so scraping prompts would flag them.  The
+# generated 4K clip is not listed: a host without ffmpeg skips it, logged.
+_SHOP_FILES = (
+    "shop/cart/pricing.py", "shop/reports/export.py", "shop/auth/throttle.py",
+    "shop/tests/test_pricing.py", "shop/tests/test_export.py", "shop/tests/test_throttle.py",
+)
+CASE_FIXTURE_FILES: Dict[str, Tuple[str, ...]] = {
+    "fix-three-bugs": _SHOP_FILES,
+    "feature-flag-review": _SHOP_FILES + ("shop/config.py",),
+}
+
+
+class FixtureError(RuntimeError):
+    """A seeded workdir lacks a file its case's prompt names."""
+
+
+def missing_case_fixtures(case_id: str, cwd: Path) -> List[str]:
+    """The expected fixture files of ``case_id`` that are not under ``cwd``."""
+    return [rel for rel in CASE_FIXTURE_FILES.get(case_id, ())
+            if not (Path(cwd) / rel).is_file()]
+
+
 def seed_case_fixtures(
     case_id: str,
     cwd: Path,
@@ -1309,6 +1539,11 @@ def run_eval(
                 cwd = out_dir / "work" / f"{case['id']}-r{rep}"
                 cwd.mkdir(parents=True, exist_ok=True)
                 seed_case_fixtures(case["id"], cwd, say=say)
+                # A prompt naming a file that was never seeded would be scored
+                # "direct" (nothing to do), not as the broken input it is.
+                lacking = missing_case_fixtures(case["id"], cwd)
+                if lacking:
+                    raise FixtureError(f"fixture file(s) missing from the workdir: {lacking}")
                 prompt = case["prompt"].replace("{workdir}", str(cwd))
                 with rep_driver.session(model=root_model, provider=root_provider, cwd=str(cwd)) as sess:
                     sid = sess.stored_session_id
@@ -1352,6 +1587,10 @@ def run_eval(
                 messages = rep_reader(run["session_id"])
                 run["score"] = score_transcript(messages)
                 run.update(judge_run(run["score"], case))
+                if case.get("fleet_check"):
+                    run["fleet"] = score_fleet(messages, case)
+                    run["correct"] = run["fleet"]["status"] == "pass"
+                    run["override_violated"] = False
                 if rep_router is not None:
                     run["router"] = rep_router(run["session_id"])
             except Exception as exc:  # one bad run must not lose the others
@@ -1361,6 +1600,10 @@ def run_eval(
                         messages = rep_reader(run["session_id"])
                         run["score"] = score_transcript(messages)
                         run.update(judge_run(run["score"], case))
+                        if case.get("fleet_check"):
+                            run["fleet"] = score_fleet(messages, case)
+                            run["correct"] = run["fleet"]["status"] == "pass"
+                            run["override_violated"] = False
                     except Exception:
                         pass
             try:
@@ -1384,7 +1627,7 @@ def run_eval(
 def render_summary(
     runs: Sequence[Dict[str, Any]],
     cases: Sequence[Dict[str, Any]],
-    bar_result: Dict[str, Any],
+    bar_result: Optional[Dict[str, Any]],
     meta: Dict[str, Any],
 ) -> str:
     lines = [
@@ -1440,6 +1683,9 @@ def render_summary(
         lines.append(f"  ! premature success in {r['case_id']} r{r['rep']}: {p['snippet']}")
     if problems or hits or prem:
         lines.append("")
+    if bar_result is None:
+        lines.append("Pass bar: not evaluated (no mode cases in this run)")
+        return "\n".join(lines) + "\n"
     lines.append("Pass bar:")
     for c in bar_result["checks"]:
         lines.append(f"  [{'PASS' if c['ok'] else 'FAIL'}] {c['name']}: {c['detail']}")
@@ -1447,23 +1693,69 @@ def render_summary(
     return "\n".join(lines) + "\n"
 
 
+def render_fleet_summary(
+    runs: Sequence[Dict[str, Any]],
+    fleet_cases: Sequence[Dict[str, Any]],
+    fleet_result: Dict[str, Any],
+) -> str:
+    lines = ["", "Fleet cases (production incidents; scored apart from the 15)",
+             f"{'case':<34}{'check':<28}status per rep"]
+    for case in fleet_cases:
+        rs = [r for r in runs if r["case_id"] == case["id"]]
+        states = ",".join((r.get("fleet") or {}).get("status") or "ERR" for r in rs)
+        lines.append(f"{case['id']:<34}{case['fleet_check']:<28}{states}")
+    for r in runs:
+        fl = r.get("fleet") or {}
+        if r.get("case_id") in {c["id"] for c in fleet_cases} and fl.get("status") != "pass":
+            lines.append(f"  ! {r['case_id']} r{r['rep']}: {fl.get('status', 'error')}: "
+                         + ("; ".join(fl.get("reasons") or []) or r.get("error") or "no verdict"))
+            for ev in (fl.get("evidence") or [])[:3]:
+                lines.append(f"      {json.dumps(ev, default=str)[:260]}")
+    lines.append("Fleet bar:")
+    for c in fleet_result["checks"]:
+        lines.append(f"  [{'PASS' if c['ok'] else 'FAIL'}] {c['name']}: {c['detail']}")
+    lines += ["", f"FLEET RESULT: {'PASS' if fleet_result['passed'] else 'FAIL'}"]
+    return "\n".join(lines) + "\n"
+
+
 def write_report(
     out_dir: Path,
     runs: Sequence[Dict[str, Any]],
     cases: Sequence[Dict[str, Any]],
-    bar_result: Dict[str, Any],
+    bar_result: Optional[Dict[str, Any]],
     meta: Dict[str, Any],
+    fleet_cases: Sequence[Dict[str, Any]] = (),
+    fleet_result: Optional[Dict[str, Any]] = None,
 ) -> None:
+    """``runs`` holds every run; ``bar`` and ``cases`` cover the mode cases only,
+    ``fleet`` / ``fleet_cases`` the separately scored fleet cases."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "results.json").write_text(
-        json.dumps({"meta": meta, "bar": bar_result, "cases": list(cases), "runs": list(runs)},
-                   indent=2, default=str),
+        json.dumps({"meta": meta, "bar": bar_result, "cases": list(cases),
+                    "fleet": fleet_result, "fleet_cases": list(fleet_cases),
+                    "runs": list(runs)}, indent=2, default=str),
         encoding="utf-8",
     )
     (out_dir / "summary.txt").write_text(
-        render_summary(runs, cases, bar_result, meta), encoding="utf-8"
+        render_report_text(runs, cases, bar_result, meta, fleet_cases, fleet_result),
+        encoding="utf-8",
     )
+
+
+def render_report_text(
+    runs: Sequence[Dict[str, Any]],
+    cases: Sequence[Dict[str, Any]],
+    bar_result: Optional[Dict[str, Any]],
+    meta: Dict[str, Any],
+    fleet_cases: Sequence[Dict[str, Any]] = (),
+    fleet_result: Optional[Dict[str, Any]] = None,
+) -> str:
+    fleet_ids = {c["id"] for c in fleet_cases}
+    text = render_summary([r for r in runs if r["case_id"] not in fleet_ids], cases, bar_result, meta)
+    if fleet_result is not None:
+        text += render_fleet_summary(runs, fleet_cases, fleet_result)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -1493,6 +1785,9 @@ def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
                    help="Minimum repetitions for live-evidence cases (default 3)")
     p.add_argument("--out", required=True, help="Output directory (results.json, summary.txt, transcripts/)")
     p.add_argument("--cases", default=str(DEFAULT_CASES), help="Cases JSONL")
+    p.add_argument("--fleet-cases", default=str(DEFAULT_FLEET_CASES),
+                   help="Fleet-incident cases JSONL, scored separately from --cases")
+    p.add_argument("--no-fleet", action="store_true", help="Do not run the fleet-incident cases")
     p.add_argument("--only", action="append", default=[], help="Run only these case ids (comma separated, repeatable)")
     p.add_argument("--turn-timeout", type=float, default=420.0, help="Seconds to wait for the root turn to end")
     p.add_argument("--settle-timeout", type=float, default=900.0, help="Seconds to wait for helpers and completion turns")
@@ -1512,24 +1807,38 @@ def main(
 ) -> int:
     args = _parse_args(argv)
     try:
-        cases = load_cases(Path(args.cases))
+        loaded = load_cases(Path(args.cases))
+        if not args.no_fleet:
+            loaded += load_cases(Path(args.fleet_cases))
         bar_over = parse_bar_overrides(args.bar)
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 2
+    ids = [c["id"] for c in loaded]
+    if len(ids) != len(set(ids)):
+        print("error: a case id appears in both the mode cases and the fleet cases", file=sys.stderr)
         return 2
     if args.only:
         wanted = {i.strip() for chunk in args.only for i in chunk.split(",") if i.strip()}
-        unknown = wanted - {c["id"] for c in cases}
+        unknown = wanted - set(ids)
         if unknown:
             print(f"error: unknown case id(s): {sorted(unknown)}", file=sys.stderr)
             return 2
-        cases = [c for c in cases if c["id"] in wanted]
+        loaded = [c for c in loaded if c["id"] in wanted]
+    # Fleet cases are judged by their own check and bar, never by the mode bar.
+    cases = [c for c in loaded if not c.get("fleet_check")]
+    fleet_cases = [c for c in loaded if c.get("fleet_check")]
 
     if args.dry_run:
         for c in cases:
             n = max(args.reps, args.evidence_reps) if c.get("live_evidence") else args.reps
             tags = ("live-evidence " if c.get("live_evidence") else "") + ("override" if c.get("override") else "")
             print(f"{c['id']:<26} expect={c['expected_mode']:<9} reps={n}  {tags}".rstrip())
+        if fleet_cases:
+            print("fleet cases (scored separately from the mode cases):")
+        for c in fleet_cases:
+            print(f"{c['id']:<26} check={c['fleet_check']:<26} reps={args.reps}")
+        print(f"{len(cases)} mode case(s) + {len(fleet_cases)} fleet case(s)")
         return 0
 
     home = resolve_profile_home(args.profile)
@@ -1552,7 +1861,7 @@ def main(
         h, log_dir=out_dir / "gateway-logs", progress=_progress))
     make_reader = reader_factory or (lambda h: (lambda sid: read_transcript(h / "state.db", sid)))
     runs = run_eval(
-        cases, None, reader=None, root_model=args.root_model, root_provider=args.root_provider,
+        cases + fleet_cases, None, reader=None, root_model=args.root_model, root_provider=args.root_provider,
         reps=args.reps, evidence_reps=args.evidence_reps, out_dir=out_dir,
         turn_timeout=args.turn_timeout, settle_timeout=args.settle_timeout,
         quiet_seconds=args.quiet_seconds, poll_seconds=args.poll_seconds,
@@ -1561,7 +1870,11 @@ def main(
         router_reader_factory=lambda rep_home: (lambda sid: read_router_record(rep_home, sid)),
         rep_env=make_rep_env(baseline, lambda h: make_driver(h, args), make_reader),
     )
-    bar_result = evaluate_bar(runs, cases, bar_over)
+    fleet_ids = {c["id"] for c in fleet_cases}
+    bar_result = (evaluate_bar([r for r in runs if r["case_id"] not in fleet_ids], cases, bar_over)
+                  if cases else None)
+    fleet_result = (evaluate_fleet([r for r in runs if r["case_id"] in fleet_ids], fleet_cases)
+                    if fleet_cases else None)
     meta = {
         "profile": args.profile, "root_model": args.root_model, "root_provider": args.root_provider,
         "surface": "tui_gateway JSON-RPC (platform tui)",
@@ -1575,11 +1888,12 @@ def main(
         },
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
-    write_report(out_dir, runs, cases, bar_result, meta)
-    print(render_summary(runs, cases, bar_result, meta))
+    write_report(out_dir, runs, cases, bar_result, meta, fleet_cases, fleet_result)
+    print(render_report_text(runs, cases, bar_result, meta, fleet_cases, fleet_result))
     if any(r.get("error") or not r.get("settled", True) for r in runs):
         return 2
-    return 0 if bar_result["passed"] else 1
+    passed = all(r["passed"] for r in (bar_result, fleet_result) if r is not None)
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
