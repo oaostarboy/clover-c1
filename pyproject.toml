@@ -451,6 +451,8 @@ py-modules = [
   "clover_constants",
   "clover_state",
   "clover_state_common",
+  "clover_state_health",
+  "clover_state_lockowners",
   "clover_state_portability",
   "clover_state_schema",
   "clover_state_search",
