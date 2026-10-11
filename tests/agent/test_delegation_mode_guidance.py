@@ -4,9 +4,11 @@ Real ``AIAgent`` roots, the real prompt builder and conversation loop, a local
 mock provider over HTTP and a fake monotonic clock.  Contract:
 
 * A root agent with ``delegate_task`` on a surface that can deliver a detached
-  helper gets ONE guidance block that names the four ways to work, lets the
-  user's explicit instruction win, and tells the model to keep internal limits
-  private.  The old plan-first and hand-off paragraphs are gone.
+  helper gets ONE short guidance block (at most four sentences): follow the
+  work plan the delegation router put on the turn, let the user's explicit
+  instruction win, dispatch then end the turn, check helper results, and keep
+  internal limits private.  The sizing rubric lives in the router, not here.
+  The old plan-first and hand-off paragraphs are gone.
 * A root that cannot get a result back later (cron, one-shot / batch runs,
   kanban workers, the stateless API server) gets a short delivery-neutral
   plan-and-verify note instead: no "end your turn", no "don't poll".
@@ -59,45 +61,57 @@ def _block() -> str:
 
 # ── the block itself ───────────────────────────────────────────────────────
 
+def _sentences(block: str) -> list:
+    body = block.split('\n', 1)[1]
+    return [p for p in re.split(r'(?<=[.!?])\s+', body.strip()) if p]
+
+
 def test_block_is_short_and_has_no_numbers():
     block = _block()
     assert block.startswith(HEADING)
-    assert len(block.split()) <= 215  # the mode choice plus the one runtime-note sentence
+    assert len(block.split()) <= 110
     assert not re.search(r'\d', block)
 
 
-def test_block_tells_the_model_what_big_means_and_what_to_do_on_rejection():
+def test_block_is_at_most_four_sentences_including_the_runtime_note_sentence():
+    from agent.prompt_builder import RUNTIME_NOTE_GUIDANCE
+
+    sentences = _sentences(_block())
+    assert len(sentences) <= 4, sentences
+    assert RUNTIME_NOTE_GUIDANCE in _block()
+
+
+def test_block_defers_to_the_work_plan_and_to_the_users_wording():
     lowered = _block().lower()
-    assert 'dozen' in lowered  # an anchor for "many items", not just a feeling
-    assert 'accepted dispatch' in lowered
-    assert 'rejected' in lowered and 'still yours' in lowered
-
-
-def test_block_names_the_four_modes_and_the_delegation_tool():
-    lowered = _block().lower()
-    for phrase in ('direct', 'single helper', 'parallel helpers', 'staged', 'delegate_task'):
-        assert phrase in lowered, phrase
-
-
-def test_block_lets_the_users_explicit_instruction_win_both_ways():
-    lowered = _block().lower()
+    assert 'work plan' in lowered
     assert 'do it yourself' in lowered
     assert 'use helpers' in lowered
-    assert 'faster to start' in lowered  # never pick direct for that reason
+    assert 'delegate_task' in lowered
 
 
-def test_block_carries_the_worker_handoff_and_verification_rules():
+def test_block_says_dispatch_then_end_the_turn_with_one_short_line():
     lowered = _block().lower()
-    for phrase in ('scope', 'inputs', 'acceptance', 'ownership', 'poll', 'verify'):
-        assert phrase in lowered, phrase
-    # staged work moves on only after the previous stage's artifacts check out
-    assert 'artifact' in lowered
+    assert 'end your turn' in lowered
+    assert 'one short line' in lowered
+    assert 'poll' in lowered
 
 
-def test_block_keeps_internal_limits_private_but_blockers_honest():
+def test_block_says_to_check_helper_results_before_saying_done():
+    lowered = _block().lower()
+    assert 'check helper results' in lowered
+    assert 'before saying done' in lowered
+
+
+def test_the_sizing_rubric_moved_to_the_router_not_the_prompt():
+    lowered = _block().lower()
+    for phrase in ('dozen', 'single helper', 'parallel helpers', 'staged:', 'faster to start'):
+        assert phrase not in lowered, phrase
+
+
+def test_block_keeps_internal_limits_private():
     lowered = _block().lower()
     assert 'never mention' in lowered
-    assert 'blocker' in lowered
+    assert 'limits' in lowered
 
 
 # ── who gets it ────────────────────────────────────────────────────────────

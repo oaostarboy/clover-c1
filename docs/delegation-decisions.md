@@ -7,9 +7,10 @@ explicit requests not to use subagents take precedence.
 
 ## Choosing how to work: four modes
 
-The root model picks the mode; code never classifies requests by keyword. One
-block in the system prompt (built once, byte-stable for the conversation, along
-with the tool schemas) names the four ways to work:
+Each human message is sized before the root starts (see "The router and its
+backstop" below) and the root follows the resulting work plan. One short block
+in the system prompt (built once, byte-stable for the conversation, along with
+the tool schemas) says how to treat that plan; the four ways to work are:
 
 | Mode | When | What the root does |
 | --- | --- | --- |
@@ -22,7 +23,7 @@ with the tool schemas) names the four ways to work:
   "use helpers" means a helper even for a small one.
 - **Signals for big:** more than a couple of minutes - a dozen or more items
   each needing lookups, commands that run for minutes, multi-step research or
-  builds. The root never picks direct just because it is faster to start.
+  builds. They live in the router's sizing prompt, not in the system prompt.
 - **Every worker is briefed:** scope, inputs, acceptance checks and ownership
   go in the task's `context`.
 - **After an accepted dispatch** the root acknowledges and ends the turn; it
@@ -43,6 +44,53 @@ with the tool schemas) names the four ways to work:
   the task is clearly review (`check`) or clearly hard (`deep`), and that long
   scripts, long code cells and many lookups are reasons to hand off rather than
   run inline.
+
+## The router and its backstop
+
+`delegation.router` (on by default) applies exactly where the foreground time
+limit does: a root chat agent with `delegate_task` on a surface that can
+deliver a helper's result later, with the limit on. It never runs for helper
+completions, multimodal messages, or a bare greeting / thank-you.
+
+- **Sizing.** Before the first model call of a human message, a fast auxiliary
+  model (`auxiliary.delegation_router`, preferring the provider's fast tier)
+  returns `{mode, tasks: [{goal, depends_on, acceptance}], reason}`. The reply
+  is schema-validated and the mode is derived from the task DAG in code - no
+  tasks is direct, one is single, several independent are parallel, any
+  dependency is staged - never taken on the model's word. One retry on an
+  invalid reply, a `timeout_seconds` (5) budget, then no plan and the turn runs
+  exactly as it did before the router.
+- **The user's words win.** "Do it yourself" is direct with no sizing call and
+  no backstop; "use helpers" is at least single.
+- **Delivery.** The plan is a `[Clover runtime] work plan:` block on the API
+  copy of that turn's user message, persisted beside the stored text like
+  prefetch context. The stored text stays clean, no message is added, and the
+  cached prefix is untouched.
+- **Backstop.** When a not-direct plan's root keeps doing the work itself - more
+  than `backstop_calls` (2) work tool calls or `backstop_seconds` (60) without
+  calling `delegate_task` - its next work call is refused and the runtime
+  dispatches the plan through the `delegate_task` handler: one call for all
+  independent tasks; for a staged plan the first stage, with the next stage
+  bound through `follow_through` where that mechanism can hold it (one task,
+  then one task). The refused call's result is the hand-off ("Handed off to
+  helpers ..."), after which the root ends its turn. Nothing already running is
+  stopped, and what the turn had already gathered goes into each helper's
+  context. If the dispatch fails the result says so and the root carries on
+  under the time limit below.
+- **Direct and no plan** are untouched: the time limit stays the only bound.
+
+```yaml
+delegation:
+  router:
+    enabled: true
+    timeout_seconds: 5
+    backstop_calls: 2
+    backstop_seconds: 60
+auxiliary:
+  delegation_router:
+    provider: auto
+    model: auto
+```
 
 ## The foreground time limit
 

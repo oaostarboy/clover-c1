@@ -511,31 +511,26 @@ RUNTIME_NOTE_GUIDANCE = (
     "describe it to the user."
 )
 
-# The one mode-choice contract for a root agent that can hand work to a
-# helper: direct, single helper, parallel helpers, or staged.  The model picks
-# the mode; code only enforces tiers, dispatch and delivery.  Shipped once, in
-# the stable part of the prompt, to roots that pass
-# ``agent.system_prompt._delegation_guidance_for`` -- decided when the prompt
-# is built, so it stays byte-stable for the life of the conversation.
-# Replaces the older plan-first and "keep the chat free" paragraphs.
+# The mode-choice contract for a root agent that can hand work to a helper.
+# Sizing (direct, single helper, parallel helpers, staged) is done per turn by
+# the delegation router (``agent.delegation_router``), which puts a
+# ``[Clover runtime] work plan:`` block on the user message, and enforced by the
+# runtime backstop (``agent.router_backstop``).  So the static prompt only says
+# how to treat that plan, who wins when the user is explicit, how to end a
+# hand-off turn and to check results.  Shipped once, in the stable part of the
+# prompt, to roots that pass ``agent.system_prompt._delegation_guidance_for`` --
+# decided when the prompt is built, so it stays byte-stable for the life of the
+# conversation.  Keep it to four sentences, the last being the runtime-note one.
 DELEGATION_MODE_GUIDANCE = (
     "# Choosing how to work\n"
-    "Pick before any work tool. Direct: a quick answer, or brief lookups (a "
-    "couple of minutes, a handful of tool calls); not sustained research or "
-    "builds. Single helper: a big job with one thread of work; one "
-    "delegate_task task. Parallel helpers: big work with many items each needing research, "
-    "or independent parts; one task per part, grouped within tool capacity. "
-    "Staged: later work needs earlier output; dispatch one stage, then the "
-    "next once its artifacts check out. Big: a dozen or more items each "
-    "needing lookups, commands that run for minutes, multi-step research or "
-    "builds. Never pick direct because it is faster to start. \"Do it "
-    "yourself\" means direct even if big; \"use helpers\" means a helper even "
-    "if small. Give every worker the plan, scope, inputs, acceptance checks "
-    "and ownership; carry them into later stages. After an accepted "
-    "dispatch, say in a sentence what is running, end your turn, don't poll. "
-    "If rejected, the job is still yours. Verify results before claiming "
-    "done. Never mention internal limits, timeouts or retries; report "
-    "genuine blockers honestly. " + RUNTIME_NOTE_GUIDANCE
+    "Follow the work plan when one is present, otherwise do quick lookups "
+    "directly and hand big or parallel jobs to helpers with delegate_task; "
+    "the user's explicit wording wins (\"do it yourself\" means direct, "
+    "\"use helpers\" means a helper). "
+    "When dispatching helpers, dispatch, then end your turn with one short "
+    "line saying what is running, and don't poll. "
+    "Check helper results before saying done, and never mention internal "
+    "limits, timeouts or retries. " + RUNTIME_NOTE_GUIDANCE
 )
 
 # Roots that cannot hand a result back later (cron, one-shot runs, webhooks, the
