@@ -182,6 +182,44 @@ def _clean_handoff(value: Any) -> Optional[dict]:
     return fields
 
 
+def _ack_minutes(low: Any, high: Any) -> Optional[str]:
+    """``~10 min`` / ``~10–25 min`` from one or two positive numbers, else None."""
+    nums = []
+    for v in (low, high):
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        try:
+            f = float(v)
+        except (OverflowError, ValueError):
+            continue
+        if math.isfinite(f) and 0 < f <= _MAX_HANDOFF_ETA_MINUTES:
+            nums.append(max(1, math.floor(f + 0.5)))
+    if not nums:
+        return None
+    lo, hi = min(nums), max(nums)
+    return f"~{lo} min" if lo == hi else f"~{lo}\u2013{hi} min"
+
+
+def ack_summary_line(handoff: Any) -> str:
+    """The chat acknowledgement line for one accepted dispatch, or ``""``.
+
+    Built only from the model's own ``handoff`` summary (never from the task
+    goal text): ``🔄 fixing the bugs → test build + PR, ~10–25 min``.  A single
+    estimate (only min or max, or min == max) shows as ``~10 min``; no
+    estimate, no estimate part.
+    """
+    if not isinstance(handoff, dict):
+        return ""
+    work = _normalize_card_text(handoff.get("work"), _HANDOFF_WORK_CHARS)
+    outcome = _normalize_card_text(handoff.get("outcome"), _HANDOFF_OUTCOME_CHARS)
+    parts = [t.rstrip(".!?") if not t.endswith("…") else t for t in (work, outcome) if t]
+    if not parts:
+        return ""
+    line = "\U0001f504 " + " \u2192 ".join(parts)
+    eta = _ack_minutes(handoff.get("estimated_minutes_min"), handoff.get("estimated_minutes_max"))
+    return f"{line}, {eta}" if eta else line
+
+
 def _with_period(value: str) -> str:
     return value if value.endswith((".", "!", "?", "…")) else value + "."
 

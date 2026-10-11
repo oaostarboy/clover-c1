@@ -558,3 +558,72 @@ def test_clearing_the_turn_state_removes_the_backstop(tmp_path, children, dispat
 
     assert not any(_is_handoff(r) for r in results)
     assert dispatches == []
+
+
+# ── the acknowledgement copy ───────────────────────────────────────────────
+
+GOAL = 'Investigate the flaky upload retries across every storage backend'
+
+
+def _receipt(*goals, summary='', sids=()):
+    return fl.DispatchReceipt(
+        delegation_id='d1', seq=1, goals=tuple(goals), summary=summary,
+        subagent_ids=tuple(sids),
+    )
+
+
+def _line(**handoff):
+    from agent.delegation_checkpoint import ack_summary_line
+
+    return ack_summary_line(handoff)
+
+
+def test_ack_uses_the_roots_own_summary_never_the_goal():
+    line = _line(work='fixing the helper-card bugs', outcome='test build + PR',
+                 estimated_minutes_min=10, estimated_minutes_max=25)
+    assert line == '\U0001f504 fixing the helper-card bugs \u2192 test build + PR, ~10\u201325 min'
+    text = rb._ack_text([_receipt(GOAL, summary=line)])
+    assert text == line
+    assert 'Investigate' not in text and 'helpers are on it' not in text.lower()
+
+
+def test_ack_estimate_is_single_or_absent():
+    assert _line(work='a', outcome='b', estimated_minutes_min=10,
+                 estimated_minutes_max=10).endswith(', ~10 min')
+    assert _line(work='a', outcome='b', estimated_minutes_min=10).endswith(', ~10 min')
+    assert _line(work='a', outcome='b', estimated_minutes_max=7).endswith(', ~7 min')
+    assert _line(work='a', outcome='b') == '\U0001f504 a \u2192 b'
+
+
+def test_ack_with_no_usable_summary_is_empty():
+    from agent.delegation_checkpoint import ack_summary_line
+
+    assert ack_summary_line(None) == '' and ack_summary_line({}) == ''
+    assert ack_summary_line({'work': '   ', 'outcome': ''}) == ''
+
+
+def test_several_receipts_with_summaries_join_on_new_lines():
+    text = rb._ack_text([_receipt(GOAL, summary='\U0001f504 a \u2192 b'),
+                         _receipt('other', summary='\U0001f504 c \u2192 d, ~5 min')])
+    assert text == '\U0001f504 a \u2192 b\n\U0001f504 c \u2192 d, ~5 min'
+
+
+def test_ack_fallback_never_quotes_the_goal():
+    one = rb._ack_text([_receipt(GOAL)])
+    assert one == "\U0001f504 on it, i'll report back here when it's done"
+    three = rb._ack_text([_receipt('x1', 'x2', 'x3')])
+    assert three == "\U0001f504 3 helpers on it, i'll report back here when they're done"
+    assert 'x1' not in three and GOAL not in one
+
+
+def test_dispatch_receipt_carries_the_handoff_summary(agent_stub=None):
+    class A:  # a bare object is enough for the receipt book
+        pass
+
+    a = A()
+    fl.note_own_dispatch(a, 'd9', goals=[GOAL],
+                         handoff={'work': 'checking uploads', 'outcome': 'a fixed retry loop'})
+    fl.note_own_dispatch(a, 'd10', goals=[GOAL])
+    first, second = fl.own_dispatch_receipts(a)
+    assert first.summary == '\U0001f504 checking uploads \u2192 a fixed retry loop'
+    assert second.summary == ''

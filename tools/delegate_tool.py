@@ -5257,6 +5257,7 @@ def delegate_task(
                 goals=_goals,
                 subagent_ids=[s for s in _sids if isinstance(s, str) and s],
                 request_identity=dict(_admitted_identity),
+                handoff=handoff,
             )
             n = len(_goals)
             note = _background_dispatch_note(n, joined=_fanout_mode == "joined")

@@ -163,13 +163,16 @@ def test_old_receipt_is_invisible_to_every_floor_reader(tmp_path):
     agent._current_turn_id = 'turn-b'
     arm(agent, calls=5)
     fl.note_own_dispatch(agent, 'job-a', goals=['OLD request audit'],
-        request_identity={'turn_id': 'turn-a'})
+        request_identity={'turn_id': 'turn-a'},
+        handoff={'work': 'OLD work', 'outcome': 'old'})
     fl.note_own_dispatch(agent, 'job-b', goals=['NEW request audit'],
-        request_identity={'turn_id': 'turn-b'})
+        request_identity={'turn_id': 'turn-b'},
+        handoff={'work': 'NEW work', 'outcome': 'new'})
     assert [r.delegation_id for r in rb.turn_receipts(agent)] == ['job-b']
     assert rb.work_status(agent) == rb.WORK_DISPATCH_ACK
     directive = rb.completion_directive(agent)
-    assert 'NEW request audit' in directive.text and 'OLD request audit' not in directive.text
+    assert 'NEW work' in directive.text and 'OLD work' not in directive.text
+    assert 'audit' not in directive.text, 'the ack never quotes goals'
 
 
 def test_unplanned_turn_floor_also_filters_by_identity(tmp_path):

@@ -276,6 +276,21 @@ class DispatchReceipt:
     generation: Optional[int] = None
     goals: Tuple[str, ...] = ()
     subagent_ids: Tuple[str, ...] = ()
+    # The root's own short summary of the dispatch (the formatted
+    # ``handoff`` line), shown in the chat acknowledgement.  Empty when the
+    # dispatch carried none.
+    summary: str = ""
+
+
+def _handoff_summary(handoff: Any) -> str:
+    if not isinstance(handoff, dict):
+        return ""
+    try:
+        from agent.delegation_checkpoint import ack_summary_line
+
+        return ack_summary_line(handoff)
+    except Exception:
+        return ""
 
 
 def note_own_dispatch(
@@ -285,6 +300,7 @@ def note_own_dispatch(
     goals: Any = (),
     subagent_ids: Any = (),
     request_identity: Optional[Dict[str, Any]] = None,
+    handoff: Any = None,
 ) -> None:
     """Remember that THIS agent instance dispatched ``delegation_id``.
 
@@ -315,6 +331,7 @@ def note_own_dispatch(
             generation=generation if isinstance(generation, int) else None,
             goals=tuple(str(g) for g in (goals or ()) if g),
             subagent_ids=tuple(str(s) for s in (subagent_ids or ()) if s),
+            summary=_handoff_summary(handoff),
         )
         while len(own) > _OWN_DISPATCH_CAP:
             own.pop(next(iter(own)))

@@ -524,7 +524,8 @@ def test_helpers_spawned_in_the_episode_are_background_even_after_expiry(
     assert results.count('"mode": "background"') >= 1, results
     assert seen[-1][0], 'the episode must have run out before the dispatch'
     assert all(forced for _, forced in seen), seen  # background before AND after expiry
-    assert result['final_response'].startswith('Helpers are on it')
+    assert re.match(r'^\U0001f504 ', result['final_response'])
+    assert 'report back here' in result['final_response'] or '\u2192' in result['final_response']
     assert result['turn_exit_reason'] == 'delegation_handoff'
 
 
