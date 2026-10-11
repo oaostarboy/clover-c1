@@ -300,3 +300,197 @@ def test_a_root_that_merged_the_stages_gets_no_runtime_chain(aux, tmp_path, help
 
     assert rb.completion_directive(agent) is not None
     assert ad.get_continuation_plan(delegation_id) is None
+
+
+# ── a completion claimed before the continuation binds keeps its tail ──────
+#
+# The gateway claims a finished helper's completion before the turn that
+# integrates it runs, so a claim is not proof the root saw anything.  The
+# claims below use the real claim API on real rows.
+
+def _stage_two_helpers(helpers):
+    return sum(STAGE_TWO[:20] in g['user'] for g in helpers.goals)
+
+
+def test_fast_claim_before_parent_ack_keeps_the_staged_tail(aux, tmp_path, helpers):
+    agent = root_agent([], tmp_path)
+    plan = _staged((STAGE_ONE, ()), (STAGE_TWO, (0,)), (STAGE_THREE, (1,)))
+    fl.begin_turn(agent, None)
+    rb.begin(agent, plan, 'Build, review, release notes', dr.RouterSettings(backstop_calls=5))
+    rows = run_batch(agent, [('delegate_task', {'tasks': [{'goal': STAGE_ONE}]})])
+    first = rows[0]['delegation_id']
+
+    # The helper finishes and the gateway claims its completion while the
+    # parent's turn is still acknowledging the dispatch.
+    _finish_and_deliver(helpers, first)
+    assert rb.completion_directive(agent) is not None
+    stored = ad.get_continuation_plan(first)
+    assert stored and [s['tasks'] for s in stored['stages']] == [[1], [2]], stored
+
+    before = set(_all_ids())
+    _completion_turn(agent, first)
+    assert len(_new_dispatch_ids(before)) == 1, 'the claimed stage lost its next stage'
+    _wait(lambda: _stage_two_helpers(helpers) == 1, 'stage two helper')
+
+
+def test_fast_claim_of_the_next_stage_keeps_the_third(aux, tmp_path, helpers, monkeypatch):
+    from agent import tool_executor
+
+    agent = root_agent([], tmp_path)
+    plan = _staged((STAGE_ONE, ()), (STAGE_TWO, (0,)), (STAGE_THREE, (1,)))
+    first = _dispatch_stage_one(agent, tmp_path, plan)
+    _finish_and_deliver(helpers, first)
+
+    real = tool_executor.dispatch_generated_tool
+
+    def claim_before_bind(*args, **kwargs):
+        raw = real(*args, **kwargs)
+        data = rb._decode(raw)
+        if data.get('status') == 'dispatched':
+            _finish_and_deliver(helpers, data['delegation_id'])
+        return raw
+
+    monkeypatch.setattr(tool_executor, 'dispatch_generated_tool', claim_before_bind)
+    before = set(_all_ids())
+    agent._router_completion_ids = (first,)
+    fl.begin_turn(agent, 'internal_notification')
+    note = dr.plan_for_turn(agent, 'helper finished', [], 'internal_notification')
+    second = _new_dispatch_ids(before)
+    assert len(second) == 1
+    assert 'last stage' not in note, note
+    assert [s['tasks'] for s in ad.get_continuation_plan(second[0])['stages']] == [[2]]
+
+    monkeypatch.setattr(tool_executor, 'dispatch_generated_tool', real)
+    before = set(_all_ids())
+    _completion_turn(agent, second[0])
+    assert len(_new_dispatch_ids(before)) == 1, 'the claimed second stage lost its third'
+
+
+def test_a_tail_that_cannot_attach_is_never_called_the_last_stage(
+        aux, tmp_path, helpers, monkeypatch):
+    agent = root_agent([], tmp_path)
+    plan = _staged((STAGE_ONE, ()), (STAGE_TWO, (0,)), (STAGE_THREE, (1,)))
+    first = _dispatch_stage_one(agent, tmp_path, plan)
+    _finish_and_deliver(helpers, first)
+    monkeypatch.setattr(rb, '_bind_plan', lambda *a, **k: False)
+    before = set(_all_ids())
+
+    agent._router_completion_ids = (first,)
+    fl.begin_turn(agent, 'internal_notification')
+    note = dr.plan_for_turn(agent, 'helper finished', [], 'internal_notification')
+
+    assert len(_new_dispatch_ids(before)) == 1, 'stage two itself still starts'
+    assert 'last stage' not in note, note
+    assert 'stage 3' in note.lower() or STAGE_THREE[:20] in note, note
+    assert 'not' in note.lower() and 'start' in note.lower(), note
+
+
+def test_a_claimed_row_takes_one_continuation_once(aux, tmp_path, helpers):
+    agent = root_agent([], tmp_path)
+    plan = _staged((STAGE_ONE, ()), (STAGE_TWO, (0,)), (STAGE_THREE, (1,)))
+    fl.begin_turn(agent, None)
+    rb.begin(agent, plan, 'Build, review, release notes', dr.RouterSettings(backstop_calls=5))
+    rows = run_batch(agent, [('delegate_task', {'tasks': [{'goal': 'unrelated lane'}]})])
+    first = rows[0]['delegation_id']
+    _finish_and_deliver(helpers, first)
+
+    def make(stages):
+        return {'version': 1, 'kind': rb.PLAN_KIND, 'delegation_id': first,
+                'request_id': f'router:{first}', 'generation': 0, 'receipt_ids': [first],
+                'accepted_at': time.time(), 'expires_at': time.time() + 600,
+                'consumed': 0, 'session_id': '', 'stages': stages, 'tasks': [],
+                'digests': []}
+
+    assert ad.bind_continuation_plan(first, make([{'stage': 1, 'tasks': [1]}]))
+    # No overwrite, and a spent plan is not replaced by a fresh one.
+    assert not ad.bind_continuation_plan(first, make([{'stage': 2, 'tasks': [2]}]))
+    assert ad.get_continuation_plan(first)['stages'] == [{'stage': 1, 'tasks': [1]}]
+    assert ad.revoke_continuation_plan(first)
+    assert not ad.bind_continuation_plan(first, make([{'stage': 2, 'tasks': [2]}]))
+
+
+def test_a_delivered_row_takes_no_late_continuation(aux, tmp_path, helpers):
+    agent = root_agent([], tmp_path)
+    plan = _staged((STAGE_ONE, ()), (STAGE_TWO, (0,)))
+    fl.begin_turn(agent, None)
+    rb.begin(agent, plan, 'Build and review', dr.RouterSettings(backstop_calls=5))
+    rows = run_batch(agent, [('delegate_task', {'tasks': [{'goal': 'unrelated lane'}]})])
+    first = rows[0]['delegation_id']
+    _finish_and_deliver(helpers, first)
+    assert ad.complete_completion_delivery(first, f'claim-{first}')
+
+    late = {'version': 1, 'kind': rb.PLAN_KIND, 'delegation_id': first, 'consumed': 0,
+            'stages': [{'stage': 1, 'tasks': [1]}]}
+    assert not ad.bind_continuation_plan(first, late), \
+        'nothing would ever consume a plan bound after the completion was delivered'
+
+
+def test_claimed_fast_stage_replay_starts_stage_two_exactly_once(aux, tmp_path, helpers):
+    agent = root_agent([], tmp_path, session_id='octavia')
+    plan = _staged((STAGE_ONE, ()), (STAGE_TWO, (0,)), (STAGE_THREE, (1,)))
+    fl.begin_turn(agent, None)
+    rb.begin(agent, plan, 'Build, review, release notes', dr.RouterSettings(backstop_calls=5))
+    rows = run_batch(agent, [('delegate_task', {'tasks': [{'goal': STAGE_ONE}]})])
+    first = rows[0]['delegation_id']
+    _finish_and_deliver(helpers, first)
+    assert rb.completion_directive(agent) is not None
+    before = set(_all_ids())
+
+    for _ in range(3):
+        _completion_turn(root_agent([], tmp_path, session_id='octavia'), first)
+
+    assert len(_new_dispatch_ids(before)) == 1
+    _wait(lambda: _stage_two_helpers(helpers) == 1, 'stage two helper')
+    time.sleep(0.2)
+    assert _stage_two_helpers(helpers) == 1
+
+
+# ── the root dispatching the stages itself: stage two runs once ────────────
+
+def test_root_spawning_both_stages_itself_runs_stage_two_once(aux, tmp_path, helpers):
+    agent = root_agent([], tmp_path)
+    plan = _staged((STAGE_ONE, ()), (STAGE_TWO, (0,)))
+    fl.begin_turn(agent, None)
+    rb.begin(agent, plan, 'Build and review', dr.RouterSettings(backstop_calls=5))
+    rows = run_batch(agent, [
+        ('delegate_task', {'tasks': [{'goal': STAGE_ONE}]}),
+        ('delegate_task', {'tasks': [{'goal': STAGE_TWO}]}),
+    ])
+    first, second = rows[0].get('delegation_id'), rows[1].get('delegation_id')
+    assert first and second, rows
+    assert rb.completion_directive(agent) is not None
+    assert ad.get_continuation_plan(first) is None, 'two own dispatches bind no runtime chain'
+
+    _finish_and_deliver(helpers, first)
+    before = set(_all_ids())
+    agent._router_completion_ids = (first,)
+    fl.begin_turn(agent, 'internal_notification')
+    dr.plan_for_turn(agent, 'helper finished', [], 'internal_notification')
+    assert _new_dispatch_ids(before) == []
+    _wait(lambda: _stage_two_helpers(helpers) >= 1, 'the root\'s own stage two helper')
+    time.sleep(0.3)
+    assert _stage_two_helpers(helpers) == 1
+
+
+def test_a_bound_chain_refuses_the_roots_later_spawn_of_the_same_stage(
+        aux, tmp_path, helpers):
+    agent = root_agent([], tmp_path)
+    plan = _staged((STAGE_ONE, ()), (STAGE_TWO, (0,)))
+    fl.begin_turn(agent, None)
+    rb.begin(agent, plan, 'Build and review', dr.RouterSettings(backstop_calls=5))
+    rows = run_batch(agent, [
+        ('delegate_task', {'tasks': [{'goal': STAGE_ONE}]}),
+        writes(tmp_path, 1, 'between')[0],
+        ('delegate_task', {'tasks': [{'goal': STAGE_TWO}]}),
+    ])
+    first = rows[0]['delegation_id']
+    assert rows[2].get('error_type') == rb.HANDOFF_CODE, rows
+    assert [s['tasks'] for s in ad.get_continuation_plan(first)['stages']] == [[1]]
+
+    _finish_and_deliver(helpers, first)
+    before = set(_all_ids())
+    _completion_turn(agent, first)
+    assert len(_new_dispatch_ids(before)) == 1
+    _wait(lambda: _stage_two_helpers(helpers) == 1, 'stage two helper')
+    time.sleep(0.3)
+    assert _stage_two_helpers(helpers) == 1

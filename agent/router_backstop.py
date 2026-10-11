@@ -569,11 +569,15 @@ def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str 
         if name == "delegate_task":
             if dc._is_spawn_dispatch(args):
                 info = state.handoff
-                if info is not None and (state.no_spawn or info.get("by_runtime")):
+                if info is not None and (
+                    state.no_spawn or info.get("by_runtime") or info.get("runtime_stages")
+                ):
                     # The runtime already started the helpers (this turn's
-                    # hand-off, or the next stage); the root only reports.  A
-                    # hand-off recorded from the root's own receipt does not
-                    # stop its own further spawns.
+                    # hand-off, or the next stage), or the later stages ride
+                    # the root's own accepted dispatch and start by themselves:
+                    # the root only reports.  A second spawn here would run a
+                    # stage the chain starts again.  A hand-off from the root's
+                    # own receipt with nothing bound does not stop its spawns.
                     return _verdict_for(state, name)
                 # In flight, not accepted: only the dispatch receipt says that.
                 state.spawning[(function_name, id(function_args))] = True
@@ -680,15 +684,23 @@ def _match_stage(
 
 
 def _adopt(agent: Any, state: RouterTurn) -> None:
-    """Bind the later stages to each accepted dispatch of this turn that is
-    exactly one stage of the plan (the runtime's own or the root's).  Idempotent."""
+    """Bind the later stages to the turn's accepted dispatch when it is exactly
+    one stage of the plan (the runtime's own or the root's).  Binds nothing when
+    the turn holds several dispatches: the root runs the stages itself.
+    Idempotent."""
     verdict = state.verdict
     if verdict.mode != "staged":
         return
     stages = verdict.stages()
     if len(stages) < 2:
         return
-    for receipt in _state_receipts(agent, state):
+    receipts = _state_receipts(agent, state)
+    if len(receipts) != 1:
+        # The root dispatched more than once itself (two spawns in one
+        # message): it is running the stages on its own, and a chain bound to
+        # one of them would start the other again.
+        return
+    for receipt in receipts:
         did = receipt.delegation_id
         with state.lock:
             if did in state.bound:
@@ -887,10 +899,22 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
         "request": str(plan.get("request") or ""), "by_runtime": True,
     }
     titles = "; ".join(_one_line(g, _ACK_GOAL_CHARS) for g in goals[:_ACK_GOALS])
-    tail = (
-        "The stage after it starts by itself when it finishes."
-        if bound else "That was the last stage."
-    )
+    if bound:
+        tail = "The stage after it starts by itself when it finishes."
+    elif remaining:
+        # The tail could not be attached to the new stage: stages are left, so
+        # this is not the last one and the user must hear that they still need
+        # starting.
+        left = "; ".join(
+            _one_line(g, _ACK_GOAL_CHARS) for g in info["later"][:_ACK_GOALS]
+        )
+        tail = (
+            f"The stage(s) after it ({left}) are NOT set to start by themselves "
+            "and have not started: tell the user plainly that they still need "
+            "starting once this stage reports back."
+        )
+    else:
+        tail = "That was the last stage."
     logger.info(
         "router stages: stage %d/%d started delegation=%s (after %s)",
         number + 1, total, new_id, delegation_id,

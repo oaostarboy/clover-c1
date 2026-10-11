@@ -394,6 +394,14 @@ def bind_continuation_plan(delegation_id: str, plan: Dict[str, Any]) -> bool:
     completion nobody claimed yet (a fast helper), because the runtime starts
     the next stage only when that completion is delivered. Existing rows cannot
     be re-bound or have a plan overwritten by callbacks.
+
+    A completion the gateway already *claimed* (but did not yet deliver) takes
+    the plan too: the gateway claims before the adapter injects, so a claim is
+    not proof that the root integrated the result, and the continuation is only
+    ever consumed by the completion turn, which runs after the dispatching
+    turn that binds.  A delivered or dropped row takes nothing -- no turn would
+    ever consume it.  ``continuation_json IS NULL`` keeps it once-only: a row
+    that holds a plan, spent or not, is never re-bound.
     """
     if not delegation_id or not isinstance(plan, dict):
         return False
@@ -407,8 +415,7 @@ def bind_continuation_plan(delegation_id: str, plan: Dict[str, Any]) -> bool:
             """UPDATE async_delegations SET continuation_json=?, updated_at=?
                WHERE delegation_id=? AND continuation_json IS NULL
                  AND (state='running'
-                      OR (state='completed' AND delivery_state='pending'
-                          AND delivery_claim IS NULL))""",
+                      OR (state='completed' AND delivery_state='pending'))""",
             (encoded, time.time(), delegation_id),
         )
         return cur.rowcount == 1
