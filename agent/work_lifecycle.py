@@ -35,6 +35,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from agent import foreground_time_limit as _fl
+from agent import router_backstop
 from agent.router_backstop import (
     EXIT_REASON,
     WORK_DISPATCH_ACK,
@@ -252,6 +253,15 @@ def completion_group(agent: Any, completion_ids: Sequence[str]) -> List["_fl.Dis
     return sorted(named + siblings, key=lambda r: r.seq)
 
 
+def _turn_receipts(agent: Any, floor: int) -> List["_fl.DispatchReceipt"]:
+    """The helpers accepted for this turn.  When the router recorded the turn
+    its request-scoped view is the answer (a late receipt of an older request
+    is not this turn's); otherwise the instance's receipts above ``floor``."""
+    if router_backstop.turn_receipt_floor(agent) is not None:
+        return router_backstop.turn_receipts(agent)
+    return _fl.own_dispatch_receipts(agent, after=floor)
+
+
 def report(agent: Any) -> Optional[WorkReport]:
     """What this turn may say about its helpers, or ``None`` when it has none.
 
@@ -263,7 +273,7 @@ def report(agent: Any) -> Optional[WorkReport]:
     floor = getattr(agent, _FLOOR, None)
     if not isinstance(floor, int) or isinstance(floor, bool):
         return None
-    turn = _fl.own_dispatch_receipts(agent, after=floor)
+    turn = _turn_receipts(agent, floor)
     if turn:
         return build_report(turn)
     ids = _completion_ids(agent)
@@ -343,7 +353,6 @@ def _handback_ids(agent: Any) -> set:
 def _arm_handback(agent: Any, message: str, group: Sequence["_fl.DispatchReceipt"]) -> bool:
     """Arm the router backstop with the one-task integration plan."""
     from agent import delegation_router as dr
-    from agent import router_backstop
 
     if any(r.delegation_id in _handback_ids(agent) for r in group):
         return False  # the result of a hand-back is final here: no second one
@@ -377,7 +386,10 @@ def begin_turn(
     """Once per turn, after the router step.  Returns the model-facing status
     note for the API copy of the user message (``""`` for none).  Never raises."""
     try:
-        setattr(agent, _FLOOR, _fl.dispatch_seq(agent))
+        # The router has already recorded where this turn starts (its public
+        # floor); a turn it did not record starts at the current sequence.
+        floor = router_backstop.turn_receipt_floor(agent)
+        setattr(agent, _FLOOR, floor if floor is not None else _fl.dispatch_seq(agent))
         ids: Tuple[str, ...] = ()
         if display_kind and isinstance(completion_ids, (list, tuple)):
             ids = tuple(str(i).strip() for i in completion_ids if isinstance(i, str) and i.strip())
@@ -405,7 +417,7 @@ def end_turn(agent: Any) -> None:
         floor = getattr(agent, _FLOOR, None)
         if not isinstance(floor, int):
             return
-        made = _fl.own_dispatch_receipts(agent, after=floor)
+        made = _turn_receipts(agent, floor)
         if made:
             _handback_ids(agent).update(r.delegation_id for r in made)
     except Exception:
