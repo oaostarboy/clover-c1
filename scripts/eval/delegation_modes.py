@@ -27,6 +27,18 @@ The scorer (``score_transcript``) is a pure function over SessionDB message
 rows; ``tests/eval/test_delegation_modes_eval.py`` exercises it on transcripts
 written through the real SessionDB.
 
+Isolation: every rep runs against its OWN disposable copy of the profile home,
+all made from ONE baseline frozen when the harness starts (config.yaml, .env,
+the auth files the profile uses, skills/ with references, memories/; never
+state.db, so each copy gets a fresh SessionDB and scoring reads that copy's
+DB).  In the copy, ``auxiliary.background_review.enabled`` and
+``curator.enabled`` are false, so neither a background review fork nor the
+curator can rewrite a skill under the next rep; everything else (model,
+delegation tiers, approvals) is kept.  A foreground ``skill_manage`` still
+lands, in that rep's copy only.  The real profile is never written, and
+results.json records the sha256 of every baseline SKILL.md.  Caveat: an OAuth
+refresh inside a copy stays in the copy.
+
 Exit status: 0 pass bar met, 1 pass bar missed, 2 harness error (a run could
 not be driven, or never settled).  The eval profile must not stop on approval
 prompts (``approvals.mode: off`` or equivalent) or a turn will hang until the
@@ -36,11 +48,13 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import math
 import os
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -48,7 +62,7 @@ import time
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Callable, Deque, Dict, Iterator, List, Optional, Sequence, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CASES = REPO_ROOT / "tests" / "eval" / "delegation_modes.jsonl"
@@ -755,6 +769,102 @@ def resolve_profile_home(profile: str) -> Path:
     return Path(get_profile_dir(profile))
 
 
+# Root-level files of a profile home the eval needs: settings, secrets, and the
+# auth stores a provider reads.  state.db is deliberately absent.
+BASELINE_FILES = ("config.yaml", ".env", "auth.json", ".anthropic_oauth.json")
+BASELINE_DIRS = ("skills", "memories")
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _eval_config(raw: str) -> Dict[str, Any]:
+    """Parse a profile's config.yaml and switch off what rewrites skills."""
+    import yaml
+
+    try:
+        data = yaml.safe_load(raw) if raw.strip() else {}
+    except yaml.YAMLError as exc:
+        raise ValueError(f"config.yaml is not valid YAML: {exc}") from exc
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        raise ValueError("config.yaml is not a mapping")
+    for path in (("auxiliary", "background_review"), ("curator",)):
+        node = data
+        for key in path:
+            if not isinstance(node.get(key), dict):
+                node[key] = {}
+            node = node[key]
+        node["enabled"] = False
+    return data
+
+
+class FrozenBaseline:
+    """One frozen snapshot of the profile, from which every rep's home is made.
+
+    ``freeze`` copies the files above into ``root`` once, at harness start, and
+    hashes every SKILL.md.  ``make_home`` then copies that snapshot (never the
+    live profile) to a fresh directory and rewrites its config.yaml.  The real
+    profile is only ever read, and only by ``freeze``.
+    """
+
+    def __init__(self, root: Path, source: Path, skill_sha256: Dict[str, str]):
+        self.root = Path(root)
+        self.source = Path(source)
+        self.skill_sha256 = dict(skill_sha256)
+
+    @classmethod
+    def freeze(cls, source_home: Path, root: Path) -> "FrozenBaseline":
+        source, root = Path(source_home), Path(root)
+        src_abs, root_abs = source.resolve(), root.resolve()
+        if src_abs == root_abs or src_abs in root_abs.parents or root_abs in src_abs.parents:
+            # a stale baseline is replaced below; never the profile itself
+            raise ValueError(f"baseline dir {root} overlaps the profile home {source}")
+        if root.exists():
+            shutil.rmtree(root)
+        root.mkdir(parents=True)
+        for name in BASELINE_FILES:
+            if (source / name).is_file():
+                shutil.copy2(source / name, root / name)
+        for name in BASELINE_DIRS:
+            if (source / name).is_dir():
+                shutil.copytree(source / name, root / name, symlinks=True)
+        hashes = {
+            p.relative_to(root).as_posix(): _sha256(p)
+            for p in sorted((root / "skills").rglob("SKILL.md")) if p.is_file()
+        }
+        return cls(root, source, hashes)
+
+    def make_home(self, label: str) -> Path:
+        """A disposable home for one rep; ``ValueError`` if config.yaml is unusable."""
+        import yaml
+
+        home = self.root.parent / "homes" / re.sub(r"[^A-Za-z0-9_.-]", "_", label)
+        if home.exists():
+            shutil.rmtree(home)
+        shutil.copytree(self.root, home, symlinks=True)
+        cfg_path = home / "config.yaml"
+        raw = cfg_path.read_text(encoding="utf-8") if cfg_path.exists() else ""
+        cfg_path.write_text(yaml.safe_dump(_eval_config(raw), sort_keys=False), encoding="utf-8")
+        return home
+
+
+def make_rep_env(
+    baseline: FrozenBaseline,
+    driver_factory: Callable[[Path], Any],
+    reader_factory: Callable[[Path], Callable[[str], Sequence[Dict[str, Any]]]],
+) -> Callable[[str], Tuple[Any, Callable[[str], Sequence[Dict[str, Any]]], Path]]:
+    """``run_eval``'s ``rep_env``: label -> (driver, reader, home) over a fresh copy."""
+
+    def _env(label: str):
+        home = baseline.make_home(label)
+        return driver_factory(home), reader_factory(home), home
+
+    return _env
+
+
 class _GatewaySession:
     def __init__(self, conn: "_GatewayConnection", live_id: str, stored_id: str):
         self._conn = conn
@@ -968,7 +1078,7 @@ def run_eval(
     cases: Sequence[Dict[str, Any]],
     driver: Any,
     *,
-    reader: Callable[[str], Sequence[Dict[str, Any]]],
+    reader: Optional[Callable[[str], Sequence[Dict[str, Any]]]],
     root_model: str,
     root_provider: Optional[str],
     reps: int,
@@ -982,7 +1092,13 @@ def run_eval(
     sleep: Callable[[float], None] = time.sleep,
     progress: Optional[Callable[[str], None]] = None,
     heartbeat_seconds: float = 30.0,
+    rep_env: Optional[Callable[[str], Tuple[Any, Callable[[str], Sequence[Dict[str, Any]]], Path]]] = None,
 ) -> List[Dict[str, Any]]:
+    """Run every case.  With ``rep_env`` (see ``make_rep_env``) each rep gets its
+    own (driver, reader, home) built from the frozen baseline; otherwise the one
+    ``driver``/``reader`` is shared by all reps."""
+    if rep_env is None and (driver is None or reader is None):
+        raise ValueError("run_eval needs a driver and reader, or a rep_env")
     out_dir = Path(out_dir)
     (out_dir / "transcripts").mkdir(parents=True, exist_ok=True)
     runs: List[Dict[str, Any]] = []
@@ -992,17 +1108,21 @@ def run_eval(
         for rep in range(n):
             run: Dict[str, Any] = {
                 "case_id": case["id"], "rep": rep, "expected_mode": case["expected_mode"],
-                "session_id": None, "error": None, "settled": False,
+                "session_id": None, "error": None, "settled": False, "home": None,
                 "turn_seconds": None, "approvals": 0, "score": None,
                 "correct": False, "override_violated": bool(case.get("override")),
                 "dispatch_within_calls_ok": case.get("dispatch_within_calls") is None,
             }
             messages: Sequence[Dict[str, Any]] = []
+            rep_driver, rep_reader = driver, reader
             try:
+                if rep_env is not None:
+                    rep_driver, rep_reader, rep_home = rep_env(f"{case['id']}-r{rep}")
+                    run["home"] = str(rep_home)
                 cwd = out_dir / "work" / f"{case['id']}-r{rep}"
                 cwd.mkdir(parents=True, exist_ok=True)
                 prompt = case["prompt"].replace("{workdir}", str(cwd))
-                with driver.session(model=root_model, provider=root_provider, cwd=str(cwd)) as sess:
+                with rep_driver.session(model=root_model, provider=root_provider, cwd=str(cwd)) as sess:
                     sid = sess.stored_session_id
                     run["session_id"] = sid
                     t0 = clock()
@@ -1033,7 +1153,7 @@ def run_eval(
                     say(f"{case['id']} r{rep}: root turn "
                         f"{'ended' if ended else 'NOT ended'} after {run['turn_seconds']}s")
                     run["settled"] = wait_settled(
-                        lambda: reader(sid), sess.idle,
+                        lambda: rep_reader(sid), sess.idle,
                         quiet_seconds=quiet_seconds, timeout=settle_timeout,
                         poll_seconds=poll_seconds, clock=clock, sleep=sleep,
                         on_poll=on_poll,
@@ -1041,14 +1161,14 @@ def run_eval(
                     if not run["settled"]:
                         sess.interrupt()
                     run["approvals"] = getattr(sess, "approvals", 0)
-                messages = reader(run["session_id"])
+                messages = rep_reader(run["session_id"])
                 run["score"] = score_transcript(messages)
                 run.update(judge_run(run["score"], case))
             except Exception as exc:  # one bad run must not lose the others
                 run["error"] = f"{type(exc).__name__}: {exc}"
                 if run["session_id"] and not messages:
                     try:
-                        messages = reader(run["session_id"])
+                        messages = rep_reader(run["session_id"])
                         run["score"] = score_transcript(messages)
                         run.update(judge_run(run["score"], case))
                     except Exception:
@@ -1215,22 +1335,36 @@ def main(
     def _progress(msg: str) -> None:
         print(msg, file=sys.stderr, flush=True)
 
-    driver = (driver_factory or (lambda h, a: TuiGatewayDriver(
-        h, log_dir=out_dir / "gateway-logs", progress=_progress)))(home, args)
-    reader = (reader_factory or (lambda h: (lambda sid: read_transcript(h / "state.db", sid))))(home)
+    # The real profile is read once, here; every rep runs on a copy of this.
+    try:
+        baseline = FrozenBaseline.freeze(home, out_dir / "baseline")
+    except (OSError, ValueError) as exc:
+        print(f"error: could not freeze the profile baseline: {exc}", file=sys.stderr)
+        return 2
+    _progress(f"baseline frozen: {len(baseline.skill_sha256)} SKILL.md hashed")
+
+    make_driver = driver_factory or (lambda h, a: TuiGatewayDriver(
+        h, log_dir=out_dir / "gateway-logs", progress=_progress))
+    make_reader = reader_factory or (lambda h: (lambda sid: read_transcript(h / "state.db", sid)))
     runs = run_eval(
-        cases, driver, reader=reader, root_model=args.root_model, root_provider=args.root_provider,
+        cases, None, reader=None, root_model=args.root_model, root_provider=args.root_provider,
         reps=args.reps, evidence_reps=args.evidence_reps, out_dir=out_dir,
         turn_timeout=args.turn_timeout, settle_timeout=args.settle_timeout,
         quiet_seconds=args.quiet_seconds, poll_seconds=args.poll_seconds,
         progress=_progress,
+        rep_env=make_rep_env(baseline, lambda h: make_driver(h, args), make_reader),
     )
     bar_result = evaluate_bar(runs, cases, bar_over)
     meta = {
         "profile": args.profile, "root_model": args.root_model, "root_provider": args.root_provider,
         "surface": "tui_gateway JSON-RPC (platform tui)",
         "reps": args.reps, "evidence_reps": args.evidence_reps,
-        "delegation_config": _delegation_config(home),
+        "delegation_config": _delegation_config(baseline.root),
+        "skill_sha256": baseline.skill_sha256,
+        "isolation": {
+            "per_rep_copy": True, "state_db": "fresh per rep",
+            "background_review": False, "curator": False,
+        },
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
     }
     write_report(out_dir, runs, cases, bar_result, meta)
