@@ -31,9 +31,13 @@ pytestmark = pytest.mark.real_delegation_router
 
 @pytest.fixture(autouse=True)
 def _clean_registry():
+    from agent import ack_checklist
+
     ad._reset_for_tests()
+    ack_checklist.reset_for_tests()
     yield
     ad._reset_for_tests()
+    ack_checklist.reset_for_tests()
 
 
 class Clock:
@@ -212,6 +216,17 @@ def test_control_plane_calls_do_not_count_or_get_refused(tmp_path, children, dis
 
     assert not any(_is_handoff(r) for r in results)
     assert (tmp_path / 'a.txt').exists() and (tmp_path / 'b.txt').exists()
+
+
+def test_a_memory_note_past_the_threshold_never_hands_off(children, dispatches, clock):
+    agent = _root()
+    _arm(agent)
+    clock.t += 61
+
+    verdict = rb.refusal(agent, "memory", {"action": "add", "target": "memory", "content": "x"})
+
+    assert verdict is None
+    assert len(dispatches) == 0
 
 
 # ── refusal after the time threshold ───────────────────────────────────────
@@ -565,9 +580,9 @@ def test_clearing_the_turn_state_removes_the_backstop(tmp_path, children, dispat
 GOAL = 'Investigate the flaky upload retries across every storage backend'
 
 
-def _receipt(*goals, summary='', sids=()):
+def _receipt(*goals, summary='', sids=(), did='d1'):
     return fl.DispatchReceipt(
-        delegation_id='d1', seq=1, goals=tuple(goals), summary=summary,
+        delegation_id=did, seq=1, goals=tuple(goals), summary=summary,
         subagent_ids=tuple(sids),
     )
 
@@ -604,7 +619,7 @@ def test_ack_with_no_usable_summary_is_empty():
 
 def test_several_receipts_with_summaries_join_on_new_lines():
     text = rb._ack_text([_receipt(GOAL, summary='\U0001f504 a \u2192 b'),
-                         _receipt('other', summary='\U0001f504 c \u2192 d, ~5 min')])
+                         _receipt('other', summary='\U0001f504 c \u2192 d, ~5 min', did='d2')])
     assert text == '\U0001f504 a \u2192 b\n\U0001f504 c \u2192 d, ~5 min'
 
 

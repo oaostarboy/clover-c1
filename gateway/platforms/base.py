@@ -3382,6 +3382,15 @@ class BasePlatformAdapter(ABC):
                     from gateway.delegation_activity import note_outbound
 
                     note_outbound(self, chat_id, getattr(result, "message_id", None))
+                    # A helper acknowledgement becomes a live checklist: bind the
+                    # message it just became to its card (no-op for any other text).
+                    from gateway.delegation_activity import bind_ack_card
+
+                    bind_ack_card(
+                        self, chat_id,
+                        args[1] if len(args) > 1 else kw.get("content"),
+                        result, kw.get("metadata"),
+                    )
             except Exception:
                 pass
             return result
