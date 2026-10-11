@@ -56,19 +56,26 @@ def children(monkeypatch):
     import run_agent
     from tools.process_registry import process_registry
 
+    import threading
+
     started: list = []
+    # A helper does not finish in a millisecond: hold it, so "helpers are
+    # running" is a fact of the test and not a race with the fake.
+    release = threading.Event()
     real = run_agent.AIAgent.run_conversation
 
     def conversation(self, user_message=None, *args, **kwargs):
         if getattr(self, '_delegate_depth', 0) or getattr(self, '_subagent_id', None):
             started.append({'system': getattr(self, 'ephemeral_system_prompt', '') or '',
                             'user': user_message})
+            release.wait(20)
             return {'final_response': f'done: {user_message}', 'messages': [], 'api_calls': 1,
                     'completed': True, 'input_tokens': 0, 'output_tokens': 0}
         return real(self, user_message, *args, **kwargs)
 
     monkeypatch.setattr(run_agent.AIAgent, 'run_conversation', conversation)
     yield started
+    release.set()
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         try:
@@ -199,7 +206,7 @@ def test_parallel_turn_is_handed_off_after_two_calls_and_the_turn_ends_cleanly(
 
 # ── staged ─────────────────────────────────────────────────────────────────
 
-def test_staged_turn_dispatches_stage_one_and_names_the_next_stage(
+def test_staged_turn_dispatches_stage_one_and_carries_the_next_stage(
         provider, aux, tmp_path, children, dispatches):
     aux.replies[:] = [verdict_json('staged', [
         T('Write the feature flag module with tests in the workdir'),
@@ -230,6 +237,11 @@ def test_staged_turn_dispatches_stage_one_and_names_the_next_stage(
     assert len(children) == 1
     handed = json.loads(next(m['content'] for m in result['messages']
                              if m.get('role') == 'tool' and 'Handed off to helpers' in m['content']))
-    assert handed['next_stage']['goal'] == 'Review the whole diff of the feature flag module'
+    # the runtime, not the root, starts the next stage: it rides the dispatched row
+    assert 'next_stage' not in handed
+    import tools.async_delegation as ad
+    stored = ad.get_continuation_plan(handed['delegation_id'])
+    assert [s['tasks'] for s in stored['stages']] == [[1]]
+    assert stored['tasks'][1]['goal'] == 'Review the whole diff of the feature flag module'
     _roles_ok(result['messages'])
     assert not (tmp_path / 'c.txt').exists()

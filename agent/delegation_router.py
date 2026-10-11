@@ -730,8 +730,9 @@ def work_plan_note(verdict: Verdict) -> str:
                      else f"Stage {n} (after stage {n - 1} results check out):")
         lines += [_task_line(i, verdict.tasks[i]) for i in stage]
     lines.append(
-        f"Dispatch stage 1 with one delegate_task call, {close}; send each later "
-        "stage once the one before it checks out."
+        f"Dispatch stage 1 with one delegate_task call, {close}; the later "
+        "stages follow once the one before them finishes: send one yourself "
+        "only when the runtime tells you to."
     )
     return "\n".join(lines)
 
@@ -746,6 +747,22 @@ def _recent_turns(history: Optional[Sequence[Any]]) -> List[Dict[str, Any]]:
             if isinstance(content, str) and content.strip() and msg.get("display_kind") != "hidden":
                 out.append({"role": msg["role"], "content": content})
     return out[-CONTEXT_TURNS:]
+
+
+def _continuation_note(agent: Any, settings: RouterSettings) -> str:
+    """A helper-completion turn: carry a staged plan on to its next stage.
+
+    Not a routing decision -- the plan was made on the human turn and is bound
+    to the finished stage's durable row.  Scope is the router's own (a root
+    conversational agent that can detach helpers); the completion ids are the
+    gateway's trusted metadata (``run_conversation``), never message text.
+    """
+    ids = getattr(agent, "_router_completion_ids", None)
+    if not ids or skip_reason(agent, "continue", None, settings=settings):
+        return ""
+    from agent import router_backstop
+
+    return router_backstop.continue_staged(agent, ids, settings)
 
 
 def plan_for_turn(
@@ -765,6 +782,8 @@ def plan_for_turn(
     try:
         settings = load_settings()
         why = skip_reason(agent, user_message, display_kind, settings=settings)
+        if why == "not_human":
+            return _continuation_note(agent, settings)
         if why:
             logger.debug("delegation router skipped: %s", why)
             return ""

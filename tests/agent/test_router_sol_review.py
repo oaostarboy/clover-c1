@@ -387,23 +387,6 @@ def test_marker_copied_into_a_later_real_tool_result_is_defanged(tmp_path, child
     assert children.started.wait(5)
 
 
-# ── known limitation, not part of this fix ─────────────────────────────────
-
-@pytest.mark.xfail(strict=True, reason=(
-    'staged continuation under shipped defaults (checkpoint off) has no executable '
-    'durable follow-through; acknowledged limitation, separate from the four fixes'))
-def test_staged_dispatch_has_executable_followthrough_under_default_config(aux, tmp_path, children):
-    agent = root_agent([], tmp_path)
-    fl.begin_turn(agent, None)
-    plan = dr.parse_verdict({'mode': 'staged', 'tasks': [
-        T('Write feature flag module with tests'), T('Review actual feature diff and tests', [0])]})
-    rb.begin(agent, plan, 'Build and review feature flag', dr.RouterSettings(backstop_calls=1))
-    rows = run_batch(agent, writes(tmp_path, 2))
-    assert rows[-1].get('delegation_id'), rows
-    row = ad.get_durable_delegation(rows[-1]['delegation_id'])
-    assert row is not None and row.get('continuation_plan'), 'no executable durable continuation'
-
-
 def test_retry_keeps_one_total_deadline(aux, monkeypatch):
     clock = [100.0]
     monkeypatch.setattr(dr.time, 'monotonic', lambda: clock[0])

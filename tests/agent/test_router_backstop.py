@@ -483,7 +483,14 @@ def test_staged_dispatches_the_first_stage_and_binds_the_next(tmp_path, children
     args = dispatches[0]
     assert [t['goal'] for t in args['tasks']] == ['write the module']
     assert args['follow_through'][0]['goal'] == 'review the module'
-    assert handed['next_stage']['goal'] == 'review the module'
+    # Under the default config nothing honours follow_through, so the runtime
+    # carries the next stage on the dispatched row; the root is not asked to.
+    assert 'next_stage' not in handed
+    assert 'start by themselves' in handed['error']
+    stored = ad.get_continuation_plan(handed['delegation_id'])
+    assert stored['kind'] == rb.PLAN_KIND
+    assert [s['tasks'] for s in stored['stages']] == [[1]]
+    assert stored['tasks'][1]['goal'] == 'review the module'
     assert len(children) == 1
 
 
@@ -500,7 +507,9 @@ def test_staged_with_a_wide_first_stage_dispatches_it_whole_and_keeps_the_rest_i
     args = dispatches[0]
     assert [t['goal'] for t in args['tasks']] == ['gather data lane A', 'gather data lane B']
     assert 'follow_through' not in args, 'the mechanism only binds a single-task stage'
-    assert 'merge both lanes' in handed['error'], 'the root is told what comes after'
+    stored = ad.get_continuation_plan(handed['delegation_id'])
+    assert [s['tasks'] for s in stored['stages']] == [[2]], 'the merge stage rides the row'
+    assert stored['tasks'][2]['goal'] == 'merge both lanes'
 
 
 def test_single_dispatches_one_task(tmp_path, children, dispatches):

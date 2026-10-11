@@ -1934,6 +1934,15 @@ def run_conversation(
     except Exception:
         logger.debug("per-turn env credential refresh failed", exc_info=True)
 
+    # The delegation router reads the trusted completion ids of this turn (a
+    # staged plan's next stage is started from the completion that finishes
+    # the one before it).
+    agent._router_completion_ids = (
+        tuple(str(c) for c in completion_delegation_ids if c)
+        if isinstance(completion_delegation_ids, (list, tuple, set, frozenset))
+        else ()
+    )
+
     # ── Per-turn setup (the prologue) ──
     # All once-per-turn setup — stdio guarding, retry-counter resets, user
     # message sanitization, todo/nudge hydration, system-prompt restore-or-
