@@ -1533,8 +1533,16 @@ def _abort_finalization(
         record["status"] = prior.get("status") or "running"
         record["completed_at"] = None
         record["interrupt_fn"] = prior.get("interrupt_fn")
-        record["progress_fn"] = prior.get("progress_fn")
-        if pending is not None:
+        if pending is None:
+            # A stall force-finalize that did not commit: the runner is still
+            # out there, so the stall detector keeps watching it.
+            record["progress_fn"] = prior.get("progress_fn")
+        else:
+            # The runner has already returned: there is nothing left to
+            # stall-detect, and a stall force-finalize of it would strand the
+            # pending completion on a record the retry path skips. Only the
+            # retry path owns this record now.
+            record["progress_fn"] = None
             record["_pending_finalize"] = pending
     if pending is not None:
         _ensure_stale_monitor_best_effort(delegation_id)
@@ -1862,9 +1870,25 @@ def _rescue_after_finalized(
         return
     with _records_lock:
         record = _records.get(batch_id)
-        if (
-            record is None or record.get("fanout_delivery") != FANOUT_JOINED
+        if record is not None and (
+            record.get("fanout_delivery") != FANOUT_JOINED
             or record.get("status") in ("running", "stalling", "finalizing")
+        ):
+            return
+    if record is None:
+        # The finalized record was pruned (or the process restarted its
+        # in-memory registry) before the runner returned: the durable ledger
+        # row carries the same routing and mode.
+        try:
+            parent = _batch_parent_snapshot(batch_id)
+            durable = get_durable_delegation(batch_id)
+        except Exception:
+            logger.debug("rescue: no durable batch %s", batch_id, exc_info=True)
+            return
+        if (
+            parent.get("fanout_delivery") != FANOUT_JOINED
+            or durable is None
+            or durable.get("state") in ("running", "finalizing")
         ):
             return
     try:
