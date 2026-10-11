@@ -15,8 +15,7 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
-## 1.5.0 | Clover C1.5 | TBD
-<!-- draft -->
+## 1.5.0 | Clover C1.5 | 2026-10-11
 - Each request is sized up for you: quick questions get a direct answer, big jobs go to helpers.
 - Independent parts run at the same time; steps that need earlier results run one after another.
 - You can keep chatting right after a hand-off, and Clover tells you the helpers are working.
