@@ -501,3 +501,59 @@ def test_router_record_is_read_from_each_reps_own_home(db, tmp_path):
 
     assert [r["router"]["mode"] for r in runs] == ["direct", "parallel"]
     assert [r["home"] for r in runs] == [str(h) for h in homes]
+
+
+def test_main_end_to_end_reports_the_two_bars_separately(tmp_path, monkeypatch, capsys):
+    """Real main(): frozen profile, per-rep copies, the real fleet case file.
+    The mode case passes, the Alfred-shaped transcript fails: results.json keeps
+    the mode bar PASS and the fleet bar FAIL, and the exit status is 1."""
+    from clover_state import SessionDB
+
+    profile = tmp_path / "profile"
+    profile.mkdir()
+    (profile / "config.yaml").write_text("model:\n  default: m\napprovals:\n  mode: 'off'\n")
+    monkeypatch.setattr(dm, "resolve_profile_home", lambda name: profile)
+
+    mode_cases = tmp_path / "modes.jsonl"
+    mode_cases.write_text(json.dumps({"id": "disk", "prompt": "What is my disk usage?",
+                                      "expected_mode": "direct"}) + "\n")
+
+    def script(db, sid, prompt):
+        r = Recorder(db, sid)
+        r.user(prompt)
+        if "security check" in prompt:
+            r.delegate(GOALS, delegation_id="d-1", text="Three helpers started.")
+            r.assistant("No spying. No intruder. The house is not on fire.", dt=60.0)
+            r.completion_batch("d-1", GOALS)
+            r.assistant("The three checks are back.", dt=3.0)
+        elif "{workdir}" in prompt or "under " in prompt:
+            r.delegate(["a", "b"], delegation_id="d-2", text="Two helpers started; back soon.")
+            r.completion_batch("d-2", ["a", "b"])
+            r.assistant("Both ready.", dt=2.0)
+        else:
+            r.assistant("41 GB in Videos.", dt=3.0)
+
+    def driver_factory(home, args):
+        return _Driver(SessionDB(db_path=home / "state.db"), script)
+
+    def reader_factory(home):
+        return lambda sid: dm.read_transcript(home / "state.db", sid)
+
+    out = tmp_path / "out"
+    rc = dm.main(
+        ["--profile", "p", "--root-model", "m", "--out", str(out), "--cases", str(mode_cases),
+         "--reps", "1", "--settle-timeout", "5", "--quiet-seconds", "0", "--poll-seconds", "0.01",
+         "--turn-timeout", "5"],
+        driver_factory=driver_factory, reader_factory=reader_factory,
+    )
+
+    data = json.loads((out / "results.json").read_text())
+    assert rc == 1
+    assert data["bar"]["passed"] is True            # the 15's bar, untouched by fleet runs
+    assert data["fleet"]["passed"] is False
+    statuses = {r["case_id"]: r["fleet"]["status"] for r in data["runs"] if "fleet" in r}
+    assert statuses["alfred-premature-verdict"] == "fail"
+    assert [c["id"] for c in data["cases"]] == ["disk"]
+    assert {c["id"] for c in data["fleet_cases"]} == set(statuses)
+    text = (out / "summary.txt").read_text()
+    assert "RESULT: PASS" in text and "FLEET RESULT: FAIL" in text
