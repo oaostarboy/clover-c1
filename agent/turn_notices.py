@@ -60,9 +60,11 @@ _DEFANGED_MARKER = "(Clover runtime)"
 # it was authored for -- ``(tool_call_id | None, tool_name)`` -- so a refusal or
 # dispatch note that carries the marker inside its JSON survives defanging only
 # in the result it was written for.  Bounded: only results of the last few
-# calls can reach the funnel.
+# calls can reach the funnel.  A result keeps EVERY invocation it was vouched
+# for (a batch of identical refusals is one string, one vouch per call); the
+# bound is on how many distinct results and invocations are remembered.
 _VOUCHED_CAP = 256
-_VOUCHED_PER_RESULT = 8
+_VOUCHED_ENTRIES_CAP = 4096
 _vouched: "OrderedDict[str, List[Tuple[Optional[str], str]]]" = OrderedDict()
 _vouched_lock = threading.Lock()
 
@@ -282,7 +284,9 @@ def vouch_runtime_result(result: str, tool_name: Optional[str] = None) -> str:
         invocation = _INVOCATION.get()
         if invocation is not None and invocation[0]:
             name, call_id = invocation
-            entry: Optional[Tuple[Optional[str], str]] = (call_id or None, name)
+            # An invocation with no call id cannot be told from a later call of
+            # the same tool: nothing to bind the vouch to, so none is recorded.
+            entry: Optional[Tuple[Optional[str], str]] = (call_id, name) if call_id else None
         elif tool_name:
             entry = (None, str(tool_name))
         else:
@@ -293,9 +297,13 @@ def vouch_runtime_result(result: str, tool_name: Optional[str] = None) -> str:
                 entries = _vouched.pop(key, [])
                 if entry not in entries:
                     entries.append(entry)
-                _vouched[key] = entries[-_VOUCHED_PER_RESULT:]
-                while len(_vouched) > _VOUCHED_CAP:
-                    _vouched.popitem(last=False)
+                _vouched[key] = entries
+                total = sum(len(v) for v in _vouched.values())
+                while len(_vouched) > 1 and (
+                    len(_vouched) > _VOUCHED_CAP or total > _VOUCHED_ENTRIES_CAP
+                ):
+                    _, dropped = _vouched.popitem(last=False)
+                    total -= len(dropped)
     return result
 
 

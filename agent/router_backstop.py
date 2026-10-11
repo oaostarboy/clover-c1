@@ -19,6 +19,13 @@ acceptance signal is the dispatch receipt (``foreground_time_limit
 reports what the turn's receipts support: ``dispatch_ack``, ``partial``,
 ``incomplete`` or ``verified_completion``.
 
+That holds for EVERY in-scope turn, not only one that armed a plan: a "direct"
+verdict, a router error and a skipped acknowledgment get the same *receipt
+floor* (``mark_turn``), so a root that dispatches a helper itself still ends the
+turn with the acknowledgment and cannot keep doing foreground work beside it.
+The floor is public (``turn_receipt_floor`` / ``turn_receipts``) so a
+helper-completion turn can read what it dispatched.
+
 Ported from reference code (MIT):
 
 * langgraph-supervisor-py/langgraph_supervisor/handoff.py -- (c) 2025
@@ -64,6 +71,9 @@ HANDOFF_CODE = _fl.ROUTER_HANDOFF_CODE
 FAILED_CODE = _fl.ROUTER_HANDOFF_FAILED_CODE
 
 _ATTR = "_router_turn"
+# A turn with a receipt floor but no armed plan keeps its (unplanned) state
+# here, so ``_ATTR`` still means "a plan is armed for this turn".
+_FLOOR_ATTR = "_router_turn_floor"
 MAX_FINDINGS = 12
 FINDING_CHARS = 1200
 FINDINGS_TOTAL_CHARS = 6000
@@ -119,6 +129,9 @@ class RouterTurn:
     # A continuation turn: the runtime already started the next stage, so the
     # root's own spawns are refused too (it only reports).
     no_spawn: bool = False
+    # ``False`` for a turn that only carries a receipt floor (a direct verdict,
+    # a router error, a skip): the receipts count, the thresholds never trip.
+    planned: bool = True
     # Dispatches of this turn already considered for a durable stage plan.
     bound: Dict[str, bool] = field(default_factory=dict)
     findings: Deque[Tuple[str, str, str]] = field(
@@ -139,11 +152,30 @@ def _now() -> float:
     return _fl._now()
 
 
-def begin(agent: Any, verdict: PlanVerdict, user_message: str, settings: RouterSettings) -> None:
-    """Arm the backstop for this turn (a direct plan arms nothing)."""
+def mark_turn(agent: Any, settings: RouterSettings) -> None:
+    """Record this turn's receipt floor without arming the backstop.
+
+    Every dispatch accepted for this instance after now belongs to the turn:
+    the acknowledgment, the refusal of later work and ``work_status`` read it
+    whether or not the router produced a plan.
+    """
     clear(agent)
+    try:
+        setattr(agent, _FLOOR_ATTR, RouterTurn(
+            verdict=PlanVerdict(mode="direct", tasks=()), user_message="",
+            settings=settings, started_at=_now(),
+            receipt_floor=_fl.dispatch_seq(agent), planned=False,
+        ))
+    except Exception:
+        logger.debug("could not record the turn's receipt floor", exc_info=True)
+
+
+def begin(agent: Any, verdict: PlanVerdict, user_message: str, settings: RouterSettings) -> None:
+    """Arm the backstop for this turn (a direct plan arms nothing but the floor)."""
     if verdict.mode == "direct" or not verdict.tasks:
+        mark_turn(agent, settings)
         return
+    clear(agent)
     try:
         setattr(agent, _ATTR, RouterTurn(
             verdict=verdict, user_message=str(user_message or ""),
@@ -155,15 +187,19 @@ def begin(agent: Any, verdict: PlanVerdict, user_message: str, settings: RouterS
 
 
 def clear(agent: Any) -> None:
-    try:
-        setattr(agent, _ATTR, None)
-    except Exception:
-        pass
+    for attr in (_ATTR, _FLOOR_ATTR):
+        try:
+            setattr(agent, attr, None)
+        except Exception:
+            pass
 
 
 def _state(agent: Any) -> Optional[RouterTurn]:
-    state = getattr(agent, _ATTR, None)
-    return state if isinstance(state, RouterTurn) else None
+    for attr in (_ATTR, _FLOOR_ATTR):
+        state = getattr(agent, attr, None)
+        if isinstance(state, RouterTurn):
+            return state
+    return None
 
 
 # ── findings gathered so far ───────────────────────────────────────────────
@@ -189,7 +225,7 @@ def note_result(agent: Any, function_name: str, function_args: Any, result: Any)
         state.running.pop(key, None)
         if state.spawning.pop(key, None) is not None:
             state.settled.notify_all()
-    if not isinstance(result, str) or not result.strip():
+    if not state.planned or not isinstance(result, str) or not result.strip():
         return
     try:
         from agent import delegation_checkpoint as dc
@@ -357,6 +393,9 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
             "later": later,
             "next_stage": follow[0] if follow and not runtime else None,
             "runtime_stages": runtime,
+            # The runtime dispatched this, not the root: the root's own spawn
+            # beside it would be a second dispatch of the same plan.
+            "by_runtime": True,
         }
     reason = data.get("error") or data.get("reason") or "the helpers were not accepted"
     return {"ok": False, "reason": _one_line(str(reason), _REASON_CHARS)}
@@ -435,15 +474,21 @@ def _verdict_for(state: RouterTurn, tool_name: str):
     )
 
 
-def _wait_for_spawns(state: RouterTurn) -> None:
+def _stop_pending(agent: Any) -> bool:
+    return getattr(agent, "_interrupt_requested", False) is True
+
+
+def _wait_for_spawns(state: RouterTurn, agent: Any) -> None:
     """Hold a work call until the root's own ``delegate_task`` (admitted before
-    it, so already started) has settled.  Caller holds ``state.lock``."""
+    it, so already started) has settled.  A pending Stop ends the wait: the
+    call is about to be cancelled, it must not sit out the settle time.
+    Caller holds ``state.lock``."""
     deadline = time.monotonic() + _SPAWN_SETTLE_SECONDS
     while state.spawning:
         left = deadline - time.monotonic()
-        if left <= 0:
+        if left <= 0 or _stop_pending(agent):
             return
-        state.settled.wait(left)
+        state.settled.wait(min(left, 0.2))
 
 
 def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str = ""):
@@ -466,15 +511,19 @@ def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str 
     with state.lock:
         if name == "delegate_task":
             if dc._is_spawn_dispatch(args):
-                if state.no_spawn and state.handoff is not None:
-                    # The runtime started the next stage; the root only reports.
+                info = state.handoff
+                if info is not None and (state.no_spawn or info.get("by_runtime")):
+                    # The runtime already started the helpers (this turn's
+                    # hand-off, or the next stage); the root only reports.  A
+                    # hand-off recorded from the root's own receipt does not
+                    # stop its own further spawns.
                     return _verdict_for(state, name)
                 # In flight, not accepted: only the dispatch receipt says that.
                 state.spawning[(function_name, id(function_args))] = True
             return None
         if name in dc.CONTROL_PLANE_TOOLS:
             return None
-        _wait_for_spawns(state)
+        _wait_for_spawns(state, agent)
         if state.handoff is None:
             owned = _fl.own_dispatch_receipts(agent, after=state.receipt_floor)
             if owned:
@@ -486,7 +535,7 @@ def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str 
             # Once a helper owns the work, the root stays out of it for the
             # turn; once the runtime could not start one, the root carries on.
             return _verdict_for(state, name)
-        if state.failure is not None:
+        if not state.planned or state.failure is not None:
             return None
         if state.spawning:
             # The root's own dispatch never settled (timeout): do not add a
@@ -778,7 +827,7 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
         "delegation_id": new_id, "subagent_ids": ids,
         "later": [verdict.tasks[i].goal for st in remaining for i in st["tasks"]],
         "next_stage": None, "runtime_stages": bound, "verdict": verdict,
-        "request": str(plan.get("request") or ""),
+        "request": str(plan.get("request") or ""), "by_runtime": True,
     }
     titles = "; ".join(_one_line(g, _ACK_GOAL_CHARS) for g in goals[:_ACK_GOALS])
     tail = (
@@ -844,11 +893,27 @@ def continue_staged(agent: Any, completion_ids: Any, settings: RouterSettings) -
 
 # ── ending the turn, and what the turn's receipts support ──────────────────
 
-def _turn_receipts(agent: Any) -> List["_fl.DispatchReceipt"]:
+def turn_receipt_floor(agent: Any) -> Optional[int]:
+    """The dispatch sequence this turn started above, or ``None``.
+
+    ``None`` when the turn is out of the router's scope (a subagent, cron, the
+    router disabled, ...).  Set for every in-scope turn, planned or not, and for
+    a helper-completion turn too: receipts numbered above it were accepted
+    during this turn.
+    """
     state = _state(agent)
-    if state is None:
+    return state.receipt_floor if state is not None else None
+
+
+def turn_receipts(agent: Any) -> List["_fl.DispatchReceipt"]:
+    """The helpers this instance had accepted since this turn's floor."""
+    floor = turn_receipt_floor(agent)
+    if floor is None:
         return []
-    return _fl.own_dispatch_receipts(agent, after=state.receipt_floor)
+    return _fl.own_dispatch_receipts(agent, after=floor)
+
+
+_turn_receipts = turn_receipts
 
 
 def _ack_text(receipts: List["_fl.DispatchReceipt"]) -> str:

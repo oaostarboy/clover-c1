@@ -41,7 +41,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from agent.turn_notices import RUNTIME_NOTE_MARKER
+from agent.turn_notices import RUNTIME_NOTE_MARKER, neutralize_marker
 
 logger = logging.getLogger(__name__)
 
@@ -197,12 +197,11 @@ def mode_from_tasks(tasks: Sequence[PlanTask]) -> str:
 
 
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]+")
-_MARKER_RE = re.compile(re.escape(RUNTIME_NOTE_MARKER), re.IGNORECASE)
 
 
 def clean_text(value: str, limit: int) -> str:
     """One line, no control characters, no copy of the runtime marker."""
-    text = _MARKER_RE.sub("(Clover runtime)", _CONTROL_CHARS.sub(" ", value))
+    text = neutralize_marker(_CONTROL_CHARS.sub(" ", value))
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
@@ -212,7 +211,7 @@ _CONTROL_KEEP_NEWLINE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]+")
 
 def goal_text(value: str) -> str:
     """A goal for a helper: line structure kept, controls and the marker gone."""
-    text = _MARKER_RE.sub("(Clover runtime)", _CONTROL_KEEP_NEWLINE.sub(" ", value))
+    text = neutralize_marker(_CONTROL_KEEP_NEWLINE.sub(" ", value))
     lines = [" ".join(line.split()) for line in text.splitlines()]
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
@@ -337,7 +336,12 @@ _SELF_PATTERNS = tuple(re.compile(p) for p in (
 _HELPER_PATTERNS = tuple(re.compile(p) for p in (
     r"\buse\s+(?:a\s+|an\s+|some\s+|the\s+|your\s+|several\s+|multiple\s+)?"
     r"(?:helpers?|sub-?agents?|workers?|background (?:helpers?|agents?))\b",
-    r"\b(?:in|to) the background\b",
+    # An instruction about the work ("run this in the background", "in the
+    # background, check ..."), not a description of a scene ("playing in the
+    # background of this clip").
+    r"\b(?:run|do|handle|work|process|execute|kick|start|launch|send|put|move|finish"
+    r"|take care of|tackle|continue)\b[^.?!\n]{0,40}\b(?:in|to) the background\b(?!\s+of\b)",
+    r"(?:^|[.!?;\n]\s*|\bplease\s+)(?:in|to) the background\b(?!\s+of\b)",
     r"\b(?:spin up|spawn|launch|start|fire off|kick off)\s+"
     r"(?:some\s+|a few\s+|several\s+|a\s+|the\s+)?(?:helpers?|sub-?agents?|workers?|background)\b",
     r"\bdelegate\s+(?:this|it|that|the)\b",
@@ -765,6 +769,17 @@ def _continuation_note(agent: Any, settings: RouterSettings) -> str:
     return router_backstop.continue_staged(agent, ids, settings)
 
 
+def _floor_applies(agent: Any, settings: RouterSettings) -> bool:
+    """Is this turn's receipt floor recorded?  The router's scope minus the
+    per-message gates: a router switched off, or the foreground time limit
+    configured off, keeps the turn exactly as it was before the router."""
+    from agent import foreground_time_limit as fl
+
+    return bool(
+        settings.enabled and fl.applies(agent) and fl.load_limit_seconds() is not None
+    )
+
+
 def plan_for_turn(
     agent: Any,
     user_message: Any,
@@ -781,6 +796,10 @@ def plan_for_turn(
     router_backstop.clear(agent)
     try:
         settings = load_settings()
+        if _floor_applies(agent, settings):
+            # Whatever the router decides (or fails to), a helper the root
+            # dispatches this turn is an accepted helper of this turn.
+            router_backstop.mark_turn(agent, settings)
         why = skip_reason(agent, user_message, display_kind, settings=settings)
         if why == "not_human":
             return _continuation_note(agent, settings)

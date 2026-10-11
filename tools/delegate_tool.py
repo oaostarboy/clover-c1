@@ -36,6 +36,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from toolsets import TOOLSETS
 from agent.interrupt_compat import request_hard_interrupt
+from agent.turn_notices import neutralize_marker as _neutralize_marker
 from agent.turn_notices import runtime_note as _runtime_note
 from agent.turn_notices import vouch_runtime_result as _vouch_runtime_result
 
@@ -5257,7 +5258,9 @@ def delegate_task(
                 "mode": "background",
                 "count": n,
                 "delegation_id": dispatch["delegation_id"],
-                "goals": _goals,
+                # Echoed back to the model: a copy of the marker (in any
+                # spelling) in a goal must not read as Clover's own note.
+                "goals": [_neutralize_marker(g) if isinstance(g, str) else g for g in _goals],
                 "note": note,
             }
             if _fg_forced_background:

@@ -44,6 +44,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
+from agent.turn_notices import runtime_note, vouch_runtime_result
+
 logger = logging.getLogger(__name__)
 
 UNDECIDED = "undecided"
@@ -807,6 +809,9 @@ class DelegationCheckpoint:
                 "then call delegate_task."
             )
             recovery = _direct_recovery()
+        # Clover wrote this refusal: mark it as the runtime's own note and keep
+        # the marker through the result funnel (which defangs any other copy).
+        message = runtime_note(message)
         payload = {
             "error": message,
             "error_type": code,
@@ -814,7 +819,9 @@ class DelegationCheckpoint:
             "recovery": recovery,
         }
         return Verdict(
-            block_result=json.dumps(payload, ensure_ascii=False),
+            block_result=vouch_runtime_result(
+                json.dumps(payload, ensure_ascii=False), tool_name
+            ),
             block_code=code,
             block_message=message,
         )
