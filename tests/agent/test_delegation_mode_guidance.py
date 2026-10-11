@@ -66,7 +66,7 @@ def _block() -> str:
 def test_block_is_short_and_has_no_numbers():
     block = _block()
     assert block.startswith(HEADING)
-    assert len(block.split()) <= 285
+    assert len(block.split()) <= 295
     assert not re.search(r'\d', block)
 
 
@@ -116,7 +116,11 @@ def test_block_picks_the_mode_before_any_tool_call_including_a_skill_load():
 def test_block_says_a_skill_decides_how_not_who():
     block = _block()
     assert 'A skill says HOW the work is done, not WHO does it' in block
-    assert 'its step order is never a reason to start the work yourself' in block
+    # the job is sized from the request: a skill neither makes quick asks big
+    # nor turns big work into direct work
+    assert 'size the job from the request, not from the skill' in block
+    assert "a skill's step order never turns big work into direct work" in block
+    assert 'never a reason to start the work yourself' not in block
     # it must come after the user-override sentence, as one decided paragraph
     assert block.index('means a helper even if small.') < block.index('A skill says HOW')
 
