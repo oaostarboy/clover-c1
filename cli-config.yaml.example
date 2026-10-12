@@ -817,6 +817,8 @@ prompt_caching:
 #     provider: "auto"
 #     model: "auto"          # auto = the provider's small fast model when one exists, else your main model
 #     prefer_fast_model: true   # false = always use your main model
+#     reasoning_effort: low     # default "low": sizing is a judgement call, and with reasoning off the small model
+#                               # undersizes multi-part jobs (none | minimal | low | medium | high). Title generation stays off.
 #     timeout: 8
 #
 #   # Session search — summarizes matching past sessions

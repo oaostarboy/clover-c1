@@ -8566,14 +8566,69 @@ def _effective_aux_timeout(task: str, timeout: Optional[float]) -> float:
     return effective
 
 
+ROUTER_DEFAULT_REASONING_EFFORT = "low"
+
+
+def _router_reasoning(
+    provider: str,
+    model: Optional[str],
+    extra_body: Dict[str, Any],
+    reasoning_config: Optional[dict],
+) -> Tuple[Optional[dict], Dict[str, Any]]:
+    """Reasoning for the delegation-router call: ``low`` unless the user chose.
+
+    Sizing a request (direct / single / staged / parallel) is a judgement call.
+    Live eval, gpt-6-luna: reasoning ``none`` sized a 3-part compare as a quick
+    answer 0/2; ``low`` scored 12/12 at p50 1.5 s.  So the default is ``low``
+    (``auxiliary.delegation_router.reasoning_effort`` overrides it, ``none``
+    included -- an explicit value is never second-guessed).  Per wire:
+
+    - openai-codex: Responses ``reasoning.effort = low``.
+    - gemini: ``thinkingLevel = low`` (3.x Flash rejects ``minimal``).
+    - anthropic: adaptive-thinking models get ``effort = low``; Haiku and the
+      manual-budget families are left exactly as they were (no thinking
+      budget is invented for a model that does not take one cheaply).
+    - openrouter / clover portal: ``extra_body.reasoning`` effort low.
+    - anything else: untouched -- an unknown OpenAI-compatible server may 400
+      on a reasoning field.
+    """
+    if reasoning_config is not None or "reasoning" in (extra_body or {}):
+        return reasoning_config, extra_body
+    effort = ROUTER_DEFAULT_REASONING_EFFORT
+    norm = _normalize_aux_provider(_fallback_provider_from_label(str(provider or "")))
+    if norm == "openai-codex":
+        return reasoning_config, {**extra_body, "reasoning": {"enabled": True, "effort": effort}}
+    if norm == "gemini":
+        bare = str(model or "").strip().lower().split("/")[-1]
+        if not bare.startswith("gemini"):
+            return reasoning_config, extra_body
+        return {"enabled": True, "effort": effort}, extra_body
+    if norm in {"openrouter", "clover"}:
+        return {"enabled": True, "effort": effort}, extra_body
+    if norm == "anthropic":
+        try:
+            from agent.anthropic_adapter import _supports_adaptive_thinking
+
+            name = str(model or "")
+            if name and "haiku" not in name.lower() and _supports_adaptive_thinking(name):
+                return {"enabled": True, "effort": effort}, extra_body
+        except Exception:
+            pass
+    return reasoning_config, extra_body
+
+
 def _small_call_reasoning(
     task: Optional[str],
     provider: str,
     extra_body: Dict[str, Any],
     reasoning_config: Optional[dict],
     main_runtime: Optional[Dict[str, Any]] = None,
+    model: Optional[str] = None,
 ) -> Tuple[Optional[dict], Dict[str, Any]]:
     """Switch thinking off for a latency-critical call that landed on a fast model.
+
+    Title generation only.  The delegation router is handled by
+    :func:`_router_reasoning`: it needs a little thinking, not none.
 
     OpenCode's ``small: true`` idea: a sizing verdict or a title gains nothing
     from reasoning tokens, so the small call carries none.  Only where the wire
@@ -8581,6 +8636,12 @@ def _small_call_reasoning(
     setting (``auxiliary.<task>.reasoning_effort`` / ``extra_body.reasoning``).
     Returns ``(reasoning_config, extra_body)``.
     """
+    if task == "delegation_router":
+        # The router is the one fast task that must NOT think less than "low":
+        # with reasoning off, gpt-6-luna sized a three-part compare as a quick
+        # answer (0/2); on "low" the same model scored 12/12.  It has its own
+        # per-provider default (``_router_reasoning``), pin or no pin.
+        return _router_reasoning(provider, model, extra_body, reasoning_config)
     if (
         task not in _FAST_MODEL_TASKS
         or reasoning_config is not None
@@ -9829,7 +9890,7 @@ def _call_llm_impl(
     request_provider = effective_provider or resolved_provider
     reasoning_config, effective_extra_body = _small_call_reasoning(
         task, request_provider, effective_extra_body, reasoning_config,
-        main_runtime=main_runtime,
+        main_runtime=main_runtime, model=final_model,
     )
     compression_config = (
         _get_auxiliary_task_config("compression") if task == "compression" else {}

@@ -361,36 +361,39 @@ def test_fast_model_is_logged_once_per_task(caplog):
 # ── small call: no reasoning ───────────────────────────────────────────────
 
 class TestNoReasoningOnSmallCall:
+    """Title generation still drops reasoning; the router has its own default
+    (see test_router_reasoning.py)."""
+
     def _prime(self, provider="anthropic", model="claude-opus-5-5", how="family", fast="claude-haiku-5-5"):
         with ac._fast_pick_lock:
-            ac._fast_pick_memo[ac._fast_memo_key("delegation_router", provider, model, "")] = (
+            ac._fast_pick_memo[ac._fast_memo_key("title_generation", provider, model, "")] = (
                 time.monotonic(), afm.FastPick(provider, fast, how))
 
     def test_anthropic_gets_thinking_off(self):
         self._prime()
         rc, body = ac._small_call_reasoning(
-            "delegation_router", "anthropic", {}, None,
+            "title_generation", "anthropic", {}, None,
             main_runtime={"provider": "anthropic", "model": "claude-opus-5-5"})
         assert rc == {"enabled": False}
 
     def test_codex_gets_the_lowest_effort(self):
         self._prime("openai-codex", "gpt-6.1-sol", "profile", "gpt-6-luna")
         rc, body = ac._small_call_reasoning(
-            "delegation_router", "openai-codex", {}, None,
+            "title_generation", "openai-codex", {}, None,
             main_runtime={"provider": "openai-codex", "model": "gpt-6.1-sol"})
         assert rc is None and body["reasoning"]["effort"] == "low"
 
     def test_user_setting_is_never_overridden(self):
         self._prime()
         rc, body = ac._small_call_reasoning(
-            "delegation_router", "anthropic", {"reasoning": {"effort": "high"}}, None,
+            "title_generation", "anthropic", {"reasoning": {"effort": "high"}}, None,
             main_runtime={"provider": "anthropic", "model": "claude-opus-5-5"})
         assert rc is None and body["reasoning"]["effort"] == "high"
 
     def test_main_model_call_is_untouched(self):
         self._prime(how="main", fast="claude-opus-5-5")
         rc, body = ac._small_call_reasoning(
-            "delegation_router", "anthropic", {}, None,
+            "title_generation", "anthropic", {}, None,
             main_runtime={"provider": "anthropic", "model": "claude-opus-5-5"})
         assert rc is None and "reasoning" not in body
 

@@ -72,7 +72,12 @@ MAX_REASON_CHARS = 300
 CONTEXT_TURNS = 4
 CONTEXT_TURN_CHARS = 300
 MAX_MESSAGE_CHARS = 6000
-ROUTER_MAX_TOKENS = 700
+# Room for the thinking the router now does by default (reasoning "low", ~100-400
+# tokens on chat.completions / Anthropic / Gemini, where thought tokens count
+# against the cap) PLUS the biggest valid verdict (MAX_TASKS tasks, ~350 tokens).
+# 700 left a long plan one reasoning burst from a truncated, unparseable reply;
+# the cap is a ceiling, not a spend -- a typical reply is far shorter.
+ROUTER_MAX_TOKENS = 1500
 # Below this much remaining deadline a retry is not worth starting.
 _MIN_RETRY_SECONDS = 0.5
 # A call still silent this long is likely stuck (warm p95 is ~3 s, p99 ~5 s):
