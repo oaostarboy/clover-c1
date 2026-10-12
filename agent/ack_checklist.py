@@ -378,11 +378,21 @@ class Checklist:
         if not kids:
             return self._stopped_title(include_say)
         title, outcome = self._title_outcome()
-        head = _title_line(
-            title, _count_tail(self.state == RUNNING, [k.state for k in kids]),
-            self.state == FAILED,
-        )
-        blocks: List[List[str]] = [[ln for ln in (self._goal_line(outcome),) if ln]]
+        if len(kids) >= 2:
+            # Two or more subagents: the header says how many; the job's own
+            # title (and its Goal) moves inside, above the sections.
+            head = _title_line(
+                _joined_title(len(kids)),
+                _count_tail(self.state == RUNNING, [k.state for k in kids]),
+                self.state == FAILED,
+            )
+            blocks: List[List[str]] = [[f"**{title}**", self._goal_line(outcome)]]
+        else:
+            head = _title_line(
+                title, _count_tail(self.state == RUNNING, [k.state for k in kids]),
+                self.state == FAILED,
+            )
+            blocks = [[ln for ln in (self._goal_line(outcome),) if ln]]
         if len(kids) > COMPACT_OVER:
             blocks += _compact_kids(kids, now, tool_cap)
         else:
@@ -921,6 +931,7 @@ class Part:
     card: Optional["Card"] = None
     ended_at: Optional[float] = None  # when the whole part ended (monotonic)
     ended_seq: int = 0  # order in which parts ended
+    opened_seq: int = 0  # order in which parts were dispatched
     liner_done: bool = False  # its one-line message was posted (or it needs none)
 
     def _changed(self) -> None:
@@ -950,6 +961,9 @@ def open_part(
             n = max(1, int(expected or 1))
             # Several helpers share the one card: a block each, no step list.
             part = Part(did, Checklist.start(header, steps if n == 1 else (), say), n)
+            global _OPEN_SEQ
+            _OPEN_SEQ += 1
+            part.opened_seq = _OPEN_SEQ
             if n > 1:
                 part.checklist.kids = [
                     Child(
@@ -1538,6 +1552,7 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
 
 
 _END_SEQ = 0
+_OPEN_SEQ = 0
 
 # (summary chars, tool lines per running helper) tried in turn until it fits.
 _BUDGET_STEPS = ((SUMMARY_CHARS, RECENT_TOOLS_MULTI), (80, RECENT_TOOLS_MULTI), (0, RECENT_TOOLS_MULTI), (0, 1), (0, 0))
@@ -1633,7 +1648,7 @@ class Card:
         done = sum(1 for x in subs if x.state == DONE)
         failed = [x for x in subs if x.state == FAILED]
         joined = len(parts) > 1
-        title = _joined_title(n) if joined else parts[0].checklist._title_outcome()[0]
+        title = _joined_title(n) if (joined or n > 1) else parts[0].checklist._title_outcome()[0]
         stats: List[str] = []
         if not failed:
             status = "done"
@@ -1702,7 +1717,11 @@ class Card:
             else:
                 part_blocks = [_section_block(title, cl, now, summary_chars, tool_cap)]
                 subs = [cl]
-            if goal and part_blocks and part_blocks[0]:
+            if cl.kids and len(states) >= 2:
+                # Several subagents on the card: each job's bold title (and
+                # its Goal) sits above that job's own sections.
+                part_blocks.insert(0, [ln for ln in (f"**{title}**", goal) if ln])
+            elif goal and part_blocks and part_blocks[0]:
                 # the part's goal: first line under its FIRST section's name
                 first = part_blocks[0]
                 if isinstance(first, _LostBlock):
@@ -1728,13 +1747,6 @@ class Card:
         say = self.say_text()
         return f"{say}\n\n{body}" if (say and include_say) else body
 
-    def single_layout(self) -> bool:
-        """True while the running card holds exactly ONE subagent (the layout
-        whose first line is the stats and whose title sits under the hint)."""
-        with _LOCK:
-            live = [p for p in self.parts if p.checklist.state == RUNNING]
-            return unified() and len(live) == 1 and not live[0].checklist.kids
-
     def say_text(self) -> str:
         """The root's opener line(s) of every part, in order ('' if none)."""
         with _LOCK:
@@ -1757,13 +1769,13 @@ class Card:
 
 def pending_liner_parts(ids: Sequence[Any]) -> List[Part]:
     """Parts of these delegation ids that have ended and whose one-line
-    message was not posted yet, in the order they ended."""
+    message was not posted yet, in the order they were dispatched."""
     with _LOCK:
         found = [
             _PARTS[i] for i in dict.fromkeys(str(x) for x in ids or ())
             if i in _PARTS and _PARTS[i].checklist.state != RUNNING and not _PARTS[i].liner_done
         ]
-    return sorted(found, key=lambda p: p.ended_seq)
+    return sorted(found, key=lambda p: (p.opened_seq, p.ended_seq))
 
 
 def card_for(receipts: Sequence[Any]) -> Optional[Card]:

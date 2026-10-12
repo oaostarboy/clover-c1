@@ -28,8 +28,14 @@ background while you keep chatting). It decides this for every message you send.
 ## What you see in chat
 
 A card shows the helpers at work: 🔀 running, 🍀 done, 🍂 failed, 🥀 stopped.
-Tap the card ("tap to watch 🍀") to follow the steps live, or to read the result
-when it is done.
+Tap the card ("tap to watch 🍀") to follow the steps live. With two or more
+subagents the card says `N subagents · k of N done`, and the job's name sits
+inside it, above the sections.
+
+When a job is done, the card shrinks to a short 🍀 line. Clover's reply about
+it comes first, and the finished card sits directly under that reply (under
+the `🛠 N tool calls` summary bubble, if you see one). A new job that Clover
+starts in the same reply keeps its running card below the finished one.
 
 ## Change or turn things off
 

@@ -5905,11 +5905,14 @@ class TurnRunner:
             if already_streamed or not ctx._status_adapter or not str(display_text or "").strip():
                 return
             async def _send_interim_message() -> None:
-                result = await ctx._status_adapter.send(
-                    ctx._status_chat_id,
-                    format_thought(display_text),
-                    metadata=ctx._status_thread_metadata,
-                )
+                from gateway.delegation_activity import status_send
+
+                with status_send():
+                    result = await ctx._status_adapter.send(
+                        ctx._status_chat_id,
+                        format_thought(display_text),
+                        metadata=ctx._status_thread_metadata,
+                    )
                 if (
                     ctx._cleanup_progress
                     and getattr(result, "success", False)
@@ -32292,7 +32295,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # no task ever drained — so they silently never appeared.
         progress_task = None
         if needs_progress_queue:
-            progress_task = asyncio.create_task(send_progress_messages())
+            # Its bubbles are not the reply: a finished card is placed when the
+            # REPLY goes out, after the 🛠 bubble.
+            from gateway.delegation_activity import run_as_status_task
+
+            progress_task = asyncio.create_task(run_as_status_task(send_progress_messages()))
 
         # Start the tool-call log writer when tool_progress == "log".
         log_task = None

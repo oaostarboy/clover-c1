@@ -213,7 +213,8 @@ def test_three_helpers_render_name_steps_tools_stats_inside_one_quote():
     ac.on_child_event("subagent.complete", delegation_id="dm", task_index=0, task_count=3, status="completed",
                       summary="Result: done\nPlain summary: Tidy.")
     lines = card.render().splitlines()
-    assert lines[0].startswith("\U0001f500 **checking the 3 sites**") and "1 of 3 done" in lines[0]
+    assert lines[0].startswith("\U0001f500 **3 subagents**") and "1 of 3 done" in lines[0]
+    assert lines[1] == "> **checking the 3 sites**"
     assert all(ln.startswith("> ") or not ln for ln in lines[1:])
     text = "\n".join(lines)
     i_nice = text.index("**nice & tidy site**")

@@ -610,7 +610,7 @@ async def test_a_joined_multi_subagent_part_keeps_its_own_sections():
     assert "*3 running" in text
 
 
-# -- a finished card sits right above the reply it belongs to ---------------
+# -- a finished card sits right under the reply it belongs to ---------------
 
 
 class _Evt:
@@ -623,14 +623,14 @@ class _Evt:
 
 async def _reply(chat, text, ids, *, silent=False):
     """What the gateway does for a completion turn: mark the turn, then either
-    send the reply through the adapter's send wrapper (before_reply) or, for
+    send the reply through the adapter's send wrapper (after_reply) or, for
     [SILENT], end the turn with nothing sent (after_silent_reply)."""
     da.begin_completion_turn(_Evt(ids))
     if silent:
         await da.after_silent_reply(chat, "chat")
     else:
-        await da.before_reply(chat, "chat", text)
         await chat.send("chat", text)
+        await da.after_reply(chat, "chat", text)
     await _settle()
     da._COMPLETION_TURN.set(None)
 
@@ -650,7 +650,7 @@ async def _ended_single(chat, did="dj1", status="completed", work="disks"):
 
 
 @pytest.mark.asyncio
-async def test_the_finished_card_is_reposted_right_above_the_completion_reply():
+async def test_the_finished_card_is_reposted_right_under_the_completion_reply():
     chat = _TgChat()
     card = await _ended_single(chat)
     await chat.send("chat", "something else, posted in between")
@@ -659,21 +659,24 @@ async def test_the_finished_card_is_reposted_right_above_the_completion_reply():
     n = len(chat.sends)
     await _reply(chat, "All done, here are the results.", ["dj1"])
     posted = _order(chat)[n:]
-    assert len(posted) == 2, "the one-liner, then the reply"
-    assert posted[0].startswith("> \U0001f340 **disks** \u00b7 done") and "**>" not in posted[0]
-    assert posted[1] == "All done, here are the results."
-    assert old_id in chat.deleted and editor._message_id == chat.sends[n]["id"], "the old card message moved"
+    assert len(posted) == 2, "the reply, then the one-liner"
+    assert posted[0] == "All done, here are the results."
+    assert posted[1].startswith("> \U0001f340 **disks** \u00b7 done") and "**>" not in posted[1]
+    assert old_id in chat.deleted and editor._message_id == chat.sends[n + 1]["id"], "the old card message moved"
 
 
 @pytest.mark.asyncio
-async def test_a_card_that_is_already_the_last_message_does_not_move():
+async def test_a_card_that_is_directly_under_the_reply_is_not_reposted_again():
     chat = _TgChat()
     card = await _ended_single(chat)
     editor = da._ACK_EDITORS[id(card)]
-    old_id, n = editor._message_id, len(chat.sends)
+    n = len(chat.sends)
     await _reply(chat, "All done.", ["dj1"])
-    assert chat.deleted == [] and editor._message_id == old_id
-    assert _order(chat)[n:] == ["All done."], "no re-post: the card already sits right above the reply"
+    assert _order(chat)[n][:5] == "All d" and _order(chat)[n + 1].startswith("> \U0001f340 **disks**")
+    moved_to, after = editor._message_id, len(chat.sends)
+    # the same completion again (a second reply of the turn): the card already is the last message
+    await da.after_reply(chat, "chat", "More text.")
+    assert editor._message_id == moved_to and len(chat.sends) == after
 
 
 @pytest.mark.asyncio
@@ -707,7 +710,7 @@ async def test_a_stopped_part_above_a_real_reply_keeps_its_stop_line():
     n = len(chat.sends)
     await _reply(chat, "Stopped as asked.", ["dj1"])
     posted = _order(chat)[n:]
-    assert posted[0].startswith("> \U0001f940 **disks** \u00b7 stopped") and posted[1] == "Stopped as asked."
+    assert posted[0] == "Stopped as asked." and posted[1].startswith("> \U0001f940 **disks** \u00b7 stopped")
 
 
 @pytest.mark.asyncio
@@ -728,13 +731,13 @@ async def test_an_ordinary_turn_never_moves_a_finished_card():
     await chat.send("chat", "newer")
     n = len(chat.sends)
     da._COMPLETION_TURN.set(None)
-    await da.before_reply(chat, "chat", "a normal human-turn reply")
     await chat.send("chat", "a normal human-turn reply")
+    await da.after_reply(chat, "chat", "a normal human-turn reply")
     assert _order(chat)[n:] == ["a normal human-turn reply"]
 
 
 @pytest.mark.asyncio
-async def test_a_joined_part_posts_its_own_line_before_its_reply_and_the_last_part_moves_the_card():
+async def test_a_joined_part_posts_its_own_line_under_its_reply_and_the_last_part_moves_the_card():
     chat = _TgChat()
     first = _opener_card("dj1", "disks", "a disk report", "on it")
     await _dispatch(chat, first)
@@ -750,8 +753,8 @@ async def test_a_joined_part_posts_its_own_line_before_its_reply_and_the_last_pa
     n = len(chat.sends)
     await _reply(chat, "Disks are fine.", ["dj1"])
     posted = _order(chat)[n:]
-    assert len(posted) == 2 and posted[0].startswith("> \U0001f340 **disks** \u00b7 done"), "its own line, then the reply"
-    assert posted[1] == "Disks are fine."
+    assert len(posted) == 2 and posted[0] == "Disks are fine.", "the reply, then its own line"
+    assert posted[1].startswith("> \U0001f340 **disks** \u00b7 done")
     assert not first.finished, "the card still runs for the other part"
     ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: ok.")
     await _settle()
@@ -759,12 +762,12 @@ async def test_a_joined_part_posts_its_own_line_before_its_reply_and_the_last_pa
     n = len(chat.sends)
     await _reply(chat, "Network is fine too.", ["dj2"])
     posted = _order(chat)[n:]
-    assert posted[0].startswith("> \U0001f340 **network** \u00b7 done") and posted[1] == "Network is fine too."
+    assert posted[0] == "Network is fine too." and posted[1].startswith("> \U0001f340 **network** \u00b7 done")
     assert sum(1 for t in _order(chat) if t.startswith("> \U0001f340 **disks**")) == 1, "disks line was posted once"
 
 
 @pytest.mark.asyncio
-async def test_a_batched_completion_for_several_parts_posts_each_line_before_the_one_reply():
+async def test_a_batched_completion_for_several_parts_posts_each_line_under_the_one_reply_in_dispatch_order():
     chat = _TgChat()
     first = _opener_card("dj1", "disks", "a disk report", "on it")
     await _dispatch(chat, first)
@@ -778,11 +781,12 @@ async def test_a_batched_completion_for_several_parts_posts_each_line_before_the
     n = len(chat.sends)
     await _reply(chat, "Both are fine.", ["dj1", "dj2"])
     posted = _order(chat)[n:]
-    assert [p.split(" ")[2] for p in posted[:2]] == ["**disks**", "**network**"] and posted[2] == "Both are fine."
+    assert posted[0] == "Both are fine."
+    assert [p.split(" ")[2] for p in posted[1:3]] == ["**disks**", "**network**"]
 
 
 @pytest.mark.asyncio
-async def test_the_real_send_wrapper_moves_the_card_before_the_reply_goes_out():
+async def test_the_real_send_wrapper_puts_the_card_right_under_the_reply():
     from gateway.config import Platform, PlatformConfig
     from gateway.platforms.base import BasePlatformAdapter
 
@@ -823,5 +827,155 @@ async def test_the_real_send_wrapper_moves_the_card_before_the_reply_goes_out():
     await chat.send("chat", "The disks are fine.")
     await _settle()
     posted = chat.sent[n:]
-    assert posted[0].startswith("> \U0001f340 **disks** \u00b7 done") and posted[-1] == "The disks are fine.", posted
+    assert posted[0] == "The disks are fine." and posted[-1].startswith("> \U0001f340 **disks** \u00b7 done"), posted
+    da._COMPLETION_TURN.set(None)
+
+
+# -- the 🛠 bubble above the reply, the finished card under it ------------------
+
+
+def _real_chat():
+    from gateway.config import Platform, PlatformConfig
+    from gateway.platforms.base import BasePlatformAdapter
+
+    class _Real(BasePlatformAdapter):
+        def __init__(self) -> None:
+            super().__init__(PlatformConfig(enabled=True), Platform.TELEGRAM)
+            self.n = 100
+            self.sent: List[str] = []
+            self.deleted: List[str] = []
+
+        async def connect(self): return True
+        async def disconnect(self): pass
+        async def send_typing(self, *a, **k): pass
+        async def get_chat_info(self, chat_id): return {}
+
+        async def send(self, chat_id, content, reply_to=None, metadata=None, **kw):
+            self.n += 1
+            self.sent.append(content)
+            return SendResult(success=True, message_id=str(self.n))
+
+        async def edit_message(self, chat_id, message_id, content, *, finalize=False, metadata=None):
+            return SendResult(success=True, message_id=message_id)
+
+        async def delete_message(self, chat_id, message_id):
+            self.deleted.append(str(message_id))
+            return True
+
+    return _Real()
+
+
+async def _finished_card_on_real_chat(chat):
+    card = _opener_card("dj1", "disks", "a disk report", "on it")
+    await chat.send("chat", card.say_text())
+    await _settle()
+    ac.on_child_event("subagent.start", delegation_id="dj1", model="claude-sonnet-5-5")
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: ok.")
+    await _settle()
+    return card
+
+
+async def _progress_bubble(chat, text="\U0001f6e0 9 tool calls \u00b7 \u23f1 1m44s"):
+    """The turn's tool-progress bubble, sent by the progress task the way the gateway runs it."""
+    await da.run_as_status_task(chat.send("chat", text))
+
+
+def _is_card(t):
+    return t.startswith("> \U0001f340 **disks** \u00b7 done")
+
+
+@pytest.mark.asyncio
+async def test_bubble_then_reply_then_the_finished_card_under_the_reply():
+    chat = _real_chat()
+    await _finished_card_on_real_chat(chat)
+    n = len(chat.sent)
+    da.begin_completion_turn(_Evt(["dj1"]))
+    await _progress_bubble(chat)
+    await chat.send("chat", "The disks are fine.")
+    await _settle()
+    posted = chat.sent[n:]
+    assert len(posted) == 3 and "tool calls" in posted[0], posted
+    assert posted[1] == "The disks are fine." and _is_card(posted[2]), "bubble, reply, card"
+    assert sum(1 for t in chat.sent if _is_card(t)) == 1 and len(chat.deleted) == 1, "moved, not duplicated"
+    da._COMPLETION_TURN.set(None)
+
+
+@pytest.mark.asyncio
+async def test_a_status_send_by_metadata_is_not_the_reply():
+    chat = _real_chat()
+    await _finished_card_on_real_chat(chat)
+    n = len(chat.sent)
+    da.begin_completion_turn(_Evt(["dj1"]))
+    await chat.send("chat", "still working", metadata={"_interim_send": True})
+    assert len(chat.sent) == n + 1, "a status message moves nothing"
+    await chat.send("chat", "The disks are fine.")
+    await _settle()
+    posted = chat.sent[n:]
+    assert posted[0] == "still working" and posted[1] == "The disks are fine." and _is_card(posted[2])
+    da._COMPLETION_TURN.set(None)
+
+
+@pytest.mark.asyncio
+async def test_reply_with_the_card_not_yet_moved_is_followed_by_exactly_one_repost():
+    chat = _real_chat()
+    await _finished_card_on_real_chat(chat)
+    n = len(chat.sent)
+    da.begin_completion_turn(_Evt(["dj1"]))
+    await chat.send("chat", "The disks are fine.")
+    await _settle()
+    await chat.send("chat", "A second message of the same turn.")
+    await _settle()
+    posted = chat.sent[n:]
+    assert posted[0] == "The disks are fine." and _is_card(posted[1]) and len(posted) == 3
+    da._COMPLETION_TURN.set(None)
+
+
+@pytest.mark.asyncio
+async def test_a_bubble_without_a_reply_leaves_the_card_for_the_silent_path():
+    chat = _real_chat()
+    await _finished_card_on_real_chat(chat)
+    n = len(chat.sent)
+    da.begin_completion_turn(_Evt(["dj1"]))
+    await _progress_bubble(chat)
+    assert len(chat.sent) == n + 1, "the bubble alone moves nothing"
+    await da.after_silent_reply(chat, "chat")
+    await _settle()
+    assert _is_card(chat.sent[-1]), "[SILENT]: the finished card still posts"
+    da._COMPLETION_TURN.set(None)
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_hands_off_a_new_job_puts_the_old_card_under_it_and_the_new_card_below():
+    chat = _real_chat()
+    await _finished_card_on_real_chat(chat)
+    n = len(chat.sent)
+    da.begin_completion_turn(_Evt(["dj1"]))
+    await _progress_bubble(chat)
+    # the turn's reply IS the new hand-off's opener; its card goes under the finished one
+    second = _opener_card("dj2", "network", "a network report", "handing the network job off")
+    await chat.send("chat", second.say_text())
+    await _settle()
+    posted = chat.sent[n:]
+    assert "tool calls" in posted[0], posted
+    assert posted[1] == "handing the network job off", "the reply"
+    assert _is_card(posted[2]), "job 1's finished card pulled down under the reply"
+    assert posted[3].startswith("**>"), "job 2's running card stays at the bottom, below the finished one"
+    assert len(posted) == 4
+    da._COMPLETION_TURN.set(None)
+
+
+@pytest.mark.asyncio
+async def test_a_running_card_stays_below_the_finished_one_after_the_reply():
+    chat = _real_chat()
+    done = await _finished_card_on_real_chat(chat)
+    running = _opener_card("dj3", "logs", "a log report", "and the logs")
+    await chat.send("chat", running.say_text())
+    await _settle()
+    n = len(chat.sent)
+    da.begin_completion_turn(_Evt(["dj1"]))
+    await chat.send("chat", "The disks are fine.")
+    await _settle()
+    posted = chat.sent[n:]
+    assert posted[0] == "The disks are fine." and _is_card(posted[1]), posted
+    assert posted[-1].startswith("**>"), "the running card follows to the very bottom"
     da._COMPLETION_TURN.set(None)

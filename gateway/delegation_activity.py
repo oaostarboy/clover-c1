@@ -30,6 +30,7 @@ Delivery rules (each exists because the alternative is wrong for a chat):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import inspect
 import itertools
@@ -1469,19 +1470,13 @@ TAP_HINT_LIVE = "tap to watch 🍀"
 TAP_HINT_DONE = "tap to read 🍀"
 
 
-def _to_expandable(
-    text: str, hint: str = "", bold_title: bool = False, spacer_after_hint: bool = True,
-) -> str:
+def _to_expandable(text: str, hint: str = "", bold_title: bool = False) -> str:
     """Header + "> " detail lines -> one Telegram expandable blockquote:
     ``**> header`` / ``> detail`` / ... with ``||`` closing the last line.
 
     The header is the quote's first line, so a collapsed quote shows the
     header, the italic hint and a blank line.  ``bold_title`` (the unified
-    subagent card) keeps the title's bold: ``**> 🍀 **title** · 1 of 3 done``.
-
-    ``spacer_after_hint=False`` drops the blank line after the hint, so the
-    third collapsed line is real content (a several-subagent card's first
-    section) instead of an empty one."""
+    subagent card) keeps the title's bold: ``**> 🍀 **title** · 1 of 3 done``."""
     # "||" would be read as a spoiler / early quote terminator, and "*" in
     # the header can eat the "**>" opener (Opus review).
     lines = text.replace("||", "¦¦").split("\n")
@@ -1500,8 +1495,7 @@ def _to_expandable(
     if details:
         tip = f"*{hint}*" if hint else spacer
         out += [f"> {tip}"]
-        if spacer_after_hint:
-            out += [f"> {spacer}"]
+        out += [f"> {spacer}"]
         out += [f"> {ln}" for ln in details]
     return "\n".join(out) + "||"
 
@@ -1616,15 +1610,18 @@ def _unified_style() -> bool:
         return False
 
 
-# -- the card sits right above the reply it belongs to -----------------------
+# -- the finished card sits right under the reply it belongs to ---------------
 #
-# A part that ended is one line.  It is posted ONCE, immediately before the
+# A part that ended is one line.  It is posted ONCE, immediately AFTER the
 # root agent's reply that handles its completion (the turn the gateway tags
-# with ``completion_delegation_ids``).  Nothing else moves it.
+# with ``completion_delegation_ids``).  A turn reads, top to bottom: the
+# ``🛠 N tool calls`` bubble, the reply, the finished card(s) in dispatch
+# order, then a running card (if the reply handed off a new job).  Nothing
+# else moves a finished card.
 
 class CompletionTurn:
     """The delegation ids a turn reports, and whether its first outbound
-    message went out yet (the one the finished cards must sit above)."""
+    message went out yet (the one the finished cards must sit under)."""
 
     __slots__ = ("ids", "fired")
 
@@ -1655,14 +1652,46 @@ def begin_completion_turn(event: Any) -> Optional[CompletionTurn]:
     return turn
 
 
-async def _post_liner(adapter: Any, chat_id: Any, text: str, metadata: Any) -> None:
+# True inside the tasks that post a turn's progress / status messages (the
+# tool-progress bubble that becomes "🛠 9 tool calls · ⏱ 1m44s", thoughts,
+# heartbeats).  Those are NOT the reply: the finished card is placed after
+# the REPLY, never after one of these.
+_STATUS_SEND: "contextvars.ContextVar[bool]" = contextvars.ContextVar("_deleg_status_send", default=False)
+
+
+@contextlib.contextmanager
+def status_send():
+    """Mark the sends made inside as progress / status messages, not the reply."""
+    token = _STATUS_SEND.set(True)
+    try:
+        yield
+    finally:
+        _STATUS_SEND.reset(token)
+
+
+async def run_as_status_task(coro: Any) -> Any:
+    """Await ``coro`` (the progress sender task) with its sends marked as status."""
+    with status_send():
+        return await coro
+
+
+def _is_status_send(metadata: Any) -> bool:
+    if _STATUS_SEND.get():
+        return True
+    return isinstance(metadata, dict) and bool(metadata.get("_interim_send"))
+
+
+async def _post_liner(adapter: Any, chat_id: Any, text: str, metadata: Any) -> Optional[str]:
+    """Send one finished line; returns its message id (None if unknown)."""
     kwargs: Dict[str, Any] = {}
     if metadata is not None:
         kwargs["metadata"] = metadata
     try:
-        await _maybe_await(adapter.send(chat_id, _fit_to_limit(text, 4000), **kwargs))
+        result = await _maybe_await(adapter.send(chat_id, _fit_to_limit(text, 4000), **kwargs))
     except TypeError:
-        await _maybe_await(adapter.send(chat_id, _fit_to_limit(text, 4000)))
+        result = await _maybe_await(adapter.send(chat_id, _fit_to_limit(text, 4000)))
+    mid = getattr(result, "message_id", None)
+    return str(mid) if mid and str(mid) != "__no_edit__" else None
 
 
 async def settle_completion(
@@ -1670,15 +1699,16 @@ async def settle_completion(
 ) -> int:
     """Put the finished one-liners of these delegation ids in place.
 
-    ``silent=False``: the reply is about to go out, so every ended part gets its
-    one-line message right before it (a card message that is not the newest
-    message in the chat is deleted and re-posted; one that already is stays).
+    ``silent=False``: the reply just went out, so every ended part gets its
+    one-line message right under it, in dispatch order (the old card message
+    is deleted and re-posted as the newest message in the chat).
     ``silent=True``: nothing will be sent; a stopped part just disappears, a
     done / failed one still posts its line.  Once per part.  Never raises;
     returns how many messages were posted or moved."""
     from agent import ack_checklist as ac
 
     moved = 0
+    last_id: Optional[str] = None
     token = _CARD_SEND.set(True)
     try:
         for part in ac.pending_liner_parts(ids):
@@ -1698,30 +1728,44 @@ async def settle_completion(
                     continue
                 if editor is not None:
                     moved += await editor.repost_final()
+                    last_id = editor._message_id or last_id
                 else:
-                    await _post_liner(adapter, chat_id, card.part_liner(part), metadata)
+                    last_id = await _post_liner(adapter, chat_id, card.part_liner(part), metadata) or last_id
                     moved += 1
                 continue
             part.liner_done = True
             if stopped and silent:
                 continue
             text = card.part_liner(part) if card is not None else part.checklist.render()
-            await _post_liner(adapter, chat_id, text, metadata)
+            last_id = await _post_liner(adapter, chat_id, text, metadata) or last_id
             moved += 1
     except Exception:
         logger.debug("settle_completion failed", exc_info=True)
     finally:
         _CARD_SEND.reset(token)
+    if moved and last_id:
+        # A card that is still running stays BELOW the finished ones: the
+        # newest finished message counts as "something newer" for it.
+        try:
+            key = _inbox_key(adapter, chat_id)
+            if _is_newer(last_id, _LAST_PLAIN.get(key)):
+                _LAST_PLAIN[key] = last_id
+            if _is_newer(last_id, _LAST_OUT.get(key)):
+                _LAST_OUT[key] = last_id
+            await follow_latest_message(adapter, chat_id)
+        except Exception:
+            logger.debug("running card follow after settle failed", exc_info=True)
     return moved
 
 
-async def before_reply(adapter: Any, chat_id: Any, content: Any, metadata: Any = None) -> None:
-    """Called by the adapter's ``send`` before a message goes out: the first
-    one of a completion turn pulls the finished cards in right above it."""
+async def after_reply(adapter: Any, chat_id: Any, content: Any, metadata: Any = None) -> None:
+    """Called by the adapter's ``send`` after a message went out: the first
+    reply of a completion turn (not a progress / status message, not a card)
+    gets the finished cards re-posted right under it."""
     turn = _COMPLETION_TURN.get()
     if turn is None or turn.fired or _CARD_SEND.get() or chat_id in (None, ""):
         return
-    if _is_ack_card_text(content):
+    if _is_ack_card_text(content) or _is_status_send(metadata):
         return
     turn.fired = True
     await settle_completion(adapter, chat_id, turn.ids, silent=False, metadata=metadata)
@@ -1797,10 +1841,11 @@ class AckCardEditor:
             return _fit_to_limit(text, 4000 - 16)
         text = _fit_to_limit(text, 4000 - 16)
         hint = TAP_HINT_DONE if self.card.finished else TAP_HINT_LIVE
-        # One subagent: stats line / hint / blank / title, Goal, steps, tools.
-        # Several: title / hint / first section (no blank line, so all three
-        # collapsed lines carry content).
-        return _to_expandable(text, hint, bold_title=True, spacer_after_hint=self.card.single_layout())
+        # Collapsed, the card shows exactly three lines: header / hint / blank.
+        # One subagent: stats line, hint, blank, then title, Goal, steps,
+        # tools.  Several: "N subagents" header, hint, blank, then the job
+        # title(s) and the sections.  Nothing of the body peeks through.
+        return _to_expandable(text, hint, bold_title=True)
 
     # any thread
     def notify(self) -> None:
@@ -1932,7 +1977,7 @@ class AckCardEditor:
 
     async def repost_final(self) -> int:
         """One last move for a card that ended: delete it and re-post its
-        one-line form at the bottom, right before the reply it belongs to.
+        one-line form at the bottom, right under the reply it belongs to.
         Does nothing when the card already is the newest message in the chat.
         Returns 1 if it moved."""
         if self.gone:

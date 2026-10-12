@@ -3375,17 +3375,6 @@ class BasePlatformAdapter(ABC):
 
         @functools.wraps(send)
         async def _send_and_note(self, *args: Any, **kw: Any):
-            try:
-                # The first message of a delegation-completion turn: the
-                # finished cards go in right above it.
-                from gateway.delegation_activity import before_reply
-
-                await before_reply(
-                    self, args[0] if args else kw.get("chat_id"),
-                    args[1] if len(args) > 1 else kw.get("content"), kw.get("metadata"),
-                )
-            except Exception:
-                pass
             result = await send(self, *args, **kw)
             try:
                 if getattr(result, "success", False):
@@ -3395,6 +3384,15 @@ class BasePlatformAdapter(ABC):
                     note_outbound(
                         self, chat_id, getattr(result, "message_id", None),
                         args[1] if len(args) > 1 else kw.get("content"),
+                    )
+                    # The first reply of a delegation-completion turn: the
+                    # finished cards go in right under it (before a new
+                    # job's card, which is bound just below).
+                    from gateway.delegation_activity import after_reply
+
+                    await after_reply(
+                        self, chat_id,
+                        args[1] if len(args) > 1 else kw.get("content"), kw.get("metadata"),
                     )
                     # A helper acknowledgement becomes a live checklist: bind the
                     # message it just became to its card (no-op for any other text).
