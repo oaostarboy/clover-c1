@@ -473,7 +473,7 @@ async def test_a_second_dispatch_joins_the_running_card_instead_of_getting_its_o
     assert second.parts[0].card is first and len(first.parts) == 2
     # the card was moved under the new opener (old message deleted, re-posted at the bottom)
     last = chat.sends[-1]
-    assert last["text"].startswith("**> \U0001f500 **checking the disks, checking the network** \u00b7 0 of 2 done")
+    assert last["text"].startswith("**> \U0001f500 **2 jobs** \u00b7 0 of 2 done")
     assert chat.deleted == [card_id] and da._ACK_EDITORS[id(first)]._message_id == last["id"]
     assert [i for i, t in enumerate(texts) if t == "and the network too"][0] < len(texts) - 1
     assert last["text"].count("Goal: ") == 2 and "\n> Goal: " not in last["text"], "goals sit in their sections"
@@ -516,7 +516,7 @@ async def test_events_of_the_joined_part_edit_the_one_card_and_counts_span_all_p
     ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: Net fine.")
     await _settle()
     done = chat.edits[-1]["text"]
-    assert done.splitlines()[0] == "**> \U0001f500 **disks, network** \u00b7 done"
+    assert done.splitlines()[0] == "**> \U0001f500 **2 jobs** \u00b7 done"
     assert done.splitlines()[1] == "> *tap to read \U0001f340*" and first.finished
 
 
@@ -534,7 +534,7 @@ async def test_the_card_stays_live_until_every_part_has_ended():
 
 
 @pytest.mark.asyncio
-async def test_a_third_part_shows_the_first_two_titles_and_plus_n_more():
+async def test_a_third_part_titles_the_card_n_jobs_not_cut_off_names():
     chat = _TgChat()
     cards = [
         _opener_card(f"dj{i}", w, f"result {i}", f"opener {i}")
@@ -544,7 +544,10 @@ async def test_a_third_part_shows_the_first_two_titles_and_plus_n_more():
         await _dispatch(chat, c)
     assert len({id(c.parts[0].card) for c in cards}) == 1
     text = da._ACK_EDITORS[id(cards[0])]._render()
-    assert text.splitlines()[0] == "**> \U0001f500 **disks, network +2 more** \u00b7 0 of 4 done"
+    assert text.splitlines()[0] == "**> \U0001f500 **4 jobs** \u00b7 0 of 4 done"
+    assert "more" not in text.splitlines()[0] and "disks" not in text.splitlines()[0]
+    for w in ("disks", "network", "backups", "logs"):
+        assert f"\u25a0 **{w}**" in text, "each job stays named in its section"
     assert text.count("Goal: ") == 4
     third = _opener_card("dj9", "x", "y", "z")
     assert da._running_editor_for(chat, "chat", third) is not None
@@ -599,6 +602,6 @@ async def test_a_joined_multi_subagent_part_keeps_its_own_sections():
         ac.on_child_event("subagent.start", delegation_id="dj2", task_index=i, task_count=2, title=("alpha", "beta")[i])
     await _settle()
     text = da._ACK_EDITORS[id(first)]._render()
-    assert text.splitlines()[0].startswith("**> \U0001f500 **disks, the sweep** \u00b7 0 of 3 done")
+    assert text.splitlines()[0].startswith("**> \U0001f500 **2 jobs** \u00b7 0 of 3 done")
     assert "> \u25a0 **disks**" in text and "> \u25a0 **alpha**" in text and "> \u25a0 **beta**" in text
     assert "*3 subagents" in text

@@ -109,7 +109,8 @@ async def test_an_agent_job_joins_the_running_card_and_posts_no_roster_card():
     host_editor._last_attempt = float("-inf")
     text = host_editor._render()
     head = text.splitlines()[0]
-    assert "shipping the card, Audit cron locking" in head and "0 of 2 done" in head
+    assert "**2 jobs**" in head and "0 of 2 done" in head and "shipping" not in head
+    assert "\u25a0 **shipping the card**" in text
     assert "\u25a0 **Audit cron locking** \u00b7 GPT-6.1 Sol \u00b7 \U0001f6e0 2 calls \u00b7 \u23f1 " in text
     assert "*now: pytest -q*" in text and "*before: Read a.py*" in text
     job.finish(0)

@@ -459,13 +459,9 @@ def _kid_step_lines(kid: Any) -> List[str]:
 
 
 def _joined_title(titles: Sequence[str]) -> str:
-    """The parts' work titles on one line: ``a, b``; with 3 or more, ``a, b +1 more``."""
-    names = [t for t in titles if t]
-    if len(names) > 1:  # one phone row for the whole title
-        names = [_cut_word(t, 28) for t in names]
-    if len(names) <= 2:
-        return ", ".join(names)
-    return f"{names[0]}, {names[1]} +{len(names) - 2} more"
+    """The title of a card that joined several jobs: ``3 jobs``.  The names stay
+    in the sections below (each ``■ **name**`` line and its ``Goal:``)."""
+    return f"{len(titles)} jobs"
 
 
 JOINED_GOAL_CHARS = 40  # a goal inside a joined card's section: one phone row
@@ -1211,7 +1207,7 @@ class Card:
     def _render_joined(
         self, summary_chars: int, tool_cap: int, include_say: bool, now: Optional[float] = None,
     ) -> str:
-        """Several dispatches on one card: one title (their work titles, ``k of N
+        """Several dispatches on one card: one title (``N jobs``, ``k of M
         done`` across all subagents), a Goal line per part, every subagent's
         section in order, and one footer."""
         now = time.monotonic() if now is None else now
