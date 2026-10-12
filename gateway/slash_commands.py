@@ -1834,6 +1834,28 @@ class GatewaySlashCommandsMixin:
             )
             return EphemeralReply(stop_ack(t("gateway.stop.stopped"), session_key))
 
+        # The chat is idle, but subagents it handed work to may still be
+        # running in the background (their card is live in the chat).  /stop
+        # is the user's "stop everything here": end those too, instead of
+        # replying "no active task" under a card that is visibly still working.
+        stopped_helpers = 0
+        try:
+            from tools.async_delegation import interrupt_for_session
+
+            stopped_helpers = interrupt_for_session(
+                session_key=session_key,
+                parent_session_id=str(getattr(session_entry, "session_id", "") or ""),
+                reason="stop_command",
+            )
+        except Exception:
+            logger.debug("/stop: could not interrupt background subagents", exc_info=True)
+        if stopped_helpers:
+            logger.info(
+                "STOP (idle) for session %s — interrupted %d background subagent run(s)",
+                session_key, stopped_helpers,
+            )
+            return EphemeralReply(stop_ack(t("gateway.stop.stopped_helpers"), session_key))
+
         # No running agent anywhere for this scope. A platform status
         # indicator can still be stuck — e.g. Slack's persistent
         # assistant.threads.setStatus survives a gateway restart or a turn
