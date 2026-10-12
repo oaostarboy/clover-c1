@@ -32,6 +32,11 @@ Tap the card ("tap to watch 🍀") to follow the steps live. With two or more
 subagents the card says `N subagents · k of N done`, and the job's name sits
 inside it, above the sections.
 
+A subagent that is done turns into one line (`🍀 name · done · …`) while the
+others keep working. Inside a running subagent, the checklist steps (`✓ ▸ ○`) and
+the tool calls (`🔧` running, `↳` finished) are told apart: the tool calls sit one
+level in, under the step in progress.
+
 When a job is done, the card shrinks to a short 🍀 line. Clover's reply about
 it comes first, and the finished card sits directly under that reply (under
 the `🛠 N tool calls` summary bubble, if you see one). A new job that Clover

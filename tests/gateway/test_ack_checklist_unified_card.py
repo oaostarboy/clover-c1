@@ -481,11 +481,12 @@ def test_a_single_subagent_reads_stats_hint_blank_title_goal_steps_tools():
         "> **fixing the bugs**",
         "> Goal: test build + PR \u00b7 ~10 min",
     ]
-    assert lines[5:8] == ["> \u25b8 find", "> \u25cb fix", "> \u25cb test"]
-    assert lines[8:] == [
-        "> \U0001f527 *terminal cmd4*", "> \u2713 *terminal cmd3*", "> \u2713 *terminal cmd2*||",
-    ][:len(lines[8:])] or lines[8].startswith("> \U0001f527 ") or lines[8].startswith("> \u2713 ")
-    assert text.count("Sonnet 5.5") == 1 and "\u25a0" not in text and "\u2003" not in text, "no section mark, no indent"
+    em = "\u2003\u2003"
+    # the tool lines nest under the step in progress; the steps still to do come after them
+    assert lines[5] == "> \u25b8 find" and lines[6].startswith(f"> {em}") and "\u2713" not in lines[6]
+    assert lines[-2:] == ["> \u25cb fix", "> \u25cb test||"]
+    assert all(ln.startswith(f"> {em}") for ln in lines[6:-2])
+    assert text.count("Sonnet 5.5") == 1 and "\u25a0" not in text, "no section mark"
     assert text.count("**>") == 1 and text.endswith("||") and all(ln.startswith("> ") for ln in lines[1:])
 
 
@@ -585,15 +586,16 @@ def test_multi_subagent_lines_are_indented_under_the_unindented_bold_name():
     text = _editor(_tg_adapter(), _three_subagent_card())._render()
     lines = [ln[2:] for ln in text.splitlines()[1:]]
     for i, ln in enumerate(lines):
-        if "**site" in ln:
+        if "**site" in ln and ln.startswith("\u25a0"):
             assert not ln.startswith((em, " ", "\u2003")), "the name line is not indented"
             under = []
             for nxt in lines[i + 1:]:
                 if nxt in ("\u2800", "") or "**site" in nxt:
                     break
                 under.append(nxt)
-            assert under and all(u.startswith(em) and not u.startswith(em + "\u2003") for u in under), under
-    assert "\n> " + em + "*" in text or "> " + em + "\U0001f527" in text
+            # steps sit one level in, the tool lines under the step in progress one level deeper
+            assert under and all(u.startswith(em) and not u.startswith(em + "\u2003\u2003\u2003") for u in under), under
+    assert "> " + em + em + "\U0001f527" in text, "the tool line nests one level under its step"
 
 
 def test_single_subagent_card_has_no_indent():
