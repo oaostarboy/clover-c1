@@ -576,6 +576,7 @@ class DelegationActivityPublisher:
         self._closed = False
         self._jobs_group: Optional[str] = None
         self._jobs_count = 0
+        self._place_lock: Optional[asyncio.Lock] = None
         # Fallback group for relays that carry no delegation_id (e.g. live
         # transcript creation failed). Per publisher, so two turns in one chat
         # never share a status key like "delegation:delegation".
@@ -600,6 +601,50 @@ class DelegationActivityPublisher:
             index = self._jobs_count
             self._jobs_count += 1
             return self._jobs_group, index
+
+    def open_external_job_card(self, card_id: str, title: str, lifecycle: bool = False) -> str:
+        """Unified card style: show an outside agent job on the subagent card.
+
+        Returns ``card_id`` (the job's delegation id from now on) when the job
+        has a part on the unified card, else ``""`` (classic style: the job
+        keeps its 🔀 roster card).  The card joins the chat's running unified
+        card, or is posted as its own message.  Any thread.
+        """
+        try:
+            from agent.ack_checklist import open_agent_job_part
+
+            card = open_agent_job_part(card_id, title, lifecycle)
+        except Exception:
+            return ""
+        if card is None:
+            return ""
+        card.target = (id(self._adapter), self._chat_id, "pending")  # claimed: nothing else binds it
+        try:
+            asyncio.run_coroutine_threadsafe(self._place_job_card(card, card_id), self._loop)
+        except RuntimeError:
+            from agent.ack_checklist import abandon
+
+            abandon(card_id)  # loop closed: the 🔀 card path takes over
+            return ""
+        return card_id
+
+    async def _place_job_card(self, card: Any, card_id: str) -> None:
+        from agent.ack_checklist import abandon, join
+
+        if self._place_lock is None:
+            self._place_lock = asyncio.Lock()
+        try:
+            async with self._place_lock:  # one job at a time: the next one finds this card
+                host = _running_editor_for(self._adapter, self._chat_id, card)
+                if host is not None and join(host.card, card):
+                    host.notify()
+                    return
+                await _send_card_under_opener(card, self._adapter, self._chat_id, self._metadata)
+        except Exception:
+            logger.debug("agent job card placement failed", exc_info=True)
+            card.target = None
+        if card.target is None:
+            abandon(card_id)
 
     # -- producer side (any thread) --------------------------------------
 

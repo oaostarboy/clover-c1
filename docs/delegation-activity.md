@@ -56,7 +56,11 @@ one helper, 2 per running helper for several), and `Model · 🛠 N tool calls �
 ⏱ time`. A dispatch of several helpers gets one block per helper (⬜ waiting,
 🔄 running, 🍀 done, 🍂 failed, ⏹ stopped) with a totals line; the header shows
 `k of N done`. When a helper finishes its tool lines give way to its plain
-summary, and no separate 🔀 card is posted. `classic` is the previous look
+summary, and no separate 🔀 card is posted. Outside agent jobs
+(`terminal(background=true, agent_job={...})`) show on the same card: they join
+the chat's running card as another section (named by the job's `title`), or get
+a card of their own; a job whose parser is `none` shows `running` instead of
+tool lines. `classic` is the previous look
 (plain checklist plus the 🔀 card). Roll back with
 `clover config set display.helper_card classic` and `/restart`.
 

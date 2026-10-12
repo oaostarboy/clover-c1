@@ -476,8 +476,9 @@ async def test_a_second_dispatch_joins_the_running_card_instead_of_getting_its_o
     assert last["text"].startswith("**> \U0001f500 **checking the disks, checking the network** \u00b7 0 of 2 done")
     assert chat.deleted == [card_id] and da._ACK_EDITORS[id(first)]._message_id == last["id"]
     assert [i for i, t in enumerate(texts) if t == "and the network too"][0] < len(texts) - 1
-    assert last["text"].count("> Goal: ") == 2
-    assert "> Goal: a disk report \u00b7 ~5 min" in last["text"] and "> Goal: a network report" in last["text"]
+    assert last["text"].count("Goal: ") == 2 and "\n> Goal: " not in last["text"], "goals sit in their sections"
+    assert "\u2003\u2003Goal: a disk report\n" in last["text"] and "\u2003\u2003Goal: a network report\n" in last["text"]
+    assert "~5 min" not in last["text"], "no ETA inside a joined card"
     # a card message was sent exactly twice in total: the first one and its repost
     assert len([t for t in texts if t.startswith("**>")]) == 2
 
@@ -503,15 +504,14 @@ async def test_events_of_the_joined_part_edit_the_one_card_and_counts_span_all_p
     await _settle()
     text = chat.edits[-1]["text"]
     assert chat.edits[-1]["id"] == editor._message_id
-    assert "**disks** \u00b7 Sonnet 5.5 \u00b7 3 calls" in text
-    assert "**network** \u00b7 Sonnet 5.5 \u00b7 4 calls" in text
-    assert "*2 subagents \u00b7 7 calls \u00b7" in text
+    assert "**disks** \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 3 calls" in text
+    assert "**network** \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 4 calls" in text
+    assert "*2 subagents \u00b7 \U0001f6e0 7 calls \u00b7" in text
     ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: Disks fine.")
     await _settle()
     mid = chat.edits[-1]["text"]
     assert "1 of 2 done" in mid.splitlines()[0] and "tap to watch" in mid
-    assert "> Goal: a disk report" in mid and "> Goal: a disk report \u00b7 ~" not in mid, "ETA only while it runs"
-    assert "> Goal: a network report \u00b7 ~5 min" in mid
+    assert "Goal: a disk report" in mid and "Goal: a network report" in mid and "~5 min" not in mid
     assert "**disks** \u00b7 done" in mid and "Disks fine." in mid
     ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: Net fine.")
     await _settle()
@@ -545,7 +545,7 @@ async def test_a_third_part_shows_the_first_two_titles_and_plus_n_more():
     assert len({id(c.parts[0].card) for c in cards}) == 1
     text = da._ACK_EDITORS[id(cards[0])]._render()
     assert text.splitlines()[0] == "**> \U0001f500 **disks, network +2 more** \u00b7 0 of 4 done"
-    assert text.count("> Goal: ") == 4
+    assert text.count("Goal: ") == 4
     third = _opener_card("dj9", "x", "y", "z")
     assert da._running_editor_for(chat, "chat", third) is not None
 
@@ -600,5 +600,5 @@ async def test_a_joined_multi_subagent_part_keeps_its_own_sections():
     await _settle()
     text = da._ACK_EDITORS[id(first)]._render()
     assert text.splitlines()[0].startswith("**> \U0001f500 **disks, the sweep** \u00b7 0 of 3 done")
-    assert "> **disks**" in text and "> **alpha**" in text and "> **beta**" in text
+    assert "> \u25a0 **disks**" in text and "> \u25a0 **alpha**" in text and "> \u25a0 **beta**" in text
     assert "*3 subagents" in text
