@@ -25204,6 +25204,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         )
                         if getattr(_edit_res, "success", False):
                             _reconciled = True
+                            # No send happened: a completion turn's finished
+                            # cards still go right under this reply.
+                            try:
+                                from gateway.delegation_activity import after_reply
+
+                                await after_reply(adapter, source.chat_id, text_content, metadata)
+                            except Exception:
+                                pass
                             logger.info(
                                 "Queued-lane final reconciled by editing message %s in place (no duplicate send).",
                                 _sc_msg_id,
@@ -33425,6 +33433,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _next_identity["persist_user_display_kind"] = next_display_kind
                 if next_completion_ids:
                     _next_identity["completion_delegation_ids"] = next_completion_ids
+                # This follow-up never passes through base.py's turn start, so
+                # open (or clear) its completion turn here: the running turn's
+                # reply is already out, and the follow-up's own reply -- not a
+                # human follow-up's -- gets the finished cards right under it.
+                try:
+                    from gateway.delegation_activity import hand_over_completion_turn
+
+                    await hand_over_completion_turn(
+                        self._adapter_for_source(source) or adapter,
+                        getattr(next_source, "chat_id", None),
+                        next_completion_ids,
+                        _status_thread_metadata,
+                    )
+                except Exception:
+                    logger.debug("completion turn hand-over failed", exc_info=True)
                 followup_result = await self._run_agent(
                     message=next_message,
                     context_prompt=context_prompt,
