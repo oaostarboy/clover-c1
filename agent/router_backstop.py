@@ -472,12 +472,22 @@ def _decode(raw: Any) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _runtime_handoff(verdict: Any) -> Dict[str, str]:
+def _runtime_handoff(verdict: Any, user_message: str = "") -> Dict[str, str]:
     """The short summary a runtime-started helper is dispatched with, so the
-    chat acknowledgement says what is happening without quoting the task."""
+    chat acknowledgement says what is happening without quoting the task.
+
+    ``work`` / ``outcome`` are built from the user's message and the router's
+    own reason (``agent.handoff_title``), with no model call; the generic
+    placeholders remain only when neither says anything usable."""
     if getattr(verdict, "source", "") == "lifecycle":
         return {"work": "finishing the check on the helper results", "outcome": "the final answer"}
-    return {"work": "taking over the rest of your request", "outcome": "the finished result"}
+    from agent.handoff_title import handoff_summary
+
+    fallback = ""
+    tasks = getattr(verdict, "tasks", ()) or ()
+    if len(tasks) == 1 and getattr(verdict, "source", "") != "direct_backstop":
+        fallback = str(getattr(tasks[0], "goal", "") or "")
+    return handoff_summary(user_message, str(getattr(verdict, "reason", "") or ""), fallback)
 
 
 def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
@@ -503,7 +513,7 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     follow = _follow_through_for(state, stages)
     if follow:
         args["follow_through"] = follow
-    args["handoff"] = _runtime_handoff(verdict)
+    args["handoff"] = _runtime_handoff(verdict, state.user_message)
     try:
         raw = dispatch_generated_tool(agent, "delegate_task", args, task_id=task_id)
     except Exception as exc:
@@ -942,7 +952,7 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
              "context": _helper_context(pseudo, i, number, findings)}
             for i in index
         ]}
-        args["handoff"] = _runtime_handoff(verdict)
+        args["handoff"] = _runtime_handoff(verdict, pseudo.user_message)
     except Exception:
         logger.warning("router stages: stage plan unreadable", exc_info=True)
         return _note(

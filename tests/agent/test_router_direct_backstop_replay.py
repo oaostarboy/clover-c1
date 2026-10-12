@@ -73,7 +73,7 @@ def test_the_replay_ack_is_a_normal_handoff_and_the_helper_gets_the_request(
     result = _run(provider, aux, tmp_path)
 
     ack = result['final_response']
-    assert re.match(r'^\U0001f504 ', ack) and 'taking over the rest of your request' in ack
+    assert re.match(r'^\U0001f504 ', ack) and 'emailing Julia the AutoHDR extension' in ack
     assert REQUEST not in ack
     assert not re.search(r'limit|timeout|timed out|backstop|budget|25|180', ack.lower())
     _wait_started(children, 1)
