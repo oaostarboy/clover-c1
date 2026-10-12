@@ -825,7 +825,11 @@ def _handoff_text(info: Dict[str, Any]) -> str:
     text = f"Handed off to helpers {ids}"
     if info["subagent_ids"]:
         text += f" (delegation {info['delegation_id']})"
-    text += ". Tell the user briefly helpers are on it, then end your turn."
+    text += (
+        ". Answer any question or other point in the user's message that the "
+        "helpers are not covering, tell the user briefly helpers are on it, "
+        "then end your turn."
+    )
     if info.get("runtime_stages"):
         text += (
             " The later stages start by themselves, each only after the one "
