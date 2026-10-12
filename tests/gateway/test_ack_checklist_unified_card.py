@@ -573,3 +573,8 @@ def test_telegram_format_of_a_joined_card_with_a_long_running_name_and_a_collaps
     last = [ln for ln in out.splitlines() if "disks report" in ln]
     assert len(last) == 1 and "\U0001f340" in last[0] and "ok." not in out
     assert out.index("finishing the small") < out.index("disks report")
+
+
+def test_a_card_with_only_a_stopped_title_keeps_the_hint():
+    out = da._to_expandable("\U0001f940 **fixing the bugs** \u00b7 stopped", da.TAP_HINT_DONE, bold_title=True)
+    assert out == "**> \U0001f940 **fixing the bugs** \u00b7 stopped\n> *tap to read \U0001f340*||"
