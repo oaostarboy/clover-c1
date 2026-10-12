@@ -218,7 +218,7 @@ async def test_the_tick_refreshes_the_running_clock_with_an_edit(monkeypatch):
     await asyncio.sleep(0.3)
     await _settle(editor)
     assert adapter.edits, "the clock was refreshed with no other change"
-    assert "\u23f1 3" in adapter.edits[-1]["text"] or "\u23f1 30s" in adapter.edits[-1]["text"]
+    assert "Opus 5.5 \u00b7 3" in adapter.edits[-1]["text"], "the clock moved on"
     assert len(adapter.sends) == 1, "an edit, never a new message"
 
 
@@ -235,7 +235,7 @@ async def test_ticks_stop_when_the_helper_finishes(monkeypatch):
     await _settle(editor)
     edits_after_finish = len(adapter.edits)
     assert adapter.edits[-1]["finalize"] is True
-    assert adapter.edits[-1]["text"].splitlines()[0].startswith("\U0001f340 ")
+    assert adapter.edits[-1]["text"].splitlines()[0] == "\U0001f500 **fixing the bugs** \u00b7 done"
     await asyncio.sleep(0.3)
     assert len(adapter.edits) == edits_after_finish, "no edits after the final one"
     assert editor._ticking is False
@@ -286,13 +286,13 @@ async def test_multi_helper_events_edit_the_one_message_in_place():
     await _settle(editor)
     assert adapter.edits and adapter.edits[-1]["id"] == "m42"
     text = adapter.edits[-1]["text"]
-    assert "\U0001f527 *terminal npm test*" in text and "\u2b1c **check a**" in text
+    assert "*now: npm test*" in text and "**check a** \u00b7 waiting" in text
     assert adapter.edits[-1]["finalize"] is True  # live edits are formatted
     for i in (0, 1):
         ac.on_child_event("subagent.complete", delegation_id="dm", task_index=i, status="completed",
                           summary="Plain summary: ok.")
     await _settle(editor)
-    assert adapter.edits[-1]["finalize"] is True and "\U0001f340 **check b**" in adapter.edits[-1]["text"]
+    assert adapter.edits[-1]["finalize"] is True and "**check b** \u00b7 done" in adapter.edits[-1]["text"]
 
 
 @pytest.mark.asyncio
@@ -305,7 +305,7 @@ async def test_a_six_helper_edit_fits_the_telegram_limit():
                           summary="Plain summary: " + " ".join(["word"] * 70) + ".")
     await _settle(editor)
     sent = adapter.edits[-1]["text"]
-    assert len(sent) <= 4000 and "\U0001f340 **Check site number 5**" in sent and sent.rstrip().endswith("*")
+    assert len(sent) <= 4000 and "**Check site number 5** \u00b7 done" in sent and sent.rstrip().endswith("*")
 
 
 @pytest.mark.asyncio
@@ -438,12 +438,13 @@ def test_telegram_title_is_the_first_line_inside_the_collapsed_quote():
     card = _say_card()
     text = _editor(_tg_adapter(), card)._render()
     lines = text.splitlines()
-    assert lines[0] == "**> \U0001f340 **fixing the bugs**", "title opens the expandable quote"
+    assert lines[0] == "**> \U0001f500 **fixing the bugs**", "title opens the expandable quote, no emoji"
     assert lines[1] == f"> *{da.TAP_HINT_LIVE}*" and da.TAP_HINT_LIVE == "tap to watch \U0001f340"
     assert lines[2] == "> \u2800", "the 3-line cut lands on empty space"
-    assert lines[3] == "> *\u2192 test build + PR \u00b7 ~10 min*", "exactly ONE spacer after the hint"
+    assert lines[3] == "> Goal: test build + PR \u00b7 ~10 min", "exactly ONE spacer after the hint, then Goal:"
     assert text.endswith("||") and text.count("||") == 1 and text.count("**>") == 1
-    assert all(ln.startswith("> ") for ln in lines[1:]) and "> \U0001f504 find" in text
+    assert all(ln.startswith("> ") for ln in lines[1:]) and "> \u25b8 find" in text
+    assert "\U0001f504" not in text and text.count("\U0001f340") == 1, "the only clover is in the hint"
 
 
 def test_telegram_finished_card_says_tap_to_read():
@@ -453,7 +454,7 @@ def test_telegram_finished_card_says_tap_to_read():
                       summary="Result: done\nPlain summary: All fixed.")
     text = _editor(_tg_adapter(), card)._render()
     lines = text.splitlines()
-    assert lines[0] == "**> \U0001f340 **fixing the bugs**"
+    assert lines[0] == "**> \U0001f500 **fixing the bugs** \u00b7 done"
     assert lines[1] == f"> *{da.TAP_HINT_DONE}*" and da.TAP_HINT_DONE == "tap to read \U0001f340"
     assert "All fixed." in text
 
@@ -461,7 +462,7 @@ def test_telegram_finished_card_says_tap_to_read():
 def test_other_platforms_keep_the_plain_quote():
     text = _editor(_Adapter(), _say_card())._render()
     assert "**>" not in text and "||" not in text and "tap to" not in text
-    assert text.splitlines()[0] == "\U0001f340 **fixing the bugs**" and "> \U0001f504 find" in text
+    assert text.splitlines()[0] == "\U0001f500 **fixing the bugs**" and "> \u25b8 find" in text
 
 
 def test_classic_style_is_not_made_expandable():
@@ -489,7 +490,7 @@ def _three_subagent_card():
 def test_multi_subagent_title_keeps_k_of_n_done_inside_one_quote():
     text = _editor(_tg_adapter(), _three_subagent_card())._render()
     lines = text.splitlines()
-    assert lines[0].startswith("**> \U0001f340 **fixing the bugs**") and "1 of 3 done" in lines[0]
+    assert lines[0].startswith("**> \U0001f500 **fixing the bugs**") and "1 of 3 done" in lines[0]
     assert lines[1] == "> *tap to watch \U0001f340*" and lines[2] == "> \u2800"
     assert text.count("**>") == 1 and text.count("||") == 1
     assert all(ln.startswith("> ") for ln in lines[1:]) and lines[-1].endswith("||")
@@ -502,7 +503,7 @@ def test_multi_subagent_spacing_one_spacer_between_blocks_and_before_footer():
     # No two blank lines in a row anywhere (hint spacer, blocks, footer).
     assert not any(a == spacer and b == spacer for a, b in zip(lines, lines[1:]))
     # Hint, ONE spacer, then straight to the outcome line.
-    assert lines[1:4] == ["> *tap to watch \U0001f340*", spacer, "> *\u2192 test build + PR \u00b7 ~10 min*"]
+    assert lines[1:4] == ["> *tap to watch \U0001f340*", spacer, "> Goal: test build + PR \u00b7 ~10 min"]
     assert lines[-2] == spacer and lines[-1].startswith("> *3 subagents") and "helpers" not in text
     # Three subagent sections: a spacer before each name line, plus the one before the footer.
     names = [i for i, ln in enumerate(lines) if ln.startswith("> ") and "**" in ln and i > 0]
@@ -536,12 +537,12 @@ def test_format_message_keeps_title_inside_one_expandable_quote_and_the_em_inden
     fm = lambda t: TelegramAdapter.format_message(object.__new__(TelegramAdapter), t)
     out = fm(_editor(_tg_adapter(), _say_card())._render())
     lines = out.splitlines()
-    assert lines[0] == "**> \U0001f340 *fixing the bugs*"
+    assert lines[0] == "**> \U0001f500 *fixing the bugs*"
     assert lines[1] == "> _tap to watch \U0001f340_" and lines[2] == "> \u2800"
     assert out.count("**>") == 1 and out.endswith("||")
     multi = fm(_editor(_tg_adapter(), _three_subagent_card())._render())
-    assert multi.splitlines()[0].startswith("**> \U0001f340 *fixing the bugs* \u00b7 1 of 3 done")
-    assert "> \u2003\u2003\U0001f504 check the repo" in multi, "EM SPACE indent survives escaping"
+    assert multi.splitlines()[0].startswith("**> \U0001f500 *fixing the bugs* \u00b7 1 of 3 done")
+    assert "> \u2003\u2003\u25b8 check the repo" in multi, "EM SPACE indent survives escaping"
     assert multi.count("**>") == 1 and multi.endswith("||")
 
 
@@ -553,4 +554,4 @@ async def test_card_text_sent_under_the_opener_is_the_expandable_one():
     sent = await adapter.send("chat", card.say_text())
     await da.bind_ack_card(adapter, "chat", card.say_text(), sent)
     assert adapter.sends[0] == SAY
-    assert adapter.sends[1].startswith("**> \U0001f340 **fixing the bugs**\n> *tap to watch")
+    assert adapter.sends[1].startswith("**> \U0001f500 **fixing the bugs**\n> *tap to watch")

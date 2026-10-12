@@ -189,7 +189,7 @@ def test_a_finished_helper_keeps_its_steps_with_final_icons():
     kids = card.parts[0].checklist.kids
     assert [r[1] for r in kids[0].steps] == ["completed", "completed"]
     assert [r[1] for r in kids[2].steps] == ["failed", "pending", "pending"], "where it stopped"
-    assert "\U0001f340 open" in card.render() and "Tidy." in card.render()
+    assert "\u2713 open" in card.render() and "Tidy." in card.render()
 
 
 def test_a_todo_that_arrives_before_the_part_opens_is_replayed_per_helper():
@@ -213,7 +213,7 @@ def test_three_helpers_render_name_steps_tools_stats_inside_one_quote():
     ac.on_child_event("subagent.complete", delegation_id="dm", task_index=0, task_count=3, status="completed",
                       summary="Result: done\nPlain summary: Tidy.")
     lines = card.render().splitlines()
-    assert lines[0].startswith("\U0001f340 **checking the 3 sites**") and "1 of 3 done" in lines[0]
+    assert lines[0].startswith("\U0001f500 **checking the 3 sites**") and "1 of 3 done" in lines[0]
     assert all(ln.startswith("> ") or not ln for ln in lines[1:])
     text = "\n".join(lines)
     i_nice = text.index("**nice & tidy site**")
@@ -221,16 +221,16 @@ def test_three_helpers_render_name_steps_tools_stats_inside_one_quote():
     i_pizza = text.index("**pizzeria bros pamphlet**")
     assert i_nice < i_silas < i_pizza
     pizza = text[i_pizza:]
-    assert pizza.index("\U0001f340 read") < pizza.index("\U0001f504 typos") < pizza.index("\u2b1c report")
-    assert pizza.index("\u2b1c report") < pizza.index("read_file")
-    assert "\U0001f340 open" in text[i_nice:i_silas], "a done helper keeps its steps"
-    assert "\U0001f527" not in text[i_nice:i_silas], "no live tool lines once it is done"
+    assert pizza.index("\u2713 read") < pizza.index("\u25b8 typos") < pizza.index("\u25cb report")
+    assert pizza.index("\u25cb report") < pizza.index("now: read_file")
+    assert "\u2713 open" in text[i_nice:i_silas], "a done helper keeps its steps"
+    assert "now:" not in text[i_nice:i_silas], "no live tool lines once it is done"
 
 
 def test_a_helper_without_steps_renders_as_before():
     card = _card3(steps=((), (), ()))
     text = card.render()
-    assert "**silas studios site**" in text and "\u2b1c" not in text, "no step rows at all"
+    assert "**silas studios site**" in text and "\u25cb" not in text, "no step rows at all"
     assert "typos" not in text
 
 

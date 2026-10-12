@@ -89,7 +89,7 @@ PENDING = "pending"  # a helper of a multi dispatch that has not started
 RECENT_TOOLS_SINGLE = 3  # tool lines on a one-helper card
 RECENT_TOOLS_MULTI = 2  # tool lines per running helper on a several-helper card
 SUMMARY_CHARS = 140  # a helper's summary on a several-helper card
-COMPACT_OVER = 4  # more helpers than this: the compact layout
+COMPACT_OVER = 6  # more helpers than this: the compact layout
 COMPACT_RUNNING = 3  # ...shows at most this many running helpers in full
 COMPACT_RESULT_CHARS = 48  # ...and a done helper's result in this many
 COMPACT_NAMES = 5  # names listed on a grouped "waiting" / "more running" line
@@ -97,9 +97,9 @@ CARD_BUDGET = 3900  # Telegram's message limit, with room to spare
 
 PENDING_ICON = "\u2b1c"  # ⬜
 ACTIVE_ICON = "\U0001f504"  # 🔄
-HEADER_RUNNING_ICON = "\U0001f340"  # 🍀 on a running unified card's title
 DONE_ICON = "\U0001f340"  # 🍀
 FAILED_ICON = "\U0001f342"  # 🍂
+TITLE_ICON = "\U0001f500"  # 🔀 leads a unified card's title (🍂 instead when it ended badly)
 STOPPED_ICON = "\u23f9"  # ⏹
 
 _STEP_ICON = {
@@ -110,8 +110,20 @@ _STEP_ICON = {
     "failed": FAILED_ICON,
 }
 _END_ICON = {DONE: DONE_ICON, FAILED: FAILED_ICON, STOPPED: STOPPED_ICON}
-_CHILD_ICON = {PENDING: PENDING_ICON, RUNNING: ACTIVE_ICON, **_END_ICON}
-_TOOL_OK, _TOOL_ERR = "\u2713", "\u2717"  # ✓ ✗
+# The unified card uses plain marks, not emojis: the only emojis on it are the
+# 🔀 in front of the title (🍂 in its place when the card ended badly), the 🍀 in
+# the "tap to ..." hint, and a 🍂 in front of a failed subagent's name.
+_STEP_MARK = {
+    "completed": "\u2713",  # ✓
+    "in_progress": "\u25b8",  # ▸
+    "pending": "\u25cb",  # ○
+    "failed": "\u2717",  # ✗
+    "cancelled": "\u2013",  # –
+}
+# Tool phrases are cut so the WHOLE line (indent + "before: " + phrase) fits one
+# phone row: a few characters more on the single card (no indent).
+TOOL_PHRASE_MULTI = 34
+TOOL_PHRASE_SINGLE = 40
 _MAX_OPEN_TOOLS = 8
 
 
@@ -282,77 +294,85 @@ class Checklist:
             return self.render_unified(include_say=include_say)
         return self.render_classic(include_say=include_say)
 
-    def _title_outcome(self) -> Tuple[str, str, str]:
-        """(icon, title, outcome) of the header line."""
-        # Ant: the card title carries a 🍀 while it runs (steps keep 🔄);
-        # it ends 🍀 / 🍂 / ⏹.
-        icon, rest = HEADER_RUNNING_ICON, self.header
+    def _title_outcome(self) -> Tuple[str, str]:
+        """(title, outcome) of the header line: no status icon, no markdown."""
+        rest = self.header
         for ic in (ACTIVE_ICON, DONE_ICON, FAILED_ICON, STOPPED_ICON):
             if rest.startswith(ic):
                 rest = rest[len(ic):].strip()
                 break
-        if self.state != RUNNING:
-            icon = _END_ICON[self.state]
         work, _, outcome = rest.partition(" \u2192 ")
         outcome = outcome.replace(", ~", " \u00b7 ~", 1)
         if self.state != RUNNING and " \u00b7 ~" in outcome:
             outcome = outcome.split(" \u00b7 ~", 1)[0]
-        return icon, work.replace("*", "").strip(), outcome
+        return work.replace("*", "").strip(), outcome.replace("*", "").strip()
+
+    def _goal_line(self, outcome: str) -> str:
+        return f"Goal: {outcome}" if outcome else ""
+
+    def _title_line(self, title: str, tail: str) -> str:
+        # 🔀 leads the title; 🍂 takes its place when the card did not end well.
+        icon = FAILED_ICON if self.state in (FAILED, STOPPED) else TITLE_ICON
+        return f"{icon} **{title}**{tail}"
 
     def render_unified(self, now: Optional[float] = None, include_say: bool = True) -> str:
-        icon, title, outcome = self._title_outcome()
-        lines = [f"{icon} **{title}**"]
-        quoted: List[str] = []
-        if outcome:
-            quoted.append(_italic("\u2192 " + outcome))
-        if self.steps:
-            quoted.append(_SPACER)
-            quoted += [f"{_STEP_ICON[status]} {text}" for text, status in self.steps]
-        tail: List[str] = []
-        if self.state == RUNNING:
-            tail += _tool_lines(self, RECENT_TOOLS_SINGLE)
-        elif self.summary:
-            tail.append(no_command_links(self.summary.replace("*", "")))
+        title, outcome = self._title_outcome()
+        tail = ""
+        if self.state != RUNNING:
+            tail = " \u00b7 " + self.state
+        head = self._title_line(title, tail)
         stats = _stats_line(self.model, self.calls, self.started, self.ended, now)
-        if stats:
-            tail.append(_italic(stats))
-        if tail:
-            quoted.append(_SPACER)
-            quoted += tail
-        body = "\n".join(lines + [f"> {q}" for q in quoted if q])
+        blocks: List[List[str]] = [
+            [ln for ln in (self._goal_line(outcome), stats) if ln],
+            [f"{_STEP_MARK[status]} {text}" for text, status in self.steps],
+        ]
+        if self.state == RUNNING:
+            blocks.append(_tool_lines(self, RECENT_TOOLS_SINGLE, TOOL_PHRASE_SINGLE))
+        elif self.summary:
+            blocks.append([no_command_links(self.summary.replace("*", ""))])
+        body = "\n".join([head] + [f"> {q}" for q in _join_blocks(blocks)])
         return f"{self.say}\n\n{body}" if (self.say and include_say) else body
 
     def render_unified_multi(
         self, now: Optional[float] = None, summary_chars: int = SUMMARY_CHARS,
         tool_cap: int = RECENT_TOOLS_MULTI, include_say: bool = True,
     ) -> str:
-        """One block per helper: icon + title, its recent tool calls while it
-        runs (its summary once over), its stats; a totals line at the end."""
+        """Goal, then one block per subagent (name + status + model + calls +
+        time, its steps, its tool lines or its summary); a totals line last."""
         now = time.monotonic() if now is None else now
-        icon, title, outcome = self._title_outcome()
+        title, outcome = self._title_outcome()
         kids = self.kids
         done = sum(1 for k in kids if k.state == DONE)
-        head = f"{icon} **{title}**"
-        if self.state == RUNNING or done < len(kids):
-            head += f" \u00b7 {done} of {len(kids)} done"
-        quoted: List[str] = []
-        if outcome:
-            quoted.append(_italic("\u2192 " + outcome))
-        if len(kids) > COMPACT_OVER:
-            quoted += _compact_kids(kids, now, tool_cap)
+        failed = sum(1 for k in kids if k.state == FAILED)
+        stopped = sum(1 for k in kids if k.state == STOPPED)
+        if self.state == RUNNING:
+            tail = f" \u00b7 {done} of {len(kids)} done"
+        elif self.state == DONE and done == len(kids):
+            tail = " \u00b7 done"
         else:
-            quoted += _full_kids(kids, now, summary_chars, tool_cap)
+            bits = [f"{done} of {len(kids)} done"]
+            if failed:
+                bits.append(f"{failed} failed")
+            if stopped:
+                bits.append(f"{stopped} stopped")
+            tail = " \u00b7 " + " \u00b7 ".join(bits)
+        head = self._title_line(title, tail)
+        blocks: List[List[str]] = [[ln for ln in (self._goal_line(outcome),) if ln]]
+        if len(kids) > COMPACT_OVER:
+            blocks += _compact_kids(kids, now, tool_cap)
+        else:
+            blocks += _full_kids(kids, now, summary_chars, tool_cap)
         started = [k.started for k in kids if k.started is not None]
         ended = [k.ended for k in kids if k.ended is not None]
         calls = sum(k.calls for k in kids)
         foot = [f"{len(kids)} subagent{'s' if len(kids) != 1 else ''}"]
         if calls:
-            foot.append(f"\U0001f6e0 {calls} tool call{'s' if calls != 1 else ''}")
+            foot.append(_calls(calls))
         if started:
             end = max(ended) if self.state != RUNNING and ended else now
-            foot.append("\u23f1 " + _duration(max(0.0, end - min(started))))
-        quoted += [_SPACER, _italic(" \u00b7 ".join(foot))]
-        body = "\n".join([head] + [f"> {q}" for q in quoted if q])
+            foot.append(_duration(max(0.0, end - min(started))))
+        blocks.append([_italic(" \u00b7 ".join(foot))])
+        body = "\n".join([head] + [f"> {q}" for q in _join_blocks(blocks)])
         return f"{self.say}\n\n{body}" if (self.say and include_say) else body
 
     def render_classic(self, include_say: bool = True) -> str:
@@ -375,6 +395,19 @@ def _indent(lines: Sequence[str]) -> List[str]:
     return [_INDENT + ln for ln in lines if ln]
 
 
+def _join_blocks(blocks: Sequence[Sequence[str]]) -> List[str]:
+    """The non-empty blocks with exactly one spacer between them."""
+    out: List[str] = []
+    for block in blocks:
+        lines = [ln for ln in block if ln]
+        if not lines:
+            continue
+        if out:
+            out.append(_SPACER)
+        out += lines
+    return out
+
+
 def _italic(text: str) -> str:
     text = (text or "").replace("*", "").strip()
     return f"*{text}*" if text else ""
@@ -389,18 +422,28 @@ def _duration(seconds: float) -> str:
         return f"{int(seconds)}s"
 
 
-def _stats_line(
+def _calls(n: int) -> str:
+    return f"{n} call{'s' if n != 1 else ''}"
+
+
+def _stats_parts(
     model: str, calls: int, started: Optional[float], ended: Optional[float], now: Optional[float],
-) -> str:
+) -> List[str]:
     parts: List[str] = []
     if model:
         parts.append(model)
     if calls:
-        parts.append(f"\U0001f6e0 {calls} tool call{'s' if calls != 1 else ''}")
+        parts.append(_calls(calls))
     if started is not None:
         end = ended if ended is not None else (now if now is not None else time.monotonic())
-        parts.append("\u23f1 " + _duration(max(0.0, end - started)))
-    return " \u00b7 ".join(parts)
+        parts.append(_duration(max(0.0, end - started)))
+    return parts
+
+
+def _stats_line(
+    model: str, calls: int, started: Optional[float], ended: Optional[float], now: Optional[float],
+) -> str:
+    return " \u00b7 ".join(_stats_parts(model, calls, started, ended, now))
 
 
 def _cut_word(text: str, limit: int) -> str:
@@ -416,28 +459,40 @@ def _cut_word(text: str, limit: int) -> str:
 
 def _kid_step_lines(kid: Child) -> List[str]:
     """The helper's own checklist (nothing when it has none)."""
-    return [f"{_STEP_ICON[status]} {text}" for text, status in kid.steps]
+    return [f"{_STEP_MARK[status]} {text}" for text, status in kid.steps]
 
 
-def _full_kids(kids: Sequence[Child], now: float, summary_chars: int, tool_cap: int) -> List[str]:
-    """Up to ``COMPACT_OVER`` helpers: a full block each."""
-    quoted: List[str] = []
-    for k in kids:
-        quoted.append(_SPACER)
-        quoted.append(f"{_CHILD_ICON[k.state]} **{k.label}**")
-        if k.state == PENDING:
-            quoted += _indent([_italic("waiting to start")])
-            continue
-        under = _kid_step_lines(k)
-        if k.state == RUNNING:
-            under += _tool_lines(k, tool_cap)
-        elif k.summary and summary_chars > 0:
-            under.append(no_command_links(_cut_word(k.summary.replace("*", ""), summary_chars)))
-        stats = _stats_line(k.model, k.calls, k.started, k.ended, now)
+def _kid_header(k: Child, now: float, *, stats: bool = True) -> str:
+    """``**Name** · done · Sonnet 5.5 · 7 calls · 35s`` (``🍂`` before a failed name)."""
+    name = f"**{k.label}**"
+    if k.state == FAILED:
+        name = f"{FAILED_ICON} {name}"
+    parts: List[str] = []
+    if k.state == PENDING:
+        parts.append("waiting")
+    else:
+        if k.state != RUNNING:
+            parts.append(k.state)
         if stats:
-            under.append(_italic(stats))
-        quoted += _indent(under)
-    return quoted
+            parts += _stats_parts(k.model, k.calls, k.started, k.ended, now)
+    return " \u00b7 ".join([name] + parts)
+
+
+def _kid_block(k: Child, now: float, summary_chars: int, tool_cap: int) -> List[str]:
+    block = [_kid_header(k, now)]
+    if k.state == PENDING:
+        return block
+    under = _kid_step_lines(k)
+    if k.state == RUNNING:
+        under += _tool_lines(k, tool_cap, TOOL_PHRASE_MULTI)
+    elif k.summary and summary_chars > 0:
+        under.append(no_command_links(_cut_word(k.summary.replace("*", ""), summary_chars)))
+    return block + _indent(under)
+
+
+def _full_kids(kids: Sequence[Child], now: float, summary_chars: int, tool_cap: int) -> List[List[str]]:
+    """Up to ``COMPACT_OVER`` helpers: a full block each."""
+    return [_kid_block(k, now, summary_chars, tool_cap) for k in kids]
 
 
 def _names(kids: Sequence[Child]) -> str:
@@ -446,11 +501,12 @@ def _names(kids: Sequence[Child]) -> str:
     return ", ".join(shown) + ("\u2026" if more > 0 else "")
 
 
-def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[str]:
-    """Many helpers: at most ``COMPACT_RUNNING`` running ones in full (name,
-    two tool lines, stats), every finished one as a single line, and the ones
-    still waiting grouped into one line."""
-    quoted: List[str] = []
+def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[List[str]]:
+    """Many helpers: at most ``COMPACT_RUNNING`` running ones in full, every
+    finished one as a single line (``**Name** · done · result``; a run of them
+    is one block), and the ones still waiting grouped into one line."""
+    blocks: List[List[str]] = []
+    run: List[str] = []  # consecutive finished helpers
     running_shown = 0
     extra_running: List[Child] = []
     waiting: List[Child] = []
@@ -462,34 +518,44 @@ def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[str]
                 extra_running.append(k)
                 continue
             running_shown += 1
-            quoted += [_SPACER, f"{_CHILD_ICON[k.state]} **{k.label}**"]
-            under = _kid_step_lines(k) + _tool_lines(k, min(tool_cap, RECENT_TOOLS_MULTI))
-            stats = _stats_line(k.model, k.calls, k.started, k.ended, now)
-            if stats:
-                under.append(_italic(stats))
-            quoted += _indent(under)
+            if run:
+                blocks.append(run)
+                run = []
+            blocks.append(_kid_block(k, now, 0, min(tool_cap, RECENT_TOOLS_MULTI)))
         else:
-            line = f"{_CHILD_ICON[k.state]} **{k.label}**"
+            line = f"{FAILED_ICON + ' ' if k.state == FAILED else ''}**{k.label}** \u00b7 {k.state}"
             if k.summary:
                 line += " \u00b7 " + no_command_links(
                     _cut_word(k.summary.replace("*", ""), COMPACT_RESULT_CHARS)
                 )
-            quoted.append(line)
+            run.append(line)
+    if run:
+        blocks.append(run)
+    tail: List[str] = []
     if extra_running:
-        quoted.append(f"{ACTIVE_ICON} {len(extra_running)} more running: {_names(extra_running)}")
+        tail.append(f"more running: {_names(extra_running)}")
     if waiting:
-        quoted.append(f"{PENDING_ICON} {len(waiting)} waiting: {_names(waiting)}")
-    return quoted
+        tail.append(f"waiting: {_names(waiting)}")
+    if tail:
+        blocks.append(tail)
+    return blocks
 
 
-def _tool_lines(obj: Any, cap: int) -> List[str]:
-    """The helper's open tool(s) then its last finished ones, newest first."""
-    lines = [f"\U0001f527 {_italic(no_command_links(phrase))}" for _, _, phrase in reversed(obj.open)]
-    lines += [
-        f"{_TOOL_OK if ok else _TOOL_ERR} {_italic(no_command_links(phrase))}"
-        for phrase, ok in reversed(obj.recent)
-    ]
-    return [ln for ln in lines if _italic("x") and ln.strip()][:cap]
+def _tool_lines(obj: Any, cap: int, phrase_max: int = TOOL_PHRASE_MULTI) -> List[str]:
+    """``*now: ...*`` for the open tool, then ``*before: ...*`` for the last
+    finished ones (newest first).  Each phrase is cut so the line fits a row."""
+    def line(label: str, phrase: str, failed: bool = False) -> str:
+        suffix = " (failed)" if failed else ""
+        # A shell command reads on its own: "now: pytest -q", not "now: terminal pytest -q".
+        phrase = phrase[len("terminal "):] if phrase.startswith("terminal ") else phrase
+        text = short_tool_phrase(phrase, max(8, phrase_max - len(suffix)))
+        return _italic(f"{label}: {text}{suffix}")
+
+    lines: List[str] = []
+    if obj.open:
+        lines.append(line("now", obj.open[-1][2]))
+    lines += [line("before", phrase, not ok) for phrase, ok in reversed(obj.recent)]
+    return [ln for ln in lines if ln][:cap]
 
 
 def _after_icon(header: str) -> str:
