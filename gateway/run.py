@@ -14953,6 +14953,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # idle case where the subagent finishes with no agent turn running.
         self._spawn_supervised(self._async_delegation_watcher, "async_delegation_watcher")
 
+        # Start again the background subagents the previous process was
+        # running when it went down (once each; see gateway.delegation_resume).
+        self._spawn_supervised(
+            self._resume_interrupted_delegations, "delegation_resume", restart=False,
+        )
+
         # Start background /loop wakeup watcher — scans persisted loops
         # (SessionDB loop:* rows) and injects due wakeup prompts into their
         # originating chats while the session is idle.
@@ -16787,6 +16793,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     logger.debug("mark_running_jobs_interrupted (%s) error: %s", phase, _e)
                 try:
                     from tools.async_delegation import interrupt_all as _interrupt_async
+                    # The children cut off here are not "interrupted" results
+                    # to report: the next start runs them again
+                    # (gateway.delegation_resume).
+                    from tools import delegation_inflight as _inflight
+
+                    _inflight.begin_shutdown_hold()
                     _async_n = _interrupt_async(reason=f"gateway shutdown ({phase})")
                     if _async_n:
                         logger.info(
@@ -29266,6 +29278,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     for evt, _claim_id in siblings:
                         _pr.completion_queue.put(evt)
         return delivered
+
+    async def _resume_interrupted_delegations(self) -> None:
+        """Start again the subagents a gateway restart cut off (best-effort)."""
+        await asyncio.sleep(5)  # let the platforms finish connecting
+        try:
+            from tools import delegation_inflight
+            from gateway.delegation_resume import resume_interrupted
+
+            delegation_inflight.end_shutdown_hold()
+            await resume_interrupted(self)
+        except Exception:
+            logger.warning("Resuming interrupted subagents failed", exc_info=True)
 
     async def _async_delegation_watcher(self, interval: float = 2.0) -> None:
         """Drain async-delegation completions and inject them as new turns.

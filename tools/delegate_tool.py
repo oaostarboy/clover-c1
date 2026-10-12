@@ -3235,6 +3235,15 @@ def _run_single_child(
                 local_backend=subagent_worktree.local_backend_active(),
             )
             if _worktree_info is not None:
+                try:
+                    from tools import delegation_inflight as _inflight
+
+                    _inflight.note_worktree(
+                        getattr(child, "_delegation_id", None), task_index,
+                        _worktree_info.get("path", ""),
+                    )
+                except Exception:
+                    pass
                 from tools.terminal_tool import record_session_cwd as _rsc
 
                 try:
@@ -4355,6 +4364,72 @@ def _background_dispatch_note(n: int, joined: bool = False) -> str:
     )
 
 
+def _record_inflight_dispatch(
+    delegation_id: str,
+    *,
+    task_list: List[Dict[str, Any]],
+    context: Optional[str],
+    role: Optional[str],
+    model: Optional[str],
+    session_key: str,
+    parent_session_id: Optional[str],
+    origin_session_id: str,
+    handoff: Any,
+    live_paths: Any,
+    child_agents: Any,
+    fanout_delivery: str,
+) -> None:
+    """Persist the spec of a background dispatch of a gateway chat, so a
+    gateway restart can start it again (``tools.delegation_inflight``).
+    Best-effort: never blocks or fails the dispatch."""
+    try:
+        from tools import delegation_inflight
+        from tools.async_delegation import _capture_routing_origin
+
+        origin = _capture_routing_origin()
+        if not origin.get("origin_platform"):
+            return  # not a gateway chat: nothing would restart it
+        tasks = []
+        for i, t in enumerate(task_list):
+            tasks.append({
+                "goal": t.get("goal"),
+                "context": t.get("context"),
+                "title": t.get("title"),
+                "steps": t.get("steps"),
+                "tier": t.get("tier"),
+                "role": t.get("role"),
+                "output_schema": t.get("output_schema"),
+                "child_session_id": getattr(
+                    child_agents[i] if i < len(child_agents) else None, "session_id", None
+                ),
+            })
+        delegation_inflight.write_dispatch_record(
+            delegation_id,
+            tasks=tasks,
+            session_key=session_key,
+            parent_session_id=parent_session_id,
+            origin=origin,
+            top_context=context,
+            top_role=role,
+            model=model,
+            handoff=handoff if isinstance(handoff, dict) else None,
+            live_paths=list(live_paths or []),
+            fanout_delivery=fanout_delivery,
+            origin_session_id=origin_session_id or "",
+        )
+    except Exception:
+        logger.debug("could not record the inflight dispatch", exc_info=True)
+
+
+def _drop_inflight_record(delegation_id: str) -> None:
+    try:
+        from tools import delegation_inflight
+
+        delegation_inflight.remove_record(delegation_id)
+    except Exception:
+        pass
+
+
 def delegate_task(
     goal: Optional[str] = None,
     context: Optional[str] = None,
@@ -4373,6 +4448,7 @@ def delegate_task(
     parent_task_id: Optional[str] = None,
     apply_default_tier: bool = True,
     reserved_delegation_id: Optional[str] = None,
+    require_background: bool = False,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks, or control
@@ -4651,7 +4727,7 @@ def delegate_task(
     # accepted (capacity, persistence, scheduling, construction) is an error
     # the model sees, never an inline wait past the limit.
     _strict_background = bool(background) and (
-        _checkpoint_applies(parent_agent) or _fg_limited
+        _checkpoint_applies(parent_agent) or _fg_limited or require_background
     )
 
     def _reject_background(reason: str, error: str, built=()) -> str:
@@ -4716,7 +4792,7 @@ def delegate_task(
     # Several helpers: each task may carry its own steps (tasks[i].steps),
     # which seed and drive that helper's own checklist on the card.
     _task_steps: List[tuple] = [()] * len(task_list)
-    if n_tasks > 1:
+    if n_tasks >= 1:
         try:
             from agent.ack_checklist import clean_steps
 
@@ -4890,6 +4966,22 @@ def delegate_task(
             except Exception as e:
                 logger.debug("Progress callback queued relay failed: %s", e)
 
+    def _open_foreground_card() -> None:
+        """A foreground dispatch gets the unified card too (never the 🔀
+        roster): titled from the tasks, no opener.  Top-level agents in a chat
+        only; best-effort."""
+        try:
+            if getattr(parent_agent, "_delegate_depth", 0) > 0 or not live_deleg_id:
+                return
+            _fg_limit.open_headless_card(
+                live_deleg_id, [t["goal"] for t in task_list],
+                titles=[t.get("title") for t in task_list],
+                steps=_task_steps[0] if n_tasks == 1 else (),
+                child_steps=list(_task_steps) if n_tasks > 1 else (),
+            )
+        except Exception:
+            logger.debug("foreground helper card unavailable", exc_info=True)
+
     def _execute_and_aggregate(
         *,
         honor_parent_interrupt: bool = True,
@@ -4912,6 +5004,8 @@ def delegate_task(
         # Only foreground/inline callers hand the ticket to the real child
         # runner, which spends it when the child conversation actually starts.
         _start_ticket = _checkpoint_ticket if credit_inline_start else None
+        if credit_inline_start:
+            _open_foreground_card()
         if n_tasks == 1:
             # Single task -- run directly (no thread pool overhead)
             _i, _t, child = children[0]
@@ -5307,6 +5401,20 @@ def delegate_task(
         # this delegation first, so their first events never get a separate
         # 🔀 roster card (note_own_dispatch opens the real part afterwards).
         _fg_limit.reserve_ack_part(_batch_delegation_id, handoff, _goals)
+        _record_inflight_dispatch(
+            _batch_delegation_id,
+            task_list=task_list,
+            context=context,
+            role=top_role,
+            model=creds.get("model"),
+            session_key=_session_key,
+            parent_session_id=_parent_session_id,
+            origin_session_id=_wake_sid,
+            handoff=handoff,
+            live_paths=live_paths,
+            child_agents=_child_agents,
+            fanout_delivery=_fanout_mode,
+        )
         try:
             dispatch = dispatch_async_delegation_batch(
                 goals=_goals,
@@ -5336,9 +5444,11 @@ def delegate_task(
             )
         except BaseException:
             _fg_limit.release_ack_part(_batch_delegation_id)
+            _drop_inflight_record(_batch_delegation_id)
             raise
         if dispatch.get("status") != "dispatched":
             _fg_limit.release_ack_part(_batch_delegation_id)
+            _drop_inflight_record(_batch_delegation_id)
 
         if dispatch.get("status") == "dispatched":
             # This instance made the dispatch: its own completion turn may earn
@@ -5354,6 +5464,8 @@ def delegate_task(
                 request_identity=dict(_admitted_identity),
                 handoff=handoff,
                 child_steps=list(_task_steps) if n_tasks > 1 else (),
+                titles=[t.get("title") for t in task_list],
+                task_steps=_task_steps[0] if n_tasks == 1 else (),
             )
             n = len(_goals)
             note = _background_dispatch_note(n, joined=_fanout_mode == "joined")

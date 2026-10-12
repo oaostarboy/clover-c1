@@ -115,13 +115,16 @@ async def test_publisher_still_posts_the_roster_card_under_classic():
 
 
 @pytest.mark.asyncio
-async def test_publisher_still_posts_for_a_delegation_without_a_unified_card():
-    # unified is on, but no ack part exists for this id (e.g. a plain
-    # delegate_task the router never dispatched): the roster card stays.
+async def test_a_delegation_without_a_card_gets_a_unified_card_never_the_roster():
+    # unified is on, but no ack part exists for this id (a nested helper, a
+    # dispatch path that skipped the card): the first event opens a plain
+    # titled unified card.  The 🔀 roster card is never posted.
     _card("some_other_id")
     adapter = FakeTelegramAdapter()
     pub = await _drive(adapter)
-    assert adapter.status_calls or adapter.sends
+    assert adapter.status_calls == [], "no 🔀 roster card"
+    assert adapter.sends, "the unified card was posted instead"
+    assert "Audit the gateway auth mixin" not in adapter.sends[0]["content"] or "**" in adapter.sends[0]["content"]
     await pub.aclose()
 
 
@@ -235,7 +238,7 @@ async def test_ticks_stop_when_the_helper_finishes(monkeypatch):
     await _settle(editor)
     edits_after_finish = len(adapter.edits)
     assert adapter.edits[-1]["finalize"] is True
-    assert adapter.edits[-1]["text"].splitlines()[0].startswith("\U0001f340 **fixing the bugs** \u00b7 done")
+    assert adapter.edits[-1]["text"].splitlines()[0].startswith("> \U0001f340 **fixing the bugs** \u00b7 done")
     await asyncio.sleep(0.3)
     assert len(adapter.edits) == edits_after_finish, "no edits after the final one"
     assert editor._ticking is False
@@ -293,8 +296,9 @@ async def test_multi_helper_events_edit_the_one_message_in_place():
                           summary="Plain summary: ok.")
     await _settle(editor)
     assert adapter.edits[-1]["finalize"] is True
-    assert adapter.edits[-1]["text"].startswith("\U0001f340 **fixing the bugs** \u00b7 2 done")
-    assert ">" not in adapter.edits[-1]["text"], "finished: one plain line, no quote"
+    assert adapter.edits[-1]["text"].splitlines() == [
+        "> \U0001f340 **fixing the bugs** \u00b7 done", "> *2 done \u00b7 \U0001f6e0 2 \u00b7 \u23f1 0s*"]
+    assert "**>" not in adapter.edits[-1]["text"], "finished: short blockquote, not expandable"
 
 
 @pytest.mark.asyncio
@@ -307,7 +311,8 @@ async def test_a_six_helper_edit_fits_the_telegram_limit():
                           summary="Plain summary: " + " ".join(["word"] * 70) + ".")
     await _settle(editor)
     sent = adapter.edits[-1]["text"]
-    assert len(sent) <= 4000 and sent.startswith("\U0001f340 **fixing the bugs** \u00b7 6 done") and "\n>" not in sent
+    assert len(sent) <= 4000 and sent.splitlines() == [
+        "> \U0001f340 **fixing the bugs** \u00b7 done", "> *6 done*"]
 
 
 @pytest.mark.asyncio
@@ -391,9 +396,13 @@ async def test_a_roster_card_already_posted_is_removed_once_the_delegation_is_ow
     pub = _make_publisher(adapter)
     runner = _turn_runner(pub)
     cb = _child_cb(runner, delegation_id=OWNED)
+    # (unified mode itself never posts a roster card any more; a style switched
+    # mid-run is the way left to have one up before the unified card owns the id)
+    ac.set_style_for_tests("classic")
     cb("subagent.start", preview="Read the Windows check result")
     await pub.drain()
     assert adapter.status_calls, "precondition: the early 🔀 card was posted"
+    ac.set_style_for_tests("unified")
     posted = list(adapter.status_calls)
     # ownership arrives late (the old race)
     _card()
@@ -455,7 +464,8 @@ def test_telegram_finished_card_is_one_plain_line_without_a_quote_or_hint():
     ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed",
                       summary="Result: done\nPlain summary: All fixed.")
     text = _editor(_tg_adapter(), card)._render()
-    assert text.startswith("\U0001f340 **fixing the bugs** \u00b7 done") and "\n>" not in text
+    lines = text.splitlines()
+    assert lines[0] == "> \U0001f340 **fixing the bugs** \u00b7 done" and lines[1].startswith("> *") and len(lines) == 2
     assert "**>" not in text and "||" not in text and "tap to" not in text and "All fixed." not in text
 
 
@@ -598,8 +608,9 @@ async def test_the_finishing_edit_swaps_the_expandable_quote_for_one_plain_line(
     await _settle(editor)
     last = adapter.edits[-1]
     assert last["finalize"] is True and last["id"] == "m42", "an edit of the same message, formatted"
-    assert last["text"].startswith("\U0001f340 **fixing the bugs** \u00b7 done")
-    assert "**>" not in last["text"] and "||" not in last["text"] and "\n>" not in last["text"]
+    assert last["text"].startswith("> \U0001f340 **fixing the bugs** \u00b7 done")
+    assert "**>" not in last["text"] and "||" not in last["text"]
+    assert all(ln.startswith("> ") for ln in last["text"].splitlines()), "short blockquote: the bar stays"
     assert "tap to" not in last["text"] and "All fixed" not in last["text"]
     assert editor._closed and card.finished, "a finished card stops following the bottom"
     n = len(adapter.edits)

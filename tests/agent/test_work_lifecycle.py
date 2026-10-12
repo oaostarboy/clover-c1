@@ -29,7 +29,7 @@ import tools.async_delegation as ad
 from agent import foreground_time_limit as fl
 from agent.work_lifecycle import HANDBACK_CHECK_CALLS
 from tests.agent.test_foreground_verification_episode import (  # noqa: F401
-    INTERNAL, _clean_async_state, _defaults, _write_config, all_tool_text,
+    INTERNAL, _clean_async_state, _defaults, _write_config, all_tool_text, atomic_write_config,
     clock, completion_turn, make_agent, provider, text, tool,
 )
 
@@ -124,7 +124,7 @@ def config(tmp_path):
         path = get_clover_home() / 'config.yaml'
         data = yaml.safe_load(path.read_text())
         data['delegation']['fanout_delivery'] = fanout
-        path.write_text(yaml.safe_dump(data))
+        atomic_write_config(yaml.safe_dump(data))
 
     return write
 

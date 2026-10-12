@@ -2268,6 +2268,13 @@ DEFAULT_CONFIG = {
         # finishes later). The card shows "waiting on helper N" meanwhile.
         # 0 = never cut the wait short (only the stall monitor bounds it).
         "fanout_straggler_seconds": 300,
+        # A gateway restart kills the background subagents it was running. With
+        # this on (default), the next start runs each of them ONCE more -- same
+        # task, a note that it was interrupted, the same card -- and tells you
+        # only if one could not be started again (conversation gone, older than
+        # 6 hours, or cut off a second time). false = they stay stopped and the
+        # chat is told, as before.
+        "resume_after_restart": True,
         # When a subagent hits a dangerous-command approval prompt, the parent's
         # prompt_toolkit TUI owns stdin — a thread-local input() call from the
         # subagent worker would deadlock the parent UI. To avoid the deadlock,

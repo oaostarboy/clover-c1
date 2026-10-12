@@ -1608,6 +1608,9 @@ delegation:
   # fanout_straggler_seconds: 300             # joined mode: once all but one helper are done, wait at most this long for the
                                               # last one, then send the combined report with it marked incomplete (its result
                                               # follows once if it finishes later). 0 = never cut the wait short.
+  # resume_after_restart: true                # A gateway restart kills its background subagents. true (default): the next start
+                                              # runs each of them ONCE more (same task, told it was interrupted, same card) and
+                                              # only says something if one cannot be started again. false: they stay stopped.
   # subagent_auto_approve: false              # When a subagent hits a dangerous-command approval prompt, auto-deny (default: false)
                                               # or auto-approve "once" (true) instead of blocking on stdin.
                                               # The parent TUI owns stdin, so blocking would deadlock; non-interactive resolution is required.

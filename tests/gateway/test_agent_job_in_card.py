@@ -136,7 +136,7 @@ async def test_an_agent_job_alone_gets_its_own_unified_card():
     job.feed(_line({"type": "result", "result": "Plain summary: Locking is fine.", "is_error": False}))
     job.finish(0)
     assert cl.state == ac.DONE and cl.summary == "Locking is fine."
-    assert card.render().startswith("\U0001f340 **Audit cron locking** \u00b7 done") and card.finished
+    assert card.render().startswith("> \U0001f340 **Audit cron locking** \u00b7 done") and card.finished
     assert "Locking is fine." not in card.render(), "the result is already in the chat"
     await pub.aclose()
 
@@ -150,7 +150,7 @@ async def test_a_failed_agent_job_gets_the_failure_mark():
     card = list(da._ACK_EDITORS.values())[0].card
     text = card.render()
     assert card.parts[0].checklist.state == ac.FAILED
-    assert text.splitlines()[0] == "\U0001f342 **Audit cron locking** \u00b7 failed"
+    assert text.splitlines()[0] == "> \U0001f342 **Audit cron locking** \u00b7 failed"
     assert "exited with code 2" in text
     await pub.aclose()
 
@@ -165,7 +165,7 @@ async def test_a_failed_job_in_a_joined_card_keeps_the_failure_mark_on_its_name(
     text = first.render()
     assert "Audit cron locking" not in text, "the failed job left the running card"
     assert text.splitlines()[0] == "\U0001f500 **shipping the card**", "one part left: single layout"
-    assert first.part_liner(first.parts[1]).startswith("\U0001f342 **Audit cron locking** \u00b7 failed")
+    assert first.part_liner(first.parts[1]).startswith("> \U0001f342 **Audit cron locking** \u00b7 failed")
     await pub.aclose()
 
 
@@ -181,7 +181,7 @@ async def test_a_lifecycle_only_job_shows_running_then_done():
     job.finish(0)
     done = card.render()
     assert card.parts[0].checklist.state == ac.DONE and card.finished
-    assert done.startswith("\U0001f340 **Audit cron locking** \u00b7 done") and "*running*" not in done
+    assert done.startswith("> \U0001f340 **Audit cron locking** \u00b7 done") and "*running*" not in done
     await pub.aclose()
 
 
