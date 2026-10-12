@@ -57,6 +57,10 @@ MODES = ("direct", "single", "parallel", "staged")
 DEFAULT_TIMEOUT_SECONDS = 8.0
 DEFAULT_BACKSTOP_CALLS = 2
 DEFAULT_BACKSTOP_SECONDS = 60.0
+# A "direct" verdict that turns out long: after this many work calls or this
+# many seconds the next work call hands the rest to one helper.
+DEFAULT_DIRECT_BACKSTOP_CALLS = 25
+DEFAULT_DIRECT_BACKSTOP_SECONDS = 180.0
 # Hard ceiling on tasks in one plan.  The live cap is
 # delegation.max_concurrent_children (passed to the router as ``max_tasks``).
 MAX_TASKS = 8
@@ -91,6 +95,12 @@ class RouterSettings:
     backstop_calls: int = DEFAULT_BACKSTOP_CALLS
     # ``None`` turns the time trigger off; the call-count trigger still applies.
     backstop_seconds: Optional[float] = DEFAULT_BACKSTOP_SECONDS
+    # ``delegation.router.direct_backstop``: the safety net for a "direct"
+    # verdict that was too small a guess.  ``False`` = a direct turn is never
+    # handed off by the runtime.  ``None`` seconds turns the time trigger off.
+    direct_backstop: bool = True
+    direct_backstop_calls: int = DEFAULT_DIRECT_BACKSTOP_CALLS
+    direct_backstop_seconds: Optional[float] = DEFAULT_DIRECT_BACKSTOP_SECONDS
 
 
 _TRUE = frozenset({"true", "1", "yes", "on"})
@@ -146,11 +156,32 @@ def load_settings() -> RouterSettings:
             seconds = normalize_limit_seconds(raw["backstop_seconds"])
             if seconds is None and raw["backstop_seconds"] is True:
                 seconds = DEFAULT_BACKSTOP_SECONDS  # a bare YAML ``true`` is not "off"
+        direct = raw.get("direct_backstop")
+        if not isinstance(direct, dict):
+            # A bare ``direct_backstop: false`` switches it off; anything
+            # else that is not a mapping keeps the defaults.
+            direct = {"enabled": direct} if isinstance(direct, bool) else {}
+        direct_seconds: Optional[float] = DEFAULT_DIRECT_BACKSTOP_SECONDS
+        if "seconds" in direct:
+            from agent.foreground_time_limit import normalize_limit_seconds
+
+            raw_seconds = direct["seconds"]
+            direct_seconds = normalize_limit_seconds(raw_seconds)
+            # Only an explicit null / 0 / false turns the time trigger off;
+            # a typo keeps the safety net.
+            if direct_seconds is None and raw_seconds not in (None, 0, False, "") \
+                    or raw_seconds is True:
+                direct_seconds = DEFAULT_DIRECT_BACKSTOP_SECONDS
         return RouterSettings(
             enabled=_bool(raw.get("enabled"), True),
             timeout_seconds=_positive_float(raw.get("timeout_seconds"), DEFAULT_TIMEOUT_SECONDS),
             backstop_calls=_positive_int(raw.get("backstop_calls"), DEFAULT_BACKSTOP_CALLS),
             backstop_seconds=seconds,
+            direct_backstop=_bool(direct.get("enabled"), True),
+            direct_backstop_calls=_positive_int(
+                direct.get("work_calls"), DEFAULT_DIRECT_BACKSTOP_CALLS
+            ),
+            direct_backstop_seconds=direct_seconds,
         )
     except Exception:
         logger.debug("delegation router settings unreadable; using defaults", exc_info=True)
@@ -753,7 +784,7 @@ def work_plan_note(verdict: Verdict) -> str:
     because = f" ({reason})" if reason else ""
     head = f"{RUNTIME_NOTE_MARKER} work plan:"
     if verdict.mode == "direct":
-        return f"{head} direct{because}. Do this yourself in this chat; no helpers are needed."
+        return f"{head} direct{because}. Handle it here."
     close = "then end your turn with one short line saying what is running"
     if verdict.mode == "single":
         return "\n".join([
@@ -862,8 +893,9 @@ def plan_for_turn(
         }, sort_keys=True))
         if verdict is None:
             return ""
-        if verdict.mode != "direct":
-            router_backstop.begin(agent, verdict, user_message, settings)
+        # A direct verdict arms the safety net too (``direct_backstop``), unless
+        # the user asked for it to be done directly: that is never overridden.
+        router_backstop.begin(agent, verdict, user_message, settings)
         return work_plan_note(verdict)
     except Exception:
         logger.debug("delegation router failed", exc_info=True)
