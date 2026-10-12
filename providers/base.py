@@ -98,6 +98,10 @@ class ProviderProfile:
         ""  # cheap model for auxiliary tasks (compression, vision, etc.)
     )
     # empty = use main model
+    # Explicit small/fast chat model for latency-critical side calls (the
+    # delegation router, session titles). Checked FIRST by the fast-model
+    # ladder (agent.aux_fast_model); empty = discover one from the live catalog.
+    fast_aux_model: str = ""
 
     # ── Hooks (override in subclass for complex providers) ───
 

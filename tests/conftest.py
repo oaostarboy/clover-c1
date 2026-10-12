@@ -1893,6 +1893,32 @@ def _stub_delegation_router(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_live_fast_model_discovery(request, monkeypatch):
+    """Latency-critical aux tasks (titles, the delegation router) default to a
+    small fast model, whose discovery reads the provider's live ``/v1/models``
+    catalog (and may start a speed-probe thread). A unit test must never reach
+    the network for that, and a test of some other behaviour must keep seeing
+    the main model it configured. Tests of the fast-model ladder itself opt out
+    with ``@pytest.mark.real_fast_model`` and patch their own catalog.
+    """
+    if request.node.get_closest_marker("real_fast_model"):
+        yield
+        return
+    try:
+        import agent.auxiliary_client as _ac
+        from agent.aux_fast_model import FastPick
+    except Exception:
+        yield
+        return
+
+    def _main(task, provider, model, base_url="", api_key="", *, allow_probe=True):
+        return FastPick(provider, model, "main")
+
+    monkeypatch.setattr(_ac, "_resolve_fast_pick", _main)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _reset_delegation_card_registries():
     """Per-chat card registries (live publishers, boards, last outbound id)
     are module globals keyed by id(adapter); a recycled id from an earlier

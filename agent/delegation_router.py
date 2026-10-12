@@ -85,6 +85,15 @@ HEDGE_AFTER_SECONDS = 3.5
 
 LOG_PREFIX = "delegation_router"
 
+# ── fast-model defaults (own block; config: delegation.router.*) ───────────
+# The router runs on a small fast model whenever one exists (see
+# agent.auxiliary_client._resolve_fast_pick).  When it ends up on the user's big
+# main model instead, a slow call is normal (median ~3.9 s on gpt-6.1-sol, 3 of
+# ~40 calls over 8 s), so it gets a longer wait and a later hedge.
+DEFAULT_SLOW_MODEL_TIMEOUT_SECONDS = 20.0
+SLOW_HEDGE_AFTER_SECONDS = 10.0
+DEFAULT_SKIP_SMALL_TALK = True
+
 
 # ── settings (config.yaml: delegation.router) ──────────────────────────────
 
@@ -188,23 +197,66 @@ def load_settings() -> RouterSettings:
         return RouterSettings()
 
 
-def calibration_v2_enabled() -> bool:
-    """``delegation.router.calibration_v2`` (default true): the v2 sizing
-    rubric and the wider override wording.  False restores the earlier rubric
-    byte for byte.  A separate reader on purpose: it does not touch
-    :class:`RouterSettings`."""
+def _router_config() -> Dict[str, Any]:
+    """The raw ``delegation.router`` mapping ({} when absent or unreadable)."""
     if os.environ.get("CLOVER_IGNORE_USER_CONFIG") == "1":
-        return True
+        return {}
     try:
         from clover_cli.config import load_config_readonly
 
         delegation = (load_config_readonly() or {}).get("delegation")
         raw = delegation.get("router") if isinstance(delegation, dict) else None
-        if not isinstance(raw, dict):
-            return True
-        return _bool(raw.get("calibration_v2"), True)
+        return raw if isinstance(raw, dict) else {}
     except Exception:
-        return True
+        return {}
+
+
+def calibration_v2_enabled() -> bool:
+    """``delegation.router.calibration_v2`` (default true): the v2 sizing
+    rubric and the wider override wording.  False restores the earlier rubric
+    byte for byte.  A separate reader on purpose: it does not touch
+    :class:`RouterSettings`.  Unreadable config / ``CLOVER_IGNORE_USER_CONFIG=1``
+    -> the default (true)."""
+    return _bool(_router_config().get("calibration_v2"), True)
+
+
+def slow_model_timeout_seconds() -> float:
+    """``delegation.router.slow_model_timeout_seconds`` (default 20): the wait
+    when the router runs on the main model because no small one exists."""
+    return _positive_float(
+        _router_config().get("slow_model_timeout_seconds"), DEFAULT_SLOW_MODEL_TIMEOUT_SECONDS,
+    )
+
+
+def skip_small_talk_enabled() -> bool:
+    """``delegation.router.skip_small_talk`` (default true)."""
+    return _bool(_router_config().get("skip_small_talk"), DEFAULT_SKIP_SMALL_TALK)
+
+
+def _model_route() -> Optional[Dict[str, Any]]:
+    """What the router's auxiliary task will run on, from the memo only (no
+    network).  ``None`` when not resolved yet."""
+    try:
+        from agent import auxiliary_client
+
+        return auxiliary_client.describe_fast_route(AUX_TASK, allow_network=False)
+    except Exception:
+        logger.debug("router model route unknown", exc_info=True)
+        return None
+
+
+def effective_timeout(settings: "RouterSettings") -> Tuple[float, str, Optional[Dict[str, Any]]]:
+    """``(seconds, label, route)``: the sizing wait and which rule set it.
+
+    ``label`` is ``"fast"`` for the normal wait, ``"slow_model"`` when the
+    router sits on a big main model (the longer wait applies), ``"configured"``
+    when the user set a longer ``timeout_seconds`` than the slow-model wait.
+    """
+    route = _model_route()
+    if route and route.get("slow"):
+        seconds = max(settings.timeout_seconds, slow_model_timeout_seconds())
+        return seconds, ("slow_model" if seconds > settings.timeout_seconds else "configured"), route
+    return settings.timeout_seconds, "fast", route
 
 
 # ── the plan ───────────────────────────────────────────────────────────────
@@ -656,7 +708,9 @@ def _reply_text(response: Any) -> str:
     return content if isinstance(content, str) else ""
 
 
-def _call_model(messages: List[Dict[str, str]], timeout: float) -> str:
+def _call_model(
+    messages: List[Dict[str, str]], timeout: float, hedge_after: Optional[float] = None,
+) -> str:
     """One router completion, abandoned (not waited for) past ``timeout``.
 
     A call still silent after ``HEDGE_AFTER_SECONDS`` gets one identical twin
@@ -687,7 +741,9 @@ def _call_model(messages: List[Dict[str, str]], timeout: float) -> str:
 
     started = time.monotonic()
     deadline = started + timeout
-    hedge_at: Optional[float] = started + HEDGE_AFTER_SECONDS
+    hedge_at: Optional[float] = started + (
+        HEDGE_AFTER_SECONDS if hedge_after is None else hedge_after
+    )
     if hedge_at >= deadline - _MIN_RETRY_SECONDS:
         hedge_at = None  # too little left for a second call to help
     launched = 1
@@ -734,7 +790,8 @@ def _route_detail(
     """``(verdict | None, stats)``; ``stats`` always says what happened."""
     settings = settings or load_settings()
     stats: Dict[str, Any] = {"attempts": 0, "latency_ms": 0, "ok": False, "source": None,
-                             "error": None}
+                             "error": None, "timeout_seconds": settings.timeout_seconds,
+                             "timeout_rule": "fast", "model": None}
     started = time.monotonic()
 
     def _finish(verdict: Optional[Verdict]) -> Tuple[Optional[Verdict], Dict[str, Any]]:
@@ -755,7 +812,19 @@ def _route_detail(
 
     cap = max(1, min(MAX_TASKS, max_tasks if max_tasks else _max_tasks_from_config()))
     messages = _build_messages(message, recent_turns, cap)
-    deadline = started + settings.timeout_seconds
+    wait, wait_rule, route = effective_timeout(settings)
+    hedge_after = SLOW_HEDGE_AFTER_SECONDS if wait_rule == "slow_model" else None
+    stats["timeout_seconds"] = wait
+    stats["timeout_rule"] = wait_rule
+    stats["model"] = (
+        f"{route['provider']}/{route['model']} ({route['how']})" if route else None
+    )
+    if wait_rule == "slow_model":
+        logger.info(
+            "%s: main model %s (no small model available); waiting up to %.0fs instead of %.0fs",
+            LOG_PREFIX, stats["model"], wait, settings.timeout_seconds,
+        )
+    deadline = started + wait
     verdict: Optional[Verdict] = None
     for attempt in (1, 2):
         remaining = deadline - time.monotonic()
@@ -763,7 +832,9 @@ def _route_detail(
             break
         try:
             stats["attempts"] = attempt
-            raw = _call_model(messages, max(0.05, remaining))
+            call_timeout = max(0.05, remaining)
+            raw = (_call_model(messages, call_timeout) if hedge_after is None
+                   else _call_model(messages, call_timeout, hedge_after))
         except Exception as exc:  # provider error or deadline: never retried
             stats["error"] = f"{type(exc).__name__}: {exc}"[:200]
             break
@@ -822,6 +893,15 @@ def skip_reason(
         return "not_text"
     if not user_message.strip():
         return "blank"
+    # Free local pre-check: explicit small talk / acknowledgements never need
+    # sizing, so no model call (and no tokens) is spent on them.  A closed
+    # allow-list, never a length rule -- see agent.aux_fast_model.is_small_talk.
+    if skip_small_talk_enabled():
+        from agent.aux_fast_model import is_small_talk
+
+        # An explicit helper / do-it-yourself request is never small talk.
+        if is_small_talk(user_message) and explicit_override(user_message) is None:
+            return "small_talk"
     from agent import foreground_time_limit as fl
 
     # The same scope as the foreground time limit: root conversational agents
@@ -960,6 +1040,9 @@ def plan_for_turn(
             "session_id": getattr(agent, "session_id", None) or "",
             "mode": verdict.mode if verdict else None,
             "latency_ms": stats["latency_ms"],
+            "model": stats.get("model"),
+            "timeout_seconds": stats.get("timeout_seconds"),
+            "timeout_rule": stats.get("timeout_rule"),
             "attempts": stats["attempts"],
             "source": stats["source"],
             "tasks": len(verdict.tasks) if verdict else 0,
