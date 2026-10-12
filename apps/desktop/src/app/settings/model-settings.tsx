@@ -118,6 +118,10 @@ const AUX_TASKS: readonly AuxTaskMeta[] = [
   { key: 'curator' }
 ]
 
+// Latency-critical side tasks: `auto` resolves to the provider's small fast
+// model (auxiliary.<task>.prefer_fast_model, default on), not the main model.
+const FAST_MODEL_TASKS: ReadonlySet<string> = new Set(['title_generation', 'delegation_router'])
+
 const NO_PROVIDERS: readonly ModelOptionProvider[] = [{ name: '—', slug: '', models: [] }]
 
 // Radix <Select> renders a blank trigger when `value` matches no <SelectItem>.
@@ -1016,7 +1020,7 @@ export function ModelSettings({ onMainModelChanged, scopeProfile }: ModelSetting
                   }
                   description={
                     <span className="font-mono text-[0.68rem]">
-                      {isAuto ? m.autoUseMain : `${current.provider} · ${current.model || m.providerDefault}`}
+                      {isAuto ? (FAST_MODEL_TASKS.has(meta.key) ? m.autoFastModel : m.autoUseMain) : `${current.provider} · ${current.model || m.providerDefault}`}
                     </span>
                   }
                   title={

@@ -59,6 +59,17 @@ def _warm() -> None:
         discover_plugins()  # idempotent; joins an in-flight background scan
     except Exception:
         logger.debug("router prewarm: plugin discovery unavailable", exc_info=True)
+    try:
+        # Resolve which small model the router (and titles) will use, so the
+        # first routed turn neither pays the catalog fetch nor guesses its
+        # wait.  A catalog read at most; the speed probe, if any, runs in its
+        # own background thread.
+        from agent import auxiliary_client
+
+        for task in ("delegation_router", "title_generation"):
+            auxiliary_client.prime_fast_route(task)
+    except Exception:
+        logger.debug("router prewarm: fast-model route unavailable", exc_info=True)
 
 
 def start(agent: Any = None) -> bool:

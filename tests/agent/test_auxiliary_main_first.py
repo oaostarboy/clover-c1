@@ -5,7 +5,9 @@ through a cheap provider-side default (Gemini Flash) while other users
 got their main model. This made behavior inconsistent and surprising.
 
 The current policy: ``auto`` means "use my main chat model" for every user,
-regardless of provider type.  Explicit per-task overrides in ``config.yaml``
+regardless of provider type -- except the two latency-critical side tasks
+(titles, the delegation router), which default to a small fast model
+(``prefer_fast_model: false`` restores the main model).  Explicit per-task overrides in ``config.yaml``
 (``auxiliary.<task>.provider``) still win.  The cheap fallback chain only
 runs when the main provider has no working client.
 """
@@ -13,6 +15,8 @@ runs when the main provider has no working client.
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 
@@ -22,14 +26,14 @@ from unittest.mock import MagicMock, patch
 class TestResolveAutoMainFirst:
     """_resolve_auto() must prefer main provider + main model for every user."""
 
-    def test_title_generation_auto_honors_main_model(self):
-        """The default auto title route must not replace the selected main model."""
+    def test_title_generation_default_off_switch_keeps_main_model(self):
+        """prefer_fast_model: false is the documented rollback: main model."""
         main_model = "deepseek-v4-flash-free"
         mock_client = MagicMock()
 
         with patch(
-            "agent.auxiliary_client._get_aux_model_for_provider",
-            return_value="gemini-3-flash",
+            "agent.auxiliary_client._get_auxiliary_task_config",
+            return_value={"prefer_fast_model": False},
         ), patch(
             "agent.auxiliary_client.resolve_provider_client",
             return_value=(mock_client, main_model),
@@ -38,20 +42,16 @@ class TestResolveAutoMainFirst:
         ):
             from agent.auxiliary_client import _resolve_auto
 
-            client, model = _resolve_auto(
-                main_runtime={
-                    "provider": "opencode-zen",
-                    "model": main_model,
-                },
+            _resolve_auto(
+                main_runtime={"provider": "opencode-zen", "model": main_model},
                 task="title_generation",
             )
 
-        assert client is mock_client
-        assert model == main_model
         assert mock_resolve.call_args.args[:2] == ("opencode-zen", main_model)
 
-    def test_title_generation_can_opt_into_provider_fast_model(self):
-        """The latency optimization remains available as an explicit opt-in."""
+    @pytest.mark.real_fast_model
+    def test_title_generation_uses_provider_fast_model_by_default(self):
+        """Default ON: no config key at all still resolves the small model."""
         fast_model = "gemini-3-flash"
         mock_client = MagicMock()
 
@@ -60,9 +60,9 @@ class TestResolveAutoMainFirst:
 
         with patch(
             "agent.auxiliary_client._get_auxiliary_task_config",
-            return_value={"prefer_fast_model": True},
+            return_value={},
         ), patch(
-            "agent.auxiliary_client._get_aux_model_for_provider",
+            "agent.auxiliary_client._static_fast_model",
             return_value=fast_model,
         ), patch(
             "agent.auxiliary_client.resolve_provider_client",
@@ -75,7 +75,7 @@ class TestResolveAutoMainFirst:
             client, model = _resolve_auto(
                 main_runtime={
                     "provider": "opencode-zen",
-                    "model": "deepseek-v4-flash-free",
+                    "model": "deepseek-v4-pro",
                 },
                 task="title_generation",
             )

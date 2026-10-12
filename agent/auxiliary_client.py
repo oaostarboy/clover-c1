@@ -158,6 +158,7 @@ def aux_probe_mode():
     finally:
         _aux_probe_state.active = prev
 
+from agent import aux_fast_model
 from agent.credential_pool import load_pool
 from agent.model_metadata import (
     MINIMUM_CONTEXT_LENGTH,
@@ -898,72 +899,61 @@ def _compression_threshold_for_model(
 # than pinned as exact ids, because exact ids rot: a hardcoded
 # "google/gemini-3-flash" kept 404ing here once Clover dropped it upstream, and
 # every aux call paid a wasted round-trip before the retry net caught it.
-# Families outlive their version numbers, so a new mini/flash/haiku release is
+# Families outlive their version numbers, so a new luna/flash/haiku release is
 # picked up with no source edit.
 #
-# Rolling "-latest" aliases come first where a provider publishes them (Clover
-# serves ~openai/gpt-mini-latest, ~google/gemini-flash-latest, …): they are the
-# only ids that are structurally rot-proof.
-#
-# Order is measured, not guessed — p50 on a real titling prompt against the
-# Clover catalog: gpt-mini-latest 1.40s, claude-haiku-latest 1.55s,
-# gemini-flash-latest 2.13s, step-3.7-flash 7.84s, grok-4.1-fast 8.05s. So the
-# first family a provider actually serves is also the fastest it can offer.
-_FAST_MODEL_FAMILIES: tuple = (
-    "gpt-mini-latest",
-    "gpt-nano-latest",
-    "claude-haiku-latest",
-    "gemini-flash-latest",
-    "gpt-5.4-nano",
-    "gpt-5.4-mini",
-    "gpt-5-mini",
-    "haiku-4.5",
-    "gemini-3.6-flash",
-    "flash-lite",
-    "-nano",
-    "-mini",
-    "-flash",
-    "haiku",
-)
-
-# Substrings that disqualify an otherwise-matching id. Reasoning variants
-# ("o3-mini", "gpt-5.4-mini-thinking") think before answering, which is the
-# opposite of what a titler wants; ":batch" is an async queue, not a live
-# endpoint; embedding models ("all-minilm") match "-mini" but aren't chat
-# models at all; ":free" tiers are heavily rate-limited and measured slowest.
-# The modality suffixes are the same trap as the embedders — a provider names
-# its speech and image endpoints after the chat model they're paired with, so
-# "gpt-4o-mini-tts" satisfies the "-mini" rung and cannot answer a prompt.
-_FAST_MODEL_EXCLUDE: tuple = (
-    "thinking", "reason", "-r1", "minilm", ":batch", ":free",
-    "o1-", "o3-", "o4-", "codex", "audio", "-vl", "embed",
-    "-tts", "-transcribe", "-realtime", "-image", "-search-preview",
-)
+# The tables, the catalog / price pickers, the speed probe and the small-talk
+# allow-list live in ``agent.aux_fast_model``; the names below stay as aliases
+# for callers and tests that import them from here.
+_FAST_MODEL_FAMILIES: tuple = aux_fast_model.FAST_RUNGS
+_FAST_MODEL_EXCLUDE: tuple = aux_fast_model.FAST_EXCLUDE
+_VERSION_CHUNK_RE = aux_fast_model._VERSION_CHUNK_RE
+_model_recency_key = aux_fast_model.recency_key
 
 
-_VERSION_CHUNK_RE = re.compile(r"(\d+(?:\.\d+)?)")
+def _load_fast_catalog(
+    provider_id: str, base_url: str = "", api_key: str = ""
+) -> Dict[str, Any]:
+    """The provider's live (cached) ``/v1/models`` catalog, ``{id: pricing}``.
 
-
-def _model_recency_key(model_id: str) -> tuple:
-    """Sort key that puts a family's newest release first (descending).
-
-    The rungs at the bottom of ``_FAST_MODEL_FAMILIES`` are bare family names —
-    ``-mini``, ``-flash``, ``haiku`` — and a provider serves every generation of
-    those it hasn't retired. Compared as plain strings, the oldest wins:
-    ``gpt-3.5-mini`` sorts before ``gpt-5.4-mini``, and ``claude-3-haiku`` before
-    ``claude-haiku-4.5``. So the rung meant to keep us current on a provider's
-    small tier was pinning us to its most obsolete member.
-
-    Splitting digit runs out and comparing them as numbers fixes both the
-    generation order and the 9-vs-10 cliff a string sort walks off.
+    ``base_url`` / ``api_key`` override the provider's own credentials for
+    endpoints that only exist in the live runtime (a ``custom`` provider such
+    as Kimi K3 behind its own URL). Never raises; ``{}`` when unavailable.
     """
-    chunks = []
-    for index, part in enumerate(_VERSION_CHUNK_RE.split(model_id.lower())):
-        if not part:
-            continue
-        # re.split with one capturing group alternates text, number, text, …
-        chunks.append((1, float(part), "") if index % 2 else (0, 0.0, part))
-    return tuple(chunks)
+    try:
+        from clover_cli.auth import resolve_api_key_provider_credentials
+        from clover_cli.models import fetch_models_with_pricing
+        from providers import get_provider_profile
+
+        # The provider's own credentials, because most ``/v1/models`` endpoints
+        # are authenticated: fetched anonymously they 401, and the caller reads
+        # that as "this provider serves no small model" and quietly falls back
+        # to the curated default forever.
+        key, url = str(api_key or "").strip(), str(base_url or "").strip()
+        if not key or not url:
+            try:
+                creds = resolve_api_key_provider_credentials(provider_id) or {}
+                key = key or str(creds.get("api_key", "")).strip()
+                url = url or str(creds.get("base_url", "")).strip()
+            except Exception:
+                # Not an API-key provider, or nothing configured yet. The anonymous
+                # fetch below still works for the catalogs that allow it.
+                logger.debug("No credentials for %s catalog", provider_id, exc_info=True)
+
+        if not url:
+            url = str(getattr(get_provider_profile(provider_id), "base_url", "") or "")
+        url = url.rstrip("/")
+        if not url:
+            return {}
+        # fetch_models_with_pricing appends its own /v1/models.
+        if url.endswith("/v1"):
+            url = url[:-3]
+        return dict(fetch_models_with_pricing(
+            api_key=key or None, base_url=url, timeout=3.0
+        ) or {})
+    except Exception:
+        logger.debug("Fast-model catalog lookup failed for %s", provider_id, exc_info=True)
+        return {}
 
 
 def _fast_model_from_catalog(provider_id: str) -> str:
@@ -976,47 +966,30 @@ def _fast_model_from_catalog(provider_id: str) -> str:
     network path — the underlying fetch is memory+disk cached with a
     last-known-good fallback.
     """
+    return aux_fast_model.pick_family(_load_fast_catalog(provider_id))
+
+
+def _static_fast_model(provider_id: str) -> str:
+    """The provider's EXPLICIT small model, no network: ``fast_aux_model`` on
+    its profile, or a built-in for profile-less providers (``openai``)."""
+    pid = str(provider_id or "").strip().lower()
     try:
-        from clover_cli.auth import resolve_api_key_provider_credentials
-        from clover_cli.models import fetch_models_with_pricing
         from providers import get_provider_profile
 
-        # The provider's own credentials, because most ``/v1/models`` endpoints
-        # are authenticated: fetched anonymously they 401, and the caller reads
-        # that as "this provider serves no small model" and quietly falls back
-        # to the curated default forever.
-        api_key, base_url = "", ""
-        try:
-            creds = resolve_api_key_provider_credentials(provider_id) or {}
-            api_key = str(creds.get("api_key", "")).strip()
-            base_url = str(creds.get("base_url", "")).strip()
-        except Exception:
-            # Not an API-key provider, or nothing configured yet. The anonymous
-            # fetch below still works for the catalogs that allow it.
-            logger.debug("No credentials for %s catalog", provider_id, exc_info=True)
-
-        if not base_url:
-            base_url = str(getattr(get_provider_profile(provider_id), "base_url", "") or "")
-        base_url = base_url.rstrip("/")
-        if not base_url:
-            return ""
-        # fetch_models_with_pricing appends its own /v1/models.
-        if base_url.endswith("/v1"):
-            base_url = base_url[:-3]
-        catalog = fetch_models_with_pricing(
-            api_key=api_key or None, base_url=base_url, timeout=3.0
-        ) or {}
+        profile = get_provider_profile(pid)
+        explicit = str(getattr(profile, "fast_aux_model", "") or "").strip()
+        if explicit:
+            return explicit
     except Exception:
-        logger.debug("Fast-model catalog lookup failed for %s", provider_id, exc_info=True)
-        return ""
+        logger.debug("fast_aux_model lookup failed for %s", pid, exc_info=True)
+    return aux_fast_model.STATIC_FAST_MODELS.get(pid, "")
 
-    ids = sorted((str(m) for m in catalog), key=_model_recency_key, reverse=True)
-    for family in _FAST_MODEL_FAMILIES:
-        for model_id in ids:
-            lowered = model_id.lower()
-            if family in lowered and not any(x in lowered for x in _FAST_MODEL_EXCLUDE):
-                return model_id
-    return ""
+
+def _curated_fast_model(provider_id: str) -> str:
+    """The curated ``default_aux_model`` when it is itself a small/fast family
+    (a provider whose default aux model is a big one does not qualify)."""
+    curated = _get_aux_model_for_provider(provider_id)
+    return curated if aux_fast_model.looks_fast(curated) else ""
 
 
 # Default auxiliary models for direct API-key providers (cheap/fast for side tasks)
@@ -1025,6 +998,8 @@ def _get_aux_model_for_provider(provider_id: str, *, prefer_fast: bool = False) 
 
     Resolution ladder, fastest-and-most-live first:
 
+    0. ``prefer_fast`` only — the provider profile's explicit
+       ``fast_aux_model`` (``gpt-6-luna`` on openai / openai-codex).
     1. ``prefer_fast`` only — a family match against the provider's LIVE
        ``/v1/models`` catalog, preferring rolling ``-latest`` aliases. This is
        both rot-proof and latency-ordered.
@@ -1035,9 +1010,10 @@ def _get_aux_model_for_provider(provider_id: str, *, prefer_fast: bool = False) 
     3. ``ProviderProfile.default_aux_model`` — curated, hardcoded, may rot.
     4. The legacy hardcoded dict, for providers predating the profiles system.
 
-    ``prefer_fast`` is opt-in so this only changes latency-critical tasks
-    (titling). Every other auxiliary caller keeps the existing static
-    behaviour and its cache keys.
+    ``prefer_fast`` is only passed for the latency-critical tasks in
+    ``_FAST_MODEL_TASKS`` (titling, the delegation router). Every other
+    auxiliary caller keeps the existing static behaviour and its cache keys.
+    The full ladder (cache, speed probe, borrowing) is ``_resolve_fast_pick``.
     """
     profile = None
     try:
@@ -1047,6 +1023,9 @@ def _get_aux_model_for_provider(provider_id: str, *, prefer_fast: bool = False) 
         pass
 
     if prefer_fast:
+        explicit = _static_fast_model(provider_id)
+        if explicit:
+            return explicit
         catalog_pick = _fast_model_from_catalog(provider_id)
         if catalog_pick:
             return catalog_pick
@@ -1092,19 +1071,354 @@ _API_KEY_PROVIDER_AUX_MODELS_FALLBACK: Dict[str, str] = {
 # can still use this dict directly. Kept in sync with _FALLBACK above.
 _API_KEY_PROVIDER_AUX_MODELS: Dict[str, str] = _API_KEY_PROVIDER_AUX_MODELS_FALLBACK
 
-# Auxiliary tasks that may opt into the provider's fast/cheap model instead of
-# the user's main chat model. The opt-in lives in
-# ``auxiliary.<task>.prefer_fast_model`` so the default ``auto = main model``
-# contract remains true on every settings surface.
+# Latency-critical auxiliary tasks that default to a small fast model instead of
+# the user's main chat model: both are tiny side calls (a JSON verdict, an
+# 8-token title) that a frontier reasoning model only makes slower.  This is the
+# one exception to "auto = main model".  Opt out per task with
+# ``auxiliary.<task>.prefer_fast_model: false``; pin a model with
+# ``auxiliary.<task>.provider`` / ``.model`` (an explicit pin always wins).
 _FAST_MODEL_TASKS: frozenset = frozenset({"title_generation", "delegation_router"})
 
 
 def _task_prefers_fast_model(task: Optional[str]) -> bool:
-    """Return whether an eligible task explicitly opts into fast-model routing."""
+    """Whether ``auto`` resolves this task to a small fast model.
+
+    True by default for the tasks in ``_FAST_MODEL_TASKS``.  False when the
+    user turned it off (``prefer_fast_model: false``) or pinned the task to an
+    explicit provider/model -- an explicit choice is never second-guessed.
+    """
     if task not in _FAST_MODEL_TASKS:
         return False
     task_config = _get_auxiliary_task_config(task)
-    return is_truthy_value(task_config.get("prefer_fast_model"), default=False)
+    if not is_truthy_value(task_config.get("prefer_fast_model"), default=True):
+        return False
+    for key in ("provider", "model"):
+        if str(task_config.get(key) or "").strip().lower() not in {"", "auto"}:
+            return False
+    return True
+
+
+# ── fast-model ladder (main provider) ───────────────────────────────────────
+
+_FAST_PICK_TTL_SECONDS = 600.0
+_FAST_PICK_MAIN_TTL_SECONDS = 30.0   # a "main" result is re-checked soon: a probe may have landed
+_fast_pick_memo: Dict[tuple, Tuple[float, "aux_fast_model.FastPick"]] = {}
+_fast_pick_logged: Dict[str, tuple] = {}
+_fast_pick_lock = threading.Lock()
+
+
+def _fast_main_identity(main_runtime: Optional[Dict[str, Any]] = None) -> Tuple[str, str, str, str]:
+    """``(provider, model, base_url, api_key)`` of the user's main route, as
+    ``_resolve_auto_route`` reads it."""
+    runtime = _normalize_main_runtime(main_runtime)
+    provider = str(runtime.get("provider") or _read_main_provider() or "").strip()
+    model = str(runtime.get("model") or _read_main_model() or "").strip()
+    api_key = runtime.get("api_key", "")
+    return (
+        provider,
+        model,
+        str(runtime.get("base_url") or "").strip(),
+        api_key if isinstance(api_key, str) else "",
+    )
+
+
+def _fast_memo_key(task: str, provider: str, model: str, base_url: str) -> tuple:
+    return (task, provider.lower(), model, base_url.rstrip("/"))
+
+
+def _peek_fast_pick(task: str, provider: str, model: str, base_url: str = ""):
+    """The memoised pick, or ``None``.  Never touches the network."""
+    with _fast_pick_lock:
+        entry = _fast_pick_memo.get(_fast_memo_key(task, provider, model, base_url))
+    if entry is None:
+        return None
+    stamped, pick = entry
+    ttl = _FAST_PICK_MAIN_TTL_SECONDS if pick.is_main else _FAST_PICK_TTL_SECONDS
+    return pick if time.monotonic() - stamped < ttl else None
+
+
+def reset_fast_pick_state() -> None:
+    """Forget memoised picks and the once-per-process log (tests, probe landed)."""
+    with _fast_pick_lock:
+        _fast_pick_memo.clear()
+        _fast_pick_logged.clear()
+    aux_fast_model.reset_probe_state()
+
+
+def _effective_fast_key(provider: str, base_url: str) -> str:
+    """Provider id for profile lookups: ``custom`` + api.openai.com is openai."""
+    pid = str(provider or "").strip().lower()
+    if pid == "custom" and base_url_host_matches(base_url or "", "api.openai.com"):
+        return "openai"
+    return pid
+
+
+def _fast_catalog_ids(
+    pid: str, base_url: str, api_key: str, catalog: Dict[str, Any]
+) -> List[str]:
+    """Model ids the provider serves: the priced catalog when it has one, else
+    the cached provider listing.  Never raises."""
+    if catalog:
+        return [str(m) for m in catalog]
+    try:
+        if pid == "custom" or pid.startswith("custom:"):
+            from clover_cli.models import cached_fetch_api_models
+
+            return list(cached_fetch_api_models(api_key or None, base_url or None, timeout=3.0) or [])
+        from clover_cli.models import cached_provider_model_ids
+
+        return list(cached_provider_model_ids(pid) or [])
+    except Exception:
+        logger.debug("fast-model listing failed for %s", pid, exc_info=True)
+        return []
+
+
+def _probe_call_factory(provider: str, base_url: str, api_key: str):
+    """Build the ``call(model) -> (reply, seconds)`` the speed probe times."""
+
+    def _call(model: str) -> Tuple[str, float]:
+        client, resolved = resolve_provider_client(
+            provider, model,
+            explicit_base_url=base_url or None, explicit_api_key=api_key or None,
+        )
+        if client is None:
+            raise RuntimeError(f"no client for {provider}")
+        kwargs = _build_call_kwargs(
+            provider, resolved or model, list(aux_fast_model.PROBE_MESSAGES),
+            temperature=0, max_tokens=aux_fast_model.PROBE_MAX_TOKENS,
+            timeout=aux_fast_model.PROBE_TIMEOUT_SECONDS, base_url=base_url or None,
+        )
+        started = time.monotonic()
+        response = client.chat.completions.create(**kwargs)
+        elapsed = time.monotonic() - started
+        content = response.choices[0].message.content
+        return (content if isinstance(content, str) else ""), elapsed
+
+    return _call
+
+
+def _borrow_fast_pick(task: str, main_provider: str):
+    """A fast model of ANOTHER provider the user already configured as a
+    fallback, with credentials that resolve without prompting; else ``None``.
+
+    Walks the task's ``fallback_chain`` then the main ``fallback_providers``
+    (the existing fallback-chain machinery), takes the first provider that has
+    a fast model and a client that builds.
+    """
+    entries: List[Dict[str, Any]] = []
+    try:
+        chain = _get_auxiliary_task_config(task).get("fallback_chain")
+        if isinstance(chain, list):
+            entries.extend(e for e in chain if isinstance(e, dict))
+    except Exception:
+        pass
+    try:
+        from clover_cli.config import load_config_readonly
+        from clover_cli.fallback_config import get_fallback_chain
+
+        entries.extend(get_fallback_chain(load_config_readonly()))
+    except Exception:
+        logger.debug("fast-model borrow: no fallback chain", exc_info=True)
+    main_norm = (main_provider or "").strip().lower()
+    seen: set = set()
+    for entry in entries:
+        prov = str(entry.get("provider") or "").strip()
+        norm = prov.lower()
+        if not prov or norm in seen or norm in {main_norm, "auto", "custom"} or norm.startswith("custom:"):
+            continue
+        seen.add(norm)
+        if _is_provider_unhealthy(norm):
+            continue
+        model = _static_fast_model(prov) or _curated_fast_model(prov)
+        if not model:
+            continue
+        try:
+            client, resolved = resolve_provider_client(prov, model=model)
+        except Exception:
+            logger.debug("fast-model borrow: %s did not resolve", prov, exc_info=True)
+            continue
+        if client is not None:
+            return aux_fast_model.FastPick(prov, resolved or model, "borrowed")
+    return None
+
+
+def _resolve_fast_pick(
+    task: str,
+    provider: str,
+    model: str,
+    base_url: str = "",
+    api_key: str = "",
+    *,
+    allow_probe: bool = True,
+):
+    """Walk the ladder for the main ``provider``/``model``; memoised.
+
+    See ``agent.aux_fast_model`` for the rungs.  Never raises: any failure
+    falls through to the next rung, ending at the main model.
+    """
+    main_pick = aux_fast_model.FastPick(provider, model, "main")
+    if not provider or not model or provider.lower() == "auto":
+        return main_pick
+    cached = _peek_fast_pick(task, provider, model, base_url)
+    if cached is not None:
+        return cached
+    try:
+        pick = _walk_fast_ladder(task, provider, model, base_url, api_key, allow_probe)
+    except Exception:
+        logger.debug("fast-model ladder failed for %s/%s", provider, model, exc_info=True)
+        pick = main_pick
+    with _fast_pick_lock:
+        _fast_pick_memo[_fast_memo_key(task, provider, model, base_url)] = (time.monotonic(), pick)
+    return pick
+
+
+def _walk_fast_ladder(task, provider, model, base_url, api_key, allow_probe):
+    FastPick = aux_fast_model.FastPick
+    main_pick = FastPick(provider, model, "main")
+    pid = _effective_fast_key(provider, base_url)
+
+    # 0. the main model already is a small fast one -- nothing to swap.
+    if aux_fast_model.looks_fast(model):
+        return FastPick(provider, model, "family")
+
+    # a) the provider profile's explicit fast model (no network).
+    explicit = _static_fast_model(pid)
+    if explicit:
+        return FastPick(provider, explicit, "profile")
+
+    # b) family match in the live catalog.
+    catalog = _load_fast_catalog(pid, base_url, api_key)
+    ids = _fast_catalog_ids(pid, base_url, api_key, catalog)
+    family = aux_fast_model.pick_family(ids)
+    if family:
+        return FastPick(provider, family, "family")
+
+    # the provider's curated fast default / its own live hook (profile).
+    curated = _curated_fast_model(pid)
+    if curated:
+        return FastPick(provider, curated, "profile")
+    try:
+        from providers import get_provider_profile
+
+        profile = get_provider_profile(pid)
+        live = profile.resolve_aux_model() if profile is not None else ""
+        if live and aux_fast_model.looks_fast(live):
+            return FastPick(provider, live, "profile")
+    except Exception:
+        logger.debug("resolve_aux_model failed for %s", pid, exc_info=True)
+
+    # c) price: the cheapest chat-capable model when the catalog is priced.
+    cheapest = aux_fast_model.pick_cheapest(catalog)
+    if cheapest:
+        return FastPick(provider, cheapest, "price")
+
+    # d) speed probe (background, never inline) -- unknown providers.
+    probe_key = base_url or str(getattr(_get_provider_profile_safe(pid), "base_url", "") or "")
+    cached_probe = aux_fast_model.cached_probe(pid, probe_key)
+    if cached_probe is not None:
+        if cached_probe.get("model"):
+            return FastPick(provider, str(cached_probe["model"]), "probe")
+    elif allow_probe and ids:
+        candidates = aux_fast_model.probe_candidates(ids)
+        if aux_fast_model.start_background_probe(
+            pid, probe_key,
+            lambda: candidates,
+            lambda: _probe_call_factory(provider, base_url, api_key),
+            on_done=reset_fast_pick_state_after_probe,
+        ):
+            logger.info(
+                "Auxiliary %s: probing %d candidate(s) on %s in the background; "
+                "using the main model until it lands",
+                task, len(candidates), provider,
+            )
+
+    # e) borrow another configured provider's fast model.
+    borrowed = _borrow_fast_pick(task, provider)
+    if borrowed is not None:
+        return borrowed
+
+    # f) the main model.
+    return main_pick
+
+
+def _get_provider_profile_safe(pid: str):
+    try:
+        from providers import get_provider_profile
+
+        return get_provider_profile(pid)
+    except Exception:
+        return None
+
+
+def reset_fast_pick_state_after_probe() -> None:
+    """A probe landed: drop memoised picks so the next call sees it."""
+    with _fast_pick_lock:
+        _fast_pick_memo.clear()
+
+
+def _log_fast_pick_once(task: str, pick) -> None:
+    token = (pick.provider, pick.model, pick.how)
+    with _fast_pick_lock:
+        if _fast_pick_logged.get(task) == token:
+            return
+        _fast_pick_logged[task] = token
+    logger.info(
+        "Auxiliary %s: fast model %s/%s (%s)", task, pick.provider, pick.model, pick.how,
+    )
+
+
+def describe_fast_route(
+    task: str, *, allow_network: bool = True, main_runtime: Optional[Dict[str, Any]] = None
+) -> Optional[Dict[str, Any]]:
+    """What ``auto`` will run ``task`` on, for callers that size a wait.
+
+    Returns ``{"provider", "model", "how", "slow"}`` where ``slow`` is True when
+    the task ends up on a big main model (no fast model exists), or ``None``
+    when that is not known yet (``allow_network=False`` and nothing memoised).
+    Never raises.
+    """
+    try:
+        provider, model, base_url, api_key = _fast_main_identity(main_runtime)
+        if not provider or not model or provider.lower() == "auto":
+            return {"provider": provider, "model": model, "how": "main", "slow": False}
+        if task in _FAST_MODEL_TASKS:
+            task_config = _get_auxiliary_task_config(task)
+            pinned = any(
+                str(task_config.get(k) or "").strip().lower() not in {"", "auto"}
+                for k in ("provider", "model")
+            )
+            if pinned:  # the user chose the model: their call, no extra wait
+                return {"provider": provider, "model": model, "how": "pinned", "slow": False}
+        if not _task_prefers_fast_model(task):
+            return {
+                "provider": provider, "model": model, "how": "main",
+                "slow": not aux_fast_model.looks_fast(model),
+            }
+        pick = _peek_fast_pick(task, provider, model, base_url)
+        if pick is None:
+            if not allow_network:
+                # No network on this path: only the explicit-profile rung (or a
+                # main model that is already small) can be answered from memory.
+                explicit = _static_fast_model(_effective_fast_key(provider, base_url))
+                if explicit:
+                    return {"provider": provider, "model": explicit, "how": "profile", "slow": False}
+                if aux_fast_model.looks_fast(model):
+                    return {"provider": provider, "model": model, "how": "family", "slow": False}
+                return None
+            pick = _resolve_fast_pick(task, provider, model, base_url, api_key)
+        return {
+            "provider": pick.provider, "model": pick.model, "how": pick.how,
+            "slow": pick.is_main and not aux_fast_model.looks_fast(pick.model),
+        }
+    except Exception:
+        logger.debug("describe_fast_route failed", exc_info=True)
+        return None
+
+
+def prime_fast_route(task: str) -> None:
+    """Resolve (and memoise) the fast route for ``task`` now -- called from a
+    background thread so the first user turn does not pay the catalog fetch."""
+    describe_fast_route(task, allow_network=True)
 
 
 # Vision-specific model overrides for direct providers.
@@ -5856,21 +6170,6 @@ def _resolve_auto_route(
     main_provider = str(runtime_provider or _read_main_provider() or "")
     main_model = str(runtime_model or _read_main_model() or "")
 
-    # Latency-critical tasks can explicitly prefer the provider's registered
-    # fast model over the main chat model. Titling is the only eligible task:
-    # it names a visible sidebar row, produces ~8 tokens, and running it on a
-    # frontier reasoning model costs seconds per new session. This remains an
-    # opt-in because every settings surface defines "auto" as using the main
-    # model; silently overriding that choice makes the selected model cosmetic.
-    if _task_prefers_fast_model(task) and main_provider and main_provider not in {"auto", ""}:
-        fast_model = _get_aux_model_for_provider(main_provider, prefer_fast=True)
-        if fast_model and fast_model != main_model:
-            logger.debug(
-                "Auxiliary task %s: preferring fast model %s over main model %s",
-                task, fast_model, main_model,
-            )
-            main_model = fast_model
-
     # MoA virtual provider: the "model" is a preset name (e.g. "opus-gpt") and
     # there is no real "moa" HTTP endpoint, so resolving an aux client against
     # provider="moa"/model=<preset> sends the preset name as the model id and
@@ -5891,6 +6190,29 @@ def _resolve_auto_route(
             runtime_base_url = ""
             runtime_api_key = ""
             runtime_api_mode = ""
+
+    # Latency-critical side tasks (titles, the delegation router) run on a small
+    # fast model by default -- see ``_resolve_fast_pick`` for the ladder and
+    # ``_FAST_MODEL_TASKS`` for the opt-out.  The pick is the same provider's
+    # small model (swap the model, keep the runtime/credentials), or a
+    # borrowed provider's, or the main model when no fast one exists.
+    if (_task_prefers_fast_model(task) and main_provider and main_model
+            and main_provider not in {"auto", ""}):
+        _pick = _resolve_fast_pick(
+            task, main_provider, main_model, runtime_base_url, runtime_api_key
+            if isinstance(runtime_api_key, str) else "",
+        )
+        _log_fast_pick_once(task, _pick)
+        if _pick.how == "borrowed":
+            _b_client, _b_model = resolve_provider_client(_pick.provider, _pick.model)
+            if _b_client is not None:
+                return _b_client, _b_model or _pick.model, _pick.provider
+        elif _pick.model and _pick.model != main_model:
+            logger.debug(
+                "Auxiliary task %s: preferring fast model %s over main model %s",
+                task, _pick.model, main_model,
+            )
+            main_model = _pick.model
 
     if (main_provider and main_model
             and main_provider not in {"auto", ""}):
@@ -7445,6 +7767,23 @@ def _runtime_cache_discriminator(field: str, value: Any) -> Any:
     return value
 
 
+def _fast_cache_token(task: Optional[str], runtime: Dict[str, Any]):
+    """Cache discriminator for ``auto`` clients of fast-model tasks.
+
+    ``False`` when the task does not prefer a fast model; otherwise the memoised
+    pick (``None`` until the first resolution), so a probe or a borrow that lands
+    later gets its own client instead of reusing the main-model one.
+    """
+    if not _task_prefers_fast_model(task):
+        return False
+    try:
+        provider, model, base, _key = _fast_main_identity(runtime)
+        pick = _peek_fast_pick(task, provider, model, base)
+    except Exception:
+        pick = None
+    return (True, (pick.provider, pick.model) if pick is not None else None)
+
+
 def _client_cache_key(
     provider: str,
     *,
@@ -7466,7 +7805,7 @@ def _client_cache_key(
     # so the task participates in the cache key. Non-auto providers keep the
     # old cache shape because the explicit provider/model tuple is sufficient.
     task_key = (
-        (task or "", _task_prefers_fast_model(task))
+        (task or "", _fast_cache_token(task, runtime))
         if provider == "auto"
         else ""
     )
@@ -8225,6 +8564,106 @@ def _effective_aux_timeout(task: str, timeout: Optional[float]) -> float:
     if timeout is None and task == "compression":
         effective = max(effective, _COMPRESSION_TIMEOUT_FLOOR_SECONDS)
     return effective
+
+
+ROUTER_DEFAULT_REASONING_EFFORT = "low"
+
+
+def _router_reasoning(
+    provider: str,
+    model: Optional[str],
+    extra_body: Dict[str, Any],
+    reasoning_config: Optional[dict],
+) -> Tuple[Optional[dict], Dict[str, Any]]:
+    """Reasoning for the delegation-router call: ``low`` unless the user chose.
+
+    Sizing a request (direct / single / staged / parallel) is a judgement call.
+    Live eval, gpt-6-luna: reasoning ``none`` sized a 3-part compare as a quick
+    answer 0/2; ``low`` scored 12/12 at p50 1.5 s.  So the default is ``low``
+    (``auxiliary.delegation_router.reasoning_effort`` overrides it, ``none``
+    included -- an explicit value is never second-guessed).  Per wire:
+
+    - openai-codex: Responses ``reasoning.effort = low``.
+    - gemini: ``thinkingLevel = low`` (3.x Flash rejects ``minimal``).
+    - anthropic: adaptive-thinking models get ``effort = low``; Haiku and the
+      manual-budget families are left exactly as they were (no thinking
+      budget is invented for a model that does not take one cheaply).
+    - openrouter / clover portal: ``extra_body.reasoning`` effort low.
+    - anything else: untouched -- an unknown OpenAI-compatible server may 400
+      on a reasoning field.
+    """
+    if reasoning_config is not None or "reasoning" in (extra_body or {}):
+        return reasoning_config, extra_body
+    effort = ROUTER_DEFAULT_REASONING_EFFORT
+    norm = _normalize_aux_provider(_fallback_provider_from_label(str(provider or "")))
+    if norm == "openai-codex":
+        return reasoning_config, {**extra_body, "reasoning": {"enabled": True, "effort": effort}}
+    if norm == "gemini":
+        bare = str(model or "").strip().lower().split("/")[-1]
+        if not bare.startswith("gemini"):
+            return reasoning_config, extra_body
+        return {"enabled": True, "effort": effort}, extra_body
+    if norm in {"openrouter", "clover"}:
+        return {"enabled": True, "effort": effort}, extra_body
+    if norm == "anthropic":
+        try:
+            from agent.anthropic_adapter import _supports_adaptive_thinking
+
+            name = str(model or "")
+            if name and "haiku" not in name.lower() and _supports_adaptive_thinking(name):
+                return {"enabled": True, "effort": effort}, extra_body
+        except Exception:
+            pass
+    return reasoning_config, extra_body
+
+
+def _small_call_reasoning(
+    task: Optional[str],
+    provider: str,
+    extra_body: Dict[str, Any],
+    reasoning_config: Optional[dict],
+    main_runtime: Optional[Dict[str, Any]] = None,
+    model: Optional[str] = None,
+) -> Tuple[Optional[dict], Dict[str, Any]]:
+    """Switch thinking off for a latency-critical call that landed on a fast model.
+
+    Title generation only.  The delegation router is handled by
+    :func:`_router_reasoning`: it needs a little thinking, not none.
+
+    OpenCode's ``small: true`` idea: a sizing verdict or a title gains nothing
+    from reasoning tokens, so the small call carries none.  Only where the wire
+    is known to take the control, and never over a caller's or the user's own
+    setting (``auxiliary.<task>.reasoning_effort`` / ``extra_body.reasoning``).
+    Returns ``(reasoning_config, extra_body)``.
+    """
+    if task == "delegation_router":
+        # The router is the one fast task that must NOT think less than "low":
+        # with reasoning off, gpt-6-luna sized a three-part compare as a quick
+        # answer (0/2); on "low" the same model scored 12/12.  It has its own
+        # per-provider default (``_router_reasoning``), pin or no pin.
+        return _router_reasoning(provider, model, extra_body, reasoning_config)
+    if (
+        task not in _FAST_MODEL_TASKS
+        or reasoning_config is not None
+        or "reasoning" in (extra_body or {})
+        or not _task_prefers_fast_model(task)
+    ):
+        return reasoning_config, extra_body
+    try:
+        main_provider, main_model, main_base, _key = _fast_main_identity(main_runtime)
+        pick = _peek_fast_pick(task, main_provider, main_model, main_base)
+        if pick is None or pick.is_main:
+            return reasoning_config, extra_body
+    except Exception:
+        return reasoning_config, extra_body
+    norm = _normalize_aux_provider(_fallback_provider_from_label(str(provider or "")))
+    if norm == "openai-codex":
+        # The Responses backend always thinks a little; ask for the least.
+        # (Luna has no "none" level, so "low" is the floor.)
+        return reasoning_config, {**extra_body, "reasoning": {"enabled": True, "effort": "low"}}
+    if norm in {"anthropic", "gemini", "openrouter", "clover"}:
+        return {"enabled": False}, extra_body
+    return reasoning_config, extra_body
 
 
 def _get_task_extra_body(task: str) -> Dict[str, Any]:
@@ -9449,6 +9888,10 @@ def _call_llm_impl(
 
     effective_timeout = _effective_aux_timeout(task, timeout)
     request_provider = effective_provider or resolved_provider
+    reasoning_config, effective_extra_body = _small_call_reasoning(
+        task, request_provider, effective_extra_body, reasoning_config,
+        main_runtime=main_runtime, model=final_model,
+    )
     compression_config = (
         _get_auxiliary_task_config("compression") if task == "compression" else {}
     )

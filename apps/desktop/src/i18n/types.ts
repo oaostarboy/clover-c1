@@ -914,6 +914,7 @@ export interface Translations {
       setToMain: string
       change: string
       autoUseMain: string
+      autoFastModel: string
       providerDefault: string
       fallbackAdd: string
       fallbackEmpty: string

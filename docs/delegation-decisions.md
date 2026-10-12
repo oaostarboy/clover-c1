@@ -69,7 +69,7 @@ deliver a helper's result later, with the limit on. It never runs for helper
 completions, multimodal messages, or a bare greeting / thank-you.
 
 - **Sizing.** Before the first model call of a human message, a fast auxiliary
-  model (`auxiliary.delegation_router`, preferring the provider's fast tier)
+  model (`auxiliary.delegation_router`: by default the provider's small fast model, e.g. `gpt-6-luna` on Codex, Haiku on Anthropic; `prefer_fast_model: false` or a pinned provider/model opts out)
   returns `{mode, tasks: [{goal, depends_on, acceptance}], reason}`. The reply
   is schema-validated and the mode is derived from the task DAG in code - no
   tasks is direct, one is single, several independent are parallel, any
@@ -117,15 +117,45 @@ delegation:
       enabled: true
       work_calls: 25
       seconds: 180
+    calibration_v2: true             # rubric v2 + wider override wording
+    slow_model_timeout_seconds: 20   # wait when only the big main model exists
+    skip_small_talk: true            # "thanks", "ok go", "lol": no router call
 auxiliary:
   delegation_router:
     provider: auto
     model: auto
+    prefer_fast_model: true          # false = always the main model
+    reasoning_effort: low            # default; none | minimal | low | medium | high
 ```
+
+When no small model exists for the main provider the router runs on the main
+model and waits `slow_model_timeout_seconds` (default 20) instead of
+`timeout_seconds` (8); the log says which applied. Pure small talk (an explicit
+allow-list, never a length rule) skips the router entirely.
+
+### Reasoning and the hand-off card
+
+The router thinks a little: `auxiliary.delegation_router.reasoning_effort`
+defaults to `low`. With reasoning off, `gpt-6-luna` sized a three-part compare
+(GPU options, PSU fit, prices) as a quick answer (0 of 2); on `low` the same
+model scored 12 of 12 at a 1.5 s median. Only title generation still runs with
+reasoning off. Per provider: Codex `reasoning.effort=low`; Gemini
+`thinkingLevel=low` (3.x Flash rejects `minimal`); Anthropic adaptive-thinking
+models `effort=low`, Haiku and manual-budget models are left as they were. An
+explicit `reasoning_effort` (or `extra_body.reasoning`) is never overridden.
+`ROUTER_MAX_TOKENS` is 1500 so thought tokens cannot cut off the JSON.
+
+When the backstop hands a turn to a helper, the chat card gets a title and goal
+built from the user's message and the router's own `reason` (no extra model
+call): `🔄 comparing 3 options for adding a second GPU → ...`. The title is at
+most 50 characters, the goal at most 60; the raw message is never pasted. The
+old "taking over the rest of your request" wording remains only when the
+message names nothing.
 
 ### Ship gate
 
-Run before changing the router prompt, or the router's model or reasoning setting. 30 cases from real use live in
+Run before changing the router prompt, the router's reasoning, or the shipped
+fast-model defaults. 30 cases from real use live in
 `tests/fixtures/router_eval/ship_gate.jsonl` (`expected_mode` may be a list
 where two modes are both defensible; `"gate": true` marks the cases that
 failed live). Copy a profile's `config.yaml` and `auth.json` into a temporary
