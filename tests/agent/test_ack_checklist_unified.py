@@ -513,7 +513,7 @@ def test_multi_card_shape_while_running():
         "> *before: read_file contact*")
     assert "> \u25a0 **Check the pizzeria bros pamphlet** \u00b7 waiting" in lines
     assert "waiting to start" not in "\n".join(lines)
-    assert lines[-1].startswith("> *3 subagents \u00b7 \U0001f6e0 13 calls \u00b7 ")
+    assert lines[-1].startswith("> *1 running \u00b7 1 waiting \u00b7 1 done \u00b7 \U0001f6e0 13 calls \u00b7 ")
     assert lines[-2] == f"> {SPACER}"
     assert "ignored" not in _flat(card.render())
 
@@ -635,7 +635,7 @@ def test_multi_footer_totals_and_a_summary_cut_on_a_word():
     ac.on_child_event("subagent.complete", status="completed", summary=long, **_kid("dm", 0))
     cl.kids[0].started -= 50; cl.kids[1].started = cl.kids[0].started + 10
     lines = _flat(card.render()).splitlines()
-    assert "> *2 subagents \u00b7 \U0001f6e0 12 calls \u00b7 " in "\n".join(lines)
+    assert "> *1 running \u00b7 1 done \u00b7 \U0001f6e0 12 calls \u00b7 " in "\n".join(lines)
     summary = next(ln for ln in lines if ln.startswith("> word"))
     assert len(summary) <= 142 and summary.endswith("\u2026") and not summary.endswith(" \u2026")
 
@@ -1123,7 +1123,7 @@ def test_one_call_is_singular_in_a_subagent_header_and_the_footer():
     ac.on_child_event("subagent.tool", tool_name="terminal", preview="ls", args={"command": "ls"}, tool_count=1,
                       **_kid("dm", 0))
     text = card.render()
-    assert "\U0001f6e0 1 call \u00b7" in text and "1 calls" not in text and "*2 subagents \u00b7 \U0001f6e0 1 call \u00b7" in text
+    assert "\U0001f6e0 1 call \u00b7" in text and "1 calls" not in text and "*1 running \u00b7 1 waiting \u00b7 \U0001f6e0 1 call \u00b7" in text
 
 
 def test_step_marks_are_plain_characters():
@@ -1589,3 +1589,51 @@ def test_a_short_result_line_is_kept_whole():
     ac.on_child_event("subagent.complete", delegation_id="a", task_index=0, task_count=2, subagent_id="a-0",
                       status="completed", summary="Plain summary: Most are in the tests folder.")
     assert "> \u2003\u2003Most are in the tests folder." in _lines(card)
+
+
+# -- the footer: live counts while running, the total once finished -----------
+
+
+def _footer(card):
+    return card.render().splitlines()[-1]
+
+
+def test_a_running_footer_shows_live_counts_and_leaves_out_zeros():
+    card = _multi_card(goals=("a", "b", "c", "d", "e"))
+    for i in range(5):
+        ac.on_child_event("subagent.start", **_kid("dm", i))
+    for i in range(2):
+        ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: ok.", **_kid("dm", i))
+    foot = _footer(card)
+    assert foot.startswith("> *3 running \u00b7 2 done") and "subagents" not in foot
+    assert "waiting" not in foot and "failed" not in foot
+
+
+def test_a_running_footer_orders_running_waiting_done_failed_stopped():
+    card = _multi_card(goals=("a", "b", "c", "d", "e"))
+    ac.on_child_event("subagent.start", **_kid("dm", 0))
+    ac.on_child_event("subagent.start", **_kid("dm", 1))
+    ac.on_child_event("subagent.start", **_kid("dm", 2))
+    ac.on_child_event("subagent.start", **_kid("dm", 3))
+    ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: ok.", **_kid("dm", 1))
+    ac.on_child_event("subagent.complete", status="failed", summary="Plain summary: broke.", **_kid("dm", 2))
+    ac.on_child_event("subagent.complete", status="interrupted", summary="", **_kid("dm", 3))
+    assert _footer(card).startswith("> *1 running \u00b7 1 waiting \u00b7 1 done \u00b7 1 failed \u00b7 1 stopped")
+
+
+def test_a_joined_running_footer_counts_across_every_job():
+    card = _five_subagents_in_three_jobs()
+    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
+    _end("b", 0, 2)
+    assert " subagents" not in _footer(card)
+    assert "2 done" in _footer(card) and "waiting" in _footer(card)
+
+
+def test_a_finished_footer_says_the_total_and_any_failures():
+    card = _multi_card(goals=("a", "b"))
+    _end("dm", 0, 2); _end("dm", 1, 2)
+    assert _footer(card).startswith("> *2 subagents")
+    bad = _five_subagents_in_three_jobs()
+    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
+    _end("b", 0, 2); _end("b", 1, 2); _end("c", 0, 2); _end("c", 1, 2, status="failed")
+    assert _footer(bad).startswith("> *5 subagents \u00b7 1 failed")

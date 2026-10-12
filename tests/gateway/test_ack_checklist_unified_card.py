@@ -504,7 +504,7 @@ def test_multi_subagent_spacing_one_spacer_between_blocks_and_before_footer():
     assert not any(a == spacer and b == spacer for a, b in zip(lines, lines[1:]))
     # Hint, ONE spacer, then straight to the outcome line.
     assert lines[1:4] == ["> *tap to watch \U0001f340*", spacer, "> Goal: test build + PR \u00b7 ~10 min"]
-    assert lines[-2] == spacer and lines[-1].startswith("> *3 subagents") and "helpers" not in text
+    assert lines[-2] == spacer and lines[-1].startswith("> *2 running \u00b7 1 done") and "helpers" not in text
     # Three subagent sections: a spacer before each name line, plus the one before the footer.
     names = [i for i, ln in enumerate(lines) if ln.startswith("> ") and "**" in ln and i > 0]
     assert len(names) == 3 and all(lines[i - 1] == spacer for i in names)

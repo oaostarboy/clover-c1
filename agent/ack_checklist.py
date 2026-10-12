@@ -355,7 +355,7 @@ class Checklist:
         started = [k.started for k in kids if k.started is not None]
         ended = [k.ended for k in kids if k.ended is not None]
         calls = sum(k.calls for k in kids)
-        foot = [f"{len(kids)} subagent{'s' if len(kids) != 1 else ''}"]
+        foot = _footer_counts([k.state for k in kids], self.state == RUNNING)
         if calls:
             foot.append(_calls(calls))
         if started:
@@ -479,6 +479,32 @@ def _joined_goal(outcome: str) -> str:
 def _title_line(title: str, tail: str, lost: bool) -> str:
     """``🔀 **title** · k of N done``; 🍂 takes the 🔀's place when it ended badly."""
     return f"{FAILED_ICON if lost else TITLE_ICON} **{title}**{tail}"
+
+
+def _footer_counts(states: Sequence[str], running: bool) -> List[str]:
+    """The footer's count parts.  Running: live counts (``2 running``,
+    ``1 waiting``, ``3 done``, ``1 failed``, ``1 stopped``; a zero is left out).
+    Finished: ``5 subagents`` plus `` · 1 failed`` / `` · 1 stopped`` if any."""
+    n = len(states)
+    failed = sum(1 for s in states if s == FAILED)
+    stopped = sum(1 for s in states if s == STOPPED)
+    if running:
+        counts = (
+            ("running", sum(1 for s in states if s == RUNNING)),
+            ("waiting", sum(1 for s in states if s == PENDING)),
+            ("done", sum(1 for s in states if s == DONE)),
+            ("failed", failed),
+            ("stopped", stopped),
+        )
+        parts = [f"{c} {word}" for word, c in counts if c]
+        if parts:
+            return parts
+    parts = [f"{n} subagent{'s' if n != 1 else ''}"]
+    if failed:
+        parts.append(f"{failed} failed")
+    if stopped:
+        parts.append(f"{stopped} stopped")
+    return parts
 
 
 def _count_tail(running: bool, states: Sequence[str]) -> str:
@@ -1347,7 +1373,7 @@ class Card:
                     ended.append(s.ended)
         if collapsed:
             blocks.append(collapsed)
-        foot = [f"{len(states)} subagent{'s' if len(states) != 1 else ''}"]
+        foot = _footer_counts(states, running)
         if calls:
             foot.append(_calls(calls))
         if started:
