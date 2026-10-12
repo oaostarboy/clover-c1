@@ -125,12 +125,53 @@ auxiliary:
     provider: auto
     model: auto
     prefer_fast_model: true          # false = always the main model
+    reasoning_effort: low            # default; none | minimal | low | medium | high
 ```
 
 When no small model exists for the main provider the router runs on the main
 model and waits `slow_model_timeout_seconds` (default 20) instead of
 `timeout_seconds` (8); the log says which applied. Pure small talk (an explicit
 allow-list, never a length rule) skips the router entirely.
+
+### Reasoning and the hand-off card
+
+The router thinks a little: `auxiliary.delegation_router.reasoning_effort`
+defaults to `low`. With reasoning off, `gpt-6-luna` sized a three-part compare
+(GPU options, PSU fit, prices) as a quick answer (0 of 2); on `low` the same
+model scored 12 of 12 at a 1.5 s median. Only title generation still runs with
+reasoning off. Per provider: Codex `reasoning.effort=low`; Gemini
+`thinkingLevel=low` (3.x Flash rejects `minimal`); Anthropic adaptive-thinking
+models `effort=low`, Haiku and manual-budget models are left as they were. An
+explicit `reasoning_effort` (or `extra_body.reasoning`) is never overridden.
+`ROUTER_MAX_TOKENS` is 1500 so thought tokens cannot cut off the JSON.
+
+When the backstop hands a turn to a helper, the chat card gets a title and goal
+built from the user's message and the router's own `reason` (no extra model
+call): `🔄 comparing 3 options for adding a second GPU → ...`. The title is at
+most 50 characters, the goal at most 60; the raw message is never pasted. The
+old "taking over the rest of your request" wording remains only when the
+message names nothing.
+
+### Ship gate
+
+Run before changing the router prompt, the router's reasoning, or the shipped
+fast-model defaults. 30 cases from real use live in
+`tests/fixtures/router_eval/ship_gate.jsonl` (`expected_mode` may be a list
+where two modes are both defensible; `"gate": true` marks the cases that
+failed live). Copy a profile's `config.yaml` and `auth.json` into a temporary
+`CLOVER_HOME` (`chmod 700`), pin `auxiliary.delegation_router` to the model
+under test, and run:
+
+```bash
+python scripts/eval/delegation_router.py --home "$TMP_HOME" \
+  --cases tests/fixtures/router_eval/ship_gate.jsonl \
+  --reps 2 --ship-gate --out /tmp/ship-gate-out
+```
+
+`--ship-gate` takes each case's own `reps` (3 for the hard ones), requires
+accuracy of at least 90 percent and every `gate` case right in at least 2 of 3
+runs, and exits 1 on a miss. Do not edit the rubric to fit one model's misses;
+report them. The gate is run by hand (it calls real models), not in CI.
 
 ## The foreground time limit
 
