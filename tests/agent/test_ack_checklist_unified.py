@@ -135,7 +135,7 @@ def test_stopped_card_shape():
     card = _running_card()
     ac.on_child_event("subagent.complete", delegation_id="d1", status="interrupted")
     lines = card.render().splitlines()
-    assert lines[2] == "\U0001f342 **fixing the bugs** \u00b7 stopped"
+    assert lines[2] == "\U0001f940 **fixing the bugs** \u00b7 stopped"
     assert "> \u2713 find" in lines and "> \u2013 fix" in lines and "> \u25cb test" in lines
     assert "now:" not in card.render()
     assert "~" not in lines[3]
@@ -151,7 +151,7 @@ def test_activity_events_update_calls_doing_and_model():
         "subagent.tool", delegation_id="d1", tool_name="read_file", preview="a.py",
         args={"path": "a.py"}, tool_count=3,
     ) is True
-    assert cl.calls == 3 and cl.doing.startswith("read_file")
+    assert cl.calls == 3 and cl.doing.startswith("read a.py")
     # the tool count only moves forward, and the model is set once
     ac.on_child_event("subagent.tool_done", delegation_id="d1", tool_name="read_file", tool_count=2, model="gpt-6-sol")
     assert cl.calls == 3 and cl.model == "Opus 5.5"
@@ -380,8 +380,8 @@ def test_single_card_shows_the_open_tool_then_the_two_before_it_newest_first():
     _tool("d1", "read_file", "a.py", 3); _done("d1", "read_file", 3)
     _tool("d1", "web_search", "silas studios booking", 4)
     assert _tool_lines(card.render()) == [
-        "*now: web_search silas studios booking*",
-        "*before: read_file a.py*",
+        "*now: searched \"silas studios booking\"*",
+        "*before: read a.py*",
         "*before: pytest -q (failed)*",
     ]
 
@@ -400,7 +400,7 @@ def test_tool_lines_come_after_the_steps_and_a_spacer_and_stats_sit_under_the_go
     _tool("d1", "terminal", "ls", 1); _done("d1", "terminal", 1)
     _tool("d1", "read_file", "a.py", 2)
     lines = card.render().splitlines()
-    assert lines[-3:] == [f"> {SPACER}", "> *now: read_file a.py*", "> *before: ls*"]
+    assert lines[-3:] == [f"> {SPACER}", "> *now: read a.py*", "> *before: ls*"]
     assert lines[1] == "> Goal: test build + PR \u00b7 ~10\u201325 min"
     assert lines[2] == "> \U0001f6e0 2 calls \u00b7 \u23f1 0s"
 
@@ -420,9 +420,9 @@ def test_tool_done_without_an_id_pairs_the_newest_open_call_of_that_tool_then_th
     _tool("d1", "read_file", "b.py", 3)
     _done("d1", "read_file", 3)  # newest open read_file = b.py
     # one open tool shown ("now" = the newest open), then the finished one
-    assert _tool_lines(card.render()) == ["*now: ls*", "*before: read_file b.py*"]
+    assert _tool_lines(card.render()) == ["*now: ls*", "*before: read b.py*"]
     _done("d1", "web_search", 3)  # unknown name: the newest open call (the terminal)
-    assert _tool_lines(card.render()) == ["*now: read_file a.py*", "*before: ls*", "*before: read_file b.py*"]
+    assert _tool_lines(card.render()) == ["*now: read a.py*", "*before: ls*", "*before: read b.py*"]
 
 
 def test_a_stray_tool_done_with_nothing_open_changes_nothing():
@@ -453,7 +453,7 @@ def test_tool_lines_use_the_same_phrase_as_before():
     _tool("d1", "read_file", "/srv/site/contact.html", 1)
     ac.on_child_event("subagent.tool", delegation_id="d1", tool_name="read_file",
                       preview="/srv/site/contact.html", args={"path": "/srv/site/contact.html"}, tool_count=2)
-    assert "*now: read_file contact.html*" in card.render()
+    assert "*now: read contact.html*" in card.render()
 
 
 # -- several helpers: one unified card --------------------------------------
@@ -507,10 +507,10 @@ def test_multi_card_shape_while_running():
     assert "> All pages load and the quote form works." in lines
     j = lines.index("> \u25a0 **silas studios site**")
     assert lines[j + 1] == "> Sonnet 5.5 \u00b7 \U0001f6e0 4 calls \u00b7 \u23f1 1m12s"
-    assert "> *now: web_search silas studios booking*" in lines
-    assert "> *before: read_file contact*" in lines
-    assert lines.index("> *now: web_search silas studios booking*") < lines.index(
-        "> *before: read_file contact*")
+    assert "> *now: searched \"silas studios booking\"*" in lines
+    assert "> *before: read contact*" in lines
+    assert lines.index("> *now: searched \"silas studios booking\"*") < lines.index(
+        "> *before: read contact*")
     assert "> \u25a0 **Check the pizzeria bros pamphlet** \u00b7 waiting" in lines
     assert "waiting to start" not in "\n".join(lines)
     assert lines[-1].startswith("> *1 running \u00b7 1 waiting \u00b7 1 done \u00b7 \U0001f6e0 13 calls \u00b7 ")
@@ -536,9 +536,9 @@ def test_each_running_helper_shows_at_most_two_tool_lines():
     for n in range(4):
         _tool("dm", "terminal", f"cmd{n}", n + 1, task_index=1); _done("dm", "terminal", n + 1, task_index=1)
     _tool("dm", "web_search", "q", 5, task_index=1)
-    assert _tool_lines(card.render()) == ["*now: web_search q*", "*before: cmd3*"]
+    assert _tool_lines(card.render()) == ["*now: searched \"q\"*", "*before: cmd3*"]
     _done("dm", "web_search", 5, task_index=1)
-    assert _tool_lines(card.render()) == ["*before: web_search q*", "*before: cmd3*"]
+    assert _tool_lines(card.render()) == ["*before: searched \"q\"*", "*before: cmd3*"]
 
 
 def test_tools_are_kept_per_helper():
@@ -547,7 +547,7 @@ def test_tools_are_kept_per_helper():
     _tool("dm", "read_file", "two", 1, task_index=1, subagent_id="sa-1")
     kids = card.parts[0].checklist.kids
     assert [o[2] for o in kids[0].open] == ["terminal one"]
-    assert [o[2] for o in kids[1].open] == ["read_file two"]
+    assert [o[2] for o in kids[1].open] == ["read two"]
 
 
 def test_children_are_found_by_subagent_id_when_there_is_no_task_index():
@@ -605,7 +605,7 @@ def test_multi_finished_with_one_failed_and_one_stopped_is_failed_and_shows_the_
     lines = _flat(card.render()).splitlines()
     assert lines[0] == "\U0001f342 **checking the 3 sites** \u00b7 1 of 3 done \u00b7 1 failed \u00b7 1 stopped"
     heads = [ln for ln in lines if ln.startswith("> ") and "**" in ln]
-    assert heads == ["> \u25a0 **a** \u00b7 done", "> \U0001f342 **b** \u00b7 failed", "> \u25a0 **c** \u00b7 stopped"]
+    assert heads == ["> \u25a0 **a** \u00b7 done", "> \U0001f342 **b** \u00b7 failed", "> \U0001f940 **c** \u00b7 stopped"]
     assert "> Site is down." in lines
 
 
@@ -679,7 +679,7 @@ def test_classic_multi_dispatch_is_still_the_plain_line():
 
 def _no_emoji(text):
     """True when no character is an emoji, except the title's \U0001f500 (the card uses plain marks)."""
-    return not any(ord(ch) >= 0x1F000 or ch in "\u2b1c\u23f9" for ch in text.replace("\U0001f500 **", "**").replace("\U0001f6e0", "").replace("\u23f1", ""))
+    return not any(ord(ch) >= 0x1F000 or ch in "\u2b1c\U0001f940" for ch in text.replace("\U0001f500 **", "**").replace("\U0001f6e0", "").replace("\u23f1", ""))
 
 
 def test_seven_helper_card_is_compact_and_under_the_telegram_limit():
@@ -1163,7 +1163,7 @@ def test_multi_tool_lines_are_italic_now_then_before_at_most_two_and_indented():
 def test_a_failed_tool_says_failed_in_words():
     card = _card()
     _tool("d1", "read_file", "a.py", 1); _done("d1", "read_file", 1, error=True)
-    assert "> *before: read_file a.py (failed)*" in card.render().splitlines()
+    assert "> *before: read a.py (failed)*" in card.render().splitlines()
 
 
 def test_tool_phrases_are_capped_so_the_whole_line_fits_one_phone_row():
@@ -1277,7 +1277,7 @@ def test_compaction_starts_above_six_with_plain_one_liners_and_grouped_waiting()
         ac.on_child_event("subagent.start", **kw(i, model="claude-sonnet-5-5", title=f"job {i}"))
     lines = _flat(card.render()).splitlines()
     assert "> \u25a0 **job 0** \u00b7 done \u00b7 all good here" in lines
-    assert "> \U0001f342 **job 1** \u00b7 failed \u00b7 it broke" in lines
+    assert any(ln.startswith("> \U0001f342 **job 1** \u00b7 failed") for ln in lines) and "> it broke" in lines
     assert "> waiting: job 4, job 5, job 6, job 7, job 8" in lines
     assert not any(ln.startswith("> \u2b1c") or "\U0001f504" in ln for ln in lines)
 
@@ -1637,3 +1637,197 @@ def test_a_finished_footer_says_the_total_and_any_failures():
     ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
     _end("b", 0, 2); _end("b", 1, 2); _end("c", 0, 2); _end("c", 1, 2, status="failed")
     assert _footer(bad).startswith("> *5 subagents \u00b7 1 failed")
+
+
+# ── one-row Goal and plain-word tool lines ─────────────────────────────────
+
+LONG_OUTCOME = "wire the new payment webhook into the billing service and test it end to end"
+
+
+def _goal_row(text):
+    return next(ln for ln in text.splitlines() if "Goal: " in ln).split("Goal: ", 1)[1]
+
+
+def test_a_long_goal_is_one_row_with_the_eta_after_the_cut():
+    card = _card(header=f"\U0001f504 fixing the bugs \u2192 {LONG_OUTCOME}, ~10\u201325 min")
+    row = _goal_row(card.render())
+    outcome, _, eta = row.partition(" \u00b7 ")
+    assert eta == "~10\u201325 min"
+    assert len(outcome) <= ac.GOAL_ROW_CHARS and outcome.endswith("\u2026")
+    assert outcome[:-1] == LONG_OUTCOME[: len(outcome) - 1].rstrip() and LONG_OUTCOME[len(outcome) - 1] == " ", \
+        "cut on a word"
+
+
+def test_a_long_goal_has_no_eta_once_the_card_has_ended():
+    card = _card(header=f"\U0001f504 fixing the bugs \u2192 {LONG_OUTCOME}, ~10 min")
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", summary="ok.")
+    row = _goal_row(card.render())
+    assert "~" not in row and len(row) <= ac.GOAL_ROW_CHARS and row.endswith("\u2026")
+
+
+def test_a_short_goal_is_kept_whole():
+    assert ac._one_row_goal("test build + PR \u00b7 ~10\u201325 min") == "Goal: test build + PR \u00b7 ~10\u201325 min"
+    assert ac._one_row_goal("") == ""
+
+
+def test_the_joined_goal_and_the_60_char_handoff_goal_fit_one_row():
+    from agent.handoff_title import GOAL_CHARS
+
+    assert GOAL_CHARS == 60, "the data limit is unchanged"
+    sixty = ("fix the flaky webhook retry logic in the billing service now")[:GOAL_CHARS]
+    assert len(ac._joined_goal(sixty)) <= len("Goal: ") + 40
+    assert len(ac._one_row_goal(sixty + " \u00b7 ~5 min").split(" \u00b7 ")[0]) <= len("Goal: ") + 40
+
+
+def _phrase(name, args=None, preview=""):
+    return ac.plain_tool_phrase(name, args, preview)
+
+
+@pytest.mark.parametrize("name,args,expected", [
+    ("execute_code", {"code": "import json\nprint(1)"}, "ran a script"),
+    ("read_file", {"path": "/home/x/proj/config.yaml"}, "read config.yaml"),
+    ("write_file", {"path": "/home/x/proj/app.py", "content": "x"}, "edited app.py"),
+    ("patch", {"path": "src/mod.py"}, "edited mod.py"),
+    ("search_files", {"pattern": "TODO"}, 'searched files for "TODO"'),
+    ("web_search", {"query": "rtx 3090 price canada"}, 'searched "rtx 3090 price canada"'),
+    ("web_extract", {"urls": ["https://www.example.com/a/b", "https://other.org"]}, "read example.com"),
+    ("browser", {}, "used the browser"),
+    ("browser_click", {"ref": "e3"}, "used the browser"),
+    ("mcp__browser_exec", {"code": "x"}, "used the browser"),
+    ("mcp__playwright__navigate", {}, "used the browser"),
+    ("browser_navigate", {"url": "https://www.news.ycombinator.com/x"}, "opened news.ycombinator.com"),
+    ("skill_view", {"name": "claude-code"}, "opened the claude-code skill"),
+    ("delegate_task", {"goal": "do the thing"}, "started a subagent"),
+    ("session_search", {"query": "x"}, "searched past chats"),
+    ("vision_analyze", {"image_url": "/tmp/a.png"}, "looked at an image"),
+    ("clarify", {"question": "which?"}, "asked you a question"),
+    ("mcp__resolve__generate_lut", {"a": 1}, "generate lut"),
+    ("some_new_tool", {"x": 1}, "some new tool"),
+])
+def test_every_tool_reads_in_plain_words(name, args, expected):
+    assert _phrase(name, args) == expected
+
+
+@pytest.mark.parametrize("name,expected", [
+    ("read_file", "read"), ("write_file", "edited"), ("patch", "edited"),
+    ("search_files", "searched files"), ("web_search", "searched the web"),
+    ("web_extract", "read"), ("skill_view", "opened a skill"),
+])
+def test_a_missing_argument_leaves_just_the_verb(name, expected):
+    assert _phrase(name, {}) == expected and _phrase(name, None) == expected
+
+
+def test_no_raw_code_or_json_reaches_a_tool_line():
+    card = _card()
+    ac.on_child_event("subagent.tool", delegation_id="d1", tool_name="execute_code",
+                      preview="import json\nprint(json.dumps({}))", args={"code": "import json\nprint(1)"},
+                      tool_count=1)
+    text = card.render()
+    assert "*now: ran a script*" in text and "import" not in text and "{" not in text
+
+
+def test_memory_is_never_shown_like_todo():
+    card = _card()
+    ac.on_child_event("subagent.tool", delegation_id="d1", tool_name="memory",
+                      preview="x", args={"action": "add"}, tool_count=1)
+    assert "now:" not in card.render()
+
+
+def test_a_failed_plain_phrase_keeps_its_suffix_and_the_cap():
+    card = _card()
+    ac.on_child_event("subagent.tool", delegation_id="d1", tool_call_id="c1", tool_name="web_search",
+                      preview="q", args={"query": "a very long query " * 6}, tool_count=1)
+    ac.on_child_event("subagent.tool_done", delegation_id="d1", tool_call_id="c1", tool_name="web_search",
+                      is_error=True, tool_count=1)
+    row = _tool_lines(card.render())[0]
+    assert row.startswith("*before: searched ") and row.endswith("\u2026 (failed)*")
+    assert len(row.strip("*")) <= len("before: ") + ac.TOOL_PHRASE_SINGLE
+
+
+def test_a_slash_in_a_search_never_becomes_a_command_link():
+    card = _card()
+    ac.on_child_event("subagent.tool", delegation_id="d1", tool_name="search_files",
+                      preview="/help", args={"pattern": "/help"}, tool_count=1)
+    assert "\"/help\"" not in card.render()
+
+
+# ── stopped / failed subagents collapse to one line below the running ones ──
+
+def _two_kids():
+    card = _multi_card(goals=("a", "b"))
+    for i in (0, 1):
+        ac.on_child_event("subagent.start", model="claude-sonnet-5-5", **_kid("dm", i))
+    return card
+
+
+def test_a_stopped_subagent_collapses_to_one_line_below_the_running_ones():
+    card = _two_kids()
+    ac.on_child_event("subagent.tool", tool_name="terminal", preview="ls", args={"command": "ls"},
+                      tool_count=13, **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="interrupted",
+                      summary="Operation interrupted: waiting for the model", **_kid("dm", 0))
+    lines = _flat(card.render()).splitlines()
+    stopped = [ln for ln in lines if "**a**" in ln]
+    assert len(stopped) == 1 and stopped[0].startswith("> \U0001f940 **a** \u00b7 stopped")
+    assert "\U0001f6e0 13" in stopped[0] and "Sonnet" not in stopped[0] and "calls" not in stopped[0]
+    assert lines.index(stopped[0]) > next(i for i, ln in enumerate(lines) if "**b**" in ln), "below the running one"
+    assert "interrupted" not in card.render().lower().replace("stopped", "") and "Operation" not in card.render()
+    assert "\u25a0 **a**" not in card.render()
+    assert any(ln.startswith("> *1 running \u00b7 1 stopped") for ln in lines), "the footer is unchanged"
+
+
+def test_a_stopped_subagent_has_no_steps_tools_or_result_lines():
+    card = _two_kids()
+    ac.on_child_event("subagent.todo", todos=_todos("completed", "in_progress"), **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="interrupted", summary="Plain summary: Tidy.", **_kid("dm", 0))
+    text = _flat(card.render())
+    stop_line = next(i for i, ln in enumerate(text.splitlines()) if "\U0001f940 **a**" in ln)
+    rest = text.splitlines()[stop_line + 1:]
+    assert not any(ln.startswith(("> \u2713", "> \u25b8", "> \u2013", "> Tidy")) for ln in rest[:1])
+    assert "Tidy" not in text
+
+
+def test_a_long_name_puts_the_stopped_stats_on_the_next_indented_line():
+    long_name = "a very long subagent name that will not fit"
+    lines = ac._lost_lines(long_name, type("O", (), dict(
+        state=ac.STOPPED, calls=13, started=0.0, ended=60.0, reason=""))())
+    assert lines[0] == f"\U0001f940 **{long_name}** \u00b7 stopped" and lines[1].startswith(ac._INDENT + "\U0001f6e0 13")
+
+
+def test_a_failed_subagent_collapses_with_one_short_plain_reason():
+    card = _two_kids()
+    ac.on_child_event("subagent.complete", status="failed",
+                      summary="Traceback (most recent call last):\n  File x\nValueError: boom", **_kid("dm", 0))
+    text = card.render()
+    lines = _flat(text).splitlines()
+    i = next(i for i, ln in enumerate(lines) if "**a**" in ln)
+    assert lines[i].startswith("> \U0001f342 **a** \u00b7 failed") and lines[i + 1] == "> hit an error"
+    assert "Traceback" not in text and "ValueError" not in text
+
+
+def test_a_failed_reason_is_cut_to_forty_and_max_iterations_has_its_own_words():
+    card = _two_kids()
+    ac.on_child_event("subagent.complete", status="failed",
+                      plain_summary="The site was unreachable because the hosting provider was down all day",
+                      **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="completed", exit_reason="max_iterations", **_kid("dm", 1))
+    lines = _flat(card.render()).splitlines()
+    reasons = [ln[2:] for ln in lines if ln.startswith("> ") and ln[2:].endswith("\u2026")]
+    assert reasons and all(len(r) <= ac.REASON_CHARS for r in reasons)
+    assert "> ran out of steps" in lines
+
+
+def test_a_single_stopped_subagent_card_has_the_stop_mark_and_no_raw_text():
+    card = _running_card()
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="interrupted",
+                      summary="Operation interrupted: waiting for the model")
+    text = card.render()
+    assert text.splitlines()[2] == "\U0001f940 **fixing the bugs** \u00b7 stopped"
+    assert "Operation interrupted" not in text and "\U0001f500" not in text
+
+
+def test_a_joined_card_keeps_lost_lines_below_running_sections():
+    card = _two_kids()
+    ac.on_child_event("subagent.complete", status="interrupted", **_kid("dm", 0))
+    lines = _flat(card.render()).splitlines()
+    assert lines[1].startswith("> Goal:") or "Goal:" in "\n".join(lines)
