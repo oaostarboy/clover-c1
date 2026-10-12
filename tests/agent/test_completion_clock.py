@@ -26,6 +26,7 @@ from unittest.mock import MagicMock
 import pytest
 import yaml
 
+from agent import router_backstop as rb
 from agent import foreground_time_limit as fl
 from tools import async_delegation as ad
 from tools.process_registry import process_registry
@@ -476,7 +477,7 @@ def test_helpers_spawned_in_the_episode_are_background_even_after_expiry(
     assert results.count('"mode": "background"') >= 1, results
     assert seen[-1][0], 'the episode must have run out before the dispatch'
     assert all(forced for _, forced in seen), seen  # background before AND after expiry
-    assert re.match(r'^\U0001f504 ', result['final_response'])
+    assert result['final_response'] in rb._FALLBACK_ONE  # the hand-off ack, not a reply
     assert result['turn_exit_reason'] == 'delegation_handoff'
 
 
