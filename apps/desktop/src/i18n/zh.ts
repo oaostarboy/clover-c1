@@ -1245,6 +1245,7 @@ export const zh: Translations = {
       setToMain: '设为主模型',
       change: '更改',
       autoUseMain: '自动 · 使用主模型',
+      autoFastModel: '自动 · 小型快速模型',
       providerDefault: '(提供方默认)',
       fallbackAdd: '添加备用模型',
       fallbackEmpty: '未配置备用模型 — 默认模型失败时才会使用备用模型。',
