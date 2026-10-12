@@ -2172,6 +2172,11 @@ DEFAULT_CONFIG = {
             "timeout_seconds": 8,
             "backstop_calls": 2,
             "backstop_seconds": 60,
+            # Sizing rubric v2: preparation before a write or send (find, read,
+            # verify, package) is single, not direct; "send subagents" /
+            # "with subagents" are explicit helper requests. false restores
+            # the earlier rubric and override wording exactly.
+            "calibration_v2": True,
             # Safety net for a "direct" verdict that was too small a guess:
             # after ``work_calls`` work tool calls or ``seconds`` seconds the
             # next work call hands the REST of the request to one helper

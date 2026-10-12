@@ -1634,6 +1634,8 @@ delegation:
   #   backstop_calls: 2                       # not-direct plan: after this many work tool calls the agent made itself ...
   #   backstop_seconds: 60                    # ... or this many seconds, the runtime hands the plan to helpers (nothing running is
   #                                           # stopped). "Do it yourself" in the message is never overridden.
+  #   calibration_v2: true                    # sizing rubric v2: preparing something before a write/send (find, read, verify, package)
+  #                                           # is sized as a helper job; "send subagents" counts as asking for helpers. false = earlier rubric
   #   direct_backstop:                        # safety net for a "direct" verdict that runs long
   #     enabled: true                         # false = a direct turn is never handed off by the runtime
   #     work_calls: 25                        # after this many work tool calls the agent made itself ...
