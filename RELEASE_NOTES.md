@@ -21,6 +21,7 @@ HOW TO EDIT (by hand, at release time)
 - Subagent titles name the real work, and each subagent can collapse on its own.
 - A job that runs long is handed to a subagent with full context instead of just stopping.
 - Subagents work in their own sandbox, read anywhere, and can no longer touch a live install.
+- Finished subagent cards now land under the reply, even when the results arrive while the agent is busy.
 
 ## 1.5.3 | Clover C1.5.3 | 2026-10-12
 - Agents hand big jobs to subagents more reliably, and quick questions stay quick.
