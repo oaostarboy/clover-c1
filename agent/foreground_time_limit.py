@@ -314,6 +314,18 @@ def _handoff_steps(handoff: Any, goals: Any) -> Tuple[str, ...]:
         return ()
 
 
+def _task_steps_for(goals: Any, task_steps: Any) -> Tuple[str, ...]:
+    """The one task's own ``steps`` (a dispatch without a handoff summary)."""
+    if len([g for g in (goals or ()) if g]) != 1 or not isinstance(task_steps, (list, tuple)):
+        return ()
+    try:
+        from agent.ack_checklist import clean_steps
+
+        return clean_steps(task_steps)
+    except Exception:
+        return ()
+
+
 def _clean_child_steps(child_steps: Any, goals: Any) -> Tuple[Tuple[str, ...], ...]:
     """Per-task steps of a several-helper dispatch; ``()`` when none has any."""
     if len([g for g in (goals or ()) if g]) < 2 or not isinstance(child_steps, (list, tuple)):
@@ -338,8 +350,18 @@ def _handoff_say(handoff: Any) -> str:
         return ""
 
 
-def _open_ack_part(did: str, receipt: "DispatchReceipt") -> None:
+def _headless_steps(receipt: "DispatchReceipt") -> Tuple[str, ...]:
+    return receipt.steps if len(receipt.goals) == 1 else ()
+
+
+def _open_ack_part(did: str, receipt: "DispatchReceipt", titles: Any = ()) -> None:
     if not receipt.summary:
+        # No handoff summary: the card is still the unified one, titled from
+        # the tasks, with no opener line.
+        open_headless_card(
+            did, receipt.goals, titles=titles, steps=_headless_steps(receipt),
+            child_steps=receipt.child_steps,
+        )
         return
     try:
         from agent.ack_checklist import open_part
@@ -353,14 +375,46 @@ def _open_ack_part(did: str, receipt: "DispatchReceipt") -> None:
         pass
 
 
+def _headless_card_possible() -> bool:
+    """Unified style on, and this turn has a chat to put a card in."""
+    try:
+        from agent.ack_checklist import unified
+        from agent.delegation_activity import current_activity_sink
+
+        return bool(unified()) and callable(getattr(current_activity_sink(), "open_dispatch_card", None))
+    except Exception:
+        return False
+
+
+def open_headless_card(
+    delegation_id: Any, goals: Any, *, titles: Any = (), steps: Any = (), child_steps: Any = (),
+) -> bool:
+    """Put the unified card of a dispatch that has no ``handoff`` summary in
+    this turn's chat (idempotent).  No chat / classic style: False."""
+    try:
+        from agent.delegation_activity import current_activity_sink
+
+        sink = current_activity_sink()
+        opener = getattr(sink, "open_dispatch_card", None)
+        if not callable(opener):
+            return False
+        return bool(opener(str(delegation_id or ""), list(goals or ()), titles, steps, child_steps))
+    except Exception:
+        return False
+
+
 def reserve_ack_part(delegation_id: Any, handoff: Any, goals: Any = ()) -> bool:
     """Before a background dispatch starts its helpers: claim the delegation
-    id for the unified card when the handoff will open a part (it has a
-    summary), so no helper event can slip a separate 🔀 card out first.
+    id for the unified card, so no helper event can slip a separate 🔀 card
+    out first.  Every dispatch gets a card: one with a handoff summary opens
+    its part from it, one without opens a plain titled part
+    (``open_headless_card``) -- provided the turn has a chat to show it in.
     Pair with ``release_ack_part`` if the dispatch is not accepted."""
     try:
         did = str(delegation_id or "").strip()
-        if not did or not _handoff_summary(handoff):
+        if not did:
+            return False
+        if not _handoff_summary(handoff) and not _headless_card_possible():
             return False
         from agent.ack_checklist import reserve
 
@@ -387,6 +441,8 @@ def note_own_dispatch(
     request_identity: Optional[Dict[str, Any]] = None,
     handoff: Any = None,
     child_steps: Any = (),
+    titles: Any = (),
+    task_steps: Any = (),
 ) -> None:
     """Remember that THIS agent instance dispatched ``delegation_id``.
 
@@ -418,11 +474,11 @@ def note_own_dispatch(
             goals=tuple(str(g) for g in (goals or ()) if g),
             subagent_ids=tuple(str(s) for s in (subagent_ids or ()) if s),
             summary=_handoff_summary(handoff),
-            steps=_handoff_steps(handoff, goals),
+            steps=_handoff_steps(handoff, goals) or _task_steps_for(goals, task_steps),
             say=_handoff_say(handoff),
             child_steps=_clean_child_steps(child_steps, goals),
         )
-        _open_ack_part(did, own[did])
+        _open_ack_part(did, own[did], titles)
         while len(own) > _OWN_DISPATCH_CAP:
             own.pop(next(iter(own)))
     except Exception:

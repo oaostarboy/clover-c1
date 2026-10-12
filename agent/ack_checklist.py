@@ -959,13 +959,54 @@ def open_agent_job_part(delegation_id: Any, title: Any, lifecycle: bool = False)
     if not unified():
         return None
     name = _cut_word(" ".join(str(title or "").replace("*", "").replace(" \u2192 ", " - ").split()), 60)
-    if not name:
-        return None
+    name = name or "agent job"  # an untitled job still gets its card, never the 🔀 roster
     with _LOCK:
         part = open_part(str(delegation_id or ""), f"{ACTIVE_ICON} **{name}**", ())
         if part is None:
             return None
         part.checklist.lifecycle = bool(lifecycle)
+        card = Card([part])
+        card.split_opener = True  # no opener: later dispatches may join this card
+        part.card = card
+        return card
+
+
+def open_dispatch_card(
+    delegation_id: Any, goals: Sequence[Any], titles: Sequence[Any] = (), steps: Sequence[Any] = (),
+    child_steps: Sequence[Any] = (),
+) -> Optional["Card"]:
+    """The unified card of a dispatch that came WITHOUT a ``handoff`` summary
+    (every dispatch gets one: the 🔀 roster card is not used in unified mode).
+
+    Title: the one task's own ``title`` or one built from its goal
+    (``agent.handoff_title``), else ``N subagents``.  No opener line, no Goal
+    line: no outcome is known, and the agent writes its own reply text.  Steps
+    are the per-task ``steps`` when given.  Returns the new one-part card for
+    the gateway to place (join to the chat's running card, or post), or None
+    (classic style, nothing to show, or the dispatch already has a part).
+    """
+    if not unified():
+        return None
+    did = str(delegation_id or "").strip()
+    goals = [str(g) for g in (goals or ()) if g]
+    if not did or not goals:
+        return None
+    try:
+        from agent.handoff_title import dispatch_work_title
+
+        work = dispatch_work_title(goals, titles)
+    except Exception:
+        work = f"{len(goals)} subagents" if len(goals) > 1 else "background task"
+    work = _cut_word(" ".join(str(work).replace("*", "").split()), 60) or "background task"
+    with _LOCK:
+        if did in _PARTS:
+            return None
+        part = open_part(
+            did, f"{ACTIVE_ICON} **{work}**", steps if len(goals) == 1 else (),
+            expected=len(goals), goals=goals, child_steps=child_steps,
+        )
+        if part is None:
+            return None
         card = Card([part])
         card.split_opener = True  # no opener: later dispatches may join this card
         part.card = card

@@ -503,6 +503,13 @@ def _board_for(pub: "DelegationActivityPublisher") -> "_ChatBoard":
     return board
 
 
+# Only live work opens a card; a late "complete" must not revive a finished one.
+_CARD_OPENING_EVENTS = frozenset({
+    "subagent.start", "subagent.tool", "subagent.tool_done", "subagent.progress",
+    "subagent.thinking", "subagent.text",
+})
+
+
 class DelegationActivityPublisher:
     """Per-turn publisher of delegation roster cards to one chat/thread."""
 
@@ -618,15 +625,36 @@ class DelegationActivityPublisher:
             return ""
         if card is None:
             return ""
+        return card_id if self.place_card(card, card_id) else ""
+
+    def place_card(self, card: Any, card_id: str) -> bool:
+        """Place a freshly opened one-part unified card in this chat: it joins
+        the chat's running card or is posted as its own message.  Any thread.
+        False when the loop is closed (nothing placed, the part is dropped)."""
         card.target = (id(self._adapter), self._chat_id, "pending")  # claimed: nothing else binds it
         try:
             asyncio.run_coroutine_threadsafe(self._place_job_card(card, card_id), self._loop)
         except RuntimeError:
             from agent.ack_checklist import abandon
 
-            abandon(card_id)  # loop closed: the 🔀 card path takes over
-            return ""
-        return card_id
+            abandon(card_id)  # loop closed: nothing to show
+            return False
+        return True
+
+    def open_dispatch_card(
+        self, delegation_id: str, goals: Any, titles: Any = (), steps: Any = (), child_steps: Any = (),
+    ) -> bool:
+        """Unified style: a delegate_task dispatch without a ``handoff`` summary
+        still gets its card (never the 🔀 roster).  Any thread."""
+        try:
+            from agent.ack_checklist import open_dispatch_card
+
+            card = open_dispatch_card(delegation_id, goals, titles, steps, child_steps)
+        except Exception:
+            return False
+        if card is None:
+            return False
+        return self.place_card(card, str(delegation_id))
 
     async def _place_job_card(self, card: Any, card_id: str) -> None:
         from agent.ack_checklist import abandon, join
@@ -662,9 +690,14 @@ class DelegationActivityPublisher:
         if not kwargs.get("delegation_id"):
             kwargs["delegation_id"] = self._fallback_group
         try:
-            from agent.ack_checklist import owns_delegation
+            from agent.ack_checklist import owns_delegation, unified
 
-            if owns_delegation(kwargs.get("delegation_id")):
+            if not owns_delegation(kwargs.get("delegation_id")):
+                # Unified style: no helper ever gets the 🔀 roster card.  A
+                # helper nobody opened a card for (a nested one, a dispatch
+                # path that skipped it) gets a plain titled card now.
+                self._open_card_from_event(event_type, preview, kwargs)
+            if owns_delegation(kwargs.get("delegation_id")) or unified():
                 # The unified helper card (the ack message) shows this
                 # helper's activity and result: no separate 🔀 card.  If an
                 # earlier event already started one (ownership was registered
@@ -694,6 +727,25 @@ class DelegationActivityPublisher:
                     card.backoff_until = float("-inf")
             self._pending_alerts.extend((gid, text) for text in alerts)
         self._schedule()
+
+    def _open_card_from_event(self, event_type: Any, preview: Any, kwargs: Dict[str, Any]) -> None:
+        """Open the unified card for the delegation of a relayed child event."""
+        try:
+            from agent.ack_checklist import unified
+
+            if not unified() or str(event_type or "") not in _CARD_OPENING_EVENTS:
+                return
+            did = str(kwargs.get("delegation_id") or "")
+            if not did:
+                return
+            count = max(1, int(kwargs.get("task_count") or 1))
+            title = str(kwargs.get("title") or "").strip()
+            goal = str(kwargs.get("goal") or "").strip() or (
+                str(preview or "").strip() if event_type == "subagent.start" else ""
+            ) or title or "background task"
+            self.open_dispatch_card(did, [goal] * count, [title] if count == 1 else ())
+        except Exception:
+            logger.debug("could not open a card from a child event", exc_info=True)
 
     def _retire_owned(self, gid: str) -> None:
         """The unified card owns ``gid`` but a 🔀 card for it may already be up

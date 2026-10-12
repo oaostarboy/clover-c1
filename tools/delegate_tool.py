@@ -4716,7 +4716,7 @@ def delegate_task(
     # Several helpers: each task may carry its own steps (tasks[i].steps),
     # which seed and drive that helper's own checklist on the card.
     _task_steps: List[tuple] = [()] * len(task_list)
-    if n_tasks > 1:
+    if n_tasks >= 1:
         try:
             from agent.ack_checklist import clean_steps
 
@@ -4890,6 +4890,22 @@ def delegate_task(
             except Exception as e:
                 logger.debug("Progress callback queued relay failed: %s", e)
 
+    def _open_foreground_card() -> None:
+        """A foreground dispatch gets the unified card too (never the 🔀
+        roster): titled from the tasks, no opener.  Top-level agents in a chat
+        only; best-effort."""
+        try:
+            if getattr(parent_agent, "_delegate_depth", 0) > 0 or not live_deleg_id:
+                return
+            _fg_limit.open_headless_card(
+                live_deleg_id, [t["goal"] for t in task_list],
+                titles=[t.get("title") for t in task_list],
+                steps=_task_steps[0] if n_tasks == 1 else (),
+                child_steps=list(_task_steps) if n_tasks > 1 else (),
+            )
+        except Exception:
+            logger.debug("foreground helper card unavailable", exc_info=True)
+
     def _execute_and_aggregate(
         *,
         honor_parent_interrupt: bool = True,
@@ -4912,6 +4928,8 @@ def delegate_task(
         # Only foreground/inline callers hand the ticket to the real child
         # runner, which spends it when the child conversation actually starts.
         _start_ticket = _checkpoint_ticket if credit_inline_start else None
+        if credit_inline_start:
+            _open_foreground_card()
         if n_tasks == 1:
             # Single task -- run directly (no thread pool overhead)
             _i, _t, child = children[0]
@@ -5354,6 +5372,8 @@ def delegate_task(
                 request_identity=dict(_admitted_identity),
                 handoff=handoff,
                 child_steps=list(_task_steps) if n_tasks > 1 else (),
+                titles=[t.get("title") for t in task_list],
+                task_steps=_task_steps[0] if n_tasks == 1 else (),
             )
             n = len(_goals)
             note = _background_dispatch_note(n, joined=_fanout_mode == "joined")

@@ -36,7 +36,8 @@ _VERBS = {
     "analyze": ("analyzing", "analyzed"), "audit": ("auditing", "audited"),
     "build": ("building", "built"), "check": ("checking", "checked"),
     "clean": ("cleaning", "cleaned"), "compare": ("comparing", "compared"),
-    "convert": ("converting", "converted"), "create": ("creating", "created"),
+    "convert": ("converting", "converted"), "count": ("counting", "counted"),
+    "create": ("creating", "created"),
     "debug": ("debugging", "debugged"), "deploy": ("deploying", "deployed"),
     "design": ("designing", "designed"), "diagnose": ("diagnosing", "diagnosed"),
     "do": ("doing", "done"), "download": ("downloading", "downloaded"),
@@ -45,6 +46,7 @@ _VERBS = {
     "figure": ("figuring", "figured"), "find": ("finding", "found"),
     "fix": ("fixing", "fixed"), "gather": ("gathering", "gathered"),
     "generate": ("generating", "generated"), "get": ("getting", "got"),
+    "implement": ("implementing", "implemented"),
     "install": ("installing", "installed"), "investigate": ("investigating", "investigated"),
     "list": ("listing", "listed"), "look": ("looking", "looked"),
     "make": ("making", "made"), "migrate": ("migrating", "migrated"),
@@ -271,3 +273,47 @@ def handoff_summary(message: str, reason: str = "", fallback_goal: str = "") -> 
     """``{"work": title, "outcome": goal}`` for ``delegate_task(handoff=...)``."""
     title, goal = title_and_goal(message, reason, fallback_goal)
     return {"work": title, "outcome": goal}
+
+
+# A task brief often opens with a role line ("You are building the site.") or
+# "Your task is to ..."; neither names the work.
+_ROLE_LINE = re.compile(r"^(?:you(?:'re| are| will be| must)\b|your (?:task|job|goal|mission) is\b)", re.IGNORECASE)
+_DANGLING = re.compile(r"\s+(?:at|on|from|in|of|to|see)(?=\s+(?:and|or|then)\b)", re.IGNORECASE)
+_TASK_PREFIX = re.compile(r"^your (?:task|job|goal|mission) is(?: to)?\s+", re.IGNORECASE)
+
+
+def task_title(goal: str, explicit: str = "") -> str:
+    """A short card title for one delegated task, with no model call.
+
+    The task's own ``title`` when it has one; otherwise a gerund phrase from its
+    goal (``implement the contact form`` -> ``implementing the contact form``).
+    Never empty, never raises.
+    """
+    try:
+        own = _flat(str(explicit or "").replace("*", ""))
+        if own:
+            return _cut(own, TITLE_CHARS)
+        scrubbed = _DANGLING.sub(" ", _scrub(goal))  # "review the PR at <link> and ..." -> "... PR and ..."
+        pieces = [_flat(p) for p in _SENTENCE_END.split(scrubbed) if _flat(p)]
+        text = ""
+        for i, piece in enumerate(pieces):
+            if _ROLE_LINE.match(piece) and not _TASK_PREFIX.match(piece):
+                continue
+            text = _TASK_PREFIX.sub("", piece)
+            break
+        text = text or (pieces[0] if pieces else "")
+        title = title_and_goal(text)[0]
+        if title == FALLBACK_TITLE:
+            title = _cut(_head_clause(_flat(text), TITLE_CHARS), TITLE_CHARS) or "background task"
+        return title
+    except Exception:
+        return "background task"
+
+
+def dispatch_work_title(goals, titles=()) -> str:
+    """The card title of a dispatch that came without a ``handoff`` summary:
+    the one task's title, or ``N subagents``."""
+    goals = [g for g in (goals or ()) if g]
+    if len(goals) == 1:
+        return task_title(goals[0], (list(titles or ()) or [""])[0])
+    return f"{len(goals)} subagents"

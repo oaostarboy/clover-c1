@@ -115,13 +115,16 @@ async def test_publisher_still_posts_the_roster_card_under_classic():
 
 
 @pytest.mark.asyncio
-async def test_publisher_still_posts_for_a_delegation_without_a_unified_card():
-    # unified is on, but no ack part exists for this id (e.g. a plain
-    # delegate_task the router never dispatched): the roster card stays.
+async def test_a_delegation_without_a_card_gets_a_unified_card_never_the_roster():
+    # unified is on, but no ack part exists for this id (a nested helper, a
+    # dispatch path that skipped the card): the first event opens a plain
+    # titled unified card.  The 🔀 roster card is never posted.
     _card("some_other_id")
     adapter = FakeTelegramAdapter()
     pub = await _drive(adapter)
-    assert adapter.status_calls or adapter.sends
+    assert adapter.status_calls == [], "no 🔀 roster card"
+    assert adapter.sends, "the unified card was posted instead"
+    assert "Audit the gateway auth mixin" not in adapter.sends[0]["content"] or "**" in adapter.sends[0]["content"]
     await pub.aclose()
 
 
@@ -391,9 +394,13 @@ async def test_a_roster_card_already_posted_is_removed_once_the_delegation_is_ow
     pub = _make_publisher(adapter)
     runner = _turn_runner(pub)
     cb = _child_cb(runner, delegation_id=OWNED)
+    # (unified mode itself never posts a roster card any more; a style switched
+    # mid-run is the way left to have one up before the unified card owns the id)
+    ac.set_style_for_tests("classic")
     cb("subagent.start", preview="Read the Windows check result")
     await pub.drain()
     assert adapter.status_calls, "precondition: the early 🔀 card was posted"
+    ac.set_style_for_tests("unified")
     posted = list(adapter.status_calls)
     # ownership arrives late (the old race)
     _card()
