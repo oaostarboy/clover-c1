@@ -115,8 +115,8 @@ _STEP_ICON = {
 _END_ICON = {DONE: DONE_ICON, FAILED: FAILED_ICON, STOPPED: STOPPED_ICON}
 # The unified card uses plain marks, not emojis: the only emojis on it are the
 # 🔀 in front of the title (🍂 in its place when the card ended badly), the 🍀 in
-# the "tap to ..." hint, a 🍂 / 🥀 in front of a failed / stopped subagent's name, and the
-# 🛠 / ⏱ leading each stats line (calls, time).
+# the "tap to ..." hint, a 🍂 / 🥀 in front of a failed / stopped subagent's name, the
+# 🛠 / ⏱ leading each stats line (calls, time), and the 🔧 on a running tool line.
 _STEP_MARK = {
     "completed": "\u2713",  # ✓
     "in_progress": "\u25b8",  # ▸
@@ -124,7 +124,7 @@ _STEP_MARK = {
     "failed": "\u2717",  # ✗
     "cancelled": "\u2013",  # –
 }
-# Tool phrases are cut so the WHOLE line (indent + "before: " + phrase) fits one
+# Tool phrases are cut so the WHOLE line (indent + "\U0001f527 " + phrase) fits one
 # phone row: a few characters more on the single card (no indent).
 TOOL_PHRASE_MULTI = 34
 TOOL_PHRASE_SINGLE = 40
@@ -225,7 +225,7 @@ class Child:
     hidden_ids: Set[str] = field(default_factory=set)
     steps: List[List[str]] = field(default_factory=list)  # its own [text, status] rows
     open: List[Tuple[str, str, str]] = field(default_factory=list)  # (call id, name, phrase)
-    recent: Deque[Tuple[str, bool]] = field(default_factory=lambda: deque(maxlen=RECENT_TOOLS_SINGLE))
+    recent: Deque[Tuple[str, bool, int]] = field(default_factory=lambda: deque(maxlen=RECENT_TOOLS_SINGLE))  # (phrase, ok, repeats)
 
     @property
     def label(self) -> str:
@@ -249,7 +249,7 @@ class Checklist:
     ended: Optional[float] = None
     # The current tool(s) and the last few finished ones (newest last).
     open: List[Tuple[str, str, str]] = field(default_factory=list)
-    recent: Deque[Tuple[str, bool]] = field(default_factory=lambda: deque(maxlen=RECENT_TOOLS_SINGLE))
+    recent: Deque[Tuple[str, bool, int]] = field(default_factory=lambda: deque(maxlen=RECENT_TOOLS_SINGLE))  # (phrase, ok, repeats)
     # A dispatch of several helpers: one entry each, in dispatch order.  The
     # card then shows a block per helper instead of one helper's steps.
     kids: List[Child] = field(default_factory=list)
@@ -346,15 +346,23 @@ class Checklist:
         tail = ""
         if self.state != RUNNING:
             tail = " \u00b7 " + self.state
-        head = self._title_line(title, tail, single=True)
         stats = _stats_line(self.model, self.calls, self.started, self.ended, now)
-        blocks: List[List[str]] = [
-            [ln for ln in (self._goal_line(outcome), stats) if ln],
-            [f"{_STEP_MARK[status]} {text}" for text, status in self.steps],
-        ]
+        steps = [f"{_STEP_MARK[status]} {text}" for text, status in self.steps]
         if self.state == RUNNING:
-            blocks.append(_live_lines(self, RECENT_TOOLS_SINGLE, TOOL_PHRASE_SINGLE))
-        elif self.summary:
+            # One live subagent, in this order (no indent, no \u25a0): line 1 is
+            # the model / calls / time (visible when the quote is collapsed,
+            # with the hint under it), then the bold title, the Goal, the
+            # subtasks and the tool calls.  Before any stats exist the title
+            # leads instead.
+            lines = [f"**{title}**"] if stats else []
+            lines += [self._goal_line(outcome)] + steps
+            lines += _live_lines(self, RECENT_TOOLS_SINGLE, TOOL_PHRASE_SINGLE)
+            head = f"{TITLE_ICON} {stats}" if stats else self._title_line(title, tail, single=True)
+            body = "\n".join([head] + [f"> {q}" for q in lines if q])
+            return f"{self.say}\n\n{body}" if (self.say and include_say) else body
+        head = self._title_line(title, tail, single=True)
+        blocks: List[List[str]] = [[ln for ln in (self._goal_line(outcome), stats) if ln], steps]
+        if self.summary:
             blocks.append([no_command_links(self.summary.replace("*", ""))])
         body = "\n".join([head] + [f"> {q}" for q in _join_blocks(blocks)])
         return f"{self.say}\n\n{body}" if (self.say and include_say) else body
@@ -493,10 +501,11 @@ def _kid_step_lines(kid: Any) -> List[str]:
     return [f"{_STEP_MARK[status]} {text}" for text, status in kid.steps]
 
 
-def _joined_title(titles: Sequence[str]) -> str:
-    """The title of a card that joined several jobs: ``3 jobs``.  The names stay
-    in the sections below (each ``■ **name**`` line and its ``Goal:``)."""
-    return f"{len(titles)} jobs"
+def _joined_title(subagents: int) -> str:
+    """The title of a card that joined several jobs: ``3 subagents`` (all the
+    subagents on the card, not the number of jobs).  The names stay in the
+    sections below (each ``■ **name**`` line and its ``Goal:``)."""
+    return f"{subagents} subagent{'s' if subagents != 1 else ''}"
 
 
 JOINED_GOAL_CHARS = 40  # a goal inside a joined card's section: one phone row
@@ -786,24 +795,29 @@ def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[List
     return _with_lost_last(blocks, kids)
 
 
-def _tool_lines(obj: Any, cap: int, phrase_max: int = TOOL_PHRASE_MULTI) -> List[str]:
-    """``*now: ...*`` for the open tool, then ``*before: ...*`` for the last
-    finished ones (newest first).  Each phrase is cut so the line fits a row."""
-    def line(label: str, phrase: str, failed: bool = False) -> str:
-        suffix = " (failed)" if failed else ""
-        # A shell command reads on its own: "now: pytest -q", not "now: terminal pytest -q".
-        for shell in ("terminal ", "Bash "):
-            if phrase.startswith(shell):
-                phrase = phrase[len(shell):]
-                break
-        text = short_tool_phrase(phrase, max(8, phrase_max - len(suffix)))
-        return _italic(f"{label}: {text}{suffix}")
+TOOL_RUNNING_MARK = "\U0001f527"  # 🔧
+TOOL_OK_MARK, TOOL_ERR_MARK = "\u2713", "\u2717"  # ✓ ✗
 
+
+def _tool_lines(obj: Any, cap: int, phrase_max: int = TOOL_PHRASE_MULTI) -> List[str]:
+    """``🔧 *tool arg*`` for the open tool(s), then ``✓ *tool arg*`` (``✗`` when
+    it failed) for the last finished ones, newest first.  Identical neighbours
+    collapse into one line with `` ×N``; each phrase is cut to fit a row."""
+    entries: List[List[Any]] = []  # [mark, phrase, repeats]
+    for _, _, phrase in reversed(obj.open):
+        if entries and entries[-1][:2] == [TOOL_RUNNING_MARK, phrase]:
+            entries[-1][2] += 1
+        else:
+            entries.append([TOOL_RUNNING_MARK, phrase, 1])
+    for phrase, ok, repeats in reversed(obj.recent):
+        entries.append([TOOL_OK_MARK if ok else TOOL_ERR_MARK, phrase, repeats])
     lines: List[str] = []
-    if obj.open:
-        lines.append(line("now", obj.open[-1][2]))
-    lines += [line("before", phrase, not ok) for phrase, ok in reversed(obj.recent)]
-    return [ln for ln in lines if ln][:cap]
+    for mark, phrase, repeats in entries:
+        suffix = f" \u00d7{repeats}" if repeats > 1 else ""
+        text = short_tool_phrase(phrase, max(8, phrase_max - len(suffix)))
+        if text:
+            lines.append(f"{mark} {_italic(text + suffix)}")
+    return lines[:cap]
 
 
 def _live_lines(obj: Any, cap: int, phrase_max: int) -> List[str]:
@@ -1267,9 +1281,9 @@ def short_tool_phrase(phrase: str, limit: int = TOOL_LINE_MAX) -> str:
         while len(words) > 1 and not any(ch.isalnum() for ch in words[-1]):
             words.pop()
         text = " ".join(words)
-    if len(text) <= limit:
+    if len(text) + (1 if cut_upstream else 0) <= limit:
         return no_command_links(text + ("\u2026" if cut_upstream else ""))
-    return no_command_links(_cut_word(text, limit))
+    return no_command_links(_cut_word(text + ("\u2026" if cut_upstream else ""), limit))
 
 
 _SHELL_TOOLS = frozenset({"terminal", "Bash"})  # Bash: Claude's shell tool
@@ -1340,7 +1354,7 @@ def _with(verb: str, thing: str) -> str:
 _TOOL_ALIAS = {
     "read": "read_file", "edit": "write_file", "write": "write_file",
     "multiedit": "write_file", "grep": "search_files", "glob": "search_files",
-    "websearch": "web_search", "webfetch": "web_extract",
+    "websearch": "web_search", "webfetch": "web_extract", "bash": "terminal",
 }
 _PREVIEW_KEY = {
     "read_file": ("path",), "write_file": ("path",), "patch": ("path",),
@@ -1349,51 +1363,64 @@ _PREVIEW_KEY = {
 }
 
 
-def plain_tool_phrase(name: str, args: Any = None, preview: Any = None) -> str:
-    """A tool call in plain words for a card's ``now:`` / ``before:`` line
-    (``ran a script``, ``read config.yaml``).  Never raw code or JSON; a missing
-    argument leaves just the verb.  Shell commands are handled by the caller."""
+_CODE_SKIP_RE = re.compile(r"^(?:import\s|from\s+\S+\s+import\s|#|[A-Za-z_][A-Za-z0-9_]*=\S*$)")
+
+
+def _first_code_line(code: str) -> str:
+    """The first meaningful line of a script: not blank, an import, a comment
+    or a ``PY=...`` style setup line."""
+    for raw in str(code or "").splitlines():
+        line = raw.strip()
+        if line and not _CODE_SKIP_RE.match(line):
+            return line
+    return ""
+
+
+def tool_line_phrase(name: str, args: Any = None, preview: Any = None) -> str:
+    """A tool call for a card's tool line: the REAL tool name and a short
+    argument preview (``read_file config.yaml``, ``web_search "query"`` without
+    the quotes, ``execute_code run_tests()``).  Shell commands are simplified by
+    the caller."""
+    from agent.delegation_activity import _tool_phrase, summarize_tool_call
+
     tool = str(name or "tool").strip() or "tool"
     low = _TOOL_ALIAS.get(tool.lower(), tool.lower())
+    if tool.lower() in _TOOL_ALIAS:
+        tool = low  # an outside agent's tool shows under our name for it (Read -> read_file)
     args = dict(args) if isinstance(args, dict) else {}
     if isinstance(preview, str) and preview.strip() and not preview.lstrip().startswith(("{", "[")):
         # No structured args (an outside job): the preview is the main argument.
         for key in _PREVIEW_KEY.get(low, ()):
             args.setdefault(key, preview.strip().splitlines()[0])
+    if low == "mcp" or low.startswith("mcp__"):
+        shown = tool.split("__")[-1].replace("_", " ").strip() or "tool"
+        if low.startswith("mcp__browser") or low.startswith("mcp__playwright__"):
+            dom = _domain(_arg(args, "url"))
+            return f"{shown} {dom}" if dom else shown
+        arg = summarize_tool_call(tool, preview, args)
+        return _tool_phrase(shown, arg)
     if low == "execute_code":
-        return "ran a script"
-    if low == "read_file":
-        return _with("read", _basename(_arg(args, "path", "file_path")))
-    if low in ("write_file", "patch"):
-        return _with("edited", _basename(_arg(args, "path", "file_path")))
-    if low == "search_files":
-        pat = _arg(args, "pattern")
-        return f'searched files for "{pat}"' if pat else "searched files"
+        code = args.get("code")
+        line = _first_code_line(code) if isinstance(code, str) else ""
+        if not line and isinstance(preview, str) and not isinstance(code, str):
+            line = _first_code_line(preview)
+        from agent.delegation_activity import sanitize_text
+
+        return _with(tool, sanitize_text(line, 200) if line else "")
+    if low in ("read_file", "write_file", "patch"):
+        return _with(tool, _basename(_arg(args, "path", "file_path")))
     if low == "web_search":
-        q = _arg(args, "query")
-        return f'searched "{q}"' if q else "searched the web"
+        return _with(tool, _arg(args, "query"))
     if low == "web_extract":
         urls = args.get("urls")
         first = urls[0] if isinstance(urls, (list, tuple)) and urls and isinstance(urls[0], str) else ""
-        return _with("read", _domain(first or _arg(args, "url")))
+        return _with(tool, _domain(first or _arg(args, "url")))
     if low == "skill_view":
-        return f"opened the {_arg(args, 'name')} skill" if _arg(args, "name") else "opened a skill"
-    if low == "delegate_task":
-        return "started a subagent"
-    if low == "session_search":
-        return "searched past chats"
-    if low == "vision_analyze":
-        return "looked at an image"
-    if low == "clarify":
-        return "asked you a question"
-    if (low == "browser" or low.startswith("browser_") or low.startswith("mcp__browser")
-            or low.startswith("mcp__playwright__")):
+        return _with(tool, _arg(args, "name"))
+    if low == "browser" or low.startswith("browser_"):
         dom = _domain(_arg(args, "url"))
-        return f"opened {dom}" if dom else "used the browser"
-    if low.startswith("mcp__"):
-        last = tool.split("__")[-1]
-        return last.replace("_", " ").strip() or "tool"
-    return tool.replace("_", " ")
+        return _with(tool, dom)
+    return _tool_phrase(tool, summarize_tool_call(tool, preview, args))
 
 
 def _tool_started(obj: Any, kw: Dict[str, Any]) -> None:
@@ -1413,11 +1440,11 @@ def _tool_started(obj: Any, kw: Dict[str, Any]) -> None:
             elif isinstance(preview, str):
                 preview = simplify_shell_command(preview)
         if name in _SHELL_TOOLS:
-            phrase = _tool_phrase(name, summarize_tool_call(name, preview, args))
+            phrase = _tool_phrase("terminal", summarize_tool_call(name, preview, args))
         else:
-            phrase = plain_tool_phrase(name, args, preview)
+            phrase = tool_line_phrase(name, args, preview)
     except Exception:
-        phrase = name.replace("_", " ")
+        phrase = name
     phrase = short_tool_phrase(phrase)
     obj.open.append((call_id, name, phrase))
     del obj.open[:-_MAX_OPEN_TOOLS]
@@ -1441,7 +1468,12 @@ def _tool_finished(obj: Any, kw: Dict[str, Any]) -> None:
     if pick < 0:
         pick = len(obj.open) - 1
     _, _, phrase = obj.open.pop(pick)
-    obj.recent.append((phrase, not kw.get("is_error")))
+    ok = not kw.get("is_error")
+    if obj.recent and obj.recent[-1][:2] == (phrase, ok):
+        last = obj.recent[-1]
+        obj.recent[-1] = (phrase, ok, last[2] + 1)  # the same call again: ×N
+    else:
+        obj.recent.append((phrase, ok, 1))
 
 
 def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
@@ -1601,7 +1633,7 @@ class Card:
         done = sum(1 for x in subs if x.state == DONE)
         failed = [x for x in subs if x.state == FAILED]
         joined = len(parts) > 1
-        title = _joined_title([p.checklist for p in parts]) if joined else parts[0].checklist._title_outcome()[0]
+        title = _joined_title(n) if joined else parts[0].checklist._title_outcome()[0]
         stats: List[str] = []
         if not failed:
             status = "done"
@@ -1635,7 +1667,7 @@ class Card:
         self, summary_chars: int, tool_cap: int, include_say: bool, now: Optional[float] = None,
         parts: Optional[Sequence[Part]] = None,
     ) -> str:
-        """Several dispatches on one card: one title (``N jobs``, ``k of M
+        """Several dispatches on one card: one title (``N subagents``, ``k of N
         done`` across all subagents), a Goal line per part, every subagent's
         section in order, and one footer."""
         now = time.monotonic() if now is None else now
@@ -1652,7 +1684,7 @@ class Card:
         running = any(cl.state == RUNNING for cl in cls)
         lost = not running and any(s == FAILED for s in states)
         head = _title_line(
-            _joined_title(titles), _count_tail(running, states), lost,
+            _joined_title(len(states)), _count_tail(running, states), lost,
         )
         blocks: List[List[str]] = []  # no Goal lines on top: each sits in its own section
         started: List[float] = []
@@ -1695,6 +1727,13 @@ class Card:
         body = "\n".join([head] + [f"> {q}" for q in _join_blocks(blocks)])
         say = self.say_text()
         return f"{say}\n\n{body}" if (say and include_say) else body
+
+    def single_layout(self) -> bool:
+        """True while the running card holds exactly ONE subagent (the layout
+        whose first line is the stats and whose title sits under the hint)."""
+        with _LOCK:
+            live = [p for p in self.parts if p.checklist.state == RUNNING]
+            return unified() and len(live) == 1 and not live[0].checklist.kids
 
     def say_text(self) -> str:
         """The root's opener line(s) of every part, in order ('' if none)."""

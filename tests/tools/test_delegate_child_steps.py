@@ -222,9 +222,9 @@ def test_three_helpers_render_name_steps_tools_stats_inside_one_quote():
     assert i_nice < i_silas < i_pizza
     pizza = text[i_pizza:]
     assert pizza.index("\u2713 read") < pizza.index("\u25b8 typos") < pizza.index("\u25cb report")
-    assert pizza.index("\u25cb report") < pizza.index("now: read x.md")
+    assert pizza.index("\u25cb report") < pizza.index("\U0001f527 *read_file x.md*")
     assert "\u2713 open" in text[i_nice:i_silas], "a done helper keeps its steps"
-    assert "now:" not in text[i_nice:i_silas], "no live tool lines once it is done"
+    assert "\U0001f527" not in text[i_nice:i_silas], "no live tool lines once it is done"
 
 
 def test_a_helper_without_steps_renders_as_before():
