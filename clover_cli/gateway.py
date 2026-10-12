@@ -8816,6 +8816,15 @@ def _gateway_command_inner(args):
             )
             sys.exit(1)
 
+        # Restart safety: refuse when a fresh interpreter cannot import the
+        # gateway (a broken/foreign editable install would crash-loop it).
+        from gateway.restart import restart_import_check, restart_refusal_message
+
+        _ok, _detail = restart_import_check()
+        if not _ok:
+            print_error(restart_refusal_message(_detail))
+            sys.exit(1)
+
         # Try service first, fall back to killing and restarting
         service_available = False
         system = getattr(args, "system", False)

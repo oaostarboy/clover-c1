@@ -2076,6 +2076,25 @@ class GatewaySlashCommandsMixin:
             logger.debug("Failed to write restart dedup marker: %s", e)
 
         active_agents = self._running_agent_count()
+        # Restart safety: a fresh interpreter must be able to import
+        # clover_cli.main from CLOVER_HOME before we replace this process.
+        try:
+            from gateway import restart as _restart_mod
+
+            _ok, _detail = await asyncio.to_thread(
+                _restart_mod.restart_import_check, None, str(_clover_home)
+            )
+        except Exception as _exc:  # the check itself must never block a restart path silently
+            _restart_mod = None
+            _ok, _detail = True, f"import check skipped: {_exc}"
+            logger.warning("restart import check unavailable: %s", _exc)
+        if not _ok and _restart_mod is not None:
+            logger.error("Refusing /restart: replacement cannot import (%s)", _detail)
+            try:
+                (_clover_home / ".restart_notify.json").unlink()
+            except Exception:
+                pass
+            return _restart_mod.restart_refusal_message(_detail)
         # When running under a service manager (systemd/launchd) or inside a
         # Docker/Podman container, use the service restart path: exit with
         # code 75 so the service manager / container restart policy restarts

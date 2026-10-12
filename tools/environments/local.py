@@ -660,7 +660,13 @@ def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = Non
 
 
 def _scrub_delegated_child_kanban_env(env: dict[str, str]) -> dict[str, str]:
-    """Strip dispatcher-owned Kanban env from delegate_task child subprocesses."""
+    """Strip dispatcher-owned Kanban env from delegate_task child subprocesses.
+
+    Also strips any venv selector that points at a live agent venv
+    (``VIRTUAL_ENV``, ``UV_PROJECT_ENVIRONMENT``, ``UV_PYTHON``,
+    ``PIP_PREFIX``/``PIP_TARGET``): a subagent's shell must never inherit a
+    pointer that makes ``uv``/``pip`` write into a running gateway's venv.
+    """
     try:
         from agent.delegation_context import (
             is_delegated_child_process_context,
@@ -668,10 +674,43 @@ def _scrub_delegated_child_kanban_env(env: dict[str, str]) -> dict[str, str]:
         )
 
         if is_delegated_child_process_context():
-            return scrub_kanban_env(env)
+            env = scrub_kanban_env(env)
+            _strip_live_venv_selectors(env)
+            return env
     except Exception:
         pass
     return env
+
+
+_LIVE_VENV_SELECTOR_VARS = (
+    "VIRTUAL_ENV",
+    "UV_PROJECT_ENVIRONMENT",
+    "UV_PYTHON",
+    "PIP_PREFIX",
+    "PIP_TARGET",
+)
+
+
+def _strip_live_venv_selectors(env: dict) -> None:
+    """Drop env vars that would aim an installer at a live agent venv."""
+    try:
+        from tools.live_venv_guard import protected_venvs
+
+        venvs = protected_venvs()
+    except Exception:
+        return
+    if not venvs:
+        return
+    for key in _LIVE_VENV_SELECTOR_VARS:
+        value = env.get(key)
+        if not value:
+            continue
+        try:
+            real = os.path.realpath(os.path.abspath(os.path.expanduser(value)))
+        except Exception:
+            continue
+        if any(real == v or real.startswith(v.rstrip(os.sep) + os.sep) for v in venvs):
+            env.pop(key, None)
 
 
 # Tier-1 secrets: stripped from EVERY spawned subprocess unconditionally —

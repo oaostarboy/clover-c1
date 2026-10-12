@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import platform
+import re
 import secrets
 import stat
 import subprocess
@@ -513,6 +514,61 @@ def _detect_claude_code_version() -> str:
 
 
 _CLAUDE_CODE_SYSTEM_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
+
+# Prose-only product-name substitutions for the OAuth system prompt.
+_OAUTH_PROSE_REPLACEMENTS = (
+    ("Clover Cognition", "Claude Code"),
+    ("Clover agent", "Claude Code"),
+)
+# Code spans (fenced or inline) are copied through untouched.
+_CODE_SPAN_RE = re.compile(r"```.*?```|`[^`\n]*`", re.DOTALL)
+# Characters that make a match part of a path, URL, slug or identifier.
+_IDENT_NEIGHBOUR = set(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-/.\\:@~$"
+)
+
+
+def _replace_prose_only(text: str, old: str, new: str) -> str:
+    out = []
+    i = 0
+    while True:
+        j = text.find(old, i)
+        if j < 0:
+            out.append(text[i:])
+            return "".join(out)
+        before = text[j - 1] if j > 0 else ""
+        after_idx = j + len(old)
+        after = text[after_idx] if after_idx < len(text) else ""
+        # A trailing sentence period is prose; ".x" (a file suffix) is not.
+        after_is_ident = after in _IDENT_NEIGHBOUR and not (
+            after == "." and (after_idx + 1 >= len(text) or text[after_idx + 1].isspace())
+        )
+        if (before and before in _IDENT_NEIGHBOUR) or (after and after_is_ident):
+            out.append(text[i:after_idx])
+        else:
+            out.append(text[i:j])
+            out.append(new)
+        i = after_idx
+
+
+def _sanitize_oauth_system_prose(text: str) -> str:
+    """Rewrite product names in standalone prose; never in paths/code/ids."""
+    if not text:
+        return text
+    pieces = []
+    last = 0
+    for m in _CODE_SPAN_RE.finditer(text):
+        pieces.append((False, text[last:m.start()]))
+        pieces.append((True, m.group(0)))
+        last = m.end()
+    pieces.append((False, text[last:]))
+    result = []
+    for is_code, piece in pieces:
+        if not is_code:
+            for old, new in _OAUTH_PROSE_REPLACEMENTS:
+                piece = _replace_prose_only(piece, old, new)
+        result.append(piece)
+    return "".join(result)
 _MCP_TOOL_PREFIX = "mcp__"
 
 
@@ -953,16 +1009,16 @@ def build_anthropic_kwargs(
         else:
             system = [cc_block]
 
-        # 2. Sanitize system prompt — replace product name references
-        #    to avoid Anthropic's server-side content filters.
+        # 2. Sanitize system prompt — replace product-name references in
+        #    standalone PROSE only. Paths, URLs, repo slugs, code spans and
+        #    identifiers are never touched: rewriting ``clover-c1`` to
+        #    ``claude-code`` sent every subagent to non-existent folders
+        #    (``/home/.../claude-code-build/claude-code``) and the wrong
+        #    GitHub repo. A live OAuth call with ``clover-c1`` paths left
+        #    intact is accepted on the plan lane, so that rewrite is gone.
         for block in system:
             if isinstance(block, dict) and block.get("type") == "text":
-                text = block.get("text", "")
-                text = text.replace("Clover Cognition", "Claude Code")
-                text = text.replace("Clover agent", "Claude Code")
-                text = text.replace("clover-c1", "claude-code")
-                text = text.replace("Clover Cognition", "Anthropic")
-                block["text"] = text
+                block["text"] = _sanitize_oauth_system_prose(block.get("text", ""))
 
         # 3. Normalize tool names so NOTHING goes on the OAuth wire with a
         #    single-underscore ``mcp_`` prefix.  Anthropic's subscription/OAuth
