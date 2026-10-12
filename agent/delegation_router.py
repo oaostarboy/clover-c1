@@ -951,7 +951,11 @@ def work_plan_note(verdict: Verdict) -> str:
     head = f"{RUNTIME_NOTE_MARKER} work plan:"
     if verdict.mode == "direct":
         return f"{head} direct{because}. Handle it here."
-    close = "then end your turn with one short line saying what is running"
+    close = (
+        "then reply briefly: first answer any question or other point in the "
+        "user's message that the helpers are not doing, then one short line "
+        "on what is running"
+    )
     if verdict.mode == "single":
         return "\n".join([
             f"{head} single helper{because}.",

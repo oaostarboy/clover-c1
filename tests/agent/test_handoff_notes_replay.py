@@ -116,14 +116,16 @@ def test_the_agent_opens_in_its_own_voice_then_the_card(provider, aux, tmp_path,
     assert len(provider.captured) == 28
     call = provider.captured[-1]
     assert not call.get('tools'), 'the opener call carries no tool schema'
-    assert call.get('max_tokens') == 80 or call.get('max_completion_tokens') == 80
+    from agent.handoff_notes import OPENER_MAX_TOKENS
+    cap = call.get('max_tokens') or call.get('max_completion_tokens')
+    assert cap == OPENER_MAX_TOKENS, 'the opener call is capped by the module constant'
     # prompt-cache friendly: the same prefix as the work requests, then one runtime note appended
     prev = provider.captured[-2]['messages']
     sent = call['messages']
     assert sent[: len(prev) - 0][:3] == prev[:3], 'system prompt + earlier turns are byte-identical'
     assert sent[0] == prev[0]
     last = sent[-1]
-    assert last['role'] == 'user' and 'A subagent is now handling this' in last['content'] and 'ONE short line' in last['content']
+    assert last['role'] == 'user' and 'A subagent is now handling this' in last['content'] and 'short reply' in last['content'] and 'answer that first' in last['content']
     assert REQUEST not in last['content']
     low = last['content'].lower()
     assert 'safety net' not in low.replace('any safety mechanism', '')

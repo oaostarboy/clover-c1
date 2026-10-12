@@ -527,8 +527,9 @@ DELEGATION_MODE_GUIDANCE = (
     "directly and hand big or parallel jobs to helpers with delegate_task; "
     "the user's explicit wording wins (\"do it yourself\" means direct, "
     "\"use helpers\" means a helper). "
-    "When dispatching helpers, dispatch, then end your turn with one short "
-    "line saying what is running, and don't poll. "
+    "When dispatching helpers, dispatch, then reply briefly: first answer "
+    "any question or other point in the user's message that the helpers are "
+    "not doing, then one short line on what is running; don't poll. "
     "Check helper results before saying done, and never mention internal "
     "limits, timeouts or retries. " + RUNTIME_NOTE_GUIDANCE
 )
@@ -559,7 +560,8 @@ TODO_DELEGATION_DECISION_GUIDANCE = (
     "is spent, or once a background worker is dispatched, work tools stay "
     "blocked until the user's next message. Quick tasks stay direct; respect "
     "explicit no-subagent instructions. After dispatching background workers, "
-    "end your turn with a short acknowledgement."
+    "end your turn with a short reply that answers anything else the user "
+    "asked and says what is running."
 )
 
 PARALLEL_TOOL_CALL_GUIDANCE = (

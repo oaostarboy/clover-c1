@@ -37,7 +37,7 @@ from typing import Any, Deque, Dict, List, Optional, Sequence, Set, Tuple
 
 MAX_STEPS = 6
 MAX_STEP_CHARS = 60
-MAX_SAY_CHARS = 200
+MAX_SAY_CHARS = 320
 
 # ``display.helper_card``: ``unified`` (default) puts the helpers' live
 # activity -- recent tool calls, model, tool count, time and, when done, the

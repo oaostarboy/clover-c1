@@ -58,8 +58,8 @@ BRIEF_MAX_TOKENS = 600
 # provider takes 20-40 s (the 8 s the old separate call gave it timed out on
 # every large turn, which is why the template was posted).
 VOICE_TIMEOUT_SECONDS = 30.0
-OPENER_MAX_TOKENS = 80
-OPENER_CHARS = 200
+OPENER_MAX_TOKENS = 120
+OPENER_CHARS = 320
 SUMMARY_TASK = "delegation_router"  # shares the router's small fast model
 
 _HISTORY_SCAN = 60  # messages looked at (tool rows included) to find the text turns
@@ -568,10 +568,12 @@ def known_so_far(notes: str, *, timeout: float = SUMMARY_TIMEOUT_SECONDS) -> Lis
 
 _VOICE_NOTE = (
     "A subagent is now handling this for the user ({work}); your turn ends here. "
-    "Write ONE short line to the user, in your usual voice, saying it is in hand. "
-    "Under 25 words, plain text, no markdown, no list, no quotes. Do not quote the "
+    "Write a short reply to the user, in your usual voice, saying it is in hand. "
+    "If the user also asked a question or raised a point the subagent is not "
+    "covering, answer that first, then say it is in hand. "
+    "Under 50 words, plain text, no markdown, no list, no quotes. Do not quote the "
     "user's message. Do not mention limits, timeouts, how long anything took or any "
-    "safety mechanism, and do not call tools. Reply with the line and nothing else."
+    "safety mechanism, and do not call tools. Reply with just that and nothing else."
 )
 
 # What the user sees when the root's own line could not be had: neutral, with
