@@ -189,7 +189,9 @@ def test_a_finished_helper_keeps_its_steps_with_final_icons():
     kids = card.parts[0].checklist.kids
     assert [r[1] for r in kids[0].steps] == ["completed", "completed"]
     assert [r[1] for r in kids[2].steps] == ["failed", "pending", "pending"], "where it stopped"
-    assert "\u2713 open" in card.render() and "Tidy." in card.render()
+    text = card.render()
+    assert "\U0001f340 **nice & tidy site** \u00b7 done" in text, "a done helper is one line"
+    assert "\u2713 open" not in text and "Tidy." not in text
 
 
 def test_a_todo_that_arrives_before_the_part_opens_is_replayed_per_helper():
@@ -213,7 +215,8 @@ def test_three_helpers_render_name_steps_tools_stats_inside_one_quote():
     ac.on_child_event("subagent.complete", delegation_id="dm", task_index=0, task_count=3, status="completed",
                       summary="Result: done\nPlain summary: Tidy.")
     lines = card.render().splitlines()
-    assert lines[0].startswith("\U0001f500 **checking the 3 sites**") and "1 of 3 done" in lines[0]
+    assert lines[0].startswith("\U0001f500 **3 subagents**") and "1 of 3 done" in lines[0]
+    assert lines[1] == "> **checking the 3 sites**"
     assert all(ln.startswith("> ") or not ln for ln in lines[1:])
     text = "\n".join(lines)
     i_nice = text.index("**nice & tidy site**")
@@ -221,10 +224,11 @@ def test_three_helpers_render_name_steps_tools_stats_inside_one_quote():
     i_pizza = text.index("**pizzeria bros pamphlet**")
     assert i_nice < i_silas < i_pizza
     pizza = text[i_pizza:]
-    assert pizza.index("\u2713 read") < pizza.index("\u25b8 typos") < pizza.index("\u25cb report")
-    assert pizza.index("\u25cb report") < pizza.index("\U0001f527 *read_file x.md*")
-    assert "\u2713 open" in text[i_nice:i_silas], "a done helper keeps its steps"
-    assert "\U0001f527" not in text[i_nice:i_silas], "no live tool lines once it is done"
+    # the tool line nests under the step in progress; the steps still to do come after it
+    assert pizza.index("\u2713 read") < pizza.index("\u25b8 typos") < pizza.index("\U0001f527 *read_file x.md*")
+    assert pizza.index("\U0001f527 *read_file x.md*") < pizza.index("\u25cb report")
+    assert "\U0001f340 **nice & tidy site** \u00b7 done" in text[i_nice - 3:i_silas], "a done helper is ONE line"
+    assert "open" not in text[i_nice:i_silas] and "\U0001f527" not in text[i_nice:i_silas]
 
 
 def test_a_helper_without_steps_renders_as_before():
@@ -245,7 +249,7 @@ def test_over_six_helpers_finished_ones_still_collapse_to_one_line():
                       summary="Result: done\nPlain summary: Fine.")
     text = card.render()
     line = next(ln for ln in text.splitlines() if "site 0" in ln)
-    assert "Fine." in line, "finished helper = one line"
+    assert line.startswith("> \U0001f340 **site 0** \u00b7 done"), "finished helper = one line"
     listed = [ln for ln in text.splitlines() if ln.endswith(" one")]
     assert len(listed) == ac.COMPACT_RUNNING, "only the running helpers shown in full list their steps"
 

@@ -126,8 +126,8 @@ _STEP_MARK = {
 }
 # Tool phrases are cut so the WHOLE line (indent + "\U0001f527 " + phrase) fits one
 # phone row: a few characters more on the single card (no indent).
-TOOL_PHRASE_MULTI = 34
-TOOL_PHRASE_SINGLE = 40
+TOOL_PHRASE_MULTI = 32  # tool lines nest two levels deep on a several-subagent card
+TOOL_PHRASE_SINGLE = 38  # ...and one level deep on the single card
 _MAX_OPEN_TOOLS = 8
 
 
@@ -355,8 +355,10 @@ class Checklist:
             # subtasks and the tool calls.  Before any stats exist the title
             # leads instead.
             lines = [f"**{title}**"] if stats else []
-            lines += [self._goal_line(outcome)] + steps
-            lines += _live_lines(self, RECENT_TOOLS_SINGLE, TOOL_PHRASE_SINGLE)
+            lines += [self._goal_line(outcome)]
+            lines += _steps_with_tools(
+                self.steps, _live_lines(self, RECENT_TOOLS_SINGLE, TOOL_PHRASE_SINGLE), "", _INDENT,
+            )
             head = f"{TITLE_ICON} {stats}" if stats else self._title_line(title, tail, single=True)
             body = "\n".join([head] + [f"> {q}" for q in lines if q])
             return f"{self.say}\n\n{body}" if (self.say and include_say) else body
@@ -378,11 +380,21 @@ class Checklist:
         if not kids:
             return self._stopped_title(include_say)
         title, outcome = self._title_outcome()
-        head = _title_line(
-            title, _count_tail(self.state == RUNNING, [k.state for k in kids]),
-            self.state == FAILED,
-        )
-        blocks: List[List[str]] = [[ln for ln in (self._goal_line(outcome),) if ln]]
+        if len(kids) >= 2:
+            # Two or more subagents: the header says how many; the job's own
+            # title (and its Goal) moves inside, above the sections.
+            head = _title_line(
+                _joined_title(len(kids)),
+                _count_tail(self.state == RUNNING, [k.state for k in kids]),
+                self.state == FAILED,
+            )
+            blocks: List[List[str]] = [[f"**{title}**", self._goal_line(outcome)]]
+        else:
+            head = _title_line(
+                title, _count_tail(self.state == RUNNING, [k.state for k in kids]),
+                self.state == FAILED,
+            )
+            blocks = [[ln for ln in (self._goal_line(outcome),) if ln]]
         if len(kids) > COMPACT_OVER:
             blocks += _compact_kids(kids, now, tool_cap)
         else:
@@ -499,6 +511,31 @@ def _cut_word(text: str, limit: int) -> str:
 def _kid_step_lines(kid: Any) -> List[str]:
     """The helper's own checklist (nothing when it has none)."""
     return [f"{_STEP_MARK[status]} {text}" for text, status in kid.steps]
+
+
+def _steps_with_tools(
+    steps: Sequence[Tuple[str, str]], tools: Sequence[str], step_indent: str, tool_indent: str,
+) -> List[str]:
+    """The checklist with the tool lines NESTED under the step in progress
+    (``tool_indent``, one level deeper than ``step_indent``), so a step (``\u2713``
+    / ``\u25b8`` / ``\u25cb``) never reads like a tool call (``\U0001f527`` / ``\u21b3`` / ``\u2717``).
+    The steps after it (the ``\u25cb`` ones) follow the tool lines.  With no step
+    in progress the tool lines sit at the step indent, just before the first
+    step still to do (after all of them when there is none)."""
+    rows = list(steps)
+    nest = tool_indent
+    at = next((i for i, (_, st) in enumerate(rows) if st == "in_progress"), None)
+    if at is None:
+        nest = step_indent
+        at = next((i - 1 for i, (_, st) in enumerate(rows) if st == "pending"), len(rows) - 1)
+    out: List[str] = []
+    if at < 0:
+        out += [nest + t for t in tools]
+    for i, (text, status) in enumerate(rows):
+        out.append(f"{step_indent}{_STEP_MARK[status]} {text}")
+        if i == at:
+            out += [nest + t for t in tools]
+    return out
 
 
 def _joined_title(subagents: int) -> str:
@@ -645,25 +682,26 @@ class _Block(list):
 def _section_block(
     name: str, obj: Any, now: float, summary_chars: int, tool_cap: int,
 ) -> List[str]:
-    """One subagent's section: header, then its steps, tool lines or summary
-    (indented under the name).  ``obj`` is a ``Child`` or a one-subagent part."""
+    """One RUNNING (or waiting) subagent's section: header, then its steps with
+    the tool lines nested under the step in progress, then its stats if the name
+    was too long.  ``obj`` is a ``Child`` or a one-subagent part.  A subagent that
+    ended is NOT a section: see ``_ended_line``."""
     header, trailing = _section_header(name, obj, now)
     block = _Block(header)
     block.head = len(header)
     if obj.state == PENDING:
         block.extend(_indent([_italic(trailing)]))
         return block
-    under = _kid_step_lines(obj)
-    if obj.state == RUNNING:
-        under += _live_lines(obj, tool_cap, TOOL_PHRASE_MULTI)
-    elif obj.summary and summary_chars > 0:
+    tools = _live_lines(obj, tool_cap, TOOL_PHRASE_MULTI) if obj.state == RUNNING else []
+    under = _steps_with_tools(obj.steps, tools, _INDENT, _INDENT * 2)
+    if obj.state != RUNNING and obj.summary and summary_chars > 0:
         # one result line, cut on a word so it never wraps and loses its indent
-        under.append(no_command_links(
+        under.append(_INDENT + no_command_links(
             _cut_word(obj.summary.replace("*", ""), min(summary_chars, RESULT_LINE_CHARS))
         ))
     if trailing:
-        under.append(_italic(trailing))  # a long name's stats close its section
-    block.extend(_indent(under))
+        under.append(_INDENT + _italic(trailing))  # a long name's stats close its section
+    block.extend(under)
     return block
 
 
@@ -694,45 +732,36 @@ def plain_reason(kw: Dict[str, Any], plain: str) -> str:
 
 
 class _LostBlock(list):
-    """The collapsed lines of the failed subagents of a card."""
+    """The one-line forms of the subagents of a card that ended (done / failed)."""
 
 
-def _lost_lines(name: str, obj: Any) -> List[str]:
-    """A failed subagent as ONE line below the running ones:
-    ``\U0001f342 **name** \u00b7 failed \u00b7 \U0001f6e0 13 \u00b7 \u23f1 1m00s`` plus one short
-    indented reason line.  Stats that do not fit the row go on the next
-    indented line.  (A subagent stopped on purpose is not on the card at all.)"""
-    label = f"{FAILED_ICON} **{name}** \u00b7 {obj.state}"
-    stats: List[str] = []
+def _ended_line(name: str, obj: Any) -> List[str]:
+    """A subagent that ended, as exactly ONE line in its place in the list,
+    whether or not the rest of its job is over::
+
+        \U0001f340 **name** \u00b7 done \u00b7 Opus 5.5 \u00b7 \U0001f6e0 34 \u00b7 \u23f1 30m
+        \U0001f342 **name** \u00b7 failed \u00b7 a short reason
+
+    (A subagent stopped on purpose is not on the card at all.)"""
+    if obj.state == FAILED:
+        reason = no_command_links(_cut_word(getattr(obj, "reason", "") or "hit an error", REASON_CHARS))
+        return [f"{FAILED_ICON} **{name}** \u00b7 failed \u00b7 {reason}"]
+    parts = [f"{DONE_ICON} **{name}** \u00b7 {obj.state}"]
+    if obj.model:
+        parts.append(obj.model)
     if obj.calls:
-        stats.append(f"{CALLS_ICON} {obj.calls}")
+        parts.append(f"{CALLS_ICON} {obj.calls}")
     if obj.started is not None and obj.ended is not None:
-        stats.append(_elapsed(max(0.0, obj.ended - obj.started)))
-    lines = [label]
-    if stats:
-        text = " \u00b7 ".join(stats)
-        if _visible_len(name) + 3 + _visible_len(obj.state) + 3 + _visible_len(text) <= ROW_CHARS:
-            lines = [f"{label} \u00b7 {text}"]
-        else:
-            lines.append(_INDENT + text)
-    reason = getattr(obj, "reason", "")
-    if reason:
-        lines.append(_INDENT + no_command_links(_cut_word(reason, REASON_CHARS)))
-    return lines
+        parts.append(_elapsed(max(0.0, obj.ended - obj.started)))
+    return [" \u00b7 ".join(parts)]
 
 
 def _is_lost(k: Any) -> bool:
     return k.state == FAILED
 
 
-def _with_lost_last(blocks: List[List[str]], kids: Sequence[Child]) -> List[List[str]]:
-    lost: List[str] = []
-    for k in kids:
-        if _is_lost(k):
-            lost += _lost_lines(k.label, k)
-    if lost:
-        blocks.append(_LostBlock(lost))
-    return blocks
+def _is_ended(k: Any) -> bool:
+    return k.state in (DONE, FAILED)
 
 
 def _kid_block(k: Child, now: float, summary_chars: int, tool_cap: int) -> List[str]:
@@ -740,10 +769,23 @@ def _kid_block(k: Child, now: float, summary_chars: int, tool_cap: int) -> List[
 
 
 def _full_kids(kids: Sequence[Child], now: float, summary_chars: int, tool_cap: int) -> List[List[str]]:
-    """Up to ``COMPACT_OVER`` helpers: a full block each."""
+    """Up to ``COMPACT_OVER`` helpers, in their own order: a full section for each
+    one still working; a helper that ended is ONE line (a run of them is one
+    block), wherever its siblings are."""
     kids = [k for k in kids if k.state != STOPPED]
-    blocks = [_kid_block(k, now, summary_chars, tool_cap) for k in kids if not _is_lost(k)]
-    return _with_lost_last(blocks, kids)
+    blocks: List[List[str]] = []
+    run: List[str] = []
+    for k in kids:
+        if _is_ended(k):
+            run += _ended_line(k.label, k)
+            continue
+        if run:
+            blocks.append(_LostBlock(run))
+            run = []
+        blocks.append(_kid_block(k, now, summary_chars, tool_cap))
+    if run:
+        blocks.append(_LostBlock(run))
+    return blocks
 
 
 def _names(kids: Sequence[Child]) -> str:
@@ -774,15 +816,8 @@ def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[List
                 blocks.append(run)
                 run = []
             blocks.append(_kid_block(k, now, 0, min(tool_cap, RECENT_TOOLS_MULTI)))
-        elif _is_lost(k):
-            continue  # collapsed below the running ones
         else:
-            line = f"{_name_label(k.label, k.state)} \u00b7 {k.state}"
-            if k.summary:
-                line += " \u00b7 " + no_command_links(
-                    _cut_word(k.summary.replace("*", ""), COMPACT_RESULT_CHARS)
-                )
-            run.append(line)
+            run += _ended_line(k.label, k)
     if run:
         blocks.append(run)
     tail: List[str] = []
@@ -792,15 +827,16 @@ def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[List
         tail.append(f"waiting: {_names(waiting)}")
     if tail:
         blocks.append(tail)
-    return _with_lost_last(blocks, kids)
+    return blocks
 
 
 TOOL_RUNNING_MARK = "\U0001f527"  # 🔧
-TOOL_OK_MARK, TOOL_ERR_MARK = "\u2713", "\u2717"  # ✓ ✗
+# \u21b3 marks a FINISHED tool call (never \u2713: that only ever means a finished step); \u2717 a failed one.
+TOOL_OK_MARK, TOOL_ERR_MARK = "\u21b3", "\u2717"  # ↳ ✗
 
 
 def _tool_lines(obj: Any, cap: int, phrase_max: int = TOOL_PHRASE_MULTI) -> List[str]:
-    """``🔧 *tool arg*`` for the open tool(s), then ``✓ *tool arg*`` (``✗`` when
+    """``🔧 *tool arg*`` for the open tool(s), then ``↳ *tool arg*`` (``✗`` when
     it failed) for the last finished ones, newest first.  Identical neighbours
     collapse into one line with `` ×N``; each phrase is cut to fit a row."""
     entries: List[List[Any]] = []  # [mark, phrase, repeats]
@@ -921,6 +957,7 @@ class Part:
     card: Optional["Card"] = None
     ended_at: Optional[float] = None  # when the whole part ended (monotonic)
     ended_seq: int = 0  # order in which parts ended
+    opened_seq: int = 0  # order in which parts were dispatched
     liner_done: bool = False  # its one-line message was posted (or it needs none)
 
     def _changed(self) -> None:
@@ -950,6 +987,9 @@ def open_part(
             n = max(1, int(expected or 1))
             # Several helpers share the one card: a block each, no step list.
             part = Part(did, Checklist.start(header, steps if n == 1 else (), say), n)
+            global _OPEN_SEQ
+            _OPEN_SEQ += 1
+            part.opened_seq = _OPEN_SEQ
             if n > 1:
                 part.checklist.kids = [
                     Child(
@@ -1538,6 +1578,7 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
 
 
 _END_SEQ = 0
+_OPEN_SEQ = 0
 
 # (summary chars, tool lines per running helper) tried in turn until it fits.
 _BUDGET_STEPS = ((SUMMARY_CHARS, RECENT_TOOLS_MULTI), (80, RECENT_TOOLS_MULTI), (0, RECENT_TOOLS_MULTI), (0, 1), (0, 0))
@@ -1633,7 +1674,7 @@ class Card:
         done = sum(1 for x in subs if x.state == DONE)
         failed = [x for x in subs if x.state == FAILED]
         joined = len(parts) > 1
-        title = _joined_title(n) if joined else parts[0].checklist._title_outcome()[0]
+        title = _joined_title(n) if (joined or n > 1) else parts[0].checklist._title_outcome()[0]
         stats: List[str] = []
         if not failed:
             status = "done"
@@ -1702,7 +1743,11 @@ class Card:
             else:
                 part_blocks = [_section_block(title, cl, now, summary_chars, tool_cap)]
                 subs = [cl]
-            if goal and part_blocks and part_blocks[0]:
+            if cl.kids and len(states) >= 2:
+                # Several subagents on the card: each job's bold title (and
+                # its Goal) sits above that job's own sections.
+                part_blocks.insert(0, [ln for ln in (f"**{title}**", goal) if ln])
+            elif goal and part_blocks and part_blocks[0]:
                 # the part's goal: first line under its FIRST section's name
                 first = part_blocks[0]
                 if isinstance(first, _LostBlock):
@@ -1728,13 +1773,6 @@ class Card:
         say = self.say_text()
         return f"{say}\n\n{body}" if (say and include_say) else body
 
-    def single_layout(self) -> bool:
-        """True while the running card holds exactly ONE subagent (the layout
-        whose first line is the stats and whose title sits under the hint)."""
-        with _LOCK:
-            live = [p for p in self.parts if p.checklist.state == RUNNING]
-            return unified() and len(live) == 1 and not live[0].checklist.kids
-
     def say_text(self) -> str:
         """The root's opener line(s) of every part, in order ('' if none)."""
         with _LOCK:
@@ -1757,13 +1795,13 @@ class Card:
 
 def pending_liner_parts(ids: Sequence[Any]) -> List[Part]:
     """Parts of these delegation ids that have ended and whose one-line
-    message was not posted yet, in the order they ended."""
+    message was not posted yet, in the order they were dispatched."""
     with _LOCK:
         found = [
             _PARTS[i] for i in dict.fromkeys(str(x) for x in ids or ())
             if i in _PARTS and _PARTS[i].checklist.state != RUNNING and not _PARTS[i].liner_done
         ]
-    return sorted(found, key=lambda p: p.ended_seq)
+    return sorted(found, key=lambda p: (p.opened_seq, p.ended_seq))
 
 
 def card_for(receipts: Sequence[Any]) -> Optional[Card]:

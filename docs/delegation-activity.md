@@ -51,12 +51,22 @@ silent where it is `off`/`log`, so existing opt-outs are preserved.
 `helper_card` styles the ack message of a dispatched helper. `unified` (default)
 makes it the one card for the dispatch: your assistant's opening line, the work
 title and outcome with an ETA, the steps (⬜/🔄/🍀/🍂) for one helper, the
-current tool plus the previous ones (✓ ok / ✗ error, newest first; 3 lines for
+current tool plus the previous ones (↳ ok / ✗ error, newest first; 3 lines for
 one helper, 2 per running helper for several), and `Model · 🛠 N tool calls ·
 ⏱ time`. A dispatch of several helpers gets one block per helper (⬜ waiting,
 🔄 running, 🍀 done, 🍂 failed, ⏹ stopped) with a totals line; the header shows
-`k of N done`. When a helper finishes its tool lines give way to its plain
-summary, and no separate 🔀 card is posted. Outside agent jobs
+`k of N done`. With two or more helpers (one job or several joined) the header
+reads `N subagents · k of N done` and each job's bold title (plus its Goal)
+sits inside the card, above that job's blocks; a collapsed Telegram quote shows
+only the header, the hint and a blank line. A finished card is posted once,
+directly **under** the reply that reports it (below the `🛠 N tool calls`
+bubble and the reply), several jobs in dispatch order; a running card stays
+below the finished ones. A helper that has finished collapses to ONE line in its
+place, even while its siblings still run (`🍀 **name** · done · Opus 5.5 · 🛠 34 ·
+⏱ 30m`; `🍂 **name** · failed · <reason>`; a stopped one leaves the card). Inside a
+running section the steps keep `✓` / `▸` / `○` and the tool lines nest one level
+deeper under the step in progress (`🔧` running, `↳` finished, `✗` failed), so a
+finished step (`✓`) never looks like a finished tool call. No separate 🔀 card is posted. Outside agent jobs
 (`terminal(background=true, agent_job={...})`) show on the same card: they join
 the chat's running card as another section (named by the job's `title`), or get
 a card of their own; a job whose parser is `none` shows `running` instead of

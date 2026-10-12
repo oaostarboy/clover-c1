@@ -297,7 +297,7 @@ async def test_multi_helper_events_edit_the_one_message_in_place():
     await _settle(editor)
     assert adapter.edits[-1]["finalize"] is True
     assert adapter.edits[-1]["text"].splitlines() == [
-        "> \U0001f340 **fixing the bugs** \u00b7 done", "> *2 done \u00b7 \U0001f6e0 2 \u00b7 \u23f1 0s*"]
+        "> \U0001f340 **2 subagents** \u00b7 done", "> *2 done \u00b7 \U0001f6e0 2 \u00b7 \u23f1 0s*"]
     assert "**>" not in adapter.edits[-1]["text"], "finished: short blockquote, not expandable"
 
 
@@ -312,7 +312,7 @@ async def test_a_six_helper_edit_fits_the_telegram_limit():
     await _settle(editor)
     sent = adapter.edits[-1]["text"]
     assert len(sent) <= 4000 and sent.splitlines() == [
-        "> \U0001f340 **fixing the bugs** \u00b7 done", "> *6 done*"]
+        "> \U0001f340 **6 subagents** \u00b7 done", "> *6 done*"]
 
 
 @pytest.mark.asyncio
@@ -481,11 +481,12 @@ def test_a_single_subagent_reads_stats_hint_blank_title_goal_steps_tools():
         "> **fixing the bugs**",
         "> Goal: test build + PR \u00b7 ~10 min",
     ]
-    assert lines[5:8] == ["> \u25b8 find", "> \u25cb fix", "> \u25cb test"]
-    assert lines[8:] == [
-        "> \U0001f527 *terminal cmd4*", "> \u2713 *terminal cmd3*", "> \u2713 *terminal cmd2*||",
-    ][:len(lines[8:])] or lines[8].startswith("> \U0001f527 ") or lines[8].startswith("> \u2713 ")
-    assert text.count("Sonnet 5.5") == 1 and "\u25a0" not in text and "\u2003" not in text, "no section mark, no indent"
+    em = "\u2003\u2003"
+    # the tool lines nest under the step in progress; the steps still to do come after them
+    assert lines[5] == "> \u25b8 find" and lines[6].startswith(f"> {em}") and "\u2713" not in lines[6]
+    assert lines[-2:] == ["> \u25cb fix", "> \u25cb test||"]
+    assert all(ln.startswith(f"> {em}") for ln in lines[6:-2])
+    assert text.count("Sonnet 5.5") == 1 and "\u25a0" not in text, "no section mark"
     assert text.count("**>") == 1 and text.endswith("||") and all(ln.startswith("> ") for ln in lines[1:])
 
 
@@ -507,12 +508,13 @@ def test_a_single_subagent_layout_survives_telegram_formatting():
     ]
 
 
-def test_the_multi_card_title_is_first_inside_the_quote_with_no_spacer_before_the_hint():
+def test_the_multi_card_collapses_to_n_subagents_hint_and_a_blank_line():
     text = _editor(_tg_adapter(), _three_subagent_card())._render()
     lines = text.splitlines()
-    assert lines[0].startswith("**> \U0001f500 **fixing the bugs**") and "1 of 3 done" in lines[0]
-    assert lines[1] == "> *tap to watch \U0001f340*" and lines[2].startswith("> Goal: ")
-    assert "\u2800" not in "".join(lines[:3])
+    assert lines[0].startswith("**> \U0001f500 **3 subagents**") and "1 of 3 done" in lines[0]
+    # Telegram's collapsed quote shows three lines: header, hint, blank. Nothing else peeks through.
+    assert lines[1] == "> *tap to watch \U0001f340*" and lines[2] == "> \u2800"
+    assert lines[3] == "> **fixing the bugs**" and lines[4].startswith("> Goal: ")
 
 
 def test_telegram_finished_card_is_one_plain_line_without_a_quote_or_hint():
@@ -557,8 +559,9 @@ def _three_subagent_card():
 def test_multi_subagent_title_keeps_k_of_n_done_inside_one_quote():
     text = _editor(_tg_adapter(), _three_subagent_card())._render()
     lines = text.splitlines()
-    assert lines[0].startswith("**> \U0001f500 **fixing the bugs**") and "1 of 3 done" in lines[0]
-    assert lines[1] == "> *tap to watch \U0001f340*" and lines[2] == "> Goal: test build + PR \u00b7 ~10 min"
+    assert lines[0].startswith("**> \U0001f500 **3 subagents**") and "1 of 3 done" in lines[0]
+    assert lines[1] == "> *tap to watch \U0001f340*" and lines[2] == "> \u2800"
+    assert lines[3] == "> **fixing the bugs**" and lines[4] == "> Goal: test build + PR \u00b7 ~10 min"
     assert text.count("**>") == 1 and text.count("||") == 1
     assert all(ln.startswith("> ") for ln in lines[1:]) and lines[-1].endswith("||")
 
@@ -569,11 +572,12 @@ def test_multi_subagent_spacing_one_spacer_between_blocks_and_before_footer():
     spacer = "> \u2800"
     # No two blank lines in a row anywhere (hint spacer, blocks, footer).
     assert not any(a == spacer and b == spacer for a, b in zip(lines, lines[1:]))
-    # Hint, then straight to the outcome line (no spacer: all three collapsed lines show).
-    assert lines[1:3] == ["> *tap to watch \U0001f340*", "> Goal: test build + PR \u00b7 ~10 min"]
+    # Hint, one spacer, then the job title and its Goal.
+    assert lines[1:5] == ["> *tap to watch \U0001f340*", spacer, "> **fixing the bugs**",
+                          "> Goal: test build + PR \u00b7 ~10 min"]
     assert lines[-2] == spacer and lines[-1].startswith("> *2 running \u00b7 1 done") and "helpers" not in text
     # Three subagent sections: a spacer before each name line, plus the one before the footer.
-    names = [i for i, ln in enumerate(lines) if ln.startswith("> ") and "**" in ln and i > 0]
+    names = [i for i, ln in enumerate(lines) if ln.startswith("> ") and "**site" in ln and i > 0]
     assert len(names) == 3 and all(lines[i - 1] == spacer for i in names)
 
 
@@ -582,15 +586,16 @@ def test_multi_subagent_lines_are_indented_under_the_unindented_bold_name():
     text = _editor(_tg_adapter(), _three_subagent_card())._render()
     lines = [ln[2:] for ln in text.splitlines()[1:]]
     for i, ln in enumerate(lines):
-        if "**site" in ln:
+        if "**site" in ln and ln.startswith("\u25a0"):
             assert not ln.startswith((em, " ", "\u2003")), "the name line is not indented"
             under = []
             for nxt in lines[i + 1:]:
                 if nxt in ("\u2800", "") or "**site" in nxt:
                     break
                 under.append(nxt)
-            assert under and all(u.startswith(em) and not u.startswith(em + "\u2003") for u in under), under
-    assert "\n> " + em + "*" in text or "> " + em + "\U0001f527" in text
+            # steps sit one level in, the tool lines under the step in progress one level deeper
+            assert under and all(u.startswith(em) and not u.startswith(em + "\u2003\u2003\u2003") for u in under), under
+    assert "> " + em + em + "\U0001f527" in text, "the tool line nests one level under its step"
 
 
 def test_single_subagent_card_has_no_indent():
@@ -608,7 +613,7 @@ def test_format_message_keeps_title_inside_one_expandable_quote_and_the_em_inden
     assert lines[1] == "> _tap to watch \U0001f340_" and lines[2] == "> \u2800"
     assert out.count("**>") == 1 and out.endswith("||")
     multi = fm(_editor(_tg_adapter(), _three_subagent_card())._render())
-    assert multi.splitlines()[0].startswith("**> \U0001f500 *fixing the bugs* \u00b7 1 of 3 done")
+    assert multi.splitlines()[0].startswith("**> \U0001f500 *3 subagents* \u00b7 1 of 3 done")
     assert "> \u2003\u2003\u25b8 check the repo" in multi, "EM SPACE indent survives escaping"
     assert multi.count("**>") == 1 and multi.endswith("||")
 

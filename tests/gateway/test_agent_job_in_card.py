@@ -113,7 +113,7 @@ async def test_an_agent_job_joins_the_running_card_and_posts_no_roster_card():
     assert "\u25a0 **shipping the card**" in text
     # a long name stands alone; its stats close its section
     assert "\u25a0 **Audit cron locking**\n" in text and "\u2003\u2003*GPT-6.1 Sol \u00b7 \U0001f6e0 2 calls \u00b7 \u23f1 " in text
-    assert "\U0001f527 *terminal pytest -q*" in text and "\u2713 *read_file a.py*" in text
+    assert "\U0001f527 *terminal pytest -q*" in text and "\u21b3 *read_file a.py*" in text
     job.finish(0)
     assert first.parts[1].checklist.state == ac.DONE and not first.finished, "the host part still runs"
     await pub.aclose()
