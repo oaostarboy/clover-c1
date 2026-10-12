@@ -570,10 +570,9 @@ def test_multi_finished_all_ok_is_one_line_with_the_count_of_subagents():
     ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: Pamphlet is fine.",
                       **_kid("dm", 2))
     cl = card.parts[0].checklist
-    for k in cl.kids:
-        k.started = k.started or cl.kids[0].started
-        k.ended = cl.kids[0].started + 100
-    cl.ended = cl.kids[0].started + 100
+    for k in cl.kids:  # whole seconds: a float sum like (t + 100) - t can land a hair under 100
+        k.started, k.ended = 1000.0, 1100.0
+    cl.ended = 1100.0
     assert card.finished
     lines = card.render().splitlines()
     assert lines[2] == "> \U0001f340 **checking the 3 sites** \u00b7 done"
