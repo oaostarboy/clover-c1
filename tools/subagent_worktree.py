@@ -145,6 +145,190 @@ def _has_git_entry_above(start: str) -> Optional[bool]:
         current = parent
 
 
+# ── Whose folder is this? ────────────────────────────────────────────────
+#
+# A subagent's private copy must be built from the PARENT's own folder,
+# never from another agent's. The parent's live terminal cwd is not proof of
+# ownership: a parent that had just ``cd``-ed into a sibling agent's live
+# checkout (to read it) once got its child's worktree created inside that
+# sibling's repo. These helpers decide whether a folder belongs to another
+# agent and, if so, where the sandbox should be built instead.
+
+_DEFAULT_FOREIGN_AGENT_ROOTS = ("~/agents",)
+
+
+def _real(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    try:
+        return os.path.realpath(os.path.abspath(os.path.expanduser(str(path))))
+    except Exception:
+        return None
+
+
+def _is_within(path: str, root: str) -> bool:
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def own_clover_home() -> Optional[str]:
+    """This agent's CLOVER_HOME (realpath), or None when it cannot be read."""
+    try:
+        from clover_constants import get_clover_home
+
+        return _real(str(get_clover_home()))
+    except Exception:
+        return None
+
+
+def own_install_repo() -> Optional[str]:
+    """The git checkout this agent's own code runs from, if any."""
+    return resolve_repo_root(str(Path(__file__).resolve().parent.parent))
+
+
+def foreign_agent_roots() -> list:
+    """Folders that hold other agents' installs (config-overridable)."""
+    roots = list(_DEFAULT_FOREIGN_AGENT_ROOTS)
+    try:
+        from clover_cli.config import load_config_readonly
+
+        cfg = (load_config_readonly() or {}).get("delegation") or {}
+        configured = cfg.get("foreign_agent_roots")
+        if isinstance(configured, (list, tuple)):
+            roots = [str(r) for r in configured if r]
+    except Exception:
+        pass
+    return [r for r in (_real(r) for r in roots) if r]
+
+
+def _looks_like_clover_home(path: str) -> bool:
+    """A folder that is some agent's CLOVER_HOME (has its gateway/state)."""
+    try:
+        if os.path.exists(os.path.join(path, "gateway.pid")):
+            return True
+        return os.path.isfile(os.path.join(path, "config.yaml")) and (
+            os.path.exists(os.path.join(path, "state.db"))
+        )
+    except Exception:
+        return False
+
+
+def foreign_owner(path: Optional[str]) -> Optional[str]:
+    """Why *path* belongs to another agent, or None when it is ours/neutral.
+
+    Foreign means: inside another agent's CLOVER_HOME, or inside a folder
+    under the configured agent-install roots (``~/agents`` by default) that
+    is not this agent's own install checkout or home.
+    """
+    real = _real(path)
+    if not real:
+        return None
+    own_home = own_clover_home()
+    own_repo = _real(own_install_repo())
+    if own_repo and _is_within(real, own_repo):
+        return None
+    if own_home and _is_within(real, own_home):
+        # Our own home — unless a nested profile home (another agent) holds it.
+        current = real
+        while current and current != own_home:
+            if _looks_like_clover_home(current):
+                return f"another agent's home ({current})"
+            parent = os.path.dirname(current)
+            if parent == current:
+                break
+            current = parent
+        return None
+    current = real
+    while True:
+        if _looks_like_clover_home(current):
+            return f"another agent's home ({current})"
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    for root in foreign_agent_roots():
+        if _is_within(real, root) and real != root:
+            return f"another agent's install folder (under {root})"
+    return None
+
+
+def session_start_candidates() -> list:
+    """The parent's own starting folders, most specific first.
+
+    Gateway: the folder frozen at startup. CLI / config: ``terminal.cwd`` and
+    the startup ``TERMINAL_CWD``. Last: the checkout this agent's own code
+    runs from — "the agent's own folder".
+    """
+    out: list = []
+    try:
+        from tools.terminal_tool import get_gateway_start_cwd
+
+        out.append(get_gateway_start_cwd())
+    except Exception:
+        pass
+    try:
+        from clover_cli.config import load_config_readonly
+
+        out.append(((load_config_readonly() or {}).get("terminal") or {}).get("cwd"))
+    except Exception:
+        pass
+    out.append(os.environ.get("TERMINAL_CWD"))
+    out.append(own_install_repo())
+    seen: list = []
+    for c in out:
+        r = _real(c) if isinstance(c, str) and c.strip() else None
+        if r and os.path.isdir(r) and r not in seen:
+            seen.append(r)
+    return seen
+
+
+def choose_sandbox_base(
+    parent_cwd: Optional[str], start_candidates: Optional[list] = None
+) -> tuple[Optional[str], Optional[str]]:
+    """Pick the folder a child's sandbox is built from.
+
+    Returns ``(base, redirect_note)``. *base* is *parent_cwd* when that folder
+    is the parent's own (or neutral); when it belongs to another agent, the
+    first non-foreign git repo among the parent's session start folders. If
+    none qualifies, *base* is ``None`` and the caller uses a private scratch
+    folder. *redirect_note* explains a redirect (None when not redirected).
+    """
+    owner = foreign_owner(parent_cwd)
+    if owner is None:
+        return parent_cwd, None
+    candidates = (
+        start_candidates if start_candidates is not None
+        else session_start_candidates()
+    )
+    for cand in candidates:
+        if foreign_owner(cand) is None and resolve_repo_root(cand):
+            if foreign_owner(resolve_repo_root(cand)) is None:
+                return cand, (
+                    f"the parent's current folder {parent_cwd} is {owner}; "
+                    f"the sandbox was built from the parent's own repo {cand} instead"
+                )
+    return None, (
+        f"the parent's current folder {parent_cwd} is {owner}, and no own "
+        "repo was found; a private scratch folder is used instead"
+    )
+
+
+def create_scratch_sandbox(subagent_id: Optional[str]) -> Optional[Dict[str, str]]:
+    """A private, non-git folder for a child whose parent sat in a foreign repo."""
+    short_id = (subagent_id or uuid.uuid4().hex[:8]).replace("/", "-")
+    home = own_clover_home()
+    base = Path(home) / "sandboxes" if home else Path(
+        os.environ.get("TMPDIR", "/tmp")
+    )
+    path = base / f"subagent-{short_id}"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except Exception as exc:
+        logger.warning("subagent sandbox: cannot create %s: %s", path, exc)
+        return None
+    return {"path": str(path), "branch": "", "repo_root": "", "base_commit": "",
+            "scratch": "1"}
+
+
 def _ensure_gitignore_entry(repo_root: str) -> None:
     """Best-effort: keep ``.worktrees/`` out of git status."""
     gitignore = Path(repo_root) / ".gitignore"
@@ -311,6 +495,23 @@ def finalize_subagent_worktree(
         payload["pruned"] = True  # nothing on disk to review
         return payload
 
+    if info.get("scratch"):
+        # Private non-git scratch folder: no commits to count. Empty → remove;
+        # anything the child wrote is kept for the parent to look at.
+        try:
+            has_files = any(os.scandir(path))
+        except Exception:
+            has_files = True
+        payload["dirty"] = bool(has_files)
+        payload["scratch"] = True
+        if prune and not has_files:
+            try:
+                os.rmdir(path)
+                payload["pruned"] = True
+            except Exception as exc:
+                logger.debug("subagent scratch: prune failed: %s", exc)
+        return payload
+
     def _unproven(
         reason: str, *, unmeasured: str = "commits/dirty"
     ) -> Dict[str, Any]:
@@ -405,6 +606,33 @@ def prepare_subagent_worktree(
             "required": required,
             "reason": "worktree isolation is unsupported by the active terminal backend",
         }, None
+    # Never build a sandbox inside another agent's checkout or home. When the
+    # parent's live terminal sits in one, build from the parent's own start
+    # repo instead, or fall back to a private scratch folder.
+    original_cwd = parent_cwd
+    base, redirect = choose_sandbox_base(parent_cwd)
+    if redirect is not None:
+        logger.warning("subagent sandbox redirected: %s", redirect)
+        if base is None:
+            scratch = create_scratch_sandbox(subagent_id)
+            if scratch is not None:
+                scratch["redirected_from"] = str(original_cwd)
+            if scratch is None:
+                return {
+                    "status": "blocked" if required else "shared",
+                    "required": required,
+                    "reason": redirect + " (scratch folder creation failed)",
+                }, None
+            return {
+                "status": "isolated",
+                "required": required,
+                "path": scratch["path"],
+                "branch": "",
+                "scratch": True,
+                "redirected_from": parent_cwd,
+                "reason": redirect,
+            }, scratch
+        parent_cwd = base
     if not resolve_repo_root(parent_cwd):
         if is_confirmed_non_git_workspace(parent_cwd):
             # Isolation protects a git checkout from concurrent writers; with
@@ -434,12 +662,16 @@ def prepare_subagent_worktree(
             "required": required,
             "reason": reason,
         }, None
-    return {
+    outcome: Dict[str, Any] = {
         "status": "isolated",
         "required": required,
         "path": info.get("path", ""),
         "branch": info.get("branch", ""),
-    }, info
+    }
+    if redirect is not None:
+        info["redirected_from"] = str(original_cwd)
+        outcome["reason"] = redirect
+    return outcome, info
 
 
 def build_shared_workspace_context_note(outcome: Dict[str, Any]) -> str:
@@ -459,16 +691,46 @@ def build_shared_workspace_context_note(outcome: Dict[str, Any]) -> str:
     )
 
 
+_READS_ALLOWED_NOTE = (
+    "This rule limits WRITES only. Reading is allowed on any path: read "
+    "files, ls, du, grep, find, git log/show/diff/status, and inspect any "
+    "folder the task names (including the main checkout), from anywhere. "
+    "If the task asks you to measure or read another path, read it there."
+)
+
+
 def build_worktree_context_note(info: Dict[str, str]) -> str:
-    """Context block telling the child to work inside its isolated worktree."""
+    """Context block telling the child where it may write.
+
+    Restricts only writes (edits, new files, installs, git mutations) to the
+    child's own copy. Reads anywhere are explicitly allowed: a read-only job
+    on the main checkout must not be refused because of this note.
+    """
+    redirected = info.get("redirected_from")
+    redirect_line = (
+        f"(Your sandbox was built away from the parent's current folder: {redirected}.)\n"
+        if redirected else ""
+    )
+    if info.get("scratch"):
+        return (
+            "\n\n[SANDBOX] Your private scratch folder is: "
+            f"{info.get('path')}\n{redirect_line}"
+            "Write only inside this folder: file edits, new files, installs "
+            "and builds go here, and nowhere else. Do not edit, install into, "
+            "or run git commands that change any other folder. "
+            + _READS_ALLOWED_NOTE
+        )
     return (
         "\n\n[WORKTREE ISOLATION] You are working in an isolated git worktree "
         f"at: {info.get('path')}\n"
-        f"Your dedicated branch is: {info.get('branch')}\n"
-        "All file edits and shell commands must happen inside this worktree "
-        "directory (your terminal already starts there). Do NOT cd to the "
-        "main repository checkout. Commit your changes to your branch when "
-        "done; the parent agent will review and merge your branch. If you "
-        "make no commits and leave the tree clean, the worktree is discarded "
-        "automatically."
+        f"Your dedicated branch is: {info.get('branch')}\n{redirect_line}"
+        "Write only inside this worktree (your terminal already starts "
+        "there): file edits, new files, builds, and git commits, checkouts, "
+        "resets or stashes happen here. Do not change the main repository "
+        "checkout or any other folder, and never pip/uv install into another "
+        "agent's venv (make your own with `uv venv .venv` here). "
+        + _READS_ALLOWED_NOTE
+        + " Commit your changes to your branch when done; the parent agent "
+        "will review and merge your branch. If you make no commits and leave "
+        "the tree clean, the worktree is discarded automatically."
     )

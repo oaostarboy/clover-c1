@@ -451,6 +451,11 @@ def recover_if_needed(
 
     try:
         args = sys.argv[1:] if argv is None else argv
+        # Restart import probe (gateway.restart.restart_import_check) only
+        # asks "would a fresh process import?" — it must never start a
+        # reinstall as a side effect.
+        if os.environ.get("CLOVER_IMPORT_PROBE") == "1":
+            return
         root = _project_root() if project_root is None else project_root
         if _pytest_owns_live_checkout(root):
             return

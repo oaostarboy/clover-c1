@@ -924,6 +924,32 @@ def _hardline_block_result(description: str, command: str = "") -> dict:
     }
 
 
+def _delegated_child_live_venv_block(command: str) -> Optional[dict]:
+    """Hardline floor for subagents: never install into a live agent venv.
+
+    Only fires inside a delegate_task child (this process's ContextVar or a
+    subprocess spawned by one). Before yolo, like the other hardline rules.
+    """
+    try:
+        from agent.delegation_context import is_delegated_child_process_context
+
+        if not is_delegated_child_process_context():
+            return None
+        from tools.live_venv_guard import (
+            detect_live_venv_install,
+            live_venv_block_result,
+        )
+
+        reason = detect_live_venv_install(command)
+    except Exception:
+        logger.debug("live venv guard failed", exc_info=True)
+        return None
+    if not reason:
+        return None
+    logger.warning("Live-venv install block (subagent): %s (command: %s)", reason, command[:200])
+    return live_venv_block_result(reason)
+
+
 def _sudo_stdin_block_result(description: str) -> dict:
     """Build the standard block result for sudo stdin guard."""
     return {
@@ -4107,6 +4133,10 @@ def check_dangerous_command(command: str, env_type: str,
         logger.warning("Hardline block: %s (command: %s)", hardline_desc, command[:200])
         return _hardline_block_result(hardline_desc, command)
 
+    _live_venv_block = _delegated_child_live_venv_block(command)
+    if _live_venv_block is not None:
+        return _live_venv_block
+
     # User-defined deny rules (approvals.deny in config.yaml): like the
     # hardline floor, these fire BEFORE the yolo bypass — a deny rule is the
     # user saying "never, even under yolo".
@@ -4744,6 +4774,10 @@ def check_all_command_guards(command: str, env_type: str,
     if is_hardline:
         logger.warning("Hardline block: %s (command: %s)", hardline_desc, command[:200])
         return _hardline_block_result(hardline_desc, command)
+
+    _live_venv_block = _delegated_child_live_venv_block(command)
+    if _live_venv_block is not None:
+        return _live_venv_block
 
     # == Sudo stdin guard ==
     # Like the hardline floor above, this is unconditional: there is never a

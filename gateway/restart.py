@@ -238,3 +238,72 @@ def resolve_restart_exit_wait_budget(
     except (TypeError, ValueError):
         margin = 0.0
     return drain + after_turn + margin
+
+
+# ── Restart safety: prove the replacement can import before re-exec ─────────
+#
+# 2026-10-12: a subagent re-pointed the live venv's editable install at its
+# own worktree and then deleted it. Every restart afterwards died with
+# ``No module named 'clover_cli'`` (57 crash-loops). The running process still
+# had the modules in memory, so it looked healthy right up to the restart.
+# Before a restart replaces the process, ask a FRESH interpreter (the service
+# python, cwd = CLOVER_HOME so the repo on cwd cannot mask a broken install)
+# whether ``clover_cli.main`` imports. If not, refuse the restart.
+
+RESTART_IMPORT_CHECK_TIMEOUT = 60.0
+
+
+def restart_import_check(
+    python: "str | None" = None,
+    clover_home: "str | None" = None,
+    timeout: float = RESTART_IMPORT_CHECK_TIMEOUT,
+) -> "tuple[bool, str]":
+    """Return ``(ok, detail)`` for ``python -c 'import clover_cli.main'``.
+
+    Runs with cwd = CLOVER_HOME and without PYTHONPATH/PYTHONSAFEPATH
+    leakage, so it sees only what the venv's install actually provides. A
+    probe that cannot be run at all (timeout, missing python) counts as a
+    failure: refusing a restart is recoverable, a crash-loop is not.
+    """
+    import subprocess
+    import sys
+
+    py = python or sys.executable
+    if not clover_home:
+        try:
+            from clover_constants import get_clover_home
+
+            clover_home = str(get_clover_home())
+        except Exception:
+            clover_home = os.path.expanduser("~")
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")}
+    env["CLOVER_HOME"] = clover_home
+    env["CLOVER_IMPORT_PROBE"] = "1"
+    # Import only; never let the probe start anything.
+    code = "import clover_cli.main as m; print(getattr(m, '__file__', ''))"
+    try:
+        proc = subprocess.run(
+            [py, "-c", code],
+            cwd=clover_home if os.path.isdir(clover_home) else None,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            stdin=subprocess.DEVNULL,
+        )
+    except Exception as exc:  # timeout, missing interpreter, ...
+        return False, f"import check could not run: {type(exc).__name__}: {exc}"
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        return False, (tail[-1] if tail else f"exit {proc.returncode}")
+    return True, (proc.stdout or "").strip()
+
+
+def restart_refusal_message(detail: str) -> str:
+    """Plain-words refusal shown to the user when the import check fails."""
+    return (
+        "I didn't restart, because the new copy of me would not start: "
+        f"{detail}. Restarting now would leave me offline. Fix the install "
+        "first (for example reinstall the venv from the live checkout), "
+        "then restart again."
+    )
