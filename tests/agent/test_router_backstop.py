@@ -631,10 +631,23 @@ def test_several_receipts_with_summaries_join_on_new_lines():
 
 def test_ack_fallback_never_quotes_the_goal():
     one = rb._ack_text([_receipt(GOAL)])
-    assert one == "\U0001f504 on it, i'll report back here when it's done"
     three = rb._ack_text([_receipt('x1', 'x2', 'x3')])
-    assert three == "\U0001f504 3 subagents on it, i'll report back here when they're done"
     assert 'x1' not in three and GOAL not in one
+    assert '3 subagents' in three
+
+
+def test_ack_fallback_reads_like_a_person():
+    """No emoji or status banner when the model skipped its own opener; the
+    same dispatch renders the same line, and different dispatches vary."""
+    seen = set()
+    for i in range(40):
+        for goals in ((GOAL,), ('x1', 'x2')):
+            text = rb._ack_text([_receipt(*goals, did=f'd{i}')])
+            assert text == rb._ack_text([_receipt(*goals, did=f'd{i}')])
+            assert text.isascii() and text == text.lower()
+            assert 'report back here' not in text
+            seen.add(text)
+    assert len(seen) > 2
 
 
 def test_dispatch_receipt_carries_the_handoff_summary(agent_stub=None):
