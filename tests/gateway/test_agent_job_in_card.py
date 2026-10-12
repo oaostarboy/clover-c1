@@ -136,7 +136,8 @@ async def test_an_agent_job_alone_gets_its_own_unified_card():
     job.feed(_line({"type": "result", "result": "Plain summary: Locking is fine.", "is_error": False}))
     job.finish(0)
     assert cl.state == ac.DONE and cl.summary == "Locking is fine."
-    assert "Locking is fine." in card.render() and card.finished
+    assert card.render().startswith("\U0001f340 **Audit cron locking** \u00b7 done") and card.finished
+    assert "Locking is fine." not in card.render(), "the result is already in the chat"
     await pub.aclose()
 
 
@@ -179,7 +180,7 @@ async def test_a_lifecycle_only_job_shows_running_then_done():
     job.finish(0)
     done = card.render()
     assert card.parts[0].checklist.state == ac.DONE and card.finished
-    assert done.splitlines()[0].endswith("\u00b7 done") and "*running*" not in done
+    assert done.startswith("\U0001f340 **Audit cron locking** \u00b7 done") and "*running*" not in done
     await pub.aclose()
 
 

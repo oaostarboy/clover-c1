@@ -258,6 +258,7 @@ class Checklist:
     # An outside agent job with no tool visibility (parser "none"): the card
     # says "running" instead of tool lines.
     lifecycle: bool = False
+    reason: str = ""  # why it failed, in a few plain words (never raw error text)
 
     @classmethod
     def start(cls, header: str, steps: Sequence[str], say: str = "") -> "Checklist":
@@ -1435,8 +1436,11 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
             kid.summary = plain
         if kid.started is not None:
             kid.ended = now
-    elif plain and not cl.summary:
-        cl.summary = plain
+    else:
+        if plain and not cl.summary:
+            cl.summary = plain
+        if state == FAILED and not cl.reason:
+            cl.reason = plain_reason(kw, plain)
     part.ended.append(state)
     if len(part.ended) < part.expected:
         return bool(cl.kids)
@@ -1516,15 +1520,19 @@ class Card:
             include_say = not self.split_opener
         with _LOCK:
             parts = self.parts
-            if unified() and len(parts) > 1:
+            if unified():
                 # A job whose subagents were all stopped on purpose is gone from
                 # the card, and from the "N jobs" count.
                 shown = [p for p in parts if not p.checklist.all_stopped]
                 if not shown:
+                    if len(parts) == 1:
+                        return parts[0].checklist._stopped_title(include_say)
                     titles = [p.checklist._title_outcome()[0] for p in parts]
                     body = _title_line(_joined_title(titles), " \u00b7 stopped", True, stopped=True)
                     say = self.say_text()
                     return f"{say}\n\n{body}" if (say and include_say) else body
+                if all(p.checklist.state != RUNNING for p in shown):
+                    return self._render_finished(shown, include_say)
                 parts = shown
             if len(parts) > 1 and unified():
                 # Dispatches that joined this card read as one card.
@@ -1546,6 +1554,51 @@ class Card:
                 if len(text) <= CARD_BUDGET:
                     break
             return text
+
+    def _render_finished(self, parts: Sequence[Part], include_say: bool) -> str:
+        """A card whose work is all over, as ONE plain line (no quote, no hint,
+        no Goal, steps or result: the result is already in the chat as the
+        agent's reply).  ``\U0001f340 **title** \u00b7 done \u00b7 Opus 5.5 \u00b7 \U0001f6e0 66 \u00b7 \u23f1 8m42s``;
+        a failure is ``\U0001f342`` with ONE short reason line under it."""
+        subs: List[Any] = []
+        for p in parts:
+            cl = p.checklist
+            subs += cl.shown_kids() if cl.kids else [cl]
+        n = len(subs)
+        done = sum(1 for x in subs if x.state == DONE)
+        failed = [x for x in subs if x.state == FAILED]
+        joined = len(parts) > 1
+        title = _joined_title([p.checklist for p in parts]) if joined else parts[0].checklist._title_outcome()[0]
+        if not failed:
+            status = f"{n} done" if (n > 1 and not joined) else "done"
+        elif n == 1:
+            status = "failed"
+        else:
+            status = f"{done} of {n} done \u00b7 {len(failed)} failed"
+        stats: List[str] = []
+        if n == 1 and subs[0].model:
+            stats.append(subs[0].model)
+        calls = sum(x.calls for x in subs)
+        if calls:
+            stats.append(f"{CALLS_ICON} {calls}")
+        started = [x.started for x in subs if x.started is not None]
+        ended = [x.ended for x in subs if x.ended is not None]
+        if started and ended:
+            stats.append(_elapsed(max(0.0, max(ended) - min(started))))
+        label = f"{FAILED_ICON if failed else DONE_ICON} **{title}** \u00b7 {status}"
+        lines = [label]
+        if stats:
+            text = " \u00b7 ".join(stats)
+            if _visible_len(title) + 3 + _visible_len(status) + 3 + _visible_len(text) <= ROW_CHARS:
+                lines = [f"{label} \u00b7 {text}"]
+            else:
+                lines.append(_INDENT + text)
+        if failed:
+            reason = getattr(failed[0], "reason", "") or "hit an error"
+            lines.append(_INDENT + no_command_links(_cut_word(reason, REASON_CHARS)))
+        body = "\n".join(lines)
+        say = self.say_text()
+        return f"{say}\n\n{body}" if (say and include_say) else body
 
     def _render_joined(
         self, summary_chars: int, tool_cap: int, include_say: bool, now: Optional[float] = None,

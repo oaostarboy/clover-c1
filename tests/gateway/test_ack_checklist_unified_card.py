@@ -235,7 +235,7 @@ async def test_ticks_stop_when_the_helper_finishes(monkeypatch):
     await _settle(editor)
     edits_after_finish = len(adapter.edits)
     assert adapter.edits[-1]["finalize"] is True
-    assert adapter.edits[-1]["text"].splitlines()[0] == "\U0001f500 **fixing the bugs** \u00b7 done"
+    assert adapter.edits[-1]["text"].splitlines()[0].startswith("\U0001f340 **fixing the bugs** \u00b7 done")
     await asyncio.sleep(0.3)
     assert len(adapter.edits) == edits_after_finish, "no edits after the final one"
     assert editor._ticking is False
@@ -292,7 +292,9 @@ async def test_multi_helper_events_edit_the_one_message_in_place():
         ac.on_child_event("subagent.complete", delegation_id="dm", task_index=i, status="completed",
                           summary="Plain summary: ok.")
     await _settle(editor)
-    assert adapter.edits[-1]["finalize"] is True and "**check b** \u00b7 done" in adapter.edits[-1]["text"]
+    assert adapter.edits[-1]["finalize"] is True
+    assert adapter.edits[-1]["text"].startswith("\U0001f340 **fixing the bugs** \u00b7 2 done")
+    assert ">" not in adapter.edits[-1]["text"], "finished: one plain line, no quote"
 
 
 @pytest.mark.asyncio
@@ -305,7 +307,7 @@ async def test_a_six_helper_edit_fits_the_telegram_limit():
                           summary="Plain summary: " + " ".join(["word"] * 70) + ".")
     await _settle(editor)
     sent = adapter.edits[-1]["text"]
-    assert len(sent) <= 4000 and "**Check site number 5** \u00b7 done" in sent and sent.rstrip().endswith("*")
+    assert len(sent) <= 4000 and sent.startswith("\U0001f340 **fixing the bugs** \u00b7 6 done") and "\n>" not in sent
 
 
 @pytest.mark.asyncio
@@ -447,16 +449,14 @@ def test_telegram_title_is_the_first_line_inside_the_collapsed_quote():
     assert "\U0001f504" not in text and text.count("\U0001f340") == 1, "the only clover is in the hint"
 
 
-def test_telegram_finished_card_says_tap_to_read():
+def test_telegram_finished_card_is_one_plain_line_without_a_quote_or_hint():
     card = _say_card()
     ac.on_child_event("subagent.start", delegation_id=OWNED, model="m")
     ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed",
                       summary="Result: done\nPlain summary: All fixed.")
     text = _editor(_tg_adapter(), card)._render()
-    lines = text.splitlines()
-    assert lines[0] == "**> \U0001f500 **fixing the bugs** \u00b7 done"
-    assert lines[1] == f"> *{da.TAP_HINT_DONE}*" and da.TAP_HINT_DONE == "tap to read \U0001f340"
-    assert "All fixed." in text
+    assert text.startswith("\U0001f340 **fixing the bugs** \u00b7 done") and "\n>" not in text
+    assert "**>" not in text and "||" not in text and "tap to" not in text and "All fixed." not in text
 
 
 def test_other_platforms_keep_the_plain_quote():
@@ -575,6 +575,42 @@ def test_telegram_format_of_a_joined_card_with_a_long_running_name_and_a_collaps
     assert out.index("finishing the small") < out.index("disks report")
 
 
-def test_a_card_with_only_a_stopped_title_keeps_the_hint():
-    out = da._to_expandable("\U0001f940 **fixing the bugs** \u00b7 stopped", da.TAP_HINT_DONE, bold_title=True)
-    assert out == "**> \U0001f940 **fixing the bugs** \u00b7 stopped\n> *tap to read \U0001f340*||"
+
+
+def _tg_format(text):
+    from gateway.config import PlatformConfig
+    from plugins.platforms.telegram.adapter import TelegramAdapter
+
+    return TelegramAdapter(PlatformConfig(enabled=True, token="fake-token")).format_message(text)
+
+
+@pytest.mark.asyncio
+async def test_the_finishing_edit_swaps_the_expandable_quote_for_one_plain_line():
+    adapter, card = _Adapter(), _say_card()
+    adapter.platform = type("P", (), {"value": "telegram"})()
+    editor = await _bind(adapter, card)
+    ac.on_child_event("subagent.start", delegation_id=OWNED, model="claude-opus-5-5")
+    editor.notify()
+    await _settle(editor)
+    live = adapter.edits[-1]["text"]
+    assert live.startswith("**> ") and live.endswith("||") and "tap to watch" in live
+    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed",
+                      summary="Plain summary: All fixed.")
+    await _settle(editor)
+    last = adapter.edits[-1]
+    assert last["finalize"] is True and last["id"] == "m42", "an edit of the same message, formatted"
+    assert last["text"].startswith("\U0001f340 **fixing the bugs** \u00b7 done")
+    assert "**>" not in last["text"] and "||" not in last["text"] and "\n>" not in last["text"]
+    assert "tap to" not in last["text"] and "All fixed" not in last["text"]
+    assert editor._closed and card.finished, "a finished card stops following the bottom"
+    n = len(adapter.edits)
+    assert await editor.repost_live_cards() == 0 and len(adapter.edits) == n
+
+
+def test_telegram_formats_the_finished_one_liners_as_plain_text():
+    ok = _tg_format("\U0001f340 **checking your second-GPU options** \u00b7 done \u00b7 Opus 5.5 \u00b7 \U0001f6e0 66 \u00b7 \u23f1 8m42s")
+    assert ok == "\U0001f340 *checking your second\\-GPU options* \u00b7 done \u00b7 Opus 5\\.5 \u00b7 \U0001f6e0 66 \u00b7 \u23f1 8m42s"
+    bad = _tg_format("\U0001f342 **fixing the bugs** \u00b7 failed\n" + ac._INDENT + "The folder does not exist.")
+    assert bad.startswith("\U0001f342 *fixing the bugs* \u00b7 failed\n") and not bad.startswith(">")
+    stopped = _tg_format("\U0001f940 **fixing the bugs** \u00b7 stopped")
+    assert stopped == "\U0001f940 *fixing the bugs* \u00b7 stopped"

@@ -1406,9 +1406,6 @@ def _to_expandable(text: str, hint: str = "", bold_title: bool = False) -> str:
     if details:
         tip = f"*{hint}*" if hint else spacer
         out += [f"> {tip}", f"> {spacer}"] + [f"> {ln}" for ln in details]
-    elif hint and bold_title and header.startswith("\U0001f940"):
-        # A card with nothing left but its stopped title still keeps the hint.
-        out.append(f"> *{hint}*")
     return "\n".join(out) + "||"
 
 
@@ -1576,6 +1573,10 @@ class AckCardEditor:
         # opener in the same message (never on a chat platform) stays plain.
         if not (self._expandable and text) or (self.card.say_text() and not self.card.split_opener):
             return text
+        if self.card.finished:
+            # A finished card is one plain line (no quote, no hint): the edit
+            # that finishes it swaps the expandable quote for plain text.
+            return _fit_to_limit(text, 4000 - 16)
         text = _fit_to_limit(text, 4000 - 16)
         hint = TAP_HINT_DONE if self.card.finished else TAP_HINT_LIVE
         return _to_expandable(text, hint, bold_title=True)

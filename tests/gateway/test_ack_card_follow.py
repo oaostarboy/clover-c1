@@ -518,8 +518,8 @@ async def test_events_of_the_joined_part_edit_the_one_card_and_counts_span_all_p
     ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: Net fine.")
     await _settle()
     done = chat.edits[-1]["text"]
-    assert done.splitlines()[0] == "**> \U0001f500 **2 jobs** \u00b7 done"
-    assert done.splitlines()[1] == "> *tap to read \U0001f340*" and first.finished
+    assert done.startswith("\U0001f340 **2 jobs** \u00b7 done") and first.finished
+    assert "**>" not in done and "||" not in done and "tap to" not in done and "\n>" not in done, "one plain line"
 
 
 @pytest.mark.asyncio
@@ -568,7 +568,8 @@ async def test_a_dispatch_never_joins_a_finished_card():
     assert len(da._ACK_EDITORS) == 2, "the new dispatch got its own card"
     cards = [s["text"] for s in chat.sends if s["text"].startswith("**>")]
     assert len(cards) == 2 and cards[-1].splitlines()[0] == "**> \U0001f500 **network**"
-    assert "tap to read" in da._ACK_EDITORS[id(first)]._render()
+    finished = da._ACK_EDITORS[id(first)]._render()
+    assert finished.startswith("\U0001f340 **disks** \u00b7 done") and "tap to" not in finished and "||" not in finished
 
 
 @pytest.mark.asyncio
