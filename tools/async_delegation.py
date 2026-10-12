@@ -578,6 +578,120 @@ def _note_delivery_attempt(delegation_id: str) -> None:
         )
 
 
+def _leave_to_restart_resume(conn, delegation_id: str, now: float) -> bool:
+    """A gateway chat's subagent cut off by a restart is started again by the
+    restart (``gateway.delegation_resume``), not reported as an unknown outcome.
+    Its ledger row is closed silently (state ``resumed``); the inflight record
+    is what the restart works from -- it resumes the job once, or reports in
+    plain words why it could not.  False: report it the usual way."""
+    try:
+        from tools import delegation_inflight
+
+        if delegation_inflight.read_record(delegation_id) is None:
+            return False
+        if not delegation_inflight.resume_enabled():
+            return False
+    except Exception:
+        return False
+    conn.execute(
+        """UPDATE async_delegations SET state='resumed', completed_at=?,
+           updated_at=?, delivery_state='delivered', delivered_at=?
+           WHERE delegation_id=? AND state IN ('running','finalizing')""",
+        (now, now, now, delegation_id),
+    )
+    return True
+
+
+def close_resumed(delegation_id: str) -> bool:
+    """The restart started this delegation again under a new id: close its
+    ledger row silently (no 'unknown outcome' report for it)."""
+    now = time.time()
+    with _DB_LOCK, _transaction() as conn:
+        cur = conn.execute(
+            """UPDATE async_delegations SET state='resumed', completed_at=?,
+               updated_at=?, delivery_state='delivered', delivered_at=?
+               WHERE delegation_id=? AND state IN ('running','finalizing')""",
+            (now, now, now, delegation_id),
+        )
+        return cur.rowcount == 1
+
+
+def release_parked_children() -> int:
+    """After a restart closed a batch silently: hand the parent the results of
+    helpers that had finished before it (parked in the ledger), as late
+    results, once.  Returns how many were queued."""
+    now = time.time()
+    with _DB_LOCK, _write_transaction() as conn:
+        promoted = _promote_orphaned_receipts(conn, now)
+    try:
+        from tools.process_registry import process_registry
+
+        for evt in promoted:
+            process_registry.completion_queue.put(evt)
+    except Exception:
+        logger.warning("could not queue parked helper results", exc_info=True)
+    return len(promoted)
+
+
+def finished_child_indexes(delegation_id: str) -> set:
+    """Task indexes of a batch whose own result is already recorded."""
+    with _DB_LOCK, _transaction() as conn:
+        ids = _committed_child_ids(conn, delegation_id)
+    return {int(c.rsplit(":", 1)[-1]) for c in ids}
+
+
+def report_unresumed(delegation_id: str, reason: str) -> bool:
+    """A restart could not start this delegation again: tell its parent, as a
+    normal ``unknown`` helper-status completion, in plain words.  Reopens the
+    ledger row the restart closed silently and queues the event once."""
+    now = time.time()
+    with _DB_LOCK, _write_transaction() as conn:
+        row = conn.execute(
+            """SELECT origin_session, origin_ui_session_id, parent_session_id,
+                      dispatched_at, task_json, origin_session_id, state
+               FROM async_delegations WHERE delegation_id=?""", (delegation_id,),
+        ).fetchone()
+        if row is None or row[6] not in ("resumed", "running", "finalizing"):
+            return False
+        session_key, origin_ui, parent_id, dispatched_at, task_json, origin_sid, _ = row
+        task = json.loads(task_json or "{}")
+        goals = task.get("goals") or []
+        error = (
+            "This background job was cut off when the system restarted, and it "
+            f"could not be started again: {reason} Tell the user plainly that "
+            "this job stopped, what it was, and that it needs to be started again."
+        )
+        evt = {
+            "type": "async_delegation", "delegation_id": delegation_id,
+            "session_key": session_key, "origin_ui_session_id": origin_ui,
+            "origin_session_id": origin_sid or "", "parent_session_id": parent_id,
+            "goal": task.get("goal", ""), "goals": goals, "context": task.get("context"),
+            "toolsets": task.get("toolsets"), "role": task.get("role"),
+            "model": task.get("model"), "is_batch": bool(task.get("is_batch")),
+            "status": "unknown", "summary": None, "error": error,
+            "dispatched_at": dispatched_at, "completed_at": now,
+        }
+        for key in _ROUTING_ORIGIN_KEYS:
+            if task.get(key):
+                evt[key] = task[key]
+        conn.execute(
+            """UPDATE async_delegations SET state='unknown', completed_at=?,
+               updated_at=?, event_json=?, result_json=?, delivery_state='pending',
+               delivered_at=NULL WHERE delegation_id=?""",
+            (now, now, json.dumps(evt),
+             json.dumps({"status": "unknown", "summary": None, "error": error}),
+             delegation_id),
+        )
+    try:
+        from tools.process_registry import process_registry
+
+        evt["restored"] = True
+        process_registry.completion_queue.put(evt)
+    except Exception:
+        logger.warning("could not queue the restart report for %s", delegation_id, exc_info=True)
+    return True
+
+
 def recover_abandoned_delegations() -> int:
     """Classify records whose owning process disappeared as outcome unknown."""
     try:
@@ -609,6 +723,9 @@ def recover_abandoned_delegations() -> int:
                 if live:
                     continue
                 task = json.loads(task_json or "{}")
+                if _leave_to_restart_resume(conn, delegation_id, now):
+                    recovered += 1
+                    continue
                 goals = task.get("goals") or []
                 committed = (
                     _committed_child_ids(conn, delegation_id)
@@ -1482,6 +1599,8 @@ def dispatch_async_delegation(
 
 def _finalize(delegation_id: str, result: Dict[str, Any], status: str) -> None:
     """Mark a record complete and push the completion event onto the queue."""
+    if status not in ("completed", "success") and _held_for_resume(delegation_id):
+        return  # cut off by a gateway restart: the restart starts it again
     claimed = _begin_finalization(delegation_id)
     if claimed is None:
         return
@@ -1589,6 +1708,24 @@ def _finish_finalization(delegation_id: str, status: str) -> None:
         if record is not None:
             record["status"] = status
         _prune_completed_locked()
+    # Done (completed, failed, stopped, stalled): nothing left to resume.
+    try:
+        from tools import delegation_inflight
+
+        delegation_inflight.remove_record(delegation_id)
+    except Exception:
+        logger.debug("could not drop inflight record %s", delegation_id, exc_info=True)
+
+
+def _held_for_resume(delegation_id: str) -> bool:
+    """The gateway is shutting down and a restart will resume this delegation:
+    its interrupted completion is neither reported nor recorded."""
+    try:
+        from tools import delegation_inflight
+
+        return delegation_inflight.hold_for_resume(delegation_id)
+    except Exception:
+        return False
 
 
 def _push_completion_event(
@@ -2171,6 +2308,11 @@ def publish_batch_child_completion(
     ``"parked"``, ``"late"`` or ``"duplicate"``.
     """
     index = result["task_index"]
+    if (
+        (result.get("status") or "error") not in ("completed", "success")
+        and _held_for_resume(delegation_id)
+    ):
+        return "held"  # cut off by a gateway restart: it runs again afterwards
     parent = _batch_parent_snapshot(delegation_id)
     goals = parent["goals"]
     if not isinstance(index, int) or not 0 <= index < len(goals):
@@ -2612,6 +2754,14 @@ def _finalize_batch(
     delegation_id: str, combined: Dict[str, Any], status: str
 ) -> None:
     """Mark a batch record complete and push ONE combined completion event."""
+    if _held_for_resume(delegation_id) and (
+        status not in ("completed", "success")
+        or any(
+            (r.get("status") or "error") not in ("completed", "success")
+            for r in (combined.get("results") or []) if isinstance(r, dict)
+        )
+    ):
+        return  # a helper was cut off by a gateway restart: the restart starts it again
     claimed = _begin_finalization(delegation_id)
     if claimed is None:
         _rescue_after_finalized(delegation_id, combined.get("results"))

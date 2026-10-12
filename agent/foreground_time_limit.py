@@ -388,6 +388,7 @@ def _headless_card_possible() -> bool:
 
 def open_headless_card(
     delegation_id: Any, goals: Any, *, titles: Any = (), steps: Any = (), child_steps: Any = (),
+    work: str = "",
 ) -> bool:
     """Put the unified card of a dispatch that has no ``handoff`` summary in
     this turn's chat (idempotent).  No chat / classic style: False."""
@@ -398,7 +399,16 @@ def open_headless_card(
         opener = getattr(sink, "open_dispatch_card", None)
         if not callable(opener):
             return False
-        return bool(opener(str(delegation_id or ""), list(goals or ()), titles, steps, child_steps))
+        if not work:
+            try:  # a job started again after a restart keeps the title it had
+                from tools.delegation_inflight import current_resume_work
+
+                work = current_resume_work()
+            except Exception:
+                work = ""
+        return bool(opener(
+            str(delegation_id or ""), list(goals or ()), titles, steps, child_steps, work,
+        ))
     except Exception:
         return False
 

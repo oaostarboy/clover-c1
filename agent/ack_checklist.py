@@ -973,7 +973,7 @@ def open_agent_job_part(delegation_id: Any, title: Any, lifecycle: bool = False)
 
 def open_dispatch_card(
     delegation_id: Any, goals: Sequence[Any], titles: Sequence[Any] = (), steps: Sequence[Any] = (),
-    child_steps: Sequence[Any] = (),
+    child_steps: Sequence[Any] = (), work: str = "",
 ) -> Optional["Card"]:
     """The unified card of a dispatch that came WITHOUT a ``handoff`` summary
     (every dispatch gets one: the 🔀 roster card is not used in unified mode).
@@ -994,9 +994,9 @@ def open_dispatch_card(
     try:
         from agent.handoff_title import dispatch_work_title
 
-        work = dispatch_work_title(goals, titles)
+        work = work or dispatch_work_title(goals, titles)
     except Exception:
-        work = f"{len(goals)} subagents" if len(goals) > 1 else "background task"
+        work = work or (f"{len(goals)} subagents" if len(goals) > 1 else "background task")
     work = _cut_word(" ".join(str(work).replace("*", "").split()), 60) or "background task"
     with _LOCK:
         if did in _PARTS:

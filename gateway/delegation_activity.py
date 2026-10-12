@@ -627,13 +627,17 @@ class DelegationActivityPublisher:
             return ""
         return card_id if self.place_card(card, card_id) else ""
 
-    def place_card(self, card: Any, card_id: str) -> bool:
+    def place_card(self, card: Any, card_id: str, reuse_message_id: str = "") -> bool:
         """Place a freshly opened one-part unified card in this chat: it joins
         the chat's running card or is posted as its own message.  Any thread.
+        ``reuse_message_id``: the message a restarted job's card was in; it is
+        edited into the new card when it still exists.
         False when the loop is closed (nothing placed, the part is dropped)."""
         card.target = (id(self._adapter), self._chat_id, "pending")  # claimed: nothing else binds it
         try:
-            asyncio.run_coroutine_threadsafe(self._place_job_card(card, card_id), self._loop)
+            asyncio.run_coroutine_threadsafe(
+                self._place_job_card(card, card_id, reuse_message_id), self._loop,
+            )
         except RuntimeError:
             from agent.ack_checklist import abandon
 
@@ -643,26 +647,58 @@ class DelegationActivityPublisher:
 
     def open_dispatch_card(
         self, delegation_id: str, goals: Any, titles: Any = (), steps: Any = (), child_steps: Any = (),
+        work: str = "",
     ) -> bool:
         """Unified style: a delegate_task dispatch without a ``handoff`` summary
         still gets its card (never the 🔀 roster).  Any thread."""
         try:
             from agent.ack_checklist import open_dispatch_card
 
-            card = open_dispatch_card(delegation_id, goals, titles, steps, child_steps)
+            card = open_dispatch_card(delegation_id, goals, titles, steps, child_steps, work)
         except Exception:
             return False
         if card is None:
             return False
-        return self.place_card(card, str(delegation_id))
+        reuse = ""
+        try:
+            from tools.delegation_inflight import current_resume_card
 
-    async def _place_job_card(self, card: Any, card_id: str) -> None:
+            old_card = current_resume_card() or {}
+            if str(old_card.get("chat_id") or "") == self._chat_id:
+                reuse = str(old_card.get("message_id") or "")
+        except Exception:
+            reuse = ""
+        return self.place_card(card, str(delegation_id), reuse)
+
+    async def _reuse_card_message(self, card: Any, message_id: str) -> bool:
+        """Turn the message a restarted job's card was in into this card.
+        False when the message is gone (the caller posts a new one)."""
+        editor = _attach_editor(
+            card, self._adapter, self._chat_id, str(message_id), self._loop, self._metadata,
+        )
+        ok = False
+        try:
+            ok = await editor._edit(editor._render())
+        except Exception:
+            logger.debug("reusing the old card message failed", exc_info=True)
+        if ok:
+            return True
+        editor.gone = True
+        editor._unregister_live()
+        _ACK_EDITORS.pop(id(card), None)
+        card.on_change = None
+        card.target = (id(self._adapter), self._chat_id, "pending")
+        return False
+
+    async def _place_job_card(self, card: Any, card_id: str, reuse_message_id: str = "") -> None:
         from agent.ack_checklist import abandon, join
 
         if self._place_lock is None:
             self._place_lock = asyncio.Lock()
         try:
             async with self._place_lock:  # one job at a time: the next one finds this card
+                if reuse_message_id and await self._reuse_card_message(card, reuse_message_id):
+                    return
                 host = _running_editor_for(self._adapter, self._chat_id, card)
                 if host is not None and join(host.card, card):
                     host.notify()
@@ -1957,6 +1993,7 @@ class AckCardEditor:
         self._failures = 0
         self._backoff_until = float("-inf")
         self.card.target = (id(self._adapter), self._chat_id, self._message_id)
+        _note_card_location(self.card, self._adapter, self._chat_id, self._message_id, self._metadata)
         for mid in [old_id] + list(self._stale):
             if not mid or mid == self._message_id:
                 continue
@@ -2104,12 +2141,33 @@ def _running_editor_for(adapter: Any, chat_id: Any, new_card: Any = None) -> Opt
     return None
 
 
+def _note_card_location(card: Any, adapter: Any, chat_id: Any, message_id: Any, metadata: Any = None) -> None:
+    """Keep, for every dispatch on this card, where its message is: a gateway
+    restart that starts the helper again puts the card back in the same message
+    (``tools.delegation_inflight``).  Never raises."""
+    try:
+        from tools import delegation_inflight
+
+        platform = str(getattr(getattr(adapter, "platform", None), "value", "") or "")
+        thread = ""
+        if isinstance(metadata, dict):
+            thread = str(metadata.get("thread_id") or "")
+        for part in list(getattr(card, "parts", ()) or ()):
+            delegation_inflight.note_card(
+                part.delegation_id, platform=platform, chat_id=str(chat_id),
+                thread_id=thread, message_id=str(message_id),
+            )
+    except Exception:
+        logger.debug("could not note the card location", exc_info=True)
+
+
 def _attach_editor(
     card: Any, adapter: Any, chat_id: Any, message_id: str,
     loop: asyncio.AbstractEventLoop, metadata: Any = None, initial_text: Optional[str] = None,
 ) -> "AckCardEditor":
     editor = AckCardEditor(card, adapter, chat_id, message_id, loop, metadata, initial_text=initial_text)
     card.target = (id(adapter), str(chat_id), str(message_id))
+    _note_card_location(card, adapter, chat_id, message_id, metadata)
     _ACK_EDITORS[id(card)] = editor
     while len(_ACK_EDITORS) > 32:
         _ACK_EDITORS.pop(next(iter(_ACK_EDITORS)))
