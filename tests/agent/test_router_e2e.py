@@ -178,7 +178,7 @@ def test_parallel_turn_is_handed_off_after_two_calls_and_the_turn_ends_cleanly(
         conversation_history=[], task_id='e2e-p')
 
     # the runtime's own acknowledgment, not whatever the model might have said
-    assert re.match(r'^\U0001f504 ', result['final_response'])
+    assert '\U0001f504 ' in result['final_response']
     assert 'report back here' in result['final_response'] or '\u2192' in result['final_response']
     assert 'Research the Notion pricing page' not in result['final_response'], 'the ack never quotes the task goal'
     assert 'comparing the pricing of Notion' in result['final_response'], 'the card names the job from the message'
@@ -196,7 +196,8 @@ def test_parallel_turn_is_handed_off_after_two_calls_and_the_turn_ends_cleanly(
     # asking the model again
     handed = [m['content'] for m in result['messages'] if m.get('role') == 'tool']
     assert any('Handed off to helpers' in t and 'end your turn' in t for t in handed)
-    assert len(provider.captured) == 3
+    # three work requests, then the one short opener line (tools off); no fourth work request
+    assert len(provider.captured) == 4
     _roles_ok(result['messages'])
     # nothing the user can read mentions the plumbing
     assert 'limit' not in result['final_response'].lower()
@@ -225,7 +226,7 @@ def test_staged_turn_dispatches_stage_one_and_carries_the_next_stage(
         'Add a feature flag with tests, then review the diff before saying done.',
         conversation_history=[], task_id='e2e-s')
 
-    assert re.match(r'^\U0001f504 ', result['final_response'])
+    assert '\U0001f504 ' in result['final_response']
     assert 'report back here' in result['final_response'] or '\u2192' in result['final_response']
     assert 'Add a feature flag with tests' not in result['final_response'], 'the ack never pastes the message'
     assert 'adding a feature flag' in result['final_response'], 'the card names the job from the message'

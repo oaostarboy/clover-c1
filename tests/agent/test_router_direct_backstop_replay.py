@@ -63,7 +63,8 @@ def test_thirty_scripted_work_calls_hand_off_at_the_25th_with_one_dispatch(
     assert len(children) == 1
     assert result['turn_exit_reason'] == 'delegation_handoff'
     assert result['work_status'] == 'dispatch_ack'
-    assert len(provider.captured) == 26, 'the model was asked 26 times; no 27th'
+    # 26 requests ran the work; the 27th is the one short, tools-off opener line
+    assert len(provider.captured) == 27, 'the model was asked 26 times for work, then once for the opener'
     assert len(handed) == 1
     _roles_ok(result['messages'])
 
@@ -73,7 +74,7 @@ def test_the_replay_ack_is_a_normal_handoff_and_the_helper_gets_the_request(
     result = _run(provider, aux, tmp_path)
 
     ack = result['final_response']
-    assert re.match(r'^\U0001f504 ', ack) and 'emailing Julia the AutoHDR extension' in ack
+    assert '\U0001f504 emailing Julia the AutoHDR extension' in ack
     assert REQUEST not in ack
     assert not re.search(r'limit|timeout|timed out|backstop|budget|25|180', ack.lower())
     _wait_started(children, 1)
@@ -90,7 +91,8 @@ def test_the_direct_note_on_the_wire_is_the_neutral_one_and_stable(
         'work plan: direct (one send after a quick look). Handle it here.' in first_user
     assert 'no helpers' not in first_user.lower()
     # the same user message carries the same note on every later request (cache-stable)
-    assert all(_wire_users(r)[-1] == first_user for r in provider.captured[1:])
+    # (the last request is the opener line: same prefix plus its own runtime note)
+    assert all(_wire_users(r)[-1] == first_user for r in provider.captured[1:-1])
 
 
 def test_with_the_flag_off_all_thirty_calls_run(provider, aux, tmp_path, children, dispatches):

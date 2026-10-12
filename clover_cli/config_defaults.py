@@ -2189,6 +2189,15 @@ DEFAULT_CONFIG = {
             # "with subagents" are explicit helper requests. false restores
             # the earlier rubric and override wording exactly.
             "calibration_v2": True,
+            # When the runtime hands a running turn to a helper, give it the
+            # whole turn's context: a notes file under cache/handoff/ (the
+            # earlier conversation, every tool call of the turn with its full
+            # result, files written, skills opened, the todo list), a short
+            # "known so far" summary from the router's small model, and an
+            # opening line in the agent's own voice before the card. false =
+            # the earlier hand-off (the request, a short digest of the last
+            # results, the card alone).
+            "handoff_notes": True,
 
             # Fast-model behaviour (own block): the wait when the router has
             # no small model and runs on the big main one, and the free

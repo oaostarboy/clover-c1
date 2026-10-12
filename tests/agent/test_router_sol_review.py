@@ -136,7 +136,8 @@ def test_dispatch_is_ack_not_finished_verdict_or_foreground_integration(
     assert result['turn_exit_reason'] == 'delegation_handoff', result
     assert 'verified' not in result['final_response'].lower()
     assert not p.exists()
-    assert agent.client.chat.completions.create.call_count == (3 if backstop else 1)
+    # 3 work requests, then (backstop) the one short tools-off opener line
+    assert agent.client.chat.completions.create.call_count == (4 if backstop else 1)
     assert result['work_status'] == 'dispatch_ack'
     assert result['work_status'] != 'verified_completion'
     # the ack is the last assistant row, persisted like any other final reply

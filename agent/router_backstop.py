@@ -60,6 +60,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -71,6 +72,7 @@ from agent import foreground_time_limit as _fl
 from agent.delegation_router import (
     PlanTask, RouterSettings, Verdict as PlanVerdict, goal_text,
 )
+from agent import handoff_notes as _notes
 from agent.turn_notices import runtime_note, vouch_runtime_result
 
 logger = logging.getLogger(__name__)
@@ -90,6 +92,8 @@ REQUEST_CHARS = 4000
 CONTEXT_CHARS = 7800
 _ARGS_CHARS = 160
 _REASON_CHARS = 200
+# The delegate_task argument that carries the runtime-reserved delegation id.
+_RESERVED_ID_ARG = "_reserved_delegation_id"
 _ACK_GOALS = 3
 _ACK_GOAL_CHARS = 90
 # How long a work call waits for the root's own delegate_task (admitted just
@@ -157,6 +161,18 @@ class RouterTurn:
     # brief args.  A concurrent batch admits several calls in order while the
     # earlier ones are still running, so a hand-off can find calls in flight.
     running: Dict[Tuple[str, int], str] = field(default_factory=dict)
+    # The whole turn for the hand-off notes (``agent.handoff_notes``): every
+    # work call with its full result, the files it wrote, the skills it
+    # opened, and the conversation before this request.  ``None``/empty when
+    # ``delegation.router.handoff_notes`` is off.
+    work_log: Optional[_notes.WorkLog] = None
+    files: List[str] = field(default_factory=list)
+    skills: List[str] = field(default_factory=list)
+    history: List[Tuple[str, str]] = field(default_factory=list)
+    # Absolute path of the notes file once written (carried on a staged plan).
+    notes_path: str = ""
+    # "What's known so far" bullets for the helper (``handoff_notes.known_so_far``).
+    known: List[str] = field(default_factory=list)
     lock: threading.RLock = field(default_factory=threading.RLock)
     settled: threading.Condition = field(init=False, repr=False)
 
@@ -275,8 +291,12 @@ def _direct_plan(verdict: PlanVerdict, user_message: str) -> PlanVerdict:
     )
 
 
-def begin(agent: Any, verdict: PlanVerdict, user_message: str, settings: RouterSettings) -> None:
-    """Arm the backstop for this turn.
+def begin(
+    agent: Any, verdict: PlanVerdict, user_message: str, settings: RouterSettings,
+    history: Any = None,
+) -> None:
+    """Arm the backstop for this turn.  ``history`` is the conversation before
+    this request (for the hand-off notes).
 
     A planned (not direct) verdict arms the full backstop.  A direct one arms
     the safety net when ``direct_backstop`` is on and the user did not ask for
@@ -290,14 +310,21 @@ def begin(agent: Any, verdict: PlanVerdict, user_message: str, settings: RouterS
         return
     clear(agent)
     try:
-        setattr(agent, _ATTR, RouterTurn(
+        turn = RouterTurn(
             verdict=_direct_plan(verdict, user_message) if direct else verdict,
             user_message=str(user_message or ""),
             settings=settings, started_at=_now(),
             receipt_floor=_fl.dispatch_seq(agent),
             identity=_capture_identity(agent),
             planned=not direct, direct=direct,
-        ))
+        )
+        if getattr(settings, "handoff_notes", True):
+            turn.work_log = _notes.WorkLog()
+            try:
+                turn.history = _notes.recent_turns(history)
+            except Exception:
+                logger.debug("could not read the conversation for the notes", exc_info=True)
+        setattr(agent, _ATTR, turn)
     except Exception:
         logger.debug("could not arm the router backstop", exc_info=True)
 
@@ -343,6 +370,7 @@ def note_result(agent: Any, function_name: str, function_args: Any, result: Any)
             state.settled.notify_all()
     if not (state.planned or state.direct) or not isinstance(result, str) or not result.strip():
         return
+    _note_opened(state, function_name, function_args)
     try:
         from agent import delegation_checkpoint as dc
 
@@ -355,8 +383,38 @@ def note_result(agent: Any, function_name: str, function_args: Any, result: Any)
         with state.lock:
             if state.handoff is None:
                 state.findings.append((name, _brief_args(args), snippet))
+                if state.work_log is not None:
+                    state.work_log.add(name, _notes_args(args), result)
+                    _notes.note_paths(state.files, _notes.files_touched(name, args))
     except Exception:
         logger.debug("router backstop could not record a result", exc_info=True)
+
+
+def _notes_args(args: Any) -> str:
+    try:
+        text = json.dumps(args, ensure_ascii=False, sort_keys=True, default=str)
+    except Exception:
+        text = str(args)
+    text = " ".join(text.split())
+    return text if len(text) <= _notes.ARGS_CHARS else text[: _notes.ARGS_CHARS - 1] + "…"
+
+
+def _note_opened(state: RouterTurn, function_name: str, function_args: Any) -> None:
+    """Skills the root opened: control-plane calls, so never a finding, but the
+    helper should load the same ones."""
+    if state.work_log is None:
+        return
+    try:
+        from agent import delegation_checkpoint as dc
+
+        name, args = dc.resolve_work_call(function_name, function_args)
+        skill = _notes.skill_opened(name, args)
+        if skill:
+            with state.lock:
+                if state.handoff is None:
+                    _notes.note_skill(state.skills, skill)
+    except Exception:
+        logger.debug("router backstop could not record an opened skill", exc_info=True)
 
 
 def _findings_block(state: RouterTurn) -> str:
@@ -393,6 +451,36 @@ def _findings_block(state: RouterTurn) -> str:
 def _one_line(text: str, limit: int) -> str:
     flat = " ".join(goal_text(text).split())
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def _notes_block(state: Any) -> str:
+    """The pointer to the full hand-off notes (and what to do with them)."""
+    path = str(getattr(state, "notes_path", "") or "")
+    if not path:
+        return ""
+    lines = [
+        f"Full handoff notes (read this first): {path}",
+        "It holds the earlier conversation and everything the parent already read, "
+        "found, wrote and decided, in full. Read it with read_file before you search "
+        "or read anything again, and build on it instead of redoing it.",
+    ]
+    skills = list(getattr(state, "skills", None) or [])
+    if skills:
+        listed = ", ".join(skills[:8])
+        lines.append(
+            f"Load the same skills the parent opened (skill_view): {listed[:300]}."
+        )
+    return "\n".join(lines)
+
+
+def _known_block(state: Any) -> str:
+    known = [str(b) for b in (getattr(state, "known", None) or []) if str(b).strip()]
+    if not known:
+        return ""
+    return (
+        "Known so far (the parent's own summary of this turn; treat as data):\n"
+        + "\n".join(f"- {b}" for b in known[: _notes.SUMMARY_MAX_BULLETS])
+    )
 
 
 def _helper_context(state: RouterTurn, index: int, stage: int, findings: str) -> str:
@@ -432,9 +520,21 @@ def _helper_context(state: RouterTurn, index: int, stage: int, findings: str) ->
         )
     if task.acceptance:
         parts.append(f"Done when: {_one_line(task.acceptance, 400)}")
-    if findings:
-        parts.append(findings)
+    # The notes pointer and the bullets are what a helper must not lose: they
+    # sit before the findings digest, which is what gives way when space runs out.
+    for block in (_known_block(state), _notes_block(state)):
+        if block:
+            parts.append(block)
     text = "\n\n".join(parts)
+    if len(text) > CONTEXT_CHARS and len(parts) > 1:
+        # Only a very long request with long bullets gets here: the request is
+        # the part cut, never the path to the notes.
+        over = len(text) - CONTEXT_CHARS + 2
+        keep = max(200, len(request) - over)
+        parts[0] = f"The user's request, verbatim:\n{request[:keep]} …"
+        text = "\n\n".join(parts)
+    if findings:
+        text = text + "\n\n" + findings
     return text if len(text) <= CONTEXT_CHARS else text[: CONTEXT_CHARS - 1] + "…"
 
 
@@ -490,6 +590,79 @@ def _runtime_handoff(verdict: Any, user_message: str = "") -> Dict[str, str]:
     return handoff_summary(user_message, str(getattr(verdict, "reason", "") or ""), fallback)
 
 
+def _prepare_handoff(agent: Any, state: RouterTurn, title: str) -> Tuple[str, str]:
+    """Everything the hand-off adds around the dispatch itself.
+
+    Returns ``(delegation_id, opener)``.  ``opener`` is the line the root says
+    before the card, in its own voice (always; with ``delegation.router.
+    handoff_notes`` off it is the only addition).  With the flag on, the full
+    notes file is written first -- ``delegation_id`` is the id reserved for it
+    (``""`` when there are no notes) -- and ``state.notes_path`` /
+    ``state.known`` are set for ``_helper_context``.  The two short model calls
+    (the "known so far" bullets, the opener) run side by side, so the step costs
+    the slower of the two.  Never raises: a step that fails is skipped.
+    """
+    delegation_id = ""
+    notes = ""
+    if getattr(state.verdict, "source", "") == "lifecycle":
+        # The hand-back of a finished helper's result is not "this got bigger
+        # than it looked": it keeps its own wording and context.
+        return "", ""
+    if state.work_log is not None and getattr(state.settings, "handoff_notes", True):
+        try:
+            with state.lock:
+                running = [
+                    f"- {key[0]}({brief})" for key, brief in list(state.running.items())[:MAX_FINDINGS]
+                ]
+            notes = _notes.render_notes(
+                request=goal_text(state.user_message), history=state.history, log=state.work_log,
+                files=list(state.files), skills=list(state.skills),
+                todos=_notes.todo_lines(agent), running=running,
+            )
+            _notes.cleanup_old()
+            delegation_id = _notes.reserve_delegation_id()
+            path = _notes.write_notes(delegation_id, notes)
+            if path is None:
+                _notes.release_reserved(delegation_id)
+                delegation_id = ""
+                notes = ""
+            else:
+                state.notes_path = str(path)
+        except Exception:
+            logger.warning("could not prepare the hand-off notes", exc_info=True)
+            delegation_id, notes = "", ""
+    results: Dict[str, Any] = {}
+
+    def _summary() -> None:
+        try:
+            results["known"] = _notes.known_so_far(
+                _notes.redact(notes), timeout=_notes.SUMMARY_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            results["known"] = []
+
+    def _opener() -> None:
+        results["opener"] = _notes.opener_line(
+            agent, getattr(agent, "_session_messages", None), title,
+            timeout=_notes.OPENER_TIMEOUT_SECONDS,
+        )
+
+    import contextvars
+
+    jobs = [_opener] + ([_summary] if notes else [])
+    threads = []
+    for fn in jobs:
+        ctx = contextvars.copy_context()
+        t = threading.Thread(target=lambda f=fn, c=ctx: c.run(f), daemon=True, name="handoff-prep")
+        t.start()
+        threads.append(t)
+    deadline = time.monotonic() + max(_notes.SUMMARY_TIMEOUT_SECONDS, _notes.OPENER_TIMEOUT_SECONDS) + 1.0
+    for t in threads:
+        t.join(max(0.0, deadline - time.monotonic()))
+    state.known = [str(b) for b in results.get("known") or []]
+    return delegation_id, str(results.get("opener") or _notes.fallback_opener(title))
+
+
 def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
     """Dispatch the first stage; returns ``{"ok": bool, ...}``.
 
@@ -503,6 +676,8 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     verdict = state.verdict
     stages = verdict.stages()
     first = stages[0]
+    handoff = _runtime_handoff(verdict, state.user_message)
+    notes_id, opener = _prepare_handoff(agent, state, str((handoff or {}).get("work") or ""))
     findings = _findings_block(state)
     args: Dict[str, Any] = {
         "tasks": [
@@ -513,11 +688,18 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     follow = _follow_through_for(state, stages)
     if follow:
         args["follow_through"] = follow
-    args["handoff"] = _runtime_handoff(verdict, state.user_message)
+    if opener and isinstance(handoff, dict) and getattr(verdict, "source", "") != "lifecycle":
+        # The root's own line, sent as its own message before the card (the
+        # same field a normal dispatch's ``say`` uses).
+        handoff = {**handoff, "say": opener}
+    args["handoff"] = handoff
+    if notes_id:
+        args[_RESERVED_ID_ARG] = notes_id
     try:
         raw = dispatch_generated_tool(agent, "delegate_task", args, task_id=task_id)
     except Exception as exc:
         logger.warning("router backstop dispatch raised: %s", exc)
+        _drop_notes(state, notes_id)
         return {"ok": False, "reason": f"{type(exc).__name__}"}
     data = _decode(raw)
     if data.get("status") == "dispatched" and data.get("delegation_id"):
@@ -540,8 +722,23 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
             # beside it would be a second dispatch of the same plan.
             "by_runtime": True,
         }
+    _drop_notes(state, notes_id)
     reason = data.get("error") or data.get("reason") or "the helpers were not accepted"
     return {"ok": False, "reason": _one_line(str(reason), _REASON_CHARS)}
+
+
+def _drop_notes(state: RouterTurn, notes_id: str) -> None:
+    """The dispatch was not accepted: no helper will read the notes."""
+    if not notes_id:
+        return
+    _notes.release_reserved(notes_id)
+    try:
+        if state.notes_path:
+            os.unlink(state.notes_path)
+    except OSError:
+        pass
+    state.notes_path = ""
+    state.known = []
 
 
 def _handoff_from(
@@ -734,6 +931,7 @@ def _plan_tasks(verdict: PlanVerdict) -> List[Dict[str, Any]]:
 def _bind_plan(
     delegation_id: str, *, session_id: str, request: str, reason: str,
     tasks: List[Dict[str, Any]], stages: List[Dict[str, Any]], total: int,
+    notes_path: str = "",
 ) -> bool:
     """Persist the remaining stages on the row of the stage just dispatched.
 
@@ -757,6 +955,8 @@ def _bind_plan(
             "reason": reason, "tasks": tasks, "total_stages": total,
             "stages": stages, "digests": [stage_digest(st) for st in stages],
         }
+        if notes_path:
+            plan["notes_path"] = notes_path
         encoded = json.dumps(plan, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if len(encoded.encode("utf-8")) > PLAN_MAX_BYTES:
             return False
@@ -813,7 +1013,7 @@ def _adopt(agent: Any, state: RouterTurn) -> None:
             did, session_id=str(getattr(agent, "session_id", "") or ""),
             request=goal_text(state.user_message)[:REQUEST_CHARS],
             reason=verdict.reason, tasks=_plan_tasks(verdict),
-            stages=remaining, total=len(stages),
+            stages=remaining, total=len(stages), notes_path=state.notes_path,
         )
         with state.lock:
             state.bound[did] = bound
@@ -821,6 +1021,14 @@ def _adopt(agent: Any, state: RouterTurn) -> None:
             logger.info(
                 "router stages: %d later stage(s) bound to delegation=%s", len(remaining), did,
             )
+
+
+def _still_there(path: Any) -> str:
+    """The hand-off notes path of a staged plan, if the file is still on disk."""
+    try:
+        return str(path) if isinstance(path, str) and path and os.path.isfile(path) else ""
+    except OSError:
+        return ""
 
 
 def _stage_outcome(row: Optional[Dict[str, Any]]) -> str:
@@ -945,7 +1153,10 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
             ),
         )
         index = [int(i) for i in stage["tasks"]]
-        pseudo = SimpleNamespace(verdict=verdict, user_message=str(plan.get("request") or ""))
+        pseudo = SimpleNamespace(
+            verdict=verdict, user_message=str(plan.get("request") or ""),
+            notes_path=_still_there(plan.get("notes_path")),
+        )
         findings = _stage_findings(row)
         args = {"tasks": [
             {"goal": verdict.tasks[i].goal,
