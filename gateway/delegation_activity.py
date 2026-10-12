@@ -1635,21 +1635,59 @@ _COMPLETION_TURN: "contextvars.ContextVar[Optional[CompletionTurn]]" = contextva
 )
 
 
-def begin_completion_turn(event: Any) -> Optional[CompletionTurn]:
-    """Mark the current task as handling ``event`` (None for any turn that is
-    not an async-delegation completion).  Called where a turn starts."""
+def start_completion_turn(ids: Optional[Sequence[str]]) -> Optional[CompletionTurn]:
+    """Mark the current task as reporting the delegation ``ids`` (``None`` /
+    empty: not a completion turn).  Every path that runs a turn carrying
+    ``completion_delegation_ids`` must come through here -- a turn that
+    starts on its own (``begin_completion_turn``) and the in-band queued
+    follow-up (``hand_over_completion_turn``) alike."""
     turn: Optional[CompletionTurn] = None
     try:
-        if getattr(event, "internal", False):
-            ids = (getattr(event, "metadata", None) or {}).get("completion_delegation_ids")
-            if isinstance(ids, (list, tuple)):
-                clean = [i for i in ids if isinstance(i, str) and i.strip()]
-                if clean:
-                    turn = CompletionTurn(clean)
+        clean = [i for i in (ids or ()) if isinstance(i, str) and i.strip()]
+        if clean:
+            turn = CompletionTurn(clean)
     except Exception:
         turn = None
     _COMPLETION_TURN.set(turn)
     return turn
+
+
+def begin_completion_turn(event: Any) -> Optional[CompletionTurn]:
+    """Mark the current task as handling ``event`` (None for any turn that is
+    not an async-delegation completion).  Called where a turn starts."""
+    ids = None
+    try:
+        if getattr(event, "internal", False):
+            ids = (getattr(event, "metadata", None) or {}).get("completion_delegation_ids")
+            if not isinstance(ids, (list, tuple)):
+                ids = None
+    except Exception:
+        ids = None
+    return start_completion_turn(ids)
+
+
+async def hand_over_completion_turn(
+    adapter: Any, chat_id: Any, ids: Optional[Sequence[str]], metadata: Any = None,
+) -> Optional[CompletionTurn]:
+    """A queued follow-up is about to run in-band, inside the turn that was
+    running when it arrived (a human turn, or another completion turn).
+
+    The running turn's reply is already out, so it never fires the follow-up's
+    cards; a completion turn of its own that has not settled yet (it ended
+    silent) is settled first.  Then the current task becomes the follow-up's
+    completion turn when ``ids`` are given (``None`` for a human follow-up, so
+    it never re-posts anybody's cards), and its reply -- sent by this same task
+    or by a task it spawns (the stream consumer) -- gets the finished cards
+    right under it.  Left set on purpose: the final send happens after the
+    follow-up returns."""
+    prev = _COMPLETION_TURN.get()
+    if prev is not None and not prev.fired and chat_id not in (None, ""):
+        prev.fired = True
+        try:
+            await settle_completion(adapter, chat_id, prev.ids, silent=True, metadata=metadata)
+        except Exception:
+            logger.debug("settling the previous completion turn failed", exc_info=True)
+    return start_completion_turn(ids)
 
 
 # True inside the tasks that post a turn's progress / status messages (the
