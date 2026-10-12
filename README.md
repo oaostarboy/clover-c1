@@ -43,6 +43,8 @@ clover → 60 days written notice, either side, no penalty. page 4, section 9.2.
 | **Runs where you point it** | Local, Docker, SSH, Modal, Daytona, Vercel Sandbox. Serverless backends hibernate when idle and cost almost nothing between sessions. |
 | **Your model, your choice** | 300+ models through one subscription, or bring your own key. Switch with `clover model`. No lock-in, no rewrite. |
 
+*How does Clover decide when to hand work to subagents? See [Subagents, in plain words](docs/user/subagents.md).*
+
 ---
 
 ## Install
