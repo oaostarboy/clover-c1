@@ -354,6 +354,7 @@ Future messages in this room will use that transcript until `/reset` or another 
   stop:
     stopped_pending:       "⚡ Stoptha. Ní raibh an gníomhaire tosaithe fós — is féidir leat leanúint leis an seisiún seo."
     stopped:               "⚡ Stoptha. Is féidir leat leanúint leis an seisiún seo."
+    stopped_helpers:       "⚡ Stoptha. Tá na fo-ghníomhairí cúlra sa chomhrá seo á gcríochnú."
     no_active:             "Níl aon tasc gníomhach le stopadh."
 
   title:

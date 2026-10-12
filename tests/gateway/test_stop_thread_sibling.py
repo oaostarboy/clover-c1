@@ -137,3 +137,55 @@ async def test_stop_no_active_agent_survives_status_clear_failure():
     result = await runner._handle_stop_command(event)
 
     assert "no active" in str(getattr(result, "text", result)).lower()
+
+
+# ---------------------------------------------------------------------------
+# /stop in an idle chat ends that chat's background subagents
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stop_idle_chat_interrupts_its_background_subagents(monkeypatch):
+    """The root turn already ended, but a subagent it dispatched is still
+    running (its card is live).  /stop must end it, not say "no active task"."""
+    import tools.async_delegation as ad
+
+    runner = object.__new__(GatewayRunner)
+    runner._running_agents = {}
+    key = _per_user_key("userA")
+    runner.session_store = _FakeStore(key)
+    runner._is_user_authorized = lambda source: True
+    runner.adapters = {}
+
+    calls = []
+
+    def _fake_interrupt_for_session(**kw):
+        calls.append(kw)
+        return 1
+
+    monkeypatch.setattr(ad, "interrupt_for_session", _fake_interrupt_for_session)
+    event = MessageEvent(
+        text="/stop", message_type=MessageType.TEXT, source=_thread_source("userA")
+    )
+    result = await runner._handle_stop_command(event)
+
+    assert calls and calls[0]["session_key"] == key
+    text = str(getattr(result, "text", result)).lower()
+    assert "no active" not in text and "stopped" in text
+
+
+@pytest.mark.asyncio
+async def test_stop_idle_chat_without_subagents_still_says_no_active(monkeypatch):
+    import tools.async_delegation as ad
+
+    runner = object.__new__(GatewayRunner)
+    runner._running_agents = {}
+    runner.session_store = _FakeStore(_per_user_key("userA"))
+    runner._is_user_authorized = lambda source: True
+    runner.adapters = {}
+    monkeypatch.setattr(ad, "interrupt_for_session", lambda **kw: 0)
+    event = MessageEvent(
+        text="/stop", message_type=MessageType.TEXT, source=_thread_source("userA")
+    )
+    result = await runner._handle_stop_command(event)
+    assert "no active" in str(getattr(result, "text", result)).lower()

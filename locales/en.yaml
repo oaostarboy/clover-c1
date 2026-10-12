@@ -363,6 +363,7 @@ gateway:
   stop:
     stopped_pending:       "⚡ Stopped. The agent hadn't started yet — you can continue this session."
     stopped:               "⚡ Stopped. You can continue this session."
+    stopped_helpers:       "⚡ Stopped. The background subagents in this chat are ending."
     no_active:             "No active task to stop."
 
   title:

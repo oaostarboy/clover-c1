@@ -347,6 +347,7 @@ gateway:
   stop:
     stopped_pending:       "⚡ Detenido. El agente aún no había comenzado — puedes continuar esta sesión."
     stopped:               "⚡ Detenido. Puedes continuar esta sesión."
+    stopped_helpers:       "⚡ Detenido. Los subagentes en segundo plano de este chat se están cerrando."
     no_active:             "No hay ninguna tarea activa que detener."
 
   title:
