@@ -38,7 +38,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from agent.delegation_activity import DelegationActivityTracker, LivenessProbe
 
@@ -1519,6 +1519,127 @@ def _unified_style() -> bool:
         return False
 
 
+# -- the card sits right above the reply it belongs to -----------------------
+#
+# A part that ended is one line.  It is posted ONCE, immediately before the
+# root agent's reply that handles its completion (the turn the gateway tags
+# with ``completion_delegation_ids``).  Nothing else moves it.
+
+class CompletionTurn:
+    """The delegation ids a turn reports, and whether its first outbound
+    message went out yet (the one the finished cards must sit above)."""
+
+    __slots__ = ("ids", "fired")
+
+    def __init__(self, ids: Sequence[str]) -> None:
+        self.ids = tuple(ids)
+        self.fired = False
+
+
+_COMPLETION_TURN: "contextvars.ContextVar[Optional[CompletionTurn]]" = contextvars.ContextVar(
+    "_deleg_completion_turn", default=None
+)
+
+
+def begin_completion_turn(event: Any) -> Optional[CompletionTurn]:
+    """Mark the current task as handling ``event`` (None for any turn that is
+    not an async-delegation completion).  Called where a turn starts."""
+    turn: Optional[CompletionTurn] = None
+    try:
+        if getattr(event, "internal", False):
+            ids = (getattr(event, "metadata", None) or {}).get("completion_delegation_ids")
+            if isinstance(ids, (list, tuple)):
+                clean = [i for i in ids if isinstance(i, str) and i.strip()]
+                if clean:
+                    turn = CompletionTurn(clean)
+    except Exception:
+        turn = None
+    _COMPLETION_TURN.set(turn)
+    return turn
+
+
+async def _post_liner(adapter: Any, chat_id: Any, text: str, metadata: Any) -> None:
+    kwargs: Dict[str, Any] = {}
+    if metadata is not None:
+        kwargs["metadata"] = metadata
+    try:
+        await _maybe_await(adapter.send(chat_id, _fit_to_limit(text, 4000), **kwargs))
+    except TypeError:
+        await _maybe_await(adapter.send(chat_id, _fit_to_limit(text, 4000)))
+
+
+async def settle_completion(
+    adapter: Any, chat_id: Any, ids: Sequence[str], *, silent: bool, metadata: Any = None,
+) -> int:
+    """Put the finished one-liners of these delegation ids in place.
+
+    ``silent=False``: the reply is about to go out, so every ended part gets its
+    one-line message right before it (a card message that is not the newest
+    message in the chat is deleted and re-posted; one that already is stays).
+    ``silent=True``: nothing will be sent; a stopped part just disappears, a
+    done / failed one still posts its line.  Once per part.  Never raises;
+    returns how many messages were posted or moved."""
+    from agent import ack_checklist as ac
+
+    moved = 0
+    token = _CARD_SEND.set(True)
+    try:
+        for part in ac.pending_liner_parts(ids):
+            if part.liner_done:
+                continue
+            card = part.card
+            stopped = part.checklist.all_stopped
+            editor = _ACK_EDITORS.get(id(card)) if card is not None else None
+            if editor is not None and (editor._adapter is not adapter or editor._chat_id != str(chat_id)):
+                continue  # another chat's card
+            is_card = bool(card is not None and card.finished and card.final_part() is part)
+            if is_card:
+                part.liner_done = True
+                if stopped and silent:
+                    if editor is not None:
+                        await editor.delete_card()
+                    continue
+                if editor is not None:
+                    moved += await editor.repost_final()
+                else:
+                    await _post_liner(adapter, chat_id, card.part_liner(part), metadata)
+                    moved += 1
+                continue
+            part.liner_done = True
+            if stopped and silent:
+                continue
+            text = card.part_liner(part) if card is not None else part.checklist.render()
+            await _post_liner(adapter, chat_id, text, metadata)
+            moved += 1
+    except Exception:
+        logger.debug("settle_completion failed", exc_info=True)
+    finally:
+        _CARD_SEND.reset(token)
+    return moved
+
+
+async def before_reply(adapter: Any, chat_id: Any, content: Any, metadata: Any = None) -> None:
+    """Called by the adapter's ``send`` before a message goes out: the first
+    one of a completion turn pulls the finished cards in right above it."""
+    turn = _COMPLETION_TURN.get()
+    if turn is None or turn.fired or _CARD_SEND.get() or chat_id in (None, ""):
+        return
+    if _is_ack_card_text(content):
+        return
+    turn.fired = True
+    await settle_completion(adapter, chat_id, turn.ids, silent=False, metadata=metadata)
+
+
+async def after_silent_reply(adapter: Any, chat_id: Any, metadata: Any = None) -> None:
+    """The completion turn ended and sent nothing (``[SILENT]``): a stopped part
+    just disappears, a done / failed one still posts its line."""
+    turn = _COMPLETION_TURN.get()
+    if turn is None or turn.fired or chat_id in (None, ""):
+        return
+    turn.fired = True
+    await settle_completion(adapter, chat_id, turn.ids, silent=True, metadata=metadata)
+
+
 class AckCardEditor:
     """Edits one sent ack message to follow its checklist (coalesced, throttled)."""
 
@@ -1573,6 +1694,10 @@ class AckCardEditor:
         # opener in the same message (never on a chat platform) stays plain.
         if not (self._expandable and text) or (self.card.say_text() and not self.card.split_opener):
             return text
+        if self.card.finished:
+            # A finished card is one plain line (no quote, no hint): the edit
+            # that finishes it swaps the expandable quote for plain text.
+            return _fit_to_limit(text, 4000 - 16)
         text = _fit_to_limit(text, 4000 - 16)
         hint = TAP_HINT_DONE if self.card.finished else TAP_HINT_LIVE
         return _to_expandable(text, hint, bold_title=True)
@@ -1705,17 +1830,58 @@ class AckCardEditor:
             peers = [p for p in _LIVE.get(key, []) if isinstance(p, AckCardEditor) and not p._closed]
         return all(p._seq <= self._seq for p in peers)
 
-    async def _repost_locked(self) -> int:
-        if self._closed:
-            self._unregister_live()
+    async def repost_final(self) -> int:
+        """One last move for a card that ended: delete it and re-post its
+        one-line form at the bottom, right before the reply it belongs to.
+        Does nothing when the card already is the newest message in the chat.
+        Returns 1 if it moved."""
+        if self.gone:
             return 0
-        if not self._is_newest_running():
+        if self._edit_lock is None:
+            self._edit_lock = asyncio.Lock()
+        token = _CARD_SEND.set(True)
+        try:
+            async with self._edit_lock:
+                return await self._repost_locked(final=True)
+        except Exception:
+            logger.debug("ack card final repost failed", exc_info=True)
             return 0
+        finally:
+            _CARD_SEND.reset(token)
+
+    async def delete_card(self) -> bool:
+        """Remove the card message (a job that was stopped on purpose leaves
+        nothing behind).  True when it is gone."""
+        if self._edit_lock is None:
+            self._edit_lock = asyncio.Lock()
+        token = _CARD_SEND.set(True)
+        try:
+            async with self._edit_lock:
+                self.gone = True
+                self._unregister_live()
+                if not _adapter_can_delete(self._adapter):
+                    return False
+                await _maybe_await(self._adapter.delete_message(self._chat_id, self._message_id))
+                return True
+        except Exception:
+            logger.debug("ack card delete failed", exc_info=True)
+            return False
+        finally:
+            _CARD_SEND.reset(token)
+
+    async def _repost_locked(self, final: bool = False) -> int:
+        if not final:
+            if self._closed:
+                self._unregister_live()
+                return 0
+            if not self._is_newest_running():
+                return 0
         # Only a message that is not a helper card counts as "newer".
         last_out = _LAST_PLAIN.get(_inbox_key(self._adapter, self._chat_id))
         if not (last_out and _is_newer(last_out, self._message_id)):
             return 0  # already the newest message in the chat
-        self._last_repost = self._clock()
+        if not final:
+            self._last_repost = self._clock()
         text = self._render()
         if not text:
             return 0

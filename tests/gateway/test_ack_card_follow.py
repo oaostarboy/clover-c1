@@ -510,16 +510,14 @@ async def test_events_of_the_joined_part_edit_the_one_card_and_counts_span_all_p
     ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: Disks fine.")
     await _settle()
     mid = chat.edits[-1]["text"]
-    assert "1 of 2 done" in mid.splitlines()[0] and "tap to watch" in mid
-    assert "Goal: a network report" in mid and "Goal: a disk report" not in mid and "~5 min" not in mid
-    # the finished job collapses to one 🍀 line below the running one
-    assert "\U0001f340 **disks** \u00b7 \U0001f6e0 3 \u00b7" in mid and "Disks fine." not in mid
-    assert mid.index("**network**") < mid.index("\U0001f340 **disks**")
+    # the ended job LEFT the card: the card is the single layout of the job still running
+    assert mid.splitlines()[0].startswith("**> \U0001f500 **network**") and "tap to watch" in mid
+    assert "Goal: a network report" in mid and "disks" not in mid and "Disks fine." not in mid
     ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: Net fine.")
     await _settle()
     done = chat.edits[-1]["text"]
-    assert done.splitlines()[0] == "**> \U0001f500 **2 jobs** \u00b7 done"
-    assert done.splitlines()[1] == "> *tap to read \U0001f340*" and first.finished
+    assert done.startswith("\U0001f340 **network** \u00b7 done") and first.finished
+    assert "**>" not in done and "||" not in done and "tap to" not in done and "\n>" not in done, "one plain line"
 
 
 @pytest.mark.asyncio
@@ -568,7 +566,8 @@ async def test_a_dispatch_never_joins_a_finished_card():
     assert len(da._ACK_EDITORS) == 2, "the new dispatch got its own card"
     cards = [s["text"] for s in chat.sends if s["text"].startswith("**>")]
     assert len(cards) == 2 and cards[-1].splitlines()[0] == "**> \U0001f500 **network**"
-    assert "tap to read" in da._ACK_EDITORS[id(first)]._render()
+    finished = da._ACK_EDITORS[id(first)]._render()
+    assert finished.startswith("\U0001f340 **disks** \u00b7 done") and "tap to" not in finished and "||" not in finished
 
 
 @pytest.mark.asyncio
@@ -607,3 +606,220 @@ async def test_a_joined_multi_subagent_part_keeps_its_own_sections():
     assert text.splitlines()[0].startswith("**> \U0001f500 **2 jobs** \u00b7 0 of 3 done")
     assert "> \u25a0 **disks**" in text and "> \u25a0 **alpha**" in text and "> \u25a0 **beta**" in text
     assert "*3 running" in text
+
+
+# -- a finished card sits right above the reply it belongs to ---------------
+
+
+class _Evt:
+    """The shape of the internal event a completion turn runs for."""
+
+    def __init__(self, ids) -> None:
+        self.internal = True
+        self.metadata = {"completion_delegation_ids": list(ids)}
+
+
+async def _reply(chat, text, ids, *, silent=False):
+    """What the gateway does for a completion turn: mark the turn, then either
+    send the reply through the adapter's send wrapper (before_reply) or, for
+    [SILENT], end the turn with nothing sent (after_silent_reply)."""
+    da.begin_completion_turn(_Evt(ids))
+    if silent:
+        await da.after_silent_reply(chat, "chat")
+    else:
+        await da.before_reply(chat, "chat", text)
+        await chat.send("chat", text)
+    await _settle()
+    da._COMPLETION_TURN.set(None)
+
+
+def _order(chat):
+    """Message texts in the order they went out, with the card message ids."""
+    return [s["text"] for s in chat.sends]
+
+
+async def _ended_single(chat, did="dj1", status="completed", work="disks"):
+    card = _opener_card(did, work, f"a {work} report", "on it")
+    await _dispatch(chat, card)
+    ac.on_child_event("subagent.start", delegation_id=did, model="claude-sonnet-5-5")
+    ac.on_child_event("subagent.complete", delegation_id=did, status=status, summary="Plain summary: ok.")
+    await _settle()
+    return card
+
+
+@pytest.mark.asyncio
+async def test_the_finished_card_is_reposted_right_above_the_completion_reply():
+    chat = _TgChat()
+    card = await _ended_single(chat)
+    await chat.send("chat", "something else, posted in between")
+    editor = da._ACK_EDITORS[id(card)]
+    old_id = editor._message_id
+    n = len(chat.sends)
+    await _reply(chat, "All done, here are the results.", ["dj1"])
+    posted = _order(chat)[n:]
+    assert len(posted) == 2, "the one-liner, then the reply"
+    assert posted[0].startswith("\U0001f340 **disks** \u00b7 done") and "**>" not in posted[0]
+    assert posted[1] == "All done, here are the results."
+    assert old_id in chat.deleted and editor._message_id == chat.sends[n]["id"], "the old card message moved"
+
+
+@pytest.mark.asyncio
+async def test_a_card_that_is_already_the_last_message_does_not_move():
+    chat = _TgChat()
+    card = await _ended_single(chat)
+    editor = da._ACK_EDITORS[id(card)]
+    old_id, n = editor._message_id, len(chat.sends)
+    await _reply(chat, "All done.", ["dj1"])
+    assert chat.deleted == [] and editor._message_id == old_id
+    assert _order(chat)[n:] == ["All done."], "no re-post: the card already sits right above the reply"
+
+
+@pytest.mark.asyncio
+async def test_a_silent_completion_moves_nothing_for_a_done_card_but_keeps_it():
+    chat = _TgChat()
+    card = await _ended_single(chat)
+    await chat.send("chat", "later message")
+    editor = da._ACK_EDITORS[id(card)]
+    n = len(chat.sends)
+    await _reply(chat, "", ["dj1"], silent=True)
+    posted = _order(chat)[n:]
+    assert len(posted) == 1 and posted[0].startswith("\U0001f340 **disks** \u00b7 done"), "not lost: posted anyway"
+    assert editor._message_id == chat.sends[n]["id"]
+
+
+@pytest.mark.asyncio
+async def test_a_silent_completion_of_a_stopped_card_just_deletes_it():
+    chat = _TgChat()
+    card = await _ended_single(chat, status="interrupted")
+    editor = da._ACK_EDITORS[id(card)]
+    old_id, n = editor._message_id, len(chat.sends)
+    await _reply(chat, "", ["dj1"], silent=True)
+    assert old_id in chat.deleted and len(chat.sends) == n, "the stopped part disappears; nothing is posted"
+
+
+@pytest.mark.asyncio
+async def test_a_stopped_part_above_a_real_reply_keeps_its_stop_line():
+    chat = _TgChat()
+    card = await _ended_single(chat, status="interrupted")
+    await chat.send("chat", "newer")
+    n = len(chat.sends)
+    await _reply(chat, "Stopped as asked.", ["dj1"])
+    posted = _order(chat)[n:]
+    assert posted[0].startswith("\U0001f940 **disks** \u00b7 stopped") and posted[1] == "Stopped as asked."
+
+
+@pytest.mark.asyncio
+async def test_each_part_moves_once_only():
+    chat = _TgChat()
+    await _ended_single(chat)
+    await chat.send("chat", "newer")
+    await _reply(chat, "first reply", ["dj1"])
+    n = len(chat.sends)
+    await _reply(chat, "second reply", ["dj1"])
+    assert _order(chat)[n:] == ["second reply"], "already placed: no second move"
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_turn_never_moves_a_finished_card():
+    chat = _TgChat()
+    await _ended_single(chat)
+    await chat.send("chat", "newer")
+    n = len(chat.sends)
+    da._COMPLETION_TURN.set(None)
+    await da.before_reply(chat, "chat", "a normal human-turn reply")
+    await chat.send("chat", "a normal human-turn reply")
+    assert _order(chat)[n:] == ["a normal human-turn reply"]
+
+
+@pytest.mark.asyncio
+async def test_a_joined_part_posts_its_own_line_before_its_reply_and_the_last_part_moves_the_card():
+    chat = _TgChat()
+    first = _opener_card("dj1", "disks", "a disk report", "on it")
+    await _dispatch(chat, first)
+    second = _opener_card("dj2", "network", "a network report", "and this")
+    await _dispatch(chat, second)
+    editor = da._ACK_EDITORS[id(first)]
+    for did in ("dj1", "dj2"):
+        ac.on_child_event("subagent.start", delegation_id=did, model="claude-sonnet-5-5")
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: ok.")
+    await _settle()
+    # part 1 ended while part 2 still runs: the live card dropped it
+    assert "disks" not in first.render() and editor._closed is False
+    n = len(chat.sends)
+    await _reply(chat, "Disks are fine.", ["dj1"])
+    posted = _order(chat)[n:]
+    assert len(posted) == 2 and posted[0].startswith("\U0001f340 **disks** \u00b7 done"), "its own line, then the reply"
+    assert posted[1] == "Disks are fine."
+    assert not first.finished, "the card still runs for the other part"
+    ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: ok.")
+    await _settle()
+    await chat.send("chat", "chatter")
+    n = len(chat.sends)
+    await _reply(chat, "Network is fine too.", ["dj2"])
+    posted = _order(chat)[n:]
+    assert posted[0].startswith("\U0001f340 **network** \u00b7 done") and posted[1] == "Network is fine too."
+    assert sum(1 for t in _order(chat) if t.startswith("\U0001f340 **disks**")) == 1, "disks line was posted once"
+
+
+@pytest.mark.asyncio
+async def test_a_batched_completion_for_several_parts_posts_each_line_before_the_one_reply():
+    chat = _TgChat()
+    first = _opener_card("dj1", "disks", "a disk report", "on it")
+    await _dispatch(chat, first)
+    second = _opener_card("dj2", "network", "a network report", "and this")
+    await _dispatch(chat, second)
+    for did in ("dj1", "dj2"):
+        ac.on_child_event("subagent.start", delegation_id=did, model="claude-sonnet-5-5")
+        ac.on_child_event("subagent.complete", delegation_id=did, status="completed", summary="Plain summary: ok.")
+    await _settle()
+    await chat.send("chat", "chatter")
+    n = len(chat.sends)
+    await _reply(chat, "Both are fine.", ["dj1", "dj2"])
+    posted = _order(chat)[n:]
+    assert [p.split(" ")[1] for p in posted[:2]] == ["**disks**", "**network**"] and posted[2] == "Both are fine."
+
+
+@pytest.mark.asyncio
+async def test_the_real_send_wrapper_moves_the_card_before_the_reply_goes_out():
+    from gateway.config import Platform, PlatformConfig
+    from gateway.platforms.base import BasePlatformAdapter
+
+    class _Real(BasePlatformAdapter):
+        def __init__(self) -> None:
+            super().__init__(PlatformConfig(enabled=True), Platform.TELEGRAM)
+            self.n = 100
+            self.sent: List[str] = []
+            self.deleted: List[str] = []
+
+        async def connect(self): return True
+        async def disconnect(self): pass
+        async def send_typing(self, *a, **k): pass
+        async def get_chat_info(self, chat_id): return {}
+
+        async def send(self, chat_id, content, reply_to=None, metadata=None, **kw):
+            self.n += 1
+            self.sent.append(content)
+            return SendResult(success=True, message_id=str(self.n))
+
+        async def edit_message(self, chat_id, message_id, content, *, finalize=False, metadata=None):
+            return SendResult(success=True, message_id=message_id)
+
+        async def delete_message(self, chat_id, message_id):
+            self.deleted.append(str(message_id))
+            return True
+
+    chat = _Real()
+    card = _opener_card("dj1", "disks", "a disk report", "on it")
+    sent = await chat.send("chat", card.say_text())
+    await _settle()
+    ac.on_child_event("subagent.start", delegation_id="dj1", model="claude-sonnet-5-5")
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: ok.")
+    await _settle()
+    await chat.send("chat", "chatter in between")
+    n = len(chat.sent)
+    da.begin_completion_turn(_Evt(["dj1"]))
+    await chat.send("chat", "The disks are fine.")
+    await _settle()
+    posted = chat.sent[n:]
+    assert posted[0].startswith("\U0001f340 **disks** \u00b7 done") and posted[-1] == "The disks are fine.", posted
+    da._COMPLETION_TURN.set(None)

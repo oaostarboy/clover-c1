@@ -111,9 +111,9 @@ async def test_an_agent_job_joins_the_running_card_and_posts_no_roster_card():
     head = text.splitlines()[0]
     assert "**2 jobs**" in head and "0 of 2 done" in head and "shipping" not in head
     assert "\u25a0 **shipping the card**" in text
-    # a long name puts its stats on the next indented line
-    assert "\u25a0 **Audit cron locking**\n> \u2003\u2003GPT-6.1 Sol \u00b7 \U0001f6e0 2 calls \u00b7 \u23f1 " in text
-    assert "*now: pytest -q*" in text and "*before: Read a.py*" in text
+    # a long name stands alone; its stats close its section
+    assert "\u25a0 **Audit cron locking**\n" in text and "\u2003\u2003*GPT-6.1 Sol \u00b7 \U0001f6e0 2 calls \u00b7 \u23f1 " in text
+    assert "*now: pytest -q*" in text and "*before: read a.py*" in text
     job.finish(0)
     assert first.parts[1].checklist.state == ac.DONE and not first.finished, "the host part still runs"
     await pub.aclose()
@@ -136,7 +136,8 @@ async def test_an_agent_job_alone_gets_its_own_unified_card():
     job.feed(_line({"type": "result", "result": "Plain summary: Locking is fine.", "is_error": False}))
     job.finish(0)
     assert cl.state == ac.DONE and cl.summary == "Locking is fine."
-    assert "Locking is fine." in card.render() and card.finished
+    assert card.render().startswith("\U0001f340 **Audit cron locking** \u00b7 done") and card.finished
+    assert "Locking is fine." not in card.render(), "the result is already in the chat"
     await pub.aclose()
 
 
@@ -162,8 +163,9 @@ async def test_a_failed_job_in_a_joined_card_keeps_the_failure_mark_on_its_name(
     pub, job = await _start_job(chat)
     job.finish(1)
     text = first.render()
-    assert "\U0001f342 **Audit cron locking** \u00b7 failed" in text
-    assert "\u25a0 **shipping the card**" in text
+    assert "Audit cron locking" not in text, "the failed job left the running card"
+    assert text.splitlines()[0] == "\U0001f500 **shipping the card**", "one part left: single layout"
+    assert first.part_liner(first.parts[1]).startswith("\U0001f342 **Audit cron locking** \u00b7 failed")
     await pub.aclose()
 
 
@@ -179,7 +181,7 @@ async def test_a_lifecycle_only_job_shows_running_then_done():
     job.finish(0)
     done = card.render()
     assert card.parts[0].checklist.state == ac.DONE and card.finished
-    assert done.splitlines()[0].endswith("\u00b7 done") and "*running*" not in done
+    assert done.startswith("\U0001f340 **Audit cron locking** \u00b7 done") and "*running*" not in done
     await pub.aclose()
 
 

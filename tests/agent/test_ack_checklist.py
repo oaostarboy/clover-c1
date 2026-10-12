@@ -90,7 +90,7 @@ def test_helper_added_items_and_unknown_statuses_are_ignored():
 def test_cancelled_step_shows_stopped_icon():
     cl = ac.Checklist.start(HEAD, STEPS[:2])
     cl.apply_todos(_todos("completed", "cancelled"))
-    assert cl.render().splitlines()[2].startswith("\u23f9")
+    assert cl.render().splitlines()[2].startswith("\U0001f940")
 
 
 # ── final state ────────────────────────────────────────────────────────────
@@ -119,7 +119,7 @@ def test_failure_marks_the_failing_step_and_header_x_and_nothing_else():
 def test_stopped_uses_the_stop_icon_and_a_second_finish_changes_nothing():
     cl = ac.Checklist.start(HEAD, STEPS[:2])
     assert cl.finish(ac.STOPPED)
-    assert cl.render().startswith("\u23f9 ")
+    assert cl.render().startswith("\U0001f940 ")
     assert not cl.finish(ac.DONE) and cl.state == ac.STOPPED
     assert not cl.apply_todos(_todos("completed", "completed")), "a finished list never regresses"
 
