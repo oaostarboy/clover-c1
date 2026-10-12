@@ -28,6 +28,17 @@ from clover_cli.main import (
 # ── Default config ──────────────────────────────────────────────────────────
 
 
+def test_delegation_router_fast_model_defaults():
+    """The router defaults to the fast model; the slow-model wait and the
+    small-talk skip live in their own delegation.router keys."""
+    dr = DEFAULT_CONFIG["auxiliary"]["delegation_router"]
+    assert dr["prefer_fast_model"] is True
+    router = DEFAULT_CONFIG["delegation"]["router"]
+    assert router["slow_model_timeout_seconds"] == 20
+    assert router["skip_small_talk"] is True
+    assert router["slow_model_timeout_seconds"] > router["timeout_seconds"]
+
+
 def test_title_generation_present_in_default_config():
     """`title_generation` task must be defined in DEFAULT_CONFIG.
 
@@ -41,7 +52,9 @@ def test_title_generation_present_in_default_config():
     assert tg["enabled"] is True
     assert tg["provider"] == "auto"
     assert tg["model"] == ""
-    assert tg["prefer_fast_model"] is False
+    # Default ON: titles run on the provider's small fast model unless the
+    # user pins a model or sets prefer_fast_model: false.
+    assert tg["prefer_fast_model"] is True
     assert tg["timeout"] > 0
     assert tg["extra_body"] == {}
 

@@ -815,8 +815,8 @@ prompt_caching:
 #   # message before the main chat agent starts. One small JSON reply.
 #   delegation_router:
 #     provider: "auto"
-#     model: "auto"          # auto = the provider's fast model when it has one, else your main model
-#     prefer_fast_model: true
+#     model: "auto"          # auto = the provider's small fast model when one exists, else your main model
+#     prefer_fast_model: true   # false = always use your main model
 #     timeout: 8
 #
 #   # Session search — summarizes matching past sessions

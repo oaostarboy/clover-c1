@@ -62,7 +62,7 @@ deliver a helper's result later, with the limit on. It never runs for helper
 completions, multimodal messages, or a bare greeting / thank-you.
 
 - **Sizing.** Before the first model call of a human message, a fast auxiliary
-  model (`auxiliary.delegation_router`, preferring the provider's fast tier)
+  model (`auxiliary.delegation_router`: by default the provider's small fast model, e.g. `gpt-6-luna` on Codex, Haiku on Anthropic; `prefer_fast_model: false` or a pinned provider/model opts out)
   returns `{mode, tasks: [{goal, depends_on, acceptance}], reason}`. The reply
   is schema-validated and the mode is derived from the task DAG in code - no
   tasks is direct, one is single, several independent are parallel, any
@@ -97,11 +97,19 @@ delegation:
     timeout_seconds: 8
     backstop_calls: 2
     backstop_seconds: 60
+    slow_model_timeout_seconds: 20   # wait when only the big main model exists
+    skip_small_talk: true            # "thanks", "ok go", "lol": no router call
 auxiliary:
   delegation_router:
     provider: auto
     model: auto
+    prefer_fast_model: true          # false = always the main model
 ```
+
+When no small model exists for the main provider the router runs on the main
+model and waits `slow_model_timeout_seconds` (default 20) instead of
+`timeout_seconds` (8); the log says which applied. Pure small talk (an explicit
+allow-list, never a length rule) skips the router entirely.
 
 ## The foreground time limit
 

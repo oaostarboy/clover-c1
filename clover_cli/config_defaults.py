@@ -1214,7 +1214,7 @@ DEFAULT_CONFIG = {
             "enabled": True,
             "provider": "auto",
             "model": "",
-            "prefer_fast_model": False,  # opt in to provider fast tier; auto otherwise uses the main model
+            "prefer_fast_model": True,  # auto = the provider's small fast model; false = the main model
             "base_url": "",
             "api_key": "",
             "timeout": 30,
@@ -1223,8 +1223,9 @@ DEFAULT_CONFIG = {
             "language": "",
         },
         # Delegation router (delegation.router): sizes a human message before
-        # the root starts. Small JSON reply, 8 s budget, so it prefers the
-        # provider's fast tier; ``auto`` otherwise resolves like title_generation.
+        # the root starts. Small JSON reply, 8 s budget, so ``auto`` resolves to
+        # the provider's small fast model (same default as title_generation);
+        # ``prefer_fast_model: false`` or a pinned provider/model opts out.
         "delegation_router": {
             "provider": "auto",
             "model": "auto",
@@ -2172,6 +2173,12 @@ DEFAULT_CONFIG = {
             "timeout_seconds": 8,
             "backstop_calls": 2,
             "backstop_seconds": 60,
+
+            # Fast-model behaviour (own block): the wait when the router has
+            # no small model and runs on the big main one, and the free
+            # local skip for pure small talk ("thanks", "ok go", "lol").
+            "slow_model_timeout_seconds": 20,
+            "skip_small_talk": True,
         },
         "max_iterations": 250,  # per-subagent iteration cap (each subagent gets its own budget,
                                # independent of the parent's max_iterations)
