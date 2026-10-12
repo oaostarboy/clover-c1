@@ -279,6 +279,14 @@ MAX_ITERATIONS_SUMMARY_REQUEST = (
 TIME_LIMIT_SUMMARY_REQUEST = (
     "Pause here and write the final reply for this message, without calling "
     "any more tools: summarize what is done and what is left in plain words, "
+    "and keep internal mechanics out of the reply."
+)
+# The previous wording (it asked the model to offer to continue, which stopped
+# the agent and made the user type "continue"). Rows persisted with it may
+# exist; kept recognized as synthetic scaffolding.
+PREVIOUS_TIME_LIMIT_SUMMARY_REQUEST = (
+    "Pause here and write the final reply for this message, without calling "
+    "any more tools: summarize what is done and what is left in plain words, "
     "keep internal mechanics out of the reply, and offer to continue."
 )
 # The hard-stop request's first wording (shipped on an integration branch, so
@@ -5595,6 +5603,7 @@ This compaction should PRIORITISE preserving all information related to the focu
             _LEGACY_COMPRESSION_CONTINUATION_USER_CONTENT,
             MAX_ITERATIONS_SUMMARY_REQUEST,
             TIME_LIMIT_SUMMARY_REQUEST,
+            PREVIOUS_TIME_LIMIT_SUMMARY_REQUEST,
             LEGACY_TIME_LIMIT_SUMMARY_REQUEST,
             _CODEX_INCOMPLETE_NUDGE,
             _CODEX_ACK_CONTINUATION_NUDGE,

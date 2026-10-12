@@ -3104,10 +3104,11 @@ def try_substitute_unknown_model(agent, *, requested_model: str, provider: str):
     return substitute
 
 
-# What the user reads when the time-limit hard stop yields no summary: honest
-# (the reply stopped) and silent about why.
+# What the user reads when the time-limit hard stop yields no summary AND no
+# helper could take the rest (see ``agent.time_limit_handoff``): honest (the
+# reply stopped) and silent about why. It does not ask for permission.
 _TIME_LIMIT_STOPPED_REPLY = (
-    "I've stopped here for now. Send 'continue' and I'll pick it back up."
+    "I've paused here before finishing all of it. The rest is still to do."
 )
 
 

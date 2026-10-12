@@ -2159,6 +2159,15 @@ DEFAULT_CONFIG = {
         # the background. Seconds; 0/null/false = off. Off too whenever
         # foreground_time_limit_seconds is off.
         "verify_time_limit_seconds": 120,
+        # When the hard stop above hits and the work is NOT finished, the
+        # runtime hands the rest to ONE background helper (full-context
+        # hand-off notes, the agent's own one-line opener) instead of asking
+        # the agent to stop and offer to continue -- a completion turn that
+        # runs out of time hands its remainder off too. false = the old
+        # behaviour (one no-tools summary, no hand-off). Also the fallback
+        # whenever no helper can be started (no delegate_task tool, no
+        # detached delivery, a refused dispatch, "do it yourself").
+        "time_limit_handoff": True,
         # Delegation router: before a root chat agent starts a human message, a
         # fast auxiliary model sizes it (direct / single / parallel / staged)
         # and the plan is put on that turn's message. If the agent then keeps

@@ -368,6 +368,14 @@ def note_result(agent: Any, function_name: str, function_args: Any, result: Any)
         state.running.pop(key, None)
         if state.spawning.pop(key, None) is not None:
             state.settled.notify_all()
+    record_result(state, function_name, function_args, result)
+
+
+def record_result(state: RouterTurn, function_name: str, function_args: Any, result: Any) -> None:
+    """Keep what one finished work call found, for the hand-off notes and the
+    findings digest.  ``note_result`` calls it for every executed call; the
+    time-limit hand-off (``agent.time_limit_handoff``) replays the turn's calls
+    through it when it builds a state after the fact."""
     if not (state.planned or state.direct) or not isinstance(result, str) or not result.strip():
         return
     _note_opened(state, function_name, function_args)
@@ -585,7 +593,7 @@ def _runtime_handoff(verdict: Any, user_message: str = "") -> Dict[str, str]:
 
     fallback = ""
     tasks = getattr(verdict, "tasks", ()) or ()
-    if len(tasks) == 1 and getattr(verdict, "source", "") != "direct_backstop":
+    if len(tasks) == 1 and getattr(verdict, "source", "") not in ("direct_backstop", "time_limit"):
         fallback = str(getattr(tasks[0], "goal", "") or "")
     return handoff_summary(user_message, str(getattr(verdict, "reason", "") or ""), fallback)
 
