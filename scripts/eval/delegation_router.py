@@ -36,6 +36,16 @@ MODES = ("direct", "single", "parallel", "staged")
 WORKDIR_STUB = "/work/eval"
 
 
+def accepted_modes(expected: Any) -> List[str]:
+    """The modes a case accepts: ``expected_mode`` is one mode, or a list when
+    the case is genuinely ambiguous (``["direct", "single"]``)."""
+    return [expected] if isinstance(expected, str) else list(expected)
+
+
+def expected_label(expected: Any) -> str:
+    return "|".join(accepted_modes(expected))
+
+
 def load_cases(path: Path) -> List[Dict[str, Any]]:
     cases: List[Dict[str, Any]] = []
     seen = set()
@@ -47,11 +57,18 @@ def load_cases(path: Path) -> List[Dict[str, Any]]:
             case = json.loads(line)
         except json.JSONDecodeError as exc:
             raise ValueError(f"{path}:{lineno}: invalid JSON: {exc}") from exc
-        for key in ("id", "prompt", "expected_mode"):
+        for key in ("id", "prompt"):
             if not isinstance(case.get(key), str) or not case[key].strip():
                 raise ValueError(f"{path}:{lineno}: missing or empty {key!r}")
-        if case["expected_mode"] not in MODES:
-            raise ValueError(f"{path}:{lineno}: expected_mode {case['expected_mode']!r} not in {MODES}")
+        expected = case.get("expected_mode")
+        if isinstance(expected, list):
+            ok = bool(expected) and len(set(expected)) == len(expected) and all(
+                isinstance(m, str) and m in MODES for m in expected)
+        else:
+            ok = isinstance(expected, str) and expected in MODES
+        if not ok:
+            raise ValueError(f"{path}:{lineno}: expected_mode {expected!r} must be one of {MODES} "
+                             "or a list of them")
         turns = case.get("recent_turns", [])
         if not isinstance(turns, list) or not all(
             isinstance(t, dict) and t.get("role") in ("user", "assistant")
@@ -101,7 +118,7 @@ def run_router_eval(
         turns = case.get("recent_turns") or []
         for rep in range(n_reps):
             run: Dict[str, Any] = {
-                "case_id": case["id"], "rep": rep, "expected_mode": case["expected_mode"],
+                "case_id": case["id"], "rep": rep, "expected_mode": expected_label(case["expected_mode"]),
                 "mode": None, "source": None, "reason": "", "latency_ms": 0,
                 "correct": False, "error": None,
             }
@@ -116,9 +133,9 @@ def run_router_eval(
             except Exception as exc:  # one bad call must not lose the others
                 run["latency_ms"] = int(round((clock() - t0) * 1000))
                 run["error"] = f"{type(exc).__name__}: {exc}"
-            run["correct"] = run["mode"] == case["expected_mode"]
+            run["correct"] = run["mode"] in accepted_modes(case["expected_mode"])
             runs.append(run)
-            say(f"{case['id']} r{rep}: expected {case['expected_mode']}, got {run['mode']} "
+            say(f"{case['id']} r{rep}: expected {expected_label(case['expected_mode'])}, got {run['mode']} "
                 f"({run['latency_ms']} ms)" + (f"  [{run['error']}]" if run["error"] else ""))
     return runs
 
@@ -148,15 +165,32 @@ def summarize(runs: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+GATE_ACCURACY = 0.90
+GATE_CASE_FRACTION = 2 / 3
+
+
+def gate_failures(cases: Sequence[Dict[str, Any]], summary: Dict[str, Any],
+                  min_case: float = GATE_CASE_FRACTION) -> List[str]:
+    """Ids of ``"gate": true`` cases that were right in fewer than ``min_case`` of their runs."""
+    out: List[str] = []
+    for case in cases:
+        if not case.get("gate"):
+            continue
+        c = summary["cases"].get(case["id"])
+        if c is None or c["n"] == 0 or c["correct"] / c["n"] + 1e-9 < min_case:
+            out.append(case["id"])
+    return out
+
+
 def render(summary: Dict[str, Any]) -> str:
     lines = [
         "Delegation router eval",
-        f"{'case':<26}{'expect':<10}{'got (per rep)':<44}{'ok':<8}",
+        f"{'case':<26}{'expect':<18}{'got (per rep)':<44}{'ok':<8}",
     ]
     for case_id, c in summary["cases"].items():
         got = ",".join(m or "NONE" for m in c["modes"])
         lines.append(
-            f"{case_id[:25]:<26}{c['expected_mode']:<10}{got[:43]:<44}{c['correct']}/{c['n']:<6}"
+            f"{case_id[:25]:<26}{c['expected_mode'][:17]:<18}{got[:43]:<44}{c['correct']}/{c['n']:<6}"
         )
     p50, p95 = summary["p50_ms"], summary["p95_ms"]
     lines += [
@@ -194,6 +228,9 @@ def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
                         "client set-up, which a long-lived gateway pays once at start-up)")
     p.add_argument("--min-accuracy", type=float, default=0.0,
                    help="Exit 1 when accuracy is below this fraction (default 0 = report only)")
+    p.add_argument("--ship-gate", action="store_true",
+                   help=f"The ship gate: accuracy >= {GATE_ACCURACY:.0%} AND every case marked "
+                        f"\"gate\": true right in >= 2 of 3 runs; implies --case-reps. Exit 1 on a miss")
     return p.parse_args(argv)
 
 
@@ -211,6 +248,9 @@ def main(
     route_fn: Optional[Callable[..., Any]] = None,
 ) -> int:
     args = _parse_args(argv)
+    if args.ship_gate:
+        args.case_reps = True
+        args.min_accuracy = max(args.min_accuracy, GATE_ACCURACY)
     try:
         cases = load_cases(Path(args.cases))
     except (OSError, ValueError) as exc:
@@ -272,9 +312,14 @@ def main(
         encoding="utf-8",
     )
     text = render(summary)
+    missed_gate = gate_failures(cases, summary) if args.ship_gate else []
+    if args.ship_gate:
+        text += ("ship gate: " + ("FAIL - gate cases below 2/3: " + ", ".join(missed_gate)
+                                 if missed_gate else "gate cases all >= 2/3")
+                 + f"; accuracy {'ok' if summary['accuracy'] >= args.min_accuracy else 'BELOW ' + format(args.min_accuracy, '.0%')}\n")
     (out_dir / "summary.txt").write_text(text, encoding="utf-8")
     print(text)
-    return 0 if summary["accuracy"] >= args.min_accuracy else 1
+    return 0 if summary["accuracy"] >= args.min_accuracy and not missed_gate else 1
 
 
 if __name__ == "__main__":

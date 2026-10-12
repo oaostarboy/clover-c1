@@ -110,6 +110,26 @@ auxiliary:
     model: auto
 ```
 
+### Ship gate
+
+Run before changing the router prompt, or the router's model or reasoning setting. 30 cases from real use live in
+`tests/fixtures/router_eval/ship_gate.jsonl` (`expected_mode` may be a list
+where two modes are both defensible; `"gate": true` marks the cases that
+failed live). Copy a profile's `config.yaml` and `auth.json` into a temporary
+`CLOVER_HOME` (`chmod 700`), pin `auxiliary.delegation_router` to the model
+under test, and run:
+
+```bash
+python scripts/eval/delegation_router.py --home "$TMP_HOME" \
+  --cases tests/fixtures/router_eval/ship_gate.jsonl \
+  --reps 2 --ship-gate --out /tmp/ship-gate-out
+```
+
+`--ship-gate` takes each case's own `reps` (3 for the hard ones), requires
+accuracy of at least 90 percent and every `gate` case right in at least 2 of 3
+runs, and exits 1 on a miss. Do not edit the rubric to fit one model's misses;
+report them. The gate is run by hand (it calls real models), not in CI.
+
 ## The foreground time limit
 
 Instead of a work-call cap, the main chat agent gets a **time limit per user
