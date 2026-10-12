@@ -746,7 +746,7 @@ def test_two_parts_of_one_card_render_as_one_joined_card():
     r2 = fl.DispatchReceipt(delegation_id="b", seq=2, goals=("g",), summary=HEAD, steps=("two",))
     card = ac.card_for([r1, r2])
     text = card.render()
-    assert text.splitlines()[0].startswith("\U0001f500 **fixing the bugs, fixing the bugs** \u00b7 0 of 2 done")
+    assert text.splitlines()[0].startswith("\U0001f500 **2 jobs** \u00b7 0 of 2 done")
     assert text.count("Goal: ") == 2 and "\n\n" not in text
     # the goals sit inside their sections, never as lines at the top
     lines = text.splitlines()
@@ -1345,3 +1345,81 @@ def test_a_single_part_card_keeps_its_goal_line_with_the_eta_on_top():
     card = _multi_card(goals=("a", "b"))
     lines = card.render().splitlines()
     assert lines[1].startswith("> Goal: ") and "~" in lines[1]
+
+
+# -- a joined card is titled "N jobs", never with (cut-off) job names ----------
+
+
+def _job(did, seq, work, goals=("g",)):
+    head = f"\U0001f504 {work} \u2192 an outcome, ~5 min"
+    return fl.DispatchReceipt(delegation_id=did, seq=seq, goals=tuple(goals), summary=head,
+                              steps=("one",) if len(goals) == 1 else ())
+
+
+def _end(did, i, n, status="completed"):
+    ac.on_child_event("subagent.complete", delegation_id=did, task_index=i, task_count=n,
+                      subagent_id=f"{did}-{i}", status=status, summary="Plain summary: ok.")
+
+
+def _five_subagents_in_three_jobs():
+    """3 jobs: shipping the new card as one message (1 subagent), a long-named
+    sweep of outside workers (2), and a cron audit (2): 5 subagents."""
+    long_name = "putting outside workers in the same card as the subagents"
+    return ac.card_for([
+        _job("a", 1, "shipping the new card as one message"),
+        _job("b", 2, long_name, goals=("alpha", "beta")),
+        _job("c", 3, "auditing cron locking", goals=("gamma", "delta")),
+    ])
+
+
+def test_a_joined_card_of_two_parts_is_titled_n_jobs():
+    card = ac.card_for([_job("a", 1, "fixing the bugs"), _job("b", 2, "the network report")])
+    lines = card.render().splitlines()
+    assert lines[0] == "\U0001f500 **2 jobs** \u00b7 0 of 2 done"
+    assert "> \u25a0 **fixing the bugs**" in lines and "> \u25a0 **the network report**" in lines
+
+
+def test_a_joined_card_of_four_parts_is_titled_n_jobs():
+    card = ac.card_for([_job(c, i, w) for i, (c, w) in enumerate(
+        (("a", "disks"), ("b", "network"), ("c", "backups"), ("d", "logs")), 1)])
+    head = card.render().splitlines()[0]
+    assert head == "\U0001f500 **4 jobs** \u00b7 0 of 4 done"
+    assert "more" not in head and "\u2026" not in head
+
+
+def test_a_joined_running_card_counts_every_subagent_and_keeps_job_names_in_sections():
+    card = _five_subagents_in_three_jobs()
+    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
+    _end("b", 0, 2)
+    text = card.render()
+    lines = text.splitlines()
+    assert lines[0] == "\U0001f500 **3 jobs** \u00b7 2 of 5 done" and len(lines[0]) < 40
+    for name in ("shipping the new card as one message", "alpha", "gamma"):
+        assert any(ln.startswith(f"> \u25a0 **{name}**") for ln in lines), name
+    assert text.count("Goal: ") == 3, "a Goal line per job, under its first section"
+    assert "shipping the new card" not in lines[0] and "putting outside" not in lines[0]
+
+
+def test_a_finished_joined_card_says_n_jobs_done():
+    card = ac.card_for([_job("a", 1, "disks"), _job("b", 2, "network"), _job("c", 3, "logs")])
+    for did in "abc":
+        ac.on_child_event("subagent.complete", delegation_id=did, status="completed", summary="Plain summary: ok.")
+    assert card.render().splitlines()[0] == "\U0001f500 **3 jobs** \u00b7 done"
+
+
+def test_a_failed_joined_card_shows_the_counts_and_the_failure():
+    card = _five_subagents_in_three_jobs()
+    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
+    _end("b", 0, 2)
+    _end("b", 1, 2)
+    _end("c", 0, 2)
+    _end("c", 1, 2, status="failed")
+    assert card.render().splitlines()[0] == "\U0001f342 **3 jobs** \u00b7 4 of 5 done \u00b7 1 failed"
+
+
+def test_a_single_part_card_keeps_its_work_title():
+    card = _card()
+    assert "\U0001f500 **fixing the bugs**" in card.render().splitlines()
+    multi = _multi_card()
+    assert multi.render().splitlines()[0] == "\U0001f500 **checking the 3 sites** \u00b7 0 of 3 done"
+    assert " jobs**" not in multi.render()
