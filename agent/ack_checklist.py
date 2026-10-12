@@ -92,6 +92,8 @@ SUMMARY_CHARS = 140  # a helper's summary on a several-helper card
 COMPACT_OVER = 6  # more helpers than this: the compact layout
 COMPACT_RUNNING = 3  # ...shows at most this many running helpers in full
 COMPACT_RESULT_CHARS = 48  # ...and a done helper's result in this many
+ROW_CHARS = 44  # a name + its stats fit one phone row up to this many visible chars
+RESULT_LINE_CHARS = 40  # a subagent's result line on a several-subagent card: one row
 COMPACT_NAMES = 5  # names listed on a grouped "waiting" / "more running" line
 CARD_BUDGET = 3900  # Telegram's message limit, with room to spare
 
@@ -506,8 +508,31 @@ def _name_label(name: str, state: str) -> str:
     return f"{FAILED_ICON if state == FAILED else SECTION_MARK} **{name}**"
 
 
-def _section_header(name: str, obj: Any, now: float) -> str:
-    """``**Name** · done · Sonnet 5.5 · 🛠 7 calls · ⏱ 35s`` (``🍂`` before a failed name)."""
+def _visible_len(text: str) -> int:
+    """Visible width of ``text`` on a phone row: markdown marks are free, an
+    emoji counts 2."""
+    n = 0
+    for ch in (text or "").replace("*", ""):
+        o = ord(ch)
+        n += 2 if (o >= 0x1F000 or ch in "\u23f1\u2b1c\u23f9") else 1
+    return n
+
+
+def _name_and_stats(label: str, name: str, parts: Sequence[str]) -> List[str]:
+    """``label · parts`` on one line, or (when the name plus the stats would
+    pass ``ROW_CHARS``) the label alone with the stats on their own indented
+    line under it, so a long name never wraps its stats to the left edge."""
+    stats = " \u00b7 ".join(p for p in parts if p)
+    if not stats:
+        return [label]
+    if _visible_len(name) + 3 + _visible_len(stats) <= ROW_CHARS:
+        return [f"{label} \u00b7 {stats}"]
+    return [label, _INDENT + stats]
+
+
+def _section_header(name: str, obj: Any, now: float) -> List[str]:
+    """``■ **Name** · done · Sonnet 5.5 · 🛠 7 calls · ⏱ 35s`` (``🍂`` before a
+    failed name); a long name puts the stats on the next indented line."""
     label = _name_label(name, obj.state)
     parts: List[str] = []
     if obj.state == PENDING:
@@ -516,7 +541,14 @@ def _section_header(name: str, obj: Any, now: float) -> str:
         if obj.state != RUNNING:
             parts.append(obj.state)
         parts += _stats_parts(obj.model, obj.calls, obj.started, obj.ended, now)
-    return " \u00b7 ".join([label] + parts)
+    return _name_and_stats(label, name, parts)
+
+
+class _Block(list):
+    """A section's lines; ``head`` is how many of them are its header (the name,
+    plus the stats line when a long name moved its stats down)."""
+
+    head = 1
 
 
 def _section_block(
@@ -524,15 +556,21 @@ def _section_block(
 ) -> List[str]:
     """One subagent's section: header, then its steps, tool lines or summary
     (indented under the name).  ``obj`` is a ``Child`` or a one-subagent part."""
-    block = [_section_header(name, obj, now)]
+    header = _section_header(name, obj, now)
+    block = _Block(header)
+    block.head = len(header)
     if obj.state == PENDING:
         return block
     under = _kid_step_lines(obj)
     if obj.state == RUNNING:
         under += _live_lines(obj, tool_cap, TOOL_PHRASE_MULTI)
     elif obj.summary and summary_chars > 0:
-        under.append(no_command_links(_cut_word(obj.summary.replace("*", ""), summary_chars)))
-    return block + _indent(under)
+        # one result line, cut on a word so it never wraps and loses its indent
+        under.append(no_command_links(
+            _cut_word(obj.summary.replace("*", ""), min(summary_chars, RESULT_LINE_CHARS))
+        ))
+    block.extend(_indent(under))
+    return block
 
 
 def _kid_block(k: Child, now: float, summary_chars: int, tool_cap: int) -> List[str]:
@@ -1163,6 +1201,49 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
 _BUDGET_STEPS = ((SUMMARY_CHARS, RECENT_TOOLS_MULTI), (80, RECENT_TOOLS_MULTI), (0, RECENT_TOOLS_MULTI), (0, 1), (0, 0))
 
 
+def _collapsed_part_lines(title: str, cl: "Checklist", subs: Sequence[Any]) -> List[str]:
+    """A finished job of a joined card, as ONE line (its results are already in
+    the chat): ``🍀 **title** · 3 done · 🛠 12 · ⏱ 2m10s``; ``🍂`` and the
+    counts when something failed or stopped.  A long title puts the stats on the
+    next indented line."""
+    states = [s.state for s in subs]
+    n = len(states)
+    done = sum(1 for st in states if st == DONE)
+    failed = sum(1 for st in states if st == FAILED)
+    stopped = sum(1 for st in states if st == STOPPED)
+    lost = failed or stopped
+    if not lost:
+        status = f"{n} done" if n > 1 else ""
+    elif n == 1:
+        status = FAILED if failed else STOPPED
+    else:
+        bits = [f"{done} of {n} done"]
+        if failed:
+            bits.append(f"{failed} failed")
+        if stopped:
+            bits.append(f"{stopped} stopped")
+        status = " \u00b7 ".join(bits)
+    calls = sum(s.calls for s in subs)
+    started = [s.started for s in subs if s.started is not None]
+    ended = [s.ended for s in subs if s.ended is not None]
+    stats = []
+    if calls:
+        stats.append(f"{CALLS_ICON} {calls}")
+    if started and ended:
+        stats.append(_elapsed(max(0.0, max(ended) - min(started))))
+    label = f"{FAILED_ICON if lost else DONE_ICON} **{title}**"
+    if status:
+        # the status stays with the name; only the stats may move down
+        label_status = f"{label} \u00b7 {status}"
+        if not stats:
+            return [label_status]
+        stats_text = " \u00b7 ".join(stats)
+        if _visible_len(title) + 3 + _visible_len(status) + 3 + _visible_len(stats_text) <= ROW_CHARS:
+            return [f"{label_status} \u00b7 {stats_text}"]
+        return [label_status, _INDENT + stats_text]
+    return _name_and_stats(label, title, stats)
+
+
 class Card:
     """The ack message: its parts, and (once sent) where it lives."""
 
@@ -1227,10 +1308,22 @@ class Card:
             _joined_title(titles), _count_tail(running, states), lost,
         )
         blocks: List[List[str]] = []  # no Goal lines on top: each sits in its own section
+        collapsed: List[str] = []  # finished jobs: one line each, below the running ones
         started: List[float] = []
         ended: List[float] = []
         calls = 0
         for cl, title, goal in zip(cls, titles, goals):
+            if cl.state != RUNNING:
+                # a finished job of a joined card: its results are in the chat already
+                subs = list(cl.kids) if cl.kids else [cl]
+                collapsed += _collapsed_part_lines(title, cl, subs)
+                for s in subs:
+                    calls += s.calls
+                    if s.started is not None:
+                        started.append(s.started)
+                    if s.ended is not None:
+                        ended.append(s.ended)
+                continue
             if cl.kids:
                 if len(cl.kids) > COMPACT_OVER:
                     part_blocks = _compact_kids(cl.kids, now, tool_cap)
@@ -1243,7 +1336,8 @@ class Card:
             if goal and part_blocks and part_blocks[0]:
                 # the part's goal: first line under its FIRST section's name
                 first = part_blocks[0]
-                part_blocks[0] = first[:1] + _indent([goal]) + first[1:]
+                h = getattr(first, "head", 1)
+                part_blocks[0] = first[:h] + _indent([goal]) + first[h:]
             blocks += part_blocks
             for s in subs:
                 calls += s.calls
@@ -1251,6 +1345,8 @@ class Card:
                     started.append(s.started)
                 if s.ended is not None:
                     ended.append(s.ended)
+        if collapsed:
+            blocks.append(collapsed)
         foot = [f"{len(states)} subagent{'s' if len(states) != 1 else ''}"]
         if calls:
             foot.append(_calls(calls))
