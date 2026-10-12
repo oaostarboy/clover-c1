@@ -9618,22 +9618,51 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 })
         return out
 
+    # A read that hits ``database is locked`` (a WAL recovery / checkpoint /
+    # several writers starting at once) is retried this long before it
+    # raises. Without it, three helpers starting together could fail the
+    # existence probe in 0 s and be treated as "row exists" (see
+    # run_agent.run_conversation).
+    _READ_LOCK_PATIENCE_S = 10.0
+
+    def _retry_locked_read(self, fn: Callable[[], T], patience_s: Optional[float] = None) -> T:
+        """Run read ``fn``; on a transient lock/busy error, retry with the
+        same jittered backoff the write path uses, for up to ``patience_s``
+        (default ``_READ_LOCK_PATIENCE_S``). Other errors raise at once."""
+        if patience_s is None:
+            patience_s = self._READ_LOCK_PATIENCE_S
+        deadline = time.monotonic() + patience_s
+        while True:
+            try:
+                return fn()
+            except sqlite3.OperationalError as exc:
+                msg = str(exc).lower()
+                if ("locked" in msg or "busy" in msg) and self._sleep_before_write_retry(
+                    deadline, patience_s
+                ):
+                    continue
+                raise
+
     def get_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get a session by ID."""
         # Cost/usage readers (/status, /usage, gateway endpoints) reach the
         # row through here; drain queued token deltas so they see exact
         # totals. No-op attribute check when nothing is queued.
         self.flush_token_counts()
-        with self._read_ctx() as conn:
-            cursor = conn.execute(
-                "SELECT s.*, "
-                "COALESCE(sp.prompt, s.system_prompt) AS _system_prompt_resolved "
-                "FROM sessions s "
-                "LEFT JOIN system_prompts sp ON sp.hash = s.system_prompt_hash "
-                "WHERE s.id = ?",
-                (session_id,),
-            )
-            row = cursor.fetchone()
+
+        def _read():
+            with self._read_ctx() as conn:
+                cursor = conn.execute(
+                    "SELECT s.*, "
+                    "COALESCE(sp.prompt, s.system_prompt) AS _system_prompt_resolved "
+                    "FROM sessions s "
+                    "LEFT JOIN system_prompts sp ON sp.hash = s.system_prompt_hash "
+                    "WHERE s.id = ?",
+                    (session_id,),
+                )
+                return cursor.fetchone()
+
+        row = self._retry_locked_read(_read)
         return self._session_row_dict(row) if row else None
 
     def get_child_sessions(self, parent_session_id: str) -> List[Dict[str, Any]]:

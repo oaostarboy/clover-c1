@@ -8636,6 +8636,7 @@ class AIAgent:
             # and background delivery processes sharing state.db (#84234).
             _turn_db = getattr(self, "_session_db", None)
             _durable_session_exists = False
+            _probe_failed = False
             if _turn_db is not None and session_id:
                 try:
                     _durable_session_exists = _turn_db.get_session(session_id) is not None
@@ -8653,6 +8654,7 @@ class AIAgent:
                         exc_info=True,
                     )
                     _durable_session_exists = True
+                    _probe_failed = True
             if (
                 _turn_db is not None
                 and session_id
@@ -8672,7 +8674,13 @@ class AIAgent:
                 # Resumed agents also defer their create check until the turn
                 # prologue. We just proved this row exists, so suppress the
                 # redundant create attempt after acquiring it.
-                self._session_db_created = True
+                # But a probe that FAILED (locked even after retries) proved
+                # nothing: leave the flag alone so the first flush creates
+                # the row. Claiming it exists made the append die on a
+                # FOREIGN KEY error and the turn stop as "session storage
+                # could not be written".
+                if not _probe_failed:
+                    self._session_db_created = True
                 _durable_holder = (
                     f"pid={os.getpid()}:turn={relay_turn_id}:platform="
                     f"{task_context['platform'] or 'unknown'}"
