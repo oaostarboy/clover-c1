@@ -329,7 +329,7 @@ class Checklist:
 
     def _stopped_title(self, say: bool = True) -> str:
         title, _ = self._title_outcome()
-        body = _title_line(title, " \u00b7 stopped", True, stopped=True)
+        body = _quoted([_title_line(title, " \u00b7 stopped", True, stopped=True)])
         return f"{self.say}\n\n{body}" if (self.say and say) else body
 
     def _goal_line(self, outcome: str) -> str:
@@ -423,6 +423,12 @@ def _join_blocks(blocks: Sequence[Sequence[str]]) -> List[str]:
             out.append(_SPACER)
         out += lines
     return out
+
+
+def _quoted(lines: Sequence[str]) -> str:
+    """``lines`` in a plain ``>`` blockquote: the card's bar.  A finished card
+    is short and NOT expandable (no ``**>`` opener, no ``||`` closer, no hint)."""
+    return "\n".join(f"> {ln}" for ln in lines if ln)
 
 
 def _italic(text: str) -> str:
@@ -1577,10 +1583,16 @@ class Card:
         return self.part_liner(last, include_say and len(parts) == 1)
 
     def _render_finished(self, parts: Sequence[Part], include_say: bool) -> str:
-        """A card whose work is all over, as ONE plain line (no quote, no hint,
-        no Goal, steps or result: the result is already in the chat as the
-        agent's reply).  ``\U0001f340 **title** \u00b7 done \u00b7 Opus 5.5 \u00b7 \U0001f6e0 66 \u00b7 \u23f1 8m42s``;
-        a failure is ``\U0001f342`` with ONE short reason line under it."""
+        """A card whose work is all over: SHORT, in a plain blockquote (the
+        card's bar; not expandable, no hint, no Goal, steps or result -- the
+        result is already in the chat as the agent's reply)::
+
+            > \U0001f340 **title** \u00b7 done
+            > *Opus 5.5 \u00b7 \U0001f6e0 66 \u00b7 \u23f1 8m42s*
+
+        Several subagents: ``*3 done \u00b7 \U0001f6e0 X \u00b7 \u23f1 t*`` (``2 of 3 done
+        \u00b7 1 failed`` when some failed).  A failure is ``\U0001f342 **title** \u00b7 failed``,
+        the stats line, then ONE short reason line."""
         subs: List[Any] = []
         for p in parts:
             cl = p.checklist
@@ -1590,13 +1602,16 @@ class Card:
         failed = [x for x in subs if x.state == FAILED]
         joined = len(parts) > 1
         title = _joined_title([p.checklist for p in parts]) if joined else parts[0].checklist._title_outcome()[0]
+        stats: List[str] = []
         if not failed:
-            status = f"{n} done" if (n > 1 and not joined) else "done"
+            status = "done"
+            if n > 1:
+                stats.append(f"{n} done")
         elif n == 1:
             status = "failed"
         else:
-            status = f"{done} of {n} done \u00b7 {len(failed)} failed"
-        stats: List[str] = []
+            status = "failed"
+            stats.append(f"{done} of {n} done \u00b7 {len(failed)} failed")
         if n == 1 and subs[0].model:
             stats.append(subs[0].model)
         calls = sum(x.calls for x in subs)
@@ -1606,18 +1621,13 @@ class Card:
         ended = [x.ended for x in subs if x.ended is not None]
         if started and ended:
             stats.append(_elapsed(max(0.0, max(ended) - min(started))))
-        label = f"{FAILED_ICON if failed else DONE_ICON} **{title}** \u00b7 {status}"
-        lines = [label]
+        lines = [f"{FAILED_ICON if failed else DONE_ICON} **{title}** \u00b7 {status}"]
         if stats:
-            text = " \u00b7 ".join(stats)
-            if _visible_len(title) + 3 + _visible_len(status) + 3 + _visible_len(text) <= ROW_CHARS:
-                lines = [f"{label} \u00b7 {text}"]
-            else:
-                lines.append(_INDENT + text)
+            lines.append(_italic(" \u00b7 ".join(stats)))
         if failed:
             reason = getattr(failed[0], "reason", "") or "hit an error"
-            lines.append(_INDENT + no_command_links(_cut_word(reason, REASON_CHARS)))
-        body = "\n".join(lines)
+            lines.append(no_command_links(_cut_word(reason, REASON_CHARS)))
+        body = _quoted(lines)
         say = self.say_text()
         return f"{say}\n\n{body}" if (say and include_say) else body
 

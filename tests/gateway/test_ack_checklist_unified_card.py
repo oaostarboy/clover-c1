@@ -238,7 +238,7 @@ async def test_ticks_stop_when_the_helper_finishes(monkeypatch):
     await _settle(editor)
     edits_after_finish = len(adapter.edits)
     assert adapter.edits[-1]["finalize"] is True
-    assert adapter.edits[-1]["text"].splitlines()[0].startswith("\U0001f340 **fixing the bugs** \u00b7 done")
+    assert adapter.edits[-1]["text"].splitlines()[0].startswith("> \U0001f340 **fixing the bugs** \u00b7 done")
     await asyncio.sleep(0.3)
     assert len(adapter.edits) == edits_after_finish, "no edits after the final one"
     assert editor._ticking is False
@@ -296,8 +296,9 @@ async def test_multi_helper_events_edit_the_one_message_in_place():
                           summary="Plain summary: ok.")
     await _settle(editor)
     assert adapter.edits[-1]["finalize"] is True
-    assert adapter.edits[-1]["text"].startswith("\U0001f340 **fixing the bugs** \u00b7 2 done")
-    assert ">" not in adapter.edits[-1]["text"], "finished: one plain line, no quote"
+    assert adapter.edits[-1]["text"].splitlines() == [
+        "> \U0001f340 **fixing the bugs** \u00b7 done", "> *2 done \u00b7 \U0001f6e0 2 \u00b7 \u23f1 0s*"]
+    assert "**>" not in adapter.edits[-1]["text"], "finished: short blockquote, not expandable"
 
 
 @pytest.mark.asyncio
@@ -310,7 +311,8 @@ async def test_a_six_helper_edit_fits_the_telegram_limit():
                           summary="Plain summary: " + " ".join(["word"] * 70) + ".")
     await _settle(editor)
     sent = adapter.edits[-1]["text"]
-    assert len(sent) <= 4000 and sent.startswith("\U0001f340 **fixing the bugs** \u00b7 6 done") and "\n>" not in sent
+    assert len(sent) <= 4000 and sent.splitlines() == [
+        "> \U0001f340 **fixing the bugs** \u00b7 done", "> *6 done*"]
 
 
 @pytest.mark.asyncio
@@ -462,7 +464,8 @@ def test_telegram_finished_card_is_one_plain_line_without_a_quote_or_hint():
     ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed",
                       summary="Result: done\nPlain summary: All fixed.")
     text = _editor(_tg_adapter(), card)._render()
-    assert text.startswith("\U0001f340 **fixing the bugs** \u00b7 done") and "\n>" not in text
+    lines = text.splitlines()
+    assert lines[0] == "> \U0001f340 **fixing the bugs** \u00b7 done" and lines[1].startswith("> *") and len(lines) == 2
     assert "**>" not in text and "||" not in text and "tap to" not in text and "All fixed." not in text
 
 
@@ -605,8 +608,9 @@ async def test_the_finishing_edit_swaps_the_expandable_quote_for_one_plain_line(
     await _settle(editor)
     last = adapter.edits[-1]
     assert last["finalize"] is True and last["id"] == "m42", "an edit of the same message, formatted"
-    assert last["text"].startswith("\U0001f340 **fixing the bugs** \u00b7 done")
-    assert "**>" not in last["text"] and "||" not in last["text"] and "\n>" not in last["text"]
+    assert last["text"].startswith("> \U0001f340 **fixing the bugs** \u00b7 done")
+    assert "**>" not in last["text"] and "||" not in last["text"]
+    assert all(ln.startswith("> ") for ln in last["text"].splitlines()), "short blockquote: the bar stays"
     assert "tap to" not in last["text"] and "All fixed" not in last["text"]
     assert editor._closed and card.finished, "a finished card stops following the bottom"
     n = len(adapter.edits)

@@ -516,8 +516,9 @@ async def test_events_of_the_joined_part_edit_the_one_card_and_counts_span_all_p
     ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: Net fine.")
     await _settle()
     done = chat.edits[-1]["text"]
-    assert done.startswith("\U0001f340 **network** \u00b7 done") and first.finished
-    assert "**>" not in done and "||" not in done and "tap to" not in done and "\n>" not in done, "one plain line"
+    assert done.startswith("> \U0001f340 **network** \u00b7 done") and first.finished
+    assert "**>" not in done and "||" not in done and "tap to" not in done, "short, not expandable"
+    assert all(ln.startswith("> ") for ln in done.splitlines()), "still inside the card's bar"
 
 
 @pytest.mark.asyncio
@@ -567,7 +568,7 @@ async def test_a_dispatch_never_joins_a_finished_card():
     cards = [s["text"] for s in chat.sends if s["text"].startswith("**>")]
     assert len(cards) == 2 and cards[-1].splitlines()[0] == "**> \U0001f500 **network**"
     finished = da._ACK_EDITORS[id(first)]._render()
-    assert finished.startswith("\U0001f340 **disks** \u00b7 done") and "tap to" not in finished and "||" not in finished
+    assert finished.startswith("> \U0001f340 **disks** \u00b7 done") and "tap to" not in finished and "||" not in finished
 
 
 @pytest.mark.asyncio
@@ -658,7 +659,7 @@ async def test_the_finished_card_is_reposted_right_above_the_completion_reply():
     await _reply(chat, "All done, here are the results.", ["dj1"])
     posted = _order(chat)[n:]
     assert len(posted) == 2, "the one-liner, then the reply"
-    assert posted[0].startswith("\U0001f340 **disks** \u00b7 done") and "**>" not in posted[0]
+    assert posted[0].startswith("> \U0001f340 **disks** \u00b7 done") and "**>" not in posted[0]
     assert posted[1] == "All done, here are the results."
     assert old_id in chat.deleted and editor._message_id == chat.sends[n]["id"], "the old card message moved"
 
@@ -683,7 +684,7 @@ async def test_a_silent_completion_moves_nothing_for_a_done_card_but_keeps_it():
     n = len(chat.sends)
     await _reply(chat, "", ["dj1"], silent=True)
     posted = _order(chat)[n:]
-    assert len(posted) == 1 and posted[0].startswith("\U0001f340 **disks** \u00b7 done"), "not lost: posted anyway"
+    assert len(posted) == 1 and posted[0].startswith("> \U0001f340 **disks** \u00b7 done"), "not lost: posted anyway"
     assert editor._message_id == chat.sends[n]["id"]
 
 
@@ -705,7 +706,7 @@ async def test_a_stopped_part_above_a_real_reply_keeps_its_stop_line():
     n = len(chat.sends)
     await _reply(chat, "Stopped as asked.", ["dj1"])
     posted = _order(chat)[n:]
-    assert posted[0].startswith("\U0001f940 **disks** \u00b7 stopped") and posted[1] == "Stopped as asked."
+    assert posted[0].startswith("> \U0001f940 **disks** \u00b7 stopped") and posted[1] == "Stopped as asked."
 
 
 @pytest.mark.asyncio
@@ -748,7 +749,7 @@ async def test_a_joined_part_posts_its_own_line_before_its_reply_and_the_last_pa
     n = len(chat.sends)
     await _reply(chat, "Disks are fine.", ["dj1"])
     posted = _order(chat)[n:]
-    assert len(posted) == 2 and posted[0].startswith("\U0001f340 **disks** \u00b7 done"), "its own line, then the reply"
+    assert len(posted) == 2 and posted[0].startswith("> \U0001f340 **disks** \u00b7 done"), "its own line, then the reply"
     assert posted[1] == "Disks are fine."
     assert not first.finished, "the card still runs for the other part"
     ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: ok.")
@@ -757,8 +758,8 @@ async def test_a_joined_part_posts_its_own_line_before_its_reply_and_the_last_pa
     n = len(chat.sends)
     await _reply(chat, "Network is fine too.", ["dj2"])
     posted = _order(chat)[n:]
-    assert posted[0].startswith("\U0001f340 **network** \u00b7 done") and posted[1] == "Network is fine too."
-    assert sum(1 for t in _order(chat) if t.startswith("\U0001f340 **disks**")) == 1, "disks line was posted once"
+    assert posted[0].startswith("> \U0001f340 **network** \u00b7 done") and posted[1] == "Network is fine too."
+    assert sum(1 for t in _order(chat) if t.startswith("> \U0001f340 **disks**")) == 1, "disks line was posted once"
 
 
 @pytest.mark.asyncio
@@ -776,7 +777,7 @@ async def test_a_batched_completion_for_several_parts_posts_each_line_before_the
     n = len(chat.sends)
     await _reply(chat, "Both are fine.", ["dj1", "dj2"])
     posted = _order(chat)[n:]
-    assert [p.split(" ")[1] for p in posted[:2]] == ["**disks**", "**network**"] and posted[2] == "Both are fine."
+    assert [p.split(" ")[2] for p in posted[:2]] == ["**disks**", "**network**"] and posted[2] == "Both are fine."
 
 
 @pytest.mark.asyncio
@@ -821,5 +822,5 @@ async def test_the_real_send_wrapper_moves_the_card_before_the_reply_goes_out():
     await chat.send("chat", "The disks are fine.")
     await _settle()
     posted = chat.sent[n:]
-    assert posted[0].startswith("\U0001f340 **disks** \u00b7 done") and posted[-1] == "The disks are fine.", posted
+    assert posted[0].startswith("> \U0001f340 **disks** \u00b7 done") and posted[-1] == "The disks are fine.", posted
     da._COMPLETION_TURN.set(None)
