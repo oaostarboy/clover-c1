@@ -422,3 +422,183 @@ async def test_real_adapter_send_wrapper_sends_opener_then_card():
     assert res.message_id == "m1", "the caller's result is the opener's"
     assert log[0] == SAY and len(log) == 2 and SAY not in log[1]
     assert card.target[2] == "m2" and da._ACK_EDITORS[id(card)]._message_id == "m2"
+
+
+# -- a new dispatch JOINS the running card of its chat ----------------------
+
+
+class _TgChat(_Chat):
+    """A Telegram-shaped chat: the card goes out as the expandable quote."""
+
+    def __init__(self) -> None:
+        from types import SimpleNamespace
+
+        super().__init__()
+        self.platform = SimpleNamespace(value="telegram")
+
+
+def _opener_card(did, work, outcome, say, goals=("g",), steps=("find", "fix"), eta="~5 min"):
+    head = f"\U0001f504 {work} \u2192 {outcome}, {eta}" if outcome else f"\U0001f504 {work}"
+    r = fl.DispatchReceipt(delegation_id=did, seq=1, goals=tuple(goals), summary=head,
+                           steps=tuple(steps) if len(goals) == 1 else (), say=say)
+    card = ac.card_for([r])
+    card.split_opener = True
+    return card
+
+
+async def _dispatch(chat, card, adapter_chat_id="chat"):
+    """What the real send wrapper does for a turn's reply: the opener goes out,
+    then bind_ack_card sends (or joins) the card."""
+    opener = card.say_text()
+    sent = await chat.send(adapter_chat_id, opener)
+    pending = da.bind_ack_card(chat, adapter_chat_id, opener, sent)
+    if pending is not None:
+        await pending
+    await _settle()
+    return sent
+
+
+@pytest.mark.asyncio
+async def test_a_second_dispatch_joins_the_running_card_instead_of_getting_its_own():
+    chat = _TgChat()
+    first = _opener_card("dj1", "checking the disks", "a disk report", "on it, disks first")
+    await _dispatch(chat, first)
+    assert [s["text"][:3] for s in chat.sends] == ["on ", "**>"], "opener, then ONE card message"
+    card_id = da._ACK_EDITORS[id(first)]._message_id
+    second = _opener_card("dj2", "checking the network", "a network report", "and the network too")
+    await _dispatch(chat, second)
+    texts = [s["text"] for s in chat.sends]
+    assert "and the network too" in texts, "its opener went out as a normal message"
+    assert len(da._ACK_EDITORS) == 1 and id(second) not in da._ACK_EDITORS, "no second editor"
+    assert second.parts[0].card is first and len(first.parts) == 2
+    # the card was moved under the new opener (old message deleted, re-posted at the bottom)
+    last = chat.sends[-1]
+    assert last["text"].startswith("**> \U0001f500 **checking the disks, checking the network** \u00b7 0 of 2 done")
+    assert chat.deleted == [card_id] and da._ACK_EDITORS[id(first)]._message_id == last["id"]
+    assert [i for i, t in enumerate(texts) if t == "and the network too"][0] < len(texts) - 1
+    assert last["text"].count("> Goal: ") == 2
+    assert "> Goal: a disk report \u00b7 ~5 min" in last["text"] and "> Goal: a network report" in last["text"]
+    # a card message was sent exactly twice in total: the first one and its repost
+    assert len([t for t in texts if t.startswith("**>")]) == 2
+
+
+@pytest.mark.asyncio
+async def test_events_of_the_joined_part_edit_the_one_card_and_counts_span_all_parts():
+    chat = _TgChat()
+    first = _opener_card("dj1", "disks", "a disk report", "on it")
+    await _dispatch(chat, first)
+    second = _opener_card("dj2", "network", "a network report", "and this")
+    await _dispatch(chat, second)
+    editor = da._ACK_EDITORS[id(first)]
+    editor._min_interval = 0.0
+    editor._last_attempt = float("-inf")
+    if editor._task is not None:
+        editor._task.cancel()  # it is waiting out the real 4 s gate
+        await _settle()
+        editor._task = None
+    for did, n in (("dj1", 3), ("dj2", 4)):
+        ac.on_child_event("subagent.start", delegation_id=did, model="claude-sonnet-5-5")
+        ac.on_child_event("subagent.tool", delegation_id=did, tool_name="terminal", preview="ls",
+                          args={"command": "ls"}, tool_count=n)
+    await _settle()
+    text = chat.edits[-1]["text"]
+    assert chat.edits[-1]["id"] == editor._message_id
+    assert "**disks** \u00b7 Sonnet 5.5 \u00b7 3 calls" in text
+    assert "**network** \u00b7 Sonnet 5.5 \u00b7 4 calls" in text
+    assert "*2 subagents \u00b7 7 calls \u00b7" in text
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: Disks fine.")
+    await _settle()
+    mid = chat.edits[-1]["text"]
+    assert "1 of 2 done" in mid.splitlines()[0] and "tap to watch" in mid
+    assert "> Goal: a disk report" in mid and "> Goal: a disk report \u00b7 ~" not in mid, "ETA only while it runs"
+    assert "> Goal: a network report \u00b7 ~5 min" in mid
+    assert "**disks** \u00b7 done" in mid and "Disks fine." in mid
+    ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: Net fine.")
+    await _settle()
+    done = chat.edits[-1]["text"]
+    assert done.splitlines()[0] == "**> \U0001f500 **disks, network** \u00b7 done"
+    assert done.splitlines()[1] == "> *tap to read \U0001f340*" and first.finished
+
+
+@pytest.mark.asyncio
+async def test_the_card_stays_live_until_every_part_has_ended():
+    chat = _TgChat()
+    first = _opener_card("dj1", "disks", "a disk report", "on it")
+    await _dispatch(chat, first)
+    second = _opener_card("dj2", "network", "a network report", "and this")
+    await _dispatch(chat, second)
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: ok.")
+    assert first.finished is False
+    ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: ok.")
+    assert first.finished is True
+
+
+@pytest.mark.asyncio
+async def test_a_third_part_shows_the_first_two_titles_and_plus_n_more():
+    chat = _TgChat()
+    cards = [
+        _opener_card(f"dj{i}", w, f"result {i}", f"opener {i}")
+        for i, w in enumerate(("disks", "network", "backups", "logs"), 1)
+    ]
+    for c in cards:
+        await _dispatch(chat, c)
+    assert len({id(c.parts[0].card) for c in cards}) == 1
+    text = da._ACK_EDITORS[id(cards[0])]._render()
+    assert text.splitlines()[0] == "**> \U0001f500 **disks, network +2 more** \u00b7 0 of 4 done"
+    assert text.count("> Goal: ") == 4
+    third = _opener_card("dj9", "x", "y", "z")
+    assert da._running_editor_for(chat, "chat", third) is not None
+
+
+@pytest.mark.asyncio
+async def test_a_dispatch_never_joins_a_finished_card():
+    chat = _TgChat()
+    first = _opener_card("dj1", "disks", "a disk report", "on it")
+    await _dispatch(chat, first)
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: ok.")
+    await _settle()
+    second = _opener_card("dj2", "network", "a network report", "and this")
+    await _dispatch(chat, second)
+    assert second.parts[0].card is second and len(first.parts) == 1
+    assert len(da._ACK_EDITORS) == 2, "the new dispatch got its own card"
+    cards = [s["text"] for s in chat.sends if s["text"].startswith("**>")]
+    assert len(cards) == 2 and cards[-1].splitlines()[0] == "**> \U0001f500 **network**"
+    assert "tap to read" in da._ACK_EDITORS[id(first)]._render()
+
+
+@pytest.mark.asyncio
+async def test_a_single_card_per_chat_but_other_chats_are_separate():
+    chat = _TgChat()
+    first = _opener_card("dj1", "disks", "a disk report", "on it")
+    await _dispatch(chat, first, "chat")
+    other = _opener_card("dj2", "network", "a network report", "and this")
+    await _dispatch(chat, other, "other-chat")
+    assert other.parts[0].card is other and len(da._ACK_EDITORS) == 2
+
+
+@pytest.mark.asyncio
+async def test_the_opener_only_message_still_matches_for_a_first_dispatch():
+    chat = _TgChat()
+    first = _opener_card("dj1", "disks", "a disk report", "on it")
+    sent = await chat.send("chat", first.say_text())
+    pending = da.bind_ack_card(chat, "chat", first.say_text(), sent)
+    assert pending is not None, "the first dispatch still sends its own card message"
+    await pending
+    await _settle()
+    assert id(first) in da._ACK_EDITORS
+
+
+@pytest.mark.asyncio
+async def test_a_joined_multi_subagent_part_keeps_its_own_sections():
+    chat = _TgChat()
+    first = _opener_card("dj1", "disks", "a disk report", "on it")
+    await _dispatch(chat, first)
+    multi = _opener_card("dj2", "the sweep", "all clear", "sweeping", goals=("alpha", "beta"))
+    await _dispatch(chat, multi)
+    for i in (0, 1):
+        ac.on_child_event("subagent.start", delegation_id="dj2", task_index=i, task_count=2, title=("alpha", "beta")[i])
+    await _settle()
+    text = da._ACK_EDITORS[id(first)]._render()
+    assert text.splitlines()[0].startswith("**> \U0001f500 **disks, the sweep** \u00b7 0 of 3 done")
+    assert "> **disks**" in text and "> **alpha**" in text and "> **beta**" in text
+    assert "*3 subagents" in text

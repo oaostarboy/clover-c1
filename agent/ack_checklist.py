@@ -311,9 +311,7 @@ class Checklist:
         return f"Goal: {outcome}" if outcome else ""
 
     def _title_line(self, title: str, tail: str) -> str:
-        # 🔀 leads the title; 🍂 takes its place when the card did not end well.
-        icon = FAILED_ICON if self.state in (FAILED, STOPPED) else TITLE_ICON
-        return f"{icon} **{title}**{tail}"
+        return _title_line(title, tail, self.state in (FAILED, STOPPED))
 
     def render_unified(self, now: Optional[float] = None, include_say: bool = True) -> str:
         title, outcome = self._title_outcome()
@@ -342,21 +340,7 @@ class Checklist:
         now = time.monotonic() if now is None else now
         title, outcome = self._title_outcome()
         kids = self.kids
-        done = sum(1 for k in kids if k.state == DONE)
-        failed = sum(1 for k in kids if k.state == FAILED)
-        stopped = sum(1 for k in kids if k.state == STOPPED)
-        if self.state == RUNNING:
-            tail = f" \u00b7 {done} of {len(kids)} done"
-        elif self.state == DONE and done == len(kids):
-            tail = " \u00b7 done"
-        else:
-            bits = [f"{done} of {len(kids)} done"]
-            if failed:
-                bits.append(f"{failed} failed")
-            if stopped:
-                bits.append(f"{stopped} stopped")
-            tail = " \u00b7 " + " \u00b7 ".join(bits)
-        head = self._title_line(title, tail)
+        head = self._title_line(title, _count_tail(self.state == RUNNING, [k.state for k in kids]))
         blocks: List[List[str]] = [[ln for ln in (self._goal_line(outcome),) if ln]]
         if len(kids) > COMPACT_OVER:
             blocks += _compact_kids(kids, now, tool_cap)
@@ -457,37 +441,78 @@ def _cut_word(text: str, limit: int) -> str:
     return cut.rstrip(" ,;:-") + "\u2026"
 
 
-def _kid_step_lines(kid: Child) -> List[str]:
+def _kid_step_lines(kid: Any) -> List[str]:
     """The helper's own checklist (nothing when it has none)."""
     return [f"{_STEP_MARK[status]} {text}" for text, status in kid.steps]
 
 
-def _kid_header(k: Child, now: float, *, stats: bool = True) -> str:
+def _joined_title(titles: Sequence[str]) -> str:
+    """The parts' work titles on one line: ``a, b``; with 3 or more, ``a, b +1 more``."""
+    names = [t for t in titles if t]
+    if len(names) > 1:  # one phone row for the whole title
+        names = [_cut_word(t, 28) for t in names]
+    if len(names) <= 2:
+        return ", ".join(names)
+    return f"{names[0]}, {names[1]} +{len(names) - 2} more"
+
+
+def _title_line(title: str, tail: str, lost: bool) -> str:
+    """``🔀 **title** · k of N done``; 🍂 takes the 🔀's place when it ended badly."""
+    return f"{FAILED_ICON if lost else TITLE_ICON} **{title}**{tail}"
+
+
+def _count_tail(running: bool, states: Sequence[str]) -> str:
+    """`` · k of N done`` while running; ``· done`` when all ended OK; else the
+    count plus `` · 1 failed`` / `` · 1 stopped``."""
+    n = len(states)
+    done = sum(1 for s in states if s == DONE)
+    failed = sum(1 for s in states if s == FAILED)
+    stopped = sum(1 for s in states if s == STOPPED)
+    if running:
+        return f" \u00b7 {done} of {n} done"
+    if done == n:
+        return " \u00b7 done"
+    bits = [f"{done} of {n} done"]
+    if failed:
+        bits.append(f"{failed} failed")
+    if stopped:
+        bits.append(f"{stopped} stopped")
+    return " \u00b7 " + " \u00b7 ".join(bits)
+
+
+def _section_header(name: str, obj: Any, now: float) -> str:
     """``**Name** · done · Sonnet 5.5 · 7 calls · 35s`` (``🍂`` before a failed name)."""
-    name = f"**{k.label}**"
-    if k.state == FAILED:
-        name = f"{FAILED_ICON} {name}"
+    label = f"**{name}**"
+    if obj.state == FAILED:
+        label = f"{FAILED_ICON} {label}"
     parts: List[str] = []
-    if k.state == PENDING:
+    if obj.state == PENDING:
         parts.append("waiting")
     else:
-        if k.state != RUNNING:
-            parts.append(k.state)
-        if stats:
-            parts += _stats_parts(k.model, k.calls, k.started, k.ended, now)
-    return " \u00b7 ".join([name] + parts)
+        if obj.state != RUNNING:
+            parts.append(obj.state)
+        parts += _stats_parts(obj.model, obj.calls, obj.started, obj.ended, now)
+    return " \u00b7 ".join([label] + parts)
+
+
+def _section_block(
+    name: str, obj: Any, now: float, summary_chars: int, tool_cap: int,
+) -> List[str]:
+    """One subagent's section: header, then its steps, tool lines or summary
+    (indented under the name).  ``obj`` is a ``Child`` or a one-subagent part."""
+    block = [_section_header(name, obj, now)]
+    if obj.state == PENDING:
+        return block
+    under = _kid_step_lines(obj)
+    if obj.state == RUNNING:
+        under += _tool_lines(obj, tool_cap, TOOL_PHRASE_MULTI)
+    elif obj.summary and summary_chars > 0:
+        under.append(no_command_links(_cut_word(obj.summary.replace("*", ""), summary_chars)))
+    return block + _indent(under)
 
 
 def _kid_block(k: Child, now: float, summary_chars: int, tool_cap: int) -> List[str]:
-    block = [_kid_header(k, now)]
-    if k.state == PENDING:
-        return block
-    under = _kid_step_lines(k)
-    if k.state == RUNNING:
-        under += _tool_lines(k, tool_cap, TOOL_PHRASE_MULTI)
-    elif k.summary and summary_chars > 0:
-        under.append(no_command_links(_cut_word(k.summary.replace("*", ""), summary_chars)))
-    return block + _indent(under)
+    return _section_block(k.label, k, now, summary_chars, tool_cap)
 
 
 def _full_kids(kids: Sequence[Child], now: float, summary_chars: int, tool_cap: int) -> List[List[str]]:
@@ -1051,8 +1076,15 @@ class Card:
         if include_say is None:
             include_say = not self.split_opener
         with _LOCK:
-            # Unified cards are multi-line blocks: keep two on one message apart.
-            sep = "\n\n" if unified() else "\n"
+            if len(self.parts) > 1 and unified():
+                # Dispatches that joined this card read as one card.
+                text = ""
+                for summary_chars, tool_cap in _BUDGET_STEPS:
+                    text = self._render_joined(summary_chars, tool_cap, include_say)
+                    if len(text) <= CARD_BUDGET:
+                        break
+                return text
+            sep = "\n"
             text = ""
             # Over Telegram's limit: cut the helpers' summaries first, then
             # their tool lines.
@@ -1064,6 +1096,60 @@ class Card:
                 if len(text) <= CARD_BUDGET:
                     break
             return text
+
+    def _render_joined(
+        self, summary_chars: int, tool_cap: int, include_say: bool, now: Optional[float] = None,
+    ) -> str:
+        """Several dispatches on one card: one title (their work titles, ``k of N
+        done`` across all subagents), a Goal line per part, every subagent's
+        section in order, and one footer."""
+        now = time.monotonic() if now is None else now
+        cls = [p.checklist for p in self.parts]
+        titles: List[str] = []
+        goals: List[str] = []
+        for cl in cls:
+            title, outcome = cl._title_outcome()
+            titles.append(title)
+            if outcome:
+                goals.append(f"Goal: {outcome}")
+        states: List[str] = []
+        for cl in cls:
+            states += [k.state for k in cl.kids] if cl.kids else [cl.state]
+        running = any(cl.state == RUNNING for cl in cls)
+        lost = not running and any(cl.state in (FAILED, STOPPED) for cl in cls)
+        head = _title_line(
+            _joined_title(titles), _count_tail(running, states), lost,
+        )
+        blocks: List[List[str]] = [goals]
+        started: List[float] = []
+        ended: List[float] = []
+        calls = 0
+        for cl, title in zip(cls, titles):
+            if cl.kids:
+                if len(cl.kids) > COMPACT_OVER:
+                    blocks += _compact_kids(cl.kids, now, tool_cap)
+                else:
+                    blocks += _full_kids(cl.kids, now, summary_chars, tool_cap)
+                subs = list(cl.kids)
+            else:
+                blocks.append(_section_block(title, cl, now, summary_chars, tool_cap))
+                subs = [cl]
+            for s in subs:
+                calls += s.calls
+                if s.started is not None:
+                    started.append(s.started)
+                if s.ended is not None:
+                    ended.append(s.ended)
+        foot = [f"{len(states)} subagent{'s' if len(states) != 1 else ''}"]
+        if calls:
+            foot.append(_calls(calls))
+        if started:
+            end = max(ended) if not running and ended else now
+            foot.append(_duration(max(0.0, end - min(started))))
+        blocks.append([_italic(" \u00b7 ".join(foot))])
+        body = "\n".join([head] + [f"> {q}" for q in _join_blocks(blocks)])
+        say = self.say_text()
+        return f"{say}\n\n{body}" if (say and include_say) else body
 
     def say_text(self) -> str:
         """The root's opener line(s) of every part, in order ('' if none)."""
@@ -1109,6 +1195,12 @@ def card_for(receipts: Sequence[Any]) -> Optional[Card]:
         for existing in _CARDS:
             if [id(p) for p in existing.parts] == [id(p) for p in parts]:
                 return existing
+        # A dispatch that joined a running card keeps that card.
+        host = parts[0].card
+        if host is not None and len(host.parts) > 1 and all(
+            p.card is host and any(q is p for q in host.parts) for p in parts
+        ):
+            return host
         card = Card(parts)
         for p in parts:
             p.card = card
@@ -1116,6 +1208,25 @@ def card_for(receipts: Sequence[Any]) -> Optional[Card]:
         while len(_CARDS) > _MAX_CARDS:
             _CARDS.pop(0)
         return card
+
+
+def join(host: Card, new: Card) -> bool:
+    """Add the dispatch(es) of ``new`` to the RUNNING card ``host``: one card per
+    chat.  ``new`` is dropped (its opener went out as its own message; no card
+    message is sent for it) and its parts report into ``host`` from now on.  A
+    finished host never takes a part: the new dispatch keeps its own card."""
+    with _LOCK:
+        if host is new or not unified() or host.finished or not host.split_opener:
+            return False
+        for part in new.parts:
+            if not any(q is part for q in host.parts):
+                host.parts.append(part)
+            part.card = host
+        if new in _CARDS:
+            _CARDS.remove(new)
+        new.target = host.target
+    host.touch()
+    return True
 
 
 def match_unbound(content: Any) -> Optional[Card]:

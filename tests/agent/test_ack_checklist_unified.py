@@ -741,13 +741,13 @@ def test_cut_summaries_come_before_tool_lines(monkeypatch):
     assert len(cut) < len(full) and cut.count("now: ") == 3 and cut.count("before: ") == 0
 
 
-def test_two_unified_cards_in_one_message_are_separated_by_a_blank_line():
+def test_two_parts_of_one_card_render_as_one_joined_card():
     r1 = fl.DispatchReceipt(delegation_id="a", seq=1, goals=("g",), summary=HEAD, steps=("one",))
     r2 = fl.DispatchReceipt(delegation_id="b", seq=2, goals=("g",), summary=HEAD, steps=("two",))
     card = ac.card_for([r1, r2])
     text = card.render()
-    assert "\n\n\U0001f500 **fixing the bugs**" in text
-    assert text.count("\U0001f500 **fixing the bugs**") == 2
+    assert text.splitlines()[0].startswith("\U0001f500 **fixing the bugs, fixing the bugs** \u00b7 0 of 2 done")
+    assert text.count("\n> Goal: ") == 2 and "\n\n" not in text
 
 
 # -- the helper's own todo bookkeeping is not a tool line ----------------------

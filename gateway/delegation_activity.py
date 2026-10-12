@@ -1808,6 +1808,15 @@ def bind_ack_card(adapter: Any, chat_id: Any, content: Any, result: Any, metadat
             opener_card = match_unbound_opener(content)
             if opener_card is None:
                 return None
+            # A card is already running in this chat: the new dispatch joins it
+            # (one live card per chat); only its opener line is a message.
+            host = _running_editor_for(adapter, chat_id, opener_card)
+            if host is not None:
+                from agent.ack_checklist import join
+
+                if join(host.card, opener_card):
+                    host.notify()
+                    return None
             # Claim it now so nothing else binds it while the card is sent.
             opener_card.target = (id(adapter), str(chat_id), "pending")
             return _send_card_under_opener(opener_card, adapter, chat_id, metadata)
@@ -1818,6 +1827,17 @@ def bind_ack_card(adapter: Any, chat_id: Any, content: Any, result: Any, metadat
         _attach_editor(card, adapter, chat_id, str(message_id), loop, metadata)
     except Exception:
         logger.debug("ack card bind failed", exc_info=True)
+    return None
+
+
+def _running_editor_for(adapter: Any, chat_id: Any, new_card: Any = None) -> Optional["AckCardEditor"]:
+    """The editor of the running unified card in this chat (newest first), if any."""
+    for editor in reversed(list(_ACK_EDITORS.values())):
+        if editor.card is new_card or editor._adapter is not adapter or editor._chat_id != str(chat_id):
+            continue
+        if editor._closed or not getattr(editor.card, "split_opener", False):
+            continue
+        return editor
     return None
 
 
