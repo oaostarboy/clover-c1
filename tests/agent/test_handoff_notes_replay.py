@@ -110,7 +110,7 @@ def test_the_agent_opens_in_its_own_voice_then_the_card(provider, aux, tmp_path,
     assert ack.startswith(OPENER), 'the opener is the first thing the user reads'
     assert '\U0001f504 emailing the existing recipient' in ack, 'the card follows it'
     assert ack.index(OPENER) < ack.index('\U0001f504')
-    assert dispatches[0]['handoff']['say'] == OPENER
+    assert 'say' not in dispatches[0]['handoff'], 'the line is written after the dispatch, not pre-written'
 
     # 27 work requests (26 ran + the refused one), then ONE short tools-off call
     assert len(provider.captured) == 28
@@ -123,22 +123,141 @@ def test_the_agent_opens_in_its_own_voice_then_the_card(provider, aux, tmp_path,
     assert sent[: len(prev) - 0][:3] == prev[:3], 'system prompt + earlier turns are byte-identical'
     assert sent[0] == prev[0]
     last = sent[-1]
-    assert last['role'] == 'user' and 'ONE short, casual line' in last['content']
+    assert last['role'] == 'user' and 'A subagent is now handling this' in last['content'] and 'ONE short line' in last['content']
+    assert REQUEST not in last['content']
     low = last['content'].lower()
     assert 'safety net' not in low.replace('any safety mechanism', '')
     # the live transcript is never changed by the opener call
-    assert not any('ONE short, casual line' in str(m.get('content')) for m in result['messages'])
+    assert not any('A subagent is now handling this' in str(m.get('content')) for m in result['messages'])
     _roles_ok(result['messages'])
 
 
-def test_an_empty_opener_answer_falls_back_to_the_template(provider, aux, tmp_path, children, dispatches):
-    from agent import handoff_notes as hn
-
+def test_an_empty_opener_answer_falls_back_to_on_it_never_a_template(
+        provider, aux, tmp_path, children, dispatches):
     result = _run(provider, aux, tmp_path, opener='')
 
     ack = result['final_response']
-    assert ack.startswith("this one's bigger than it looked, a subagent's on it: emailing the existing recipient")
+    assert ack.startswith('on it\n\n'), ack
     assert '\U0001f504 emailing the existing recipient' in ack
-    for word in ('limit', 'timeout', 'timed out', 'safety net', 'backstop'):
+    for word in ('limit', 'timeout', 'timed out', 'safety net', 'backstop', 'bigger than it looked'):
         assert word not in ack.lower()
-    assert dispatches[0]['handoff']['say'].startswith(hn.fallback_opener('')[:40])
+    assert REQUEST not in ack
+    assert 'say' not in dispatches[0]['handoff']
+
+
+# ── the exact complaint from the field: title from the work, voice from the agent ──
+
+COMPLAINT = 'Why the fuck do you keep stopping'
+DND_TODO = {'todos': [{'id': '1', 'content': 'add images to DND website', 'status': 'in_progress'}]}
+DND_VOICE = "Right, handing the images over to a helper, back with the site shortly."
+
+
+def _run_complaint(provider, aux, tmp_path, brief=None, voice=DND_VOICE):
+    from clover_constants import get_clover_home
+
+    from clover_cli.config_defaults import DEFAULT_CONFIG
+
+    (get_clover_home() / 'config.yaml').write_text(yaml.safe_dump({
+        '_config_version': DEFAULT_CONFIG['_config_version'],
+        'delegation': {'foreground_time_limit_seconds': 300,
+                       'router': {'direct_backstop': {'enabled': True, 'work_calls': 26}}},
+    }))
+    files = _files(tmp_path, 27)
+    aux.replies[:] = [verdict_json('direct', reason='one more step'), brief if brief is not None else BULLETS]
+    queue = [tool('todo', DND_TODO, 't0')] + [tool('read_file', {'path': str(f)}, f'c{i}')
+                                               for i, f in enumerate(files, 1)]
+    provider.queue[:] = queue
+    provider.queue.append(text(voice))  # the scripted model turn that writes the opener
+    agent = make_agent(provider, session_id='replay-complaint')
+    return agent.run_conversation(COMPLAINT, conversation_history=list(HISTORY), task_id='replay-complaint')
+
+
+def _show(label, result, dispatches):
+    print(f'\n--- {label}')
+    print('opener + card text :', repr(result['final_response']))
+    print('card title (work)  :', dispatches[0]['handoff']['work'])
+    print('goal (outcome)     :', dispatches[0]['handoff']['outcome'])
+
+
+def test_the_complaint_is_titled_from_the_todo_and_opened_by_the_agent(
+        provider, aux, tmp_path, children, dispatches):
+    """No small-model answer (it times out / is empty): the todo names the work."""
+    result = _run_complaint(provider, aux, tmp_path)
+
+    assert result['turn_exit_reason'] == 'delegation_handoff' and len(dispatches) == 1
+    _show('complaint, small model gave bullets only (heuristic title)', result, dispatches)
+    handoff = dispatches[0]['handoff']
+    assert handoff['work'] == 'adding images to DND website'
+    blob = (result['final_response'] + str(handoff)).lower()
+    for bad in ('fuck', 'answering', 'keep stopping', 'bigger than it looked'):
+        assert bad not in blob
+    assert result['final_response'].startswith(DND_VOICE), 'the opener is the scripted model turn'
+    assert 'say' not in handoff
+    assert len(provider.captured) == 29, 'todo + 27 reads + the one voice turn'
+    voice_call = provider.captured[-1]
+    assert not voice_call.get('tools')
+    note = voice_call['messages'][-1]['content']
+    assert 'adding images to DND website' in note and 'Why the fuck' not in note
+
+
+def test_a_small_model_title_is_used_for_the_card_and_the_voice_note(
+        provider, aux, tmp_path, children, dispatches):
+    brief = ('{"title": "finishing the DND website", "goal": "site live on dndsecurity.ca", '
+             '"known": ["Pages are built.", "Images still missing."]}')
+    result = _run_complaint(provider, aux, tmp_path, brief=brief)
+
+    _show('complaint, small model JSON', result, dispatches)
+    handoff = dispatches[0]['handoff']
+    assert handoff['work'] == 'finishing the DND website'
+    assert handoff['outcome'] == 'site live on dndsecurity.ca'
+    assert '\U0001f504 finishing the DND website' in result['final_response']
+    assert 'finishing the DND website' in provider.captured[-1]['messages'][-1]['content']
+    assert 'Pages are built.' in dispatches[0]['tasks'][0]['context']
+
+
+def test_a_model_title_that_echoes_the_complaint_is_dropped(
+        provider, aux, tmp_path, children, dispatches):
+    brief = '{"title": "answering why the fuck do you keep stopping", "goal": "stop stopping", "known": ["x"]}'
+    result = _run_complaint(provider, aux, tmp_path, brief=brief)
+    assert dispatches[0]['handoff']['work'] == 'adding images to DND website'
+    assert 'fuck' not in result['final_response'].lower()
+
+
+def test_a_failed_voice_turn_posts_on_it_not_a_template(provider, aux, tmp_path, children, dispatches):
+    result = _run_complaint(provider, aux, tmp_path, voice='')
+    _show('complaint, voice turn empty', result, dispatches)
+    assert result['final_response'].startswith('on it\n\n')
+    low = result['final_response'].lower()
+    assert 'bigger than it looked' not in low and 'keep stopping' not in low and 'fuck' not in low
+
+
+PUSH = 'Push it to the domain. dndsecurity.ca'
+
+
+def test_push_it_to_the_domain_is_not_titled_from_the_message(
+        provider, aux, tmp_path, children, dispatches):
+    """The live case of 10:47: the card read "working on push it to the domain"."""
+    brief = ('{"title": "deploying the DND site to dndsecurity.ca", "goal": "site live on dndsecurity.ca", '
+             '"known": ["Build is ready in dist/."]}')
+    from clover_constants import get_clover_home
+
+    from clover_cli.config_defaults import DEFAULT_CONFIG
+
+    (get_clover_home() / 'config.yaml').write_text(yaml.safe_dump({
+        '_config_version': DEFAULT_CONFIG['_config_version'],
+        'delegation': {'foreground_time_limit_seconds': 300,
+                       'router': {'direct_backstop': {'enabled': True, 'work_calls': 26}}},
+    }))
+    files = _files(tmp_path, 27)
+    aux.replies[:] = [verdict_json('direct', reason='one more step'), brief]
+    provider.queue[:] = [tool('read_file', {'path': str(f)}, f'c{i}') for i, f in enumerate(files, 1)]
+    provider.queue.append(text('On it, the deploy is with a helper now.'))
+    agent = make_agent(provider, session_id='replay-push')
+    result = agent.run_conversation(PUSH, conversation_history=list(HISTORY), task_id='replay-push')
+
+    _show('"Push it to the domain. dndsecurity.ca"', result, dispatches)
+    handoff = dispatches[0]['handoff']
+    assert handoff['work'] == 'deploying the DND site to dndsecurity.ca'
+    assert handoff['outcome'] == 'site live on dndsecurity.ca'
+    assert 'push it to the domain' not in result['final_response'].lower()
+    assert result['final_response'].startswith('On it, the deploy is with a helper now.')

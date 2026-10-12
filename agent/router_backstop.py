@@ -173,6 +173,10 @@ class RouterTurn:
     notes_path: str = ""
     # "What's known so far" bullets for the helper (``handoff_notes.known_so_far``).
     known: List[str] = field(default_factory=list)
+    # The hand-off card's title (what the helper is working on), and whether
+    # the root's own line for the chat was already written for it.
+    title: str = ""
+    voiced: bool = False
     lock: threading.RLock = field(default_factory=threading.RLock)
     settled: threading.Condition = field(init=False, repr=False)
 
@@ -580,13 +584,32 @@ def _decode(raw: Any) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _runtime_handoff(verdict: Any, user_message: str = "") -> Dict[str, str]:
+def _earlier_requests(history: Any) -> List[str]:
+    """The user's earlier turns in this conversation, newest first."""
+    out: List[str] = []
+    for item in reversed(list(history or [])):
+        try:
+            role, text = item
+        except (TypeError, ValueError):
+            continue
+        if role == "user" and str(text or "").strip():
+            out.append(str(text))
+        if len(out) >= 3:
+            break
+    return out
+
+
+def _runtime_handoff(
+    verdict: Any, user_message: str = "", *, agent: Any = None, history: Any = None,
+) -> Dict[str, str]:
     """The short summary a runtime-started helper is dispatched with, so the
     chat acknowledgement says what is happening without quoting the task.
 
-    ``work`` / ``outcome`` are built from the user's message and the router's
-    own reason (``agent.handoff_title``), with no model call; the generic
-    placeholders remain only when neither says anything usable."""
+    ``work`` / ``outcome`` come from the WORK, never from the user's latest
+    message unless that message is itself an order (``agent.handoff_title``):
+    the in-progress todo, the plan's own task, the last hand-off's title in
+    this session, the request this turn continues.  The small model's title
+    (``_prepare_handoff``) replaces them when it gave one."""
     if getattr(verdict, "source", "") == "lifecycle":
         return {"work": "finishing the check on the subagent results", "outcome": "the final answer"}
     from agent.handoff_title import handoff_summary
@@ -595,27 +618,31 @@ def _runtime_handoff(verdict: Any, user_message: str = "") -> Dict[str, str]:
     tasks = getattr(verdict, "tasks", ()) or ()
     if len(tasks) == 1 and getattr(verdict, "source", "") not in ("direct_backstop", "time_limit"):
         fallback = str(getattr(tasks[0], "goal", "") or "")
-    return handoff_summary(user_message, str(getattr(verdict, "reason", "") or ""), fallback)
+    context: Dict[str, Any] = {"earlier": _earlier_requests(history)}
+    if agent is not None:
+        context["todo"] = _notes.active_todo(agent)
+        context["last_title"] = str(getattr(agent, "_handoff_last_title", "") or "")
+    return handoff_summary(user_message, str(getattr(verdict, "reason", "") or ""), fallback, **context)
 
 
-def _prepare_handoff(agent: Any, state: RouterTurn, title: str) -> Tuple[str, str]:
+def _prepare_handoff(agent: Any, state: RouterTurn) -> Tuple[str, "_notes.Brief"]:
     """Everything the hand-off adds around the dispatch itself.
 
-    Returns ``(delegation_id, opener)``.  ``opener`` is the line the root says
-    before the card, in its own voice (always; with ``delegation.router.
-    handoff_notes`` off it is the only addition).  With the flag on, the full
-    notes file is written first -- ``delegation_id`` is the id reserved for it
-    (``""`` when there are no notes) -- and ``state.notes_path`` /
-    ``state.known`` are set for ``_helper_context``.  The two short model calls
-    (the "known so far" bullets, the opener) run side by side, so the step costs
-    the slower of the two.  Never raises: a step that fails is skipped.
+    Returns ``(delegation_id, brief)``.  With ``delegation.router.
+    handoff_notes`` on, the full notes file is written first -- ``delegation_id``
+    is the id reserved for it (``\"\"`` when there are no notes) -- and
+    ``state.notes_path`` / ``state.known`` are set for ``_helper_context``.
+    ``brief`` is the ONE short call on the router's small model: the card title,
+    the goal and the "known so far" bullets, read from the work.  It gets
+    ``BRIEF_TIMEOUT_SECONDS`` and an empty ``Brief`` is the answer on any
+    failure.  The root's own line for the chat is NOT written here: it is one
+    more model turn after the helper is accepted (``_voice``).  Never raises.
     """
     delegation_id = ""
     notes = ""
     if getattr(state.verdict, "source", "") == "lifecycle":
-        # The hand-back of a finished helper's result is not "this got bigger
-        # than it looked": it keeps its own wording and context.
-        return "", ""
+        # The hand-back of a finished helper's result keeps its own wording.
+        return "", _notes.Brief()
     if state.work_log is not None and getattr(state.settings, "handoff_notes", True):
         try:
             with state.lock:
@@ -639,36 +666,61 @@ def _prepare_handoff(agent: Any, state: RouterTurn, title: str) -> Tuple[str, st
         except Exception:
             logger.warning("could not prepare the hand-off notes", exc_info=True)
             delegation_id, notes = "", ""
-    results: Dict[str, Any] = {}
-
-    def _summary() -> None:
+    brief = _notes.Brief()
+    if notes:
         try:
-            results["known"] = _notes.known_so_far(
-                _notes.redact(notes), timeout=_notes.SUMMARY_TIMEOUT_SECONDS,
+            brief = _notes.handoff_brief(
+                _notes.redact(notes), message=state.user_message,
+                timeout=_notes.BRIEF_TIMEOUT_SECONDS,
             )
         except Exception:
-            results["known"] = []
+            brief = _notes.Brief()
+    state.known = [str(b) for b in brief.known]
+    return delegation_id, brief
 
-    def _opener() -> None:
-        results["opener"] = _notes.opener_line(
-            agent, getattr(agent, "_session_messages", None), title,
-            timeout=_notes.OPENER_TIMEOUT_SECONDS,
-        )
 
-    import contextvars
+def _set_say(delegation_id: str, line: str) -> bool:
+    """Put the root's own line on the dispatch's part of the unified card, so
+    the card sends it as its own message before the card."""
+    try:
+        from agent import ack_checklist as ac
 
-    jobs = [_opener] + ([_summary] if notes else [])
-    threads = []
-    for fn in jobs:
-        ctx = contextvars.copy_context()
-        t = threading.Thread(target=lambda f=fn, c=ctx: c.run(f), daemon=True, name="handoff-prep")
-        t.start()
-        threads.append(t)
-    deadline = time.monotonic() + max(_notes.SUMMARY_TIMEOUT_SECONDS, _notes.OPENER_TIMEOUT_SECONDS) + 1.0
-    for t in threads:
-        t.join(max(0.0, deadline - time.monotonic()))
-    state.known = [str(b) for b in results.get("known") or []]
-    return delegation_id, str(results.get("opener") or _notes.fallback_opener(title))
+        said = ac.clean_say(line)
+        with ac._LOCK:
+            part = ac._PARTS.get(str(delegation_id))
+            if part is None or not said:
+                return False
+            part.checklist.say = said
+        return True
+    except Exception:
+        logger.debug("could not place the hand-off line on the card", exc_info=True)
+        return False
+
+
+def _voice(agent: Any, state: RouterTurn, receipts: List["_fl.DispatchReceipt"], messages: Any = None) -> None:
+    """The root's own line for the chat, once: ONE more model turn.
+
+    The helper is already running; the root gets its own messages and system
+    prompt back (the cached prefix is untouched, one runtime note is appended to
+    a copy) saying a subagent is now handling ``state.title`` and asking for one
+    short line in its usual voice, tools off.  That text is placed on the card
+    as the line sent before it (``handoff.say``'s place).  If the turn errors,
+    is empty or is slow, the line is ``on it``.  No pre-written wording."""
+    if state.voiced or not state.title or getattr(state.verdict, "source", "") == "lifecycle":
+        return
+    info = state.handoff
+    if not isinstance(info, dict) or not info.get("by_runtime"):
+        return
+    did = str(info.get("delegation_id") or "")
+    receipt = next((r for r in receipts if r.delegation_id == did), None)
+    if receipt is None or receipt.say or not receipt.summary:
+        return
+    state.voiced = True
+    line = _notes.voice_line(
+        agent, messages if messages else getattr(agent, "_session_messages", None),
+        state.title, message=state.user_message,
+    )
+    _set_say(did, line)
 
 
 def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
@@ -684,8 +736,16 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     verdict = state.verdict
     stages = verdict.stages()
     first = stages[0]
-    handoff = _runtime_handoff(verdict, state.user_message)
-    notes_id, opener = _prepare_handoff(agent, state, str((handoff or {}).get("work") or ""))
+    handoff = _runtime_handoff(verdict, state.user_message, agent=agent, history=state.history)
+    notes_id, brief = _prepare_handoff(agent, state)
+    if getattr(verdict, "source", "") != "lifecycle":
+        # The small model read the work; its title and goal beat the heuristic
+        # ones (which are only there for when it gave none).
+        if brief.title:
+            handoff = {**handoff, "work": brief.title}
+        if brief.goal:
+            handoff = {**handoff, "outcome": brief.goal}
+        state.title = str(handoff.get("work") or "")
     findings = _findings_block(state)
     args: Dict[str, Any] = {
         "tasks": [
@@ -696,10 +756,6 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     follow = _follow_through_for(state, stages)
     if follow:
         args["follow_through"] = follow
-    if opener and isinstance(handoff, dict) and getattr(verdict, "source", "") != "lifecycle":
-        # The root's own line, sent as its own message before the card (the
-        # same field a normal dispatch's ``say`` uses).
-        handoff = {**handoff, "say": opener}
     args["handoff"] = handoff
     if notes_id:
         args[_RESERVED_ID_ARG] = notes_id
@@ -712,6 +768,8 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     data = _decode(raw)
     if data.get("status") == "dispatched" and data.get("delegation_id"):
         delegation_id = str(data["delegation_id"])
+        if state.title:
+            agent._handoff_last_title = state.title
         later = [verdict.tasks[i].goal for stage in stages[1:] for i in stage]
         # The later stages ride this row: the runtime starts them (default
         # config included).  Only when they could not be bound -- or the
@@ -1171,7 +1229,7 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
              "context": _helper_context(pseudo, i, number, findings)}
             for i in index
         ]}
-        args["handoff"] = _runtime_handoff(verdict, pseudo.user_message)
+        args["handoff"] = _runtime_handoff(verdict, pseudo.user_message, agent=agent)
     except Exception:
         logger.warning("router stages: stage plan unreadable", exc_info=True)
         return _note(
@@ -1377,7 +1435,7 @@ def _opener_is_own_message(card: Any, agent: Any) -> bool:
         return False
 
 
-def completion_directive(agent: Any):
+def completion_directive(agent: Any, messages: Any = None):
     """The deterministic end of a turn whose helpers were accepted, or ``None``.
 
     Asked once per assistant message, after every tool result of that message
@@ -1401,6 +1459,10 @@ def completion_directive(agent: Any):
         _adopt(agent, state)
     from agent import delegation_checkpoint as dc
 
+    if state is not None:
+        # The agent's own line, written now that the helper is running (one
+        # model turn over the messages it already has).
+        _voice(agent, state, receipts, messages)
     return dc.Directive(EXIT_REASON, _ack_text(receipts, agent))
 
 

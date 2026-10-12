@@ -172,8 +172,8 @@ def test_the_helper_gets_the_request_and_the_turns_work_so_far(
     assert 'refactor the billing module' in body
     assert 'BILLING-SOURCE-MARKER' in body  # what the turn read so far, in full
     # the hand-off carries a real title, not the placeholder
-    assert call['handoff']['work'] != 'taking over the rest of your request'
-    assert call['handoff']['say'] == OPENER
+    assert call['handoff']['work'] == 'refactoring the billing module'
+    assert 'say' not in call['handoff'], 'the line is the agent\'s own turn after the dispatch'
 
 
 def test_the_opener_is_the_replay_of_the_agents_own_voice_and_is_streamed(
@@ -425,3 +425,25 @@ def test_setting_defaults_to_on_and_reads_the_config(monkeypatch):
     assert tlh.enabled() is False
     path.write_text(yaml.safe_dump({'delegation': {'time_limit_handoff': 'garbage'}}))
     assert tlh.enabled() is True
+
+
+def test_a_complaint_at_the_hard_stop_is_titled_from_the_earlier_request_not_the_complaint(
+        clock, provider, stub_children, dispatches):
+    """"Why the fuck do you keep stopping" must not become the card or the line."""
+    agent = make_agent(provider)
+    history = [
+        {'role': 'user', 'content': 'finish the DND Security website'},
+        {'role': 'assistant', 'content': 'Working on the pages now.'},
+    ]
+    advance_per_tool_round(agent, clock, 100, after_limit=5)
+    _script_long_job(provider)
+
+    result = agent.run_conversation(
+        'Why the fuck do you keep stopping', conversation_history=history, task_id='tlh-complaint')
+
+    (call,) = dispatches
+    blob = (result['final_response'] + str(call['handoff'])).lower()
+    for bad in ('fuck', 'answering', 'keep stopping', 'bigger than it looked'):
+        assert bad not in blob
+    assert call['handoff']['work'] == 'finishing the DND Security website'
+    assert result['final_response'].startswith(OPENER), 'the agent\'s own scripted turn is the opener'

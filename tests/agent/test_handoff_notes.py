@@ -2,7 +2,7 @@
 
 * ``agent.handoff_notes`` (pure part): the bounded work log, the notes file
   (0600 in a 0700 dir, redacted, newest kept), the cleanup, the "known so far"
-  call that is silent on failure, the opener line and its template.
+  call that is silent on failure, and the agent's own voice line (``on it`` when it cannot be had).
 * ``agent.router_backstop``: both paths (planned + direct) write the notes at
   hand-off, put the path and the bullets in the helper's context (under the
   cap), and ``delegation.router.handoff_notes: false`` restores the old context.
@@ -289,16 +289,24 @@ class TestKnownSoFar:
 
 # ── the opener line ────────────────────────────────────────────────────────
 
-class TestOpenerFallback:
-    def test_the_template_names_the_job(self):
-        assert hn.fallback_opener('running a diagnostic on why that fuse tripped') == (
-            "this one's bigger than it looked, a subagent's on it: running a diagnostic on why that fuse tripped")
+class TestVoiceLineFallback:
+    """No canned wording: the line is the agent's own, or ``on it``."""
 
-    def test_the_template_without_a_title(self):
-        assert hn.fallback_opener('') == "this one's bigger than it looked, a subagent's on it"
+    def test_the_old_template_is_gone(self):
+        assert not hasattr(hn, 'fallback_opener') and not hasattr(hn, 'opener_line')
+        assert hn.FALLBACK_LINE == 'on it'
 
-    def test_no_transcript_means_the_template(self):
-        assert hn.opener_line(SimpleNamespace(), [], 'fixing the bug') == hn.fallback_opener('fixing the bug')
+    def test_no_transcript_means_on_it_never_the_title(self):
+        line = hn.voice_line(SimpleNamespace(), [], 'fixing the bug')
+        assert line == 'on it' and 'fixing' not in line and 'bigger than it looked' not in line
+
+    def test_an_error_means_on_it(self):
+        class Boom(SimpleNamespace):
+            pass
+
+        agent = SimpleNamespace()  # no model client: the turn raises
+        msgs = [{'role': 'user', 'content': 'go'}, {'role': 'assistant', 'content': 'ok'}]
+        assert hn.voice_line(agent, msgs, 'fixing the bug') == 'on it'
 
     @pytest.mark.parametrize('text', ['DONE', '', 'ok', 'Sure, running into the safety net now for you',
                                       'handing it off after the time limit ran out'])
@@ -441,7 +449,8 @@ def test_the_summary_call_gets_the_notes_and_runs_on_the_router_task(tmp_path, c
 def test_a_summary_timeout_still_hands_off_with_the_path_and_no_bullets(
         tmp_path, children, dispatches, aux_box, monkeypatch):
     monkeypatch.setattr(hn, 'SUMMARY_TIMEOUT_SECONDS', 0.2)
-    monkeypatch.setattr(hn, 'OPENER_TIMEOUT_SECONDS', 0.2)
+    monkeypatch.setattr(hn, 'BRIEF_TIMEOUT_SECONDS', 0.2)
+    monkeypatch.setattr(hn, 'VOICE_TIMEOUT_SECONDS', 0.2)
     aux_box.delay = 1.0
     agent = _root()
     _arm(agent)
@@ -583,16 +592,21 @@ class TestReservedIds:
 
 # ── the opener rides the hand-off as the root's own line ───────────────────
 
-def test_the_handoff_carries_an_opener_in_say(tmp_path, children, dispatches, aux_box):
+def test_the_dispatch_carries_no_canned_opener_and_the_agent_voices_it_after(
+        tmp_path, children, dispatches, aux_box):
+    """The line is written AFTER the helper is accepted (one more model turn),
+    never pre-written into the dispatch."""
     agent = _root()
     _arm(agent)
     _trip(agent, tmp_path)
-    say = dispatches[0]['handoff']['say']
-    assert say.startswith("this one's bigger than it looked, a subagent's on it: ")
-    for word in ('limit', 'timeout', 'timed out', 'safety', 'backstop', '25', '180'):
+    assert 'say' not in dispatches[0]['handoff']
+    directive = rb.completion_directive(agent)
+    assert directive is not None
+    say = directive.text
+    assert say.startswith('on it'), 'no transcript here, so the neutral line'
+    for word in ('limit', 'timeout', 'timed out', 'safety', 'backstop', 'bigger than it looked'):
         assert word not in say.lower()
-    (receipt,) = rb.turn_receipts(agent)
-    assert receipt.say == say
+    assert REQUEST not in say
 
 
 def test_the_hand_back_of_a_finished_helper_keeps_its_own_wording(tmp_path, children, dispatches, aux_box):
@@ -643,7 +657,7 @@ async def test_unified_style_the_reply_is_the_opener_alone_and_the_card_binds_un
         await asyncio.to_thread(_trip, agent, tmp_path)
 
         directive = rb.completion_directive(agent)
-        say = dispatches[0]['handoff']['say']
+        say = 'on it'
         assert directive is not None and directive.text == say, 'the reply is the opener, nothing else'
         assert '\U0001f504' not in directive.text
 

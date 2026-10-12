@@ -1276,7 +1276,7 @@ def _durable_receipts_ready(receipt_ids: Any) -> Any:
     return owned_receipts_ready(receipt_ids)
 
 
-def completion_directive(agent: Any) -> Optional[Directive]:
+def completion_directive(agent: Any, messages: Any = None) -> Optional[Directive]:
     """The conversation loop's question after a tool round: end the turn now?
 
     Reads existing state only.  The checkpoint's own directive (when it is on
@@ -1297,7 +1297,7 @@ def completion_directive(agent: Any) -> Optional[Directive]:
             return directive
     from agent import router_backstop
 
-    return router_backstop.completion_directive(agent)
+    return router_backstop.completion_directive(agent, messages)
 
 
 def resolve_work_call(function_name: str, function_args: Any) -> tuple:

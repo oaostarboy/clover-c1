@@ -145,12 +145,23 @@ models `effort=low`, Haiku and manual-budget models are left as they were. An
 explicit `reasoning_effort` (or `extra_body.reasoning`) is never overridden.
 `ROUTER_MAX_TOKENS` is 1500 so thought tokens cannot cut off the JSON.
 
-When the backstop hands a turn to a helper, the chat card gets a title and goal
-built from the user's message and the router's own `reason` (no extra model
-call): `🔄 comparing 3 options for adding a second GPU → ...`. The title is at
-most 50 characters, the goal at most 60; the raw message is never pasted. The
-old "taking over the rest of your request" wording remains only when the
-message names nothing.
+When the backstop (or the time-limit hand-off) hands a turn to a helper, the
+chat card names the WORK, never the user's latest message. One call on the
+router's small model (6 s, before the dispatch) reads the hand-off notes and
+returns `{"title", "goal", "known"}`: a 3-6 word gerund title
+(`🔄 deploying the DND site to dndsecurity.ca`), a goal of at most 8 words, and
+the "known so far" bullets. Without that answer the title comes, in order, from
+the in-progress todo item, the plan's own task, the last hand-off's title in
+the session, the earlier request this turn continues, else `finishing this
+up`. A message is used only when it is itself an order; a question, a
+complaint, chit-chat or anything with profanity never becomes a title, and
+profanity is always stripped.
+
+The line before the card is written by the agent itself, in its own voice: once
+the helper is accepted the root takes ONE more model turn over the messages it
+already has (same system prompt, a runtime note appended to a copy, tools off)
+saying a subagent is now handling the title. If that turn errors, is empty or
+takes more than 30 s the line is `on it`. There is no canned wording.
 
 ### Ship gate
 
