@@ -52,6 +52,16 @@ def load_cases(path: Path) -> List[Dict[str, Any]]:
                 raise ValueError(f"{path}:{lineno}: missing or empty {key!r}")
         if case["expected_mode"] not in MODES:
             raise ValueError(f"{path}:{lineno}: expected_mode {case['expected_mode']!r} not in {MODES}")
+        turns = case.get("recent_turns", [])
+        if not isinstance(turns, list) or not all(
+            isinstance(t, dict) and t.get("role") in ("user", "assistant")
+            and isinstance(t.get("content"), str) and t["content"].strip() for t in turns
+        ):
+            raise ValueError(f"{path}:{lineno}: recent_turns must be a list of "
+                             "{role: user|assistant, content: text}")
+        reps = case.get("reps")
+        if reps is not None and (isinstance(reps, bool) or not isinstance(reps, int) or reps < 1):
+            raise ValueError(f"{path}:{lineno}: reps must be a positive integer")
         if case["id"] in seen:
             raise ValueError(f"{path}:{lineno}: duplicate case id {case['id']!r}")
         seen.add(case["id"])
@@ -75,16 +85,21 @@ def run_router_eval(
     route_fn: Callable[..., Any],
     *,
     reps: int = 1,
+    case_reps: bool = False,
     clock: Callable[[], float] = time.perf_counter,
     progress: Optional[Callable[[str], None]] = None,
 ) -> List[Dict[str, Any]]:
     """One record per case x rep.  ``route_fn(message, recent_turns=())`` is the
-    router; an exception is recorded, never raised."""
+    router; an exception is recorded, never raised.  A case may carry
+    ``recent_turns`` (the chat history the router saw) and, with ``case_reps``,
+    its own ``reps`` count (more repetitions for the cases under study)."""
     say = progress or (lambda _m: None)
     runs: List[Dict[str, Any]] = []
     for case in cases:
         prompt = case["prompt"].replace("{workdir}", WORKDIR_STUB)
-        for rep in range(max(1, reps)):
+        n_reps = max(1, int(case.get("reps") or reps)) if case_reps else max(1, reps)
+        turns = case.get("recent_turns") or []
+        for rep in range(n_reps):
             run: Dict[str, Any] = {
                 "case_id": case["id"], "rep": rep, "expected_mode": case["expected_mode"],
                 "mode": None, "source": None, "reason": "", "latency_ms": 0,
@@ -92,7 +107,7 @@ def run_router_eval(
             }
             t0 = clock()
             try:
-                verdict = route_fn(prompt, [])
+                verdict = route_fn(prompt, turns)
                 run["latency_ms"] = int(round((clock() - t0) * 1000))
                 if verdict is not None:
                     run["mode"] = verdict.mode
@@ -163,6 +178,17 @@ def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
     p.add_argument("--reps", type=int, default=3, help="Repetitions per case (default 3)")
     p.add_argument("--only", action="append", default=[], help="Run only these case ids (comma separated)")
     p.add_argument("--out", required=True, help="Output directory (results.json, summary.txt)")
+    p.add_argument("--home", default=None,
+                   help="Use this directory as CLOVER_HOME (config.yaml + auth.json), e.g. a copy "
+                        "of a profile with auxiliary.delegation_router pinned to one model")
+    p.add_argument("--timeout", type=float, default=None,
+                   help="Sizing-call deadline in seconds (default: delegation.router.timeout_seconds). "
+                        "A slow model (gpt-6.1-sol answers in 4-8 s) is cut off by the 8 s default; "
+                        "raise this to score its classification apart from its speed")
+    p.add_argument("--case-reps", action="store_true",
+                   help="A case's own \"reps\" field overrides --reps for that case")
+    p.add_argument("--calibration-v2", choices=("on", "off", "config"), default="config",
+                   help="Force delegation.router.calibration_v2 for this run (default: the config)")
     p.add_argument("--no-warmup", action="store_true",
                    help="Time the first model call too (it pays the one-time SDK imports and "
                         "client set-up, which a long-lived gateway pays once at start-up)")
@@ -199,12 +225,23 @@ def main(
         cases = [c for c in cases if c["id"] in wanted]
 
     if route_fn is None:
-        if args.profile:
+        if args.home:
+            os.environ["CLOVER_HOME"] = str(Path(args.home).expanduser())
+        elif args.profile:
             os.environ["CLOVER_HOME"] = str(_resolve_profile_home(args.profile))
         sys.path.insert(0, str(REPO_ROOT))
+        import agent.delegation_router as router_module
         from agent.delegation_router import load_settings, route
 
+        if args.calibration_v2 != "config":
+            forced = args.calibration_v2 == "on"
+            router_module.calibration_v2_enabled = lambda: forced
+
         settings = load_settings()
+        if args.timeout:
+            from dataclasses import replace as _replace
+
+            settings = _replace(settings, timeout_seconds=float(args.timeout))
 
         def route_fn(message: str, recent_turns: Sequence[Any] = ()) -> Any:  # noqa: F811
             return route(message, recent_turns, settings=settings)
@@ -221,7 +258,7 @@ def main(
                   file=sys.stderr, flush=True)
 
     runs = run_router_eval(
-        cases, route_fn, reps=args.reps,
+        cases, route_fn, reps=args.reps, case_reps=args.case_reps,
         progress=lambda m: print(m, file=sys.stderr, flush=True),
     )
     summary = summarize(runs)
@@ -229,6 +266,7 @@ def main(
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "results.json").write_text(
         json.dumps({"summary": summary, "runs": runs, "profile": args.profile,
+                    "home": args.home, "timeout": args.timeout, "calibration_v2": args.calibration_v2,
                     "reps": args.reps, "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")},
                    indent=2, default=str),
         encoding="utf-8",

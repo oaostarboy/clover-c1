@@ -28,8 +28,15 @@ the tool schemas) says how to treat that plan; the four ways to work are:
   `tests/eval/delegation_modes.jsonl` and the held-out paraphrases in
   `tests/eval/delegation_router_heldout.jsonl` (the rubric is tuned on the
   first only).
-- **The user's words win.** "Do it yourself" means direct even for a big job;
-  "use helpers" means a helper even for a small one.
+- **Preparation before a write or send is a helper job.** Finding, reading and
+  checking files, code or past sessions, then assembling or packaging the
+  result for a person ("email Julia the extension with exact instructions",
+  "also send the X skill") is single; sending a link or text already in the
+  chat stays direct. Set `delegation.router.calibration_v2: false` to restore
+  the earlier rubric and override wording exactly.
+- **The user's words win.** "Do it yourself" (or "do it here / directly")
+  means direct even for a big job; "use helpers", "send subagents", "with
+  subagents" or "in the background" means a helper even for a small one.
 - **Signals for big:** more than a couple of minutes - a dozen or more items
   each needing lookups, commands that run for minutes, multi-step research or
   builds. They live in the router's sizing prompt, not in the system prompt.

@@ -2166,6 +2166,11 @@ DEFAULT_CONFIG = {
             "timeout_seconds": 8,
             "backstop_calls": 2,
             "backstop_seconds": 60,
+            # Sizing rubric v2: preparation before a write or send (find, read,
+            # verify, package) is single, not direct; "send subagents" /
+            # "with subagents" are explicit helper requests. false restores
+            # the earlier rubric and override wording exactly.
+            "calibration_v2": True,
         },
         "max_iterations": 250,  # per-subagent iteration cap (each subagent gets its own budget,
                                # independent of the parent's max_iterations)
