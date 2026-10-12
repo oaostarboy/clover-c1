@@ -576,3 +576,15 @@ def test_report_lands_in_the_queue_once():
     assert ad.report_unresumed(DID, "because.")
     assert not ad.report_unresumed(DID, "because."), "a second report is a no-op"
     assert len([e for e in _drain_queue() if e.get("delegation_id") == DID]) == 1
+
+
+def test_source_is_rebuilt_from_the_stored_route_for_a_raw_session_key():
+    """The API server's session key is the caller's raw id: no layout to parse."""
+    src = dr._source_from_origin(
+        {"origin_platform": "api_server", "origin_chat_id": "vegas-resume-1", "user_id": "u9"},
+        {},
+    )
+    assert src is not None and src.platform.value == "api_server"
+    assert src.chat_id == "vegas-resume-1" and src.user_id == "u9"
+    assert dr._source_from_origin({"origin_platform": "nonsense", "origin_chat_id": "1"}, {}) is None
+    assert dr._source_from_origin({"origin_platform": "telegram"}, {}) is None

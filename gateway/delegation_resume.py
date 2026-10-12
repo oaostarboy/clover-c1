@@ -97,6 +97,31 @@ def _decide(record: Dict[str, Any], now: float) -> str:
     return ""
 
 
+def _source_from_origin(origin: Dict[str, Any], record: Dict[str, Any]) -> Any:
+    """A ``SessionSource`` straight from the route stored at dispatch -- for a
+    chat whose session key is a raw id (the API server binds the caller's
+    ``X-Clover-Session-Id``), which cannot be derived from a key's layout."""
+    try:
+        from gateway.config import Platform
+        from gateway.session import SessionSource
+
+        platform = Platform(str(origin.get("origin_platform") or "").strip().lower())
+        chat_id = str(origin.get("origin_chat_id") or "").strip()
+        if not chat_id:
+            return None
+        return SessionSource(
+            platform=platform,
+            chat_id=chat_id,
+            chat_type=str(origin.get("origin_chat_type") or "dm") or "dm",
+            thread_id=str(origin.get("origin_thread_id") or "") or None,
+            user_id=str(origin.get("user_id") or "") or None,
+            user_name=str(origin.get("user_name") or "") or None,
+            scope_id=str(origin.get("scope_id") or "") or None,
+        )
+    except Exception:
+        return None
+
+
 async def _build_parent(runner: Any, record: Dict[str, Any]):
     """``(agent, source, publisher)`` standing in for the conversation's agent."""
     from gateway.run import _load_gateway_config, _platform_config_key
@@ -114,6 +139,8 @@ async def _build_parent(runner: Any, record: Dict[str, Any]):
         "scope_id": origin.get("scope_id"),
     }
     source = await asyncio.to_thread(runner._build_process_event_source, evt)
+    if source is None:
+        source = _source_from_origin(origin, record)
     if source is None:
         raise RuntimeError("the chat it belonged to cannot be reached")
     user_config = _load_gateway_config()
