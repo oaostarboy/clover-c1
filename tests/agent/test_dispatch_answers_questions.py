@@ -63,11 +63,11 @@ def test_the_direct_plan_is_unchanged():
         f"{dr.RUNTIME_NOTE_MARKER} work plan: direct (because). Handle it here.")
 
 
-def test_the_stable_prompt_guidance_does_not_say_to_drop_the_rest():
+def test_the_stable_prompt_guidance_says_to_answer_the_rest():
     from agent.prompt_builder import DELEGATION_MODE_GUIDANCE, TODO_DELEGATION_DECISION_GUIDANCE
 
-    assert "end your turn with one short" not in DELEGATION_MODE_GUIDANCE
-    assert "answer" in DELEGATION_MODE_GUIDANCE and "not doing" in DELEGATION_MODE_GUIDANCE
+    assert "answer what the helpers aren't covering, end your turn" in DELEGATION_MODE_GUIDANCE
+    assert "answer" in DELEGATION_MODE_GUIDANCE
     assert "answers anything else the user asked" in TODO_DELEGATION_DECISION_GUIDANCE
 
 

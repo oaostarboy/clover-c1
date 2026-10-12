@@ -527,9 +527,8 @@ DELEGATION_MODE_GUIDANCE = (
     "directly and hand big or parallel jobs to helpers with delegate_task; "
     "the user's explicit wording wins (\"do it yourself\" means direct, "
     "\"use helpers\" means a helper). "
-    "When dispatching helpers, dispatch, then reply briefly: first answer "
-    "any question or other point in the user's message that the helpers are "
-    "not doing, then one short line on what is running; don't poll. "
+    "Dispatch, answer what the helpers aren't covering, end your turn with "
+    "one short line on what is running, and don't poll. "
     "Check helper results before saying done, and never mention internal "
     "limits, timeouts or retries. " + RUNTIME_NOTE_GUIDANCE
 )
