@@ -112,7 +112,8 @@ _STEP_ICON = {
 _END_ICON = {DONE: DONE_ICON, FAILED: FAILED_ICON, STOPPED: STOPPED_ICON}
 # The unified card uses plain marks, not emojis: the only emojis on it are the
 # 🔀 in front of the title (🍂 in its place when the card ended badly), the 🍀 in
-# the "tap to ..." hint, and a 🍂 in front of a failed subagent's name.
+# the "tap to ..." hint, a 🍂 in front of a failed subagent's name, and the
+# 🛠 / ⏱ leading each stats line (calls, time).
 _STEP_MARK = {
     "completed": "\u2713",  # ✓
     "in_progress": "\u25b8",  # ▸
@@ -250,6 +251,9 @@ class Checklist:
     kids: List[Child] = field(default_factory=list)
     hidden: int = 0  # the helper's todo-list calls: hidden, so not counted either
     hidden_ids: Set[str] = field(default_factory=set)
+    # An outside agent job with no tool visibility (parser "none"): the card
+    # says "running" instead of tool lines.
+    lifecycle: bool = False
 
     @classmethod
     def start(cls, header: str, steps: Sequence[str], say: str = "") -> "Checklist":
@@ -325,7 +329,7 @@ class Checklist:
             [f"{_STEP_MARK[status]} {text}" for text, status in self.steps],
         ]
         if self.state == RUNNING:
-            blocks.append(_tool_lines(self, RECENT_TOOLS_SINGLE, TOOL_PHRASE_SINGLE))
+            blocks.append(_live_lines(self, RECENT_TOOLS_SINGLE, TOOL_PHRASE_SINGLE))
         elif self.summary:
             blocks.append([no_command_links(self.summary.replace("*", ""))])
         body = "\n".join([head] + [f"> {q}" for q in _join_blocks(blocks)])
@@ -354,7 +358,7 @@ class Checklist:
             foot.append(_calls(calls))
         if started:
             end = max(ended) if self.state != RUNNING and ended else now
-            foot.append(_duration(max(0.0, end - min(started))))
+            foot.append(_elapsed(max(0.0, end - min(started))))
         blocks.append([_italic(" \u00b7 ".join(foot))])
         body = "\n".join([head] + [f"> {q}" for q in _join_blocks(blocks)])
         return f"{self.say}\n\n{body}" if (self.say and include_say) else body
@@ -406,8 +410,16 @@ def _duration(seconds: float) -> str:
         return f"{int(seconds)}s"
 
 
+CALLS_ICON = "\U0001f6e0"  # 🛠 leads every calls stat
+TIME_ICON = "\u23f1"  # ⏱ leads every time stat
+
+
 def _calls(n: int) -> str:
-    return f"{n} call{'s' if n != 1 else ''}"
+    return f"{CALLS_ICON} {n} call{'s' if n != 1 else ''}"
+
+
+def _elapsed(seconds: float) -> str:
+    return f"{TIME_ICON} {_duration(seconds)}"
 
 
 def _stats_parts(
@@ -420,7 +432,7 @@ def _stats_parts(
         parts.append(_calls(calls))
     if started is not None:
         end = ended if ended is not None else (now if now is not None else time.monotonic())
-        parts.append(_duration(max(0.0, end - started)))
+        parts.append(_elapsed(max(0.0, end - started)))
     return parts
 
 
@@ -456,6 +468,16 @@ def _joined_title(titles: Sequence[str]) -> str:
     return f"{names[0]}, {names[1]} +{len(names) - 2} more"
 
 
+JOINED_GOAL_CHARS = 40  # a goal inside a joined card's section: one phone row
+
+
+def _joined_goal(outcome: str) -> str:
+    """``Goal: <outcome>`` for a section of a joined card: no ETA, cut on a
+    word to one phone row.  ``""`` when the part has no goal."""
+    text = (outcome or "").split(" \u00b7 ~", 1)[0].strip()
+    return f"Goal: {_cut_word(text, JOINED_GOAL_CHARS)}" if text else ""
+
+
 def _title_line(title: str, tail: str, lost: bool) -> str:
     """``🔀 **title** · k of N done``; 🍂 takes the 🔀's place when it ended badly."""
     return f"{FAILED_ICON if lost else TITLE_ICON} **{title}**{tail}"
@@ -480,11 +502,17 @@ def _count_tail(running: bool, states: Sequence[str]) -> str:
     return " \u00b7 " + " \u00b7 ".join(bits)
 
 
+SECTION_MARK = "\u25a0"  # ■ leads each subagent's name on a several-subagent card
+
+
+def _name_label(name: str, state: str) -> str:
+    """``■ **Name**`` (🍂 instead of the ■ for a failed subagent)."""
+    return f"{FAILED_ICON if state == FAILED else SECTION_MARK} **{name}**"
+
+
 def _section_header(name: str, obj: Any, now: float) -> str:
-    """``**Name** · done · Sonnet 5.5 · 7 calls · 35s`` (``🍂`` before a failed name)."""
-    label = f"**{name}**"
-    if obj.state == FAILED:
-        label = f"{FAILED_ICON} {label}"
+    """``**Name** · done · Sonnet 5.5 · 🛠 7 calls · ⏱ 35s`` (``🍂`` before a failed name)."""
+    label = _name_label(name, obj.state)
     parts: List[str] = []
     if obj.state == PENDING:
         parts.append("waiting")
@@ -505,7 +533,7 @@ def _section_block(
         return block
     under = _kid_step_lines(obj)
     if obj.state == RUNNING:
-        under += _tool_lines(obj, tool_cap, TOOL_PHRASE_MULTI)
+        under += _live_lines(obj, tool_cap, TOOL_PHRASE_MULTI)
     elif obj.summary and summary_chars > 0:
         under.append(no_command_links(_cut_word(obj.summary.replace("*", ""), summary_chars)))
     return block + _indent(under)
@@ -548,7 +576,7 @@ def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[List
                 run = []
             blocks.append(_kid_block(k, now, 0, min(tool_cap, RECENT_TOOLS_MULTI)))
         else:
-            line = f"{FAILED_ICON + ' ' if k.state == FAILED else ''}**{k.label}** \u00b7 {k.state}"
+            line = f"{_name_label(k.label, k.state)} \u00b7 {k.state}"
             if k.summary:
                 line += " \u00b7 " + no_command_links(
                     _cut_word(k.summary.replace("*", ""), COMPACT_RESULT_CHARS)
@@ -572,7 +600,10 @@ def _tool_lines(obj: Any, cap: int, phrase_max: int = TOOL_PHRASE_MULTI) -> List
     def line(label: str, phrase: str, failed: bool = False) -> str:
         suffix = " (failed)" if failed else ""
         # A shell command reads on its own: "now: pytest -q", not "now: terminal pytest -q".
-        phrase = phrase[len("terminal "):] if phrase.startswith("terminal ") else phrase
+        for shell in ("terminal ", "Bash "):
+            if phrase.startswith(shell):
+                phrase = phrase[len(shell):]
+                break
         text = short_tool_phrase(phrase, max(8, phrase_max - len(suffix)))
         return _italic(f"{label}: {text}{suffix}")
 
@@ -581,6 +612,15 @@ def _tool_lines(obj: Any, cap: int, phrase_max: int = TOOL_PHRASE_MULTI) -> List
         lines.append(line("now", obj.open[-1][2]))
     lines += [line("before", phrase, not ok) for phrase, ok in reversed(obj.recent)]
     return [ln for ln in lines if ln][:cap]
+
+
+def _live_lines(obj: Any, cap: int, phrase_max: int) -> List[str]:
+    """A running subagent's tool lines; an outside job without tool
+    visibility says ``running`` instead."""
+    lines = _tool_lines(obj, cap, phrase_max)
+    if not lines and getattr(obj, "lifecycle", False):
+        return [_italic("running")]
+    return lines
 
 
 def _after_icon(header: str) -> str:
@@ -720,6 +760,33 @@ def open_part(
             else:
                 _record_complete(part, kw)
         return part
+
+
+def open_agent_job_part(delegation_id: Any, title: Any, lifecycle: bool = False) -> Optional["Card"]:
+    """Open the unified-card part of an outside agent job (``terminal`` with
+    ``agent_job``) and return its own one-part card, or None (classic style,
+    no title).  The gateway then joins that card to the chat's running one, or
+    posts it as its own.  ``delegation_id`` must be unique per job."""
+    if not unified():
+        return None
+    name = _cut_word(" ".join(str(title or "").replace("*", "").replace(" \u2192 ", " - ").split()), 60)
+    if not name:
+        return None
+    with _LOCK:
+        part = open_part(str(delegation_id or ""), f"{ACTIVE_ICON} **{name}**", ())
+        if part is None:
+            return None
+        part.checklist.lifecycle = bool(lifecycle)
+        card = Card([part])
+        card.split_opener = True  # no opener: later dispatches may join this card
+        part.card = card
+        return card
+
+
+def abandon(delegation_id: Any) -> None:
+    """Drop a part that never got a card, so its events fall back to the 🔀 card."""
+    with _LOCK:
+        _PARTS.pop(str(delegation_id or ""), None)
 
 
 def reserve(delegation_id: Any) -> bool:
@@ -884,7 +951,7 @@ def _on_activity(et: str, kw: Dict[str, Any]) -> bool:
             try:
                 from agent.delegation_activity import pretty_model
 
-                obj.model = pretty_model(str(model)) or ""
+                obj.model = _CTX_SIZE_RE.sub("", pretty_model(str(model)) or "")
             except Exception:
                 obj.model = ""
         if et == "subagent.tool" and str(kw.get("tool_name") or "") in _HIDDEN_TOOLS:
@@ -909,6 +976,9 @@ def _on_activity(et: str, kw: Dict[str, Any]) -> bool:
         part._changed()
     return changed
 
+
+# "GPT-6.1 Sol 900k": the context size is not part of the model's name.
+_CTX_SIZE_RE = re.compile(r"\s+\d+(?:\.\d+)?[kKmM]$")
 
 # The helper's own todo bookkeeping: the steps already show it.
 _HIDDEN_TOOLS = frozenset({"todo"})
@@ -966,6 +1036,37 @@ def short_tool_phrase(phrase: str, limit: int = TOOL_LINE_MAX) -> str:
     return no_command_links(_cut_word(text, limit))
 
 
+_SHELL_TOOLS = frozenset({"terminal", "Bash"})  # Bash: Claude's shell tool
+_CD_PREFIX_RE = re.compile(r"^\s*cd\s+[^;&\n]*?\s*(?:&&|;|\n)\s*")
+_ENV_PREFIX_RE = re.compile(r"^\s*[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s+")
+_ENV_ONLY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=\S*$")
+
+
+def simplify_shell_command(command: Any) -> str:
+    """The part of a shell command worth showing on a tool line: a leading
+    ``cd <dir> &&`` / ``cd <dir>;`` and leading ``VAR=value`` assignments are
+    dropped (repeatedly).  When nothing meaningful is left, the first command
+    word."""
+    text = str(command or "").strip()
+    rest = text
+    while True:
+        stripped = _CD_PREFIX_RE.sub("", rest, count=1) or rest
+        if stripped == rest:
+            stripped = _ENV_PREFIX_RE.sub("", rest, count=1)
+        if stripped == rest:
+            break
+        rest = stripped
+    rest = rest.strip()
+    core = rest.rstrip("\u2026").strip()
+    if core and not _ENV_ONLY_RE.match(core) and not re.fullmatch(r"cd(\s.*)?", core):
+        return rest
+    words = text.split()
+    for w in words:
+        if not _ENV_ONLY_RE.match(w):
+            return w
+    return words[0] if words else ""
+
+
 def _tool_started(obj: Any, kw: Dict[str, Any]) -> None:
     name = str(kw.get("tool_name") or "tool")
     if name in _HIDDEN_TOOLS:
@@ -976,7 +1077,13 @@ def _tool_started(obj: Any, kw: Dict[str, Any]) -> None:
     try:
         from agent.delegation_activity import _tool_phrase, summarize_tool_call
 
-        phrase = _tool_phrase(name, summarize_tool_call(name, kw.get("preview"), kw.get("args")))
+        preview, args = kw.get("preview"), kw.get("args")
+        if name in _SHELL_TOOLS:
+            if isinstance(args, dict) and isinstance(args.get("command"), str):
+                args = {**args, "command": simplify_shell_command(args["command"])}
+            elif isinstance(preview, str):
+                preview = simplify_shell_command(preview)
+        phrase = _tool_phrase(name, summarize_tool_call(name, preview, args))
     except Exception:
         phrase = name
     phrase = short_tool_phrase(phrase)
@@ -1023,6 +1130,10 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
     state = end_state_for(kw.get("status"))
     if str(kw.get("exit_reason") or "").lower() in {"max_iterations", "max_turns"}:
         state = FAILED
+    if kw.get("exited_unverified") and str(kw.get("status") or "").lower() == "incomplete":
+        # An outside job that exited 0 without a verdict line (parser "none"):
+        # it ended cleanly, so it is done, not failed.
+        state = DONE
     if state == DONE and kw.get("outcome") == "not_done":
         # The run ended cleanly but the helper says the job is not done.
         state = FAILED
@@ -1106,12 +1217,11 @@ class Card:
         now = time.monotonic() if now is None else now
         cls = [p.checklist for p in self.parts]
         titles: List[str] = []
-        goals: List[str] = []
+        goals: List[str] = []  # one per part ("" when it has none)
         for cl in cls:
             title, outcome = cl._title_outcome()
             titles.append(title)
-            if outcome:
-                goals.append(f"Goal: {outcome}")
+            goals.append(_joined_goal(outcome))
         states: List[str] = []
         for cl in cls:
             states += [k.state for k in cl.kids] if cl.kids else [cl.state]
@@ -1120,20 +1230,25 @@ class Card:
         head = _title_line(
             _joined_title(titles), _count_tail(running, states), lost,
         )
-        blocks: List[List[str]] = [goals]
+        blocks: List[List[str]] = []  # no Goal lines on top: each sits in its own section
         started: List[float] = []
         ended: List[float] = []
         calls = 0
-        for cl, title in zip(cls, titles):
+        for cl, title, goal in zip(cls, titles, goals):
             if cl.kids:
                 if len(cl.kids) > COMPACT_OVER:
-                    blocks += _compact_kids(cl.kids, now, tool_cap)
+                    part_blocks = _compact_kids(cl.kids, now, tool_cap)
                 else:
-                    blocks += _full_kids(cl.kids, now, summary_chars, tool_cap)
+                    part_blocks = _full_kids(cl.kids, now, summary_chars, tool_cap)
                 subs = list(cl.kids)
             else:
-                blocks.append(_section_block(title, cl, now, summary_chars, tool_cap))
+                part_blocks = [_section_block(title, cl, now, summary_chars, tool_cap)]
                 subs = [cl]
+            if goal and part_blocks and part_blocks[0]:
+                # the part's goal: first line under its FIRST section's name
+                first = part_blocks[0]
+                part_blocks[0] = first[:1] + _indent([goal]) + first[1:]
+            blocks += part_blocks
             for s in subs:
                 calls += s.calls
                 if s.started is not None:
@@ -1145,7 +1260,7 @@ class Card:
             foot.append(_calls(calls))
         if started:
             end = max(ended) if not running and ended else now
-            foot.append(_duration(max(0.0, end - min(started))))
+            foot.append(_elapsed(max(0.0, end - min(started))))
         blocks.append([_italic(" \u00b7 ".join(foot))])
         body = "\n".join([head] + [f"> {q}" for q in _join_blocks(blocks)])
         say = self.say_text()

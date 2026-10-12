@@ -54,7 +54,7 @@ def test_running_card_shape():
         "",
         "\U0001f500 **fixing the bugs**",
         "> Goal: test build + PR \u00b7 ~10\u201325 min",
-        "> Sonnet 5.5 \u00b7 14 calls \u00b7 6m12s",
+        "> Sonnet 5.5 \u00b7 \U0001f6e0 14 calls \u00b7 \u23f1 6m12s",
         f"> {SPACER}",
         "> \u2713 find",
         "> \u25b8 fix",
@@ -94,7 +94,7 @@ def test_done_flips_header_drops_eta_and_swaps_tool_line_for_summary():
     lines = card.render().splitlines()
     assert lines[2] == "\U0001f500 **fixing the bugs** \u00b7 done"
     assert lines[3] == "> Goal: test build + PR", "the ETA goes away"
-    assert lines[4] == "> Sonnet 5.5 \u00b7 31 calls \u00b7 14m"
+    assert lines[4] == "> Sonnet 5.5 \u00b7 \U0001f6e0 31 calls \u00b7 \u23f1 14m"
     assert lines[6:9] == ["> \u2713 find", "> \u2713 fix", "> \u2713 test"]
     assert lines[-1] == "> The fix is in and tests pass."
     assert "now:" not in card.render() and "before:" not in card.render(), "no live tool line once finished"
@@ -155,7 +155,7 @@ def test_activity_events_update_calls_doing_and_model():
     assert cl.calls == 3 and cl.model == "Opus 5.5"
     ac.on_child_event("subagent.tool_done", delegation_id="d1", tool_name="read_file", tool_count=4)
     assert cl.calls == 4
-    assert "Opus 5.5 \u00b7 4 calls" in card.render()
+    assert "Opus 5.5 \u00b7 \U0001f6e0 4 calls" in card.render()
 
 
 def test_one_tool_call_is_singular():
@@ -400,7 +400,7 @@ def test_tool_lines_come_after_the_steps_and_a_spacer_and_stats_sit_under_the_go
     lines = card.render().splitlines()
     assert lines[-3:] == [f"> {SPACER}", "> *now: read_file a.py*", "> *before: ls*"]
     assert lines[1] == "> Goal: test build + PR \u00b7 ~10\u201325 min"
-    assert lines[2] == "> 2 calls \u00b7 0s"
+    assert lines[2] == "> \U0001f6e0 2 calls \u00b7 \u23f1 0s"
 
 
 def test_tool_done_pairs_by_call_id_before_name():
@@ -499,16 +499,16 @@ def test_multi_card_shape_while_running():
         "on it", "", "\U0001f500 **checking the 3 sites** \u00b7 1 of 3 done",
         "> Goal: outcome \u00b7 ~5 min", f"> {SPACER}",
     ]
-    assert "> **nice & tidy site** \u00b7 done \u00b7 Sonnet 5.5 \u00b7 9 calls \u00b7 1m40s" in lines
+    assert "> \u25a0 **nice & tidy site** \u00b7 done \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 9 calls \u00b7 \u23f1 1m40s" in lines
     assert "> All pages load and the quote form works." in lines
-    assert "> **silas studios site** \u00b7 Sonnet 5.5 \u00b7 4 calls \u00b7 1m12s" in lines
+    assert "> \u25a0 **silas studios site** \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 4 calls \u00b7 \u23f1 1m12s" in lines
     assert "> *now: web_search silas studios booking*" in lines
     assert "> *before: read_file contact*" in lines
     assert lines.index("> *now: web_search silas studios booking*") < lines.index(
         "> *before: read_file contact*")
-    assert "> **Check the pizzeria bros pamphlet** \u00b7 waiting" in lines
+    assert "> \u25a0 **Check the pizzeria bros pamphlet** \u00b7 waiting" in lines
     assert "waiting to start" not in "\n".join(lines)
-    assert lines[-1].startswith("> *3 subagents \u00b7 13 calls \u00b7 ")
+    assert lines[-1].startswith("> *3 subagents \u00b7 \U0001f6e0 13 calls \u00b7 ")
     assert lines[-2] == f"> {SPACER}"
     assert "ignored" not in _flat(card.render())
 
@@ -582,8 +582,8 @@ def test_multi_finished_all_ok_drops_the_count_and_the_eta():
     lines = _flat(card.render()).splitlines()
     assert lines[2] == "\U0001f500 **checking the 3 sites** \u00b7 done"
     assert lines[3] == "> Goal: outcome", "the ETA goes away"
-    assert [ln.split(" \u00b7 ")[0] for ln in lines if ln.startswith("> **") and " \u00b7 done" in ln] == [
-        "> **nice & tidy site**", "> **silas studios site**", "> **Check the pizzeria bros pamphlet**",
+    assert [ln.split(" \u00b7 ")[0] for ln in lines if ln.startswith("> \u25a0 **") and " \u00b7 done" in ln] == [
+        "> \u25a0 **nice & tidy site**", "> \u25a0 **silas studios site**", "> \u25a0 **Check the pizzeria bros pamphlet**",
     ]
     assert "> Booking works." in lines and "> Pamphlet is fine." in lines
     assert _tool_lines(_flat(card.render())) == []
@@ -600,7 +600,7 @@ def test_multi_finished_with_one_failed_and_one_stopped_is_failed_and_shows_the_
     lines = _flat(card.render()).splitlines()
     assert lines[0] == "\U0001f342 **checking the 3 sites** \u00b7 1 of 3 done \u00b7 1 failed \u00b7 1 stopped"
     heads = [ln for ln in lines if ln.startswith("> ") and "**" in ln]
-    assert heads == ["> **a** \u00b7 done", "> \U0001f342 **b** \u00b7 failed", "> **c** \u00b7 stopped"]
+    assert heads == ["> \u25a0 **a** \u00b7 done", "> \U0001f342 **b** \u00b7 failed", "> \u25a0 **c** \u00b7 stopped"]
     assert "> Site is down." in lines
 
 
@@ -630,7 +630,7 @@ def test_multi_footer_totals_and_a_summary_cut_on_a_word():
     ac.on_child_event("subagent.complete", status="completed", summary=long, **_kid("dm", 0))
     cl.kids[0].started -= 50; cl.kids[1].started = cl.kids[0].started + 10
     lines = _flat(card.render()).splitlines()
-    assert "> *2 subagents \u00b7 12 calls \u00b7 " in "\n".join(lines)
+    assert "> *2 subagents \u00b7 \U0001f6e0 12 calls \u00b7 " in "\n".join(lines)
     summary = next(ln for ln in lines if ln.startswith("> word"))
     assert len(summary) <= 142 and summary.endswith("\u2026") and not summary.endswith(" \u2026")
 
@@ -642,7 +642,7 @@ def test_multi_complete_before_the_part_exists_is_replayed_per_child():
     card = _multi_card(goals=("g1", "g2"))
     lines = _flat(card.render()).splitlines()
     assert any(ln.startswith("> \U0001f342 **second** \u00b7 failed") for ln in lines) and "> Nope." in lines
-    assert "> **g1** \u00b7 waiting" in lines
+    assert "> \u25a0 **g1** \u00b7 waiting" in lines
 
 
 def test_multi_activity_before_the_part_exists_is_still_dropped():
@@ -674,7 +674,7 @@ def test_classic_multi_dispatch_is_still_the_plain_line():
 
 def _no_emoji(text):
     """True when no character is an emoji, except the title's \U0001f500 (the card uses plain marks)."""
-    return not any(ord(ch) >= 0x1F000 or ch in "\u2b1c\u23f9\u23f1" for ch in text.replace("\U0001f500 **", "**"))
+    return not any(ord(ch) >= 0x1F000 or ch in "\u2b1c\u23f9" for ch in text.replace("\U0001f500 **", "**").replace("\U0001f6e0", "").replace("\u23f1", ""))
 
 
 def test_seven_helper_card_is_compact_and_under_the_telegram_limit():
@@ -693,7 +693,7 @@ def test_seven_helper_card_is_compact_and_under_the_telegram_limit():
     # more than 6 helpers: a finished helper is ONE line, no stats, no emoji
     rows = [ln for ln in text.splitlines() if "**Check site number" in ln]
     assert len(rows) == 7 and all(len(r) < 90 and r.endswith("\u2026") for r in rows)
-    assert all(r.startswith("> **Check site number") and " \u00b7 done \u00b7 " in r for r in rows)
+    assert all(r.startswith("> \u25a0 **Check site number") and " \u00b7 done \u00b7 " in r for r in rows)
     assert text.count(" calls") == 1, "only the totals line has stats"
     assert _no_emoji(text)
 
@@ -747,7 +747,11 @@ def test_two_parts_of_one_card_render_as_one_joined_card():
     card = ac.card_for([r1, r2])
     text = card.render()
     assert text.splitlines()[0].startswith("\U0001f500 **fixing the bugs, fixing the bugs** \u00b7 0 of 2 done")
-    assert text.count("\n> Goal: ") == 2 and "\n\n" not in text
+    assert text.count("Goal: ") == 2 and "\n\n" not in text
+    # the goals sit inside their sections, never as lines at the top
+    lines = text.splitlines()
+    assert not any(ln.startswith("> Goal: ") for ln in lines)
+    assert lines[1] == "> \u25a0 **fixing the bugs**" and lines[2] == "> \u2003\u2003Goal: test build + PR"
 
 
 # -- the helper's own todo bookkeeping is not a tool line ----------------------
@@ -913,14 +917,14 @@ def test_many_helpers_use_the_compact_layout():
     lines = _flat(card.render()).splitlines()
     text = "\n".join(lines)
     # done helpers: one line each (`**Name** · done · result`), no stats, no emoji
-    done = [ln for ln in lines if ln.startswith("> **") and " \u00b7 done \u00b7 " in ln]
+    done = [ln for ln in lines if ln.startswith("> \u25a0 **") and " \u00b7 done \u00b7 " in ln]
     assert len(done) == 2 and all(len(ln) < 90 for ln in done)
-    assert done[0].startswith("> **alpha site** \u00b7 done \u00b7 alpha site is fine")
+    assert done[0].startswith("> \u25a0 **alpha site** \u00b7 done \u00b7 alpha site is fine")
     for nm in NAMES[:2]:
         i = next(j for j, ln in enumerate(lines) if f"**{nm}**" in ln)
         assert "Sonnet" not in lines[i] and "calls" not in lines[i]
     # at most 3 running helpers in full: name + stats, then at most 2 tool lines
-    full = [ln for ln in lines if ln.startswith("> **") and "Sonnet 5.5" in ln and "done" not in ln]
+    full = [ln for ln in lines if ln.startswith("> \u25a0 **") and "Sonnet 5.5" in ln and "done" not in ln]
     assert len(full) == 3
     for ln in full:
         i = lines.index(ln)
@@ -1075,7 +1079,7 @@ def test_the_failure_emoji_appears_only_on_a_failed_or_stopped_title_and_a_faile
     ac.on_child_event("subagent.complete", status="failed", summary="Plain summary: broke.", **_kid("dm", 1))
     lines = multi.render().splitlines()
     assert lines[0].startswith("\U0001f342 **") and "> \U0001f342 **b** \u00b7 failed" in lines
-    assert "> **a** \u00b7 done" in lines and sum(ln.count("\U0001f342") for ln in lines) == 2
+    assert "> \u25a0 **a** \u00b7 done" in lines and sum(ln.count("\U0001f342") for ln in lines) == 2
     assert _no_emoji(_clean_chars(multi.render()))
 
 
@@ -1098,9 +1102,9 @@ def test_a_subagent_header_has_the_model_calls_and_time_and_the_status_word():
     cl.kids[0].started -= 100; cl.kids[0].ended = cl.kids[0].started + 100
     cl.kids[1].started -= 72
     lines = _flat(card.render()).splitlines()
-    assert "> **nice & tidy site** \u00b7 done \u00b7 Sonnet 5.5 \u00b7 9 calls \u00b7 1m40s" in lines
-    assert "> **silas studios site** \u00b7 Sonnet 5.5 \u00b7 4 calls \u00b7 1m12s" in lines, "running: no status word"
-    assert "> **Check the pizzeria bros pamphlet** \u00b7 waiting" in lines, "waiting: no stats"
+    assert "> \u25a0 **nice & tidy site** \u00b7 done \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 9 calls \u00b7 \u23f1 1m40s" in lines
+    assert "> \u25a0 **silas studios site** \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 4 calls \u00b7 \u23f1 1m12s" in lines, "running: no status word"
+    assert "> \u25a0 **Check the pizzeria bros pamphlet** \u00b7 waiting" in lines, "waiting: no stats"
 
 
 def test_one_call_is_singular_in_a_subagent_header_and_the_footer():
@@ -1109,7 +1113,7 @@ def test_one_call_is_singular_in_a_subagent_header_and_the_footer():
     ac.on_child_event("subagent.tool", tool_name="terminal", preview="ls", args={"command": "ls"}, tool_count=1,
                       **_kid("dm", 0))
     text = card.render()
-    assert "1 call \u00b7" in text and "1 calls" not in text and "*2 subagents \u00b7 1 call \u00b7" in text
+    assert "\U0001f6e0 1 call \u00b7" in text and "1 calls" not in text and "*2 subagents \u00b7 \U0001f6e0 1 call \u00b7" in text
 
 
 def test_step_marks_are_plain_characters():
@@ -1184,7 +1188,7 @@ def test_the_single_card_reads_title_hint_goal_stats_steps_tools():
     assert text[2:] == [
         "\U0001f500 **fixing the bugs**",
         "> Goal: test build + PR \u00b7 ~10\u201325 min",
-        "> Sonnet 5.5 \u00b7 15 calls \u00b7 35s",
+        "> Sonnet 5.5 \u00b7 \U0001f6e0 15 calls \u00b7 \u23f1 35s",
         f"> {SPACER}",
         "> \u2713 find", "> \u25b8 fix", "> \u25cb test",
         f"> {SPACER}",
@@ -1262,7 +1266,82 @@ def test_compaction_starts_above_six_with_plain_one_liners_and_grouped_waiting()
     for i in (2, 3):
         ac.on_child_event("subagent.start", **kw(i, model="claude-sonnet-5-5", title=f"job {i}"))
     lines = _flat(card.render()).splitlines()
-    assert "> **job 0** \u00b7 done \u00b7 all good here" in lines
+    assert "> \u25a0 **job 0** \u00b7 done \u00b7 all good here" in lines
     assert "> \U0001f342 **job 1** \u00b7 failed \u00b7 it broke" in lines
     assert "> waiting: job 4, job 5, job 6, job 7, job 8" in lines
     assert not any(ln.startswith("> \u2b1c") or "\U0001f504" in ln for ln in lines)
+
+
+# -- section marker, shell-command cleanup and joined-card goals --------------
+
+
+def test_each_subagent_name_of_a_multi_card_leads_with_the_section_mark_but_a_single_card_does_not():
+    multi = _live_multi()
+    names = [ln for ln in multi.render().splitlines() if "**" in ln and "\u00b7" in ln and ln.startswith("> ")]
+    assert names and all(ln.startswith("> \u25a0 **") or ln.startswith("> \U0001f342 **") for ln in names)
+    single = _running_card().render()
+    assert "\u25a0" not in single
+
+
+def test_a_failed_subagent_keeps_the_failure_mark_instead_of_the_section_mark():
+    card = _multi_card(goals=("a", "b"))
+    ac.on_child_event("subagent.complete", status="failed", summary="Plain summary: broke.", **_kid("dm", 1))
+    lines = card.render().splitlines()
+    assert "> \U0001f342 **b** \u00b7 failed" in lines and not any("\u25a0 **b**" in ln for ln in lines)
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("cd /home/x/agent-job-card && PY=/home/x/venv/bin/python; $PY -m pytest -q", "$PY -m pytest -q"),
+    ("cd /a/b; FOO=1 BAR='x y' pytest tests -q", "pytest tests -q"),
+    ("cd /a && cd /b && ls -la", "ls -la"),
+    ("FOO=1 BAZ=2 make test", "make test"),
+    ("git status", "git status"),
+    ("sleep 60; for i in $(seq 1 14); do echo $i; done", "sleep 60; for i in $(seq 1 14); do echo $i; done"),
+    ("cd /a/b", "cd"),
+    ("FOO=1", "FOO=1"),
+    ("cd /a &&", "cd"),
+])
+def test_shell_commands_lose_a_leading_cd_and_env_assignments(command, expected):
+    assert ac.simplify_shell_command(command) == expected
+
+
+def test_a_terminal_tool_line_shows_the_command_without_cd_and_env_noise():
+    card = _running_card()
+    ac.on_child_event(
+        "subagent.tool", delegation_id="d1", tool_name="terminal", tool_call_id="t9", tool_count=15,
+        args={"command": "cd /home/starboy/Projects/x/agent-job-card && PY=/home/starboy/venv/bin/python; pytest -q"},
+    )
+    text = card.render()
+    assert "*now: pytest -q*" in text and "agent-job-card" not in text and "PY=" not in text
+
+
+def test_a_joined_card_has_no_goal_lines_on_top_and_each_goal_sits_in_its_section():
+    long_goal = "outside workers show in the same card as the subagents, always"
+    r1 = fl.DispatchReceipt(delegation_id="a", seq=1, goals=("g",), summary=HEAD, steps=("one",))
+    head2 = "\U0001f504 second job \u2192 " + long_goal + ", ~5 min"
+    r2 = fl.DispatchReceipt(delegation_id="b", seq=2, goals=("g",), summary=head2, steps=("two",))
+    card = ac.card_for([r1, r2])
+    lines = card.render().splitlines()
+    assert lines[1] != "> Goal: test build + PR" and not any(ln.startswith("> Goal:") for ln in lines)
+    i = lines.index("> \u25a0 **fixing the bugs**")
+    assert lines[i + 1] == "> \u2003\u2003Goal: test build + PR"
+    j = lines.index("> \u25a0 **second job**")
+    goal = lines[j + 1].split("Goal: ", 1)[1]
+    assert goal.endswith("\u2026") and len(goal) <= ac.JOINED_GOAL_CHARS and "~5 min" not in goal
+
+
+def test_a_goal_of_a_part_with_several_subagents_goes_under_its_first_section_only():
+    r1 = fl.DispatchReceipt(delegation_id="a", seq=1, goals=("g",), summary=HEAD, steps=("one",))
+    r2 = fl.DispatchReceipt(delegation_id="b", seq=2, goals=("x", "y"), summary=MHEAD)
+    card = ac.card_for([r1, r2])
+    text = card.render()
+    assert text.count("Goal: ") == 2
+    lines = text.splitlines()
+    first_kid = next(i for i, ln in enumerate(lines) if ln.startswith("> \u25a0 **subagent 1**") or "\u25a0 **" in ln and i > 3)
+    assert any("Goal: " in ln for ln in lines[first_kid:first_kid + 2])
+
+
+def test_a_single_part_card_keeps_its_goal_line_with_the_eta_on_top():
+    card = _multi_card(goals=("a", "b"))
+    lines = card.render().splitlines()
+    assert lines[1].startswith("> Goal: ") and "~" in lines[1]

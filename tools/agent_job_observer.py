@@ -82,9 +82,15 @@ class AgentJobObserver:
         model: str = "",
         parser: str = "none",
         clock: Callable[[], float] = time.monotonic,
+        card_id: str = "",
     ) -> None:
         self.session_id = session_id
         self.group_id = group_id
+        # Set when the job lives on the unified subagent card: its own
+        # delegation id (the card part's key), instead of the shared group.
+        self.card_id = card_id
+        self._tool_ids: set = set()
+        self._tool_count = 0
         self.index = index
         self.title = title
         self.model = model
@@ -117,8 +123,15 @@ class AgentJobObserver:
 
     def _emit(self, event_type: str, tool_name: Any = None, preview: Any = None,
               args: Any = None, **kw: Any) -> None:
+        if event_type == "subagent.tool":
+            with self._lock:
+                call_id = kw.get("tool_call_id")
+                if not call_id or call_id not in self._tool_ids:
+                    if call_id:
+                        self._tool_ids.add(call_id)
+                    self._tool_count += 1
         kw.update(
-            delegation_id=self.group_id,
+            delegation_id=self.card_id or self.group_id,
             subagent_id=self.session_id,
             task_index=self.index,
             title=self.title,
@@ -127,6 +140,17 @@ class AgentJobObserver:
         )
         if self.model:
             kw["model"] = self.model
+        if self.card_id:
+            # The unified subagent card shows this job: feed its part (the
+            # sink then posts no separate 🔀 card for the id).
+            kw["tool_count"] = self._tool_count
+            try:
+                from agent.ack_checklist import on_child_event
+
+                on_child_event(event_type, **{**kw, "tool_name": tool_name,
+                                              "preview": preview, "args": args})
+            except Exception:
+                logger.debug("agent job %s: card update failed", self.session_id, exc_info=True)
         try:
             self._sink.observe(event_type, tool_name, preview, args, **kw)
         except Exception:
@@ -392,6 +416,17 @@ def register_agent_job(session: Any, spec: Dict[str, str], *, sink: Any = None) 
             "(delegation activity is off here or this is not a gateway chat)",
         }
     group_id, index = sink.external_job_identity()
+    card_id = ""
+    opener = getattr(sink, "open_external_job_card", None)
+    if callable(opener):
+        # Unified card style: the job joins the chat's running card or gets
+        # its own (nothing happens under the classic style).
+        try:
+            card_id = opener(
+                f"{group_id}.{index}", spec["title"], spec.get("parser", "none") == "none",
+            ) or ""
+        except Exception:
+            logger.debug("agent job card open failed", exc_info=True)
     observer = AgentJobObserver(
         session_id=session.id,
         sink=sink,
@@ -400,6 +435,7 @@ def register_agent_job(session: Any, spec: Dict[str, str], *, sink: Any = None) 
         title=spec["title"],
         model=spec.get("model", ""),
         parser=spec.get("parser", "none"),
+        card_id=card_id,
     )
     with session._lock:
         session.agent_job = observer

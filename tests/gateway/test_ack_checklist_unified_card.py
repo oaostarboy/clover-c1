@@ -218,7 +218,7 @@ async def test_the_tick_refreshes_the_running_clock_with_an_edit(monkeypatch):
     await asyncio.sleep(0.3)
     await _settle(editor)
     assert adapter.edits, "the clock was refreshed with no other change"
-    assert "Opus 5.5 \u00b7 3" in adapter.edits[-1]["text"], "the clock moved on"
+    assert "Opus 5.5 \u00b7 \u23f1 30s" in adapter.edits[-1]["text"], "the clock moved on"
     assert len(adapter.sends) == 1, "an edit, never a new message"
 
 
