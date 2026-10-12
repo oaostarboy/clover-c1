@@ -300,7 +300,7 @@ class Checklist:
         if self.state == RUNNING:
             tail += _tool_lines(self, RECENT_TOOLS_SINGLE)
         elif self.summary:
-            tail.append(self.summary.replace("*", ""))
+            tail.append(no_command_links(self.summary.replace("*", "")))
         stats = _stats_line(self.model, self.calls, self.started, self.ended, now)
         if stats:
             tail.append(_italic(stats))
@@ -407,7 +407,7 @@ def _full_kids(kids: Sequence[Child], now: float, summary_chars: int, tool_cap: 
         if k.state == RUNNING:
             quoted += _tool_lines(k, tool_cap)
         elif k.summary and summary_chars > 0:
-            quoted.append(_cut_word(k.summary.replace("*", ""), summary_chars))
+            quoted.append(no_command_links(_cut_word(k.summary.replace("*", ""), summary_chars)))
         stats = _stats_line(k.model, k.calls, k.started, k.ended, now)
         if stats:
             quoted.append(_italic(stats))
@@ -444,7 +444,9 @@ def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[str]
         else:
             line = f"{_CHILD_ICON[k.state]} **{k.label}**"
             if k.summary:
-                line += " \u00b7 " + _cut_word(k.summary.replace("*", ""), COMPACT_RESULT_CHARS)
+                line += " \u00b7 " + no_command_links(
+                    _cut_word(k.summary.replace("*", ""), COMPACT_RESULT_CHARS)
+                )
             quoted.append(line)
     if extra_running:
         quoted.append(f"{ACTIVE_ICON} {len(extra_running)} more running: {_names(extra_running)}")
@@ -455,9 +457,10 @@ def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[str]
 
 def _tool_lines(obj: Any, cap: int) -> List[str]:
     """The helper's open tool(s) then its last finished ones, newest first."""
-    lines = [f"\U0001f527 {_italic(phrase)}" for _, _, phrase in reversed(obj.open)]
+    lines = [f"\U0001f527 {_italic(no_command_links(phrase))}" for _, _, phrase in reversed(obj.open)]
     lines += [
-        f"{_TOOL_OK if ok else _TOOL_ERR} {_italic(phrase)}" for phrase, ok in reversed(obj.recent)
+        f"{_TOOL_OK if ok else _TOOL_ERR} {_italic(no_command_links(phrase))}"
+        for phrase, ok in reversed(obj.recent)
     ]
     return [ln for ln in lines if _italic("x") and ln.strip()][:cap]
 
@@ -770,13 +773,27 @@ _HOME_RE = re.compile(r"(?:/home/[^/\s]+|/Users/[^/\s]+)(?=/|\s|$)")
 _PATH_TOKEN_RE = re.compile(r"[~\w.\-]*(?:/[\w.\-@+]+){2,}/?")
 
 
+# Telegram turns "/word" at a word start into a tappable bot command.  A tool
+# line must never contain one: a long path is cut to "\u2026 claude-code/docs"
+# (no slash right after the ellipsis); any other "/name" gets an invisible
+# WORD JOINER after the slash.
+_WORD_JOINER = "\u2060"
+_COMMAND_LIKE_RE = re.compile(r"(?<![\w/])/(?=[A-Za-z0-9_])")
+
+
+def no_command_links(text: Any) -> str:
+    """``text`` with no token that starts with ``/`` and a letter."""
+    out = str(text or "").replace("\u2026/", "\u2026 ")
+    return _COMMAND_LIKE_RE.sub("/" + _WORD_JOINER, out)
+
+
 def _short_path(match: "re.Match[str]") -> str:
     tok = match.group(0)
     if len(tok) <= 20:
         return tok
     parts = [p for p in tok.split("/") if p]
     for keep in (2, 1):
-        short = "\u2026/" + "/".join(parts[-keep:])
+        short = "\u2026 " + "/".join(parts[-keep:])  # no "/" after the "\u2026": see below
         if len(short) <= 22 or keep == 1:
             return short
     return tok
@@ -798,8 +815,8 @@ def short_tool_phrase(phrase: str, limit: int = TOOL_LINE_MAX) -> str:
             words.pop()
         text = " ".join(words)
     if len(text) <= limit:
-        return text + ("\u2026" if cut_upstream else "")
-    return _cut_word(text, limit)
+        return no_command_links(text + ("\u2026" if cut_upstream else ""))
+    return no_command_links(_cut_word(text, limit))
 
 
 def _tool_started(obj: Any, kw: Dict[str, Any]) -> None:
@@ -897,14 +914,19 @@ class Card:
     def __init__(self, parts: List[Part]) -> None:
         self.parts = parts
         self.created = time.monotonic()
-        self.initial_text = self.render()
+        # True when the turn's reply is the opener line ALONE and the gateway
+        # sends the card as its own message under it (see router_backstop).
+        self.split_opener = False
+        self.initial_text = self.render(include_say=True)
         self.target: Any = None  # set by the gateway: where the message is
         self.on_change: Any = None  # set by the gateway: schedule an edit
 
-    def render(self, include_say: bool = True) -> str:
-        """The whole message.  ``include_say=False`` leaves out the root's own
-        opener line(s): the card alone, for the message that follows the
-        bottom of the chat while the opener stays where it was sent."""
+    def render(self, include_say: Optional[bool] = None) -> str:
+        """The card message.  When the opener is its own message
+        (``split_opener``) the card never contains it; otherwise the opener
+        line leads the text (``include_say`` overrides)."""
+        if include_say is None:
+            include_say = not self.split_opener
         with _LOCK:
             # Unified cards are multi-line blocks: keep two on one message apart.
             sep = "\n\n" if unified() else "\n"
@@ -989,6 +1011,29 @@ def match_unbound(content: Any) -> Optional[Card]:
             base = card.initial_text
             # Delivery may add a cursor or a footer; the card text is the bulk.
             if base in text and len(text) - len(base) <= 160:
+                return card
+    return None
+
+
+_OPENER_TAIL_MAX = 8  # a streaming cursor / space after the opener, nothing more
+
+
+def match_unbound_opener(content: Any) -> Optional[Card]:
+    """The newest unplaced card whose opener line IS ``content`` (a cursor or
+    trailing space tolerated).  Exact on purpose: an opener such as "on it" must
+    never claim some later reply that merely contains those words."""
+    text = str(content or "").strip()
+    if not text:
+        return None
+    now = time.monotonic()
+    with _LOCK:
+        for card in reversed(_CARDS):
+            if card.target is not None or now - card.created > BIND_WINDOW_SECONDS:
+                continue
+            if not card.split_opener:
+                continue
+            say = card.say_text()
+            if say and text.startswith(say) and len(text) - len(say) <= _OPENER_TAIL_MAX:
                 return card
     return None
 

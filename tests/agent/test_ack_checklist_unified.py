@@ -810,14 +810,14 @@ def test_a_long_command_with_an_absolute_path_is_one_short_line():
                       args={"command": long_cmd}, tool_call_id="a", tool_count=1)
     line = next(ln for ln in card.render().splitlines() if "terminal" in ln)
     assert "/home/starboy" not in line and "Projects" not in line
-    assert "\u2026/claude-code" in line
+    assert "\u2026 claude-code" in line and "\u2026/" not in line
     assert len(line.removeprefix("> ").strip("*")) <= ac.TOOL_LINE_MAX + 3
 
 
 @pytest.mark.parametrize("raw,expect", [
     ("terminal cd /home/starboy && ls", "terminal cd ~ && ls"),
     ("terminal pytest -q", "terminal pytest -q"),
-    ("read_file /home/starboy/Projects/clover/agent/ack_checklist.py", "read_file \u2026/ack_checklist.py"),
+    ("read_file /home/starboy/Projects/clover/agent/ack_checklist.py", "read_file \u2026 ack_checklist.py"),
 ])
 def test_short_tool_phrase(raw, expect):
     assert ac.short_tool_phrase(raw) == expect
@@ -926,3 +926,93 @@ def test_many_waiting_names_are_cut_with_an_ellipsis():
     card = ac.card_for([r])
     line = next(ln for ln in card.render().splitlines() if "waiting:" in ln)
     assert line.startswith("> \u2b1c 12 waiting: ") and line.endswith("\u2026")
+
+
+# -- no Telegram /command links in any rendered tool line ----------------------
+
+_CMD = __import__("re").compile(r"(?<![\w/])/[A-Za-z]")
+
+
+@pytest.mark.parametrize("cmd", [
+    "du -s -B1 /home/starboy/Projects/claude-code-build/claude-code/clover_c1.egg-info /x/acp_adapter",
+    "ls /clover",
+    "cat /etc/hosts /var/log/syslog",
+    "git -C /home/starboy/Projects/claude-code-build/claude-code rev-parse",
+    "rg foo /tmp/x/y/z/clover_c1.eg",
+])
+def test_no_slash_word_token_in_any_tool_line(cmd):
+    assert not _CMD.search(ac.short_tool_phrase(cmd)), ac.short_tool_phrase(cmd)
+    card = _card()
+    ac.on_child_event("subagent.start", delegation_id="d1")
+    ac.on_child_event("subagent.tool", delegation_id="d1", tool_name="terminal", preview=cmd,
+                      args={"command": cmd}, tool_call_id="a", tool_count=1)
+    shown = card.render()
+    assert not _CMD.search(shown), shown
+    ac.on_child_event("subagent.tool_done", delegation_id="d1", tool_name="terminal", tool_call_id="a")
+    assert not _CMD.search(card.render())
+
+
+def test_multi_helper_tool_lines_have_no_command_links():
+    r = fl.DispatchReceipt(delegation_id="dm", seq=1, goals=("a", "b"), summary=HEAD, steps=())
+    card = ac.card_for([r])
+    for i in range(2):
+        ac.on_child_event("subagent.start", delegation_id="dm", task_index=i, task_count=2)
+        ac.on_child_event("subagent.tool", delegation_id="dm", task_index=i, task_count=2,
+                          tool_name="terminal", preview="ls /clover", args={"command": "ls /clover"},
+                          tool_call_id=f"t{i}", tool_count=1)
+    text = card.render()
+    assert "terminal" in text and not _CMD.search(text), text
+
+
+def test_ellipsis_path_keeps_a_readable_name_without_a_slash_after_it():
+    out = ac.short_tool_phrase("read_file /home/starboy/Projects/clover/agent/ack_checklist.py")
+    assert out == "read_file \u2026 ack_checklist.py"
+
+
+# -- the opener is the turn's own reply; the card is a second message ----------
+
+def test_ack_text_on_a_chat_platform_is_the_opener_alone():
+    from types import SimpleNamespace
+
+    from agent import router_backstop as rb
+
+    r = fl.DispatchReceipt(delegation_id="dx", seq=1, goals=("g",), summary=HEAD, steps=STEPS,
+                           say="on it, sorting it out.")
+    text = rb._ack_text([r], SimpleNamespace(platform="telegram"))
+    assert text == "on it, sorting it out."
+    card = ac.card_for([r])
+    assert card.split_opener is True
+    assert "on it" not in card.render() and card.render().startswith("\U0001f340 **fixing the bugs**")
+    assert ac.match_unbound_opener(text) is card and ac.match_unbound(text) is None
+
+
+def test_ack_text_without_agent_or_on_the_cli_keeps_the_whole_text():
+    from types import SimpleNamespace
+
+    from agent import router_backstop as rb
+
+    r = fl.DispatchReceipt(delegation_id="dy", seq=1, goals=("g",), summary=HEAD, steps=STEPS, say="got it")
+    assert rb._ack_text([r]).startswith("got it\n\n\U0001f340 **fixing the bugs**")
+    r2 = fl.DispatchReceipt(delegation_id="dz", seq=1, goals=("g",), summary=HEAD, steps=STEPS, say="got it")
+    assert rb._ack_text([r2], SimpleNamespace(platform="cli")).startswith("got it\n\n")
+
+
+def test_ack_text_without_an_opener_stays_the_card_text():
+    from types import SimpleNamespace
+
+    from agent import router_backstop as rb
+
+    r = fl.DispatchReceipt(delegation_id="dq", seq=1, goals=("g",), summary=HEAD, steps=STEPS, say="")
+    text = rb._ack_text([r], SimpleNamespace(platform="telegram"))
+    assert text.startswith("\U0001f340 **fixing the bugs**") and ac.card_for([r]).split_opener is False
+
+
+def test_classic_style_ack_text_is_unchanged_on_a_chat_platform():
+    from types import SimpleNamespace
+
+    from agent import router_backstop as rb
+
+    ac.set_style_for_tests("classic")
+    r = fl.DispatchReceipt(delegation_id="dc", seq=1, goals=("g",), summary=HEAD, steps=STEPS, say="got it")
+    text = rb._ack_text([r], SimpleNamespace(platform="telegram"))
+    assert text.startswith("got it\n\n") and ac.card_for([r]).split_opener is False

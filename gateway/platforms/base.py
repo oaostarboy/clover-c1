@@ -3389,11 +3389,15 @@ class BasePlatformAdapter(ABC):
                     # message it just became to its card (no-op for any other text).
                     from gateway.delegation_activity import bind_ack_card
 
-                    bind_ack_card(
+                    pending = bind_ack_card(
                         self, chat_id,
                         args[1] if len(args) > 1 else kw.get("content"),
                         result, kw.get("metadata"),
                     )
+                    if pending is not None:
+                        # The opener line went out as its own message: the
+                        # card follows as a second one, before send() returns.
+                        await pending
             except Exception:
                 pass
             return result

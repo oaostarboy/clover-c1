@@ -408,3 +408,100 @@ async def test_a_roster_card_already_posted_is_removed_once_the_delegation_is_ow
     assert adapter.sends == [], "no summary message for an owned delegation"
     assert len(adapter.status_calls) == len(posted), "nothing more was posted for it"
     await pub.aclose()
+
+
+# -- Telegram: bold title on top, the rest in a collapsed expandable quote ----
+
+SAY = "on it, sorting it out."
+
+
+def _tg_adapter():
+    from types import SimpleNamespace
+
+    a = _Adapter()
+    a.platform = SimpleNamespace(value="telegram")
+    return a
+
+
+def _say_card(did=OWNED):
+    r = fl.DispatchReceipt(delegation_id=did, seq=1, goals=("g",), summary=HEAD, steps=STEPS, say=SAY)
+    card = ac.card_for([r])
+    card.split_opener = True  # the opener is its own message
+    return card
+
+
+def _editor(adapter, card):
+    return da.AckCardEditor(card, adapter, "chat", "m1", asyncio.new_event_loop(), min_interval=0.0)
+
+
+def test_telegram_card_is_title_plus_collapsed_quote_with_the_live_hint():
+    card = _say_card()
+    text = _editor(_tg_adapter(), card)._render()
+    lines = text.splitlines()
+    assert lines[0] == "\U0001f340 **fixing the bugs**", "bold title stays visible on top"
+    assert lines[1] == f"**> _{da.TAP_HINT_LIVE}_" and da.TAP_HINT_LIVE == "tap to watch \U0001f340"
+    assert lines[2:4] == ["> \u2800", "> \u2800"], "the 3-line cut lands on empty space"
+    assert text.endswith("||") and text.count("||") == 1
+    assert "> \U0001f504 find" in text and "> *\u2192 test build + PR" in text
+
+
+def test_telegram_finished_card_says_tap_to_read():
+    card = _say_card()
+    ac.on_child_event("subagent.start", delegation_id=OWNED, model="m")
+    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed",
+                      summary="Result: done\nPlain summary: All fixed.")
+    text = _editor(_tg_adapter(), card)._render()
+    lines = text.splitlines()
+    assert lines[0] == "\U0001f340 **fixing the bugs**"
+    assert lines[1] == f"**> _{da.TAP_HINT_DONE}_" and da.TAP_HINT_DONE == "tap to read \U0001f340"
+    assert "All fixed." in text
+
+
+def test_other_platforms_keep_the_plain_quote():
+    text = _editor(_Adapter(), _say_card())._render()
+    assert "**>" not in text and "||" not in text and "tap to" not in text
+    assert text.splitlines()[0] == "\U0001f340 **fixing the bugs**" and "> \U0001f504 find" in text
+
+
+def test_classic_style_is_not_made_expandable():
+    ac.set_style_for_tests("classic")
+    card = _say_card()
+    text = _editor(_tg_adapter(), card)._render()
+    assert "**>" not in text and text == card.render()
+
+
+def test_multi_helper_title_keeps_k_of_n_done_and_one_quote():
+    r = fl.DispatchReceipt(delegation_id="dm", seq=1, goals=("a", "b", "c"), summary=HEAD, steps=(), say=SAY)
+    card = ac.card_for([r])
+    card.split_opener = True
+    for i in range(3):
+        ac.on_child_event("subagent.start", delegation_id="dm", task_index=i, task_count=3,
+                          title=f"site {i}")
+    ac.on_child_event("subagent.complete", delegation_id="dm", task_index=0, task_count=3, status="completed",
+                      summary="Result: done\nPlain summary: Site 0 is tidy.")
+    text = _editor(_tg_adapter(), card)._render()
+    lines = text.splitlines()
+    assert lines[0].startswith("\U0001f340 **fixing the bugs**") and "1 of 3 done" in lines[0]
+    assert lines[1].startswith("**> _tap to watch") and text.count("**>") == 1 and text.count("||") == 1
+    assert all(ln.startswith("> ") for ln in lines[2:-1] if ln) and lines[-1].endswith("||")
+
+
+def test_format_message_keeps_one_expandable_quote_and_the_bold_title():
+    from plugins.platforms.telegram.adapter import TelegramAdapter
+
+    text = _editor(_tg_adapter(), _say_card())._render()
+    out = TelegramAdapter.format_message(object.__new__(TelegramAdapter), text)
+    assert out.splitlines()[0] == "\U0001f340 *fixing the bugs*"
+    assert out.splitlines()[1] == "**> _tap to watch \U0001f340_"
+    assert out.count("**>") == 1 and out.endswith("||")
+
+
+@pytest.mark.asyncio
+async def test_card_text_sent_under_the_opener_is_the_expandable_one():
+    adapter = _tg_adapter()
+    card = _say_card()
+    card.split_opener = True
+    sent = await adapter.send("chat", card.say_text())
+    await da.bind_ack_card(adapter, "chat", card.say_text(), sent)
+    assert adapter.sends[0] == SAY
+    assert adapter.sends[1].startswith("\U0001f340 **fixing the bugs**\n**> _tap to watch")

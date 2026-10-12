@@ -1336,19 +1336,32 @@ TAP_HINT_LIVE = "tap to watch 🍀"
 TAP_HINT_DONE = "tap to read 🍀"
 
 
-def _to_expandable(text: str, hint: str = "") -> str:
+def _to_expandable(text: str, hint: str = "", keep_title: bool = False) -> str:
     """Header + "> " detail lines -> one Telegram expandable blockquote:
-    ``**> header`` / ``> detail`` / ... with ``||`` closing the last line."""
+    ``**> header`` / ``> detail`` / ... with ``||`` closing the last line.
+
+    ``keep_title`` (the unified helper card): the first line stays OUTSIDE the
+    quote, bold and always visible; the quote starts with the italic hint."""
     # "||" would be read as a spoiler / early quote terminator, and "*" in
     # the header can eat the "**>" opener (Opus review).
     lines = text.replace("||", "¦¦").split("\n")
-    header = lines[0].replace("*", "")
     body = [ln[2:] if ln.startswith("> ") else ln for ln in lines[1:]]
     # A collapsed Telegram quote shows about three lines and then cuts off.
     # Header, a small italic "tap" hint, and a blank line fill those three,
     # so the cut lands on empty space, never on half a detail.
     details = [ln for ln in body if ln.strip()]
     spacer = "\u2800"
+    if keep_title:
+        # Title is its own line above; the quote's three visible lines are the
+        # italic hint and two blanks.  The hint sits on the "**>" line itself,
+        # so it is written with "_": a "*" there would pair with the opener's.
+        out = [lines[0]]
+        if not details:
+            return "\n".join(out)
+        tip = f"_{hint}_" if hint else spacer
+        out += [f"**> {tip}", f"> {spacer}", f"> {spacer}"] + [f"> {ln}" for ln in details]
+        return "\n".join(out) + "||"
+    header = lines[0].replace("*", "")
     out = [f"**> {header}"]
     if details:
         tip = f"*{hint}*" if hint else spacer
@@ -1451,6 +1464,21 @@ _ACK_EDITORS: Dict[int, "AckCardEditor"] = {}
 _ACK_SEQ = itertools.count(1)
 
 
+def _adapter_is_telegram(adapter: Any) -> bool:
+    """Telegram only has expandable quotes (the 🔀 roster card checks the same)."""
+    plat = getattr(adapter, "platform", None)
+    return str(getattr(plat, "value", plat) or "").lower() == "telegram"
+
+
+def _unified_style() -> bool:
+    try:
+        from agent.ack_checklist import unified
+
+        return bool(unified())
+    except Exception:
+        return False
+
+
 class AckCardEditor:
     """Edits one sent ack message to follow its checklist (coalesced, throttled)."""
 
@@ -1465,6 +1493,7 @@ class AckCardEditor:
         *,
         min_interval: float = ACK_MIN_INTERVAL,
         clock: Callable[[], float] = time.monotonic,
+        initial_text: Optional[str] = None,
     ) -> None:
         self.card = card
         self._adapter = adapter
@@ -1475,7 +1504,10 @@ class AckCardEditor:
         self._min_interval = max(0.0, float(min_interval))
         self._clock = clock
         self._lock = threading.Lock()
-        self._last_text = card.render()
+        # Telegram: title visible, the rest in a collapsed expandable quote
+        # (like the 🔀 roster card); other platforms keep the plain quote.
+        self._expandable = _adapter_is_telegram(adapter) and _unified_style()
+        self._last_text = initial_text if initial_text is not None else card.render()
         # Let the message settle first: a stream consumer may still finalize it.
         self._last_attempt = clock()
         self._backoff_until = float("-inf")
@@ -1487,10 +1519,6 @@ class AckCardEditor:
         self._last_repost = float("-inf")
         self._repost_timer: Any = None
         self._stale: List[str] = []
-        # Set once the opener line was split off: the original message keeps
-        # only the root's words, this editor owns a card-only message.
-        self._split = False
-        self._say_id: Optional[str] = None
         self._registered = False
         self._seq = next(_ACK_SEQ)
         # Shares the follow protocol with the 🔀 cards (follow_latest_message).
@@ -1499,9 +1527,15 @@ class AckCardEditor:
         self._register_live()
 
     def _render(self) -> str:
-        """What the message this editor owns should say: the card alone once
-        the opener line was split off, the whole ack text before that."""
-        return self.card.render(include_say=not self._split)
+        """What the card message should say now."""
+        text = self.card.render()
+        # The title must be the first line: a card that still carries its
+        # opener in the same message (never on a chat platform) stays plain.
+        if not (self._expandable and text) or (self.card.say_text() and not self.card.split_opener):
+            return text
+        text = _fit_to_limit(text, 4000 - 16)
+        hint = TAP_HINT_DONE if self.card.finished else TAP_HINT_LIVE
+        return _to_expandable(text, hint, keep_title=True)
 
     # any thread
     def notify(self) -> None:
@@ -1642,11 +1676,7 @@ class AckCardEditor:
         if not (last_out and _is_newer(last_out, self._message_id)):
             return 0  # already the newest message in the chat
         self._last_repost = self._clock()
-        # First follow of a card with an opener line: the opener stays in the
-        # original message (edited down to just that line); only the card moves.
-        say = "" if self._split else self.card.say_text()
-        split_now = bool(say)
-        text = self.card.render(include_say=False) if (split_now or self._split) else self.card.render()
+        text = self._render()
         if not text:
             return 0
         try:
@@ -1663,30 +1693,14 @@ class AckCardEditor:
         if not (getattr(result, "success", False) and new_id) or str(new_id) == "__no_edit__":
             return 0
         old_id = self._message_id
-        keep_old = False
-        if split_now:
-            if await self._edit_message(old_id, say):
-                keep_old = True
-                self._split = True
-                self._say_id = old_id
-            else:
-                # Could not trim the original to the opener line: move the
-                # whole message instead (the previous behaviour).
-                text = self.card.render()
-                if not await self._edit_message(str(new_id), text):
-                    try:
-                        await _maybe_await(self._adapter.delete_message(self._chat_id, str(new_id)))
-                    except Exception:
-                        logger.debug("ack card repost cleanup failed", exc_info=True)
-                    return 0
         self._message_id = str(new_id)
         self._last_text = text
         self._last_attempt = self._clock()
         self._failures = 0
         self._backoff_until = float("-inf")
         self.card.target = (id(self._adapter), self._chat_id, self._message_id)
-        for mid in ([] if keep_old else [old_id]) + list(self._stale):
-            if not mid or mid == self._message_id or mid == self._say_id:
+        for mid in [old_id] + list(self._stale):
+            if not mid or mid == self._message_id:
                 continue
             try:
                 await _maybe_await(self._adapter.delete_message(self._chat_id, mid))
@@ -1725,28 +1739,6 @@ class AckCardEditor:
             if self._render() == self._last_text:
                 self._tick_later()
                 return
-
-    async def _edit_message(self, message_id: str, text: str) -> bool:
-        """One plain edit of ``message_id`` (no bookkeeping); True on success."""
-        editor = getattr(self._adapter, "edit_message", None)
-        if not callable(editor):
-            return False
-        token = _CARD_SEND.set(True)
-        try:
-            kwargs: Dict[str, Any] = {"finalize": True}
-            if self._metadata is not None:
-                kwargs["metadata"] = self._metadata
-            try:
-                result = await _maybe_await(editor(self._chat_id, message_id, _fit_to_limit(text, 4000), **kwargs))
-            except TypeError:
-                kwargs.pop("metadata", None)
-                result = await _maybe_await(editor(self._chat_id, message_id, _fit_to_limit(text, 4000), **kwargs))
-            return bool(result is not None and getattr(result, "success", False))
-        except Exception as exc:
-            logger.debug("ack opener edit raised: %s", exc)
-            return False
-        finally:
-            _CARD_SEND.reset(token)
 
     async def _edit(self, text: str) -> bool:
         editor = getattr(self._adapter, "edit_message", None)
@@ -1796,30 +1788,83 @@ class AckCardEditor:
         return False
 
 
-def bind_ack_card(adapter: Any, chat_id: Any, content: Any, result: Any, metadata: Any = None) -> None:
+def bind_ack_card(adapter: Any, chat_id: Any, content: Any, result: Any, metadata: Any = None) -> Any:
     """Called after an adapter sent ``content``: if it is an ack checklist that
-    is not yet placed, remember where it landed and keep it current.  Never raises."""
+    is not yet placed, remember where it landed and keep it current.  Never raises.
+
+    Two shapes of ack text:
+      * the whole card (classic style, or no opener line): the message that was
+        just sent *is* the card; bind an editor to it;
+      * the opener line alone (unified card with a ``say``): that message stays a
+        plain chat message forever.  Returns a coroutine that sends the card as
+        its own message right under it and binds the editor to that one; the
+        sending wrapper awaits it so the order is opener, then card.
+    """
     try:
         if adapter is None or chat_id in (None, "") or not getattr(result, "success", False):
-            return
+            return None
         message_id = getattr(result, "message_id", None)
         if not message_id or str(message_id) == "__no_edit__":
-            return
-        from agent.ack_checklist import match_unbound
+            return None
+        from agent.ack_checklist import match_unbound, match_unbound_opener
 
         card = match_unbound(content)
         if card is None:
-            return
+            opener_card = match_unbound_opener(content)
+            if opener_card is None:
+                return None
+            # Claim it now so nothing else binds it while the card is sent.
+            opener_card.target = (id(adapter), str(chat_id), "pending")
+            return _send_card_under_opener(opener_card, adapter, chat_id, metadata)
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            return
-        editor = AckCardEditor(card, adapter, chat_id, str(message_id), loop, metadata)
-        card.target = (id(adapter), str(chat_id), str(message_id))
-        _ACK_EDITORS[id(card)] = editor
-        while len(_ACK_EDITORS) > 32:
-            _ACK_EDITORS.pop(next(iter(_ACK_EDITORS)))
-        if editor._render() != editor._last_text or card.finished:
-            editor.notify()  # it already moved on between render and send
+            return None
+        _attach_editor(card, adapter, chat_id, str(message_id), loop, metadata)
     except Exception:
         logger.debug("ack card bind failed", exc_info=True)
+    return None
+
+
+def _attach_editor(
+    card: Any, adapter: Any, chat_id: Any, message_id: str,
+    loop: asyncio.AbstractEventLoop, metadata: Any = None, initial_text: Optional[str] = None,
+) -> "AckCardEditor":
+    editor = AckCardEditor(card, adapter, chat_id, message_id, loop, metadata, initial_text=initial_text)
+    card.target = (id(adapter), str(chat_id), str(message_id))
+    _ACK_EDITORS[id(card)] = editor
+    while len(_ACK_EDITORS) > 32:
+        _ACK_EDITORS.pop(next(iter(_ACK_EDITORS)))
+    if editor._render() != editor._last_text or card.finished:
+        editor.notify()  # it already moved on between render and send
+    return editor
+
+
+async def _send_card_under_opener(card: Any, adapter: Any, chat_id: Any, metadata: Any) -> None:
+    """Send the card as its own message (the opener was just delivered above it)."""
+    loop = asyncio.get_running_loop()
+    # Build the editor first so the text we send is exactly what it renders.
+    probe = AckCardEditor.__new__(AckCardEditor)
+    probe.card = card
+    probe._expandable = _adapter_is_telegram(adapter) and _unified_style()
+    text = AckCardEditor._render(probe)
+    if not text:
+        card.target = None
+        return
+    token = _CARD_SEND.set(True)
+    try:
+        kwargs: Dict[str, Any] = {}
+        if metadata is not None:
+            kwargs["metadata"] = metadata
+        result = await _maybe_await(adapter.send(chat_id, _fit_to_limit(text, 4000), **kwargs))
+    except Exception:
+        logger.debug("ack card send under the opener failed", exc_info=True)
+        card.target = None
+        return
+    finally:
+        _CARD_SEND.reset(token)
+    new_id = getattr(result, "message_id", None)
+    if not (getattr(result, "success", False) and new_id) or str(new_id) == "__no_edit__":
+        card.target = None  # the opener stands alone; nothing to keep current
+        return
+    _attach_editor(card, adapter, chat_id, str(new_id), loop, metadata, initial_text=text)
