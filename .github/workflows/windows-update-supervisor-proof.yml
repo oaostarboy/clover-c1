@@ -49,20 +49,20 @@ jobs:
         path: [cli, chat]
         phase: [old2new, new2next]
     env:
-      # OLD_REF is v1.5.1 (the previous release; an ancestor of main, which is
-      # now v1.5.2). Its updater has the Schedule-service fix, so troy old2new
+      # OLD_REF is v1.5.2 (the previous release; an ancestor of main, which is
+      # now v1.5.3). Its updater has the Schedule-service fix, so troy old2new
       # is a normal "must succeed" row, not an expected-failure reproduction.
-      OLD_REF: 7584e295cfaebf207b9ff1a5dd2a5b07326aa0cf
+      OLD_REF: e113ad3710e98881f8a2b867ad527bfb8de1044f
       HEAD_SHA: ${{ github.sha }}
       HEAD_BRANCH: ${{ github.ref_name }}
       # Target-bound variant (CI-only helper): the update target is the exact
       # frozen release candidate, NOT the helper branch head (workflow commit).
       # TARGET_BRANCH is a frozen copy of the candidate tip (the pin below
       # checks sha+tree), so a later push to c1.5/integration cannot move it.
-      TARGET_SHA: e113ad3710e98881f8a2b867ad527bfb8de1044f
-      TARGET_TREE: fd7c1b94820b6f698bc7e49ddea6240c0dd9524a
-      TARGET_BRANCH: ci/win-update-next/c1-5-2-e113ad3-target
-      NEXT_BRANCH: ci/win-update-next/c1-5-2-e113ad3
+      TARGET_SHA: 8e222641e1bf32141e7c446a1e65abf942c10077
+      TARGET_TREE: 314d64d944518ce128834ecb41bec26a34e44a08
+      TARGET_BRANCH: ci/win-update-next/c1-5-3-8e22264-target
+      NEXT_BRANCH: ci/win-update-next/c1-5-3-8e22264
       SETUP: ${{ matrix.setup }}
       UPDATE_PATH: ${{ matrix.path }}
       PHASE: ${{ matrix.phase }}
@@ -91,13 +91,13 @@ jobs:
           & "$env:TEMP\install.ps1" -Branch main -Commit $from -NonInteractive -SkipComputerUse -CloverHome $cloverHome -InstallDir $installDir
           $mainAtInstall = (git -C $installDir rev-parse refs/remotes/origin/main).Trim()
           if ($mainAtInstall -eq $from) {
-            # origin/main IS $from here (new2next: v1.5.2 is main's tip and the
+            # origin/main IS $from here (new2next: v1.5.3 is main's tip and the
             # install target). The proof makes main read as the next marker with
             # `git replace`, which is keyed by commit id, so an install sitting ON
             # main's tip would be replaced too (0 commits behind, "up to date").
             # Re-id the install: same tree, same parents, different commit id.
             # Set-MainIsTarget grafts it into the next target's history, so the
-            # update is a real fast-forward. (old2new needs none: v1.5.1 is an
+            # update is a real fast-forward. (old2new needs none: v1.5.2 is an
             # ancestor of main and main already IS the target.)
             $tree = (git -C $installDir rev-parse "$from^{tree}").Trim()
             $ids = @((git -C $installDir rev-list --parents -n 1 $from).Trim() -split ' ')
@@ -185,7 +185,7 @@ jobs:
           $label = "$env:SETUP $env:UPDATE_PATH $env:PHASE"
           $exitCode = Invoke-PathUpdate $label
           Write-Host "[$label] update exit=$exitCode"
-          # Every row must succeed: v1.5.1's updater (old2new) and v1.5.2's
+          # Every row must succeed: v1.5.2's updater (old2new) and v1.5.3's
           # (new2next) both handle the Schedule-hosted gateway.
           Assert-UpdateSucceeded $label $logStart $exitCode ([int]$env:OLD_GATEWAY_PID)
           exit 0
