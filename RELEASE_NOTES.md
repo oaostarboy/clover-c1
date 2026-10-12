@@ -15,6 +15,14 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.5.3 | Clover C1.5.3 | 2026-10-12
+- Agents hand big jobs to subagents more reliably, and quick questions stay quick.
+- If a job turns out bigger than expected, it's handed to a subagent automatically.
+- The subagent card names the job, like "comparing 3 options for adding a second GPU".
+- Finished jobs shrink to one 🍀 line, and the bottom line shows what's running and what's done.
+- Joined cards show a short title like "3 jobs" instead of cut-off names.
+- Small talk like "thanks" no longer spends tokens on routing.
+
 ## 1.5.2 | Clover C1.5.2 | 2026-10-11
 - Subagent work now shows in one tidy card that stays at the bottom of your chat; tap it to watch.
 - Each subagent gets its own checklist, with its live steps, model, tool calls and time.
