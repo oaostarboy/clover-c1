@@ -109,11 +109,11 @@ async def test_an_agent_job_joins_the_running_card_and_posts_no_roster_card():
     host_editor._last_attempt = float("-inf")
     text = host_editor._render()
     head = text.splitlines()[0]
-    assert "**2 jobs**" in head and "0 of 2 done" in head and "shipping" not in head
+    assert "**2 subagents**" in head and "0 of 2 done" in head and "shipping" not in head
     assert "\u25a0 **shipping the card**" in text
     # a long name stands alone; its stats close its section
     assert "\u25a0 **Audit cron locking**\n" in text and "\u2003\u2003*GPT-6.1 Sol \u00b7 \U0001f6e0 2 calls \u00b7 \u23f1 " in text
-    assert "*now: pytest -q*" in text and "*before: read a.py*" in text
+    assert "\U0001f527 *terminal pytest -q*" in text and "\u2713 *read_file a.py*" in text
     job.finish(0)
     assert first.parts[1].checklist.state == ac.DONE and not first.finished, "the host part still runs"
     await pub.aclose()
@@ -126,13 +126,15 @@ async def test_an_agent_job_alone_gets_its_own_unified_card():
     assert chat.status_calls == []
     assert len(chat.sends) == 1, "one card message"
     text = chat.sends[0]["text"]
-    assert text.startswith("**> \U0001f500 **Audit cron locking**\n> *tap to watch")
+    lines = text.splitlines()
+    assert lines[0].startswith("**> \U0001f500 GPT-6.1 Sol") and lines[1] == "> *tap to watch \U0001f340*", "stats, then the hint"
+    assert "> **Audit cron locking**||" in lines, "the title sits under the hint"
     assert "tap to watch" in text and "Goal:" not in text
     job.feed(_tool_use("c1", "Bash", command="cd /repo && FOO=1 make test"))
     card = list(da._ACK_EDITORS.values())[0].card
     cl = card.parts[0].checklist
     assert cl.model == "GPT-6.1 Sol" and cl.calls == 1
-    assert "*now: make test*" in card.render()
+    assert "\U0001f527 *terminal make test*" in card.render()
     job.feed(_line({"type": "result", "result": "Plain summary: Locking is fine.", "is_error": False}))
     job.finish(0)
     assert cl.state == ac.DONE and cl.summary == "Locking is fine."

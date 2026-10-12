@@ -1469,13 +1469,19 @@ TAP_HINT_LIVE = "tap to watch 🍀"
 TAP_HINT_DONE = "tap to read 🍀"
 
 
-def _to_expandable(text: str, hint: str = "", bold_title: bool = False) -> str:
+def _to_expandable(
+    text: str, hint: str = "", bold_title: bool = False, spacer_after_hint: bool = True,
+) -> str:
     """Header + "> " detail lines -> one Telegram expandable blockquote:
     ``**> header`` / ``> detail`` / ... with ``||`` closing the last line.
 
     The header is the quote's first line, so a collapsed quote shows the
     header, the italic hint and a blank line.  ``bold_title`` (the unified
-    subagent card) keeps the title's bold: ``**> 🍀 **title** · 1 of 3 done``."""
+    subagent card) keeps the title's bold: ``**> 🍀 **title** · 1 of 3 done``.
+
+    ``spacer_after_hint=False`` drops the blank line after the hint, so the
+    third collapsed line is real content (a several-subagent card's first
+    section) instead of an empty one."""
     # "||" would be read as a spoiler / early quote terminator, and "*" in
     # the header can eat the "**>" opener (Opus review).
     lines = text.replace("||", "¦¦").split("\n")
@@ -1493,7 +1499,10 @@ def _to_expandable(text: str, hint: str = "", bold_title: bool = False) -> str:
     out = [f"**> {header}"]
     if details:
         tip = f"*{hint}*" if hint else spacer
-        out += [f"> {tip}", f"> {spacer}"] + [f"> {ln}" for ln in details]
+        out += [f"> {tip}"]
+        if spacer_after_hint:
+            out += [f"> {spacer}"]
+        out += [f"> {ln}" for ln in details]
     return "\n".join(out) + "||"
 
 
@@ -1788,7 +1797,10 @@ class AckCardEditor:
             return _fit_to_limit(text, 4000 - 16)
         text = _fit_to_limit(text, 4000 - 16)
         hint = TAP_HINT_DONE if self.card.finished else TAP_HINT_LIVE
-        return _to_expandable(text, hint, bold_title=True)
+        # One subagent: stats line / hint / blank / title, Goal, steps, tools.
+        # Several: title / hint / first section (no blank line, so all three
+        # collapsed lines carry content).
+        return _to_expandable(text, hint, bold_title=True, spacer_after_hint=self.card.single_layout())
 
     # any thread
     def notify(self) -> None:

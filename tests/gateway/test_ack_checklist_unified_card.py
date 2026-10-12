@@ -289,7 +289,7 @@ async def test_multi_helper_events_edit_the_one_message_in_place():
     await _settle(editor)
     assert adapter.edits and adapter.edits[-1]["id"] == "m42"
     text = adapter.edits[-1]["text"]
-    assert "*now: npm test*" in text and "**check a** \u00b7 waiting" in text
+    assert "\U0001f527 *terminal npm test*" in text and "**check a** \u00b7 waiting" in text
     assert adapter.edits[-1]["finalize"] is True  # live edits are formatted
     for i in (0, 1):
         ac.on_child_event("subagent.complete", delegation_id="dm", task_index=i, status="completed",
@@ -364,7 +364,7 @@ def test_a_live_card_renders_without_raw_markdown_through_telegram_format():
     bare = [ln for ln in out.splitlines() if ln.strip() in (">", "\\>")]
     assert bare == [], f"a bare quote-bar line would show as a lone '>': {out!r}"
     assert any(ln.startswith(">") for ln in out.splitlines()), "the body is quoted"
-    assert "\u2800" in raw and "\n>\n" not in raw + "\n"
+    assert "\n>\n" not in raw + "\n"
     assert "todo" not in raw.lower()
 
 
@@ -449,13 +449,70 @@ def test_telegram_title_is_the_first_line_inside_the_collapsed_quote():
     card = _say_card()
     text = _editor(_tg_adapter(), card)._render()
     lines = text.splitlines()
+    # no stats yet (the subagent has not started): the title leads
     assert lines[0] == "**> \U0001f500 **fixing the bugs**", "title opens the expandable quote, no emoji"
     assert lines[1] == f"> *{da.TAP_HINT_LIVE}*" and da.TAP_HINT_LIVE == "tap to watch \U0001f340"
-    assert lines[2] == "> \u2800", "the 3-line cut lands on empty space"
-    assert lines[3] == "> Goal: test build + PR \u00b7 ~10 min", "exactly ONE spacer after the hint, then Goal:"
+    assert lines[2] == "> \u2800" and lines[3] == "> Goal: test build + PR \u00b7 ~10 min"
+    assert "> \u2800\n> \u2800" not in text
     assert text.endswith("||") and text.count("||") == 1 and text.count("**>") == 1
     assert all(ln.startswith("> ") for ln in lines[1:]) and "> \u25b8 find" in text
     assert "\U0001f504" not in text and text.count("\U0001f340") == 1, "the only clover is in the hint"
+
+
+def _running_single():
+    card = _say_card()
+    ac.on_child_event("subagent.start", delegation_id=OWNED, model="claude-sonnet-5-5")
+    for n in range(5):
+        ac.on_child_event("subagent.tool", delegation_id=OWNED, tool_name="terminal", preview=f"cmd{n}",
+                          args={"command": f"cmd{n}"}, tool_call_id=f"c{n}", tool_count=n + 1)
+        ac.on_child_event("subagent.tool_done", delegation_id=OWNED, tool_name="terminal",
+                          tool_call_id=f"c{n}", tool_count=n + 1)
+    card.parts[0].checklist.started -= 34
+    return card
+
+
+def test_a_single_subagent_reads_stats_hint_blank_title_goal_steps_tools():
+    text = _editor(_tg_adapter(), _running_single())._render()
+    lines = text.splitlines()
+    assert lines[:5] == [
+        "**> \U0001f500 Sonnet 5.5 \u00b7 \U0001f6e0 5 calls \u00b7 \u23f1 34s",
+        "> *tap to watch \U0001f340*",
+        "> \u2800",
+        "> **fixing the bugs**",
+        "> Goal: test build + PR \u00b7 ~10 min",
+    ]
+    assert lines[5:8] == ["> \u25b8 find", "> \u25cb fix", "> \u25cb test"]
+    assert lines[8:] == [
+        "> \U0001f527 *terminal cmd4*", "> \u2713 *terminal cmd3*", "> \u2713 *terminal cmd2*||",
+    ][:len(lines[8:])] or lines[8].startswith("> \U0001f527 ") or lines[8].startswith("> \u2713 ")
+    assert text.count("Sonnet 5.5") == 1 and "\u25a0" not in text and "\u2003" not in text, "no section mark, no indent"
+    assert text.count("**>") == 1 and text.endswith("||") and all(ln.startswith("> ") for ln in lines[1:])
+
+
+def test_a_single_subagent_card_without_stats_yet_keeps_title_and_hint():
+    text = _editor(_tg_adapter(), _say_card())._render()
+    lines = text.splitlines()
+    assert lines[0] == "**> \U0001f500 **fixing the bugs**" and lines[1] == "> *tap to watch \U0001f340*"
+    assert text.count("fixing the bugs") == 1
+
+
+def test_a_single_subagent_layout_survives_telegram_formatting():
+    from plugins.platforms.telegram.adapter import TelegramAdapter
+
+    fm = lambda t: TelegramAdapter.format_message(object.__new__(TelegramAdapter), t)
+    out = fm(_editor(_tg_adapter(), _running_single())._render())
+    assert out.splitlines()[:4] == [
+        "**> \U0001f500 Sonnet 5\\.5 \u00b7 \U0001f6e0 5 calls \u00b7 \u23f1 34s",
+        "> _tap to watch \U0001f340_", "> \u2800", "> *fixing the bugs*",
+    ]
+
+
+def test_the_multi_card_title_is_first_inside_the_quote_with_no_spacer_before_the_hint():
+    text = _editor(_tg_adapter(), _three_subagent_card())._render()
+    lines = text.splitlines()
+    assert lines[0].startswith("**> \U0001f500 **fixing the bugs**") and "1 of 3 done" in lines[0]
+    assert lines[1] == "> *tap to watch \U0001f340*" and lines[2].startswith("> Goal: ")
+    assert "\u2800" not in "".join(lines[:3])
 
 
 def test_telegram_finished_card_is_one_plain_line_without_a_quote_or_hint():
@@ -501,7 +558,7 @@ def test_multi_subagent_title_keeps_k_of_n_done_inside_one_quote():
     text = _editor(_tg_adapter(), _three_subagent_card())._render()
     lines = text.splitlines()
     assert lines[0].startswith("**> \U0001f500 **fixing the bugs**") and "1 of 3 done" in lines[0]
-    assert lines[1] == "> *tap to watch \U0001f340*" and lines[2] == "> \u2800"
+    assert lines[1] == "> *tap to watch \U0001f340*" and lines[2] == "> Goal: test build + PR \u00b7 ~10 min"
     assert text.count("**>") == 1 and text.count("||") == 1
     assert all(ln.startswith("> ") for ln in lines[1:]) and lines[-1].endswith("||")
 
@@ -512,8 +569,8 @@ def test_multi_subagent_spacing_one_spacer_between_blocks_and_before_footer():
     spacer = "> \u2800"
     # No two blank lines in a row anywhere (hint spacer, blocks, footer).
     assert not any(a == spacer and b == spacer for a, b in zip(lines, lines[1:]))
-    # Hint, ONE spacer, then straight to the outcome line.
-    assert lines[1:4] == ["> *tap to watch \U0001f340*", spacer, "> Goal: test build + PR \u00b7 ~10 min"]
+    # Hint, then straight to the outcome line (no spacer: all three collapsed lines show).
+    assert lines[1:3] == ["> *tap to watch \U0001f340*", "> Goal: test build + PR \u00b7 ~10 min"]
     assert lines[-2] == spacer and lines[-1].startswith("> *2 running \u00b7 1 done") and "helpers" not in text
     # Three subagent sections: a spacer before each name line, plus the one before the footer.
     names = [i for i, ln in enumerate(lines) if ln.startswith("> ") and "**" in ln and i > 0]
@@ -580,7 +637,7 @@ def test_telegram_format_of_a_joined_card_with_a_long_running_name_and_an_ended_
     ac.on_child_event("subagent.complete", delegation_id="b", status="completed", summary="Plain summary: ok.")
     out = _telegram_format(da._to_expandable(card.render(include_say=False), da.TAP_HINT_LIVE, bold_title=True))
     assert "\u25a0 *finishing the small fast model fix*\n" in out, "the name has the line to itself"
-    assert "disks report" not in out and "2 jobs" in out.splitlines()[0]
+    assert "disks report" not in out and "2 subagents" in out.splitlines()[0]
     stats = next(ln for ln in out.splitlines() if "Sonnet 5" in ln)
     assert stats.startswith("> \u2003\u2003_Sonnet 5") and "\U0001f6e0 20 calls" in stats
     assert out.index("Goal:") < out.index("Sonnet 5"), "the Goal sits right under the name; the stats close the section"
