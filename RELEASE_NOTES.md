@@ -15,6 +15,13 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.5.4 | Clover C1.5.4 | 2026-10-12
+- Every subagent job now gets a clean card, and the card is back after a restart.
+- Joined cards say "3 subagents", and a finished card sits right under the reply.
+- Subagent titles name the real work, and each subagent can collapse on its own.
+- A job that runs long is handed to a subagent with full context instead of just stopping.
+- Subagents work in their own sandbox, read anywhere, and can no longer touch a live install.
+
 ## 1.5.3 | Clover C1.5.3 | 2026-10-12
 - Agents hand big jobs to subagents more reliably, and quick questions stay quick.
 - If a job turns out bigger than expected, it's handed to a subagent automatically.
