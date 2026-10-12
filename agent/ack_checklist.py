@@ -158,6 +158,36 @@ def clean_steps(value: Any) -> Tuple[str, ...]:
     return tuple(out)
 
 
+def _apply_todos_to(steps: List[List[str]], todos: Any) -> bool:
+    """Mirror a helper's todo list onto ``steps`` by position.  True when changed."""
+    if not steps or not isinstance(todos, list):
+        return False
+    changed = False
+    for i, row in enumerate(steps):
+        if i >= len(todos) or not isinstance(todos[i], dict):
+            break
+        status = str(todos[i].get("status") or "").strip().lower()
+        if status in _STEP_ICON and row[1] != status:
+            row[1] = status
+            changed = True
+    return changed
+
+
+def _finish_steps_for(steps: List[List[str]], state: str) -> None:
+    if state == DONE:
+        for row in steps:
+            if row[1] in ("pending", "in_progress"):
+                row[1] = "completed"
+    else:
+        # The step that was running is where it stopped / went wrong;
+        # steps never reached stay as they were.
+        mark = "failed" if state == FAILED else "cancelled"
+        for row in steps:
+            if row[1] == "in_progress":
+                row[1] = mark
+                break
+
+
 @dataclass
 class Child:
     """One helper of a multi-helper dispatch (observed state only)."""
@@ -176,6 +206,7 @@ class Child:
     titled: bool = False  # the helper's own title was seen (beats the goal)
     hidden: int = 0  # its todo-list calls: hidden, so not counted either
     hidden_ids: Set[str] = field(default_factory=set)
+    steps: List[List[str]] = field(default_factory=list)  # its own [text, status] rows
     open: List[Tuple[str, str, str]] = field(default_factory=list)  # (call id, name, phrase)
     recent: Deque[Tuple[str, bool]] = field(default_factory=lambda: deque(maxlen=RECENT_TOOLS_SINGLE))
 
@@ -225,35 +256,16 @@ class Checklist:
         helper added past the seeded steps are ignored: the user was promised
         this list.  Never regresses a finished checklist.
         """
-        if self.state != RUNNING or not self.steps or not isinstance(todos, list):
+        if self.state != RUNNING:
             return False
-        changed = False
-        for i, row in enumerate(self.steps):
-            if i >= len(todos) or not isinstance(todos[i], dict):
-                break
-            status = str(todos[i].get("status") or "").strip().lower()
-            if status in _STEP_ICON and row[1] != status:
-                row[1] = status
-                changed = True
-        return changed
+        return _apply_todos_to(self.steps, todos)
 
     def finish(self, state: str) -> bool:
         """Close the checklist.  A second call changes nothing."""
         if self.state != RUNNING or state not in _END_ICON:
             return False
         self.state = state
-        if state == DONE:
-            for row in self.steps:
-                if row[1] in ("pending", "in_progress"):
-                    row[1] = "completed"
-        else:
-            # The step that was running is where it stopped / went wrong;
-            # steps never reached stay as they were.
-            mark = "failed" if state == FAILED else "cancelled"
-            for row in self.steps:
-                if row[1] == "in_progress":
-                    row[1] = mark
-                    break
+        _finish_steps_for(self.steps, state)
         return True
 
     # -- text ------------------------------------------------------------
@@ -395,6 +407,11 @@ def _cut_word(text: str, limit: int) -> str:
     return cut.rstrip(" ,;:-") + "\u2026"
 
 
+def _kid_step_lines(kid: Child) -> List[str]:
+    """The helper's own checklist (nothing when it has none)."""
+    return [f"{_STEP_ICON[status]} {text}" for text, status in kid.steps]
+
+
 def _full_kids(kids: Sequence[Child], now: float, summary_chars: int, tool_cap: int) -> List[str]:
     """Up to ``COMPACT_OVER`` helpers: a full block each."""
     quoted: List[str] = []
@@ -404,6 +421,7 @@ def _full_kids(kids: Sequence[Child], now: float, summary_chars: int, tool_cap: 
         if k.state == PENDING:
             quoted.append(_italic("waiting to start"))
             continue
+        quoted += _kid_step_lines(k)
         if k.state == RUNNING:
             quoted += _tool_lines(k, tool_cap)
         elif k.summary and summary_chars > 0:
@@ -437,6 +455,7 @@ def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[str]
                 continue
             running_shown += 1
             quoted += [_SPACER, f"{_CHILD_ICON[k.state]} **{k.label}**"]
+            quoted += _kid_step_lines(k)
             quoted += _tool_lines(k, min(tool_cap, RECENT_TOOLS_MULTI))
             stats = _stats_line(k.model, k.calls, k.started, k.ended, now)
             if stats:
@@ -562,9 +581,16 @@ class Part:
             card.touch()
 
 
+def _seed_rows(steps: Any) -> List[List[str]]:
+    rows = [[s, "pending"] for s in clean_steps(steps)] if steps else []
+    if rows:
+        rows[0][1] = "in_progress"
+    return rows
+
+
 def open_part(
     delegation_id: str, header: str, steps: Sequence[str], expected: int = 1, say: str = "",
-    goals: Sequence[Any] = (),
+    goals: Sequence[Any] = (), child_steps: Sequence[Any] = (),
 ) -> Optional[Part]:
     did = str(delegation_id or "").strip()
     if not did or not str(header or "").strip():
@@ -577,7 +603,13 @@ def open_part(
             # Several helpers share the one card: a block each, no step list.
             part = Part(did, Checklist.start(header, steps if n == 1 else (), say), n)
             if n > 1:
-                part.checklist.kids = [Child(index=i, title=_goal_title(_nth(goals, i))) for i in range(n)]
+                part.checklist.kids = [
+                    Child(
+                        index=i, title=_goal_title(_nth(goals, i)),
+                        steps=_seed_rows(_nth(child_steps, i)),
+                    )
+                    for i in range(n)
+                ]
         _PARTS[did] = part
         while len(_PARTS) > _MAX_PARTS:
             _PARTS.pop(next(iter(_PARTS)))
@@ -585,7 +617,7 @@ def open_part(
         # this part exists: replay what it already reported.
         for et, kw in _EARLY.pop(did, []):
             if et == "subagent.todo":
-                part.checklist.apply_todos(kw.get("todos"))
+                _apply_child_todos(part, kw)
             else:
                 _record_complete(part, kw)
         return part
@@ -650,14 +682,18 @@ def on_child_event(event_type: Any, **kw: Any) -> bool:
                 if did:
                     early = _EARLY.setdefault(did, [])
                     if et == "subagent.todo":
-                        early[:] = [e for e in early if e[0] != "subagent.todo"]
+                        # the newest todo list of each helper is enough
+                        early[:] = [
+                            e for e in early
+                            if not (e[0] == "subagent.todo" and e[1].get("task_index") == kw.get("task_index"))
+                        ]
                     early.append((et, {k: kw.get(k) for k in ("todos", "status", "exit_reason", "outcome", "summary", "preview",
                                                              "task_index", "subagent_id", "title", "goal")}))
                     while len(_EARLY) > _MAX_PARTS:
                         _EARLY.pop(next(iter(_EARLY)))
                 return False
             if et == "subagent.todo":
-                changed = part.checklist.apply_todos(kw.get("todos"))
+                changed = _apply_child_todos(part, kw)
             else:
                 changed = _record_complete(part, kw)
         if changed:
@@ -665,6 +701,18 @@ def on_child_event(event_type: Any, **kw: Any) -> bool:
         return changed
     except Exception:
         return False
+
+
+def _apply_child_todos(part: Part, kw: Dict[str, Any]) -> bool:
+    """A helper's todo list ticks ITS steps: by ``task_index`` on a several-helper
+    dispatch, the dispatch's own steps otherwise."""
+    cl = part.checklist
+    if not cl.kids:
+        return cl.apply_todos(kw.get("todos"))
+    kid = _child_for(cl, kw)
+    if kid is None or kid.state not in (PENDING, RUNNING):
+        return False
+    return _apply_todos_to(kid.steps, kw.get("todos"))
 
 
 _ACTIVITY_EVENTS = frozenset({"subagent.start", "subagent.tool", "subagent.tool_done"})
@@ -886,6 +934,7 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
             return False
         _note_identity(kid, kw)
         kid.state = state
+        _finish_steps_for(kid.steps, state)
         kid.open.clear()
         if plain and not kid.summary:
             kid.summary = plain
@@ -977,6 +1026,7 @@ def card_for(receipts: Sequence[Any]) -> Optional[Card]:
                 expected=max(1, len(getattr(r, "goals", ()) or ())),
                 say=getattr(r, "say", ""),
                 goals=getattr(r, "goals", ()) or (),
+                child_steps=getattr(r, "child_steps", ()) or (),
             )
             if part is not None:
                 parts.append(part)

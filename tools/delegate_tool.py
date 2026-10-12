@@ -4707,9 +4707,20 @@ def delegate_task(
             _ack_steps = clean_steps(handoff.get("steps"))
         except Exception:
             _ack_steps = ()
+    # Several helpers: each task may carry its own steps (tasks[i].steps),
+    # which seed and drive that helper's own checklist on the card.
+    _task_steps: List[tuple] = [()] * len(task_list)
+    if n_tasks > 1:
+        try:
+            from agent.ack_checklist import clean_steps
+
+            _task_steps = [clean_steps(t.get("steps")) for t in task_list]
+        except Exception:
+            _task_steps = [()] * len(task_list)
     children = []
     try:
         for i, t in enumerate(task_list):
+            _steps_i = _ack_steps or (_task_steps[i] if i < len(_task_steps) else ())
             # Per-task role beats top-level; normalise again so unknown
             # per-task values warn and degrade to leaf uniformly.
             effective_role = _normalize_role(t.get("role") or top_role)
@@ -4717,12 +4728,12 @@ def delegate_task(
             # so the child knows the expected output shape before it starts.
             _task_schema = task_schemas[i] if i < len(task_schemas) else None
             _child_context = t.get("context")
-            if _ack_steps:
+            if _steps_i:
                 from agent.ack_checklist import child_instruction
 
                 _child_context = (
                     f"{_child_context}\n\n" if _child_context else ""
-                ) + child_instruction(_ack_steps)
+                ) + child_instruction(_steps_i)
             if _task_schema is not None:
                 from tools.delegation_output_schema import append_output_contract
 
@@ -4813,11 +4824,11 @@ def delegate_task(
             # From here the child is owned by `children`, so a failure while wiring
             # it up releases it with the rest.
             children.append((i, t, child))
-            if _ack_steps:
+            if _steps_i:
                 try:
                     from agent.ack_checklist import seed_todos
 
-                    child._todo_store.write(seed_todos(_ack_steps))
+                    child._todo_store.write(seed_todos(_steps_i))
                 except Exception:
                     logger.debug("seeding the helper's todo list failed", exc_info=True)
             if task_tier_fallback:
@@ -5336,6 +5347,7 @@ def delegate_task(
                 subagent_ids=[s for s in _sids if isinstance(s, str) and s],
                 request_identity=dict(_admitted_identity),
                 handoff=handoff,
+                child_steps=list(_task_steps) if n_tasks > 1 else (),
             )
             n = len(_goals)
             note = _background_dispatch_note(n, joined=_fanout_mode == "joined")
@@ -6234,6 +6246,14 @@ DELEGATE_TASK_SCHEMA = {
                             "description": (
                                 "Short label (≤60 chars) shown to the user "
                                 "while this child runs."
+                            ),
+                        },
+                        "steps": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Optional 1-6 short steps for this child's "
+                                "own checklist on the user's card."
                             ),
                         },
                         "context": {
