@@ -4372,6 +4372,7 @@ def delegate_task(
     credentials_cfg: Optional[Dict[str, Any]] = None,
     parent_task_id: Optional[str] = None,
     apply_default_tier: bool = True,
+    reserved_delegation_id: Optional[str] = None,
 ) -> str:
     """
     Spawn one or more child agents to handle delegated tasks, or control
@@ -4597,8 +4598,13 @@ def delegate_task(
         wrap_progress_callback,
     )
 
+    # The router backstop names its hand-off notes file after the delegation
+    # id before the helper exists; only an id the runtime reserved is honoured.
+    from agent.handoff_notes import consume_reserved
+
     live_deleg_id, live_writers, live_paths = create_live_transcripts(
-        task_list, context, model=creds.get("model"), provider=creds.get("provider")
+        task_list, context, model=creds.get("model"), provider=creds.get("provider"),
+        delegation_id=consume_reserved(reserved_delegation_id),
     )
 
     # Capture the ORIGINATING session's wake target BEFORE any child agent is
@@ -6377,6 +6383,10 @@ DELEGATE_TASK_SCHEMA = {
 # --- Registry ---
 from tools.registry import registry, tool_error
 
+# Not in the model-facing schema: the runtime's own delegation id for a
+# hand-off (see ``agent.handoff_notes.reserve_delegation_id``).
+RESERVED_ID_ARG = "_reserved_delegation_id"
+
 
 def _model_background_value(args: dict, parent_agent=None) -> bool:
     """Background flag for the MODEL-facing dispatch path (registry fallback).
@@ -6437,6 +6447,7 @@ registry.register(
         handoff=args.get("handoff"),
         follow_through=args.get("follow_through"),
         parent_agent=kw.get("parent_agent"),
+        reserved_delegation_id=args.get(RESERVED_ID_ARG),
     ),
     check_fn=check_delegate_requirements,
     emoji="🔀",

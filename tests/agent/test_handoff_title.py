@@ -79,6 +79,48 @@ class TestTitleFromTheMessage:
         assert title_and_goal(GPU)[0]
 
 
+class TestTheGoalReadsNaturally:
+    """The goal never has the verb moved to the end ("..., run")."""
+
+    @pytest.mark.parametrize("message, goal", [
+        ("Run a diagnostic on why that fuse tripped.", "diagnostic on why that fuse tripped"),
+        ("Can you also send the AutoHDR skill?", "send the AutoHDR skill"),
+        ("research the best 2 TB NVMe for local AI models in Canada and write me a summary",
+         "research on the best 2 TB NVMe for local AI models in Canada"),
+        ("fix the login bug", "fix the login bug"),
+        ("check my PSU and case fit", "check my PSU and case fit"),
+    ])
+    def test_real_messages(self, message, goal):
+        assert title_and_goal(message)[1] == goal
+
+    def test_the_gpu_comparison_is_a_noun_phrase(self):
+        _, goal = title_and_goal(GPU)
+        assert goal == "comparison of 3 options for adding a second GPU for local AI"
+
+    @pytest.mark.parametrize("message", [
+        "Run a diagnostic on why that fuse tripped.", GPU, "Can you also send the AutoHDR skill?",
+        "research the best 2 TB NVMe for local AI models in Canada", "fix the login bug",
+        "build the release then run the tests", "find out why the build is slow",
+        "Use 3 subagents at once to do a full PC diagnostic and make upgrade recommendations.",
+    ])
+    def test_no_trailing_verb_and_no_participle(self, message):
+        import re
+
+        _, goal = title_and_goal(message)
+        assert not re.search(r",\s+\w+$", goal), goal  # never "<phrase>, <verb>"
+        verb = message.lower().split()[0]
+        assert not goal.lower().endswith(f" {verb}"), goal
+
+    def test_the_title_is_unchanged(self):
+        assert title_and_goal("Run a diagnostic on why that fuse tripped.")[0] == (
+            "running a diagnostic on why that fuse tripped")
+
+    def test_the_routers_reason_still_wins_when_it_names_the_job(self):
+        _, goal = title_and_goal("Run a diagnostic on why that fuse tripped.",
+                                 "Diagnose why the fuse tripped.")
+        assert goal == "Diagnose why the fuse tripped"
+
+
 class TestGoalFromTheRoutersReason:
     def test_a_reason_that_describes_the_job_is_the_goal(self):
         _, goal = title_and_goal(GPU, "Compare three GPUs against the user's setup, current Canadian pricing.")
@@ -91,7 +133,7 @@ class TestGoalFromTheRoutersReason:
     ])
     def test_a_reason_about_the_sizing_is_not_used(self, reason):
         _, goal = title_and_goal(GPU, reason)
-        assert goal.startswith("3 options for adding a second GPU")
+        assert goal.startswith("comparison of 3 options for adding a second GPU")
 
     def test_a_long_reason_is_cut_not_pasted(self):
         reason = "Compare three GPUs against the user's setup, current Canadian pricing, and model capacity for local AI."

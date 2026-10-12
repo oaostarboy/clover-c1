@@ -115,6 +115,11 @@ class RouterSettings:
     direct_backstop: bool = True
     direct_backstop_calls: int = DEFAULT_DIRECT_BACKSTOP_CALLS
     direct_backstop_seconds: Optional[float] = DEFAULT_DIRECT_BACKSTOP_SECONDS
+    # ``delegation.router.handoff_notes``: a hand-off carries the whole turn's
+    # context (notes file, "known so far" bullets, the earlier conversation)
+    # and opens with a line in the root's own voice.  ``False`` = the old
+    # hand-off: the request, the last few cut-down results, the card alone.
+    handoff_notes: bool = True
 
 
 _TRUE = frozenset({"true", "1", "yes", "on"})
@@ -196,6 +201,7 @@ def load_settings() -> RouterSettings:
                 direct.get("work_calls"), DEFAULT_DIRECT_BACKSTOP_CALLS
             ),
             direct_backstop_seconds=direct_seconds,
+            handoff_notes=_bool(raw.get("handoff_notes"), True),
         )
     except Exception:
         logger.debug("delegation router settings unreadable; using defaults", exc_info=True)
@@ -1058,7 +1064,7 @@ def plan_for_turn(
             return ""
         # A direct verdict arms the safety net too (``direct_backstop``), unless
         # the user asked for it to be done directly: that is never overridden.
-        router_backstop.begin(agent, verdict, user_message, settings)
+        router_backstop.begin(agent, verdict, user_message, settings, history=history)
         return work_plan_note(verdict)
     except Exception:
         logger.debug("delegation router failed", exc_info=True)

@@ -3112,7 +3112,9 @@ _TIME_LIMIT_STOPPED_REPLY = (
 
 
 def handle_max_iterations(
-    agent, messages: list, api_call_count: int, *, reason: str = "iterations"
+    agent, messages: list, api_call_count: int, *, reason: str = "iterations",
+    request_text: Optional[str] = None, max_tokens: Optional[int] = None,
+    quiet: bool = False,
 ) -> str:
     """Request a summary when max iterations are reached. Returns the final response text.
 
@@ -3121,6 +3123,12 @@ def handle_max_iterations(
     own summary request (compaction recognizes its text).  The user never
     hears about the limit: the request tells the model not to mention it and
     the warning and fallback wording are neutral.
+
+    ``quiet`` turns this into a plain "one short tools-off call on the root's
+    own model" (the router backstop's opener line): ``request_text`` is the
+    hidden user note appended after ``messages`` (pass a COPY: the list is
+    appended to), ``max_tokens`` caps the reply, nothing is printed, thinking
+    is off, and a failure RAISES instead of becoming a canned reply.
     """
     _time_limit = reason == "time_limit"
     if _time_limit:
@@ -3129,7 +3137,9 @@ def handle_max_iterations(
     else:
         warning = f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary..."
         _no_summary = "I reached the iteration limit and couldn't generate a summary."
-    if getattr(agent, "suppress_status_output", False):
+    if quiet:
+        pass
+    elif getattr(agent, "suppress_status_output", False):
         # Strict machine-readable mode (clover chat -Q, oneshot, background
         # review): keep diagnostics out of stdout so wrappers receive only
         # the final assistant content (#93220 class). Note: plain quiet_mode
@@ -3178,6 +3188,10 @@ def handle_max_iterations(
     summary_request = (
         TIME_LIMIT_SUMMARY_REQUEST if _time_limit else MAX_ITERATIONS_SUMMARY_REQUEST
     )
+    if request_text:
+        summary_request = request_text
+    _call_max_tokens = max_tokens if max_tokens is not None else agent.max_tokens
+    _call_reasoning = {"enabled": False} if quiet else agent.reasoning_config
     # Runtime scaffolding stored as a user row: ``display_kind="hidden"`` keeps
     # it out of every human transcript projection (TUI / desktop / CLI resume,
     # export) while the provider still replays it as a plain user message.
@@ -3293,8 +3307,8 @@ def handle_max_iterations(
             if _is_lmstudio_summary else None
         )
         if not _is_lmstudio_summary and agent._supports_reasoning_extra_body():
-            if agent.reasoning_config is not None:
-                summary_extra_body["reasoning"] = agent.reasoning_config
+            if _call_reasoning is not None:
+                summary_extra_body["reasoning"] = _call_reasoning
             else:
                 summary_extra_body["reasoning"] = {
                     "enabled": True,
@@ -3315,8 +3329,8 @@ def handle_max_iterations(
             }
             if _summary_temperature is not None:
                 summary_kwargs["temperature"] = _summary_temperature
-            if agent.max_tokens is not None:
-                summary_kwargs.update(agent._max_tokens_param(agent.max_tokens))
+            if _call_max_tokens is not None:
+                summary_kwargs.update(agent._max_tokens_param(_call_max_tokens))
             if _lm_reasoning_effort is not None:
                 summary_kwargs["reasoning_effort"] = _lm_reasoning_effort
 
@@ -3334,7 +3348,7 @@ def handle_max_iterations(
                         provider_preferences=provider_preferences or None,
                         model=agent.model,
                         base_url=agent.base_url,
-                        reasoning_config=agent.reasoning_config,
+                        reasoning_config=_call_reasoning,
                     )
             except Exception:
                 pass
@@ -3377,8 +3391,8 @@ def handle_max_iterations(
                     model=agent.model,
                     messages=api_messages,
                     tools=None,
-                    max_tokens=agent.max_tokens,
-                    reasoning_config=agent.reasoning_config,
+                    max_tokens=_call_max_tokens,
+                    reasoning_config=_call_reasoning,
                     is_oauth=agent._is_anthropic_oauth,
                     preserve_dots=agent._anthropic_preserve_dots(),
                     base_url=getattr(agent, "_anthropic_base_url", None),
@@ -3414,6 +3428,10 @@ def handle_max_iterations(
                 )
             else:
                 final_response = _no_summary
+        elif quiet:
+            # A one-line opener is not worth a second call: the caller has a
+            # template for an empty answer.
+            final_response = ""
         else:
             # Retry summary generation
             if agent.api_mode == "codex_responses":
@@ -3430,8 +3448,8 @@ def handle_max_iterations(
                     messages=api_messages,
                     tools=None,
                     is_oauth=agent._is_anthropic_oauth,
-                    max_tokens=agent.max_tokens,
-                    reasoning_config=agent.reasoning_config,
+                    max_tokens=_call_max_tokens,
+                    reasoning_config=_call_reasoning,
                     preserve_dots=agent._anthropic_preserve_dots(),
                     base_url=getattr(agent, "_anthropic_base_url", None),
                 )
@@ -3450,8 +3468,8 @@ def handle_max_iterations(
                 }
                 if _summary_temperature is not None:
                     summary_kwargs["temperature"] = _summary_temperature
-                if agent.max_tokens is not None:
-                    summary_kwargs.update(agent._max_tokens_param(agent.max_tokens))
+                if _call_max_tokens is not None:
+                    summary_kwargs.update(agent._max_tokens_param(_call_max_tokens))
                 if _lm_reasoning_effort is not None:
                     summary_kwargs["reasoning_effort"] = _lm_reasoning_effort
                 if summary_extra_body:
@@ -3483,6 +3501,8 @@ def handle_max_iterations(
                 final_response = _no_summary
 
     except Exception as e:
+        if quiet:
+            raise
         logger.warning("Failed to get summary response: %s", e)
         if _time_limit:
             # Details stay in the log above; the user never reads an error,
@@ -3498,6 +3518,8 @@ def handle_max_iterations(
             outcome=summary_call_outcome,
         )
 
+    if quiet and summary_call_outcome != "success":
+        return ""
     return final_response
 
 

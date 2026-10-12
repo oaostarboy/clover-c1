@@ -8,8 +8,12 @@ result").  This builds both from what is already in hand:
   ``compare 3 options for adding a second GPU ...`` -> ``comparing 3 options for
   adding a second GPU`` (at most ``TITLE_CHARS``, cut on a word);
 * the goal (``outcome``): the router's own ``reason`` when it describes the job
-  (a "Compare three GPUs against ..." sentence), otherwise a short noun phrase
-  from the message (``3 options for adding a second GPU, compared``), at most
+  (a "Compare three GPUs against ..." sentence), otherwise a short phrase from
+  the message that reads on its own: a noun where one is natural
+  (``comparison of 3 options for adding a second GPU``), a noun phrase with the
+  verb dropped (``run a diagnostic on why that fuse tripped`` ->
+  ``diagnostic on why that fuse tripped``), else the cleaned request itself
+  (``send the AutoHDR skill``).  The verb is never moved to the end.  At most
   ``GOAL_CHARS``.
 
 The raw message is never pasted: fenced code, quoted blocks, links and
@@ -59,6 +63,18 @@ _VERBS = {
     "upgrade": ("upgrading", "upgraded"), "verify": ("verifying", "verified"),
     "write": ("writing", "written"),
 }
+
+# verb -> the noun that heads the same job ("compare X" -> "comparison of X")
+_NOUNS = {
+    "analyse": "analysis of", "analyze": "analysis of", "audit": "audit of",
+    "compare": "comparison of", "diagnose": "diagnosis of", "plan": "plan for",
+    "research": "research on", "review": "review of", "summarise": "summary of",
+    "summarize": "summary of", "investigate": "investigation of",
+    "design": "design of", "migrate": "migration of", "transcribe": "transcript of",
+}
+# Verbs that only carry the noun after them: "run a diagnostic" -> "diagnostic".
+_LIGHT_VERBS = frozenset({"run", "do", "make", "perform", "give", "write", "put", "set"})
+_LEADING_ARTICLE = re.compile(r"^(?:a|an|the|some|one)\s+", re.IGNORECASE)
 
 # Opening filler, stripped repeatedly from the front (case-insensitive).
 _FILLER = re.compile(
@@ -210,12 +226,9 @@ def title_and_goal(message: str, reason: str = "", fallback_goal: str = "") -> T
             rest = _flat(rest).rstrip(" ?!.,;:")
         title = noun = ""
         if verb and rest:
-            gerund, participle = _VERBS[verb]
+            gerund = _VERBS[verb][0]
             title = _cut(f"{gerund} {_head_clause(rest, TITLE_CHARS)}", TITLE_CHARS)
-            phrase = _head_clause(rest, GOAL_CHARS)
-            noun = _cut(f"{phrase}, {participle}", GOAL_CHARS)
-            if f", {participle}" not in noun:  # no room for the participle: keep the phrase whole
-                noun = _cut(phrase, GOAL_CHARS)
+            noun = _cut(_goal_phrase(verb, _head_clause(rest, GOAL_CHARS)), GOAL_CHARS)
         elif rest and _QUESTION.match(rest):
             body = _head_clause(rest, TITLE_CHARS)
             title = _cut("answering: " + _lead_lower(body), TITLE_CHARS)
@@ -229,6 +242,18 @@ def title_and_goal(message: str, reason: str = "", fallback_goal: str = "") -> T
         return title, goal
     except Exception:
         return FALLBACK_TITLE, FALLBACK_GOAL
+
+
+def _goal_phrase(verb: str, phrase: str) -> str:
+    """The job as a phrase that reads on its own; never ``<phrase>, <verb>``."""
+    phrase = _flat(phrase)
+    if verb in _NOUNS:
+        return f"{_NOUNS[verb]} {phrase}"
+    if verb in _LIGHT_VERBS:
+        bare = _LEADING_ARTICLE.sub("", phrase)
+        if bare and bare != phrase:
+            return bare
+    return f"{verb} {phrase}"
 
 
 def _job_goal(reason: str) -> str:

@@ -1640,6 +1640,9 @@ delegation:
   #     enabled: true                         # false = a direct turn is never handed off by the runtime
   #     work_calls: 25                        # after this many work tool calls the agent made itself ...
   #     seconds: 180                          # ... or this many seconds, the next work call hands the REST of the request to ONE helper
+  #   handoff_notes: true                     # a runtime hand-off gives the helper the whole turn: a notes file (cache/handoff/<id>.md: the earlier
+  #                                           # conversation, every tool call with its full result, files written, skills opened, todo list), a short
+  #                                           # "known so far" summary, and an opening line from the agent before the card. false = the earlier, shorter hand-off
   #   calibration_v2: true                    # sizing rubric v2: preparing something before a write/send (find, read, verify, package)
   #                                           # is sized as a helper job; "send subagents" counts as asking for helpers. false = earlier rubric
   #   slow_model_timeout_seconds: 20          # wait for the sizing call when only the big main model is available (no small fast one)
