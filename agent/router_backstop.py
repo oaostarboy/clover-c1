@@ -63,6 +63,7 @@ import logging
 import os
 import threading
 import time
+import zlib
 from collections import deque
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -1497,9 +1498,33 @@ def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None) -> str:
             logger.debug("ack checklist unavailable; plain summary lines", exc_info=True)
         return "\n".join(lines)
     count = sum(len(r.goals) for r in receipts) or sum(len(r.subagent_ids) for r in receipts) or 1
-    if count == 1:
-        return "\U0001f504 on it, i'll report back here when it's done"
-    return f"\U0001f504 {count} subagents on it, i'll report back here when they're done"
+    return _fallback_ack(count, receipts)
+
+
+# The model skipped its own opener line (``handoff.say``): say something a
+# person would text, not a status banner.  No emoji, never the raw task text
+# (goals are internal briefs).  The wording varies so repeated hand-offs in
+# one chat do not read as a canned bot reply; it is picked from the
+# delegation id so the same dispatch always renders the same line.
+_FALLBACK_ONE = (
+    "on it, i'll let you know here when it's done",
+    "on it, i'll message you here once it's done",
+    "got it, working on that now. i'll post the result here",
+    "on it. i'll tell you here when it's finished",
+)
+_FALLBACK_MANY = (
+    "on it with {n} subagents, i'll let you know here when they're done",
+    "got {n} subagents on it, i'll post the results here",
+    "on it, {n} subagents working. i'll tell you here when they're done",
+)
+
+
+def _fallback_ack(count: int, receipts: List["_fl.DispatchReceipt"]) -> str:
+    key = "|".join(str(getattr(r, "delegation_id", "") or "") for r in receipts)
+    pick = zlib.crc32(key.encode("utf-8"))
+    if count <= 1:
+        return _FALLBACK_ONE[pick % len(_FALLBACK_ONE)]
+    return _FALLBACK_MANY[pick % len(_FALLBACK_MANY)].format(n=count)
 
 
 def _opener_is_own_message(card: Any, agent: Any) -> bool:
