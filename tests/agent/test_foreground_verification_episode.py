@@ -49,6 +49,20 @@ def clock(monkeypatch) -> FakeClock:
     return c
 
 
+def atomic_write_config(text: str) -> None:
+    """Replace config.yaml in one step. ``write_text`` truncates first, and a
+    leaked background thread (title generation) that loads the config in that
+    gap sees a legacy file, migrates it and writes the defaults over the test's
+    settings."""
+    import os
+    from clover_constants import get_clover_home
+
+    path = get_clover_home() / 'config.yaml'
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
 def _write_config(foreground: Any = 300, verify: Any = 'unset') -> None:
     from clover_constants import get_clover_home
 
@@ -57,7 +71,7 @@ def _write_config(foreground: Any = 300, verify: Any = 'unset') -> None:
     delegation: dict[str, Any] = {'foreground_time_limit_seconds': foreground}
     if verify != 'unset':
         delegation['verify_time_limit_seconds'] = verify
-    (get_clover_home() / 'config.yaml').write_text(yaml.safe_dump({
+    atomic_write_config(yaml.safe_dump({
         '_config_version': DEFAULT_CONFIG['_config_version'],
         'delegation': delegation,
     }))
