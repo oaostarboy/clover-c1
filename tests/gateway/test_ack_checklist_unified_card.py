@@ -434,15 +434,16 @@ def _editor(adapter, card):
     return da.AckCardEditor(card, adapter, "chat", "m1", asyncio.new_event_loop(), min_interval=0.0)
 
 
-def test_telegram_card_is_title_plus_collapsed_quote_with_the_live_hint():
+def test_telegram_title_is_the_first_line_inside_the_collapsed_quote():
     card = _say_card()
     text = _editor(_tg_adapter(), card)._render()
     lines = text.splitlines()
-    assert lines[0] == "\U0001f340 **fixing the bugs**", "bold title stays visible on top"
-    assert lines[1] == f"**> _{da.TAP_HINT_LIVE}_" and da.TAP_HINT_LIVE == "tap to watch \U0001f340"
-    assert lines[2:4] == ["> \u2800", "> \u2800"], "the 3-line cut lands on empty space"
-    assert text.endswith("||") and text.count("||") == 1
-    assert "> \U0001f504 find" in text and "> *\u2192 test build + PR" in text
+    assert lines[0] == "**> \U0001f340 **fixing the bugs**", "title opens the expandable quote"
+    assert lines[1] == f"> *{da.TAP_HINT_LIVE}*" and da.TAP_HINT_LIVE == "tap to watch \U0001f340"
+    assert lines[2] == "> \u2800", "the 3-line cut lands on empty space"
+    assert lines[3] == "> *\u2192 test build + PR \u00b7 ~10 min*", "exactly ONE spacer after the hint"
+    assert text.endswith("||") and text.count("||") == 1 and text.count("**>") == 1
+    assert all(ln.startswith("> ") for ln in lines[1:]) and "> \U0001f504 find" in text
 
 
 def test_telegram_finished_card_says_tap_to_read():
@@ -452,8 +453,8 @@ def test_telegram_finished_card_says_tap_to_read():
                       summary="Result: done\nPlain summary: All fixed.")
     text = _editor(_tg_adapter(), card)._render()
     lines = text.splitlines()
-    assert lines[0] == "\U0001f340 **fixing the bugs**"
-    assert lines[1] == f"**> _{da.TAP_HINT_DONE}_" and da.TAP_HINT_DONE == "tap to read \U0001f340"
+    assert lines[0] == "**> \U0001f340 **fixing the bugs**"
+    assert lines[1] == f"> *{da.TAP_HINT_DONE}*" and da.TAP_HINT_DONE == "tap to read \U0001f340"
     assert "All fixed." in text
 
 
@@ -470,30 +471,78 @@ def test_classic_style_is_not_made_expandable():
     assert "**>" not in text and text == card.render()
 
 
-def test_multi_helper_title_keeps_k_of_n_done_and_one_quote():
-    r = fl.DispatchReceipt(delegation_id="dm", seq=1, goals=("a", "b", "c"), summary=HEAD, steps=(), say=SAY)
+def _three_subagent_card():
+    r = fl.DispatchReceipt(delegation_id="dm", seq=1, goals=("a", "b", "c"), summary=HEAD, steps=(), say=SAY,
+                           child_steps=(("check the repo", "count files"), ("scan", "report"), ("x", "y")))
     card = ac.card_for([r])
     card.split_opener = True
     for i in range(3):
         ac.on_child_event("subagent.start", delegation_id="dm", task_index=i, task_count=3,
-                          title=f"site {i}")
-    ac.on_child_event("subagent.complete", delegation_id="dm", task_index=0, task_count=3, status="completed",
-                      summary="Result: done\nPlain summary: Site 0 is tidy.")
-    text = _editor(_tg_adapter(), card)._render()
+                          title=f"site {i}", model="m")
+    ac.on_child_event("subagent.tool", delegation_id="dm", task_index=0, task_count=3,
+                      tool_name="terminal", preview="ls", tool_call_id="t1")
+    ac.on_child_event("subagent.complete", delegation_id="dm", task_index=1, task_count=3, status="completed",
+                      summary="Result: done\nPlain summary: Site 1 is tidy.")
+    return card
+
+
+def test_multi_subagent_title_keeps_k_of_n_done_inside_one_quote():
+    text = _editor(_tg_adapter(), _three_subagent_card())._render()
     lines = text.splitlines()
-    assert lines[0].startswith("\U0001f340 **fixing the bugs**") and "1 of 3 done" in lines[0]
-    assert lines[1].startswith("**> _tap to watch") and text.count("**>") == 1 and text.count("||") == 1
-    assert all(ln.startswith("> ") for ln in lines[2:-1] if ln) and lines[-1].endswith("||")
+    assert lines[0].startswith("**> \U0001f340 **fixing the bugs**") and "1 of 3 done" in lines[0]
+    assert lines[1] == "> *tap to watch \U0001f340*" and lines[2] == "> \u2800"
+    assert text.count("**>") == 1 and text.count("||") == 1
+    assert all(ln.startswith("> ") for ln in lines[1:]) and lines[-1].endswith("||")
 
 
-def test_format_message_keeps_one_expandable_quote_and_the_bold_title():
+def test_multi_subagent_spacing_one_spacer_between_blocks_and_before_footer():
+    text = _editor(_tg_adapter(), _three_subagent_card())._render()
+    lines = text.splitlines()
+    spacer = "> \u2800"
+    # No two blank lines in a row anywhere (hint spacer, blocks, footer).
+    assert not any(a == spacer and b == spacer for a, b in zip(lines, lines[1:]))
+    # Hint, ONE spacer, then straight to the outcome line.
+    assert lines[1:4] == ["> *tap to watch \U0001f340*", spacer, "> *\u2192 test build + PR \u00b7 ~10 min*"]
+    assert lines[-2] == spacer and lines[-1].startswith("> *3 subagents") and "helpers" not in text
+    # Three subagent sections: a spacer before each name line, plus the one before the footer.
+    names = [i for i, ln in enumerate(lines) if ln.startswith("> ") and "**" in ln and i > 0]
+    assert len(names) == 3 and all(lines[i - 1] == spacer for i in names)
+
+
+def test_multi_subagent_lines_are_indented_under_the_unindented_bold_name():
+    em = "\u2003\u2003"
+    text = _editor(_tg_adapter(), _three_subagent_card())._render()
+    lines = [ln[2:] for ln in text.splitlines()[1:]]
+    for i, ln in enumerate(lines):
+        if "**site" in ln:
+            assert not ln.startswith((em, " ", "\u2003")), "the name line is not indented"
+            under = []
+            for nxt in lines[i + 1:]:
+                if nxt in ("\u2800", "") or "**site" in nxt:
+                    break
+                under.append(nxt)
+            assert under and all(u.startswith(em) and not u.startswith(em + "\u2003") for u in under), under
+    assert "\n> " + em + "*" in text or "> " + em + "\U0001f527" in text
+
+
+def test_single_subagent_card_has_no_indent():
+    text = _editor(_tg_adapter(), _say_card())._render()
+    assert "\u2003" not in text
+
+
+def test_format_message_keeps_title_inside_one_expandable_quote_and_the_em_indent():
     from plugins.platforms.telegram.adapter import TelegramAdapter
 
-    text = _editor(_tg_adapter(), _say_card())._render()
-    out = TelegramAdapter.format_message(object.__new__(TelegramAdapter), text)
-    assert out.splitlines()[0] == "\U0001f340 *fixing the bugs*"
-    assert out.splitlines()[1] == "**> _tap to watch \U0001f340_"
+    fm = lambda t: TelegramAdapter.format_message(object.__new__(TelegramAdapter), t)
+    out = fm(_editor(_tg_adapter(), _say_card())._render())
+    lines = out.splitlines()
+    assert lines[0] == "**> \U0001f340 *fixing the bugs*"
+    assert lines[1] == "> _tap to watch \U0001f340_" and lines[2] == "> \u2800"
     assert out.count("**>") == 1 and out.endswith("||")
+    multi = fm(_editor(_tg_adapter(), _three_subagent_card())._render())
+    assert multi.splitlines()[0].startswith("**> \U0001f340 *fixing the bugs* \u00b7 1 of 3 done")
+    assert "> \u2003\u2003\U0001f504 check the repo" in multi, "EM SPACE indent survives escaping"
+    assert multi.count("**>") == 1 and multi.endswith("||")
 
 
 @pytest.mark.asyncio
@@ -504,4 +553,4 @@ async def test_card_text_sent_under_the_opener_is_the_expandable_one():
     sent = await adapter.send("chat", card.say_text())
     await da.bind_ack_card(adapter, "chat", card.say_text(), sent)
     assert adapter.sends[0] == SAY
-    assert adapter.sends[1].startswith("\U0001f340 **fixing the bugs**\n**> _tap to watch")
+    assert adapter.sends[1].startswith("**> \U0001f340 **fixing the bugs**\n> *tap to watch")

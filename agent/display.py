@@ -483,6 +483,35 @@ def _delegate_task_goal_parts(tasks: Any, *, per_goal_len: int) -> tuple[int, li
     return len(goals), goals
 
 
+def delegate_progress_line(args: Any) -> "str | None":
+    """The chat progress text for a ``delegate_task`` call, never the goal.
+
+    ``""`` means "show no line": the unified card is on and this dispatch
+    carries a handoff summary, so a card will say what is happening.
+    ``None`` leaves the generic path (list / steer / stop actions).
+    Otherwise ``"Delegating N subagents"`` (``"Delegating a subagent"``).
+    """
+    if not isinstance(args, dict):
+        return "Delegating a subagent"
+    action = str(args.get("action") or "").strip().lower()
+    if action in ("list", "steer", "stop"):
+        return None
+    handoff = args.get("handoff")
+    if isinstance(handoff, dict) and str(handoff.get("work") or "").strip():
+        try:
+            from agent.ack_checklist import unified
+
+            if unified():
+                return ""
+        except Exception:
+            pass
+    tasks = args.get("tasks")
+    count = len([t for t in tasks if isinstance(t, dict)]) if isinstance(tasks, list) else 0
+    if count > 1:
+        return f"Delegating {count} subagents"
+    return "Delegating a subagent"
+
+
 def _browser_exec_step_label(args: dict, max_chars: int = 80) -> str | None:
     """User-friendly step label from browser_exec code's leading comment."""
     code = str(args.get("code", "") or "").strip()

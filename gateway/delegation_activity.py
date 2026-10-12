@@ -1336,12 +1336,13 @@ TAP_HINT_LIVE = "tap to watch 🍀"
 TAP_HINT_DONE = "tap to read 🍀"
 
 
-def _to_expandable(text: str, hint: str = "", keep_title: bool = False) -> str:
+def _to_expandable(text: str, hint: str = "", bold_title: bool = False) -> str:
     """Header + "> " detail lines -> one Telegram expandable blockquote:
     ``**> header`` / ``> detail`` / ... with ``||`` closing the last line.
 
-    ``keep_title`` (the unified helper card): the first line stays OUTSIDE the
-    quote, bold and always visible; the quote starts with the italic hint."""
+    The header is the quote's first line, so a collapsed quote shows the
+    header, the italic hint and a blank line.  ``bold_title`` (the unified
+    subagent card) keeps the title's bold: ``**> 🍀 **title** · 1 of 3 done``."""
     # "||" would be read as a spoiler / early quote terminator, and "*" in
     # the header can eat the "**>" opener (Opus review).
     lines = text.replace("||", "¦¦").split("\n")
@@ -1351,17 +1352,11 @@ def _to_expandable(text: str, hint: str = "", keep_title: bool = False) -> str:
     # so the cut lands on empty space, never on half a detail.
     details = [ln for ln in body if ln.strip()]
     spacer = "\u2800"
-    if keep_title:
-        # Title is its own line above; the quote's three visible lines are the
-        # italic hint and two blanks.  The hint sits on the "**>" line itself,
-        # so it is written with "_": a "*" there would pair with the opener's.
-        out = [lines[0]]
-        if not details:
-            return "\n".join(out)
-        tip = f"_{hint}_" if hint else spacer
-        out += [f"**> {tip}", f"> {spacer}", f"> {spacer}"] + [f"> {ln}" for ln in details]
-        return "\n".join(out) + "||"
-    header = lines[0].replace("*", "")
+    # The hint is followed by exactly one spacer: a detail block that opens
+    # with its own spacer would leave two blank lines there.
+    while details and details[0].strip() == spacer:
+        details.pop(0)
+    header = lines[0] if bold_title else lines[0].replace("*", "")
     out = [f"**> {header}"]
     if details:
         tip = f"*{hint}*" if hint else spacer
@@ -1535,7 +1530,7 @@ class AckCardEditor:
             return text
         text = _fit_to_limit(text, 4000 - 16)
         hint = TAP_HINT_DONE if self.card.finished else TAP_HINT_LIVE
-        return _to_expandable(text, hint, keep_title=True)
+        return _to_expandable(text, hint, bold_title=True)
 
     # any thread
     def notify(self) -> None:

@@ -38,6 +38,17 @@ def test_failed_footer_unchanged():
     assert "did not finish properly: x. Treat that part as not done." in wl.status_footer(work)
 
 
+def test_status_footer_says_subagent_tasks_never_helper():
+    work = wl.WorkReport(
+        (wl.Slot("a", wl.BAD), wl.Slot("b", wl.STOPPED), wl.Slot("c", wl.PENDING)), wl.WORK_INCOMPLETE,
+    )
+    footer = wl.status_footer(work)
+    assert "1 of 3 subagent tasks did not finish properly: a." in footer
+    assert "1 of 3 subagent tasks was stopped: b." in footer
+    assert "1 of 3 subagent tasks still running: c." in footer
+    assert "helper" not in footer.lower()
+
+
 @pytest.mark.parametrize("text, silent", [
     ("[SILENT]", True), ("  [silent]\n", True), ("NO_REPLY", True), ("no reply", True),
     ("[SILENT] but here is text", False), ("all done", False), ("", False), (None, False),

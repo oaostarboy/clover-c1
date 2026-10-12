@@ -358,7 +358,16 @@ def _done(did, name, n, error=False, **kw):
                       is_error=error, **kw)
 
 
+_EM = "\u2003\u2003"  # a multi-subagent card indents everything under a subagent's name
+
+
+def _flat(text):
+    """The card text without the per-subagent indent (for shape checks)."""
+    return text.replace(_EM, "")
+
+
 def _tool_lines(text):
+    text = _flat(text)
     return [ln[2:] for ln in text.splitlines() if ln[2:3] in ("\U0001f527", "\u2713", "\u2717")]
 
 
@@ -487,7 +496,7 @@ def test_multi_card_shape_while_running():
     cl = card.parts[0].checklist
     cl.kids[0].started -= 100; cl.kids[0].ended = cl.kids[0].started + 100
     cl.kids[1].started -= 72
-    lines = card.render().splitlines()
+    lines = _flat(card.render()).splitlines()
     assert lines[:4] == [
         "on it", "", "\U0001f340 **checking the 3 sites** \u00b7 1 of 3 done",
         "> *\u2192 outcome \u00b7 ~5 min*",
@@ -503,16 +512,16 @@ def test_multi_card_shape_while_running():
     assert "> *Sonnet 5.5 \u00b7 \U0001f6e0 4 tool calls \u00b7 \u23f1 1m12s*" in lines
     assert "> \u2b1c **Check the pizzeria bros pamphlet**" in lines
     assert "> *waiting to start*" in lines
-    assert lines[-1].startswith("> *3 helpers \u00b7 \U0001f6e0 13 tool calls \u00b7 \u23f1 ")
+    assert lines[-1].startswith("> *3 subagents \u00b7 \U0001f6e0 13 tool calls \u00b7 \u23f1 ")
     assert lines[-2] == f"> {SPACER}"
-    assert "ignored" not in card.render()
+    assert "ignored" not in _flat(card.render())
 
 
 def test_multi_helper_without_a_title_uses_the_goal_then_a_number():
     card = _multi_card(goals=("Check nice and tidy site works. Then report.", ""))
-    text = card.render()
+    text = _flat(card.render())
     assert "**Check nice and tidy site works**" in text
-    assert "**helper 2**" in text
+    assert "**subagent 2**" in text
 
 
 def test_child_title_from_the_event_beats_the_goal():
@@ -574,7 +583,7 @@ def test_multi_finished_all_ok_drops_the_count_and_the_eta():
         k.started = k.started or cl.kids[0].started
         k.ended = cl.kids[0].started + 100
     cl.ended = cl.kids[0].started + 100
-    lines = card.render().splitlines()
+    lines = _flat(card.render()).splitlines()
     assert lines[2] == "\U0001f340 **checking the 3 sites**"
     assert lines[3] == "> *\u2192 outcome*"
     assert [ln for ln in lines if "\U0001f340 **" in ln and ln.startswith(">")] == [
@@ -582,8 +591,8 @@ def test_multi_finished_all_ok_drops_the_count_and_the_eta():
         "> \U0001f340 **Check the pizzeria bros pamphlet**",
     ]
     assert "> Booking works." in lines and "> Pamphlet is fine." in lines
-    assert _tool_lines(card.render()) == []
-    assert lines[-1].endswith("\u23f1 1m40s*") and "3 helpers" in lines[-1]
+    assert _tool_lines(_flat(card.render())) == []
+    assert lines[-1].endswith("\u23f1 1m40s*") and "3 subagents" in lines[-1]
     assert card.finished
 
 
@@ -593,7 +602,7 @@ def test_multi_finished_with_one_failed_and_one_stopped_is_failed_and_shows_the_
     ac.on_child_event("subagent.complete", status="completed", outcome="not_done",
                       summary="Result: not done\nPlain summary: Site is down.", **_kid("dm", 1))
     ac.on_child_event("subagent.complete", status="interrupted", summary="", **_kid("dm", 2))
-    lines = card.render().splitlines()
+    lines = _flat(card.render()).splitlines()
     assert lines[0] == "\U0001f342 **checking the 3 sites** \u00b7 1 of 3 done"
     assert "> \U0001f340 **a**" in lines and "> \U0001f342 **b**" in lines and "> \u23f9 **c**" in lines
     assert "> Site is down." in lines
@@ -623,8 +632,8 @@ def test_multi_footer_totals_and_a_summary_cut_on_a_word():
     long = "Plain summary: " + " ".join(["word"] * 80) + "."
     ac.on_child_event("subagent.complete", status="completed", summary=long, **_kid("dm", 0))
     cl.kids[0].started -= 50; cl.kids[1].started = cl.kids[0].started + 10
-    lines = card.render().splitlines()
-    assert "> *2 helpers \u00b7 \U0001f6e0 12 tool calls \u00b7 \u23f1 " in "\n".join(lines)
+    lines = _flat(card.render()).splitlines()
+    assert "> *2 subagents \u00b7 \U0001f6e0 12 tool calls \u00b7 \u23f1 " in "\n".join(lines)
     summary = next(ln for ln in lines if ln.startswith("> word"))
     assert len(summary) <= 142 and summary.endswith("\u2026") and not summary.endswith(" \u2026")
 
@@ -634,7 +643,7 @@ def test_multi_complete_before_the_part_exists_is_replayed_per_child():
                       subagent_id="sa-1", status="completed", outcome="not_done",
                       summary="Result: not done\nPlain summary: Nope.")
     card = _multi_card(goals=("g1", "g2"))
-    lines = card.render().splitlines()
+    lines = _flat(card.render()).splitlines()
     assert "> \U0001f342 **second**" in lines and "> Nope." in lines
     assert "> \u2b1c **g1**" in lines
 
@@ -676,9 +685,9 @@ def test_six_helper_card_is_compact_and_under_the_telegram_limit():
                           args={"query": "q" * 70}, tool_count=2, **_kid("dm", i))
     for i in range(6):
         ac.on_child_event("subagent.complete", status="completed", summary=para, **_kid("dm", i))
-    text = card.render()
+    text = _flat(card.render())
     assert len(text) < 4000
-    assert text.count("\U0001f340 **Check site number") == 6 and "6 helpers" in text
+    assert text.count("\U0001f340 **Check site number") == 6 and "6 subagents" in text
     # more than 4 helpers: a finished helper is ONE line, no stats line
     rows = [ln for ln in text.splitlines() if "**Check site number" in ln]
     assert len(rows) == 6 and all(len(r) < 90 and r.endswith("\u2026") for r in rows)

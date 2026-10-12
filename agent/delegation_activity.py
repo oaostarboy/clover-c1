@@ -1059,7 +1059,7 @@ def _worker_rows(child: ChildActivity, now: float, *, live: bool) -> List[str]:
         bits.append(f"🛠 {calls} tool call{'s' if calls != 1 else ''}")
     if live:
         if child.awaited and child.state not in TERMINAL_STATES:
-            bits.append(f"⏳ waiting on helper {child.index + 1}")
+            bits.append(f"⏳ waiting on subagent {child.index + 1}")
         bits.append(_doing(child, now).replace("🔧 ", ""))
     else:
         bits.append(f"⏱ {_elapsed(child, now)}")

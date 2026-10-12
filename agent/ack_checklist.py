@@ -212,7 +212,7 @@ class Child:
 
     @property
     def label(self) -> str:
-        return (self.title or "").replace("*", "").strip() or f"helper {self.index + 1}"
+        return (self.title or "").replace("*", "").strip() or f"subagent {self.index + 1}"
 
 
 @dataclass
@@ -345,7 +345,7 @@ class Checklist:
         started = [k.started for k in kids if k.started is not None]
         ended = [k.ended for k in kids if k.ended is not None]
         calls = sum(k.calls for k in kids)
-        foot = [f"{len(kids)} helpers"]
+        foot = [f"{len(kids)} subagent{'s' if len(kids) != 1 else ''}"]
         if calls:
             foot.append(f"\U0001f6e0 {calls} tool call{'s' if calls != 1 else ''}")
         if started:
@@ -366,6 +366,13 @@ class Checklist:
 
 
 _SPACER = "\u2800"
+# Two EM SPACEs: Telegram keeps these at the start of a quoted line (an
+# ordinary space is trimmed), so a subagent's lines sit under its name.
+_INDENT = "\u2003\u2003"
+
+
+def _indent(lines: Sequence[str]) -> List[str]:
+    return [_INDENT + ln for ln in lines if ln]
 
 
 def _italic(text: str) -> str:
@@ -419,16 +426,17 @@ def _full_kids(kids: Sequence[Child], now: float, summary_chars: int, tool_cap: 
         quoted.append(_SPACER)
         quoted.append(f"{_CHILD_ICON[k.state]} **{k.label}**")
         if k.state == PENDING:
-            quoted.append(_italic("waiting to start"))
+            quoted += _indent([_italic("waiting to start")])
             continue
-        quoted += _kid_step_lines(k)
+        under = _kid_step_lines(k)
         if k.state == RUNNING:
-            quoted += _tool_lines(k, tool_cap)
+            under += _tool_lines(k, tool_cap)
         elif k.summary and summary_chars > 0:
-            quoted.append(no_command_links(_cut_word(k.summary.replace("*", ""), summary_chars)))
+            under.append(no_command_links(_cut_word(k.summary.replace("*", ""), summary_chars)))
         stats = _stats_line(k.model, k.calls, k.started, k.ended, now)
         if stats:
-            quoted.append(_italic(stats))
+            under.append(_italic(stats))
+        quoted += _indent(under)
     return quoted
 
 
@@ -455,11 +463,11 @@ def _compact_kids(kids: Sequence[Child], now: float, tool_cap: int) -> List[str]
                 continue
             running_shown += 1
             quoted += [_SPACER, f"{_CHILD_ICON[k.state]} **{k.label}**"]
-            quoted += _kid_step_lines(k)
-            quoted += _tool_lines(k, min(tool_cap, RECENT_TOOLS_MULTI))
+            under = _kid_step_lines(k) + _tool_lines(k, min(tool_cap, RECENT_TOOLS_MULTI))
             stats = _stats_line(k.model, k.calls, k.started, k.ended, now)
             if stats:
-                quoted.append(_italic(stats))
+                under.append(_italic(stats))
+            quoted += _indent(under)
         else:
             line = f"{_CHILD_ICON[k.state]} **{k.label}**"
             if k.summary:

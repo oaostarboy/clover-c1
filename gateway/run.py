@@ -4791,6 +4791,17 @@ class TurnRunner:
         except Exception:
             pass
 
+        # delegate_task: never paste the task goal into the chat.  When the
+        # unified card will be shown the card says it all (no progress line);
+        # otherwise a goal-free "Delegating N subagents" line.
+        _delegate_msg = None
+        if tool_name == "delegate_task":
+            from agent.display import delegate_progress_line
+
+            _delegate_msg = delegate_progress_line(args)
+            if _delegate_msg == "":
+                return
+
         # "new" mode: only report when tool changes
         if ctx.progress_mode == "new" and tool_name == ctx.last_tool[0]:
             return
@@ -4876,7 +4887,10 @@ class TurnRunner:
         # compact — unlike CLI spinners, these persist as permanent messages).
         # Terminal commands on markdown platforms get a single-line capped
         # fenced block (built above) instead of the truncated preview.
-        if _code_block_short is not None:
+        if _delegate_msg:
+            msg = f"{emoji} {_delegate_msg}"
+            ctx.last_was_terminal_block[0] = False
+        elif _code_block_short is not None:
             msg = _code_block_short
             ctx.last_was_terminal_block[0] = True
         elif preview:

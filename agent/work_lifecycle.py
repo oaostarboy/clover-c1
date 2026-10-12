@@ -164,7 +164,7 @@ def _slot_goal(goals: Sequence[str], index: int) -> str:
 
     if 0 <= index < len(goals) and goals[index]:
         return clean_text(goals[index], _GOAL_CHARS)
-    return "a helper task"
+    return "a subagent task"
 
 
 def slots_for(delegation_id: str, goals: Sequence[str] = ()) -> List[Slot]:
@@ -372,17 +372,17 @@ def status_footer(work: Optional[WorkReport], exit_reason: Any = "") -> str:
     parts: List[str] = []
     if bad:
         parts.append(
-            f"{len(bad)} of {total} helper task{'s' if total != 1 else ''} did not "
+            f"{len(bad)} of {total} subagent task{'s' if total != 1 else ''} did not "
             f"finish properly: {_listed(bad)}. Treat that part as not done."
         )
     if stopped:
         parts.append(
-            f"{len(stopped)} of {total} helper task{'s' if total != 1 else ''} "
+            f"{len(stopped)} of {total} subagent task{'s' if total != 1 else ''} "
             f"{'was' if len(stopped) == 1 else 'were'} stopped: {_listed(stopped)}."
         )
     if pending:
         parts.append(
-            f"{len(pending)} of {total} helper task{'s' if total != 1 else ''} "
+            f"{len(pending)} of {total} subagent task{'s' if total != 1 else ''} "
             f"still running: {_listed(pending)}. What is said above covers only "
             "what has reported so far."
         )

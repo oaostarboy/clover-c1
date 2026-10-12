@@ -413,7 +413,7 @@ def _runtime_handoff(verdict: Any) -> Dict[str, str]:
     """The short summary a runtime-started helper is dispatched with, so the
     chat acknowledgement says what is happening without quoting the task."""
     if getattr(verdict, "source", "") == "lifecycle":
-        return {"work": "finishing the check on the helper results", "outcome": "the final answer"}
+        return {"work": "finishing the check on the subagent results", "outcome": "the final answer"}
     return {"work": "taking over the rest of your request", "outcome": "the finished result"}
 
 
@@ -1058,7 +1058,7 @@ def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None) -> str:
     count = sum(len(r.goals) for r in receipts) or sum(len(r.subagent_ids) for r in receipts) or 1
     if count == 1:
         return "\U0001f504 on it, i'll report back here when it's done"
-    return f"\U0001f504 {count} helpers on it, i'll report back here when they're done"
+    return f"\U0001f504 {count} subagents on it, i'll report back here when they're done"
 
 
 def _opener_is_own_message(card: Any, agent: Any) -> bool:
