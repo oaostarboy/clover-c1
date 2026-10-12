@@ -506,13 +506,15 @@ async def test_events_of_the_joined_part_edit_the_one_card_and_counts_span_all_p
     assert chat.edits[-1]["id"] == editor._message_id
     assert "**disks** \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 3 calls" in text
     assert "**network** \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 4 calls" in text
-    assert "*2 subagents \u00b7 \U0001f6e0 7 calls \u00b7" in text
+    assert "*2 running \u00b7 \U0001f6e0 7 calls \u00b7" in text
     ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: Disks fine.")
     await _settle()
     mid = chat.edits[-1]["text"]
     assert "1 of 2 done" in mid.splitlines()[0] and "tap to watch" in mid
-    assert "Goal: a disk report" in mid and "Goal: a network report" in mid and "~5 min" not in mid
-    assert "**disks** \u00b7 done" in mid and "Disks fine." in mid
+    assert "Goal: a network report" in mid and "Goal: a disk report" not in mid and "~5 min" not in mid
+    # the finished job collapses to one 🍀 line below the running one
+    assert "\U0001f340 **disks** \u00b7 \U0001f6e0 3 \u00b7" in mid and "Disks fine." not in mid
+    assert mid.index("**network**") < mid.index("\U0001f340 **disks**")
     ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: Net fine.")
     await _settle()
     done = chat.edits[-1]["text"]
@@ -604,4 +606,4 @@ async def test_a_joined_multi_subagent_part_keeps_its_own_sections():
     text = da._ACK_EDITORS[id(first)]._render()
     assert text.splitlines()[0].startswith("**> \U0001f500 **2 jobs** \u00b7 0 of 3 done")
     assert "> \u25a0 **disks**" in text and "> \u25a0 **alpha**" in text and "> \u25a0 **beta**" in text
-    assert "*3 subagents" in text
+    assert "*3 running" in text

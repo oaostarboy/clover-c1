@@ -504,7 +504,7 @@ def test_multi_subagent_spacing_one_spacer_between_blocks_and_before_footer():
     assert not any(a == spacer and b == spacer for a, b in zip(lines, lines[1:]))
     # Hint, ONE spacer, then straight to the outcome line.
     assert lines[1:4] == ["> *tap to watch \U0001f340*", spacer, "> Goal: test build + PR \u00b7 ~10 min"]
-    assert lines[-2] == spacer and lines[-1].startswith("> *3 subagents") and "helpers" not in text
+    assert lines[-2] == spacer and lines[-1].startswith("> *2 running \u00b7 1 done") and "helpers" not in text
     # Three subagent sections: a spacer before each name line, plus the one before the footer.
     names = [i for i, ln in enumerate(lines) if ln.startswith("> ") and "**" in ln and i > 0]
     assert len(names) == 3 and all(lines[i - 1] == spacer for i in names)
@@ -555,3 +555,21 @@ async def test_card_text_sent_under_the_opener_is_the_expandable_one():
     await da.bind_ack_card(adapter, "chat", card.say_text(), sent)
     assert adapter.sends[0] == SAY
     assert adapter.sends[1].startswith("**> \U0001f500 **fixing the bugs**\n> *tap to watch")
+
+
+def test_telegram_format_of_a_joined_card_with_a_long_running_name_and_a_collapsed_job():
+    r1 = fl.DispatchReceipt(delegation_id="a", seq=1, goals=("g",), steps=("one",),
+                            summary="\U0001f504 finishing the small fast model fix \u2192 an outcome, ~5 min")
+    r2 = fl.DispatchReceipt(delegation_id="b", seq=2, goals=("g",), steps=("two",),
+                            summary="\U0001f504 disks report \u2192 an outcome, ~5 min")
+    card = ac.card_for([r1, r2])
+    cl = card.parts[0].checklist
+    cl.model, cl.calls, cl.started = "Sonnet 5.5", 20, time.monotonic() - 355
+    ac.on_child_event("subagent.complete", delegation_id="b", status="completed", summary="Plain summary: ok.")
+    out = _telegram_format(da._to_expandable(card.render(include_say=False), da.TAP_HINT_LIVE, bold_title=True))
+    assert "\u25a0 *finishing the small fast model fix*\n" in out, "the name has the line to itself"
+    stats = next(ln for ln in out.splitlines() if "Sonnet 5" in ln)
+    assert stats.startswith("> \u2003\u2003") and "\U0001f6e0 20 calls" in stats
+    last = [ln for ln in out.splitlines() if "disks report" in ln]
+    assert len(last) == 1 and "\U0001f340" in last[0] and "ok." not in out
+    assert out.index("finishing the small") < out.index("disks report")
