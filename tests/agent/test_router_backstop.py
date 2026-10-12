@@ -25,6 +25,9 @@ from tests.agent.test_delegation_checkpoint import _agent, run_batch
 MARKER = '[Clover runtime]'
 SETTINGS = dr.RouterSettings(enabled=True, timeout_seconds=5.0, backstop_calls=2,
                              backstop_seconds=60.0)
+# ``direct_backstop`` off: a direct verdict is never handed off (the old behaviour).
+SETTINGS_NO_DIRECT = dr.RouterSettings(enabled=True, timeout_seconds=5.0, backstop_calls=2,
+                                       backstop_seconds=60.0, direct_backstop=False)
 
 pytestmark = pytest.mark.real_delegation_router
 
@@ -300,9 +303,11 @@ def test_a_root_dispatch_that_was_not_accepted_leaves_the_backstop_armed(tmp_pat
 
 # ── not direct only ────────────────────────────────────────────────────────
 
-def test_a_direct_verdict_is_never_touched(tmp_path, children, dispatches, clock):
+def test_a_direct_verdict_is_never_touched_with_the_direct_backstop_off(
+        tmp_path, children, dispatches, clock):
     agent = _root()
-    _arm(agent, verdict=dr.Verdict(mode='direct', tasks=(), reason='one lookup'))
+    _arm(agent, verdict=dr.Verdict(mode='direct', tasks=(), reason='one lookup'),
+         settings=SETTINGS_NO_DIRECT)
     clock.t += 3600
 
     results = run_batch(agent, [_write(tmp_path, f'{i}.txt') for i in range(6)])
@@ -329,7 +334,8 @@ def test_the_existing_foreground_limit_still_applies_to_a_direct_turn(tmp_path, 
     agent = _root()
     fl.begin_turn(agent, None)
     assert fl.remaining_seconds(agent) is not None
-    _arm(agent, verdict=dr.Verdict(mode='direct', tasks=(), reason='one lookup'))
+    _arm(agent, verdict=dr.Verdict(mode='direct', tasks=(), reason='one lookup'),
+         settings=SETTINGS_NO_DIRECT)
     clock.t += 301
 
     (r,) = run_batch(agent, [_write(tmp_path, 'a.txt')])

@@ -28,8 +28,15 @@ the tool schemas) says how to treat that plan; the four ways to work are:
   `tests/eval/delegation_modes.jsonl` and the held-out paraphrases in
   `tests/eval/delegation_router_heldout.jsonl` (the rubric is tuned on the
   first only).
-- **The user's words win.** "Do it yourself" means direct even for a big job;
-  "use helpers" means a helper even for a small one.
+- **Preparation before a write or send is a helper job.** Finding, reading and
+  checking files, code or past sessions, then assembling or packaging the
+  result for a person ("email Julia the extension with exact instructions",
+  "also send the X skill") is single; sending a link or text already in the
+  chat stays direct. Set `delegation.router.calibration_v2: false` to restore
+  the earlier rubric and override wording exactly.
+- **The user's words win.** "Do it yourself" (or "do it here / directly")
+  means direct even for a big job; "use helpers", "send subagents", "with
+  subagents" or "in the background" means a helper even for a small one.
 - **Signals for big:** more than a couple of minutes - a dozen or more items
   each needing lookups, commands that run for minutes, multi-step research or
   builds. They live in the router's sizing prompt, not in the system prompt.
@@ -88,7 +95,16 @@ completions, multimodal messages, or a bare greeting / thank-you.
   stopped, and what the turn had already gathered goes into each helper's
   context. If the dispatch fails the result says so and the root carries on
   under the time limit below.
-- **Direct and no plan** are untouched: the time limit stays the only bound.
+- **Direct backstop.** A direct verdict is watched too
+  (`delegation.router.direct_backstop`, on by default): the runtime counts the
+  root's work calls and collects their findings exactly as above. After
+  `work_calls` (25) calls or `seconds` (180), the next work call is refused and
+  the rest of the request goes to exactly one helper, built from the user's
+  message plus the findings. The same exemptions, scope, refusal and failure
+  behaviour apply; "do it yourself" (and a root that already dispatched a helper
+  itself) is never handed off again. `enabled: false` restores the old
+  behaviour.
+- **No plan** (router off, timeout, bad reply) is untouched: the time limit stays the only bound.
 
 ```yaml
 delegation:
@@ -97,6 +113,11 @@ delegation:
     timeout_seconds: 8
     backstop_calls: 2
     backstop_seconds: 60
+    direct_backstop:
+      enabled: true
+      work_calls: 25
+      seconds: 180
+    calibration_v2: true             # rubric v2 + wider override wording
     slow_model_timeout_seconds: 20   # wait when only the big main model exists
     skip_small_talk: true            # "thanks", "ok go", "lol": no router call
 auxiliary:
@@ -104,12 +125,53 @@ auxiliary:
     provider: auto
     model: auto
     prefer_fast_model: true          # false = always the main model
+    reasoning_effort: low            # default; none | minimal | low | medium | high
 ```
 
 When no small model exists for the main provider the router runs on the main
 model and waits `slow_model_timeout_seconds` (default 20) instead of
 `timeout_seconds` (8); the log says which applied. Pure small talk (an explicit
 allow-list, never a length rule) skips the router entirely.
+
+### Reasoning and the hand-off card
+
+The router thinks a little: `auxiliary.delegation_router.reasoning_effort`
+defaults to `low`. With reasoning off, `gpt-6-luna` sized a three-part compare
+(GPU options, PSU fit, prices) as a quick answer (0 of 2); on `low` the same
+model scored 12 of 12 at a 1.5 s median. Only title generation still runs with
+reasoning off. Per provider: Codex `reasoning.effort=low`; Gemini
+`thinkingLevel=low` (3.x Flash rejects `minimal`); Anthropic adaptive-thinking
+models `effort=low`, Haiku and manual-budget models are left as they were. An
+explicit `reasoning_effort` (or `extra_body.reasoning`) is never overridden.
+`ROUTER_MAX_TOKENS` is 1500 so thought tokens cannot cut off the JSON.
+
+When the backstop hands a turn to a helper, the chat card gets a title and goal
+built from the user's message and the router's own `reason` (no extra model
+call): `🔄 comparing 3 options for adding a second GPU → ...`. The title is at
+most 50 characters, the goal at most 60; the raw message is never pasted. The
+old "taking over the rest of your request" wording remains only when the
+message names nothing.
+
+### Ship gate
+
+Run before changing the router prompt, the router's reasoning, or the shipped
+fast-model defaults. 30 cases from real use live in
+`tests/fixtures/router_eval/ship_gate.jsonl` (`expected_mode` may be a list
+where two modes are both defensible; `"gate": true` marks the cases that
+failed live). Copy a profile's `config.yaml` and `auth.json` into a temporary
+`CLOVER_HOME` (`chmod 700`), pin `auxiliary.delegation_router` to the model
+under test, and run:
+
+```bash
+python scripts/eval/delegation_router.py --home "$TMP_HOME" \
+  --cases tests/fixtures/router_eval/ship_gate.jsonl \
+  --reps 2 --ship-gate --out /tmp/ship-gate-out
+```
+
+`--ship-gate` takes each case's own `reps` (3 for the hard ones), requires
+accuracy of at least 90 percent and every `gate` case right in at least 2 of 3
+runs, and exits 1 on a miss. Do not edit the rubric to fit one model's misses;
+report them. The gate is run by hand (it calls real models), not in CI.
 
 ## The foreground time limit
 

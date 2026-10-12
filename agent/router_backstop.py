@@ -19,6 +19,14 @@ acceptance signal is the dispatch receipt (``foreground_time_limit
 reports what the turn's receipts support: ``dispatch_ack``, ``partial``,
 ``incomplete`` or ``verified_completion``.
 
+A "direct" verdict is not left unwatched.  ``delegation.router.direct_backstop``
+(on by default) counts the root's work calls and collects what they found just
+like a planned turn does; once ``work_calls`` calls or ``seconds`` seconds are
+spent, the next work call is refused and the REST of the request goes to exactly
+one helper, as a single task built from the user's message and the findings.  A
+user who asked for it to be done directly (``explicit_override``) is never
+handed off, and neither is a turn the root already dispatched for itself.
+
 That holds for EVERY in-scope turn, not only one that armed a plan: a "direct"
 verdict, a router error and a skipped acknowledgment get the same *receipt
 floor* (``mark_turn``), so a root that dispatches a helper itself still ends the
@@ -136,6 +144,10 @@ class RouterTurn:
     # ``False`` for a turn that only carries a receipt floor (a direct verdict,
     # a router error, a skip): the receipts count, the thresholds never trip.
     planned: bool = True
+    # A "direct" verdict under watch (``direct_backstop``): the same counting
+    # and findings as a planned turn, with its own thresholds; the plan handed
+    # off is one task built from the request.
+    direct: bool = False
     # Dispatches of this turn already considered for a durable stage plan.
     bound: Dict[str, bool] = field(default_factory=dict)
     findings: Deque[Tuple[str, str, str]] = field(
@@ -154,6 +166,15 @@ class RouterTurn:
 
 # Notes the root keeps for itself; never the work the plan is about.
 BOOKKEEPING_TOOLS = frozenset({"memory"})
+
+# The one task a direct turn hands over (the user's own words ride in the
+# helper's context, with whatever the root already found).
+_DIRECT_GOAL = (
+    "Finish the user's request, which the parent started and did not finish. "
+    "Do not redo what the findings already cover."
+)
+_DIRECT_ACCEPTANCE = "the user's request is fully done"
+_DIRECT_GOAL_REQUEST_CHARS = 600
 
 
 def _now() -> float:
@@ -230,18 +251,52 @@ def mark_turn(agent: Any, settings: RouterSettings) -> None:
         logger.debug("could not record the turn's receipt floor", exc_info=True)
 
 
+def _asked_for_self(verdict: PlanVerdict, user_message: str) -> bool:
+    """Did the user ask for this to be done directly?  Never overridden."""
+    if getattr(verdict, "source", "") == "override":
+        return True
+    try:
+        from agent.delegation_router import explicit_override
+
+        return explicit_override(str(user_message or "")) == "self"
+    except Exception:
+        return False
+
+
+def _direct_plan(verdict: PlanVerdict, user_message: str) -> PlanVerdict:
+    """What a direct turn hands over when it runs long: the rest of the user's
+    request as one task (the whole request also rides in the helper's context,
+    with the findings)."""
+    request = _one_line(user_message, _DIRECT_GOAL_REQUEST_CHARS)
+    goal = _DIRECT_GOAL + (f" The request: {request}" if request else "")
+    return PlanVerdict(
+        mode="single", reason=verdict.reason, source="direct_backstop",
+        tasks=(PlanTask(goal=goal, acceptance=_DIRECT_ACCEPTANCE),),
+    )
+
+
 def begin(agent: Any, verdict: PlanVerdict, user_message: str, settings: RouterSettings) -> None:
-    """Arm the backstop for this turn (a direct plan arms nothing but the floor)."""
-    if verdict.mode == "direct" or not verdict.tasks:
+    """Arm the backstop for this turn.
+
+    A planned (not direct) verdict arms the full backstop.  A direct one arms
+    the safety net when ``direct_backstop`` is on and the user did not ask for
+    it to be done directly; otherwise it records the receipt floor only.
+    """
+    direct = verdict.mode == "direct" or not verdict.tasks
+    if direct and not (
+        settings.direct_backstop and not _asked_for_self(verdict, user_message)
+    ):
         mark_turn(agent, settings)
         return
     clear(agent)
     try:
         setattr(agent, _ATTR, RouterTurn(
-            verdict=verdict, user_message=str(user_message or ""),
+            verdict=_direct_plan(verdict, user_message) if direct else verdict,
+            user_message=str(user_message or ""),
             settings=settings, started_at=_now(),
             receipt_floor=_fl.dispatch_seq(agent),
             identity=_capture_identity(agent),
+            planned=not direct, direct=direct,
         ))
     except Exception:
         logger.debug("could not arm the router backstop", exc_info=True)
@@ -286,7 +341,7 @@ def note_result(agent: Any, function_name: str, function_args: Any, result: Any)
         state.running.pop(key, None)
         if state.spawning.pop(key, None) is not None:
             state.settled.notify_all()
-    if not state.planned or not isinstance(result, str) or not result.strip():
+    if not (state.planned or state.direct) or not isinstance(result, str) or not result.strip():
         return
     try:
         from agent import delegation_checkpoint as dc
@@ -351,13 +406,21 @@ def _helper_context(state: RouterTurn, index: int, stage: int, findings: str) ->
         f"{i + 1}. {_one_line(t.goal, 160)}"
         for i, t in enumerate(verdict.tasks) if i != index
     ]
-    plan = f"Plan: {verdict.mode}, {len(verdict.tasks)} task(s)"
-    if verdict.reason:
-        plan += f" ({_one_line(verdict.reason, _REASON_CHARS)})"
-    plan += f". You are task {index + 1}"
-    if verdict.mode == "staged":
-        plan += f", stage {stage + 1}"
-    plan += "."
+    if getattr(state, "direct", False):
+        plan = (
+            "The parent started on this request and has done part of it; you "
+            "take over the rest."
+        )
+        if verdict.reason:
+            plan += f" (Why it looked small: {_one_line(verdict.reason, _REASON_CHARS)})"
+    else:
+        plan = f"Plan: {verdict.mode}, {len(verdict.tasks)} task(s)"
+        if verdict.reason:
+            plan += f" ({_one_line(verdict.reason, _REASON_CHARS)})"
+        plan += f". You are task {index + 1}"
+        if verdict.mode == "staged":
+            plan += f", stage {stage + 1}"
+        plan += "."
     if others:
         plan += " Other tasks, handled elsewhere:\n" + "\n".join(others)
     parts.append(plan)
@@ -409,12 +472,22 @@ def _decode(raw: Any) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _runtime_handoff(verdict: Any) -> Dict[str, str]:
+def _runtime_handoff(verdict: Any, user_message: str = "") -> Dict[str, str]:
     """The short summary a runtime-started helper is dispatched with, so the
-    chat acknowledgement says what is happening without quoting the task."""
+    chat acknowledgement says what is happening without quoting the task.
+
+    ``work`` / ``outcome`` are built from the user's message and the router's
+    own reason (``agent.handoff_title``), with no model call; the generic
+    placeholders remain only when neither says anything usable."""
     if getattr(verdict, "source", "") == "lifecycle":
         return {"work": "finishing the check on the subagent results", "outcome": "the final answer"}
-    return {"work": "taking over the rest of your request", "outcome": "the finished result"}
+    from agent.handoff_title import handoff_summary
+
+    fallback = ""
+    tasks = getattr(verdict, "tasks", ()) or ()
+    if len(tasks) == 1 and getattr(verdict, "source", "") != "direct_backstop":
+        fallback = str(getattr(tasks[0], "goal", "") or "")
+    return handoff_summary(user_message, str(getattr(verdict, "reason", "") or ""), fallback)
 
 
 def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
@@ -440,7 +513,7 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     follow = _follow_through_for(state, stages)
     if follow:
         args["follow_through"] = follow
-    args["handoff"] = _runtime_handoff(verdict)
+    args["handoff"] = _runtime_handoff(verdict, state.user_message)
     try:
         raw = dispatch_generated_tool(agent, "delegate_task", args, task_id=task_id)
     except Exception as exc:
@@ -611,15 +684,23 @@ def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str 
             # Once a helper owns the work, the root stays out of it for the
             # turn; once the runtime could not start one, the root carries on.
             return _verdict_for(state, name)
-        if not state.planned or state.failure is not None:
+        if not (state.planned or state.direct) or state.failure is not None:
             return None
         if state.spawning:
             # The root's own dispatch never settled (timeout): do not add a
             # second one on top of it.
             return None
-        seconds = state.settings.backstop_seconds
+        if state.direct:
+            max_calls = state.settings.direct_backstop_calls
+            seconds = state.settings.direct_backstop_seconds
+        else:
+            max_calls = state.settings.backstop_calls
+            seconds = state.settings.backstop_seconds
         elapsed = _now() - state.started_at
-        if state.work_calls < state.settings.backstop_calls and not (
+        if state.direct and _stop_pending(agent):
+            # The call is about to be cancelled: no hand-off on a Stop.
+            return None
+        if state.work_calls < max_calls and not (
             seconds is not None and elapsed >= seconds
         ):
             state.work_calls += 1
@@ -629,9 +710,10 @@ def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str 
         if info.get("ok"):
             state.handoff = info
             logger.info(
-                "router backstop: handed off delegation=%s mode=%s tasks=%d "
+                "router backstop: handed off delegation=%s mode=%s%s tasks=%d "
                 "work_calls=%d elapsed=%.0fs",
-                info["delegation_id"], state.verdict.mode, len(state.verdict.tasks),
+                info["delegation_id"], "direct" if state.direct else state.verdict.mode,
+                " (direct backstop)" if state.direct else "", len(state.verdict.tasks),
                 state.work_calls, elapsed,
             )
         else:
@@ -870,7 +952,7 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
              "context": _helper_context(pseudo, i, number, findings)}
             for i in index
         ]}
-        args["handoff"] = _runtime_handoff(verdict)
+        args["handoff"] = _runtime_handoff(verdict, pseudo.user_message)
     except Exception:
         logger.warning("router stages: stage plan unreadable", exc_info=True)
         return _note(

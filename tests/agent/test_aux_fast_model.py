@@ -516,6 +516,14 @@ class TestSmallTalkSkip:
             assert dr.skip_reason(self._agent(), "use a helper to count files", None, settings=settings) != "small_talk"
             assert dr.skip_reason(self._agent(), "how is the build going", None, settings=settings) != "small_talk"
 
+    def test_explicit_override_is_never_small_talk(self):
+        # merge guard (#101 x #103): an explicit helper / do-it-yourself
+        # request must reach the router even if it also looks like an ack.
+        with patch.object(dr, "_router_config", return_value={}), \
+                patch.object(afm, "is_small_talk", return_value=True):
+            for msg in ("send subagents", "ok, do it yourself"):
+                assert dr.skip_reason(self._agent(), msg, None, settings=SETTINGS) != "small_talk", msg
+
     def test_config_switch_turns_the_skip_off(self):
         with patch.object(dr, "_router_config", return_value={"skip_small_talk": False}):
             assert dr.skip_reason(self._agent(), "thanks", None, settings=SETTINGS) != "small_talk"

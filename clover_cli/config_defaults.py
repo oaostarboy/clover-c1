@@ -2173,6 +2173,22 @@ DEFAULT_CONFIG = {
             "timeout_seconds": 8,
             "backstop_calls": 2,
             "backstop_seconds": 60,
+            # Safety net for a "direct" verdict that was too small a guess:
+            # after ``work_calls`` work tool calls or ``seconds`` seconds the
+            # next work call hands the REST of the request to one helper
+            # (calls already running are never stopped; "do it yourself" is
+            # never overridden). ``enabled: false`` = a direct turn is never
+            # handed off by the runtime.
+            "direct_backstop": {
+                "enabled": True,
+                "work_calls": 25,
+                "seconds": 180,
+            },
+            # Sizing rubric v2: preparation before a write or send (find, read,
+            # verify, package) is single, not direct; "send subagents" /
+            # "with subagents" are explicit helper requests. false restores
+            # the earlier rubric and override wording exactly.
+            "calibration_v2": True,
 
             # Fast-model behaviour (own block): the wait when the router has
             # no small model and runs on the big main one, and the free

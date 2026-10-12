@@ -180,7 +180,8 @@ def test_parallel_turn_is_handed_off_after_two_calls_and_the_turn_ends_cleanly(
     # the runtime's own acknowledgment, not whatever the model might have said
     assert re.match(r'^\U0001f504 ', result['final_response'])
     assert 'report back here' in result['final_response'] or '\u2192' in result['final_response']
-    assert 'Notion' not in result['final_response'], 'the ack never quotes the task goal'
+    assert 'Research the Notion pricing page' not in result['final_response'], 'the ack never quotes the task goal'
+    assert 'comparing the pricing of Notion' in result['final_response'], 'the card names the job from the message'
     assert result['turn_exit_reason'] == 'delegation_handoff'
     assert result['work_status'] == 'dispatch_ack'
     assert (tmp_path / 'a.txt').exists() and (tmp_path / 'b.txt').exists()
@@ -226,7 +227,8 @@ def test_staged_turn_dispatches_stage_one_and_carries_the_next_stage(
 
     assert re.match(r'^\U0001f504 ', result['final_response'])
     assert 'report back here' in result['final_response'] or '\u2192' in result['final_response']
-    assert 'feature flag' not in result['final_response'], 'the ack never quotes the task goal'
+    assert 'Add a feature flag with tests' not in result['final_response'], 'the ack never pastes the message'
+    assert 'adding a feature flag' in result['final_response'], 'the card names the job from the message'
     assert result['work_status'] == 'dispatch_ack'
     wire_user = _wire_users(provider.captured[0])[-1]
     assert f'{MARKER} staged' in wire_user
