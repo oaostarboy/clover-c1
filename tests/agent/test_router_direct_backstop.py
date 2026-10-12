@@ -503,7 +503,8 @@ def test_the_ack_is_the_normal_handoff_summary_and_says_nothing_about_limits(
     assert directive is not None and directive.reason == rb.EXIT_REASON
     text = directive.text
     assert text.startswith('\U0001f504 ')
-    assert 'taking over the rest of your request' in text
+    assert 'emailing Julia the extension' in text, 'the card names the job, not a placeholder'
+    assert 'taking over the rest of your request' not in text
     assert REQUEST not in text, 'the task text is never pasted into the ack'
     refusal = rb._verdict_for(rb._state(agent), 'write_file').block_message
     lowered = (text + ' ' + refusal).lower()
@@ -519,9 +520,9 @@ def test_the_dispatch_carries_the_handoff_summary(tmp_path, children, dispatches
 
     run_batch(agent, _writes(tmp_path, 2))
 
-    assert dispatches[0]['handoff'] == rb._runtime_handoff(rb._state(agent).verdict)
+    assert dispatches[0]['handoff'] == rb._runtime_handoff(rb._state(agent).verdict, rb._state(agent).user_message)
     (receipt,) = rb.turn_receipts(agent)
-    assert receipt.summary and 'taking over the rest of your request' in receipt.summary
+    assert receipt.summary and 'emailing Julia the extension' in receipt.summary
 
 
 # ── scope: the router's, unchanged ─────────────────────────────────────────
