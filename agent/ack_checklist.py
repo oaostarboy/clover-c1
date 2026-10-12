@@ -899,6 +899,9 @@ class Part:
     expected: int = 1  # children in the dispatch; it ends when all reported
     ended: List[str] = field(default_factory=list)  # end state per child
     card: Optional["Card"] = None
+    ended_at: Optional[float] = None  # when the whole part ended (monotonic)
+    ended_seq: int = 0  # order in which parts ended
+    liner_done: bool = False  # its one-line message was posted (or it needs none)
 
     def _changed(self) -> None:
         card = self.card
@@ -1449,54 +1452,16 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
         cl.ended = now
     cl.open.clear()
     part.checklist.finish(final)
+    global _END_SEQ
+    _END_SEQ += 1
+    part.ended_seq, part.ended_at = _END_SEQ, now
     return True
 
 
+_END_SEQ = 0
+
 # (summary chars, tool lines per running helper) tried in turn until it fits.
 _BUDGET_STEPS = ((SUMMARY_CHARS, RECENT_TOOLS_MULTI), (80, RECENT_TOOLS_MULTI), (0, RECENT_TOOLS_MULTI), (0, 1), (0, 0))
-
-
-def _collapsed_part_lines(title: str, cl: "Checklist", subs: Sequence[Any]) -> List[str]:
-    """A finished job of a joined card, as ONE line (its results are already in
-    the chat): ``🍀 **title** · 3 done · 🛠 12 · ⏱ 2m10s``; ``🍂`` and the
-    counts when something failed or stopped.  A long title puts the stats on the
-    next indented line."""
-    states = [s.state for s in subs]
-    n = len(states)
-    done = sum(1 for st in states if st == DONE)
-    failed = sum(1 for st in states if st == FAILED)
-    stopped = sum(1 for st in states if st == STOPPED)
-    lost = failed or stopped
-    if not lost:
-        status = f"{n} done" if n > 1 else ""
-    elif n == 1:
-        status = FAILED if failed else STOPPED
-    else:
-        bits = [f"{done} of {n} done"]
-        if failed:
-            bits.append(f"{failed} failed")
-        if stopped:
-            bits.append(f"{stopped} stopped")
-        status = " \u00b7 ".join(bits)
-    calls = sum(s.calls for s in subs)
-    started = [s.started for s in subs if s.started is not None]
-    ended = [s.ended for s in subs if s.ended is not None]
-    stats = []
-    if calls:
-        stats.append(f"{CALLS_ICON} {calls}")
-    if started and ended:
-        stats.append(_elapsed(max(0.0, max(ended) - min(started))))
-    label = f"{FAILED_ICON if lost else DONE_ICON} **{title}**"
-    if status:
-        # the status stays with the name; only the stats may move down
-        label_status = f"{label} \u00b7 {status}"
-        if not stats:
-            return [label_status]
-        stats_text = " \u00b7 ".join(stats)
-        if _visible_len(title) + 3 + _visible_len(status) + 3 + _visible_len(stats_text) <= ROW_CHARS:
-            return [f"{label_status} \u00b7 {stats_text}"]
-        return [label_status, _INDENT + stats_text]
-    return _name_and_stats(label, title, stats)
 
 
 class Card:
@@ -1521,19 +1486,13 @@ class Card:
         with _LOCK:
             parts = self.parts
             if unified():
-                # A job whose subagents were all stopped on purpose is gone from
-                # the card, and from the "N jobs" count.
-                shown = [p for p in parts if not p.checklist.all_stopped]
-                if not shown:
-                    if len(parts) == 1:
-                        return parts[0].checklist._stopped_title(include_say)
-                    titles = [p.checklist._title_outcome()[0] for p in parts]
-                    body = _title_line(_joined_title(titles), " \u00b7 stopped", True, stopped=True)
-                    say = self.say_text()
-                    return f"{say}\n\n{body}" if (say and include_say) else body
-                if all(p.checklist.state != RUNNING for p in shown):
-                    return self._render_finished(shown, include_say)
-                parts = shown
+                live = [p for p in parts if p.checklist.state == RUNNING]
+                if live:
+                    # A part that ended LEAVES the running card: it is (or will
+                    # be) its own one-line message.  One part left: single layout.
+                    parts = live
+                else:
+                    return self._render_ended(parts, include_say)
             if len(parts) > 1 and unified():
                 # Dispatches that joined this card read as one card.
                 text = ""
@@ -1554,6 +1513,27 @@ class Card:
                 if len(text) <= CARD_BUDGET:
                     break
             return text
+
+    def final_part(self) -> Optional[Part]:
+        """The part whose one-liner IS the card's message once every part is
+        over: the one that ended last."""
+        with _LOCK:
+            ended = [p for p in self.parts if p.checklist.state != RUNNING]
+            return max(ended, key=lambda p: p.ended_seq) if ended else None
+
+    def part_liner(self, part: Part, include_say: bool = False) -> str:
+        """One ended part as its own one-line message (``\U0001f340 **title** \u00b7 done \u00b7
+        \U0001f6e0 X \u00b7 \u23f1 t``; ``\U0001f342`` plus one short reason; ``\U0001f940`` when it was stopped)."""
+        with _LOCK:
+            if part.checklist.all_stopped:
+                return part.checklist._stopped_title(include_say)
+            return self._render_finished([part], include_say)
+
+    def _render_ended(self, parts: Sequence[Part], include_say: bool) -> str:
+        """The card once every part is over: the one-liner of the part that
+        ended last (earlier parts are, or will be, their own messages)."""
+        last = self.final_part() or parts[-1]
+        return self.part_liner(last, include_say and len(parts) == 1)
 
     def _render_finished(self, parts: Sequence[Part], include_say: bool) -> str:
         """A card whose work is all over, as ONE plain line (no quote, no hint,
@@ -1624,22 +1604,11 @@ class Card:
             _joined_title(titles), _count_tail(running, states), lost,
         )
         blocks: List[List[str]] = []  # no Goal lines on top: each sits in its own section
-        collapsed: List[str] = []  # finished jobs: one line each, below the running ones
         started: List[float] = []
         ended: List[float] = []
         calls = 0
         for cl, title, goal in zip(cls, titles, goals):
-            if cl.state != RUNNING:
-                # a finished job of a joined card: its results are in the chat already
-                subs = cl.shown_kids() if cl.kids else [cl]
-                collapsed += _collapsed_part_lines(title, cl, subs)
-                for s in subs:
-                    calls += s.calls
-                    if s.started is not None:
-                        started.append(s.started)
-                    if s.ended is not None:
-                        ended.append(s.ended)
-                continue
+            # (parts that ended have left the card: they are their own messages)
             if cl.kids:
                 shown = cl.shown_kids()
                 if len(shown) > COMPACT_OVER:
@@ -1665,8 +1634,6 @@ class Card:
                     started.append(s.started)
                 if s.ended is not None:
                     ended.append(s.ended)
-        if collapsed:
-            blocks.append(collapsed)
         foot = _footer_counts(states, running)
         if calls:
             foot.append(_calls(calls))
@@ -1696,6 +1663,17 @@ class Card:
                 cb()
             except Exception:
                 pass
+
+
+def pending_liner_parts(ids: Sequence[Any]) -> List[Part]:
+    """Parts of these delegation ids that have ended and whose one-line
+    message was not posted yet, in the order they ended."""
+    with _LOCK:
+        found = [
+            _PARTS[i] for i in dict.fromkeys(str(x) for x in ids or ())
+            if i in _PARTS and _PARTS[i].checklist.state != RUNNING and not _PARTS[i].liner_done
+        ]
+    return sorted(found, key=lambda p: p.ended_seq)
 
 
 def card_for(receipts: Sequence[Any]) -> Optional[Card]:

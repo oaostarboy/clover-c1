@@ -163,8 +163,9 @@ async def test_a_failed_job_in_a_joined_card_keeps_the_failure_mark_on_its_name(
     pub, job = await _start_job(chat)
     job.finish(1)
     text = first.render()
-    assert "\U0001f342 **Audit cron locking** \u00b7 failed" in text
-    assert "\u25a0 **shipping the card**" in text
+    assert "Audit cron locking" not in text, "the failed job left the running card"
+    assert text.splitlines()[0] == "\U0001f500 **shipping the card**", "one part left: single layout"
+    assert first.part_liner(first.parts[1]).startswith("\U0001f342 **Audit cron locking** \u00b7 failed")
     await pub.aclose()
 
 

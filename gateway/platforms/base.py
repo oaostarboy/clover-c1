@@ -3375,6 +3375,17 @@ class BasePlatformAdapter(ABC):
 
         @functools.wraps(send)
         async def _send_and_note(self, *args: Any, **kw: Any):
+            try:
+                # The first message of a delegation-completion turn: the
+                # finished cards go in right above it.
+                from gateway.delegation_activity import before_reply
+
+                await before_reply(
+                    self, args[0] if args else kw.get("chat_id"),
+                    args[1] if len(args) > 1 else kw.get("content"), kw.get("metadata"),
+                )
+            except Exception:
+                pass
             result = await send(self, *args, **kw)
             try:
                 if getattr(result, "success", False):
@@ -6940,6 +6951,12 @@ class BasePlatformAdapter(ABC):
 
             # Call the handler (this can take a while with tool calls)
             event._turn_marker_handoff = self.gateway_runner is not None
+            try:
+                from gateway.delegation_activity import begin_completion_turn
+
+                begin_completion_turn(event)
+            except Exception:
+                pass
             response = await self._message_handler(event)
             # The runner returned (turn finished, command answered or rejected):
             # the input is no longer waiting on the platform's replay. A
@@ -6979,6 +6996,14 @@ class BasePlatformAdapter(ABC):
                 response = None
             if not response:
                 logger.debug("[%s] Handler returned empty/None response for %s", self.name, event.source.chat_id)
+                try:
+                    # A completion turn that said nothing ([SILENT]): finished
+                    # cards still settle (a stopped one just disappears).
+                    from gateway.delegation_activity import after_silent_reply
+
+                    await after_silent_reply(self, event.source.chat_id, _thread_metadata)
+                except Exception:
+                    pass
             if response:
                 # Capture [[as_document]] before extract_media strips it, so the
                 # dispatch partition below can route image-extension files

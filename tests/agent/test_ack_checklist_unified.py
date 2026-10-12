@@ -1385,37 +1385,39 @@ def test_a_joined_card_of_four_parts_is_titled_n_jobs():
     assert "more" not in head and "\u2026" not in head
 
 
-def test_a_joined_running_card_counts_every_subagent_and_keeps_job_names_in_sections():
+def test_a_joined_running_card_shows_only_the_parts_still_running():
     card = _five_subagents_in_three_jobs()
     ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
     _end("b", 0, 2)
     text = card.render()
     lines = text.splitlines()
-    assert lines[0] == "\U0001f500 **3 jobs** \u00b7 2 of 5 done" and len(lines[0]) < 40
+    assert lines[0] == "\U0001f500 **2 jobs** \u00b7 1 of 4 done" and len(lines[0]) < 40
     for name in ("alpha", "gamma"):
         assert any(ln.startswith(f"> \u25a0 **{name}**") for ln in lines), name
-    # job a ended while the others run: it is one 🍀 line below, no goal
-    assert "> \U0001f340 **shipping the new card as one message** \u00b7 \U0001f6e0 0 \u00b7 \u23f1 0s" not in lines
-    assert any(ln.startswith("> \U0001f340 **shipping the new card as one message**") for ln in lines)
-    assert text.count("Goal: ") == 2, "a Goal line per RUNNING job, under its first section"
-    assert "shipping the new card" not in lines[0] and "putting outside" not in lines[0]
+    assert "shipping the new card" not in text, "job a ended: it left the card"
+    assert text.count("Goal: ") == 2, "a Goal line per running job, under its first section"
 
 
 def test_a_finished_joined_card_says_n_jobs_done_on_one_line():
     card = ac.card_for([_job("a", 1, "disks"), _job("b", 2, "network"), _job("c", 3, "logs")])
     for did in "abc":
         ac.on_child_event("subagent.complete", delegation_id=did, status="completed", summary="Plain summary: ok.")
-    assert card.render() == "\U0001f340 **3 jobs** \u00b7 done"
+    assert card.render() == "\U0001f340 **logs** \u00b7 done", "the part that ended last"
+    assert card.part_liner(card.parts[0]) == "\U0001f340 **disks** \u00b7 done"
 
 
-def test_a_failed_joined_card_shows_the_counts_and_the_failure():
+def test_a_failed_part_leaves_the_joined_card_and_the_last_part_gets_the_single_layout():
     card = _five_subagents_in_three_jobs()
     ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
     _end("b", 0, 2)
     _end("b", 1, 2)
     _end("c", 0, 2)
     _end("c", 1, 2, status="failed")
-    assert card.render().splitlines()[0] == "\U0001f342 **3 jobs** \u00b7 4 of 5 done \u00b7 1 failed"
+    assert card.finished
+    part_c = next(p for p in card.parts if p.delegation_id == "c")
+    liner = card.part_liner(part_c).splitlines()
+    assert liner[0].startswith("\U0001f342 **auditing cron locking** \u00b7 1 of 2 done \u00b7 1 failed")
+    assert liner[-1].startswith(ac._INDENT) and ">" not in "\n".join(liner)
 
 
 def test_a_single_part_card_keeps_its_work_title():
@@ -1452,30 +1454,24 @@ def _lines(card):
     return card.render().splitlines()
 
 
-def test_a_part_that_ended_while_another_runs_collapses_below_the_running_one():
+def test_a_part_that_ended_leaves_a_running_card_and_the_last_one_uses_the_single_layout():
     card = _joined(("a", "disks", ("g",)), ("b", "network", ("g",)))
     ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
     _timed(card, "a", calls=3)
     lines = _lines(card)
-    assert lines[0] == "\U0001f500 **2 jobs** \u00b7 1 of 2 done"
-    net = lines.index("> \u25a0 **network**")
-    disks = next(i for i, ln in enumerate(lines) if "**disks**" in ln)
-    assert net < disks, "the collapsed job sits BELOW the running one"
-    assert lines[disks] == f"> {CLOVER} **disks** \u00b7 \U0001f6e0 3 \u00b7 \u23f1 2m05s"
+    assert lines[0] == "\U0001f500 **network**", "one part left: the single layout, no 'N jobs'"
     text = "\n".join(lines)
-    assert "Goal: an outcome" in text and text.count("Goal: ") == 1, "no goal for the collapsed part"
-    assert "ok." not in text, "its result is in the chat already"
-    assert not any(ln.startswith("> \u25a0 **disks**") for ln in lines)
+    assert "disks" not in text and "Goal: an outcome" in text and "ok." not in text
+    part_a = card.parts[0]
+    assert card.part_liner(part_a) == "\U0001f340 **disks** \u00b7 done \u00b7 \U0001f6e0 3 \u00b7 \u23f1 2m05s"
 
 
-def test_a_collapsed_part_with_several_subagents_says_n_done():
+def test_an_ended_part_with_several_subagents_says_n_done():
     card = _joined(("a", "checking sites", ("x", "y", "z")), ("b", "network", ("g",)))
     for i in range(3):
         _end("a", i, 3)
     _timed(card, "a", calls=4)
-    lines = _lines(card)
-    assert f"> {CLOVER} **checking sites** \u00b7 3 done \u00b7 \U0001f6e0 12 \u00b7 \u23f1 2m05s" in lines
-    assert not any(ln.startswith("> \u25a0 **x**") for ln in lines)
+    assert card.part_liner(card.parts[0]) == "\U0001f340 **checking sites** \u00b7 3 done \u00b7 \U0001f6e0 12 \u00b7 \u23f1 2m05s"
 
 
 def test_a_part_still_running_is_not_collapsed_even_if_some_of_its_subagents_ended():
@@ -1485,16 +1481,16 @@ def test_a_part_still_running_is_not_collapsed_even_if_some_of_its_subagents_end
     assert any(ln.startswith("> \u25a0 **x**") for ln in lines) and not any(CLOVER + " **checking" in ln for ln in lines)
 
 
-def test_a_collapsed_part_with_a_failure_or_a_stop_keeps_the_counts():
+def test_an_ended_part_with_a_failure_or_a_stop_counts_only_what_is_shown():
     card = _joined(("a", "checking sites", ("x", "y", "z")), ("b", "backups", ("u", "v")), ("c", "network", ("g",)))
     _end("a", 0, 3); _end("a", 1, 3); _end("a", 2, 3, status="failed")
     _end("b", 0, 2); _end("b", 1, 2, status="interrupted")
     _timed(card, "a", calls=1); _timed(card, "b", calls=1)
-    text = "\n".join(_lines(card))
-    # (these are longer than a row, so the stats sit on the next indented line)
-    assert f"> {LEAF} **checking sites** \u00b7 2 of 3 done \u00b7 1 failed\n> \u2003\u2003\U0001f6e0 3 \u00b7 \u23f1 2m05s" in text
-    assert "stopped" not in text, "a stopped helper is not counted anywhere"
-    assert f"> {LEAF} **backups** \u00b7 \U0001f6e0 1 \u00b7 \u23f1 2m05s" in text or "**backups**" in text
+    a = card.part_liner(card.parts[0]).splitlines()
+    assert a[0] == "\U0001f342 **checking sites** \u00b7 2 of 3 done \u00b7 1 failed"
+    assert a[1] == ac._INDENT + "\U0001f6e0 3 \u00b7 \u23f1 2m05s"
+    b = card.part_liner(card.parts[1])
+    assert "stopped" not in b or b.startswith("\U0001f340 **backups**")
 
 
 def test_a_single_subagent_part_that_failed_or_stopped_says_so():
@@ -1503,19 +1499,21 @@ def test_a_single_subagent_part_that_failed_or_stopped_says_so():
     ac.on_child_event("subagent.complete", delegation_id="b", status="interrupted", summary="")
     _timed(card, "a", calls=2); _timed(card, "b", calls=2)
     text = "\n".join(_lines(card))
-    assert f"> {LEAF} **disks** \u00b7 failed \u00b7 \U0001f6e0 2 \u00b7 \u23f1 2m05s" in text
-    assert "logs" not in text and "stopped" not in text, "a job whose only helper was stopped is gone"
-    assert "**2 jobs**" in text.splitlines()[0] and "0 of 2" in text.splitlines()[0], "(a, c remain)"
+    assert "disks" not in text and "logs" not in text, "ended parts left the running card"
+    assert text.splitlines()[0] == "\U0001f500 **network**", "one part left: single layout"
+    assert card.part_liner(card.parts[0]).splitlines() == [
+        "\U0001f342 **disks** \u00b7 failed \u00b7 \U0001f6e0 2 \u00b7 \u23f1 2m05s", ac._INDENT + "broke."]
+    assert card.part_liner(card.parts[1]) == "\U0001f940 **logs** \u00b7 stopped"
 
 
-def test_a_finished_joined_card_is_one_plain_line():
+def test_a_finished_joined_card_is_the_last_ended_part_as_one_plain_line():
     card = _joined(("a", "disks", ("g",)), ("b", "network", ("x", "y")))
     ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
     _end("b", 0, 2); _end("b", 1, 2)
     _timed(card, "a", calls=3); _timed(card, "b", calls=2)
     lines = _lines(card)
     assert card.finished
-    assert lines == ["\U0001f340 **2 jobs** \u00b7 done \u00b7 \U0001f6e0 7 \u00b7 \u23f1 2m05s"]
+    assert lines == ["\U0001f340 **network** \u00b7 2 done \u00b7 \U0001f6e0 4 \u00b7 \u23f1 2m05s"]
     text = "\n".join(lines)
     assert ">" not in text and "Goal" not in text and "\u25a0" not in text and "ok." not in text
 
@@ -1555,13 +1553,13 @@ def test_short_names_keep_their_stats_inline():
     assert line.startswith("> \u25a0 **disks** \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 2 calls \u00b7 \u23f1 ")
 
 
-def test_a_long_collapsed_title_puts_its_stats_on_the_next_line():
+def test_a_long_ended_title_puts_its_stats_on_the_next_line():
     card = _joined(("a", "putting outside workers in the same card as the subagents", ("g",)), ("b", "logs", ("g",)))
     ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
     _timed(card, "a", calls=5)
-    lines = _lines(card)
-    i = lines.index(f"> {CLOVER} **putting outside workers in the same card as the subagents**")
-    assert lines[i + 1] == "> \u2003\u2003\U0001f6e0 5 \u00b7 \u23f1 2m05s"
+    lines = card.part_liner(card.parts[0]).splitlines()
+    assert lines == ["\U0001f340 **putting outside workers in the same card as the subagents** \u00b7 done",
+                     ac._INDENT + "\U0001f6e0 5 \u00b7 \u23f1 2m05s"]
 
 
 def test_a_subagent_result_line_on_a_joined_card_is_cut_to_one_row():
@@ -1615,20 +1613,21 @@ def test_a_running_footer_orders_running_waiting_done_failed_stopped():
     assert "stopped" not in _footer(card)
 
 
-def test_a_joined_running_footer_counts_across_every_job():
+def test_a_joined_running_footer_counts_only_the_running_parts():
     card = _five_subagents_in_three_jobs()
     ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
     _end("b", 0, 2)
     assert " subagents" not in _footer(card)
-    assert "2 done" in _footer(card) and "waiting" in _footer(card)
+    foot = _footer(card)
+    assert "1 done" in foot and "waiting" in foot, "only the parts still on the card are counted"
 
 
-def test_a_finished_failed_joined_card_counts_the_failure():
+def test_a_finished_failed_joined_card_is_the_last_ended_part():
     bad = _five_subagents_in_three_jobs()
     ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
     _end("b", 0, 2); _end("b", 1, 2); _end("c", 0, 2); _end("c", 1, 2, status="failed")
     first = bad.render().splitlines()[0]
-    assert first.startswith("\U0001f342 **3 jobs** \u00b7 4 of 5 done \u00b7 1 failed")
+    assert first.startswith("\U0001f342 **auditing cron locking** \u00b7 1 of 2 done \u00b7 1 failed")
 
 
 # ── one-row Goal and plain-word tool lines ─────────────────────────────────
@@ -1837,8 +1836,9 @@ def test_a_joined_card_drops_a_fully_stopped_job_and_its_count():
 def test_a_joined_card_with_every_job_stopped_keeps_just_the_stop_title():
     card = _joined(("a", "disks", ("g",)), ("b", "logs", ("g",)))
     ac.on_child_event("subagent.complete", delegation_id="a", status="interrupted", summary="")
+    assert card.render().splitlines()[0] == "\U0001f500 **logs**", "one part left: single layout"
     ac.on_child_event("subagent.complete", delegation_id="b", status="interrupted", summary="")
-    assert card.render().splitlines() == ["\U0001f940 **2 jobs** \u00b7 stopped"]
+    assert card.render().splitlines() == ["\U0001f940 **logs** \u00b7 stopped"]
 
 
 def test_a_partly_stopped_job_shows_only_its_other_helpers():
