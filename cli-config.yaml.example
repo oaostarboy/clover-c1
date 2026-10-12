@@ -1761,6 +1761,11 @@ display:
   # messages). Keeps elapsed time and waiting/stalled status truthful.
   # 0 disables the heartbeat.
   delegation_heartbeat_seconds: 60
+  # Ack card for a single dispatched helper.
+  #   unified: ONE card -- steps, current tool, tool calls, time and the
+  #            helper's plain summary at the end; no separate 🔀 card (default)
+  #   classic: plain checklist plus the separate 🔀 card
+  helper_card: unified
 
   # Live 🏛 council card (/council and council runs the agent starts).
   #   v2:      one collapsible card with the question, each seat and its model;

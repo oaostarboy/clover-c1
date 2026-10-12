@@ -1581,6 +1581,12 @@ DEFAULT_CONFIG = {
         # Quiet-period refresh interval (seconds) for delegation cards; edits
         # only, never new messages. 0 disables the heartbeat.
         "delegation_heartbeat_seconds": 60,
+        # Helper ack card. "unified" (default): when one helper is dispatched
+        # with a handoff, the ack message is the whole card -- steps, current
+        # tool, tool calls, time and, at the end, the helper's plain summary --
+        # and no separate 🔀 card is posted for it. "classic": the plain
+        # checklist plus the separate 🔀 card.
+        "helper_card": "unified",
         # Optional custom phrases for generic long-running status messages.
         # Built-in defaults live in gateway/assets/status_phrases.yaml. Users
         # can set `path`/`paths` to CLOVER_HOME-relative YAML files/directories

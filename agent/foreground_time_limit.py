@@ -285,6 +285,9 @@ class DispatchReceipt:
     steps: Tuple[str, ...] = ()
     # The root's own opening sentence(s) for the ack (``handoff.say``).
     say: str = ""
+    # Several-helper dispatches: each task's own steps (``tasks[i].steps``), by
+    # task index; ``()`` for a helper without any.
+    child_steps: Tuple[Tuple[str, ...], ...] = ()
 
 
 def _handoff_summary(handoff: Any) -> str:
@@ -311,6 +314,19 @@ def _handoff_steps(handoff: Any, goals: Any) -> Tuple[str, ...]:
         return ()
 
 
+def _clean_child_steps(child_steps: Any, goals: Any) -> Tuple[Tuple[str, ...], ...]:
+    """Per-task steps of a several-helper dispatch; ``()`` when none has any."""
+    if len([g for g in (goals or ()) if g]) < 2 or not isinstance(child_steps, (list, tuple)):
+        return ()
+    try:
+        from agent.ack_checklist import clean_steps
+
+        out = tuple(clean_steps(s) for s in child_steps)
+    except Exception:
+        return ()
+    return out if any(out) else ()
+
+
 def _handoff_say(handoff: Any) -> str:
     if not isinstance(handoff, dict):
         return ""
@@ -330,8 +346,34 @@ def _open_ack_part(did: str, receipt: "DispatchReceipt") -> None:
 
         open_part(
             did, receipt.summary, receipt.steps,
-            expected=max(1, len(receipt.goals)), say=receipt.say,
+            expected=max(1, len(receipt.goals)), say=receipt.say, goals=receipt.goals,
+            child_steps=receipt.child_steps,
         )
+    except Exception:
+        pass
+
+
+def reserve_ack_part(delegation_id: Any, handoff: Any, goals: Any = ()) -> bool:
+    """Before a background dispatch starts its helpers: claim the delegation
+    id for the unified card when the handoff will open a part (it has a
+    summary), so no helper event can slip a separate 🔀 card out first.
+    Pair with ``release_ack_part`` if the dispatch is not accepted."""
+    try:
+        did = str(delegation_id or "").strip()
+        if not did or not _handoff_summary(handoff):
+            return False
+        from agent.ack_checklist import reserve
+
+        return reserve(did)
+    except Exception:
+        return False
+
+
+def release_ack_part(delegation_id: Any) -> None:
+    try:
+        from agent.ack_checklist import release
+
+        release(delegation_id)
     except Exception:
         pass
 
@@ -344,6 +386,7 @@ def note_own_dispatch(
     subagent_ids: Any = (),
     request_identity: Optional[Dict[str, Any]] = None,
     handoff: Any = None,
+    child_steps: Any = (),
 ) -> None:
     """Remember that THIS agent instance dispatched ``delegation_id``.
 
@@ -377,6 +420,7 @@ def note_own_dispatch(
             summary=_handoff_summary(handoff),
             steps=_handoff_steps(handoff, goals),
             say=_handoff_say(handoff),
+            child_steps=_clean_child_steps(child_steps, goals),
         )
         _open_ack_part(did, own[did])
         while len(own) > _OWN_DISPATCH_CAP:

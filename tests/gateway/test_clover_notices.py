@@ -13,7 +13,7 @@ TAILS = {
     "shutting_down": "Your task got stopped.",
     "restart_requested": "If I'm not back in a minute, run `clover gateway restart` on the computer.",
     "restart_in_progress": "",
-    "draining": "Finishing 2 task(s) first.",
+    "draining": "Finishing 2 tasks first.",
     "back_online": "",
     "job_interrupted": "'nightly' got cut off by the restart, so there's no result this time.",
     "update_rolled_back": (
@@ -281,7 +281,7 @@ async def test_restart_already_in_progress_and_draining(monkeypatch, tmp_path, s
         face, line = _face_line(in_progress, "restart_in_progress")
         assert in_progress == f"{face} {line}"
         face, line = _face_line(draining, "draining")
-        assert draining == f"{face} {line}. Finishing 2 task(s) first."
+        assert draining == f"{face} {line}. Finishing 2 tasks first."
     else:
         assert in_progress == "⏳ Gateway restart already in progress..."
         assert draining == "⏳ Draining 2 active agent(s) before restart..."
@@ -354,3 +354,15 @@ def test_watcher_keeps_stock_text_and_imports_no_gateway_code():
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count,word", [(1, "1 task"), (2, "2 tasks")])
+async def test_draining_notice_is_plural_correct(count, word):
+    runner, _adapter = make_restart_runner()
+    runner._draining = True
+    runner._running_agent_count = lambda: count
+    event = MessageEvent(text="/restart", message_type=MessageType.TEXT,
+                         source=make_restart_source(chat_id="42"), message_id="m1")
+    out = str(await runner._handle_restart_command(event))
+    assert f"Finishing {word} first." in out and "task(s)" not in out

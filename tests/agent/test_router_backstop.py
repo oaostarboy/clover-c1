@@ -633,7 +633,7 @@ def test_ack_fallback_never_quotes_the_goal():
     one = rb._ack_text([_receipt(GOAL)])
     assert one == "\U0001f504 on it, i'll report back here when it's done"
     three = rb._ack_text([_receipt('x1', 'x2', 'x3')])
-    assert three == "\U0001f504 3 helpers on it, i'll report back here when they're done"
+    assert three == "\U0001f504 3 subagents on it, i'll report back here when they're done"
     assert 'x1' not in three and GOAL not in one
 
 

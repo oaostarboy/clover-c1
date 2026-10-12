@@ -113,7 +113,7 @@ def test_straggler_wait_shows_waiting_on_helper_until_it_ends_or_is_given_up():
         subagent_id="sa-1", task_index=1, task_count=2, goal="goal 1",
     )
     assert changed == "batch-1"
-    assert "waiting on helper 2" in tracker.render("batch-1")
+    assert "waiting on subagent 2" in tracker.render("batch-1")
     assert {c["index"]: c["awaited"] for c in tracker.snapshot("batch-1")}[1] is True
 
     # Giving up the wait clears the note (the root reported without it).
@@ -121,7 +121,7 @@ def test_straggler_wait_shows_waiting_on_helper_until_it_ends_or_is_given_up():
         "subagent.awaiting", awaiting=False, delegation_id="batch-1",
         subagent_id="sa-1", task_index=1, task_count=2, goal="goal 1",
     )
-    assert "waiting on helper" not in tracker.render("batch-1")
+    assert "waiting on subagent" not in tracker.render("batch-1")
 
 
 def test_awaiting_note_never_regresses_a_finished_helper_or_makes_a_card():

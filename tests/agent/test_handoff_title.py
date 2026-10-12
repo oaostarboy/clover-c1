@@ -136,7 +136,7 @@ class TestBothBackstopPaths:
 
     def test_lifecycle_handoff_is_unchanged(self):
         verdict = dr.Verdict(mode="single", source="lifecycle", tasks=(dr.PlanTask(goal="x" * 12),))
-        assert rb._runtime_handoff(verdict, GPU)["work"] == "finishing the check on the helper results"
+        assert rb._runtime_handoff(verdict, GPU)["work"] == "finishing the check on the subagent results"
 
     def test_the_summary_survives_the_cards_own_sanitiser(self):
         from agent.delegation_checkpoint import ack_summary_line

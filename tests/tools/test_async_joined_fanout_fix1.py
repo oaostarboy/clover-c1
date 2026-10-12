@@ -244,7 +244,7 @@ def test_straggler_window_joins_without_the_last_helper_then_one_late_result(reg
         _dispatch(runner, straggler_seconds=300,
                   straggler_notify=lambda idx, waiting: notes.append((idx, waiting)))
         assert parked.wait(10)
-        assert notes == [([1], True)]          # card: "waiting on helper 2"
+        assert notes == [([1], True)]          # card: "waiting on subagent 2"
         assert reg.empty()
 
         clock.t += 299

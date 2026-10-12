@@ -480,7 +480,7 @@ def _runtime_handoff(verdict: Any, user_message: str = "") -> Dict[str, str]:
     own reason (``agent.handoff_title``), with no model call; the generic
     placeholders remain only when neither says anything usable."""
     if getattr(verdict, "source", "") == "lifecycle":
-        return {"work": "finishing the check on the helper results", "outcome": "the final answer"}
+        return {"work": "finishing the check on the subagent results", "outcome": "the final answer"}
     from agent.handoff_title import handoff_summary
 
     fallback = ""
@@ -1110,9 +1110,15 @@ def turn_is_armed(agent: Any) -> bool:
     )
 
 
-def _ack_text(receipts: List["_fl.DispatchReceipt"]) -> str:
+def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None) -> str:
     """What the user is told when helpers took over: the root's own short
-    summary of each dispatch, never the helper's raw task text."""
+    summary of each dispatch, never the helper's raw task text.
+
+    With the unified card and an opener line on a chat platform, the turn's
+    reply is the opener ALONE: its own normal message, never edited or moved.
+    The gateway sends the card as a second message right under it when it
+    delivers that reply (``bind_ack_card`` -> ``match_unbound_opener``).  No
+    opener (or no chat platform): the reply is the card text, as before."""
     lines = [r.summary for r in receipts if getattr(r, "summary", "")]
     if lines:
         try:
@@ -1121,15 +1127,35 @@ def _ack_text(receipts: List["_fl.DispatchReceipt"]) -> str:
             card = card_for(receipts)
             if card is not None:
                 # The same text, with the steps under each header; the gateway
-                # edits the message this becomes as the helper works.
-                return card.render()
+                # edits the message this becomes as the helper works.  The
+                # text it was created with (the live card shows a running
+                # clock, so a fresh render could no longer be matched).
+                if _opener_is_own_message(card, agent):
+                    card.split_opener = True
+                    return card.say_text()
+                return card.initial_text
         except Exception:
             logger.debug("ack checklist unavailable; plain summary lines", exc_info=True)
         return "\n".join(lines)
     count = sum(len(r.goals) for r in receipts) or sum(len(r.subagent_ids) for r in receipts) or 1
     if count == 1:
         return "\U0001f504 on it, i'll report back here when it's done"
-    return f"\U0001f504 {count} helpers on it, i'll report back here when they're done"
+    return f"\U0001f504 {count} subagents on it, i'll report back here when they're done"
+
+
+def _opener_is_own_message(card: Any, agent: Any) -> bool:
+    """True when the opener line is sent alone and the card follows it as a
+    second message: the unified style, an opener to send, and a messaging
+    platform (a CLI has no second message to edit, it keeps the whole text)."""
+    try:
+        from agent.ack_checklist import unified
+
+        if not (unified() and card.say_text()):
+            return False
+        platform = str(getattr(agent, "platform", "") or "").strip().lower()
+        return agent is not None and platform not in ("", "cli", "tui")
+    except Exception:
+        return False
 
 
 def completion_directive(agent: Any):
@@ -1156,7 +1182,7 @@ def completion_directive(agent: Any):
         _adopt(agent, state)
     from agent import delegation_checkpoint as dc
 
-    return dc.Directive(EXIT_REASON, _ack_text(receipts))
+    return dc.Directive(EXIT_REASON, _ack_text(receipts, agent))
 
 
 def _row_outcome(row: Optional[Dict[str, Any]]) -> str:

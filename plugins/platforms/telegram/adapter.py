@@ -9094,8 +9094,10 @@ class TelegramAdapter(BasePlatformAdapter):
         )
 
         # 5) Convert bold: **text** → *text* (MarkdownV2 bold)
+        #    The "**>" that opens an expandable quote is not a bold opener
+        #    (a bold title may follow it on the same line: "**> 🍀 **title**").
         text = re.sub(
-            r'\*\*(.+?)\*\*',
+            r'\*\*(?!>)(.+?)\*\*',
             lambda m: _ph(f'*{_escape_mdv2(m.group(1))}*'),
             text,
         )
