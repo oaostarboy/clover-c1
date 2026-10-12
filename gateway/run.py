@@ -6973,7 +6973,7 @@ class TurnRunner:
                 )
             if ctx.completion_delegation_ids:
                 # Trusted ids of the helper completion this turn delivers: the
-                # foreground time limit's verification window keys on them.
+                # foreground time limit starts the turn's own clock from them.
                 _conversation_kwargs["completion_delegation_ids"] = (
                     ctx.completion_delegation_ids
                 )
@@ -28460,7 +28460,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 ]
             # Trusted ids of the helper results this turn delivers (producer
             # event fields, never the notification text): the foreground time
-            # limit keys its one verification window on them.
+            # limit starts the completion turn's own clock from them.
             _completion_ids = self._completion_delegation_ids(evt)
             if _completion_ids:
                 metadata["completion_delegation_ids"] = _completion_ids

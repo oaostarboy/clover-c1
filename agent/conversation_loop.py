@@ -1899,8 +1899,8 @@ def run_conversation(
         completion_delegation_ids: Trusted delegation ids of the helper
             completion an ``internal_notification`` turn delivers (set by the
             gateway from the producer event, never parsed from text). Only
-            the foreground time limit reads them, to decide whether this
-            turn earns its one short verification window.
+            the foreground time limit reads them: a turn that delivers a
+            helper result starts its own full clock.
                 or queuing follow-up prefetch work.
 
     Returns:

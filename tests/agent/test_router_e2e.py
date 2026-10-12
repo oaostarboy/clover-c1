@@ -229,7 +229,8 @@ def test_staged_turn_dispatches_stage_one_and_carries_the_next_stage(
     assert '\U0001f504 ' in result['final_response']
     assert 'report back here' in result['final_response'] or '\u2192' in result['final_response']
     assert 'Add a feature flag with tests' not in result['final_response'], 'the ack never pastes the message'
-    assert 'adding a feature flag' in result['final_response'], 'the card names the job from the message'
+    # stage one is titled from ITS task, not from the whole request
+    assert 'writing the feature flag module with tests' in result['final_response']
     assert result['work_status'] == 'dispatch_ack'
     wire_user = _wire_users(provider.captured[0])[-1]
     assert f'{MARKER} staged' in wire_user

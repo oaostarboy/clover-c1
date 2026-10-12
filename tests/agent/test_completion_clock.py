@@ -1,12 +1,12 @@
-"""Verification episode for a helper's own completion turn (C1.5 B2).
+"""A turn that delivers a helper's result gets its own full foreground clock.
 
-``delegation.verify_time_limit_seconds`` (default 120; 0/null/false = off): the
-completion turn of a hand-off THIS agent instance dispatched gets a fresh,
-bounded episode so the root can run a short check before it answers.  The
-grant keys on trusted completion metadata (``completion_delegation_ids`` from
-the gateway), never on notification text or on session identity, is consumed
-once per dispatch (durably, across restart), and leaves everything else on
-today's start-expired path.
+The Octavia incident (2026-10-12 13:04): the completion of a hand-off arrived
+after the dispatching request had used its 300 s, inherited that spent clock,
+and hit "the time limit is reached" 37 s in -- twice in a row.  A completion
+turn (an ``internal_notification`` carrying the gateway's trusted
+``completion_delegation_ids``) is the user-facing continuation of the work, so
+it starts its OWN episode with the full limit, like a new human message.
+Other internal turns (watches, wake-ups, no ids) still inherit.
 
 Real ``AIAgent.run_conversation`` against a local scripted provider, the real
 async-delegation registry / durable ledger in a scratch ``CLOVER_HOME``
@@ -63,14 +63,12 @@ def atomic_write_config(text: str) -> None:
     os.replace(tmp, path)
 
 
-def _write_config(foreground: Any = 300, verify: Any = 'unset') -> None:
+def _write_config(foreground: Any = 300) -> None:
     from clover_constants import get_clover_home
 
     from clover_cli.config_defaults import DEFAULT_CONFIG
 
     delegation: dict[str, Any] = {'foreground_time_limit_seconds': foreground}
-    if verify != 'unset':
-        delegation['verify_time_limit_seconds'] = verify
     atomic_write_config(yaml.safe_dump({
         '_config_version': DEFAULT_CONFIG['_config_version'],
         'delegation': delegation,
@@ -79,7 +77,7 @@ def _write_config(foreground: Any = 300, verify: Any = 'unset') -> None:
 
 @pytest.fixture(autouse=True)
 def _defaults():
-    _write_config(300)  # verify limit left at its default (120)
+    _write_config(300)
 
 
 @pytest.fixture(autouse=True)
@@ -269,155 +267,85 @@ def check_script(provider: Provider, marker, second_marker=None) -> None:
     provider.queue[:] = queue
 
 
-# ── the grant ──────────────────────────────────────────────────────────────
+# ── the fresh clock ────────────────────────────────────────────────────────
 
-def test_own_handoff_completion_runs_one_check_then_finish_mode(
-        clock, provider, stub_children, tmp_path):
+@pytest.mark.parametrize('used', [299, 400, 1000])
+def test_completion_turn_after_the_parent_used_its_clock_gets_a_fresh_full_limit(
+        clock, provider, stub_children, tmp_path, used):
     agent = make_agent(provider)
     did = hand_off(agent, provider)
-    clock.advance(400)  # the helper took longer than the human's 5 minutes
-    first, second = tmp_path / 'first.txt', tmp_path / 'second.txt'
-    check_script(provider, first, second)
-    advance_per_tool_round(agent, clock, 130)  # the check "takes" 130 s
+    clock.advance(used)  # the helper ran as long as the parent's episode (or longer)
+    marks = [tmp_path / f'm{i}.txt' for i in range(3)]
+    provider.queue[:] = [tool('terminal', {'command': f'touch {m}'}, f't{i}')
+                         for i, m in enumerate(marks)] + [text('Checked: all right.')]
+    advance_per_tool_round(agent, clock, 70)  # 3 rounds: 210 s, inside 300 s
 
     result = completion_turn(agent, [did])
 
-    assert first.exists(), 'the check admitted inside the window must run'
-    assert not second.exists(), 'after the window the turn is in finish mode'
-    assert fl.BLOCK_CODE in all_tool_text(provider)
-    assert result['final_response'] == 'Checked: the numbers are right.'
-    assert agent._fg_episode.limit == 120
+    assert agent._fg_episode.limit == 300 and agent._fg_episode.completion is True
+    assert agent._fg_episode.finish_at is None, 'not started in finish mode'
+    assert all(m.exists() for m in marks), 'every check inside the full limit runs'
+    assert fl.BLOCK_CODE not in all_tool_text(provider)
+    assert result['final_response'] == 'Checked: all right.'
 
 
-def test_without_a_grant_the_same_completion_turn_is_start_expired(
+def test_the_completion_clock_expires_normally_after_its_own_full_limit(
         clock, provider, stub_children, tmp_path):
-    """Control for the test above: no trusted ids -> today's behaviour."""
+    agent = make_agent(provider)
+    did = hand_off(agent, provider)
+    clock.advance(1000)
+    first, second = tmp_path / 'first.txt', tmp_path / 'second.txt'
+    check_script(provider, first, second)
+    advance_per_tool_round(agent, clock, 310)  # the first check alone takes 310 s
+
+    completion_turn(agent, [did])
+
+    assert first.exists()
+    assert not second.exists(), 'past ITS limit the turn is in finish mode'
+    assert fl.BLOCK_CODE in all_tool_text(provider)
+
+
+@pytest.mark.parametrize('ids', [['deleg_foreign'], ['deleg_a', 'deleg_b']],
+                         ids=['foreign', 'several'])
+def test_the_fresh_clock_needs_no_state_on_the_agent_instance(
+        clock, provider, stub_children, tmp_path, ids):
+    """Trusted metadata is the whole test: a rebuilt agent, a restart and
+    another generation get the same fresh clock."""
     agent = make_agent(provider)
     hand_off(agent, provider)
-    clock.advance(400)
-    first = tmp_path / 'first.txt'
-    check_script(provider, first)
-
-    agent.run_conversation('helper finished', conversation_history=[], task_id='c0',
-                           persist_user_display_kind=INTERNAL)
-
-    assert not first.exists()
-    assert fl.BLOCK_CODE in all_tool_text(provider)
-
-
-def test_second_completion_for_the_same_dispatch_gets_no_new_allowance(
-        clock, provider, stub_children, tmp_path):
-    agent = make_agent(provider)
-    did = hand_off(agent, provider)
-    clock.advance(400)
-    completion_turn(agent, [did], task_id='c1')
-    clock.advance(600)
-    again = tmp_path / 'again.txt'
-    check_script(provider, again)
-    provider.captured.clear()
-
-    completion_turn(agent, [did], task_id='c2')
-
-    assert not again.exists()
-    assert fl.BLOCK_CODE in all_tool_text(provider)
-
-
-def test_the_allowance_stays_consumed_across_a_restart(
-        clock, provider, stub_children, tmp_path):
-    agent = make_agent(provider)
-    did = hand_off(agent, provider)
-    clock.advance(400)
-    completion_turn(agent, [did], task_id='c1')  # consumes it
-
-    ad._reset_for_tests()  # the process restarts: memory gone, ledger stays
-    reborn = make_agent(provider)
-    fl.note_own_dispatch(reborn, did)  # even an instance that claims the id
-    clock.advance(600)
-    late = tmp_path / 'late.txt'
-    check_script(provider, late)
-    provider.captured.clear()
-
-    completion_turn(reborn, [did], task_id='c3')
-
-    assert not late.exists()
-    assert fl.BLOCK_CODE in all_tool_text(provider)
-
-
-def test_a_restarted_instance_that_never_dispatched_gets_nothing(
-        clock, provider, stub_children, tmp_path):
-    agent = make_agent(provider)
-    did = hand_off(agent, provider)
     ad._reset_for_tests()
-    clock.advance(400)
-    reborn = make_agent(provider)  # previous generation's dispatch
-    late = tmp_path / 'late.txt'
-    check_script(provider, late)
+    reborn = make_agent(provider)  # never dispatched anything
+    clock.advance(1000)
+    target = tmp_path / 'reborn.txt'
+    check_script(provider, target)
 
-    completion_turn(reborn, [did], task_id='c4')
+    completion_turn(reborn, ids, task_id='reborn')
 
-    assert not late.exists()
-    assert fl.BLOCK_CODE in all_tool_text(provider)
-
-
-# ── what must NOT earn the grant ───────────────────────────────────────────
-
-def test_foreign_cron_and_mismatched_ids_keep_todays_behaviour(
-        clock, provider, stub_children, tmp_path):
-    agent = make_agent(provider)
-    own = hand_off(agent, provider)
-    cron = ad.dispatch_async_delegation(
-        goal='nightly', context=None, toolsets=None, role='leaf', model=None,
-        session_key='cron:nightly',
-        runner=lambda: {'status': 'completed', 'summary': 'ok'})['delegation_id']
-    clock.advance(400)
-
-    for n, ids in enumerate((['deleg_never_dispatched_here'], [cron], [own + 'x'], [])):
-        target = tmp_path / f'attempt{n}.txt'
-        check_script(provider, target)
-        provider.captured.clear()
-        completion_turn(agent, ids, task_id=f'm{n}')
-        assert not target.exists(), f'ids={ids!r} must not open a window'
-        assert fl.BLOCK_CODE in all_tool_text(provider)
-
-    # the real owner's own id was never spent by the attempts above
-    mine = tmp_path / 'mine.txt'
-    check_script(provider, mine)
-    provider.captured.clear()
-    clock.advance(10)
-    completion_turn(agent, [own], task_id='mine')
-    assert mine.exists()
+    assert reborn._fg_episode.completion is True and reborn._fg_episode.limit == 300
+    assert target.exists()
 
 
-def test_notification_text_naming_the_id_is_not_trusted(
-        clock, provider, stub_children, tmp_path):
+@pytest.mark.parametrize('ids', [[], None, '', ['', '  ']], ids=['empty', 'none', 'str', 'blank'])
+def test_an_internal_turn_without_trusted_ids_still_inherits(
+        clock, provider, stub_children, tmp_path, ids):
     agent = make_agent(provider)
     did = hand_off(agent, provider)
-    clock.advance(400)
-    target = tmp_path / 'text.txt'
+    clock.advance(1000)
+    target = tmp_path / 'inherit.txt'
     check_script(provider, target)
 
     agent.run_conversation(
-        f'[ASYNC DELEGATION COMPLETE delegation_id={did}] done',
-        conversation_history=[], task_id='txt', persist_user_display_kind=INTERNAL)
+        f'[ASYNC DELEGATION COMPLETE delegation_id={did}] done',  # text is never trusted
+        conversation_history=[], task_id='txt', persist_user_display_kind=INTERNAL,
+        completion_delegation_ids=ids)
 
+    assert agent._fg_episode.completion is False
+    assert agent._fg_episode.finish_at is not None, 'spent -> finish mode from the start'
     assert not target.exists()
+    assert fl.BLOCK_CODE in all_tool_text(provider)
 
 
-def test_the_same_session_id_alone_does_not_grant(
-        clock, provider, stub_children, tmp_path):
-    agent = make_agent(provider)
-    did = hand_off(agent, provider)
-    clock.advance(400)
-    sibling = make_agent(provider, session_id=agent.session_id)  # same session, other instance
-    target = tmp_path / 'session.txt'
-    check_script(provider, target)
-
-    completion_turn(sibling, [did], task_id='sess')
-
-    assert not target.exists()
-
-
-def test_ids_on_a_human_turn_are_ignored(clock, provider, stub_children, tmp_path):
+def test_ids_on_a_human_turn_are_ignored(clock, provider, stub_children):
     agent = make_agent(provider)
     did = hand_off(agent, provider)
     clock.advance(400)
@@ -426,48 +354,62 @@ def test_ids_on_a_human_turn_are_ignored(clock, provider, stub_children, tmp_pat
     agent.run_conversation('hi again', conversation_history=[], task_id='hum',
                            completion_delegation_ids=[did])
 
-    assert agent._fg_episode.limit == 300  # the human's own limit, not 120
-    assert ad.claim_verification_allowance(did) is True, 'a human turn must not consume it'
+    assert agent._fg_episode.limit == 300 and agent._fg_episode.completion is False
 
 
-def test_a_still_running_human_clock_is_not_replaced(
-        clock, provider, stub_children, tmp_path):
+# ── a human message keeps its clock rules ──────────────────────────────────
+
+def test_a_human_message_inside_an_episode_starts_its_own_clock(
+        clock, provider, stub_children):
     agent = make_agent(provider)
-    did = hand_off(agent, provider)
-    started = agent._fg_episode.started_at
+    hand_off(agent, provider)
+    first = agent._fg_episode.started_at
     clock.advance(100)
-    provider.queue[:] = [text('integrated')]
+    provider.queue[:] = [text('ok')]
 
-    completion_turn(agent, [did], task_id='live')
+    agent.run_conversation('next request', conversation_history=[], task_id='hum2')
 
-    assert agent._fg_episode.started_at == started
-    assert agent._fg_episode.limit == 300
-    assert ad.claim_verification_allowance(did) is True, 'nothing was spent'
-
-
-# ── limits / switches ──────────────────────────────────────────────────────
-
-@pytest.mark.parametrize('off', [0, None, False, 'nope'])
-def test_verify_limit_off_means_no_episode(
-        clock, provider, stub_children, tmp_path, off):
-    agent = make_agent(provider)
-    did = hand_off(agent, provider)
-    _write_config(300, off)
-    clock.advance(400)
-    target = tmp_path / 'off.txt'
-    check_script(provider, target)
-
-    completion_turn(agent, [did], task_id='off')
-
-    assert not target.exists()
-    assert fl.BLOCK_CODE in all_tool_text(provider)
+    assert agent._fg_episode.started_at == first + 100
+    assert agent._fg_episode.limit == 300 and agent._fg_episode.completion is False
 
 
-def test_foreground_limit_off_disables_the_verification_episode_too(
+def test_a_human_message_after_a_completion_gets_its_own_fresh_clock(
         clock, provider, stub_children, tmp_path):
     agent = make_agent(provider)
     did = hand_off(agent, provider)
-    _write_config(0, 120)
+    clock.advance(400)
+    provider.queue[:] = [text('checked')]
+    completion_turn(agent, [did], task_id='ep')
+    clock.advance(50)
+    target = tmp_path / 'human.txt'
+    provider.queue[:] = [tool('terminal', {'command': f'touch {target}'}, 'h1'), text('done')]
+
+    agent.run_conversation('next request', conversation_history=[], task_id='hum3')
+
+    assert agent._fg_episode.limit == 300 and agent._fg_episode.completion is False
+    assert agent._fg_episode.started_at == clock.t
+    assert target.exists()
+
+
+def test_steer_style_midturn_input_does_not_reset_a_running_episode(clock, provider):
+    """Only a turn BEGINNING resets the clock; a begin_turn-free redirect inside
+    the running turn reads the same episode."""
+    agent = make_agent(provider)
+    fl.begin_turn(agent)
+    started = agent._fg_episode.started_at
+    clock.advance(120)
+
+    assert fl.remaining_seconds(agent) == pytest.approx(180)
+    assert agent._fg_episode.started_at == started
+
+
+# ── limits / switches / scope ──────────────────────────────────────────────
+
+def test_foreground_limit_off_means_no_episode_for_a_completion_turn(
+        clock, provider, stub_children, tmp_path):
+    agent = make_agent(provider)
+    did = hand_off(agent, provider)
+    _write_config(0)
     clock.advance(400)
     target = tmp_path / 'fgoff.txt'
     check_script(provider, target)
@@ -479,28 +421,26 @@ def test_foreground_limit_off_disables_the_verification_episode_too(
     assert target.exists(), 'with the limit off nothing is refused'
 
 
-def test_verify_limit_is_read_from_config(clock, provider, stub_children, tmp_path):
+def test_no_clock_where_a_detached_helper_cannot_be_delivered(
+        clock, provider, stub_children):
+    import gateway.session_context as sc
+
     agent = make_agent(provider)
     did = hand_off(agent, provider)
-    _write_config(300, 45)
     clock.advance(400)
-    provider.queue[:] = [text('ok')]
+    sc.declare_stateless_channel()  # the surface can no longer take a detached result
+    try:
+        provider.queue[:] = [text('ok')]
+        completion_turn(agent, [did], task_id='nodeliv')
+    finally:
+        sc._SESSION_ASYNC_DELIVERY.set(sc._UNSET)
 
-    completion_turn(agent, [did], task_id='cfg')
-
-    assert agent._fg_episode.limit == 45
+    assert agent._fg_episode.enabled is False
 
 
-def test_default_and_normalisation_of_the_verify_limit(monkeypatch):
-    assert fl.DEFAULT_VERIFY_SECONDS == 120.0
-    assert fl.load_verify_seconds() == 120.0  # default config, key absent
-    _write_config(300, 'unset')
-    assert fl.load_verify_seconds() == 120.0
-    for off in (0, None, False, True, '', 'x', -5):
-        _write_config(300, off)
-        assert fl.load_verify_seconds() is None, off
-    _write_config(300, 90)
-    assert fl.load_verify_seconds() == 90.0
+def test_the_removed_verify_setting_and_claim_are_gone():
+    assert not hasattr(fl, 'load_verify_seconds')
+    assert not hasattr(ad, 'claim_verification_allowance')
 
 
 # ── helpers spawned in the episode ─────────────────────────────────────────
@@ -510,9 +450,9 @@ def test_helpers_spawned_in_the_episode_are_background_even_after_expiry(
     agent = make_agent(provider)
     did = hand_off(agent, provider)
     clock.advance(400)
-    # Two quiet rounds run the episode out; the dispatch comes after expiry.  A
-    # dispatch on a completion turn is the hand-back of the integration: the
-    # runtime acknowledges it and ends the turn (agent.work_lifecycle).
+    # Rounds run the episode out; the dispatch comes after expiry.  A dispatch
+    # on a completion turn is the hand-back of the integration: the runtime
+    # acknowledges it and ends the turn (agent.work_lifecycle).
     provider.queue[:] = [
         tool('todo', {'todos': [{'id': '1', 'content': 'x', 'status': 'pending'}]}, 'e1'),
         tool('todo', {'todos': [{'id': '1', 'content': 'x', 'status': 'in_progress'}]}, 'e2'),
@@ -524,22 +464,19 @@ def test_helpers_spawned_in_the_episode_are_background_even_after_expiry(
     def round_(*a, **k):
         out = original(*a, **k)
         seen.append((agent._fg_episode.expired(), fl.forces_background(agent)))
-        clock.advance(70)  # rounds end at 70 s, 140 s (expired), 210 s
+        clock.advance(160)  # rounds end at 160 s, 320 s (expired), 480 s
         return out
 
     agent._execute_tool_calls = round_
 
     result = completion_turn(agent, [did], task_id='bg')
 
-    # the turn ended on the dispatch, so its result is in the transcript, not
-    # in a later request
     results = '\n'.join(str(m.get('content')) for m in result['messages']
                         if m.get('role') == 'tool')
     assert results.count('"mode": "background"') >= 1, results
     assert seen[-1][0], 'the episode must have run out before the dispatch'
     assert all(forced for _, forced in seen), seen  # background before AND after expiry
     assert re.match(r'^\U0001f504 ', result['final_response'])
-    assert 'report back here' in result['final_response'] or '\u2192' in result['final_response']
     assert result['turn_exit_reason'] == 'delegation_handoff'
 
 
@@ -558,32 +495,10 @@ def test_no_limit_or_timeout_wording_reaches_the_user_reply(
     result = completion_turn(agent, [did], task_id='quiet')
 
     assert result['final_response'] == 'Everything checks out.'
-    # any model-facing refusal text is a marked Clover note that never asks to
-    # be hidden (the keep-quiet rule is in the static prompt)
     for t in tool_texts(provider.captured[-1]):
         if fl.BLOCK_CODE in t:
-            assert '[Clover runtime]' in t
+            assert '(Clover runtime)' in t
             assert 'do not mention' not in t.lower()
-
-
-# ── human clocks and cache stability ───────────────────────────────────────
-
-def test_a_human_message_after_the_episode_gets_its_own_fresh_clock(
-        clock, provider, stub_children, tmp_path):
-    agent = make_agent(provider)
-    did = hand_off(agent, provider)
-    clock.advance(400)
-    provider.queue[:] = [text('checked')]
-    completion_turn(agent, [did], task_id='ep')
-    clock.advance(50)  # inside / around the verification window
-    target = tmp_path / 'human.txt'
-    provider.queue[:] = [tool('terminal', {'command': f'touch {target}'}, 'h1'), text('done')]
-
-    agent.run_conversation('next request', conversation_history=[], task_id='hum2')
-
-    assert agent._fg_episode.limit == 300
-    assert agent._fg_episode.started_at == clock.t
-    assert target.exists()
 
 
 def test_system_prompt_and_tool_schemas_are_identical_in_the_episode(
@@ -604,39 +519,6 @@ def test_system_prompt_and_tool_schemas_are_identical_in_the_episode(
 
     assert system(human_req) == system(episode_req)
     assert human_req.get('tools') == episode_req.get('tools')
-
-
-# ── batch children ─────────────────────────────────────────────────────────
-
-def test_batch_child_completions_share_one_allowance_per_dispatch(
-        clock, provider, stub_children, tmp_path):
-    agent = make_agent(provider)
-    batch = hand_off(agent, provider)
-    clock.advance(400)
-    first, second = tmp_path / 'c0.txt', tmp_path / 'c1.txt'
-
-    check_script(provider, first)
-    completion_turn(agent, [f'{batch}:child:0', batch], task_id='b0')
-    assert first.exists()
-
-    clock.advance(600)
-    check_script(provider, second)
-    provider.captured.clear()
-    completion_turn(agent, [f'{batch}:child:1', batch], task_id='b1')
-    assert not second.exists()
-    assert fl.BLOCK_CODE in all_tool_text(provider)
-
-
-# ── the durable claim itself ───────────────────────────────────────────────
-
-def test_claim_is_once_only_and_fails_closed_for_unknown_ids(provider, stub_children, clock):
-    agent = make_agent(provider)
-    did = hand_off(agent, provider)
-
-    assert ad.claim_verification_allowance(did) is True
-    assert ad.claim_verification_allowance(did) is False
-    assert ad.claim_verification_allowance('deleg_missing') is False
-    assert ad.claim_verification_allowance('') is False
 
 
 # ── a completion queued behind a busy turn keeps its identity ──────────────
@@ -681,7 +563,7 @@ async def run_with_queued(monkeypatch, tmp_path, clock, provider, agent, queued,
         user_rows = [m for m in result['messages'] if m.get('role') == 'user']
         calls.append(SimpleNamespace(
             kwargs=kwargs, started_at=episode.started_at, limit=episode.limit,
-            verification=episode.verification, finish_at=episode.finish_at,
+            completion=episode.completion, finish_at=episode.finish_at,
             user_row=user_rows[-1]))
         clock.advance(first_turn_seconds if len(calls) == 1 else 30)
         return result
@@ -703,26 +585,28 @@ def queued_completion(ids, *, text_: str = 'helper finished'):
 
 
 @pytest.mark.asyncio
-async def test_queued_own_completion_gets_the_window_and_internal_presentation(
-        clock, provider, stub_children, monkeypatch, tmp_path):
+@pytest.mark.parametrize('foreign', [False, True], ids=['own', 'foreign'])
+async def test_queued_completion_gets_its_own_clock_and_internal_presentation(
+        clock, provider, stub_children, monkeypatch, tmp_path, foreign):
     agent = make_agent(provider)
     did = hand_off(agent, provider)
+    ids = ['deleg_foreign'] if foreign else [did]
 
     first, second = await run_with_queued(
-        monkeypatch, tmp_path, clock, provider, agent, queued_completion([did]))
+        monkeypatch, tmp_path, clock, provider, agent, queued_completion(ids))
 
-    assert first.verification is False and first.limit == 300
+    assert first.completion is False and first.limit == 300
     assert second.kwargs.get('persist_user_display_kind') == INTERNAL
-    assert tuple(second.kwargs.get('completion_delegation_ids')) == (did,)
+    assert tuple(second.kwargs.get('completion_delegation_ids')) == tuple(ids)
     assert second.user_row.get('display_kind') == INTERNAL
-    assert second.verification is True and second.limit == 120
-    assert second.started_at == first.started_at + 310  # its own window, not the human's
-    assert ad.claim_verification_allowance(did) is False, 'spent exactly once'
+    assert second.completion is True and second.limit == 300
+    assert second.started_at == first.started_at + 310  # its own clock, not the human's
+    assert second.finish_at is None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('ids', [['deleg_foreign'], [], None], ids=['foreign', 'empty', 'text-only'])
-async def test_queued_foreign_or_text_only_completion_inherits_without_a_fresh_clock(
+@pytest.mark.parametrize('ids', [[], None], ids=['empty', 'text-only'])
+async def test_queued_text_only_notification_inherits_without_a_fresh_clock(
         clock, provider, stub_children, monkeypatch, tmp_path, ids):
     agent = make_agent(provider)
     did = hand_off(agent, provider)
@@ -732,11 +616,9 @@ async def test_queued_foreign_or_text_only_completion_inherits_without_a_fresh_c
         queued_completion(ids, text_=f'helper finished delegation_id={did}'))
 
     assert second.kwargs.get('persist_user_display_kind') == INTERNAL
-    assert second.user_row.get('display_kind') == INTERNAL
-    assert second.verification is False
-    assert second.started_at == first.started_at, 'an internal turn must not mint a human clock'
-    assert second.limit == 300 and second.finish_at is not None  # spent -> finish mode
-    assert ad.claim_verification_allowance(did) is True, 'the own allowance was never spent'
+    assert second.completion is False
+    assert second.started_at == first.started_at, 'an untrusted internal turn must not mint a clock'
+    assert second.finish_at is not None  # spent -> finish mode
 
 
 @pytest.mark.asyncio
@@ -757,42 +639,6 @@ async def test_queued_genuine_human_message_keeps_a_fresh_human_clock(
     assert second.kwargs.get('persist_user_display_kind') is None
     assert second.kwargs.get('completion_delegation_ids') is None
     assert 'display_kind' not in second.user_row
-    assert second.verification is False and second.limit == 300
+    assert second.completion is False and second.limit == 300
     assert second.started_at == first.started_at + 310  # a fresh human clock
     assert second.finish_at is None
-    assert ad.claim_verification_allowance(did) is True
-
-
-# ── one allowance per window; the grant stays local to delivery ────────────
-
-def test_several_coalesced_dispatches_spend_only_one_allowance(
-        clock, provider, stub_children):
-    agent = make_agent(provider)
-    first = hand_off(agent, provider, task_id='h1')
-    second = hand_off(agent, provider, task_id='h2')
-    clock.advance(400)
-    provider.queue[:] = [text('checked both')]
-
-    completion_turn(agent, [first, second], task_id='co')
-
-    assert agent._fg_episode.verification is True
-    assert ad.claim_verification_allowance(first) is False, 'the matched id is spent'
-    assert ad.claim_verification_allowance(second) is True, 'the other is left unspent'
-
-
-def test_no_window_where_a_detached_helper_cannot_be_delivered(
-        clock, provider, stub_children):
-    import gateway.session_context as sc
-
-    agent = make_agent(provider)
-    did = hand_off(agent, provider)
-    clock.advance(400)
-    sc.declare_stateless_channel()  # the surface can no longer take a detached result
-    try:
-        provider.queue[:] = [text('ok')]
-        completion_turn(agent, [did], task_id='nodeliv')
-    finally:
-        sc._SESSION_ASYNC_DELIVERY.set(sc._UNSET)
-
-    assert agent._fg_episode.verification is False
-    assert ad.claim_verification_allowance(did) is True, 'nothing was spent'

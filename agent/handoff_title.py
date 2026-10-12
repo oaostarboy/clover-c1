@@ -415,6 +415,115 @@ def title_and_goal(message: str, reason: str = "", fallback_goal: str = "", **co
     return found[0], found[1]
 
 
+# ── distinct titles within one chat ────────────────────────────────────────
+
+RECENT_WINDOW_SECONDS = 30 * 60
+_TITLE_KEY = re.compile(r"[^a-z0-9 ]")
+_LEAD_GERUND = re.compile(r"^(?:[a-z]+ing)\s+(?:on\s+)?", re.IGNORECASE)
+# Words a variant is built from; a title that starts with one is already one.
+_VARIANT_LEADS = (
+    "checking", "finishing the checks on", "wrapping up", "following up on",
+    "double-checking", "continuing",
+)
+# Completion turn: this helper checks and finishes what the earlier one started.
+_COMPLETION_LADDER = (
+    "checking {obj}", "finishing the checks on {obj}", "wrapping up {obj}",
+    "double-checking {obj}",
+)
+_COMPLETION_LADDER_BARE = (
+    "checking the helper results", "finishing the helper checks",
+    "wrapping up the helper results", "double-checking the helper results",
+)
+# Human turn: another helper on the same chat's work.
+_FOLLOW_LADDER = (
+    "following up on {obj}", "continuing {obj}", "taking another pass at {obj}",
+)
+_FOLLOW_LADDER_BARE = (
+    "following up on the earlier work", "continuing the earlier work",
+    "taking another pass at the earlier work",
+)
+
+
+def title_key(title: str) -> str:
+    """A title as compared for sameness: lowercase words only."""
+    return _flat(_TITLE_KEY.sub(" ", str(title or "").lower()))
+
+
+def title_object(title: str) -> str:
+    """What a title is about (``restoring the Clover gateway`` -> ``the Clover
+    gateway``); ``""`` when nothing readable is left."""
+    text = _flat(title).strip(" .")
+    if text.lower().startswith(_VARIANT_LEADS):
+        return ""  # a variant of a variant: no clean object to reuse
+    body = _LEAD_GERUND.sub("", text, count=1).strip()
+    if body == text or len(body.split()) < 2:
+        return ""
+    return _cut(body, TITLE_CHARS - 22)
+
+
+def is_recent_title(title: str, recent: Sequence[str]) -> bool:
+    key = title_key(title)
+    return bool(key) and any(key == title_key(r) for r in recent or ())
+
+
+def distinct_title(title: str, recent: Sequence[str], *, completion: bool = False) -> str:
+    """``title`` unless this chat already had a hand-off with that title in the
+    last half hour; then a variant that says what THIS helper does.
+
+    No model needed: a completion turn's helper checks and finishes what the
+    earlier one produced (``checking the Clover gateway``); a later helper on
+    a human turn follows up on it.  The wording comes from the earlier title's
+    own subject, never repeats any recent title, and never raises."""
+    try:
+        recent = [r for r in (recent or ()) if _flat(r)]
+        if not is_recent_title(title, recent):
+            return title
+        obj = title_object(title) or next((o for o in map(title_object, recent) if o), "")
+        ladder = (
+            (_COMPLETION_LADDER if obj else _COMPLETION_LADDER_BARE) if completion
+            else (_FOLLOW_LADDER if obj else _FOLLOW_LADDER_BARE)
+        )
+        for pattern in ladder:
+            candidate = _cut(pattern.format(obj=obj), TITLE_CHARS)
+            if candidate and not is_recent_title(candidate, recent):
+                return candidate
+        n = 2
+        while True:  # every rung used: number it, still distinct and readable
+            candidate = _cut(f"{ladder[0].format(obj=obj)} ({n})", TITLE_CHARS + 4)
+            if not is_recent_title(candidate, recent):
+                return candidate
+            n += 1
+    except Exception:
+        return title
+
+
+def stage_handoff(goals: Sequence[str], earlier: Sequence[str] = ()) -> dict:
+    """``{"work", "outcome"}`` for one stage of a router plan, from THAT
+    stage's own task(s) -- never from the user's whole request or the plan's
+    overall reason, which would put the same title and the whole plan's goal on
+    every stage.  One task: its short gerund title and a noun for its result.
+    Several: their titles joined (``N subagents`` when too long) and their
+    results joined."""
+    goals = [g for g in (goals or ()) if _flat(g)]
+    if not goals:
+        return {"work": FALLBACK_TITLE, "outcome": FALLBACK_GOAL}
+    titles: list = []
+    nouns: list = []
+    for g in goals:
+        found = resolve(g, "", "", earlier=earlier)
+        titles.append(found[0] if found.source == "message" else task_title(g))
+        nouns.append(found[1] if found.source == "message" else "")
+    if len(goals) == 1:
+        work = titles[0]
+    else:
+        joined = " and ".join(titles[:2]) if len(goals) == 2 else ""
+        work = joined if joined and len(joined) <= TITLE_CHARS else f"{len(goals)} subagents"
+    outcome = " + ".join(n for n in nouns if n)
+    outcome = _cut(outcome, GOAL_CHARS) if outcome else ""
+    return {"work": strip_profanity(work) or FALLBACK_TITLE,
+            "outcome": strip_profanity(outcome) or FALLBACK_GOAL}
+
+
 def _goal_phrase(verb: str, phrase: str) -> str:
     """The job as a phrase that reads on its own; never ``<phrase>, <verb>``."""
     phrase = _flat(phrase)
