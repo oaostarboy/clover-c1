@@ -42,10 +42,23 @@ means *reported done*; the parent agent still reviews the work.
 display:
   delegation_activity: auto          # auto | on | off (per platform under display.platforms.<p>)
   delegation_heartbeat_seconds: 60   # 0 disables the heartbeat
+  helper_card: unified               # unified | classic
 ```
 
 `auto` shows the card wherever `tool_progress` is shown in chat and stays
 silent where it is `off`/`log`, so existing opt-outs are preserved.
+
+`helper_card` styles the ack message of a dispatched helper. `unified` (default)
+makes it the one card for the dispatch: your assistant's opening line, the work
+title and outcome with an ETA, the steps (⬜/🔄/🍀/🍂) for one helper, the
+current tool plus the previous ones (✓ ok / ✗ error, newest first; 3 lines for
+one helper, 2 per running helper for several), and `Model · 🛠 N tool calls ·
+⏱ time`. A dispatch of several helpers gets one block per helper (⬜ waiting,
+🔄 running, 🍀 done, 🍂 failed, ⏹ stopped) with a totals line; the header shows
+`k of N done`. When a helper finishes its tool lines give way to its plain
+summary, and no separate 🔀 card is posted. `classic` is the previous look
+(plain checklist plus the 🔀 card). Roll back with
+`clover config set display.helper_card classic` and `/restart`.
 
 ## External agent CLI workers (Claude, Codex, Clover/Luna)
 

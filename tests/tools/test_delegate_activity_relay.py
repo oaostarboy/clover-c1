@@ -137,3 +137,31 @@ def test_reasoning_and_spinner_text_are_marked_not_notes():
     cb("_thinking", "Checking the lock file")
     kinds = [kw["note_kind"] for et, kw in events if et == "subagent.thinking"]
     assert kinds == ["reasoning", "status", "note"]
+
+
+def test_complete_event_carries_the_plain_summary_from_the_full_answer(tmp_path, monkeypatch):
+    """summary is cut to 500 chars; the trailing 'Plain summary:' paragraph
+    must survive as its own field."""
+    monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
+    events = []
+    parent = _parent(events)
+    long_answer = ("Checked the thing in detail. " * 40) + "\nResult: done\n\nPlain summary: The fix works and tests pass."
+
+    def _make(*_a, **kw):
+        child = MagicMock()
+        child.model = "claude-opus-5-5"
+        child.session_prompt_tokens = child.session_completion_tokens = 1
+        child.session_estimated_cost_usd = 0.0
+        child.tool_progress_callback = kw.get("tool_progress_callback")
+        child.run_conversation.side_effect = lambda *a, **k: {
+            "final_response": long_answer, "completed": True, "interrupted": False,
+            "api_calls": 1, "messages": [],
+        }
+        return child
+
+    with patch("run_agent.AIAgent", side_effect=_make):
+        delegate_task(tasks=[{"goal": "do it"}], parent_agent=parent)
+    done = [kw for et, _t, _p, kw in events if et == "subagent.complete"]
+    assert done, events
+    assert "Plain summary" not in done[-1]["summary"], "the 500-char cut drops it"
+    assert done[-1]["plain_summary"] == "The fix works and tests pass."

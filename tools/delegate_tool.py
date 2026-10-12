@@ -1641,13 +1641,16 @@ def _build_child_progress_callback(
     ):
         payload = _identity_kwargs()
         payload.update(kwargs)  # caller overrides (e.g. status, duration_seconds)
-        if event_type in ("subagent.todo", "subagent.complete"):
+        if event_type in ("subagent.todo", "subagent.complete", "subagent.start",
+                          "subagent.tool", "subagent.tool_done"):
             # The ack message's live checklist follows the helper whether or not
-            # a roster card is attached to this turn.
+            # a roster card is attached to this turn (and, in the unified card,
+            # its current tool, tool calls and time too).
             try:
                 from agent.ack_checklist import on_child_event
 
-                on_child_event(event_type, **payload)
+                on_child_event(event_type, **{**payload, "tool_name": tool_name,
+                                              "preview": preview, "args": args})
             except Exception as e:
                 logger.debug("ack checklist update failed: %s", e)
         # ``subagent.todo`` feeds the ack checklist in-process only: the roster
@@ -3817,7 +3820,19 @@ def _run_single_child(
 
         _output_tail = _extract_output_tail(result, max_entries=8, max_chars=600)
 
+        # The helper's "Plain summary:" paragraph sits at the END of its answer:
+        # extract it from the full text, before the 500-char cut below drops it.
+        _plain = ""
+        if summary:
+            try:
+                from agent.delegation_activity import plain_summary as _plain_summary
+
+                _plain = _plain_summary(summary)
+            except Exception:
+                _plain = ""
+
         complete_kwargs: Dict[str, Any] = {
+            "plain_summary": _plain,
             "preview": summary[:160] if summary else entry.get("error", ""),
             "status": status,
             "exit_reason": entry.get("exit_reason", ""),
@@ -4692,9 +4707,20 @@ def delegate_task(
             _ack_steps = clean_steps(handoff.get("steps"))
         except Exception:
             _ack_steps = ()
+    # Several helpers: each task may carry its own steps (tasks[i].steps),
+    # which seed and drive that helper's own checklist on the card.
+    _task_steps: List[tuple] = [()] * len(task_list)
+    if n_tasks > 1:
+        try:
+            from agent.ack_checklist import clean_steps
+
+            _task_steps = [clean_steps(t.get("steps")) for t in task_list]
+        except Exception:
+            _task_steps = [()] * len(task_list)
     children = []
     try:
         for i, t in enumerate(task_list):
+            _steps_i = _ack_steps or (_task_steps[i] if i < len(_task_steps) else ())
             # Per-task role beats top-level; normalise again so unknown
             # per-task values warn and degrade to leaf uniformly.
             effective_role = _normalize_role(t.get("role") or top_role)
@@ -4702,12 +4728,12 @@ def delegate_task(
             # so the child knows the expected output shape before it starts.
             _task_schema = task_schemas[i] if i < len(task_schemas) else None
             _child_context = t.get("context")
-            if _ack_steps:
+            if _steps_i:
                 from agent.ack_checklist import child_instruction
 
                 _child_context = (
                     f"{_child_context}\n\n" if _child_context else ""
-                ) + child_instruction(_ack_steps)
+                ) + child_instruction(_steps_i)
             if _task_schema is not None:
                 from tools.delegation_output_schema import append_output_contract
 
@@ -4798,11 +4824,11 @@ def delegate_task(
             # From here the child is owned by `children`, so a failure while wiring
             # it up releases it with the rest.
             children.append((i, t, child))
-            if _ack_steps:
+            if _steps_i:
                 try:
                     from agent.ack_checklist import seed_todos
 
-                    child._todo_store.write(seed_todos(_ack_steps))
+                    child._todo_store.write(seed_todos(_steps_i))
                 except Exception:
                     logger.debug("seeding the helper's todo list failed", exc_info=True)
             if task_tier_fallback:
@@ -5271,32 +5297,42 @@ def delegate_task(
         from tools.async_delegation import _new_delegation_id
         _batch_delegation_id = live_deleg_id or _new_delegation_id()
         _fanout_mode = _get_fanout_delivery()
-        dispatch = dispatch_async_delegation_batch(
-            goals=_goals,
-            context=context,
-            # Metadata for the completion block only; subagents inherit the
-            # parent's toolsets (no model-facing toolsets arg).
-            toolsets=None,
-            role=top_role,
-            model=creds["model"],
-            session_key=_session_key,
-            origin_ui_session_id=_origin_ui_session_id,
-            origin_session_id=_wake_sid,
-            parent_session_id=_parent_session_id,
-            runner=_batch_runner,
-            interrupt_fn=_batch_interrupt,
-            max_async_children=_get_max_async_children(),
-            # Reuse the live-transcript directory's id (when created) so the
-            # returned delegation_id matches cache/delegation/live/<id>/.
-            delegation_id=_batch_delegation_id,
-            progress_fn=_batch_progress,
-            fanout_delivery=_fanout_mode,
-            request_identity=dict(_admitted_identity),
-            straggler_seconds=(
-                _get_fanout_straggler_seconds() if _fanout_mode == "joined" else 0
-            ),
-            straggler_notify=_straggler_notify,
-        )
+        # Helpers start inside the dispatch call: claim the unified card for
+        # this delegation first, so their first events never get a separate
+        # 🔀 roster card (note_own_dispatch opens the real part afterwards).
+        _fg_limit.reserve_ack_part(_batch_delegation_id, handoff, _goals)
+        try:
+            dispatch = dispatch_async_delegation_batch(
+                goals=_goals,
+                context=context,
+                # Metadata for the completion block only; subagents inherit the
+                # parent's toolsets (no model-facing toolsets arg).
+                toolsets=None,
+                role=top_role,
+                model=creds["model"],
+                session_key=_session_key,
+                origin_ui_session_id=_origin_ui_session_id,
+                origin_session_id=_wake_sid,
+                parent_session_id=_parent_session_id,
+                runner=_batch_runner,
+                interrupt_fn=_batch_interrupt,
+                max_async_children=_get_max_async_children(),
+                # Reuse the live-transcript directory's id (when created) so the
+                # returned delegation_id matches cache/delegation/live/<id>/.
+                delegation_id=_batch_delegation_id,
+                progress_fn=_batch_progress,
+                fanout_delivery=_fanout_mode,
+                request_identity=dict(_admitted_identity),
+                straggler_seconds=(
+                    _get_fanout_straggler_seconds() if _fanout_mode == "joined" else 0
+                ),
+                straggler_notify=_straggler_notify,
+            )
+        except BaseException:
+            _fg_limit.release_ack_part(_batch_delegation_id)
+            raise
+        if dispatch.get("status") != "dispatched":
+            _fg_limit.release_ack_part(_batch_delegation_id)
 
         if dispatch.get("status") == "dispatched":
             # This instance made the dispatch: its own completion turn may earn
@@ -5311,6 +5347,7 @@ def delegate_task(
                 subagent_ids=[s for s in _sids if isinstance(s, str) and s],
                 request_identity=dict(_admitted_identity),
                 handoff=handoff,
+                child_steps=list(_task_steps) if n_tasks > 1 else (),
             )
             n = len(_goals)
             note = _background_dispatch_note(n, joined=_fanout_mode == "joined")
@@ -6209,6 +6246,14 @@ DELEGATE_TASK_SCHEMA = {
                             "description": (
                                 "Short label (≤60 chars) shown to the user "
                                 "while this child runs."
+                            ),
+                        },
+                        "steps": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Optional 1-6 short steps for this child's "
+                                "own checklist on the user's card."
                             ),
                         },
                         "context": {
