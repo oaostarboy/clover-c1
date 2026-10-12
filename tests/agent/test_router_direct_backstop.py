@@ -521,8 +521,9 @@ def test_the_dispatch_carries_the_handoff_summary(tmp_path, children, dispatches
     run_batch(agent, _writes(tmp_path, 2))
 
     sent = dict(dispatches[0]['handoff'])
-    assert sent.pop('say'), 'the root opens in its own voice before the card'
-    assert sent == rb._runtime_handoff(rb._state(agent).verdict, rb._state(agent).user_message)
+    assert 'say' not in sent, 'the root voices its line AFTER the dispatch, never pre-written'
+    st = rb._state(agent)
+    assert sent == rb._runtime_handoff(st.verdict, st.user_message, agent=agent, history=st.history)
     (receipt,) = rb.turn_receipts(agent)
     assert receipt.summary and 'emailing Julia the extension' in receipt.summary
 

@@ -1,33 +1,40 @@
-"""A real title and goal for the runtime hand-off card, with no model call.
+"""A real title and goal for the runtime hand-off card.
 
-When the router backstop hands a turn to a helper, the card used to show two
-fixed placeholders ("taking over the rest of your request" -> "the finished
-result").  This builds both from what is already in hand:
+The title names the WORK, never the user's latest message.  The best source is
+one small-model call (``agent.handoff_notes.handoff_brief``; its answer is
+checked here by ``clean_model_title`` / ``clean_model_goal``).  This module is
+the fallback that needs no model:
 
-* the title (``work``): a short gerund phrase from the user's message,
-  ``compare 3 options for adding a second GPU ...`` -> ``comparing 3 options for
-  adding a second GPU`` (at most ``TITLE_CHARS``, cut on a word);
+* the title (``work``): a short gerund phrase from the user's message when it
+  is a task, ``compare 3 options for adding a second GPU ...`` -> ``comparing 3
+  options for adding a second GPU`` (at most ``TITLE_CHARS``, cut on a word);
+* a message that is NOT a task (a question, a complaint, chit-chat, anything
+  with profanity) is never turned into a title.  The title then comes, in
+  order, from the in-progress todo item, the plan's own task, the last
+  hand-off's title in this session, the earlier request this turn continues,
+  else ``finishing this up``;
 * the goal (``outcome``): the router's own ``reason`` when it describes the job
   (a "Compare three GPUs against ..." sentence), otherwise a short phrase from
-  the message that reads on its own: a noun where one is natural
+  the task that reads on its own: a noun where one is natural
   (``comparison of 3 options for adding a second GPU``), a noun phrase with the
   verb dropped (``run a diagnostic on why that fuse tripped`` ->
   ``diagnostic on why that fuse tripped``), else the cleaned request itself
   (``send the AutoHDR skill``).  The verb is never moved to the end.  At most
   ``GOAL_CHARS``.
 
-The raw message is never pasted: fenced code, quoted blocks, links and
-everything past the first sentence are dropped before anything is shown, and
-both strings are length-capped.  Pure functions; nothing here can raise.
+Profanity is always stripped.  The raw message is never pasted: fenced code,
+quoted blocks, links and everything past the first sentence are dropped before
+anything is shown, and both strings are length-capped.  Pure functions;
+nothing here can raise.
 """
 from __future__ import annotations
 
 import re
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 TITLE_CHARS = 50
 GOAL_CHARS = 60
-FALLBACK_TITLE = "taking over the rest of your request"
+FALLBACK_TITLE = "finishing this up"
 FALLBACK_GOAL = "the finished result"
 
 # verb -> (gerund, past participle)
@@ -62,6 +69,20 @@ _VERBS = {
     "transcribe": ("transcribing", "transcribed"), "update": ("updating", "updated"),
     "upgrade": ("upgrading", "upgraded"), "verify": ("verifying", "verified"),
     "write": ("writing", "written"),
+    "continue": ("continuing", "continued"), "finish": ("finishing", "finished"),
+    "resume": ("resuming", "resumed"), "rename": ("renaming", "renamed"),
+    "move": ("moving", "moved"), "remove": ("removing", "removed"),
+    "delete": ("deleting", "deleted"), "show": ("showing", "shown"),
+    "explain": ("explaining", "explained"), "open": ("opening", "opened"),
+    "push": ("pushing", "pushed"), "merge": ("merging", "merged"),
+    "commit": ("committing", "committed"), "schedule": ("scheduling", "scheduled"),
+    "book": ("booking", "booked"), "buy": ("buying", "bought"),
+    "publish": ("publishing", "published"), "reply": ("replying", "replied"),
+    "restart": ("restarting", "restarted"), "start": ("starting", "started"),
+    "wire": ("wiring", "wired"),
+    "configure": ("configuring", "configured"), "implement": ("implementing", "implemented"),
+    "improve": ("improving", "improved"), "finalize": ("finalizing", "finalized"),
+    "finalise": ("finalising", "finalised"), "complete": ("completing", "completed"),
 }
 
 # verb -> the noun that heads the same job ("compare X" -> "comparison of X")
@@ -157,7 +178,6 @@ _CLAUSE_SPLIT = re.compile(
     r",\s+|\s+(?:and then|then|after that|afterwards|before that|once that'?s done)\s+", re.IGNORECASE)
 _AND_SPLIT = re.compile(r"\s+and\s+", re.IGNORECASE)
 _VAGUE = frozenset({"this", "that", "it", "these", "those", "them", "something", "stuff", "things", "everything"})
-_QUESTION = re.compile(r"^(?:why|how|what|whats|what's|where|when|who|is|are|does|do|did|can|could|should|which)\b", re.I)
 
 
 def _head_clause(text: str, limit: int) -> str:
@@ -214,34 +234,183 @@ def _job_like_reason(reason: str) -> str:
     return text
 
 
-def title_and_goal(message: str, reason: str = "", fallback_goal: str = "") -> Tuple[str, str]:
-    """``(title, goal)`` for the hand-off card.  Never raises, never empty."""
+# Words that are never shown on a card, whoever typed them.
+_PROFANITY = re.compile(
+    r"\b(?:f+u+c+k\w*|fck\w*|fuk\w*|motherf\w*|sh[i1]+t\w*|bullsh\w*|damn\w*|goddamn\w*|"
+    r"bitch\w*|bastard\w*|asshole\w*|arse(?:hole)?s?|ass|crap\w*|dick(?:head)?s?|piss(?:ed|ing)?|cunt\w*|wtf|stfu)\b",
+    re.IGNORECASE,
+)
+# A question or chit-chat opener: never a task.  The auxiliaries (do, is...)
+# only count when a pronoun follows ("do you ...") because "do a full
+# diagnostic" is an order.  "can/could/would you <action verb>" is a polite
+# order and is left to the verb check ("can you not stop" has no verb).
+_WH = re.compile(r"^(?:why|how|what|whats|what's|where|when|who|which|whose)\b", re.IGNORECASE)
+_AUX = re.compile(
+    r"^(?:is|are|was|were|does|do|did|should|have|has|had|am)\s+"
+    r"(?:you|i|we|they|he|she|it|this|that|there|these|those|my|your|the)\b", re.IGNORECASE)
+_NEGATED = re.compile(r"^(?:not|never|no)\b", re.IGNORECASE)
+_SPACES = re.compile(r"\s+")
+
+
+def strip_profanity(text: str) -> str:
+    """``text`` without profane words (and without the gaps they leave)."""
+    out = _PROFANITY.sub(" ", str(text or ""))
+    out = re.sub(r"\s+([,.;:!?])", r"\1", out)
+    out = re.sub(r"([,;:])\s*(?=[,.;:!?])", "", out)
+    return _SPACES.sub(" ", out).strip(" ,;:-")
+
+
+def has_profanity(text: str) -> bool:
+    return bool(_PROFANITY.search(str(text or "")))
+
+
+def _is_question(text: str) -> bool:
+    text = _flat(text)
+    return bool(text.endswith("?") or _WH.match(text) or _AUX.match(text))
+
+
+def _task_parts(text: str, *, noun_ok: bool = False) -> Tuple[str, str]:
+    """``(title, goal noun)`` of ``text`` when it is an order to do something.
+
+    ``("", "")`` when it is not: a question, a complaint, chit-chat, anything
+    profane, an order about nothing in particular ("push it to the domain"), or
+    a sentence that does not start with a known action verb.  With ``noun_ok``
+    (a todo item, not a chat message) a plain noun phrase becomes ``working on
+    <phrase>``.  Never raises."""
     try:
-        verb, rest = _action(message)
+        raw = _scrub(text)
+        if not _flat(raw) or has_profanity(raw):
+            return "", ""
+        first = _first_clause(raw)
+        if _WH.match(first) or _AUX.match(first):
+            return "", ""
+        verb, rest = _action(raw)
         rest = _flat(rest).rstrip(" ?!.,;:")
-        if rest.lower() in _VAGUE:
-            rest = ""
-        if not rest:  # "do it", "ok": the message names nothing; the plan's own task may
-            verb, rest = _action(fallback_goal) if fallback_goal else ("", "")
-            rest = _flat(rest).rstrip(" ?!.,;:")
-        title = noun = ""
-        if verb and rest:
-            gerund = _VERBS[verb][0]
-            title = _cut(f"{gerund} {_head_clause(rest, TITLE_CHARS)}", TITLE_CHARS)
+        lead = rest.split(" ", 1)[0].lower() if rest else ""
+        if not rest or lead in _VAGUE or _NEGATED.match(rest):
+            return "", ""
+        if verb:
+            head = _head_clause(rest, TITLE_CHARS)
+            title = _cut(f"{_VERBS[verb][0]} {head}", TITLE_CHARS)
             noun = _cut(_goal_phrase(verb, _head_clause(rest, GOAL_CHARS)), GOAL_CHARS)
-        elif rest and _QUESTION.match(rest):
-            body = _head_clause(rest, TITLE_CHARS)
-            title = _cut("answering: " + _lead_lower(body), TITLE_CHARS)
-            noun = _cut(rest, GOAL_CHARS)
-        elif rest:
-            title = _cut("working on " + _lead_lower(_head_clause(rest, TITLE_CHARS)), TITLE_CHARS)
-            noun = _cut(rest, GOAL_CHARS)
-        if len(title.split()) < 3:
-            title = FALLBACK_TITLE
-        goal = _job_goal(reason) or noun or FALLBACK_GOAL
-        return title, goal
+            return (title, noun) if len(title.split()) >= 3 else ("", "")
+        if noun_ok and not _is_question(first):
+            body = _lead_lower(_head_clause(rest, TITLE_CHARS))
+            title = _cut("working on " + body, TITLE_CHARS)
+            return (title, _cut(rest, GOAL_CHARS)) if len(title.split()) >= 3 else ("", "")
     except Exception:
-        return FALLBACK_TITLE, FALLBACK_GOAL
+        pass
+    return "", ""
+
+
+def _is_default(title: str) -> bool:
+    return _flat(title).lower().rstrip(".") in ("", FALLBACK_TITLE)
+
+
+def _clean_title(text: str) -> str:
+    """A title carried over from an earlier hand-off: no profanity, no
+    ``answering:`` echo, capped; ``""`` when nothing usable is left."""
+    text = _flat(text)
+    if re.match(r"^(?:answering|replying to|responding to)\b", text, re.IGNORECASE):
+        return ""
+    text = _cut(strip_profanity(text), TITLE_CHARS)
+    return "" if len(text.split()) < 3 or _is_default(text) else text
+
+
+def clean_model_title(text: str, message: str = "") -> str:
+    """The model's title if it is usable, else ``""``.
+
+    Usable: 3 to 8 words, a gerund or ``working on`` phrase, no profanity, no
+    ``answering:`` prefix, no question, and not a quote of the user's latest
+    message."""
+    try:
+        title = _flat(text).strip("\"'`“”‘’ .")
+        if not title or has_profanity(title) or _is_question(title):
+            return ""
+        if re.match(r"^(?:answering|replying to|responding to)\b", title, re.IGNORECASE):
+            return ""
+        title = _cut(_lead_lower(title), TITLE_CHARS)
+        words = title.split()
+        if not 3 <= len(words) <= 8 or not words[0].lower().endswith("ing"):
+            return ""
+        said = re.sub(r"[^a-z0-9 ]", "", _flat(message).lower())
+        mine = re.sub(r"[^a-z0-9 ]", "", title.lower())
+        if said and mine and (mine in said or said in mine):
+            return ""
+        return title
+    except Exception:
+        return ""
+
+
+def clean_model_goal(text: str, message: str = "") -> str:
+    """The model's goal if usable (at most 8 words, no profanity), else ``""``."""
+    try:
+        goal = _flat(text).strip("\"'`“”‘’ ").rstrip(" .!?")
+        if not goal or has_profanity(goal) or len(goal.split()) > 12:
+            return ""
+        said = re.sub(r"[^a-z0-9 ]", "", _flat(message).lower())
+        mine = re.sub(r"[^a-z0-9 ]", "", goal.lower())
+        if said and len(mine) > 8 and (mine in said or said in mine):
+            return ""
+        return _cut(goal, GOAL_CHARS)
+    except Exception:
+        return ""
+
+
+class HandoffText(tuple):
+    """``(title, goal)`` that also says where the title came from (``source``:
+    ``message`` | ``todo`` | ``plan`` | ``delegation`` | ``earlier`` | ``default``)."""
+
+    def __new__(cls, title: str, goal: str, source: str):
+        obj = super().__new__(cls, (title, goal))
+        obj.source = source
+        return obj
+
+
+def resolve(
+    message: str, reason: str = "", fallback_goal: str = "", *,
+    todo: str = "", last_title: str = "", earlier: Sequence[str] = (),
+) -> HandoffText:
+    """Title and goal for the card, always from the WORK.
+
+    The message gives the title only when it is an order; otherwise (a
+    complaint, a question, chit-chat, profanity) the title comes from, in
+    order: the in-progress ``todo`` item, the plan's own task
+    (``fallback_goal``), the title of the last hand-off in this session, the
+    earlier request(s) this turn continues, else ``finishing this up``.
+    Never raises, never empty."""
+    try:
+        title, noun = _task_parts(message)
+        source = "message"
+        if not title:
+            title, noun, source = "", "", "default"
+            for src, text in (("todo", todo), ("plan", fallback_goal)):
+                t, n = _task_parts(text, noun_ok=(src == "todo"))
+                if t:
+                    title, noun, source = t, n, src
+                    break
+            if not title:
+                prior = _clean_title(last_title)
+                if prior:
+                    title, source = prior, "delegation"
+            if not title:
+                for text in earlier or ():
+                    t, n = _task_parts(text)
+                    if t:
+                        title, noun, source = t, n, "earlier"
+                        break
+        if not title:
+            title, source = FALLBACK_TITLE, "default"
+        goal = _job_goal(reason) or noun or FALLBACK_GOAL
+        return HandoffText(strip_profanity(title) or FALLBACK_TITLE, strip_profanity(goal) or FALLBACK_GOAL, source)
+    except Exception:
+        return HandoffText(FALLBACK_TITLE, FALLBACK_GOAL, "default")
+
+
+def title_and_goal(message: str, reason: str = "", fallback_goal: str = "", **context) -> Tuple[str, str]:
+    """``(title, goal)`` for the hand-off card.  Never raises, never empty."""
+    found = resolve(message, reason, fallback_goal, **context)
+    return found[0], found[1]
 
 
 def _goal_phrase(verb: str, phrase: str) -> str:
@@ -267,7 +436,7 @@ def _job_goal(reason: str) -> str:
     return _cut(text, GOAL_CHARS) if text else ""
 
 
-def handoff_summary(message: str, reason: str = "", fallback_goal: str = "") -> Optional[dict]:
+def handoff_summary(message: str, reason: str = "", fallback_goal: str = "", **context) -> Optional[dict]:
     """``{"work": title, "outcome": goal}`` for ``delegate_task(handoff=...)``."""
-    title, goal = title_and_goal(message, reason, fallback_goal)
+    title, goal = title_and_goal(message, reason, fallback_goal, **context)
     return {"work": title, "outcome": goal}

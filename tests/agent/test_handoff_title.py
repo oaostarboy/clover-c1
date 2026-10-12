@@ -31,9 +31,9 @@ class TestTitleFromTheMessage:
     def test_filler_is_stripped_and_the_title_is_a_gerund(self, message, title):
         assert title_and_goal(message)[0] == title
 
-    def test_a_question_gets_a_plain_title(self):
+    def test_a_question_never_becomes_an_answering_title(self):
         title, _ = title_and_goal("why does this crash on startup?")
-        assert title == "answering: why does this crash on startup"
+        assert title == FALLBACK_TITLE and "answering" not in title
 
     def test_limits_hold_for_any_input(self):
         for message in (GPU * 20, "x" * 5000, "a " * 3000, "compare " + "word " * 400):
@@ -186,3 +186,167 @@ class TestBothBackstopPaths:
         line = ack_summary_line(handoff_summary(GPU, "Compare three GPUs against the user's setup."))
         assert line.startswith("\U0001f504 comparing 3 options for adding a second GPU")
         assert GPU not in line
+
+
+# ── the title names the WORK, never the user's latest message ─────────────────
+
+from agent import handoff_notes as hn  # noqa: E402
+from agent.handoff_title import clean_model_goal, clean_model_title, resolve, strip_profanity  # noqa: E402
+
+COMPLAINT = "Why the fuck do you keep stopping"
+PUSH = "Push it to the domain. dndsecurity.ca"
+
+
+class TestNeverEchoesTheMessage:
+    def test_the_complaint_with_a_todo_is_titled_from_the_todo(self):
+        found = resolve(COMPLAINT, todo="add images to DND website")
+        assert found[0] == "adding images to DND website" and found.source == "todo"
+        blob = " ".join(found).lower()
+        assert "fuck" not in blob and "answering" not in blob and "stopping" not in blob
+
+    def test_order_of_sources(self):
+        assert resolve(COMPLAINT, todo="add images to DND website", last_title="fixing the login bug",
+                       earlier=["finish the DND Security website"]).source == "todo"
+        assert resolve(COMPLAINT, fallback_goal="Audit the Google Ads account for Montreal.",
+                       last_title="fixing the login bug").source == "plan"
+        found = resolve(COMPLAINT, last_title="fixing the login bug",
+                        earlier=["finish the DND Security website"])
+        assert (found[0], found.source) == ("fixing the login bug", "delegation")
+        found = resolve(COMPLAINT, earlier=["finish the DND Security website"])
+        assert (found[0], found.source) == ("finishing the DND Security website", "earlier")
+        found = resolve(COMPLAINT)
+        assert (found[0], found.source) == ("finishing this up", "default")
+
+    def test_a_last_title_that_echoed_a_message_is_not_reused(self):
+        assert resolve(COMPLAINT, last_title="answering: why the fuck do you keep stopping")[0] == "finishing this up"
+
+    @pytest.mark.parametrize("message", [
+        COMPLAINT, "why did you stop?", "what's going on", "how is it going", "are you done",
+        "did you finish", "is it live yet", "this is shit, fix it", "wtf", "thanks", "ok cool", "hmm",
+        "you keep stopping", "stop stopping",
+    ])
+    def test_chitchat_complaints_and_questions_never_become_a_title(self, message):
+        title, goal = title_and_goal(message, todo="add images to DND website")
+        assert title == "adding images to DND website"
+        for text in (title, goal):
+            assert message.lower() not in text.lower() and "answering" not in text
+
+    @pytest.mark.parametrize("message", [COMPLAINT, "shit", "fuckin stopping again", "wtf"])
+    def test_profanity_is_never_shown_even_with_nothing_else_to_go_on(self, message):
+        title, goal = title_and_goal(message)
+        assert (title, goal) == ("finishing this up", "the finished result")
+
+    def test_innocent_words_are_not_profanity(self):
+        assert strip_profanity("review the Arsenal and Dickens pages, assess the class") == (
+            "review the Arsenal and Dickens pages, assess the class")
+
+    def test_profanity_inside_a_todo_or_earlier_request_is_stripped_or_skipped(self):
+        assert "shit" not in " ".join(resolve(COMPLAINT, todo="fix the shit build", earlier=["fix the login bug"]))
+        assert strip_profanity("fix the fucking build, damn it") == "fix the build, it"
+
+    def test_push_it_to_the_domain_is_not_working_on_push_it_to_the_domain(self):
+        title, goal = title_and_goal(PUSH)
+        assert "push it to the domain" not in (title + goal).lower()
+        assert title == "finishing this up"
+        assert resolve(PUSH, earlier=["deploy the DND site"])[0] == "deploying the DND site"
+
+    def test_a_plain_task_still_gets_a_sensible_title(self):
+        assert title_and_goal("Run a diagnostic on why that fuse tripped.")[0] == (
+            "running a diagnostic on why that fuse tripped")
+        assert resolve("Run a diagnostic on why that fuse tripped.", todo="x y z").source == "message"
+
+    def test_a_polite_order_is_still_an_order(self):
+        assert title_and_goal("Could you push the DND site live")[0] == "pushing the DND site live"
+
+    def test_the_answering_prefix_pattern_is_gone(self):
+        import inspect
+
+        import agent.handoff_title as ht
+
+        assert "answering: " not in inspect.getsource(ht).replace('"answering', "").replace("(?:answering", "")
+
+
+class TestModelTitle:
+    @pytest.mark.parametrize("raw, ok", [
+        ("finishing the DND website", "finishing the DND website"),
+        ("Deploying the DND site to dndsecurity.ca.", "deploying the DND site to dndsecurity.ca"),
+        ('"fixing the login bug"', "fixing the login bug"),
+    ])
+    def test_a_good_title_is_kept(self, raw, ok):
+        assert clean_model_title(raw, COMPLAINT) == ok
+
+    @pytest.mark.parametrize("raw", [
+        "answering why you keep stopping", "why do you keep stopping", "stopping", "fixing the fucking site",
+        "the DND website", "", "replying to your message about the site",
+    ])
+    def test_a_bad_title_is_dropped(self, raw):
+        assert clean_model_title(raw, COMPLAINT) == ""
+
+    def test_a_title_that_quotes_the_message_is_dropped(self):
+        assert clean_model_title("deploying the site now", "deploying the site now") == ""
+
+    def test_the_goal_is_checked_too(self):
+        assert clean_model_goal("site live on dndsecurity.ca", COMPLAINT) == "site live on dndsecurity.ca"
+        assert clean_model_goal("fuck this site", COMPLAINT) == ""
+        assert clean_model_goal("w " * 30, COMPLAINT) == ""
+
+
+class TestBriefParsing:
+    def test_json_gives_title_goal_and_known(self):
+        brief = hn.parse_brief(
+            '{"title": "finishing the DND website", "goal": "site live on dndsecurity.ca", '
+            '"known": ["Pages are built.", "Images are missing."]}', COMPLAINT)
+        assert (brief.title, brief.goal) == ("finishing the DND website", "site live on dndsecurity.ca")
+        assert brief.known == ["Pages are built.", "Images are missing."]
+
+    def test_fenced_json_is_accepted(self):
+        brief = hn.parse_brief('```json\n{"title": "fixing the login bug", "goal": "bug gone", "known": []}\n```')
+        assert brief.title == "fixing the login bug"
+
+    def test_the_old_bullet_reply_still_gives_bullets_and_no_title(self):
+        brief = hn.parse_brief("- one\n- two")
+        assert brief.known == ["one", "two"] and brief.title == "" and brief.goal == ""
+
+    def test_a_profane_or_echoing_title_is_dropped_but_known_is_kept(self):
+        brief = hn.parse_brief('{"title": "answering why the fuck", "goal": "ok ok", "known": ["Fucking pages done."]}',
+                               COMPLAINT)
+        assert brief.title == "" and "fuck" not in brief.known[0].lower()
+
+
+class TestBriefCall:
+    @pytest.fixture
+    def aux(self, monkeypatch):
+        import time
+        from types import SimpleNamespace
+
+        import agent.auxiliary_client as ac
+
+        box = SimpleNamespace(calls=[], reply='', error=None, delay=0.0)
+
+        def fake(task=None, *, messages=None, **kw):
+            box.calls.append({"task": task, "messages": messages, **kw})
+            if box.delay:
+                time.sleep(box.delay)
+            if box.error:
+                raise box.error
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=box.reply))])
+
+        monkeypatch.setattr(ac, "call_llm", fake)
+        return box
+
+    def test_one_call_on_the_router_model_with_a_six_second_budget(self, aux):
+        aux.reply = '{"title": "finishing the DND website", "goal": "site live", "known": ["a"]}'
+        brief = hn.handoff_brief("NOTES", message=COMPLAINT)
+        (call,) = aux.calls
+        assert call["task"] == "delegation_router" and call["timeout"] == hn.BRIEF_TIMEOUT_SECONDS == 6.0
+        system = call["messages"][0]["content"]
+        assert "NEVER quote" in system and "profanity" in system and "title" in system and "goal" in system
+        assert brief.title == "finishing the DND website"
+
+    def test_a_timeout_gives_an_empty_brief(self, aux):
+        aux.delay = 1.0
+        assert hn.handoff_brief("n", timeout=0.1) == hn.Brief()
+
+    def test_an_error_gives_an_empty_brief(self, aux):
+        aux.error = RuntimeError("down")
+        assert hn.handoff_brief("n") == hn.Brief()

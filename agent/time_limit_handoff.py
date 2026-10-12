@@ -353,6 +353,8 @@ def _hand_off(agent: Any, messages: List[Dict[str, Any]], task_id: str) -> Optio
         did, len(state.work_log.entries) if state.work_log is not None else 0,
     )
     receipts = _fl.own_dispatch_receipts(agent, after=state.receipt_floor)
+    # The agent's own line, written now that the helper is running.
+    rb._voice(agent, state, receipts, messages)
     return rb._ack_text(receipts, agent)
 
 

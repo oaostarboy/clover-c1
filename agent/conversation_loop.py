@@ -7656,7 +7656,7 @@ def run_conversation(
                     break
 
                 from agent.delegation_checkpoint import completion_directive as _completion_directive
-                _directive = _completion_directive(agent)
+                _directive = _completion_directive(agent, messages)
                 if _directive is not None:
                     # An accepted background handoff (or a spent allowance the
                     # model keeps pushing against) ends the root's turn through
