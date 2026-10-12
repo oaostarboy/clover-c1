@@ -1893,6 +1893,28 @@ def _stub_delegation_router(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _stub_time_limit_handoff(request, monkeypatch):
+    """Default the foreground time limit's hard stop to the plain summary.
+
+    With ``delegation.time_limit_handoff`` on (the shipped default) the hard
+    stop dispatches a helper and makes extra model calls (known-so-far, the
+    opener) instead of the single summary call, so a test that scripts the
+    summary would see a different request sequence. Tests of the hand-off opt
+    in with ``@pytest.mark.real_time_limit_handoff``.
+    """
+    if request.node.get_closest_marker("real_time_limit_handoff"):
+        yield
+        return
+    try:
+        import agent.time_limit_handoff as _tlh
+    except Exception:
+        yield
+        return
+    monkeypatch.setattr(_tlh, "enabled", lambda: False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_live_fast_model_discovery(request, monkeypatch):
     """Latency-critical aux tasks (titles, the delegation router) default to a
     small fast model, whose discovery reads the provider's live ``/v1/models``

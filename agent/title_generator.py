@@ -26,6 +26,7 @@ from typing import Any, Callable, Optional
 from agent.auxiliary_client import call_llm
 from agent.context_compressor import (
     LEGACY_TIME_LIMIT_SUMMARY_REQUEST,
+    PREVIOUS_TIME_LIMIT_SUMMARY_REQUEST,
     LEGACY_SUMMARY_PREFIX,
     MAX_ITERATIONS_SUMMARY_REQUEST,
     TIME_LIMIT_SUMMARY_REQUEST,
@@ -160,6 +161,7 @@ _MACHINE_PREFIXES = (
     # max-iterations / hard-stop summary call. Never the user's intent.
     MAX_ITERATIONS_SUMMARY_REQUEST,
     TIME_LIMIT_SUMMARY_REQUEST,
+    PREVIOUS_TIME_LIMIT_SUMMARY_REQUEST,
     LEGACY_TIME_LIMIT_SUMMARY_REQUEST,
 )
 

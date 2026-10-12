@@ -869,13 +869,17 @@ def run_hard_stop(
     *,
     pending_answer: Optional[str] = None,
     pending_previewed: bool = False,
+    task_id: str = "",
 ) -> Tuple[str, str]:
     """Produce the turn's final answer; returns ``(text, exit_reason)``.
 
     A composed answer a verification gate withheld is preferred to another
     fallible model call (same rule as the finalizer's budget fallback).
-    Otherwise this is the max-iterations summary path -- one no-tools call --
-    under a distinct exit reason so ``finalize_turn`` does not run it again.
+    Otherwise the unfinished work goes to ONE background helper
+    (``agent.time_limit_handoff``) and the turn ends with the agent's own
+    opener line.  Only when no hand-off is possible is this the max-iterations
+    summary path -- one no-tools call that says what is done and what is left
+    -- under a distinct exit reason so ``finalize_turn`` does not run it again.
     """
     logger.info(
         "Foreground time limit hard stop (limit=%.0fs, finish_iterations=%d)",
@@ -886,5 +890,14 @@ def run_hard_stop(
         if pending_previewed:
             agent._response_was_previewed = True
         return pending_answer, HARD_STOP_EXIT_REASON
+    try:
+        from agent import time_limit_handoff
+
+        handed = time_limit_handoff.finish_turn(agent, messages, task_id=task_id)
+    except Exception:
+        logger.warning("time-limit hand-off unavailable; summarizing instead", exc_info=True)
+        handed = None
+    if handed is not None:
+        return handed
     text = agent._handle_max_iterations(messages, api_call_count, reason="time_limit")
     return text, HARD_STOP_EXIT_REASON

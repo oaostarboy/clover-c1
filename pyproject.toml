@@ -487,6 +487,7 @@ markers = [
     "real_concurrent_gate: opt out of the autouse stub that disables _detect_concurrent_clover_instances",
     "real_update_preflight: opt out of the autouse stub that makes the update pre-check report all-clear",
     "real_fast_model: opt out of the autouse stub that keeps latency-critical aux tasks (titles, delegation router) on the main model (no live catalog read, no speed probe)",
+    "real_time_limit_handoff: opt out of the autouse stub that turns the time-limit hand-off off (the hard stop then ends with the plain summary)",
     "real_delegation_router: opt out of the autouse stub that makes the delegation router produce no plan (no auxiliary-model call at turn start)",
     "real_agent_prewarm: opt out of the autouse stub that disables the tui_gateway deferred agent pre-warm timer",
     "requires_wal: needs the runtime to actually enable SQLite WAL mode (skipped where Clover falls back to journal_mode=DELETE)",

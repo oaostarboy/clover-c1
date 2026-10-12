@@ -2130,6 +2130,7 @@ def run_conversation(
                     agent, messages, api_call_count,
                     pending_answer=_pending_verification_response,
                     pending_previewed=_pending_verification_response_previewed,
+                    task_id=effective_task_id or "",
                 )
                 break
             _fg_limit.note_model_call(agent)
