@@ -32,18 +32,19 @@ runs in a background helper:
   turn -- decided once at ``begin_turn``, inherited by internal turns -- and
   behaviour is exactly as before.
 
-* Verification episode: the completion turn of a hand-off THIS agent
-  instance dispatched may run a short check before it answers.  When the
-  gateway's trusted completion metadata (``completion_delegation_ids``)
-  names a dispatch the instance made, and the inherited episode is already
-  spent (or absent), the turn gets a fresh episode of
-  ``delegation.verify_time_limit_seconds`` (default 120; 0/null/false = off).
-  Each dispatch's allowance is consumed once, durably (it survives a
-  restart).  Anything else -- another generation, cron, other profiles,
-  unrelated internal turns, notification text, a still-running human clock --
-  keeps the start-expired / inherit path above.  Helpers spawned in the
-  episode are background for its whole life, expiry included, and a human
-  message still gets its own fresh clock.
+* Completion clock: a turn that delivers a helper's RESULT (an
+  ``internal_notification`` turn whose trusted completion metadata,
+  ``completion_delegation_ids``, names a delegation) is the user-facing
+  continuation of the work, so it starts its OWN episode with the full limit,
+  exactly as a new human message does.  It never inherits the (usually spent)
+  clock of the request that dispatched the helper: that made the reply that
+  integrated a result hit "the time limit is reached" seconds in.  The ids come
+  from the gateway, never from notification text, and need no state on this
+  agent instance, so a rebuilt agent, a restart and another generation get the
+  same fresh clock.  A completion turn that runs out of time hands off at most
+  once per original request (``agent.time_limit_handoff``); the completion of
+  THAT hand-off ends with the plain summary.  Helpers spawned in the episode
+  are background for its whole life, expiry included.
 
 The limit is a backstop, never something the user hears about: the system
 prompt tells an eligible root to hand clearly big jobs to a helper at the
@@ -77,7 +78,6 @@ from agent.turn_notices import RUNTIME_NOTE_MARKER, runtime_note, vouch_runtime_
 logger = logging.getLogger(__name__)
 
 DEFAULT_LIMIT_SECONDS = 300.0
-DEFAULT_VERIFY_SECONDS = 120.0
 # Dispatch ids remembered per agent instance (oldest dropped first).
 _OWN_DISPATCH_CAP = 256
 NOTICE_FRACTION = 0.8
@@ -136,11 +136,9 @@ class _Episode:
     # server without a wake session id) the limit is OFF for the episode and
     # every internal turn that inherits it.
     enabled: bool = True
-    # A verification episode (a helper's own completion turn): shorter than
-    # the foreground limit, so what a follow-up message gets is quoted from
-    # ``fresh_limit`` rather than ``limit``.
-    verification: bool = False
-    fresh_limit: Optional[float] = None
+    # The episode of a turn that delivers a helper's result: it has its own
+    # full-length clock (see the module docstring).
+    completion: bool = False
 
     def elapsed(self) -> float:
         return max(0.0, _now() - self.started_at)
@@ -184,22 +182,6 @@ def load_limit_seconds() -> Optional[float]:
     except Exception:
         logger.debug("foreground time limit config unreadable; using default", exc_info=True)
         return DEFAULT_LIMIT_SECONDS
-
-
-def load_verify_seconds() -> Optional[float]:
-    """Read ``delegation.verify_time_limit_seconds`` (default 120; off = None)."""
-    if os.environ.get("CLOVER_IGNORE_USER_CONFIG") == "1":
-        return DEFAULT_VERIFY_SECONDS
-    try:
-        from clover_cli.config import load_config_readonly
-
-        delegation = (load_config_readonly() or {}).get("delegation")
-        if not isinstance(delegation, dict) or "verify_time_limit_seconds" not in delegation:
-            return DEFAULT_VERIFY_SECONDS
-        return normalize_limit_seconds(delegation["verify_time_limit_seconds"])
-    except Exception:
-        logger.debug("verify time limit config unreadable; using default", exc_info=True)
-        return DEFAULT_VERIFY_SECONDS
 
 
 def _platform_in_scope(platform: Any) -> bool:
@@ -457,8 +439,8 @@ def note_own_dispatch(
     """Remember that THIS agent instance dispatched ``delegation_id``.
 
     Called by ``delegate_task`` once a background dispatch was accepted.  Only
-    ids noted here can ever earn a verification episode, so a rebuilt agent
-    (previous generation), cron and other profiles own nothing.  The receipt
+    ids noted here are the ones this instance answers for (a rebuilt agent
+    (previous generation), cron and other profiles own nothing).  The receipt
     also carries the turn/request identity and the goals, which is what lets
     the router tell "a helper was accepted this turn" from older work.
     """
@@ -489,10 +471,26 @@ def note_own_dispatch(
             child_steps=_clean_child_steps(child_steps, goals),
         )
         _open_ack_part(did, own[did], titles)
+        _remember_title(agent, handoff)
         while len(own) > _OWN_DISPATCH_CAP:
             own.pop(next(iter(own)))
     except Exception:
         logger.debug("could not record own dispatch", exc_info=True)
+
+
+def _remember_title(agent: Any, handoff: Any) -> None:
+    """Note the card title of an accepted dispatch in this chat's recent
+    titles, so a later hand-off in the same chat can be worded differently --
+    whoever chose the title (the runtime, or the root's own delegate_task)."""
+    try:
+        work = str((handoff or {}).get("work") or "").strip() if isinstance(handoff, dict) else ""
+        sid = str(getattr(agent, "session_id", "") or "")
+        if work and sid:
+            from agent.handoff_notes import remember_title
+
+            remember_title(sid, work)
+    except Exception:
+        logger.debug("could not note the dispatch's title", exc_info=True)
 
 
 def dispatch_seq(agent: Any) -> int:
@@ -510,36 +508,18 @@ def own_dispatch_receipts(agent: Any, *, after: int = 0) -> List[DispatchReceipt
     return sorted(found, key=lambda r: r.seq)
 
 
-def _claim_verification(agent: Any, completion_ids: Any) -> Optional[float]:
-    """Seconds of verification allowance granted to this turn, or ``None``.
-
-    The ids are the gateway's trusted completion metadata.  A grant needs the
-    verify limit on, a dispatch this instance made, and the durable
-    once-per-dispatch claim; every failure path is "no allowance".
-    """
-    verify = load_verify_seconds()
-    if verify is None or not completion_ids or isinstance(completion_ids, (str, bytes)):
-        return None
-    own = getattr(agent, "_fg_own_dispatches", None)
-    if not isinstance(own, dict) or not own:
-        return None
+def _completion_delivery(display_kind: Optional[str], completion_ids: Any) -> bool:
+    """Does this turn deliver a helper's result?  Only the gateway's trusted
+    metadata counts: an internal-notification turn that carries the delegation
+    ids of the completion.  Notification text never does."""
+    if display_kind is None or display_kind not in _internal_kinds():
+        return False
+    if not completion_ids or isinstance(completion_ids, (str, bytes)):
+        return False
     try:
-        from tools.async_delegation import claim_verification_allowance, dispatch_id_for
-
-        matched: List[str] = []
-        for raw in completion_ids:
-            did = dispatch_id_for(str(raw or "").strip())
-            if did and did in own and did not in matched:
-                matched.append(did)
-        # One window spends ONE allowance: the first matched dispatch that is
-        # still unspent.  Further coalesced dispatches stay unspent.
-        for did in matched:
-            if claim_verification_allowance(did):
-                return verify
-        return None
-    except Exception:
-        logger.debug("verification allowance claim failed", exc_info=True)
-        return None
+        return any(str(raw or "").strip() for raw in completion_ids)
+    except TypeError:
+        return False
 
 
 def begin_turn(
@@ -550,16 +530,13 @@ def begin_turn(
     """Start (or inherit) the episode for a turn.
 
     ``display_kind`` is the trusted ``persist_user_display_kind`` of the turn.
-    A human message starts a fresh clock.  An ``internal_notification`` turn
-    never does: it inherits the instance's episode, or -- with no state (a
-    fresh instance, a restart wake-up) -- starts already expired so it can read
-    and answer but never mint a new budget.
-
-    ``completion_ids`` are the trusted delegation ids of the completion this
-    internal turn delivers (gateway turn setup, never notification text).  When
-    one is a dispatch this instance made, its once-only allowance is unspent
-    and the inherited episode has nothing left, the turn gets a fresh,
-    bounded verification episode instead of the start-expired path.
+    A human message starts a fresh clock.  So does a turn that delivers a
+    helper's result: ``completion_ids`` are the trusted delegation ids of the
+    completion (gateway turn setup, never notification text), and that turn is
+    the user-facing continuation of the work, with its own full limit.  Any
+    other ``internal_notification`` turn (a watch, a restart wake-up) never
+    starts a clock: it inherits the instance's episode, or -- with no state --
+    starts already expired so it can read and answer but never mint a budget.
     """
     agent._fg_turn_active = False
     try:
@@ -572,29 +549,8 @@ def begin_turn(
             return
         now = _now()
         episode = getattr(agent, "_fg_episode", None)
-        internal = display_kind is not None and display_kind in _internal_kinds()
-        if internal and completion_ids:
-            # A live human clock is never replaced; only a spent (or absent)
-            # inherited episode makes room for the one checking window.
-            spent = not isinstance(episode, _Episode) or (
-                episode.enabled and now - episode.started_at >= episode.limit
-            )
-            # The window exists to hand work to a helper, so it needs the same
-            # detached-delivery scope as the episode it replaces.
-            allowance = (
-                _claim_verification(agent, completion_ids)
-                if spent and _detached_delivery_available() else None
-            )
-            if allowance is not None:
-                agent._fg_episode = _Episode(
-                    started_at=now, limit=allowance, verification=True,
-                    fresh_limit=limit,
-                )
-                agent._fg_turn_active = True
-                logger.info(
-                    "Foreground verification episode granted (limit=%.0fs)", allowance
-                )
-                return
+        completion = _completion_delivery(display_kind, completion_ids)
+        internal = display_kind is not None and display_kind in _internal_kinds() and not completion
         if internal and isinstance(episode, _Episode):
             if not episode.enabled:
                 # Inherit the decision: this episode's surface cannot deliver a
@@ -617,7 +573,9 @@ def begin_turn(
                 episode.finish_at = now
                 episode.finish_iterations = 0
         else:
-            episode = _Episode(started_at=now, limit=limit)
+            episode = _Episode(started_at=now, limit=limit, completion=completion)
+            if completion:
+                logger.info("Foreground completion clock started (limit=%.0fs)", limit)
         agent._fg_episode = episode
         agent._fg_turn_active = True
     except Exception:
@@ -831,7 +789,7 @@ def refusal(agent: Any, function_name: str, function_args: Any):
             else "cronjob, todo, memory, clarify, read_file, search_files and "
             "skill_view still work. "
         )
-        + f"A follow-up message gets a fresh {_duration(episode.fresh_limit or limit)}."
+        + f"A follow-up message gets a fresh {_duration(limit)}."
     )
     message = runtime_note(message)
     payload: Dict[str, Any] = {

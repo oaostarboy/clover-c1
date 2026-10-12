@@ -599,8 +599,28 @@ def _earlier_requests(history: Any) -> List[str]:
     return out
 
 
+def _plan_stage_handoff(verdict: Any, stage_tasks: Any) -> Optional[Dict[str, str]]:
+    """The card summary of ONE stage of a staged router plan, from that
+    stage's own task(s): the dispatch covers only part of the plan, so the
+    plan's overall request / reason / goal would be wrong for it.  ``None`` for
+    anything else (a single task, a dispatch that carries the whole plan, a
+    backstop / time-limit / lifecycle hand-off), which keeps its own wording."""
+    tasks = getattr(verdict, "tasks", ()) or ()
+    if len(tasks) < 2 or getattr(verdict, "source", "") in ("direct_backstop", "time_limit", "lifecycle"):
+        return None
+    chosen = [t for t in (stage_tasks or ()) if getattr(t, "goal", "")]
+    if not chosen or len(chosen) >= len(tasks):
+        return None
+    from agent.handoff_title import stage_handoff
+
+    return stage_handoff(
+        [str(t.goal) for t in chosen], [str(getattr(t, "acceptance", "") or "") for t in chosen],
+    )
+
+
 def _runtime_handoff(
     verdict: Any, user_message: str = "", *, agent: Any = None, history: Any = None,
+    stage_tasks: Any = None,
 ) -> Dict[str, str]:
     """The short summary a runtime-started helper is dispatched with, so the
     chat acknowledgement says what is happening without quoting the task.
@@ -612,6 +632,9 @@ def _runtime_handoff(
     (``_prepare_handoff``) replaces them when it gave one."""
     if getattr(verdict, "source", "") == "lifecycle":
         return {"work": "finishing the check on the subagent results", "outcome": "the final answer"}
+    staged = _plan_stage_handoff(verdict, stage_tasks)
+    if staged is not None:
+        return staged
     from agent.handoff_title import handoff_summary
 
     fallback = ""
@@ -623,6 +646,47 @@ def _runtime_handoff(
         context["todo"] = _notes.active_todo(agent)
         context["last_title"] = str(getattr(agent, "_handoff_last_title", "") or "")
     return handoff_summary(user_message, str(getattr(verdict, "reason", "") or ""), fallback, **context)
+
+
+def _task_title_arg(verdict: Any, index: int) -> Dict[str, str]:
+    """A short work title for one task of a multi-task plan, so the card's
+    section is not headed with the raw plan text (``{}`` for anything else)."""
+    tasks = getattr(verdict, "tasks", ()) or ()
+    if len(tasks) < 2 or getattr(verdict, "source", "") in ("direct_backstop", "time_limit", "lifecycle"):
+        return {}
+    from agent.handoff_title import task_title
+
+    return {"title": task_title(str(tasks[index].goal))}
+
+
+def _session_id(agent: Any) -> str:
+    return str(getattr(agent, "session_id", "") or "")
+
+
+def _is_completion_turn(agent: Any) -> bool:
+    return bool(getattr(agent, "_router_completion_ids", ()) or ())
+
+
+def _distinct_handoff(agent: Any, handoff: Dict[str, str]) -> Dict[str, str]:
+    """The card summary with a title this chat has not used in the last half
+    hour: a second hand-off says what THIS helper does, never repeats the
+    first.  The title is remembered for the next one."""
+    try:
+        from agent.handoff_title import FALLBACK_TITLE, distinct_title
+
+        work = str(handoff.get("work") or "")
+        if not work:
+            return handoff
+        completion = _is_completion_turn(agent)
+        recent = _notes.recent_titles(_session_id(agent))
+        if completion and work == FALLBACK_TITLE and not recent:
+            work = "checking the helper results"
+        work = distinct_title(work, recent, completion=completion)
+        _notes.remember_title(_session_id(agent), work)
+        return {**handoff, "work": work}
+    except Exception:
+        logger.debug("could not make the hand-off title distinct", exc_info=True)
+        return handoff
 
 
 def _prepare_handoff(agent: Any, state: RouterTurn) -> Tuple[str, "_notes.Brief"]:
@@ -672,6 +736,8 @@ def _prepare_handoff(agent: Any, state: RouterTurn) -> Tuple[str, "_notes.Brief"
             brief = _notes.handoff_brief(
                 _notes.redact(notes), message=state.user_message,
                 timeout=_notes.BRIEF_TIMEOUT_SECONDS,
+                recent_titles=_notes.recent_titles(_session_id(agent)),
+                completion=_is_completion_turn(agent),
             )
         except Exception:
             brief = _notes.Brief()
@@ -736,20 +802,28 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     verdict = state.verdict
     stages = verdict.stages()
     first = stages[0]
-    handoff = _runtime_handoff(verdict, state.user_message, agent=agent, history=state.history)
+    stage_tasks = [verdict.tasks[i] for i in first]
+    handoff = _runtime_handoff(
+        verdict, state.user_message, agent=agent, history=state.history, stage_tasks=stage_tasks,
+    )
+    own_stage = _plan_stage_handoff(verdict, stage_tasks) is not None
     notes_id, brief = _prepare_handoff(agent, state)
     if getattr(verdict, "source", "") != "lifecycle":
         # The small model read the work; its title and goal beat the heuristic
-        # ones (which are only there for when it gave none).
-        if brief.title:
+        # ones (which are only there for when it gave none).  A stage of a
+        # multi-task plan is titled from its OWN task: the brief reads the
+        # whole turn, so its title / goal would describe the whole plan.
+        if brief.title and not own_stage:
             handoff = {**handoff, "work": brief.title}
-        if brief.goal:
+        if brief.goal and not own_stage:
             handoff = {**handoff, "outcome": brief.goal}
+        handoff = _distinct_handoff(agent, handoff)
         state.title = str(handoff.get("work") or "")
     findings = _findings_block(state)
     args: Dict[str, Any] = {
         "tasks": [
-            {"goal": verdict.tasks[i].goal, "context": _helper_context(state, i, 0, findings)}
+            {"goal": verdict.tasks[i].goal, "context": _helper_context(state, i, 0, findings),
+             **_task_title_arg(verdict, i)}
             for i in first
         ],
     }
@@ -1230,10 +1304,14 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
         findings = _stage_findings(row)
         args = {"tasks": [
             {"goal": verdict.tasks[i].goal,
-             "context": _helper_context(pseudo, i, number, findings)}
+             "context": _helper_context(pseudo, i, number, findings),
+             **_task_title_arg(verdict, i)}
             for i in index
         ]}
-        args["handoff"] = _runtime_handoff(verdict, pseudo.user_message, agent=agent)
+        args["handoff"] = _distinct_handoff(agent, _runtime_handoff(
+            verdict, pseudo.user_message, agent=agent,
+            stage_tasks=[verdict.tasks[i] for i in index],
+        ))
     except Exception:
         logger.warning("router stages: stage plan unreadable", exc_info=True)
         return _note(

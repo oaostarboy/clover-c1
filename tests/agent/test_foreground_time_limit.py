@@ -42,10 +42,17 @@ def _write_config(body: dict | None) -> None:
 
     from clover_cli.config_defaults import DEFAULT_CONFIG
 
+    import os
+
     path = get_clover_home() / 'config.yaml'
     # Current version: an old/missing one would send the file through migration.
-    path.write_text(yaml.safe_dump(
+    # Replaced in one step: ``write_text`` truncates first, and a leaked
+    # background thread that loads the config in that gap sees a legacy file,
+    # migrates it and writes the defaults over this test's settings.
+    tmp = path.with_name(path.name + '.tmp')
+    tmp.write_text(yaml.safe_dump(
         {'_config_version': DEFAULT_CONFIG['_config_version'], **(body or {})}))
+    os.replace(tmp, path)
 
 
 def _set_limit(value: Any) -> None:

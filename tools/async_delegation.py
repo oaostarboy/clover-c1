@@ -218,8 +218,9 @@ def _initialize_schema(conn: sqlite3.Connection) -> None:
         # api_server (the in-memory record that carried it is gone).
         ("origin_session_id", "TEXT"),
         ("continuation_json", "TEXT"),
-        # When the dispatching agent's verification episode (foreground time
-        # limit) was granted for this dispatch's completion. NULL = unspent.
+        # Retired: the short verification window this column metered is gone
+        # (a completion turn now starts its own full foreground clock). Kept
+        # so older ledgers keep opening; nothing reads or writes it.
         ("verify_consumed_at", "REAL"),
     ):
         if name not in columns:
@@ -896,31 +897,6 @@ def child_delegation_id(delegation_id: str, index: int) -> str:
 def dispatch_id_for(delegation_id: str) -> str:
     """The dispatch a completion id belongs to (a batch child maps to its batch)."""
     return str(delegation_id or "").split(_CHILD_ID_MARK, 1)[0]
-
-
-def claim_verification_allowance(delegation_id: str) -> bool:
-    """Spend a dispatch's one verification allowance; ``True`` only the first time.
-
-    The foreground time limit grants the dispatching agent a short checking
-    window when this dispatch's own result comes back.  The claim is one
-    atomic UPDATE on the durable record, so it survives a restart and no two
-    callers (turns, processes) can both win.  An unknown or pruned record, or
-    any ledger error, is "no allowance".
-    """
-    did = dispatch_id_for(delegation_id)
-    if not did:
-        return False
-    try:
-        with _DB_LOCK, _transaction() as conn:
-            cursor = conn.execute(
-                """UPDATE async_delegations SET verify_consumed_at=?
-                   WHERE delegation_id=? AND verify_consumed_at IS NULL""",
-                (time.time(), did),
-            )
-            return cursor.rowcount == 1
-    except Exception:
-        logger.debug("verification allowance claim failed for %s", did, exc_info=True)
-        return False
 
 
 def mark_completion_delivered(delegation_id: str) -> bool:

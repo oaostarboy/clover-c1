@@ -2151,19 +2151,12 @@ DEFAULT_CONFIG = {
         # per hard stop, accepted). Seconds; 0/null/false = off. Independent of
         # delegation.checkpoint.
         "foreground_time_limit_seconds": 300,
-        # A short checking window for a helper's OWN result coming back: when
-        # the completion turn of a hand-off this agent dispatched arrives after
-        # the foreground limit is spent, it gets a fresh episode of this many
-        # seconds (once per dispatch, also across restart) so the agent can
-        # verify the result before answering; helpers it spawns there stay in
-        # the background. Seconds; 0/null/false = off. Off too whenever
-        # foreground_time_limit_seconds is off.
-        "verify_time_limit_seconds": 120,
         # When the hard stop above hits and the work is NOT finished, the
         # runtime hands the rest to ONE background helper (full-context
         # hand-off notes, the agent's own one-line opener) instead of asking
-        # the agent to stop and offer to continue -- a completion turn that
-        # runs out of time hands its remainder off too. false = the old
+        # the agent to stop and offer to continue -- a completion turn (it has
+        # its own full foreground clock) that runs out of time hands its
+        # remainder off too, at most once per original request. false = the old
         # behaviour (one no-tools summary, no hand-off). Also the fallback
         # whenever no helper can be started (no delegate_task tool, no
         # detached delivery, a refused dispatch, "do it yourself").

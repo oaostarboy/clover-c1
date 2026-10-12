@@ -419,6 +419,81 @@ _SUMMARY_SYSTEM = (
 )
 
 
+# ── this chat's recent hand-off titles (so the next one can differ) ────────
+
+RECENT_TITLES_KEEP = 8
+
+
+def _titles_path(session_id: str):
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_id or "").strip())[:80]
+    return (notes_dir() / f"titles-{safe}.json") if safe else None
+
+
+def recent_titles(session_id: str, within: Optional[float] = None) -> List[str]:
+    """Titles of this chat's hand-offs in the last ``within`` seconds (default
+    ``handoff_title.RECENT_WINDOW_SECONDS``), newest last.  Durable (a rebuilt
+    agent or a restart still sees them); ``[]`` on any problem."""
+    try:
+        import json
+
+        from agent.handoff_title import RECENT_WINDOW_SECONDS
+
+        path = _titles_path(session_id)
+        if path is None or not path.is_file():
+            return []
+        horizon = time.time() - (RECENT_WINDOW_SECONDS if within is None else within)
+        rows = json.loads(path.read_text(encoding="utf-8"))
+        return [
+            str(r[1]) for r in rows
+            if isinstance(r, list) and len(r) == 2 and isinstance(r[0], (int, float))
+            and r[0] >= horizon and str(r[1]).strip()
+        ]
+    except Exception:
+        logger.debug("could not read the recent hand-off titles", exc_info=True)
+        return []
+
+
+def remember_title(session_id: str, title: str) -> None:
+    """Record ``title`` as a hand-off of this chat, now.  Never raises."""
+    try:
+        import json
+
+        path = _titles_path(session_id)
+        title = " ".join(str(title or "").split())
+        if path is None or not title:
+            return
+        now = time.time()
+        from agent.handoff_title import RECENT_WINDOW_SECONDS
+
+        rows = [
+            r for r in _read_rows(path) if r[0] >= now - RECENT_WINDOW_SECONDS
+        ][-(RECENT_TITLES_KEEP - 1):]
+        from agent.handoff_title import title_key
+
+        if rows and title_key(str(rows[-1][1])) == title_key(title):
+            return  # the same dispatch noted twice (the backstop, then the receipt)
+        rows.append([now, title])
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(rows), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        logger.debug("could not record the hand-off title", exc_info=True)
+
+
+def _read_rows(path) -> List[List[Any]]:
+    import json
+
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else []
+    except (OSError, ValueError):
+        return []
+    return [
+        r for r in rows
+        if isinstance(r, list) and len(r) == 2 and isinstance(r[0], (int, float))
+    ] if isinstance(rows, list) else []
+
+
 def _clip_for_summary(notes: str) -> str:
     if len(notes) <= SUMMARY_INPUT_CHARS:
         return notes
@@ -537,15 +612,39 @@ def parse_brief(text: str, message: str = "") -> Brief:
     )
 
 
-def handoff_brief(notes: str, *, message: str = "", timeout: float = BRIEF_TIMEOUT_SECONDS) -> Brief:
+def _recent_titles_rule(recent: Sequence[str], completion: bool) -> str:
+    """The system-prompt addendum when this chat already had hand-offs."""
+    titles = [" ".join(str(t or "").split()) for t in recent or () if str(t or "").strip()]
+    if not titles:
+        return ""
+    listed = "; ".join(f'"{t}"' for t in titles[-4:])
+    lead = (
+        " This subagent takes over after the earlier one(s) reported back: it checks "
+        "and finishes what they produced." if completion else ""
+    )
+    return (
+        f"\nThis chat already had hand-offs in the last half hour, titled: {listed}.{lead} "
+        "The title must describe what is different about THIS subagent's job and must "
+        "not repeat any of those titles."
+    )
+
+
+def handoff_brief(
+    notes: str, *, message: str = "", timeout: float = BRIEF_TIMEOUT_SECONDS,
+    recent_titles: Sequence[str] = (), completion: bool = False,
+) -> Brief:
     """Title, goal and 3-6 bullets on what the notes show, from the router's
-    small fast model.  An empty ``Brief`` -- silently -- on a timeout, an error
-    or an unusable reply."""
+    small fast model.  ``recent_titles`` are this chat's hand-off titles of the
+    last half hour: the model is told to describe what is different, and a
+    title that still equals one of them is dropped (the caller then derives
+    one).  An empty ``Brief`` -- silently -- on a timeout, an error or an
+    unusable reply."""
     try:
         text = _timed_call({
             "task": SUMMARY_TASK,
             "messages": [
-                {"role": "system", "content": _SUMMARY_SYSTEM},
+                {"role": "system",
+                 "content": _SUMMARY_SYSTEM + _recent_titles_rule(recent_titles, completion)},
                 {"role": "user", "content": "<handoff_notes>\n" + _clip_for_summary(notes)
                  + "\n</handoff_notes>"},
             ],
@@ -553,7 +652,13 @@ def handoff_brief(notes: str, *, message: str = "", timeout: float = BRIEF_TIMEO
             "max_tokens": BRIEF_MAX_TOKENS,
             "timeout": timeout,
         }, timeout)
-        return parse_brief(text, message)
+        brief = parse_brief(text, message)
+        if brief.title:
+            from agent.handoff_title import is_recent_title
+
+            if is_recent_title(brief.title, recent_titles):
+                brief.title = ""
+        return brief
     except BaseException as exc:  # noqa: BLE001 - never user-visible
         logger.debug("hand-off brief skipped: %s", exc)
         return Brief()

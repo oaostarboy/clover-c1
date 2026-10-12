@@ -17,6 +17,10 @@ model is never asked to stop and "offer to continue".
 * **Completion turn** (a helper's results being integrated, ``display_kind``
   ``internal_notification``): the helper gets the completion results and the
   user's original request, and finishes the integration.
+* **Once per original request.**  A completion turn has its own full
+  foreground clock (``agent.foreground_time_limit``); if even that runs out it
+  hands off once, and that hand-off marks the helpers it was integrating, so no
+  other completion of the same chain hands off again.
 * **Never twice.**  A turn that already handed off (the backstop, the root's
   own ``delegate_task``) is acknowledged, not dispatched again; the completion
   of a hand-off this module (or the integration hand-back) made is never handed
@@ -159,6 +163,28 @@ def _own(agent: Any) -> Dict[str, bool]:
         except Exception:
             pass
     return own
+
+
+def _completion_dispatches(agent: Any) -> List[str]:
+    """The dispatch ids this turn's trusted completion metadata names, plus the
+    helpers dispatched in the same request turn (``completion_group``)."""
+    found: List[str] = []
+    try:
+        from agent import work_lifecycle as wl
+        from tools.async_delegation import dispatch_id_for
+
+        ids = tuple(getattr(agent, "_router_completion_ids", ()) or ())
+        for raw in ids:
+            did = dispatch_id_for(str(raw or "").strip())
+            if did and did not in found:
+                found.append(did)
+        if ids:
+            for receipt in wl.completion_group(agent, ids):
+                if receipt.delegation_id not in found:
+                    found.append(receipt.delegation_id)
+    except Exception:
+        logger.debug("could not read the completion's dispatches", exc_info=True)
+    return found
 
 
 def _completion_of_a_handoff(agent: Any) -> bool:
@@ -343,6 +369,12 @@ def _hand_off(agent: Any, messages: List[Dict[str, Any]], task_id: str) -> Optio
     if did:
         _own(agent)[did] = True
         _mark(did)
+    # One hand-off per original request: a completion turn that handed off also
+    # closes the chain for the helpers it was integrating, so a sibling's
+    # completion arriving next summarises instead of handing off again.
+    for sibling in _completion_dispatches(agent):
+        _own(agent)[sibling] = True
+        _mark(sibling)
     # An armed backstop must not hand the same work off again, and must refuse
     # the root's own spawn beside this one.
     armed = rb._state(agent)

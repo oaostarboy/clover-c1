@@ -28,7 +28,7 @@ import pytest
 import tools.async_delegation as ad
 from agent import foreground_time_limit as fl
 from agent.work_lifecycle import HANDBACK_CHECK_CALLS
-from tests.agent.test_foreground_verification_episode import (  # noqa: F401
+from tests.agent.test_completion_clock import (  # noqa: F401
     INTERNAL, _clean_async_state, _defaults, _write_config, all_tool_text, atomic_write_config,
     clock, completion_turn, make_agent, provider, text, tool,
 )

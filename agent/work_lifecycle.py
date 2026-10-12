@@ -435,8 +435,8 @@ def _arm_handback(agent: Any, message: str, group: Sequence["_fl.DispatchReceipt
         reason=_HANDBACK_REASON,
         source="lifecycle",
     )
-    # The count is the "short check" allowance; the clock is already bounded by
-    # the verification episode, so the time trigger is left to it.
+    # The count is the "short check" allowance; the completion turn's own
+    # foreground clock bounds it in time, so the time trigger is left to it.
     router_backstop.begin(
         agent, verdict, _HANDBACK_REQUEST_LEAD + digest,
         dataclasses.replace(

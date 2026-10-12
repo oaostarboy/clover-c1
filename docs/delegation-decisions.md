@@ -198,12 +198,14 @@ delegation:
 ```
 
 - **Clock.** Monotonic; it starts when a turn that consumes a human message
-  begins. Helper completions, watches and restart wake-ups
-  (`internal_notification` turns) never start a clock: they inherit the
-  episode's remaining time, and when none is left (or a freshly restarted
-  process has no episode at all) they run in finish mode from the start, which
-  still allows reads and the final answer so a helper's result can be
-  integrated. Steering or redirecting a running turn does not reset it; a
+  begins. A turn that delivers a helper's result (an `internal_notification`
+  turn carrying the gateway's `completion_delegation_ids`) is the continuation
+  of the user's work and starts its OWN full clock, like a new message; it
+  never inherits the spent clock of the request that dispatched the helper.
+  Other internal turns (watches, restart wake-ups) never start a clock: they
+  inherit the episode's remaining time, and when none is left (or a freshly
+  restarted process has no episode at all) they run in finish mode from the
+  start, which still allows reads and the final answer. Steering or redirecting a running turn does not reset it; a
   follow-up message gets a fresh 5 minutes when it is consumed as its own turn.
 - **Up front, and quiet.** The limit is a backstop. The mode-choice block
   (above) already tells the agent to hand clearly big jobs to a background
@@ -247,22 +249,15 @@ delegation:
   calls' arguments from their raw strings, while the loop sends the canonical
   form, so even the message bytes differ.) Turns that finish on their own never
   pay it.
-- **Checking a helper's result.** `delegation.verify_time_limit_seconds`
-  (default **120**; `0`, `null` or `false` = off, and off whenever the
-  foreground limit is off). When the completion turn of a helper THIS agent
-  started arrives after the limit is spent, the agent gets one fresh episode of
-  that length - enough for a short terminal check - and then the usual finish
-  mode. It is granted only from the gateway's own completion metadata (the
-  helper's delegation id), never from notification text or session identity;
-  each helper's allowance is spent once, also across restarts; a restarted or
-  rebuilt agent, cron, another profile and unrelated internal turns keep the
-  start-expired behaviour above. Helpers started in the window are background
-  helpers for all of it, expiry included, and a human message during or after
-  it gets its own fresh clock. Nothing about the window is shown to the user.
-  Several helpers finishing together share one window and spend one allowance.
-  Existing limitation: the API-server wake path (`gateway/wake.py`) re-enters as
-  an ordinary request with no completion ids, so no verification window exists
-  there.
+- **Completion turns.** The clock above is the whole story for a helper's
+  result: there is no separate "checking window" setting any more
+  (`verify_time_limit_seconds` was removed; it gave a spent clock 120 s back
+  once per dispatch and was only granted to the instance that dispatched). The
+  ids are trusted gateway metadata, never notification text, and no state on
+  the agent instance is needed, so a rebuilt agent or a restart gets the same
+  fresh clock. If a completion turn itself runs out of time it may hand off to
+  a helper at most once per original request; the completion of that hand-off
+  ends with the plain summary.
 - **Where it applies.** The limit exists to hand work to a background helper,
   so it applies only in chats where the bot can actually run one and deliver
   its result later: Telegram and the other messaging platforms, and the
@@ -271,8 +266,8 @@ delegation:
   API server, unless the request carries a session id it can be woken by - the
   limit is simply **off** for that message: no notice, no refusals, no hard
   stop, and delegation behaves exactly as before. That decision is made once
-  when the human message starts and is inherited by the helper-completion
-  turns that follow it.
+  when the human message starts and is inherited by the watch / wake-up
+  turns that follow it (a completion turn on such a surface stays off too).
 - **Whole-turn hand-off.** While the limit applies to a turn, every
   `delegate_task` of the root runs as a background helper (the tool result says
   so). A helper that cannot be started (capacity, persistence, scheduling,

@@ -37,7 +37,7 @@ from tests.agent.test_foreground_time_limit_loop import (  # noqa: F401
     text,
     tool,
 )
-from tests.agent.test_foreground_verification_episode import (  # noqa: F401
+from tests.agent.test_completion_clock import (  # noqa: F401
     INTERNAL,
     _clean_async_state,
     stub_children,
@@ -201,8 +201,8 @@ def test_a_completion_turn_hard_stop_hands_off_the_integration(
         {'role': 'assistant', 'content': 'Two helpers are on the images and the text.'},
     ]
     clock.advance(1000)  # the helpers took longer than the human's episode
-    # the verification window is 120 s: spend it, then the iterations
-    advance_per_tool_round(agent, clock, 70, after_limit=5, limit=120)
+    # the completion turn has its OWN full 300 s: spend it, then the iterations
+    advance_per_tool_round(agent, clock, 100, after_limit=5)
     _script_long_job(provider, 'on it, a subagent is wrapping up the website')
 
     result = agent.run_conversation(
@@ -380,8 +380,10 @@ def test_the_completion_of_a_time_limit_handoff_is_never_handed_off_again(
     provider.captured.clear()
 
     # the helper's completion arrives (after the human's episode) and THAT turn
-    # also runs out of its verification window
+    # also runs out of its own full clock
     clock.advance(1000)
+    del agent._execute_tool_calls  # a fresh round timer for the completion turn
+    advance_per_tool_round(agent, clock, 100, after_limit=5)
     _script_long_job(provider, 'Done: the first part. Left: the checks.')
     result = agent.run_conversation(
         '[ASYNC DELEGATION COMPLETE] the helper finished', conversation_history=[],
