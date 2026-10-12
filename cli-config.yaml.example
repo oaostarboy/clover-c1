@@ -1634,6 +1634,10 @@ delegation:
   #   backstop_calls: 2                       # not-direct plan: after this many work tool calls the agent made itself ...
   #   backstop_seconds: 60                    # ... or this many seconds, the runtime hands the plan to helpers (nothing running is
   #                                           # stopped). "Do it yourself" in the message is never overridden.
+  #   direct_backstop:                        # safety net for a "direct" verdict that runs long
+  #     enabled: true                         # false = a direct turn is never handed off by the runtime
+  #     work_calls: 25                        # after this many work tool calls the agent made itself ...
+  #     seconds: 180                          # ... or this many seconds, the next work call hands the REST of the request to ONE helper
   # checkpoint:                               # Optional delegation checkpoint for conversational roots with todo + delegate_task (off by default: no cap)
   #   enabled: false                          # true = opt in: gate work tools until a delegation choice is recorded
   #   max_work_tools: 5                       # parent work calls one direct/delegate choice covers (positive integer)

@@ -2166,6 +2166,17 @@ DEFAULT_CONFIG = {
             "timeout_seconds": 8,
             "backstop_calls": 2,
             "backstop_seconds": 60,
+            # Safety net for a "direct" verdict that was too small a guess:
+            # after ``work_calls`` work tool calls or ``seconds`` seconds the
+            # next work call hands the REST of the request to one helper
+            # (calls already running are never stopped; "do it yourself" is
+            # never overridden). ``enabled: false`` = a direct turn is never
+            # handed off by the runtime.
+            "direct_backstop": {
+                "enabled": True,
+                "work_calls": 25,
+                "seconds": 180,
+            },
         },
         "max_iterations": 250,  # per-subagent iteration cap (each subagent gets its own budget,
                                # independent of the parent's max_iterations)
