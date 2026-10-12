@@ -15,6 +15,14 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.5.2 | Clover C1.5.2 | 2026-10-11
+- Subagent work now shows in one tidy card that stays at the bottom of your chat; tap it to watch.
+- Each subagent gets its own checklist, with its live steps, model, tool calls and time.
+- A new job joins the card that's already running instead of starting a second one.
+- Subagents no longer fail when Clover's database is busy for a moment.
+- Chat now says "subagents", and task text is no longer pasted into the chat.
+- Outside workers (like other AI models) now show in the same card as your subagents.
+
 ## 1.5.1 | Clover C1.5.1 | 2026-10-11
 - When a helper takes over, you get a short line and a checklist that ticks itself off as it works.
 - Done steps get a 🍀, and a 🍂 shows when a helper couldn't finish the job.

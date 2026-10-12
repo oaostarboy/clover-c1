@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import inspect
+import itertools
 import logging
 import threading
 import time
@@ -75,6 +76,9 @@ _LIVE_MAX_PER_CHAT = 32
 # Newest outbound message id per chat (any message the bot sent), and the
 # pending debounced follow per chat.
 _LAST_OUT: Dict[Tuple[int, str], str] = {}
+# Newest outbound message per chat that is NOT a helper (ack) card: the only
+# kind of message a running unified card treats as "something newer".
+_LAST_PLAIN: Dict[Tuple[int, str], str] = {}
 _FOLLOW_TIMERS: Dict[Tuple[int, str], Any] = {}
 FOLLOW_DEBOUNCE_SECONDS = 1.5
 # True while a publisher itself is sending/editing cards, so its own posts
@@ -95,10 +99,22 @@ def _is_newer(a: Optional[str], b: Optional[str]) -> bool:
         return a != b
 
 
-def note_outbound(adapter: Any, chat_id: Any, message_id: Any = None) -> None:
+def _is_ack_card_text(content: Any) -> bool:
+    try:
+        from agent.ack_checklist import match_unbound
+
+        return content is not None and match_unbound(content) is not None
+    except Exception:
+        return False
+
+
+def note_outbound(adapter: Any, chat_id: Any, message_id: Any = None, content: Any = None) -> None:
     """Record that the bot just posted a message in this chat. When running
     subagent cards live there, move them below it after a short quiet window
-    (coalesces streaming bursts into one move). Never raises."""
+    (coalesces streaming bursts into one move). Never raises.
+
+    ``content`` (the text sent) lets a helper (ack) card's own first send be
+    told apart: it never counts as "something newer" for another card."""
     try:
         if _CARD_SEND.get() or adapter is None or chat_id in (None, ""):
             return
@@ -107,6 +123,10 @@ def note_outbound(adapter: Any, chat_id: Any, message_id: Any = None) -> None:
             prev = _LAST_OUT.get(key)
             if prev is None or _is_newer(str(message_id), prev):
                 _LAST_OUT[key] = str(message_id)
+            if not _is_ack_card_text(content):
+                prev = _LAST_PLAIN.get(key)
+                if prev is None or _is_newer(str(message_id), prev):
+                    _LAST_PLAIN[key] = str(message_id)
         with _LIVE_LOCK:
             pubs = [p for p in _LIVE.get(key, []) if not p._closed]
         if not pubs:
@@ -233,6 +253,9 @@ class _CardState:
     # Combined mode: finished after its turn; parked for the next turn card.
     in_inbox: bool = False
     inbox_expired: bool = False
+    # The unified helper card took this delegation over after a 🔀 card was
+    # already (being) posted: that card is removed, nothing more is posted.
+    retired: bool = False
 
 
 # ── One live board per chat ───────────────────────────────────────────────
@@ -553,6 +576,7 @@ class DelegationActivityPublisher:
         self._closed = False
         self._jobs_group: Optional[str] = None
         self._jobs_count = 0
+        self._place_lock: Optional[asyncio.Lock] = None
         # Fallback group for relays that carry no delegation_id (e.g. live
         # transcript creation failed). Per publisher, so two turns in one chat
         # never share a status key like "delegation:delegation".
@@ -578,6 +602,50 @@ class DelegationActivityPublisher:
             self._jobs_count += 1
             return self._jobs_group, index
 
+    def open_external_job_card(self, card_id: str, title: str, lifecycle: bool = False) -> str:
+        """Unified card style: show an outside agent job on the subagent card.
+
+        Returns ``card_id`` (the job's delegation id from now on) when the job
+        has a part on the unified card, else ``""`` (classic style: the job
+        keeps its 🔀 roster card).  The card joins the chat's running unified
+        card, or is posted as its own message.  Any thread.
+        """
+        try:
+            from agent.ack_checklist import open_agent_job_part
+
+            card = open_agent_job_part(card_id, title, lifecycle)
+        except Exception:
+            return ""
+        if card is None:
+            return ""
+        card.target = (id(self._adapter), self._chat_id, "pending")  # claimed: nothing else binds it
+        try:
+            asyncio.run_coroutine_threadsafe(self._place_job_card(card, card_id), self._loop)
+        except RuntimeError:
+            from agent.ack_checklist import abandon
+
+            abandon(card_id)  # loop closed: the 🔀 card path takes over
+            return ""
+        return card_id
+
+    async def _place_job_card(self, card: Any, card_id: str) -> None:
+        from agent.ack_checklist import abandon, join
+
+        if self._place_lock is None:
+            self._place_lock = asyncio.Lock()
+        try:
+            async with self._place_lock:  # one job at a time: the next one finds this card
+                host = _running_editor_for(self._adapter, self._chat_id, card)
+                if host is not None and join(host.card, card):
+                    host.notify()
+                    return
+                await _send_card_under_opener(card, self._adapter, self._chat_id, self._metadata)
+        except Exception:
+            logger.debug("agent job card placement failed", exc_info=True)
+            card.target = None
+        if card.target is None:
+            abandon(card_id)
+
     # -- producer side (any thread) --------------------------------------
 
     def observe(
@@ -593,6 +661,18 @@ class DelegationActivityPublisher:
             return
         if not kwargs.get("delegation_id"):
             kwargs["delegation_id"] = self._fallback_group
+        try:
+            from agent.ack_checklist import owns_delegation
+
+            if owns_delegation(kwargs.get("delegation_id")):
+                # The unified helper card (the ack message) shows this
+                # helper's activity and result: no separate 🔀 card.  If an
+                # earlier event already started one (ownership was registered
+                # late), take it back down.
+                self._retire_owned(str(kwargs.get("delegation_id")))
+                return
+        except Exception:
+            pass
         self._ensure_live()
         try:
             group_id, alerts = self.tracker.observe(
@@ -614,6 +694,41 @@ class DelegationActivityPublisher:
                     card.backoff_until = float("-inf")
             self._pending_alerts.extend((gid, text) for text in alerts)
         self._schedule()
+
+    def _retire_owned(self, gid: str) -> None:
+        """The unified card owns ``gid`` but a 🔀 card for it may already be up
+        (or in flight): remove it and make sure nothing more is posted, no
+        summary either.  Idempotent; any thread."""
+        with self._state_lock:
+            card = self._cards.get(gid)
+            known = card is not None or gid in self.tracker.group_ids()
+            if not known:
+                return
+            if card is None:
+                card = self._cards.setdefault(gid, _CardState())
+            if card.retired:
+                return
+            card.retired = card.suppressed = card.summary_posted = True
+            card.dirty = False
+            mid = card.message_id
+            self._pending_alerts = [a for a in self._pending_alerts if a[0] != gid]
+        self.tracker.drop_group(gid)
+        self._remove_later(gid, mid)
+
+    def _remove_later(self, gid: str, message_id: Optional[str]) -> None:
+        async def _go() -> None:
+            token = _CARD_SEND.set(True)
+            try:
+                await self._remove_live_card(gid, message_id)
+                if self._board_mode:
+                    _board_for(self).schedule(0.0)
+            finally:
+                _CARD_SEND.reset(token)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_go(), self._loop)
+        except RuntimeError:
+            pass  # loop closed (gateway shutting down)
 
     def _schedule(self) -> None:
         try:
@@ -997,6 +1112,11 @@ class DelegationActivityPublisher:
         except Exception as exc:
             self._record_failure(card, None, f"{type(exc).__name__}: {exc}")
             return
+        if card.retired:
+            # The unified card took this group over while the post was in
+            # flight: take the card that just landed back down.
+            await self._remove_live_card(gid, card.message_id)
+            return
         if result is not None and getattr(result, "success", False):
             with self._state_lock:
                 card.posted = True
@@ -1261,19 +1381,27 @@ TAP_HINT_LIVE = "tap to watch 🍀"
 TAP_HINT_DONE = "tap to read 🍀"
 
 
-def _to_expandable(text: str, hint: str = "") -> str:
+def _to_expandable(text: str, hint: str = "", bold_title: bool = False) -> str:
     """Header + "> " detail lines -> one Telegram expandable blockquote:
-    ``**> header`` / ``> detail`` / ... with ``||`` closing the last line."""
+    ``**> header`` / ``> detail`` / ... with ``||`` closing the last line.
+
+    The header is the quote's first line, so a collapsed quote shows the
+    header, the italic hint and a blank line.  ``bold_title`` (the unified
+    subagent card) keeps the title's bold: ``**> 🍀 **title** · 1 of 3 done``."""
     # "||" would be read as a spoiler / early quote terminator, and "*" in
     # the header can eat the "**>" opener (Opus review).
     lines = text.replace("||", "¦¦").split("\n")
-    header = lines[0].replace("*", "")
     body = [ln[2:] if ln.startswith("> ") else ln for ln in lines[1:]]
     # A collapsed Telegram quote shows about three lines and then cuts off.
     # Header, a small italic "tap" hint, and a blank line fill those three,
     # so the cut lands on empty space, never on half a detail.
     details = [ln for ln in body if ln.strip()]
     spacer = "\u2800"
+    # The hint is followed by exactly one spacer: a detail block that opens
+    # with its own spacer would leave two blank lines there.
+    while details and details[0].strip() == spacer:
+        details.pop(0)
+    header = lines[0] if bold_title else lines[0].replace("*", "")
     out = [f"**> {header}"]
     if details:
         tip = f"*{hint}*" if hint else spacer
@@ -1368,7 +1496,27 @@ def build_turn_publisher(
 # edit transport or a deleted message just leaves the last text in place.
 
 ACK_MIN_INTERVAL = DEFAULT_MIN_INTERVAL
+ACK_TICK_SECONDS = 15.0
+# A running unified card follows the bottom of the chat like the 🔀 card did,
+# but re-posts at most this often.
+ACK_REPOST_MIN_SECONDS = 4.0
 _ACK_EDITORS: Dict[int, "AckCardEditor"] = {}
+_ACK_SEQ = itertools.count(1)
+
+
+def _adapter_is_telegram(adapter: Any) -> bool:
+    """Telegram only has expandable quotes (the 🔀 roster card checks the same)."""
+    plat = getattr(adapter, "platform", None)
+    return str(getattr(plat, "value", plat) or "").lower() == "telegram"
+
+
+def _unified_style() -> bool:
+    try:
+        from agent.ack_checklist import unified
+
+        return bool(unified())
+    except Exception:
+        return False
 
 
 class AckCardEditor:
@@ -1385,6 +1533,7 @@ class AckCardEditor:
         *,
         min_interval: float = ACK_MIN_INTERVAL,
         clock: Callable[[], float] = time.monotonic,
+        initial_text: Optional[str] = None,
     ) -> None:
         self.card = card
         self._adapter = adapter
@@ -1395,14 +1544,38 @@ class AckCardEditor:
         self._min_interval = max(0.0, float(min_interval))
         self._clock = clock
         self._lock = threading.Lock()
-        self._last_text = card.render()
+        # Telegram: title visible, the rest in a collapsed expandable quote
+        # (like the 🔀 roster card); other platforms keep the plain quote.
+        self._expandable = _adapter_is_telegram(adapter) and _unified_style()
+        self._last_text = initial_text if initial_text is not None else card.render()
         # Let the message settle first: a stream consumer may still finalize it.
         self._last_attempt = clock()
         self._backoff_until = float("-inf")
         self._failures = 0
         self._task: Optional[asyncio.Task] = None
+        self._ticking = False
         self.gone = False
+        self._edit_lock: Optional[asyncio.Lock] = None
+        self._last_repost = float("-inf")
+        self._repost_timer: Any = None
+        self._stale: List[str] = []
+        self._registered = False
+        self._seq = next(_ACK_SEQ)
+        # Shares the follow protocol with the 🔀 cards (follow_latest_message).
+        self._combined = False
         card.on_change = self.notify
+        self._register_live()
+
+    def _render(self) -> str:
+        """What the card message should say now."""
+        text = self.card.render()
+        # The title must be the first line: a card that still carries its
+        # opener in the same message (never on a chat platform) stays plain.
+        if not (self._expandable and text) or (self.card.say_text() and not self.card.split_opener):
+            return text
+        text = _fit_to_limit(text, 4000 - 16)
+        hint = TAP_HINT_DONE if self.card.finished else TAP_HINT_LIVE
+        return _to_expandable(text, hint, bold_title=True)
 
     # any thread
     def notify(self) -> None:
@@ -1417,25 +1590,194 @@ class AckCardEditor:
         if self._task is None or self._task.done():
             self._task = self._loop.create_task(self._run())
 
+    def _tick_later(self) -> None:
+        """The unified card shows a running clock: refresh it now and then
+        while the helper works, even when nothing else changed."""
+        if self.gone or self.card.finished or self._ticking:
+            return
+        try:
+            from agent.ack_checklist import unified
+
+            if not unified():
+                return
+        except Exception:
+            return
+
+        def _go() -> None:
+            self._ticking = False
+            self.notify()
+
+        self._ticking = True
+        try:
+            self._loop.call_later(ACK_TICK_SECONDS, _go)
+        except RuntimeError:
+            self._ticking = False
+
     def _delay(self) -> float:
         return max(0.0, self._last_attempt + self._min_interval - self._clock(),
                    self._backoff_until - self._clock())
 
+    # -- follow the bottom of the chat (running unified cards only) ----------
+
+    @property
+    def _closed(self) -> bool:
+        """Not eligible to follow: gone, or finished (a done card stays put)."""
+        if self.gone:
+            return True
+        try:
+            return bool(self.card.finished)
+        except Exception:
+            return True
+
+    def _register_live(self) -> None:
+        if self._registered or self._closed:
+            return
+        try:
+            from agent.ack_checklist import unified
+
+            if not unified() or not _adapter_can_delete(self._adapter):
+                return
+        except Exception:
+            return
+        key = _inbox_key(self._adapter, self._chat_id)
+        with _LIVE_LOCK:
+            pubs = _LIVE.setdefault(key, [])
+            if self not in pubs:
+                pubs.append(self)
+                if len(pubs) > _LIVE_MAX_PER_CHAT:
+                    del pubs[: len(pubs) - _LIVE_MAX_PER_CHAT]
+        self._registered = True
+
+    def _unregister_live(self) -> None:
+        if not self._registered:
+            return
+        self._registered = False
+        key = _inbox_key(self._adapter, self._chat_id)
+        with _LIVE_LOCK:
+            pubs = _LIVE.get(key)
+            if pubs and self in pubs:
+                pubs.remove(self)
+                if not pubs:
+                    _LIVE.pop(key, None)
+
+    async def repost_live_cards(self) -> int:
+        """Re-post the card at the bottom when something newer was sent after
+        it, delete the old message, and keep editing the new one. Throttled;
+        a finished card never moves. Returns 1 if it moved."""
+        if self._closed:
+            self._unregister_live()
+            return 0
+        if self._edit_lock is None:
+            self._edit_lock = asyncio.Lock()
+        wait = self._last_repost + ACK_REPOST_MIN_SECONDS - self._clock()
+        if wait > 0:
+            self._repost_later(wait)
+            return 0
+        token = _CARD_SEND.set(True)
+        try:
+            async with self._edit_lock:
+                return await self._repost_locked()
+        except Exception:
+            logger.debug("ack card repost failed", exc_info=True)
+            return 0
+        finally:
+            _CARD_SEND.reset(token)
+
+    def _repost_later(self, delay: float) -> None:
+        if self._repost_timer is not None:
+            return
+
+        def _go() -> None:
+            self._repost_timer = None
+            if not self._closed:
+                self._loop.create_task(self.repost_live_cards())
+
+        try:
+            self._repost_timer = self._loop.call_later(max(0.0, delay), _go)
+        except RuntimeError:
+            self._repost_timer = None
+
+    def _is_newest_running(self) -> bool:
+        """Only the newest running card in a chat follows; older ones stay put
+        (two cards chasing each other's messages would loop forever)."""
+        key = _inbox_key(self._adapter, self._chat_id)
+        with _LIVE_LOCK:
+            peers = [p for p in _LIVE.get(key, []) if isinstance(p, AckCardEditor) and not p._closed]
+        return all(p._seq <= self._seq for p in peers)
+
+    async def _repost_locked(self) -> int:
+        if self._closed:
+            self._unregister_live()
+            return 0
+        if not self._is_newest_running():
+            return 0
+        # Only a message that is not a helper card counts as "newer".
+        last_out = _LAST_PLAIN.get(_inbox_key(self._adapter, self._chat_id))
+        if not (last_out and _is_newer(last_out, self._message_id)):
+            return 0  # already the newest message in the chat
+        self._last_repost = self._clock()
+        text = self._render()
+        if not text:
+            return 0
+        try:
+            kwargs: Dict[str, Any] = {}
+            if self._metadata is not None:
+                kwargs["metadata"] = self._metadata
+            result = await _maybe_await(
+                self._adapter.send(self._chat_id, _fit_to_limit(text, 4000), **kwargs)
+            )
+        except Exception:
+            logger.debug("ack card repost send failed", exc_info=True)
+            return 0
+        new_id = getattr(result, "message_id", None)
+        if not (getattr(result, "success", False) and new_id) or str(new_id) == "__no_edit__":
+            return 0
+        old_id = self._message_id
+        self._message_id = str(new_id)
+        self._last_text = text
+        self._last_attempt = self._clock()
+        self._failures = 0
+        self._backoff_until = float("-inf")
+        self.card.target = (id(self._adapter), self._chat_id, self._message_id)
+        for mid in [old_id] + list(self._stale):
+            if not mid or mid == self._message_id:
+                continue
+            try:
+                await _maybe_await(self._adapter.delete_message(self._chat_id, mid))
+                if mid in self._stale:
+                    self._stale.remove(mid)
+            except Exception:
+                logger.debug("old ack card delete failed", exc_info=True)
+                if mid not in self._stale:
+                    self._stale.append(mid)
+        del self._stale[8:]
+        if self._render() != self._last_text:
+            self.notify()  # changed while we were sending
+        return 1
+
     async def _run(self) -> None:
         # Bursts of ticks collapse: sleep out the gate, then render the latest.
+        self._register_live()
         while not self.gone:
             delay = self._delay()
             if delay > 0:
                 await asyncio.sleep(delay)
                 continue
-            text = self.card.render()
+            text = self._render()
             if text == self._last_text:
+                self._tick_later()
                 return
-            if not await self._edit(text):
+            if self._edit_lock is None:
+                self._edit_lock = asyncio.Lock()
+            async with self._edit_lock:
+                # A repost may have run while we waited: edit what is current.
+                ok = await self._edit(self._render())
+            if not ok:
                 if self.gone or self._failures >= 8:
                     return
                 continue
-            if self.card.render() == self._last_text:
+            if self._render() == self._last_text:
+                self._tick_later()
                 return
 
     async def _edit(self, text: str) -> bool:
@@ -1446,7 +1788,11 @@ class AckCardEditor:
             return False
         token = _CARD_SEND.set(True)
         try:
-            kwargs: Dict[str, Any] = {"finalize": self.card.finished}
+            # Always finalize=True: Telegram only formats (MarkdownV2) on the
+            # finalize path; finalize=False is the plain-text streaming path and
+            # would show literal ``**`` / ``>`` on every live edit. The text is
+            # already fitted, so the overflow split never triggers.
+            kwargs: Dict[str, Any] = {"finalize": True}
             if self._metadata is not None:
                 kwargs["metadata"] = self._metadata
             try:
@@ -1482,30 +1828,103 @@ class AckCardEditor:
         return False
 
 
-def bind_ack_card(adapter: Any, chat_id: Any, content: Any, result: Any, metadata: Any = None) -> None:
+def bind_ack_card(adapter: Any, chat_id: Any, content: Any, result: Any, metadata: Any = None) -> Any:
     """Called after an adapter sent ``content``: if it is an ack checklist that
-    is not yet placed, remember where it landed and keep it current.  Never raises."""
+    is not yet placed, remember where it landed and keep it current.  Never raises.
+
+    Two shapes of ack text:
+      * the whole card (classic style, or no opener line): the message that was
+        just sent *is* the card; bind an editor to it;
+      * the opener line alone (unified card with a ``say``): that message stays a
+        plain chat message forever.  Returns a coroutine that sends the card as
+        its own message right under it and binds the editor to that one; the
+        sending wrapper awaits it so the order is opener, then card.
+    """
     try:
         if adapter is None or chat_id in (None, "") or not getattr(result, "success", False):
-            return
+            return None
         message_id = getattr(result, "message_id", None)
         if not message_id or str(message_id) == "__no_edit__":
-            return
-        from agent.ack_checklist import match_unbound
+            return None
+        from agent.ack_checklist import match_unbound, match_unbound_opener
 
         card = match_unbound(content)
         if card is None:
-            return
+            opener_card = match_unbound_opener(content)
+            if opener_card is None:
+                return None
+            # A card is already running in this chat: the new dispatch joins it
+            # (one live card per chat); only its opener line is a message.
+            host = _running_editor_for(adapter, chat_id, opener_card)
+            if host is not None:
+                from agent.ack_checklist import join
+
+                if join(host.card, opener_card):
+                    host.notify()
+                    return None
+            # Claim it now so nothing else binds it while the card is sent.
+            opener_card.target = (id(adapter), str(chat_id), "pending")
+            return _send_card_under_opener(opener_card, adapter, chat_id, metadata)
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            return
-        editor = AckCardEditor(card, adapter, chat_id, str(message_id), loop, metadata)
-        card.target = (id(adapter), str(chat_id), str(message_id))
-        _ACK_EDITORS[id(card)] = editor
-        while len(_ACK_EDITORS) > 32:
-            _ACK_EDITORS.pop(next(iter(_ACK_EDITORS)))
-        if card.render() != editor._last_text or card.finished:
-            editor.notify()  # it already moved on between render and send
+            return None
+        _attach_editor(card, adapter, chat_id, str(message_id), loop, metadata)
     except Exception:
         logger.debug("ack card bind failed", exc_info=True)
+    return None
+
+
+def _running_editor_for(adapter: Any, chat_id: Any, new_card: Any = None) -> Optional["AckCardEditor"]:
+    """The editor of the running unified card in this chat (newest first), if any."""
+    for editor in reversed(list(_ACK_EDITORS.values())):
+        if editor.card is new_card or editor._adapter is not adapter or editor._chat_id != str(chat_id):
+            continue
+        if editor._closed or not getattr(editor.card, "split_opener", False):
+            continue
+        return editor
+    return None
+
+
+def _attach_editor(
+    card: Any, adapter: Any, chat_id: Any, message_id: str,
+    loop: asyncio.AbstractEventLoop, metadata: Any = None, initial_text: Optional[str] = None,
+) -> "AckCardEditor":
+    editor = AckCardEditor(card, adapter, chat_id, message_id, loop, metadata, initial_text=initial_text)
+    card.target = (id(adapter), str(chat_id), str(message_id))
+    _ACK_EDITORS[id(card)] = editor
+    while len(_ACK_EDITORS) > 32:
+        _ACK_EDITORS.pop(next(iter(_ACK_EDITORS)))
+    if editor._render() != editor._last_text or card.finished:
+        editor.notify()  # it already moved on between render and send
+    return editor
+
+
+async def _send_card_under_opener(card: Any, adapter: Any, chat_id: Any, metadata: Any) -> None:
+    """Send the card as its own message (the opener was just delivered above it)."""
+    loop = asyncio.get_running_loop()
+    # Build the editor first so the text we send is exactly what it renders.
+    probe = AckCardEditor.__new__(AckCardEditor)
+    probe.card = card
+    probe._expandable = _adapter_is_telegram(adapter) and _unified_style()
+    text = AckCardEditor._render(probe)
+    if not text:
+        card.target = None
+        return
+    token = _CARD_SEND.set(True)
+    try:
+        kwargs: Dict[str, Any] = {}
+        if metadata is not None:
+            kwargs["metadata"] = metadata
+        result = await _maybe_await(adapter.send(chat_id, _fit_to_limit(text, 4000), **kwargs))
+    except Exception:
+        logger.debug("ack card send under the opener failed", exc_info=True)
+        card.target = None
+        return
+    finally:
+        _CARD_SEND.reset(token)
+    new_id = getattr(result, "message_id", None)
+    if not (getattr(result, "success", False) and new_id) or str(new_id) == "__no_edit__":
+        card.target = None  # the opener stands alone; nothing to keep current
+        return
+    _attach_editor(card, adapter, chat_id, str(new_id), loop, metadata, initial_text=text)

@@ -1581,6 +1581,12 @@ DEFAULT_CONFIG = {
         # Quiet-period refresh interval (seconds) for delegation cards; edits
         # only, never new messages. 0 disables the heartbeat.
         "delegation_heartbeat_seconds": 60,
+        # Helper ack card. "unified" (default): when one helper is dispatched
+        # with a handoff, the ack message is the whole card -- steps, current
+        # tool, tool calls, time and, at the end, the helper's plain summary --
+        # and no separate 🔀 card is posted for it. "classic": the plain
+        # checklist plus the separate 🔀 card.
+        "helper_card": "unified",
         # Optional custom phrases for generic long-running status messages.
         # Built-in defaults live in gateway/assets/status_phrases.yaml. Users
         # can set `path`/`paths` to CLOVER_HOME-relative YAML files/directories
@@ -2171,6 +2177,17 @@ DEFAULT_CONFIG = {
             # "with subagents" are explicit helper requests. false restores
             # the earlier rubric and override wording exactly.
             "calibration_v2": True,
+            # Safety net for a "direct" verdict that was too small a guess:
+            # after ``work_calls`` work tool calls or ``seconds`` seconds the
+            # next work call hands the REST of the request to one helper
+            # (calls already running are never stopped; "do it yourself" is
+            # never overridden). ``enabled: false`` = a direct turn is never
+            # handed off by the runtime.
+            "direct_backstop": {
+                "enabled": True,
+                "work_calls": 25,
+                "seconds": 180,
+            },
         },
         "max_iterations": 250,  # per-subagent iteration cap (each subagent gets its own budget,
                                # independent of the parent's max_iterations)

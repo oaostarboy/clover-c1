@@ -2,7 +2,7 @@
 
 [project]
 name = "clover-c1"
-version = "1.5.1"
+version = "1.5.2"
 description = "The self-improving AI agent — creates skills from experience, improves them during use, and runs anywhere"
 readme = "README.md"
 # Upper bound is load-bearing, not cosmetic. uv resolves the project's
@@ -481,6 +481,7 @@ plugins = ["**/plugin.yaml", "**/plugin.yml"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
+    "unified_card: run with the shipped unified helper card instead of the classic style pinned by tests/conftest.py",
     "clover_skin: run under the shipped Clover skin instead of the classic skin pinned by tests/conftest.py",
     "integration: marks tests requiring external services (API keys, Modal, etc.)",
     "real_concurrent_gate: opt out of the autouse stub that disables _detect_concurrent_clover_instances",

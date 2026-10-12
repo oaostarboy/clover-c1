@@ -594,6 +594,23 @@ def _pin_classic_skin(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_classic_helper_card(request, monkeypatch):
+    """Pin ``display.helper_card`` to ``classic`` unless the test opts in.
+
+    The shipped default is the unified helper card.  Most ack/delegation tests
+    assert the classic checklist layout plus the separate 🔀 card, so keep them
+    on it.  Tests about the unified card use ``@pytest.mark.unified_card``.
+    """
+    if request.node.get_closest_marker("unified_card"):
+        return
+    try:
+        from agent import ack_checklist as _ac
+    except Exception:
+        return
+    monkeypatch.setattr(_ac, "card_style", lambda: _ac.STYLE_CLASSIC)
+
+
+@pytest.fixture(autouse=True)
 def _no_router_prewarm(monkeypatch):
     """Constructing an agent must not start the router's background import
     warm-up in the test process (it would load the plugin set behind the test's

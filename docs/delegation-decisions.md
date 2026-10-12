@@ -95,7 +95,16 @@ completions, multimodal messages, or a bare greeting / thank-you.
   stopped, and what the turn had already gathered goes into each helper's
   context. If the dispatch fails the result says so and the root carries on
   under the time limit below.
-- **Direct and no plan** are untouched: the time limit stays the only bound.
+- **Direct backstop.** A direct verdict is watched too
+  (`delegation.router.direct_backstop`, on by default): the runtime counts the
+  root's work calls and collects their findings exactly as above. After
+  `work_calls` (25) calls or `seconds` (180), the next work call is refused and
+  the rest of the request goes to exactly one helper, built from the user's
+  message plus the findings. The same exemptions, scope, refusal and failure
+  behaviour apply; "do it yourself" (and a root that already dispatched a helper
+  itself) is never handed off again. `enabled: false` restores the old
+  behaviour.
+- **No plan** (router off, timeout, bad reply) is untouched: the time limit stays the only bound.
 
 ```yaml
 delegation:
@@ -104,6 +113,10 @@ delegation:
     timeout_seconds: 8
     backstop_calls: 2
     backstop_seconds: 60
+    direct_backstop:
+      enabled: true
+      work_calls: 25
+      seconds: 180
 auxiliary:
   delegation_router:
     provider: auto
