@@ -179,6 +179,10 @@ class RouterTurn:
     # the root's own line for the chat was already written for it.
     title: str = ""
     voiced: bool = False
+    # The root's own line for a dispatch that has no ``handoff`` summary (no
+    # card part to carry it): ``(delegation_id, line)``; ``_ack_text`` sends it
+    # as the turn's reply.  Empty when the voice-line call failed.
+    opener: Tuple[str, str] = ("", "")
     lock: threading.RLock = field(default_factory=threading.RLock)
     settled: threading.Condition = field(init=False, repr=False)
 
@@ -878,10 +882,17 @@ def _voice(agent: Any, state: RouterTurn, receipts: List["_fl.DispatchReceipt"],
       * the ROOT called ``delegate_task`` with a ``handoff`` but no ``say``:
         without a line the turn's reply would be the card alone -- the user
         gets no reply, and the card can never join a card already running in
-        the chat (joining goes through the opener line).  Chat platforms only
-        (a CLI has no second message), bounded by
-        ``MODEL_DISPATCH_VOICE_TIMEOUT_SECONDS``.
-    A dispatch where the root gave its own ``say`` never gets a second line."""
+        the chat (joining goes through the opener line);
+      * the ROOT called ``delegate_task`` with NO ``handoff`` at all: the card
+        is placed on its own (``open_headless_card``) and the reply would be
+        a canned line that never read the user's message, so a question asked
+        beside the job went unanswered.  The line is kept on the turn
+        (``state.opener``) and ``_ack_text`` sends it; the canned lines are
+        only the floor when the call fails.
+      The root's own dispatches: chat platforms only (a CLI has no second
+      message), bounded by ``MODEL_DISPATCH_VOICE_TIMEOUT_SECONDS``.
+    A dispatch where the root gave its own ``say`` (or wrote text beside the
+    call) never gets a second line, and never waits on a model call."""
     if state.voiced or getattr(state.verdict, "source", "") == "lifecycle":
         return
     if any(getattr(r, "say", "") for r in receipts):
@@ -895,37 +906,72 @@ def _voice(agent: Any, state: RouterTurn, receipts: List["_fl.DispatchReceipt"],
         if receipt is None or not title:
             return
     else:
-        # The root's own dispatch(es): the card would be the whole reply.
-        receipt = next((r for r in receipts if getattr(r, "summary", "")), None)
-        if receipt is None or not _chat_platform(agent):
+        # The root's own dispatch(es): the card -- or a canned line -- would
+        # be the whole reply.
+        if not receipts or not _chat_platform(agent):
             return
         if _dispatch_message_spoke(messages):
             # The root already wrote text beside its delegate_task call; it
             # went out as its own message.  A second line would repeat it.
             return
-        try:
-            from agent.ack_checklist import unified
+        receipt = next((r for r in receipts if getattr(r, "summary", "")), None)
+        if receipt is not None:
+            try:
+                from agent.ack_checklist import unified
 
-            if not unified():
+                if not unified():
+                    return
+            except Exception:
                 return
-        except Exception:
-            return
-        title = title or _summary_work(receipt.summary)
+            title = title or _summary_work(receipt.summary)
+        else:
+            # No handoff at all: name the work from the tasks' own titles
+            # (or a title built from each goal), never the raw goal text.
+            receipt = receipts[0]
+            title = title or _receipts_work(receipts)
         timeout = _notes.MODEL_DISPATCH_VOICE_TIMEOUT_SECONDS
-    if not receipt.summary:
-        return
     state.voiced = True
     started = time.monotonic()
     line = _notes.voice_line(
         agent, messages if messages else getattr(agent, "_session_messages", None),
         title, message=state.user_message, timeout=timeout,
     )
-    placed = _set_say(receipt.delegation_id, line)
+    if receipt.summary:
+        placed = _set_say(receipt.delegation_id, line)
+    else:
+        # The canned lines stay the floor when the agent's own line failed.
+        placed = bool(line) and line != _notes.FALLBACK_LINE
+        if placed:
+            state.opener = (str(receipt.delegation_id), line)
     logger.info(
-        "hand-off opener: %s dispatch %s, %.1fs, placed=%s",
+        "hand-off opener: %s dispatch %s%s, %.1fs, placed=%s",
         "runtime" if isinstance(info, dict) and info.get("by_runtime") else "model",
-        receipt.delegation_id, time.monotonic() - started, placed,
+        receipt.delegation_id, "" if receipt.summary else " (no handoff)",
+        time.monotonic() - started, placed,
     )
+
+
+def _receipts_work(receipts: List["_fl.DispatchReceipt"]) -> str:
+    """What the root's own dispatches without a ``handoff`` are doing, for the
+    voice-line prompt: each task's ``title``, else a title built from its goal
+    (``agent.handoff_title``).  Never the raw goal text."""
+    names: List[str] = []
+    try:
+        from agent.handoff_title import task_title
+
+        for r in receipts:
+            titles = list(getattr(r, "titles", ()) or ())
+            for i, goal in enumerate(getattr(r, "goals", ()) or ()):
+                name = task_title(goal, titles[i] if i < len(titles) else "")
+                if name and name not in names:
+                    names.append(name)
+    except Exception:
+        logger.debug("could not title the dispatch for the opener", exc_info=True)
+    if not names:
+        return "the rest of it"
+    if len(names) == 1:
+        return names[0]
+    return _one_line("; ".join(names), 160)
 
 
 def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
@@ -1635,12 +1681,19 @@ def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None) -> str:
         except Exception:
             logger.debug("ack checklist unavailable; plain summary lines", exc_info=True)
         return "\n".join(lines)
+    state = _state(agent) if agent is not None else None
+    if state is not None:
+        did, line = state.opener
+        if line and any(str(getattr(r, "delegation_id", "")) == did for r in receipts):
+            # The agent's own line (``_voice``), which read the user's message.
+            return line
     count = sum(len(r.goals) for r in receipts) or sum(len(r.subagent_ids) for r in receipts) or 1
     return _fallback_ack(count, receipts)
 
 
-# The model skipped its own opener line (``handoff.say``): say something a
-# person would text, not a status banner.  No emoji, never the raw task text
+# The FLOOR when the agent's own line (``_voice``) could not be had -- the
+# voice-line call failed or timed out, or there is no chat to need one (CLI):
+# say something a person would text, not a status banner.  No emoji, never the raw task text
 # (goals are internal briefs).  The wording varies so repeated hand-offs in
 # one chat do not read as a canned bot reply; it is picked from the
 # delegation id so the same dispatch always renders the same line.

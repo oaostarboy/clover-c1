@@ -270,6 +270,10 @@ class DispatchReceipt:
     # Several-helper dispatches: each task's own steps (``tasks[i].steps``), by
     # task index; ``()`` for a helper without any.
     child_steps: Tuple[Tuple[str, ...], ...] = ()
+    # Each task's own ``title`` (``tasks[i].title``), by task index; ``""`` for
+    # a task without one.  Names the work for the agent's own opener line when
+    # the dispatch has no ``handoff`` summary.
+    titles: Tuple[str, ...] = ()
 
 
 def _handoff_summary(handoff: Any) -> str:
@@ -469,6 +473,7 @@ def note_own_dispatch(
             steps=_handoff_steps(handoff, goals) or _task_steps_for(goals, task_steps),
             say=_handoff_say(handoff),
             child_steps=_clean_child_steps(child_steps, goals),
+            titles=tuple(str(t or "").strip() for t in (titles or ())),
         )
         _open_ack_part(did, own[did], titles)
         _remember_title(agent, handoff)
