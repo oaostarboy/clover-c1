@@ -73,9 +73,11 @@ SUMMARY_MAX_TOKENS = 450
 # every large turn, which is why the template was posted).
 VOICE_TIMEOUT_SECONDS = 30.0
 # The root called delegate_task itself with no ``say``: its turn is otherwise
-# finished, so the user waits on this line.  Measured 2-4.6 s on Opus 5.5 and
-# GPT-6.1 Sol; past this, ``on it`` goes out and the card still follows it.
-MODEL_DISPATCH_VOICE_TIMEOUT_SECONDS = 10.0
+# finished, so the user waits on this line.  Measured live (tools off, mixed
+# order+question messages): Opus 5.5 2.6-3.7 s, GPT-6.1 Sol 5.8-10.6 s.  Past
+# this, ``on it`` goes out and the card still follows it -- but ``on it``
+# drops the user's question, so the cap sits above the slow model's tail.
+MODEL_DISPATCH_VOICE_TIMEOUT_SECONDS = 15.0
 OPENER_MAX_TOKENS = 120
 OPENER_CHARS = 320
 SUMMARY_TASK = "delegation_router"  # shares the router's small fast model

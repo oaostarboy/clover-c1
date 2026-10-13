@@ -172,6 +172,20 @@ already has (same system prompt, a runtime note appended to a copy, tools off)
 saying a subagent is now handling the title. If that turn errors, is empty or
 takes more than 30 s the line is `on it`. There is no canned wording.
 
+The same line is written when the ROOT called `delegate_task` itself with a
+`handoff` but no `say` (and no text of its own beside the call), on a chat
+platform. Without it the turn's reply would be the card alone: the user gets
+no reply, and the card cannot join a card already running in the chat, since
+joining goes through the opener line. That turn is otherwise finished, so the
+wait is capped at 15 s (Opus 5.5 answered in 2.6-3.7 s, GPT-6.1 Sol in
+5.8-10.6 s). A `say` the model wrote is never doubled. The CLI keeps the whole
+card text as the reply.
+
+A helper completion where any task is not done (failed, `Result: not done`,
+incomplete, cut off at max iterations) is never offered `[SILENT]`: the prompt
+asks for a plain line on what did not get done. A clean completion the user
+already heard may still be absorbed with `[SILENT]`.
+
 ### Ship gate
 
 Run before changing the router prompt, the router's reasoning, or the shipped
