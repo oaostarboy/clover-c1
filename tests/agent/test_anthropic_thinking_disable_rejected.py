@@ -128,6 +128,47 @@ def test_a_call_that_never_asked_for_a_disable_is_not_retried():
     assert len(messages.sent) == 1
 
 
+# ── "thinking off" sent as adaptive must not eat a small visible budget ───
+# Live (2026-10-13, Opus 5.5, the voice line's max_tokens=120): adaptive + low
+# spent all 120 tokens thinking on 3 of 6 mixed question messages (stop_reason
+# max_tokens, no text block -> "on it", the question unanswered) and cut the
+# other 3 mid-sentence.  The same prompts need ~110-200 thinking tokens.
+
+@pytest.mark.parametrize("small", [16, 64, 120, 160])
+def test_adaptive_thinking_off_keeps_the_callers_visible_budget(small):
+    kw = build_anthropic_kwargs(model="claude-opus-5-5", messages=MSGS, tools=None,
+                                max_tokens=small, reasoning_config=OFF, is_oauth=False)
+    assert kw["thinking"] == {"type": "adaptive"}
+    assert kw["max_tokens"] >= small + aa.THINKING_OFF_HEADROOM_TOKENS
+
+
+def test_a_real_disable_keeps_the_callers_max_tokens_exactly():
+    kw = build_anthropic_kwargs(model="claude-haiku-5-5", messages=MSGS, tools=None,
+                                max_tokens=120, reasoning_config=OFF, is_oauth=False)
+    assert kw["thinking"] == {"type": "disabled"} and kw["max_tokens"] == 120
+
+
+def test_the_headroom_never_passes_the_models_output_ceiling_or_the_window():
+    ceiling = aa._get_anthropic_max_output("claude-opus-5-5")
+    kw = build_anthropic_kwargs(model="claude-opus-5-5", messages=MSGS, tools=None,
+                                max_tokens=ceiling, reasoning_config=OFF, is_oauth=False)
+    assert kw["max_tokens"] == ceiling
+    kw = build_anthropic_kwargs(model="claude-opus-5-5", messages=MSGS, tools=None,
+                                max_tokens=100, reasoning_config=OFF, is_oauth=False,
+                                context_length=600)
+    assert kw["max_tokens"] <= 599
+
+
+def test_the_learned_retry_also_gets_the_headroom():
+    messages = _FakeMessages(fail_first=True)
+    first = build_anthropic_kwargs(model="claude-opus-9-9", messages=MSGS, tools=None,
+                                   max_tokens=120, reasoning_config=OFF, is_oauth=False)
+    assert first["max_tokens"] == 120
+    create_anthropic_message(SimpleNamespace(messages=messages), first, prefer_stream=False)
+    assert first["thinking"] == {"type": "adaptive"}
+    assert first["max_tokens"] >= 120 + aa.THINKING_OFF_HEADROOM_TOKENS
+
+
 def test_the_refusal_matcher_knows_both_wordings():
     assert aa._is_thinking_disable_rejection(_BadRequest(REFUSAL))
     assert aa._is_thinking_disable_rejection(_BadRequest(

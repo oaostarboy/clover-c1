@@ -236,6 +236,29 @@ _DISABLE_REJECTED_CLAUDE_SUBSTRINGS = (
 _LEARNED_DISABLE_REJECTED: set[str] = set()
 _LEARNED_LOCK = threading.Lock()
 
+# Adaptive thinking spends OUTPUT tokens, so a caller that asked for "thinking
+# off" with a small ``max_tokens`` (the hand-off voice line: 120, a title: 64)
+# gets an empty or cut reply once that is sent as adaptive + low: live on Opus
+# 5.5 the voice line used all 120 tokens thinking on 3 of 6 real messages
+# (``stop_reason=max_tokens``, no text block, the user's question unanswered).
+# The caller's number is its VISIBLE budget, so the cap is widened by this
+# much.  Unused tokens are not billed; a short reply costs the same.
+THINKING_OFF_HEADROOM_TOKENS = 1024
+
+
+def _thinking_off_max_tokens(
+    requested: int, model: str | None, context_length: Optional[int] = None,
+) -> int:
+    """``requested`` plus the adaptive-thinking headroom, never past the
+    model's output ceiling or the context window."""
+    widened = int(requested) + THINKING_OFF_HEADROOM_TOKENS
+    ceiling = _get_anthropic_max_output(str(model or ""))
+    if ceiling > 0:
+        widened = min(widened, max(int(requested), ceiling))
+    if context_length:
+        widened = min(widened, max(int(context_length) - 1, 1))
+    return max(widened, 1)
+
 
 def _learn_thinking_disable_rejected(model: str | None) -> None:
     key = (model or "").strip().lower()
@@ -1172,6 +1195,9 @@ def build_anthropic_kwargs(
                 # cheapest "off" it allows is adaptive at low effort.
                 kwargs["thinking"] = {"type": "adaptive"}
                 kwargs["output_config"] = {"effort": "low"}
+                kwargs["max_tokens"] = _thinking_off_max_tokens(
+                    effective_max_tokens, model, context_length,
+                )
         elif "haiku" not in model.lower():
             effort = str(reasoning_config.get("effort", "medium")).lower()
             budget = THINKING_BUDGET.get(effort, 8000)
@@ -1346,6 +1372,9 @@ def _downgrade_rejected_thinking_disable(
     output_config = dict(api_kwargs.get("output_config") or {})
     output_config["effort"] = "low"
     api_kwargs["output_config"] = output_config
+    requested = _resolve_positive_anthropic_max_tokens(api_kwargs.get("max_tokens"))
+    if requested is not None:
+        api_kwargs["max_tokens"] = _thinking_off_max_tokens(requested, model)
     logger.info(
         "%s%s rejects thinking.type=disabled; retrying with adaptive thinking at low effort",
         log_prefix, model,
