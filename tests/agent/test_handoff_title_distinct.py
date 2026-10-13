@@ -98,7 +98,7 @@ def test_the_model_is_told_the_earlier_titles_and_a_repeat_is_dropped(monkeypatc
                            'known': ['x']})
 
     monkeypatch.setattr(hn, '_timed_call', fake)
-    brief = hn.handoff_brief('NOTES', recent_titles=['restoring the Clover gateway'],
+    brief = hn.handoff_title('NOTES', recent_titles=['restoring the Clover gateway'],
                              completion=True)
 
     assert 'restoring the Clover gateway' in seen['system']
@@ -110,15 +110,15 @@ def test_the_model_is_told_the_earlier_titles_and_a_repeat_is_dropped(monkeypatc
 def test_a_different_model_title_is_kept(monkeypatch):
     monkeypatch.setattr(hn, '_timed_call', lambda kw, t: json.dumps(
         {'title': 'checking the gateway fix', 'goal': 'fix confirmed', 'known': []}))
-    brief = hn.handoff_brief('NOTES', recent_titles=['restoring the Clover gateway'])
+    brief = hn.handoff_title('NOTES', recent_titles=['restoring the Clover gateway'])
     assert brief.title == 'checking the gateway fix'
 
 
 def test_no_earlier_titles_leaves_the_prompt_unchanged(monkeypatch):
     seen = {}
     monkeypatch.setattr(hn, '_timed_call', lambda kw, t: seen.setdefault('s', kw['messages'][0]['content']) and '{}')
-    hn.handoff_brief('NOTES')
-    assert seen['s'] == hn._SUMMARY_SYSTEM
+    hn.handoff_title('NOTES')
+    assert seen['s'] == hn._TITLE_SYSTEM
 
 
 # ── the backstop wiring (fallback path, no model) ──────────────────────────

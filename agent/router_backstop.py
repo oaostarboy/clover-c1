@@ -600,6 +600,38 @@ def _earlier_requests(history: Any) -> List[str]:
     return out
 
 
+def _last_assistant(history: Any) -> str:
+    """The assistant's last text turn before this request: what it said and
+    offered, which a bare "ok, do it" answers."""
+    for item in reversed(list(history or [])):
+        try:
+            role, text = item
+        except (TypeError, ValueError):
+            continue
+        if role == "assistant" and str(text or "").strip():
+            return str(text)
+    return ""
+
+
+def _last_real_title(agent: Any) -> str:
+    """The title of the last hand-off of this session that actually named
+    work: the in-memory one, else the durable list of this chat's titles
+    (a rebuilt agent or a restart lost the attribute), newest first, skipping
+    the placeholder."""
+    from agent.handoff_title import FALLBACK_TITLE
+
+    own = str(getattr(agent, "_handoff_last_title", "") or "")
+    if own and own != FALLBACK_TITLE:
+        return own
+    try:
+        for title in reversed(_notes.recent_titles(_session_id(agent), within=7 * 86400)):
+            if title and title != FALLBACK_TITLE:
+                return title
+    except Exception:
+        logger.debug("could not read the earlier hand-off titles", exc_info=True)
+    return ""
+
+
 def _plan_stage_handoff(verdict: Any, stage_tasks: Any) -> Optional[Dict[str, str]]:
     """The card summary of ONE stage of a staged router plan, from that
     stage's own task(s): the dispatch covers only part of the plan, so the
@@ -642,10 +674,13 @@ def _runtime_handoff(
     tasks = getattr(verdict, "tasks", ()) or ()
     if len(tasks) == 1 and getattr(verdict, "source", "") not in ("direct_backstop", "time_limit"):
         fallback = str(getattr(tasks[0], "goal", "") or "")
-    context: Dict[str, Any] = {"earlier": _earlier_requests(history)}
+    context: Dict[str, Any] = {
+        "earlier": _earlier_requests(history),
+        "last_assistant": _last_assistant(history),
+    }
     if agent is not None:
         context["todo"] = _notes.active_todo(agent)
-        context["last_title"] = str(getattr(agent, "_handoff_last_title", "") or "")
+        context["last_title"] = _last_real_title(agent)
     return handoff_summary(user_message, str(getattr(verdict, "reason", "") or ""), fallback, **context)
 
 
@@ -697,10 +732,12 @@ def _prepare_handoff(agent: Any, state: RouterTurn) -> Tuple[str, "_notes.Brief"
     handoff_notes`` on, the full notes file is written first -- ``delegation_id``
     is the id reserved for it (``\"\"`` when there are no notes) -- and
     ``state.notes_path`` / ``state.known`` are set for ``_helper_context``.
-    ``brief`` is the ONE short call on the router's small model: the card title,
-    the goal and the "known so far" bullets, read from the work.  It gets
-    ``BRIEF_TIMEOUT_SECONDS`` and an empty ``Brief`` is the answer on any
-    failure.  The root's own line for the chat is NOT written here: it is one
+    ``brief`` comes from two calls on the router's small model: a tiny one
+    (the latest message, the last turns, a few hundred characters of findings;
+    ``TITLE_TIMEOUT_SECONDS``) for the card title and goal, and a big one on the
+    whole notes (the "known so far" bullets) that runs beside it and is never
+    waited for past ``KNOWN_GRACE_SECONDS`` -- when it lands later it is written
+    into the notes file.  An empty ``Brief`` is the answer on any failure.  The root's own line for the chat is NOT written here: it is one
     more model turn after the helper is accepted (``_voice``).  Never raises.
     """
     delegation_id = ""
@@ -732,16 +769,34 @@ def _prepare_handoff(agent: Any, state: RouterTurn) -> Tuple[str, "_notes.Brief"
             logger.warning("could not prepare the hand-off notes", exc_info=True)
             delegation_id, notes = "", ""
     brief = _notes.Brief()
+    known_job = None
     if notes:
+        redacted = ""
         try:
-            brief = _notes.handoff_brief(
-                _notes.redact(notes), message=state.user_message,
-                timeout=_notes.BRIEF_TIMEOUT_SECONDS,
+            redacted = _notes.redact(notes)
+            # The "known so far" bullets read the whole notes file: that call
+            # is slow (seconds) and must not hold the card's title back, so it
+            # starts first and runs beside the title call.
+            known_job = _notes.start_known(redacted, state.notes_path)
+        except Exception:
+            known_job = None
+        try:
+            brief = _notes.handoff_title(
+                _notes.title_context(
+                    message=state.user_message, history=state.history,
+                    todos=_notes.todo_lines(agent), log=state.work_log,
+                ),
+                message=state.user_message,
+                timeout=_notes.TITLE_TIMEOUT_SECONDS,
                 recent_titles=_notes.recent_titles(_session_id(agent)),
                 completion=_is_completion_turn(agent),
             )
         except Exception:
             brief = _notes.Brief()
+    if known_job is not None:
+        # Bullets that are in by now ride the helper's context; slower ones
+        # are written into the notes file when they land.
+        brief.known = known_job.result(_notes.KNOWN_GRACE_SECONDS)
     state.known = [str(b) for b in brief.known]
     return delegation_id, brief
 

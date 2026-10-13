@@ -19,6 +19,7 @@ import re
 import secrets
 import stat
 import subprocess
+import threading
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -220,6 +221,53 @@ _MANDATORY_THINKING_CLAUDE_SUBSTRINGS = (
     "claude-fable",
 )
 
+# Adaptive Claude families that REJECT ``thinking: {"type": "disabled"}`` but
+# DO accept a low-effort adaptive request (Opus 5.5: 400 ``"thinking.type.
+# disabled" is not supported for this model``; Sonnet 5.5: 400 "To turn
+# thinking off on this model, send between_tools").  For these "thinking off"
+# is sent as ``adaptive`` + ``output_config.effort = "low"``, the cheapest
+# thinking they take.  This list is only a seed so the first call does not
+# have to fail: any model the API refuses a disable for is learned at runtime
+# (``_learn_thinking_disable_rejected``) and treated the same from then on.
+_DISABLE_REJECTED_CLAUDE_SUBSTRINGS = (
+    "claude-opus-5-5", "claude-opus-5.5",
+    "claude-sonnet-5-5", "claude-sonnet-5.5",
+)
+_LEARNED_DISABLE_REJECTED: set[str] = set()
+_LEARNED_LOCK = threading.Lock()
+
+
+def _learn_thinking_disable_rejected(model: str | None) -> None:
+    key = (model or "").strip().lower()
+    if key:
+        with _LEARNED_LOCK:
+            _LEARNED_DISABLE_REJECTED.add(key)
+
+
+def _thinking_disable_rejected(model: str | None) -> bool:
+    """True when *model* is known (seeded or learned) to answer HTTP 400 to
+    ``thinking: {"type": "disabled"}`` while still accepting adaptive."""
+    key = (model or "").strip().lower()
+    if not key:
+        return False
+    with _LEARNED_LOCK:
+        if key in _LEARNED_DISABLE_REJECTED:
+            return True
+    return any(v in key for v in _DISABLE_REJECTED_CLAUDE_SUBSTRINGS)
+
+
+def _is_thinking_disable_rejection(exc: BaseException) -> bool:
+    """True for the API's refusal of ``thinking.type.disabled`` (any model)."""
+    if getattr(exc, "status_code", 400) != 400:
+        return False
+    text = str(exc).lower()
+    if "thinking" not in text:
+        return False
+    return (
+        ("disabled" in text and "not supported" in text)
+        or "turn thinking off" in text
+    )
+
 
 def _is_claude_model(model: str | None) -> bool:
     return "claude" in (model or "").lower()
@@ -407,6 +455,8 @@ def _accepts_thinking_disable(model: str) -> bool:
     if not _is_claude_model(model):
         return False
     if not _supports_adaptive_thinking(model):
+        return False
+    if _thinking_disable_rejected(model):
         return False
     m = model.lower()
     return not any(v in m for v in _MANDATORY_THINKING_CLAUDE_SUBSTRINGS)
@@ -1113,6 +1163,15 @@ def build_anthropic_kwargs(
             # omission: a silently-ignored disable beats a dead turn.
             if _accepts_thinking_disable(model):
                 kwargs["thinking"] = {"type": "disabled"}
+            elif (
+                _is_claude_model(model)
+                and _supports_adaptive_thinking(model)
+                and _thinking_disable_rejected(model)
+            ):
+                # The model refuses a disable but takes adaptive: the
+                # cheapest "off" it allows is adaptive at low effort.
+                kwargs["thinking"] = {"type": "adaptive"}
+                kwargs["output_config"] = {"effort": "low"}
         elif "haiku" not in model.lower():
             effort = str(reasoning_config.get("effort", "medium")).lower()
             budget = THINKING_BUDGET.get(effort, 8000)
@@ -1255,7 +1314,54 @@ def create_anthropic_message(
     turn loop takes.
     """
     sanitize_anthropic_kwargs(api_kwargs, log_prefix=log_prefix)
+    try:
+        return _create_anthropic_message_once(
+            client, api_kwargs, log_prefix=log_prefix, prefer_stream=prefer_stream,
+            on_stream_event=on_stream_event, on_response=on_response,
+        )
+    except Exception as exc:
+        if not _downgrade_rejected_thinking_disable(api_kwargs, exc, log_prefix=log_prefix):
+            raise
+    return _create_anthropic_message_once(
+        client, api_kwargs, log_prefix=log_prefix, prefer_stream=prefer_stream,
+        on_stream_event=on_stream_event, on_response=on_response,
+    )
 
+
+def _downgrade_rejected_thinking_disable(
+    api_kwargs: dict, exc: BaseException, *, log_prefix: str = "",
+) -> bool:
+    """After a 400 to ``thinking: disabled``, remember the model and swap the
+    request to adaptive + low effort in place.  True when the call is worth
+    one retry.  Any model, any future family: the API's refusal is the signal,
+    not a list."""
+    thinking = api_kwargs.get("thinking") if isinstance(api_kwargs, dict) else None
+    if not (isinstance(thinking, dict) and thinking.get("type") == "disabled"):
+        return False
+    if not _is_thinking_disable_rejection(exc):
+        return False
+    model = api_kwargs.get("model")
+    _learn_thinking_disable_rejected(model)
+    api_kwargs["thinking"] = {"type": "adaptive"}
+    output_config = dict(api_kwargs.get("output_config") or {})
+    output_config["effort"] = "low"
+    api_kwargs["output_config"] = output_config
+    logger.info(
+        "%s%s rejects thinking.type=disabled; retrying with adaptive thinking at low effort",
+        log_prefix, model,
+    )
+    return True
+
+
+def _create_anthropic_message_once(
+    client: Any,
+    api_kwargs: dict,
+    *,
+    log_prefix: str = "",
+    prefer_stream: bool = True,
+    on_stream_event=None,
+    on_response=None,
+) -> Any:
     messages_api = getattr(client, "messages", None)
     stream_fn = getattr(messages_api, "stream", None)
     if prefer_stream and callable(stream_fn):

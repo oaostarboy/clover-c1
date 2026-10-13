@@ -146,16 +146,25 @@ explicit `reasoning_effort` (or `extra_body.reasoning`) is never overridden.
 `ROUTER_MAX_TOKENS` is 1500 so thought tokens cannot cut off the JSON.
 
 When the backstop (or the time-limit hand-off) hands a turn to a helper, the
-chat card names the WORK, never the user's latest message. One call on the
-router's small model (6 s, before the dispatch) reads the hand-off notes and
-returns `{"title", "goal", "known"}`: a 3-6 word gerund title
-(`🔄 deploying the DND site to dndsecurity.ca`), a goal of at most 8 words, and
-the "known so far" bullets. Without that answer the title comes, in order, from
-the in-progress todo item, the plan's own task, the last hand-off's title in
-the session, the earlier request this turn continues, else `finishing this
-up`. A message is used only when it is itself an order; a question, a
-complaint, chit-chat or anything with profanity never becomes a title, and
-profanity is always stripped.
+chat card names the WORK, never the user's latest message. Two calls on the
+router's small model run beside each other. The title call is tiny (the latest
+message, the last four turns with the END of a long turn kept, the todo list, a
+few hundred characters of findings; `TITLE_TIMEOUT_SECONDS`, 5 s, the dispatch
+waits for it) and returns `{"title", "goal"}`: a 3-6 word gerund title
+(`🔄 deploying the DND site to dndsecurity.ca`) and a goal of at most 8 words.
+The "known so far" bullets are their own, slow call over the whole notes file
+(`KNOWN_TIMEOUT_SECONDS`, 25 s); the dispatch waits only `KNOWN_GRACE_SECONDS`
+for them, and bullets that land later are written into the notes file the
+helper reads first. (They used to share one 6 s call with the title: on a 26k
+char notes file it timed out 3 of 3, and the card said `finishing this up`.)
+Without a title answer the title comes, in order, from the in-progress todo
+item, the plan's own task, the action the assistant's last turn offered when the
+message is only a go-ahead (`ok, do it` after `want me to start on the
+tracking?`), the chat's last real hand-off title (kept on disk, so a restart
+does not lose it), the earlier request this turn continues, else `finishing
+this up` -- only when there is truly nothing. A message is used only when it is
+itself an order; a question, a complaint, chit-chat or anything with profanity
+never becomes a title, and profanity is always stripped.
 
 The line before the card is written by the agent itself, in its own voice: once
 the helper is accepted the root takes ONE more model turn over the messages it

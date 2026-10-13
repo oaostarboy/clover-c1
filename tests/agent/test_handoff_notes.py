@@ -254,7 +254,7 @@ class TestKnownSoFar:
                            'Still to do: send the mail.']
         (call,) = aux_box.calls
         assert call['task'] == hn.SUMMARY_TASK == 'delegation_router'
-        assert call['timeout'] == hn.SUMMARY_TIMEOUT_SECONDS == 8.0
+        assert call['timeout'] == hn.KNOWN_TIMEOUT_SECONDS
         assert 'NOTES TEXT' in call['messages'][1]['content']
 
     def test_notes_over_30k_are_trimmed_head_and_tail(self, aux_box):
@@ -441,15 +441,20 @@ def test_the_summary_call_gets_the_notes_and_runs_on_the_router_task(tmp_path, c
     _arm(agent)
     _trip(agent, tmp_path)
     summary = [c for c in aux_box.calls if c['task'] == 'delegation_router']
-    assert len(summary) == 1
-    sent = summary[0]['messages'][1]['content']
+    # two small calls: the tiny title one and the big known-so-far one
+    assert len(summary) == 2
+    known = [c for c in summary if c['messages'][0]['content'].startswith('You brief a colleague')]
+    title = [c for c in summary if c['messages'][0]['content'].startswith('You name a half-finished job')]
+    assert len(known) == 1 and len(title) == 1
+    sent = known[0]['messages'][1]['content']
     assert REQUEST in sent and 'Who did I email' in sent and '0.txt' in sent
+    assert len(title[0]['messages'][1]['content']) < len(sent)
 
 
 def test_a_summary_timeout_still_hands_off_with_the_path_and_no_bullets(
         tmp_path, children, dispatches, aux_box, monkeypatch):
-    monkeypatch.setattr(hn, 'SUMMARY_TIMEOUT_SECONDS', 0.2)
-    monkeypatch.setattr(hn, 'BRIEF_TIMEOUT_SECONDS', 0.2)
+    monkeypatch.setattr(hn, 'KNOWN_TIMEOUT_SECONDS', 0.2)
+    monkeypatch.setattr(hn, 'TITLE_TIMEOUT_SECONDS', 0.2)
     monkeypatch.setattr(hn, 'VOICE_TIMEOUT_SECONDS', 0.2)
     aux_box.delay = 1.0
     agent = _root()

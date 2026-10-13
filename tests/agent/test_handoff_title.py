@@ -334,19 +334,31 @@ class TestBriefCall:
         monkeypatch.setattr(ac, "call_llm", fake)
         return box
 
-    def test_one_call_on_the_router_model_with_a_six_second_budget(self, aux):
+    def test_one_tiny_call_on_the_router_model_inside_the_dispatch_budget(self, aux):
         aux.reply = '{"title": "finishing the DND website", "goal": "site live", "known": ["a"]}'
-        brief = hn.handoff_brief("NOTES", message=COMPLAINT)
+        ctx = hn.title_context(message=COMPLAINT, history=[("user", "x"), ("assistant", "y")])
+        brief = hn.handoff_title(ctx, message=COMPLAINT)
         (call,) = aux.calls
-        assert call["task"] == "delegation_router" and call["timeout"] == hn.BRIEF_TIMEOUT_SECONDS == 6.0
+        assert call["task"] == "delegation_router" and call["timeout"] == hn.TITLE_TIMEOUT_SECONDS
+        assert hn.TITLE_TIMEOUT_SECONDS <= 6.0 and call["max_tokens"] == hn.TITLE_MAX_TOKENS <= 200
         system = call["messages"][0]["content"]
         assert "NEVER quote" in system and "profanity" in system and "title" in system and "goal" in system
-        assert brief.title == "finishing the DND website"
+        assert "known" not in system, "the slow bullets are not part of the title call"
+        assert brief.title == "finishing the DND website" and brief.known == []
+
+    def test_the_title_input_is_short_even_for_a_huge_turn(self):
+        log = hn.WorkLog()
+        for i in range(30):
+            log.add("terminal", "{" + "a" * 900 + "}", "r" * 20_000)
+        history = [("user", "q" * 5000), ("assistant", "start " + "z" * 5000 + " want me to deploy the fix?")] * 6
+        ctx = hn.title_context(message="ok, do it", history=history, todos=["[>] fixing it"], log=log)
+        assert len(ctx) < 4_000
+        assert "want me to deploy the fix?" in ctx, "the END of a long assistant turn (its offer) is kept"
 
     def test_a_timeout_gives_an_empty_brief(self, aux):
         aux.delay = 1.0
-        assert hn.handoff_brief("n", timeout=0.1) == hn.Brief()
+        assert hn.handoff_title("n", timeout=0.1) == hn.Brief()
 
     def test_an_error_gives_an_empty_brief(self, aux):
         aux.error = RuntimeError("down")
-        assert hn.handoff_brief("n") == hn.Brief()
+        assert hn.handoff_title("n") == hn.Brief()
