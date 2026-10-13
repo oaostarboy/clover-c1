@@ -188,7 +188,10 @@ async def follow_latest_message(adapter: Any, chat_id: Any) -> int:
             moved += int(await board.refresh(move=True))
         except Exception:
             logger.debug("delegation board follow failed", exc_info=True)
-    for pub in pubs:
+    # A copy: an idle publisher drops itself from ``_LIVE[key]`` (this same
+    # list) inside its repost, which would skip the card right after it -- a
+    # running card then stayed ABOVE the opener line it should follow.
+    for pub in list(pubs):
         try:
             moved += await pub.repost_live_cards()
         except Exception:

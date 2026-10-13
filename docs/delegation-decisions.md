@@ -181,6 +181,18 @@ wait is capped at 15 s (Opus 5.5 answered in 2.6-3.7 s, GPT-6.1 Sol in
 5.8-10.6 s). A `say` the model wrote is never doubled. The CLI keeps the whole
 card text as the reply.
 
+It is also written when the root called `delegate_task` with NO `handoff` at
+all (tasks only, no `say`, no text beside the call), on a chat platform. The
+voice-line prompt names the work from each task's `title`, else a title built
+from its goal (`agent/handoff_title.py`), never the raw goal text. The line is
+the turn's reply and the card (placed on its own for a dispatch without a
+handoff) follows it: under it, or joined into the chat's running card. The
+short canned lines ("on it, i'll let you know here when it's done", ...) are
+only the floor when that call fails or runs past the same 15 s cap, and the
+CLI's reply. Before this, that path always got a canned line that never read
+the message, so a question asked beside the job went unanswered until the job
+finished.
+
 A helper completion where any task is not done (failed, `Result: not done`,
 incomplete, cut off at max iterations) is never offered `[SILENT]`: the prompt
 asks for a plain line on what did not get done. A clean completion the user
