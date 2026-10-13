@@ -78,7 +78,57 @@ def voice() -> dict:
             "is_fallback": line == hn.FALLBACK_LINE}
 
 
+# Suni, 2026-10-13 ~11:16 (GPT-6.1 Sol): the model dispatched tasks only -- no
+# handoff, no say -- and the chat got a canned "on it" that dropped the question.
+NO_HANDOFF_MESSAGE = ("Also use a subagent to list every file in ~/Projects/gopi bigger than 5 MB. "
+                      "Btw, what model are you on right now?")
+
+
+def no_handoff(provider: str, model: str) -> dict:
+    """The real opener path of a model dispatch with NO handoff on the real
+    root model: ``router_backstop._voice`` then ``_ack_text`` (the turn's
+    reply), on the transcript the conversation loop has at that point."""
+    from agent import ack_checklist as ac
+    from agent import delegation_router as dr
+    from agent import foreground_time_limit as fl
+    from agent import router_backstop as rb
+    from run_agent import AIAgent
+
+    ac.set_style_for_tests("unified")
+    # The agent's real system prompt (persona, the model line), as live.
+    agent = AIAgent(provider=provider, model=model, quiet_mode=True, skip_context_files=False,
+                    skip_memory=False, skip_background_review=True,
+                    enabled_toolsets=["todo", "delegation"], max_iterations=5, platform="telegram")
+    agent._cached_system_prompt = agent._build_system_prompt(None)
+    task = {"goal": "List every file under ~/Projects/gopi larger than 5 MB, with sizes. Read-only.",
+            "title": "Finding big files in gopi"}
+    did = f"deleg_nhprobe{int(time.time())}"
+    receipt = fl.DispatchReceipt(delegation_id=did, seq=1, goals=(task["goal"],),
+                                 titles=(task["title"],))
+    messages = [
+        {"role": "user", "content": NO_HANDOFF_MESSAGE},
+        {"role": "assistant", "content": "", "tool_calls": [{
+            "id": "call_nh", "type": "function",
+            "function": {"name": "delegate_task", "arguments": json.dumps({"tasks": [task]})}}]},
+        {"role": "tool", "tool_call_id": "call_nh", "content": json.dumps(
+            {"status": "dispatched", "mode": "background", "count": 1, "delegation_id": did})},
+    ]
+    state = rb.RouterTurn(verdict=dr.Verdict(mode="direct", tasks=()), user_message=NO_HANDOFF_MESSAGE,
+                          settings=dr.RouterSettings(enabled=True), started_at=time.monotonic(),
+                          planned=False)
+    setattr(agent, rb._ATTR, state)  # the turn's router state, as the loop arms it
+    started = time.monotonic()
+    rb._voice(agent, state, [receipt], messages)
+    reply = rb._ack_text([receipt], agent)
+    canned = set(rb._FALLBACK_ONE)
+    return {"model": model, "seconds": round(time.monotonic() - started, 2), "opener": reply,
+            "canned": reply in canned, "voice_line": state.opener[1]}
+
+
 if __name__ == "__main__":
     kind = sys.argv[1]
+    if kind == "nohandoff":
+        print("PROBE " + json.dumps(no_handoff(sys.argv[2], sys.argv[3])))
+        sys.exit(0)
     out = {"title": lambda: title(True), "nomodel": lambda: title(False), "voice": voice}[kind]()
     print("PROBE " + json.dumps(out))

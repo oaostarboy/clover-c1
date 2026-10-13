@@ -32,12 +32,12 @@ NOTES = Path.home() / ".clover" / "cache" / "handoff" / "deleg_25890b3b.md"
 DISPATCH_BUDGET_SECONDS = 6.0
 
 
-def _probe(kind: str) -> dict:
+def _probe(kind: str, *args: str) -> dict:
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("CLOVER_TEST", "PYTEST"))}
     env["CLOVER_HOME"] = str(Path.home() / ".clover")
     env["HOME"] = str(Path.home())
-    run = subprocess.run([sys.executable, str(PROBE), kind], capture_output=True, text=True,
+    run = subprocess.run([sys.executable, str(PROBE), kind, *args], capture_output=True, text=True,
                          env=env, cwd=str(Path.home()), timeout=120)
     for line in run.stdout.splitlines():
         if line.startswith("PROBE "):
@@ -64,6 +64,22 @@ def test_without_the_model_the_chain_still_names_the_offered_work():
     out = _probe("nomodel")
     print("\nno-model probe:", out)
     assert out["card_title"] != ht.FALLBACK_TITLE
+
+
+@pytest.mark.parametrize("provider,model", [
+    ("openai-codex", "gpt-6.1-sol-900k"), ("anthropic", "claude-opus-5-5")])
+def test_a_dispatch_without_a_handoff_gets_a_voice_line_that_answers_the_question(
+        provider, model, request):
+    """Suni's live repro: tasks only, no handoff, no say, and a question beside
+    the job.  The reply must be the model's own line answering "what model",
+    never a canned "on it"."""
+    out = _probe("nohandoff", provider, model)
+    print(f"\nno-handoff opener ({model}):", out)
+    assert not out["canned"], "the agent's own line, not a canned one"
+    assert out["opener"] == out["voice_line"]
+    low = out["opener"].lower()
+    assert any(w in low for w in ("gpt", "opus", "claude", "sol", "model")), \
+        "it answered which model it is on"
 
 
 def test_the_voice_line_succeeds_on_opus_5_5():
