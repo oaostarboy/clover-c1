@@ -61,7 +61,8 @@ def _run(provider, aux, tmp_path, opener=OPENER):
                        'router': {'direct_backstop': {'enabled': True, 'work_calls': 26}}},
     }))
     files = _files(tmp_path, 27)
-    aux.replies[:] = [verdict_json('direct', reason='one send after a quick look'), BULLETS]
+    aux.replies[:] = [verdict_json('direct', reason='one send after a quick look')]
+    aux.brief_reply = BULLETS
     provider.queue[:] = [tool('read_file', {'path': str(f)}, f'c{i}') for i, f in enumerate(files, 1)]
     provider.queue.append(text(opener))  # the one short tools-off call after the hand-off
     agent = make_agent(provider, session_id='replay-notes')
@@ -165,7 +166,8 @@ def _run_complaint(provider, aux, tmp_path, brief=None, voice=DND_VOICE):
                        'router': {'direct_backstop': {'enabled': True, 'work_calls': 26}}},
     }))
     files = _files(tmp_path, 27)
-    aux.replies[:] = [verdict_json('direct', reason='one more step'), brief if brief is not None else BULLETS]
+    aux.replies[:] = [verdict_json('direct', reason='one more step')]
+    aux.brief_reply = brief if brief is not None else BULLETS
     queue = [tool('todo', DND_TODO, 't0')] + [tool('read_file', {'path': str(f)}, f'c{i}')
                                                for i, f in enumerate(files, 1)]
     provider.queue[:] = queue
@@ -251,7 +253,8 @@ def test_push_it_to_the_domain_is_not_titled_from_the_message(
                        'router': {'direct_backstop': {'enabled': True, 'work_calls': 26}}},
     }))
     files = _files(tmp_path, 27)
-    aux.replies[:] = [verdict_json('direct', reason='one more step'), brief]
+    aux.replies[:] = [verdict_json('direct', reason='one more step')]
+    aux.brief_reply = brief
     provider.queue[:] = [tool('read_file', {'path': str(f)}, f'c{i}') for i, f in enumerate(files, 1)]
     provider.queue.append(text('On it, the deploy is with a helper now.'))
     agent = make_agent(provider, session_id='replay-push')

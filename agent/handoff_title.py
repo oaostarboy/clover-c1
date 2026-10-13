@@ -1,7 +1,7 @@
 """A real title and goal for the runtime hand-off card.
 
 The title names the WORK, never the user's latest message.  The best source is
-one small-model call (``agent.handoff_notes.handoff_brief``; its answer is
+one tiny small-model call (``agent.handoff_notes.handoff_title``; its answer is
 checked here by ``clean_model_title`` / ``clean_model_goal``).  This module is
 the fallback that needs no model:
 
@@ -10,9 +10,11 @@ the fallback that needs no model:
   options for adding a second GPU`` (at most ``TITLE_CHARS``, cut on a word);
 * a message that is NOT a task (a question, a complaint, chit-chat, anything
   with profanity) is never turned into a title.  The title then comes, in
-  order, from the in-progress todo item, the plan's own task, the last
-  hand-off's title in this session, the earlier request this turn continues,
-  else ``finishing this up``;
+  order, from the in-progress todo item, the plan's own task, (for a bare
+  go-ahead like "ok, do it") the action the assistant's last turn proposed,
+  the last hand-off's title in this session, the earlier request this turn
+  continues, that proposal, else ``finishing this up`` -- only when there is
+  truly nothing;
 * the goal (``outcome``): the router's own ``reason`` when it describes the job
   (a "Compare three GPUs against ..." sentence), otherwise a short phrase from
   the task that reads on its own: a noun where one is natural
@@ -102,7 +104,7 @@ _LEADING_ARTICLE = re.compile(r"^(?:a|an|the|some|one)\s+", re.IGNORECASE)
 # Opening filler, stripped repeatedly from the front (case-insensitive).
 _FILLER = re.compile(
     r"^(?:"
-    r"hey+|hi|hello|ok(?:ay)?|so|well|alright|right|also|and|then|now|and then|"
+    r"hey+|hi|hello|ok(?:ay)?|yes+|yeah+|yep|yup|ye|sure|so|well|alright|right|also|and|then|now|and then|"
     r"(?:can|could|would|will) you(?: please| also| just| maybe)*|"
     r"please|pls|kindly|just|quickly|go ahead and|i(?:'d| would)? (?:need|want|like) you to|"
     r"i need|i want|i'd like|i would like|let'?s|lets|"
@@ -359,9 +361,57 @@ def clean_model_goal(text: str, message: str = "") -> str:
         return ""
 
 
+_AFFIRM_WORDS = frozenset({
+    "ok", "okay", "k", "kk", "yes", "yeah", "yea", "ye", "yep", "yup", "y", "sure", "do", "it", "go",
+    "ahead", "please", "pls", "thanks", "thx", "ty", "great", "perfect", "good", "sounds", "fine",
+    "alright", "right", "yessir", "definitely", "absolutely", "of", "course", "that", "works",
+    "lets", "let's", "then", "now", "and", "so", "just", "start", "proceed", "continue", "approved",
+    "agreed", "cool", "nice", "go-ahead", "pick", "your", "the", "one", "me",
+})
+_PROPOSALS = (
+    re.compile(r"\b(?:do you )?want me to\s+(.+?)\s*\?", re.IGNORECASE),
+    re.compile(r"\b(?:would you like|shall|should|can|could|may) (?:me to |i )\s*(.+?)\s*\?", re.IGNORECASE),
+    re.compile(r"\bi(?:'ll| will| can| could)\s+(.+?)\s*[.?!](?:\s|$)", re.IGNORECASE),
+)
+
+
+def is_go_ahead(message: str) -> bool:
+    """True when ``message`` only says yes: ``1. ok, do it. 2. ok. 3. ye. Yes.``
+    The work is then whatever the assistant's last turn proposed."""
+    try:
+        words = re.findall(r"[a-z][a-z'-]*", _flat(_scrub(message)).lower())
+        return bool(words) and len(words) <= 24 and all(w in _AFFIRM_WORDS for w in words)
+    except Exception:
+        return False
+
+
+def proposed_action(assistant_text: str) -> Tuple[str, str]:
+    """``(title, goal noun)`` of the action the assistant's last turn offered
+    (``want me to start on the tracking?`` -> ``starting on the tracking``);
+    ``("", "")`` when it offered none that names a known action."""
+    try:
+        text = _flat(_scrub(assistant_text))[-1200:]
+        best = ("", "")
+        best_at = -1
+        for pattern in _PROPOSALS:
+            for match in pattern.finditer(text):
+                if match.start() < best_at:
+                    continue
+                body = match.group(1)
+                first = _AND_SPLIT.split(body, maxsplit=1)[0]
+                if len(first.split()) >= 3:
+                    body = first  # the title names one job, not the whole offer
+                found = _task_parts(body)
+                if found[0]:
+                    best, best_at = found, match.start()
+        return best
+    except Exception:
+        return "", ""
+
+
 class HandoffText(tuple):
     """``(title, goal)`` that also says where the title came from (``source``:
-    ``message`` | ``todo`` | ``plan`` | ``delegation`` | ``earlier`` | ``default``)."""
+    ``message`` | ``todo`` | ``plan`` | ``proposal`` | ``delegation`` | ``earlier`` | ``default``)."""
 
     def __new__(cls, title: str, goal: str, source: str):
         obj = super().__new__(cls, (title, goal))
@@ -372,14 +422,17 @@ class HandoffText(tuple):
 def resolve(
     message: str, reason: str = "", fallback_goal: str = "", *,
     todo: str = "", last_title: str = "", earlier: Sequence[str] = (),
+    last_assistant: str = "",
 ) -> HandoffText:
     """Title and goal for the card, always from the WORK.
 
     The message gives the title only when it is an order; otherwise (a
     complaint, a question, chit-chat, profanity) the title comes from, in
     order: the in-progress ``todo`` item, the plan's own task
-    (``fallback_goal``), the title of the last hand-off in this session, the
-    earlier request(s) this turn continues, else ``finishing this up``.
+    (``fallback_goal``), for a bare go-ahead the action the assistant's last
+    turn (``last_assistant``) proposed, the title of the last hand-off in this
+    session, the earlier request(s) this turn continues, that proposal, else
+    ``finishing this up`` -- only when there is truly nothing.
     Never raises, never empty."""
     try:
         title, noun = _task_parts(message)
@@ -391,6 +444,10 @@ def resolve(
                 if t:
                     title, noun, source = t, n, src
                     break
+            proposal = proposed_action(last_assistant) if last_assistant else ("", "")
+            if not title and proposal[0] and is_go_ahead(message):
+                # "ok, do it" answers the assistant's last offer: that is the work.
+                title, noun, source = proposal[0], proposal[1], "proposal"
             if not title:
                 prior = _clean_title(last_title)
                 if prior:
@@ -401,6 +458,8 @@ def resolve(
                     if t:
                         title, noun, source = t, n, "earlier"
                         break
+            if not title and proposal[0]:
+                title, noun, source = proposal[0], proposal[1], "proposal"
         if not title:
             title, source = FALLBACK_TITLE, "default"
         goal = _job_goal(reason) or noun or FALLBACK_GOAL

@@ -174,9 +174,10 @@ def test_delivered_child_prompt_names_silence_marker_and_keeps_failure():
         "status": "error",
         "error": "new failure",
     })
-    for text in (done, failed):
-        assert "[SILENT]" in text
-        assert "must still be reported" in text
+    # A clean completion may still be absorbed; a failure always gets a reply.
+    assert "[SILENT]" in done and "must still be reported" in done
+    assert "Do not reply [SILENT]" in failed
+    assert "reply with exactly [SILENT]" not in failed
     assert "favicon ready" in done
     assert "new failure" in failed
     assert "one combined message" not in done

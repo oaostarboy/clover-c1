@@ -61,6 +61,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 import zlib
@@ -600,6 +601,38 @@ def _earlier_requests(history: Any) -> List[str]:
     return out
 
 
+def _last_assistant(history: Any) -> str:
+    """The assistant's last text turn before this request: what it said and
+    offered, which a bare "ok, do it" answers."""
+    for item in reversed(list(history or [])):
+        try:
+            role, text = item
+        except (TypeError, ValueError):
+            continue
+        if role == "assistant" and str(text or "").strip():
+            return str(text)
+    return ""
+
+
+def _last_real_title(agent: Any) -> str:
+    """The title of the last hand-off of this session that actually named
+    work: the in-memory one, else the durable list of this chat's titles
+    (a rebuilt agent or a restart lost the attribute), newest first, skipping
+    the placeholder."""
+    from agent.handoff_title import FALLBACK_TITLE
+
+    own = str(getattr(agent, "_handoff_last_title", "") or "")
+    if own and own != FALLBACK_TITLE:
+        return own
+    try:
+        for title in reversed(_notes.recent_titles(_session_id(agent), within=7 * 86400)):
+            if title and title != FALLBACK_TITLE:
+                return title
+    except Exception:
+        logger.debug("could not read the earlier hand-off titles", exc_info=True)
+    return ""
+
+
 def _plan_stage_handoff(verdict: Any, stage_tasks: Any) -> Optional[Dict[str, str]]:
     """The card summary of ONE stage of a staged router plan, from that
     stage's own task(s): the dispatch covers only part of the plan, so the
@@ -642,10 +675,13 @@ def _runtime_handoff(
     tasks = getattr(verdict, "tasks", ()) or ()
     if len(tasks) == 1 and getattr(verdict, "source", "") not in ("direct_backstop", "time_limit"):
         fallback = str(getattr(tasks[0], "goal", "") or "")
-    context: Dict[str, Any] = {"earlier": _earlier_requests(history)}
+    context: Dict[str, Any] = {
+        "earlier": _earlier_requests(history),
+        "last_assistant": _last_assistant(history),
+    }
     if agent is not None:
         context["todo"] = _notes.active_todo(agent)
-        context["last_title"] = str(getattr(agent, "_handoff_last_title", "") or "")
+        context["last_title"] = _last_real_title(agent)
     return handoff_summary(user_message, str(getattr(verdict, "reason", "") or ""), fallback, **context)
 
 
@@ -697,10 +733,12 @@ def _prepare_handoff(agent: Any, state: RouterTurn) -> Tuple[str, "_notes.Brief"
     handoff_notes`` on, the full notes file is written first -- ``delegation_id``
     is the id reserved for it (``\"\"`` when there are no notes) -- and
     ``state.notes_path`` / ``state.known`` are set for ``_helper_context``.
-    ``brief`` is the ONE short call on the router's small model: the card title,
-    the goal and the "known so far" bullets, read from the work.  It gets
-    ``BRIEF_TIMEOUT_SECONDS`` and an empty ``Brief`` is the answer on any
-    failure.  The root's own line for the chat is NOT written here: it is one
+    ``brief`` comes from two calls on the router's small model: a tiny one
+    (the latest message, the last turns, a few hundred characters of findings;
+    ``TITLE_TIMEOUT_SECONDS``) for the card title and goal, and a big one on the
+    whole notes (the "known so far" bullets) that runs beside it and is never
+    waited for past ``KNOWN_GRACE_SECONDS`` -- when it lands later it is written
+    into the notes file.  An empty ``Brief`` is the answer on any failure.  The root's own line for the chat is NOT written here: it is one
     more model turn after the helper is accepted (``_voice``).  Never raises.
     """
     delegation_id = ""
@@ -732,16 +770,34 @@ def _prepare_handoff(agent: Any, state: RouterTurn) -> Tuple[str, "_notes.Brief"
             logger.warning("could not prepare the hand-off notes", exc_info=True)
             delegation_id, notes = "", ""
     brief = _notes.Brief()
+    known_job = None
     if notes:
+        redacted = ""
         try:
-            brief = _notes.handoff_brief(
-                _notes.redact(notes), message=state.user_message,
-                timeout=_notes.BRIEF_TIMEOUT_SECONDS,
+            redacted = _notes.redact(notes)
+            # The "known so far" bullets read the whole notes file: that call
+            # is slow (seconds) and must not hold the card's title back, so it
+            # starts first and runs beside the title call.
+            known_job = _notes.start_known(redacted, state.notes_path)
+        except Exception:
+            known_job = None
+        try:
+            brief = _notes.handoff_title(
+                _notes.title_context(
+                    message=state.user_message, history=state.history,
+                    todos=_notes.todo_lines(agent), log=state.work_log,
+                ),
+                message=state.user_message,
+                timeout=_notes.TITLE_TIMEOUT_SECONDS,
                 recent_titles=_notes.recent_titles(_session_id(agent)),
                 completion=_is_completion_turn(agent),
             )
         except Exception:
             brief = _notes.Brief()
+    if known_job is not None:
+        # Bullets that are in by now ride the helper's context; slower ones
+        # are written into the notes file when they land.
+        brief.known = known_job.result(_notes.KNOWN_GRACE_SECONDS)
     state.known = [str(b) for b in brief.known]
     return delegation_id, brief
 
@@ -764,30 +820,112 @@ def _set_say(delegation_id: str, line: str) -> bool:
         return False
 
 
+def _summary_work(summary: str) -> str:
+    """The work part of a card header line (``🔄 work → outcome, ~ETA``)."""
+    text = " ".join(str(summary or "").split())
+    if text.startswith("\U0001f504"):
+        text = text[1:].strip()
+    work = text.split(" \u2192 ", 1)[0]
+    if work == text:
+        work = re.sub(r",\s*~\s*[\d\u2013-]+\s*min$", "", work)
+    return work.strip()
+
+
+def _dispatch_message_spoke(messages: Any) -> bool:
+    """Did the assistant message that called ``delegate_task`` carry visible
+    text of its own?"""
+    try:
+        for msg in reversed(list(messages or [])):
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            calls = msg.get("tool_calls") or []
+            names = [
+                str(((c or {}).get("function") or {}).get("name") or "") for c in calls
+                if isinstance(c, dict)
+            ]
+            if "delegate_task" not in names and not any(n == "tool_call" for n in names):
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                content = " ".join(
+                    str(p.get("text") or "") for p in content
+                    if isinstance(p, dict) and p.get("type") in ("text", "output_text")
+                )
+            return bool(str(content or "").strip())
+    except Exception:
+        return False
+    return False
+
+
+def _chat_platform(agent: Any) -> bool:
+    platform = str(getattr(agent, "platform", "") or "").strip().lower()
+    return platform not in ("", "cli", "tui")
+
+
 def _voice(agent: Any, state: RouterTurn, receipts: List["_fl.DispatchReceipt"], messages: Any = None) -> None:
     """The root's own line for the chat, once: ONE more model turn.
 
     The helper is already running; the root gets its own messages and system
     prompt back (the cached prefix is untouched, one runtime note is appended to
-    a copy) saying a subagent is now handling ``state.title`` and asking for one
+    a copy) saying a subagent is now handling the work and asking for one
     short line in its usual voice, tools off.  That text is placed on the card
     as the line sent before it (``handoff.say``'s place).  If the turn errors,
-    is empty or is slow, the line is ``on it``.  No pre-written wording."""
-    if state.voiced or not state.title or getattr(state.verdict, "source", "") == "lifecycle":
+    is empty or is slow, the line is ``on it``.  No pre-written wording.
+
+    Two sources:
+      * the runtime dispatched (backstop / time limit): the line for its
+        dispatch, titled from the hand-off brief;
+      * the ROOT called ``delegate_task`` with a ``handoff`` but no ``say``:
+        without a line the turn's reply would be the card alone -- the user
+        gets no reply, and the card can never join a card already running in
+        the chat (joining goes through the opener line).  Chat platforms only
+        (a CLI has no second message), bounded by
+        ``MODEL_DISPATCH_VOICE_TIMEOUT_SECONDS``.
+    A dispatch where the root gave its own ``say`` never gets a second line."""
+    if state.voiced or getattr(state.verdict, "source", "") == "lifecycle":
         return
+    if any(getattr(r, "say", "") for r in receipts):
+        return  # the root wrote its own opener: never a duplicate
     info = state.handoff
-    if not isinstance(info, dict) or not info.get("by_runtime"):
-        return
-    did = str(info.get("delegation_id") or "")
-    receipt = next((r for r in receipts if r.delegation_id == did), None)
-    if receipt is None or receipt.say or not receipt.summary:
+    timeout = _notes.VOICE_TIMEOUT_SECONDS
+    title = state.title
+    if isinstance(info, dict) and info.get("by_runtime"):
+        did = str(info.get("delegation_id") or "")
+        receipt = next((r for r in receipts if r.delegation_id == did), None)
+        if receipt is None or not title:
+            return
+    else:
+        # The root's own dispatch(es): the card would be the whole reply.
+        receipt = next((r for r in receipts if getattr(r, "summary", "")), None)
+        if receipt is None or not _chat_platform(agent):
+            return
+        if _dispatch_message_spoke(messages):
+            # The root already wrote text beside its delegate_task call; it
+            # went out as its own message.  A second line would repeat it.
+            return
+        try:
+            from agent.ack_checklist import unified
+
+            if not unified():
+                return
+        except Exception:
+            return
+        title = title or _summary_work(receipt.summary)
+        timeout = _notes.MODEL_DISPATCH_VOICE_TIMEOUT_SECONDS
+    if not receipt.summary:
         return
     state.voiced = True
+    started = time.monotonic()
     line = _notes.voice_line(
         agent, messages if messages else getattr(agent, "_session_messages", None),
-        state.title, message=state.user_message,
+        title, message=state.user_message, timeout=timeout,
     )
-    _set_say(did, line)
+    placed = _set_say(receipt.delegation_id, line)
+    logger.info(
+        "hand-off opener: %s dispatch %s, %.1fs, placed=%s",
+        "runtime" if isinstance(info, dict) and info.get("by_runtime") else "model",
+        receipt.delegation_id, time.monotonic() - started, placed,
+    )
 
 
 def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:

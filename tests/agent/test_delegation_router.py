@@ -30,6 +30,11 @@ class FakeAux:
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.replies: list[Any] = []
+        # The hand-off's two small-model calls (title+goal, known-so-far) run
+        # beside the router's verdict call and beside each other, so they are
+        # answered by kind, never from the ordered ``replies`` queue.  One
+        # JSON ``{"title", "goal", "known"}`` (or bullet text) feeds both.
+        self.brief_reply: Any = None
 
     @property
     def router_calls(self) -> list[dict]:
@@ -39,12 +44,47 @@ class FakeAux:
         self.calls.append({'task': task, 'messages': messages, **kwargs})
         if task != 'delegation_router':
             return _resp('{}')
+        kind = _handoff_call_kind(messages)
+        if kind:
+            return _resp(self._handoff_reply(kind))
         reply = self.replies.pop(0) if self.replies else verdict_json('direct')
         if isinstance(reply, BaseException):
             raise reply
         if callable(reply):
             reply = reply()
         return _resp(reply)
+
+
+def _handoff_call_kind(messages) -> str:
+    """``title`` / ``known`` for the hand-off's two small-model calls, else ``""``."""
+    try:
+        system = str(messages[0]['content'])
+    except Exception:
+        return ''
+    if system.startswith('You name a half-finished job'):
+        return 'title'
+    if system.startswith('You brief a colleague'):
+        return 'known'
+    return ''
+
+
+def _handoff_reply(self, kind: str) -> str:
+    reply = self.brief_reply
+    if reply is None:
+        return '{}'
+    if callable(reply):
+        reply = reply(kind)
+    try:
+        data = json.loads(reply)
+    except (TypeError, ValueError):
+        return reply if kind == 'known' else '{}'  # bullet text only feeds the bullets
+    if not isinstance(data, dict):
+        return '{}'
+    keys = ('title', 'goal') if kind == 'title' else ('known',)
+    return json.dumps({k: data[k] for k in keys if k in data})
+
+
+FakeAux._handoff_reply = _handoff_reply
 
 
 def _resp(text: str):
