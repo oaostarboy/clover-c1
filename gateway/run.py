@@ -2880,6 +2880,14 @@ from gateway.whatsapp_identity import (
 logger = logging.getLogger(__name__)
 
 
+def _final_send_dup_log_level(streamed: Any, previewed: Any, content_delivered: Any) -> int:
+    """Level of the "final-send NOT suppressed" diagnostic: WARNING only when
+    something of this turn was already streamed, previewed or delivered (a
+    real duplicate risk); DEBUG for the plain turn where the normal send is the
+    only send -- it fired on every such turn and buried real problems."""
+    return logging.WARNING if (streamed or previewed or content_delivered) else logging.DEBUG
+
+
 _OWN_POLICY_OPEN_ENV = {
     Platform.WECOM: ("WECOM_DM_POLICY", "WECOM_GROUP_POLICY", "WECOM_ALLOW_ALL_USERS"),
     Platform.WEIXIN: ("WEIXIN_DM_POLICY", "WEIXIN_GROUP_POLICY", "WEIXIN_ALLOW_ALL_USERS"),
@@ -29164,15 +29172,27 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         ))
 
     @staticmethod
-    def _format_coalesced_async_delegations(blocks: list[str]) -> str:
-        """Join per-delegation formatted blocks into one consolidated turn."""
+    def _format_coalesced_async_delegations(blocks: list[str], *, not_done: bool = False) -> str:
+        """Join per-delegation formatted blocks into one consolidated turn.
+
+        ``not_done``: a task in the batch failed / is not done, so the batch
+        always gets a real reply and [SILENT] is not offered."""
+        if not_done:
+            tail = (
+                "At least one of them is NOT done: do not reply [SILENT]; tell "
+                "the user plainly what did not get done.]"
+            )
+        else:
+            tail = (
+                "If a result does not change the current conclusion, "
+                "absorb it silently: reply with exactly [SILENT] and nothing else, "
+                "and nothing is sent to the user.]"
+            )
         header = (
             f"[IMPORTANT: {len(blocks)} background subagent delegations "
             "completed for this session. Treat these results as one "
             "completion batch and send at most one consolidated user-facing "
-            "response. If a result does not change the current conclusion, "
-            "absorb it silently: reply with exactly [SILENT] and nothing else, "
-            "and nothing is sent to the user.]"
+            "response. " + tail
         )
         return "\n\n".join([header, *blocks])
 
@@ -29243,7 +29263,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 primary_text, primary_evt,
             )
 
-        consolidated = self._format_coalesced_async_delegations(blocks)
+        try:
+            from tools.process_registry import async_delegation_not_done
+
+            _not_done = any(
+                async_delegation_not_done(e)
+                for e in [primary_evt] + [sib for sib, _claim in siblings]
+            )
+        except Exception:
+            _not_done = False
+        consolidated = self._format_coalesced_async_delegations(blocks, not_done=_not_done)
         delivered: Optional[bool] = False
         # The consolidated turn carries every sibling's result, so if the
         # pipeline drops it AFTER acceptance (where the siblings are acked with
@@ -33718,7 +33747,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # ahead. Log the decision inputs so a recurrence can be pinned to
                 # "signal never set" vs "ack-pending race".
                 # See docs/rca-wecom-stream-final-ack-timeout-duplicate.md.
-                logger.warning(
+                # Nothing streamed, previewed or delivered yet: the normal send
+                # is the ONLY send (every plain turn on every box), so there
+                # is no duplicate to warn about -- DEBUG.  Something already
+                # out stays a WARNING.
+                logger.log(
+                    _final_send_dup_log_level(_streamed, _previewed, _content_delivered),
                     "Normal final-send NOT suppressed despite active stream "
                     "consumer for session %s: streamed=%s previewed=%s "
                     "content_delivered=%s transformed=%s final_len=%d — "

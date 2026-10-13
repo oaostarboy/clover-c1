@@ -1508,6 +1508,15 @@ def _message_gone(result: Any) -> bool:
     return any(marker in error for marker in _GONE_MARKERS)
 
 
+def _error_kind(result: Any) -> str:
+    """A short, log-safe label for a failed send/edit: the platform's error
+    string cut to one short line (never the message text we tried to send)."""
+    error = " ".join(str(getattr(result, "error", "") or "").split())
+    if not error:
+        return "unknown"
+    return error if len(error) <= 80 else error[:79] + "…"
+
+
 def _fit_to_limit(text: str, limit: int) -> str:
     """Trim a card to the adapter's message limit on a line boundary."""
     if not text or len(text) <= limit:
@@ -1864,7 +1873,20 @@ class AckCardEditor:
         # Shares the follow protocol with the 🔀 cards (follow_latest_message).
         self._combined = False
         card.on_change = self.notify
+        self._logged_final = False
         self._register_live()
+
+    def _finished_safe(self) -> bool:
+        try:
+            return bool(self.card.finished)
+        except Exception:
+            return False
+
+    def _parts_safe(self) -> int:
+        try:
+            return len(self.card.parts)
+        except Exception:
+            return 0
 
     def _render(self) -> str:
         """What the card message should say now."""
@@ -2026,7 +2048,11 @@ class AckCardEditor:
         try:
             async with self._edit_lock:
                 return await self._repost_locked(final=True)
-        except Exception:
+        except Exception as exc:
+            logger.info(
+                "helper card final repost raised: chat=%s message=%s (%s)",
+                self._chat_id, self._message_id, type(exc).__name__,
+            )
             logger.debug("ack card final repost failed", exc_info=True)
             return 0
         finally:
@@ -2075,11 +2101,21 @@ class AckCardEditor:
             result = await _maybe_await(
                 self._adapter.send(self._chat_id, _fit_to_limit(text, 4000), **kwargs)
             )
-        except Exception:
+        except Exception as exc:
+            if final:
+                logger.info(
+                    "helper card final repost send raised: chat=%s message=%s (%s)",
+                    self._chat_id, self._message_id, type(exc).__name__,
+                )
             logger.debug("ack card repost send failed", exc_info=True)
             return 0
         new_id = getattr(result, "message_id", None)
         if not (getattr(result, "success", False) and new_id) or str(new_id) == "__no_edit__":
+            if final:
+                logger.info(
+                    "helper card final repost failed: chat=%s message=%s error=%s",
+                    self._chat_id, self._message_id, _error_kind(result),
+                )
             return 0
         old_id = self._message_id
         self._message_id = str(new_id)
@@ -2096,11 +2132,19 @@ class AckCardEditor:
                 await _maybe_await(self._adapter.delete_message(self._chat_id, mid))
                 if mid in self._stale:
                     self._stale.remove(mid)
-            except Exception:
-                logger.debug("old ack card delete failed", exc_info=True)
+            except Exception as exc:
+                logger.info(
+                    "helper card old message delete raised: chat=%s message=%s (%s)",
+                    self._chat_id, mid, type(exc).__name__,
+                )
                 if mid not in self._stale:
                     self._stale.append(mid)
         del self._stale[8:]
+        if final:
+            logger.info(
+                "helper card finalized (moved under the reply): chat=%s message=%s old=%s parts=%d",
+                self._chat_id, self._message_id, old_id, self._parts_safe(),
+            )
         if self._render() != self._last_text:
             self.notify()  # changed while we were sending
         return 1
@@ -2156,17 +2200,37 @@ class AckCardEditor:
                 )
         except Exception as exc:
             result = None
-            logger.debug("ack checklist edit raised: %s", exc)
+            # Proof for "the card stayed up": the error type only, never text.
+            logger.info(
+                "helper card edit raised: chat=%s message=%s finished=%s (%s)",
+                self._chat_id, self._message_id, self._finished_safe(), type(exc).__name__,
+            )
         finally:
             _CARD_SEND.reset(token)
         if result is not None and getattr(result, "success", False):
             self._last_text = text
             self._failures = 0
             self._backoff_until = float("-inf")
+            if self._finished_safe() and not self._logged_final:
+                self._logged_final = True
+                logger.info(
+                    "helper card finalized: chat=%s message=%s parts=%d",
+                    self._chat_id, self._message_id, self._parts_safe(),
+                )
             return True
         if _message_gone(result):
             self.gone = True
+            logger.info(
+                "helper card edit: message gone, card closed: chat=%s message=%s finished=%s",
+                self._chat_id, self._message_id, self._finished_safe(),
+            )
             return False
+        if result is not None:
+            logger.info(
+                "helper card edit failed: chat=%s message=%s finished=%s failures=%d error=%s",
+                self._chat_id, self._message_id, self._finished_safe(), self._failures + 1,
+                _error_kind(result),
+            )
         self._failures += 1
         retry_after = getattr(result, "retry_after", None) if result is not None else None
         try:

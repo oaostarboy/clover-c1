@@ -3195,6 +3195,64 @@ _REDUNDANT_NOTICE_SILENCE = (
     "heard must still be reported."
 )
 
+# Offered INSTEAD of the [SILENT] note when any task in the completion did not
+# get done: a failed, not-done, incomplete, partial or cut-off result always
+# gets a real reply (live: a "Result: not done" helper was answered [SILENT],
+# and the user never heard it had failed).  A helper the user stopped on
+# purpose is not "not done": its completion may still be absorbed.
+NOT_DONE_REPLY_NOTE = (
+    "At least one task above is NOT done (failed, not done, incomplete or cut "
+    "off). Do not reply [SILENT]: tell the user plainly, in a line or two, what "
+    "did not get done and what happens next."
+)
+
+_DONE_STATUSES = frozenset({"completed", "success", "ok", ""})
+_STOPPED_STATUSES = frozenset({"interrupted", "cancelled", "canceled", "stopped"})
+
+
+def _said_not_done(summary: object) -> bool:
+    """The helper's own ``Result: not done`` line (its last one wins)."""
+    try:
+        from agent.ack_checklist import helper_outcome
+
+        return helper_outcome(summary) == "not_done"
+    except Exception:
+        return False
+
+
+def _one_not_done(r: dict) -> bool:
+    status = str(r.get("status") or "").strip().lower()
+    if r.get("incomplete") or r.get("truncated") or r.get("exit_reason") == "max_iterations":
+        return True
+    if status in _STOPPED_STATUSES:
+        return _said_not_done(r.get("summary"))
+    if status not in _DONE_STATUSES:
+        return True  # failed / error / timeout / partial / incomplete
+    return _said_not_done(r.get("summary"))
+
+
+def async_delegation_not_done(evt: dict) -> bool:
+    """Is any task of this delegation completion not done?
+
+    Read from the structured status fields and the helper's own ``Result:``
+    line -- never from free prose.  A helper the user stopped on purpose
+    (interrupted / cancelled) counts as not done only when it said so."""
+    if not isinstance(evt, dict):
+        return False
+    results = evt.get("results")
+    if evt.get("is_batch") or isinstance(results, list):
+        results = [r for r in (results or []) if isinstance(r, dict)]
+        if evt.get("incomplete_indexes"):
+            return True
+        if evt.get("error") and not results:
+            return True
+        return any(_one_not_done(r) for r in results)
+    return _one_not_done(evt)
+
+
+def _reply_note(evt: dict) -> str:
+    return NOT_DONE_REPLY_NOTE if async_delegation_not_done(evt) else _REDUNDANT_NOTICE_SILENCE
+
 
 def _format_async_delegation(evt: dict) -> str:
     """Format an async-delegation completion into a self-contained re-injection.
@@ -3294,7 +3352,7 @@ def _format_async_delegation(evt: dict) -> str:
                     f"{published} child result(s) were already published "
                     "separately and are not unknown. Do not repeat them."
                 )
-            lines.append(_REDUNDANT_NOTICE_SILENCE)
+            lines.append(_reply_note(evt))
             return "\n".join(lines)
         for r in sorted(results, key=lambda x: x.get("task_index", 0)):
             idx = r.get("task_index", 0)
@@ -3350,7 +3408,7 @@ def _format_async_delegation(evt: dict) -> str:
                 lines.append(
                     f"Full live transcript (complete tool/assistant trace): {r_live}"
                 )
-        lines.append(_REDUNDANT_NOTICE_SILENCE)
+        lines.append(_reply_note(evt))
         return "\n".join(lines)
 
     age = ""
@@ -3418,7 +3476,7 @@ def _format_async_delegation(evt: dict) -> str:
         if summary:
             lines.append("Partial output:")
             lines.append(summary)
-    lines.append(_REDUNDANT_NOTICE_SILENCE)
+    lines.append(_reply_note(evt))
     return "\n".join(lines)
 
 

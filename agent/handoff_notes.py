@@ -58,7 +58,7 @@ SUMMARY_INPUT_CHARS = 30_000
 # call (the whole notes file in, a paragraph of bullets out: ~7 s on Haiku)
 # that never holds the dispatch back.  They used to be one 6 s call: it timed
 # out every time on a 26k-char notes file, and the card said "finishing this up".
-TITLE_TIMEOUT_SECONDS = 5.0
+TITLE_TIMEOUT_SECONDS = 6.0
 TITLE_MAX_TOKENS = 160
 TITLE_TURNS = 4  # last conversation turns the title call reads
 TITLE_TURN_CHARS = 700
@@ -72,6 +72,10 @@ SUMMARY_MAX_TOKENS = 450
 # provider takes 20-40 s (the 8 s the old separate call gave it timed out on
 # every large turn, which is why the template was posted).
 VOICE_TIMEOUT_SECONDS = 30.0
+# The root called delegate_task itself with no ``say``: its turn is otherwise
+# finished, so the user waits on this line.  Measured 2-4.6 s on Opus 5.5 and
+# GPT-6.1 Sol; past this, ``on it`` goes out and the card still follows it.
+MODEL_DISPATCH_VOICE_TIMEOUT_SECONDS = 10.0
 OPENER_MAX_TOKENS = 120
 OPENER_CHARS = 320
 SUMMARY_TASK = "delegation_router"  # shares the router's small fast model

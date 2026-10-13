@@ -61,6 +61,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 import time
 import zlib
@@ -819,30 +820,112 @@ def _set_say(delegation_id: str, line: str) -> bool:
         return False
 
 
+def _summary_work(summary: str) -> str:
+    """The work part of a card header line (``🔄 work → outcome, ~ETA``)."""
+    text = " ".join(str(summary or "").split())
+    if text.startswith("\U0001f504"):
+        text = text[1:].strip()
+    work = text.split(" \u2192 ", 1)[0]
+    if work == text:
+        work = re.sub(r",\s*~\s*[\d\u2013-]+\s*min$", "", work)
+    return work.strip()
+
+
+def _dispatch_message_spoke(messages: Any) -> bool:
+    """Did the assistant message that called ``delegate_task`` carry visible
+    text of its own?"""
+    try:
+        for msg in reversed(list(messages or [])):
+            if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                continue
+            calls = msg.get("tool_calls") or []
+            names = [
+                str(((c or {}).get("function") or {}).get("name") or "") for c in calls
+                if isinstance(c, dict)
+            ]
+            if "delegate_task" not in names and not any(n == "tool_call" for n in names):
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                content = " ".join(
+                    str(p.get("text") or "") for p in content
+                    if isinstance(p, dict) and p.get("type") in ("text", "output_text")
+                )
+            return bool(str(content or "").strip())
+    except Exception:
+        return False
+    return False
+
+
+def _chat_platform(agent: Any) -> bool:
+    platform = str(getattr(agent, "platform", "") or "").strip().lower()
+    return platform not in ("", "cli", "tui")
+
+
 def _voice(agent: Any, state: RouterTurn, receipts: List["_fl.DispatchReceipt"], messages: Any = None) -> None:
     """The root's own line for the chat, once: ONE more model turn.
 
     The helper is already running; the root gets its own messages and system
     prompt back (the cached prefix is untouched, one runtime note is appended to
-    a copy) saying a subagent is now handling ``state.title`` and asking for one
+    a copy) saying a subagent is now handling the work and asking for one
     short line in its usual voice, tools off.  That text is placed on the card
     as the line sent before it (``handoff.say``'s place).  If the turn errors,
-    is empty or is slow, the line is ``on it``.  No pre-written wording."""
-    if state.voiced or not state.title or getattr(state.verdict, "source", "") == "lifecycle":
+    is empty or is slow, the line is ``on it``.  No pre-written wording.
+
+    Two sources:
+      * the runtime dispatched (backstop / time limit): the line for its
+        dispatch, titled from the hand-off brief;
+      * the ROOT called ``delegate_task`` with a ``handoff`` but no ``say``:
+        without a line the turn's reply would be the card alone -- the user
+        gets no reply, and the card can never join a card already running in
+        the chat (joining goes through the opener line).  Chat platforms only
+        (a CLI has no second message), bounded by
+        ``MODEL_DISPATCH_VOICE_TIMEOUT_SECONDS``.
+    A dispatch where the root gave its own ``say`` never gets a second line."""
+    if state.voiced or getattr(state.verdict, "source", "") == "lifecycle":
         return
+    if any(getattr(r, "say", "") for r in receipts):
+        return  # the root wrote its own opener: never a duplicate
     info = state.handoff
-    if not isinstance(info, dict) or not info.get("by_runtime"):
-        return
-    did = str(info.get("delegation_id") or "")
-    receipt = next((r for r in receipts if r.delegation_id == did), None)
-    if receipt is None or receipt.say or not receipt.summary:
+    timeout = _notes.VOICE_TIMEOUT_SECONDS
+    title = state.title
+    if isinstance(info, dict) and info.get("by_runtime"):
+        did = str(info.get("delegation_id") or "")
+        receipt = next((r for r in receipts if r.delegation_id == did), None)
+        if receipt is None or not title:
+            return
+    else:
+        # The root's own dispatch(es): the card would be the whole reply.
+        receipt = next((r for r in receipts if getattr(r, "summary", "")), None)
+        if receipt is None or not _chat_platform(agent):
+            return
+        if _dispatch_message_spoke(messages):
+            # The root already wrote text beside its delegate_task call; it
+            # went out as its own message.  A second line would repeat it.
+            return
+        try:
+            from agent.ack_checklist import unified
+
+            if not unified():
+                return
+        except Exception:
+            return
+        title = title or _summary_work(receipt.summary)
+        timeout = _notes.MODEL_DISPATCH_VOICE_TIMEOUT_SECONDS
+    if not receipt.summary:
         return
     state.voiced = True
+    started = time.monotonic()
     line = _notes.voice_line(
         agent, messages if messages else getattr(agent, "_session_messages", None),
-        state.title, message=state.user_message,
+        title, message=state.user_message, timeout=timeout,
     )
-    _set_say(did, line)
+    placed = _set_say(receipt.delegation_id, line)
+    logger.info(
+        "hand-off opener: %s dispatch %s, %.1fs, placed=%s",
+        "runtime" if isinstance(info, dict) and info.get("by_runtime") else "model",
+        receipt.delegation_id, time.monotonic() - started, placed,
+    )
 
 
 def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
