@@ -172,9 +172,9 @@ def test_each_stage_task_has_a_short_title_not_the_raw_plan_text():
         assert title != task.goal and len(title) <= ht.TITLE_CHARS
 
 
-def test_single_task_dispatches_keep_their_own_wording():
+def test_single_task_dispatches_keep_their_own_card_wording_but_still_carry_a_task_title():
     single = Verdict(mode='single', reason='', tasks=(PlanTask(goal='Compare three GPUs'),))
-    assert rb._task_title_arg(single, 0) == {}
+    assert rb._task_title_arg(single, 0) == {'title': 'comparing three GPUs'}
     assert rb._plan_stage_handoff(single, [single.tasks[0]]) is None
 
 

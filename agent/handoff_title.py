@@ -654,3 +654,83 @@ def dispatch_work_title(goals, titles=()) -> str:
     if len(goals) == 1:
         return task_title(goals[0], (list(titles or ()) or [""])[0])
     return f"{len(goals)} subagents"
+
+
+# ── distinct titles across the tasks of ONE dispatch ───────────────────────
+
+# The ceiling on a task's ``title`` (delegate_task's schema: "Short label
+# (<=60 chars)").  ``TITLE_CHARS`` is the preferred length, this the hard one.
+TASK_TITLE_MAX = 60
+
+
+def _word_key(word: str) -> str:
+    return word.lower().rstrip(",;:")
+
+
+def _shared_prefix_words(goals: Sequence[str]) -> int:
+    """How many leading words every goal in ``goals`` starts with (comparing
+    case-insensitively, ignoring trailing ``,;:``), always leaving each goal at
+    least three words.  ``For site.ca, remove ...`` / ``For site.ca, fix ...``
+    share ``For site.ca,``."""
+    split = [_flat(g).split(" ") for g in goals if _flat(g)]
+    if len(split) < 2:
+        return 0
+    limit = min(len(words) for words in split) - 3
+    shared = 0
+    while shared < limit and len({_word_key(words[shared]) for words in split}) == 1:
+        shared += 1
+    return shared
+
+
+def _numbered(base: str, taken: set) -> str:
+    n = 2
+    while True:
+        suffix = f" ({n})"
+        candidate = _cut(base, TASK_TITLE_MAX - len(suffix)) + suffix
+        if title_key(candidate) not in taken:
+            return candidate
+        n += 1
+
+
+def distinct_task_titles(goals: Sequence[str], explicit: Sequence[str] = ()) -> list:
+    """One short card title per task, no two alike, none longer than
+    ``TASK_TITLE_MAX``.  Deterministic; no model call; never raises.
+
+    A task's own ``explicit`` title (the router's) is used when it is usable.
+    A missing one is built from the goal (``task_title``).  Titles that still
+    collide -- explicit ones the model repeated, or goals that all open with
+    the same words (``For silasstudios.ca, ...`` x4) -- are rebuilt from the
+    part of each goal AFTER the words the colliding siblings share, and only
+    when that is still not enough get a ``(2)`` / ``(3)`` suffix.
+    """
+    try:
+        goals = [str(g or "") for g in goals]
+        n = len(goals)
+        given = [str(explicit[i] or "") if i < len(explicit) else "" for i in range(n)]
+        titles = [task_title(goals[i], given[i]) for i in range(n)]
+        used_explicit = [bool(_flat(given[i])) for i in range(n)]
+        by_key: dict = {}
+        for i, t in enumerate(titles):
+            by_key.setdefault(title_key(t), []).append(i)
+        for idxs in by_key.values():
+            if len(idxs) < 2:
+                continue
+            shared = _shared_prefix_words([goals[i] for i in idxs])
+            for i in idxs:
+                rest = " ".join(_flat(goals[i]).split(" ")[shared:]) if shared else ""
+                rebuilt = task_title(rest) if rest else ""
+                if not rebuilt and used_explicit[i]:
+                    rebuilt = task_title(goals[i])
+                if rebuilt:
+                    titles[i] = rebuilt
+        # Whatever still collides gets a number; the first keeps its wording.
+        taken: set = set()
+        for i in range(n):
+            titles[i] = _cut(titles[i], TASK_TITLE_MAX) or "background task"
+            if title_key(titles[i]) in taken:
+                titles[i] = _numbered(titles[i], taken)
+            taken.add(title_key(titles[i]))
+        return titles
+    except Exception:
+        return [f"background task {i + 1}" if len(goals or ()) > 1 else "background task"
+                for i in range(len(goals or ()))]
