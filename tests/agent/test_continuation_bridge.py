@@ -17,10 +17,26 @@ from types import SimpleNamespace
 
 import pytest
 
+import importlib
+
 from agent import delegation_router as dr, router_backstop as rb
-from agent import workstream_origin as origin
-from agent import workstreams as ws
 from cron import jobs, monitor, notepad as np, scheduler
+
+
+class _Live:
+    """Resolve a module at use time, so a test elsewhere in a long process
+    that reloads it cannot leave this module holding a stale copy whose
+    classes/secret differ from the ones SessionDB imports lazily."""
+
+    def __init__(self, name):
+        self._name = name
+
+    def __getattr__(self, attr):
+        return getattr(importlib.import_module(self._name), attr)
+
+
+origin = _Live("agent.workstream_origin")
+ws = _Live("agent.workstreams")
 from tests.agent.test_delegation_router import aux  # noqa: F401
 from tests.agent.test_router_staged_continuation import (  # noqa: F401
     STAGE_ONE, STAGE_TWO, _all_ids, _completion_turn, _dispatch_stage_one,
