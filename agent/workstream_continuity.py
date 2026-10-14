@@ -39,7 +39,8 @@ class Capsule:
     verdict: dict[str, Any] = field(default_factory=dict)
 
 
-_CURRENT: ContextVar[Capsule | None] = ContextVar("workstream_compaction_capsule", default=None)
+_UNBOUND = object()
+_CURRENT: ContextVar[Any] = ContextVar("workstream_compaction_capsule", default=_UNBOUND)
 
 
 def read_capsule(scope: ws.Scope, settings: ws.ProactiveSettings) -> Capsule | None:
@@ -111,6 +112,8 @@ def current_turn_context(scope: ws.Scope, query: str, settings: ws.ProactiveSett
     """
     if not settings.active or not settings.compaction_audit_enabled:
         return ws.current_turn_note(scope, query, settings) or ""
+    if scope.profile != ws.current_profile():
+        return ""
     capsule = read_capsule(scope, settings)
     if capsule is None:
         return redact_capsule(ws.current_turn_note(scope, query, settings) or "")
@@ -140,8 +143,12 @@ def summary_audit(capsule: Capsule | None) -> Iterator[None]:
 def audit_current_summary(summary: str) -> str | None:
     """None means no host snapshot; legacy standalone compressors stay valid."""
     capsule = _CURRENT.get()
-    if capsule is None:
+    if capsule is _UNBOUND:
         return None
+    if capsule is None:
+        # A bound host attempt with no eligible capsule MUST NOT consult a
+        # stale compressor._workstream_scope left by another turn/surface.
+        return summary
     clean = redact_capsule(summary)
     missing = [wid for wid, line in capsule.entries if line not in clean]
     capsule.verdict.update(

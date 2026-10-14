@@ -14,6 +14,20 @@ from tests.agent.test_workstream_continuity_host import (  # noqa: F401
 from tests.gateway.test_trusted_human_origin_ingress import network_guard  # noqa: F401
 
 
+def test_host_preflight_cannot_fall_back_to_previous_turn_scope(host, monkeypatch):
+    produce(host)
+    agent = fresh_agent(host)
+    from agent.memory_manager import current_workstream_context
+
+    assert "[ws:" in current_workstream_context(agent, "packaging path")
+    # A cached compressor legitimately saw the prior private surface. A new
+    # transport identity is presented before another turn rebuilt its scope.
+    agent._user_id = "999"
+    result, _, _ = compact(host, agent, monkeypatch)
+    assert "[ws:" not in str(result)
+    assert "Workstream evidence capsule" not in str(result)
+
+
 def test_shadow_audit_never_changes_summary_from_a_previous_scope(host, monkeypatch):
     produce(host)
     shadow = replace(ws.load_settings(), mode="shadow")

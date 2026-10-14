@@ -169,7 +169,7 @@ def _cold_child(root, parent, newchat):
 
     monkeypatch = pytest.MonkeyPatch()
     guard = network_guard.__wrapped__(monkeypatch)
-    next(guard)
+    attempts = next(guard)
     h = Harness(monkeypatch, Path(root), proactive=SETTINGS)
     try:
         entry = h.runner.session_store.get_or_create_session(_user_source())
@@ -192,10 +192,55 @@ def _cold_child(root, parent, newchat):
         obligations = [r for r in rows if r["kind"] == "obligation"]
         assert obligations and all(r["status"] == "open" for r in obligations)
         assert any(r["kind"] == "progress" and r["status"] == "resolved" for r in rows)
+        # In the cold interpreter, both the exact-scope retrieval API and the
+        # ordinary host composer must exclude other scopes. No authority
+        # receipts or compressor metadata are attached to these new agents.
+        from dataclasses import replace
+        from agent.workstream_continuity import current_turn_context, read_capsule
+        from clover_state import SessionDB
+
+        original_scope = scope(h)
+        settings = ws.load_settings()
+        for dimension in ("profile", "project", "audience", "root"):
+            foreign = replace(original_scope, **{dimension: "foreign-scope"})
+            assert read_capsule(foreign, settings) is None
+            assert current_turn_context(foreign, "packaging path", settings) == ""
+        for dimension in ("profile", "project", "audience", "root"):
+            with monkeypatch.context() as changed:
+                kwargs = dict(platform="telegram", chat_type="dm", chat_id="12345", user_id="12345")
+                foreign_db = None
+                if dimension == "profile":
+                    foreign_home = h.home.parent / "foreign-profile"
+                    foreign_home.mkdir(exist_ok=True)
+                    (foreign_home / "config.yaml").write_text((h.home / "config.yaml").read_text())
+                    changed.setenv("CLOVER_HOME", str(foreign_home))
+                    foreign_db = SessionDB(db_path=foreign_home / "state.db")
+                elif dimension == "project":
+                    changed.setenv("TERMINAL_CWD", str(h.project.parent / "foreign-project"))
+                elif dimension == "audience":
+                    kwargs.update(chat_type="group", chat_id="-100")
+                else:
+                    # A native DM root is the transport user identity, not an
+                    # arbitrary conversation-id override.
+                    kwargs.update(chat_id="999", user_id="999")
+                candidate = AIAgent(
+                    api_key="test-key", base_url="http://127.0.0.1:1/v1",
+                    provider="openai", model="scripted/test", quiet_mode=True,
+                    session_db=foreign_db or h.db, skip_context_files=True,
+                    skip_memory=True, platform=kwargs["platform"],
+                    chat_type=kwargs["chat_type"], chat_id=kwargs["chat_id"],
+                    user_id=kwargs["user_id"])
+                candidate.run_conversation("Which packaging path and remediation remain?")
+                request = str(h.scripted.requests[-1]["messages"])
+                assert PATH_X not in request and TEST_Z not in request
+                assert "[ws:" not in request
+                if foreign_db is not None:
+                    foreign_db.close()
         print("CHILD_RESULT " + json.dumps({
             "session": h.session_id(), "root": parent, "newchat": newchat,
             "open_ids": [r["workstream_id"] for r in obligations],
-            "provider_calls": h.scripted.calls, "network_attempts": 0,
+            "provider_calls": h.scripted.calls, "network_attempts": len(attempts),
+            "foreign_scope_compositions": 4,
         }))
     finally:
         h.close()
@@ -252,7 +297,7 @@ def test_capsule_survives_fresh_process_and_native_newchat(host, monkeypatch, in
     assert child.returncode == 0, child.stdout + child.stderr
     receipt = next(line for line in child.stdout.splitlines() if line.startswith("CHILD_RESULT "))
     observed = json.loads(receipt.removeprefix("CHILD_RESULT "))
-    assert observed["root"] == parent and observed["provider_calls"] == 1
+    assert observed["root"] == parent and observed["provider_calls"] == 5
     assert observed["open_ids"] == [r["workstream_id"] for r in obligations]
     print(receipt)
 
