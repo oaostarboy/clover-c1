@@ -181,3 +181,72 @@ def test_bypass_prologue_composer_sends_identical_workstream_bytes(
         if message.get("role") == "user"
     )
     assert wire_user == "What did we decide?\n\n" + note
+
+
+def test_local_recall_uses_real_sqlite_and_isolates_profile_project_and_audience(
+    monkeypatch, tmp_path
+):
+    from agent import workstreams
+    from cron import notepad
+
+    profile = tmp_path / "profile-a"
+    project = tmp_path / "project-a"
+    profile.mkdir()
+    project.mkdir()
+    monkeypatch.setenv("CLOVER_HOME", str(profile))
+    monkeypatch.setenv("TERMINAL_CWD", str(project))
+    monkeypatch.setattr(notepad, "NOTEPAD_FILE", tmp_path / "notepad.db")
+    settings = workstreams.load_settings(
+        {
+            "proactive": {
+                "enabled": True,
+                "private_only": True,
+                "recall": {"enabled": True, "max_items": 3, "max_bytes": 1200},
+            }
+        }
+    )
+    monkeypatch.setattr(workstreams, "load_settings", lambda: settings)
+    scope = workstreams.make_scope(str(project), audience="private:alice", root="alice")
+    record = notepad.create_workstream(
+        scope,
+        kind="decision",
+        title="Rollout window",
+        summary="Use the Friday rollout window",
+        fingerprint="rollout-friday",
+        approved=True,
+    )
+    alice = type(
+        "Agent", (), {"platform": "telegram", "_chat_type": "dm", "_user_id": "alice"}
+    )()
+
+    note = current_workstream_context(alice, "Which rollout window did we choose?")
+    assert "Friday rollout window" in note
+    assert record["workstream_id"] in note
+
+    bob = type(
+        "Agent", (), {"platform": "telegram", "_chat_type": "dm", "_user_id": "bob"}
+    )()
+    assert current_workstream_context(bob, "Which rollout window did we choose?") == ""
+
+    group = type(
+        "Agent",
+        (),
+        {
+            "platform": "telegram",
+            "_chat_type": "group",
+            "_chat_id": "room-1",
+            "_user_id": "alice",
+        },
+    )()
+    assert current_workstream_context(group, "Which rollout window did we choose?") == ""
+
+    other_project = tmp_path / "project-b"
+    other_project.mkdir()
+    monkeypatch.setenv("TERMINAL_CWD", str(other_project))
+    assert current_workstream_context(alice, "Which rollout window did we choose?") == ""
+
+    monkeypatch.setenv("TERMINAL_CWD", str(project))
+    other_profile = tmp_path / "profile-b"
+    other_profile.mkdir()
+    monkeypatch.setenv("CLOVER_HOME", str(other_profile))
+    assert current_workstream_context(alice, "Which rollout window did we choose?") == ""
