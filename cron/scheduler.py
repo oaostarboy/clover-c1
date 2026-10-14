@@ -5525,6 +5525,34 @@ def _settle_monitor_occurrence_without_authority(job: dict, occurrence: dict):
     )
 
 
+def _pending_linked_monitor_occurrence(job: dict) -> Optional[dict]:
+    """Find crash-recovered pending work only for an approved eligible link."""
+    workstream_id = str(job.get("workstream_id") or "")
+    job_id = str(job.get("id") or "")
+    if not workstream_id or not job_id:
+        return None
+    try:
+        from agent import workstreams
+        from cron import notepad
+
+        settings = workstreams.load_settings()
+        if not settings.enabled or not workstreams.job_eligible(settings, job_id):
+            return None
+        scope = workstreams.job_scope(job)
+        record = notepad.get_workstream(scope, workstream_id)
+        if not record or not record.get("approved") or record.get("status") not in {"open", "deferred"}:
+            return None
+        pending = notepad.pending_occurrences(scope, workstream_id=workstream_id)
+        return pending[0] if pending else None
+    except Exception:
+        logger.warning(
+            "Job '%s': unable to read linked pending monitor occurrence",
+            job_id,
+            exc_info=True,
+        )
+        return None
+
+
 def run_job(
     job: dict,
     *,
@@ -5738,6 +5766,12 @@ def run_job(
             )
             return False, _mon_doc, _mon_alert, _mon.error
         if not _mon.changed:
+            # Detection may have committed the occurrence and hash before a
+            # prior scheduler process crashed. Consume that durable pending
+            # row even though this poll's source hash is unchanged.
+            _pending = _pending_linked_monitor_occurrence(job)
+            if _pending is not None:
+                return _settle_monitor_occurrence_without_authority(job, _pending)
             # Unchanged output — suppress the agent run entirely. Recorded
             # as a silent no_change tick (visible in the executions ledger
             # via this doc; SILENT_MARKER blocks delivery).

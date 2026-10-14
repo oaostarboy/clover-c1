@@ -175,6 +175,84 @@ def test_run_job_does_not_turn_monitor_evidence_into_agent_authority(
     assert receipts[0]["state"] == "unknown"
 
 
+def test_unchanged_monitor_consumes_recovered_durable_pending_occurrence(
+    monkeypatch, tmp_path
+):
+    from cron import jobs, monitor, scheduler
+
+    _workstreams, notepad, scope, record, project, job_id = _setup_scope(
+        monkeypatch, tmp_path
+    )
+    occurrence = notepad.ensure_occurrence(
+        scope,
+        record["workstream_id"],
+        occurrence_key="crash-before-scheduler-consume",
+        source="monitor",
+    )
+    monkeypatch.setattr(jobs, "job_payload_is_empty", lambda _job: False)
+    monkeypatch.setattr(monitor, "job_has_monitor", lambda _job: True)
+    monkeypatch.setattr(
+        monitor,
+        "check_monitor",
+        lambda _job: SimpleNamespace(
+            ok=True, changed=False, first_run=False, context_block="", error=None
+        ),
+    )
+    dispatches = []
+    monkeypatch.setattr(
+        scheduler,
+        "_build_job_prompt",
+        lambda *_args, **_kwargs: dispatches.append("prompt") or "prompt",
+    )
+    job = {
+        "id": job_id,
+        "name": "monitor",
+        "prompt": "Inspect",
+        "workdir": str(project),
+        "workstream_id": record["workstream_id"],
+        "monitor_script": "monitor.sh",
+    }
+
+    success, _doc, final, error = scheduler.run_job(job)
+
+    assert success is False
+    assert final == scheduler.SILENT_MARKER
+    assert error and "no authorized runtime continuation route" in error
+    assert dispatches == []
+    settled = notepad.list_occurrences(scope, workstream_id=record["workstream_id"])
+    assert len(settled) == 1
+    assert settled[0]["occurrence_key"] == occurrence["occurrence_key"]
+    assert settled[0]["state"] == "unknown"
+
+
+def test_monitor_occurrence_uses_shared_job_scope_with_linked_root(monkeypatch, tmp_path):
+    from cron import scheduler
+
+    workstreams, notepad, _scope, _record, project, job_id = _setup_scope(
+        monkeypatch, tmp_path
+    )
+    linked_scope = workstreams.make_scope(str(project), audience="private", root="local")
+    linked = notepad.create_workstream(
+        linked_scope,
+        kind="obligation",
+        title="Linked local job",
+        summary="Use the canonical CLI root",
+        fingerprint="linked-local",
+        approved=True,
+    )
+    calls = []
+    monkeypatch.setattr(workstreams, "job_scope", lambda job: calls.append(job) or linked_scope)
+    job = {"id": job_id, "workdir": str(project), "workstream_id": linked["workstream_id"], "workstream_root": "local"}
+
+    occurrence = scheduler._record_workstream_monitor_occurrence(
+        job, SimpleNamespace(context_block="monitor changed")
+    )
+
+    assert calls == [job]
+    assert occurrence is not None
+    assert len(notepad.pending_occurrences(linked_scope, workstream_id=linked["workstream_id"])) == 1
+
+
 def test_monitor_hash_persistence_precedes_occurrence_and_exposes_crash_gap(
     monkeypatch, tmp_path
 ):
