@@ -616,3 +616,93 @@ class TestCrossProcess:
         sc, wid, outs = _race(db, "budget", setup=setup)
         assert outs.count("WIN") == 2
         assert np.get_authority(sc, wid)["budget"]["turns"] == 0
+
+
+# ── `clover cron workstream` CLI ───────────────────────────────────────────
+
+
+class TestWorkstreamCli:
+    @pytest.fixture
+    def cli(self, db, monkeypatch):
+        import argparse
+        import sys
+
+        from agent import workstreams as ws
+        from clover_cli.cron import cron_workstream
+
+        scope_ = ws.make_scope("proj-a", audience="private", root="")
+        on = ws.ProactiveSettings(enabled=True, mode="active")
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: on)
+        # make_scope resolves the real profile; align the fixture rows with it
+        row = np.create_workstream(
+            scope_, kind="constraint", title="No publish",
+            summary="Never publish proj-a artifacts", fingerprint="np", now=NOW,
+        )
+
+        def run(action="list", *, tty=True, **kw):
+            monkeypatch.setattr(sys.stdin, "isatty", lambda: tty, raising=False)
+            ns = argparse.Namespace(
+                project="proj-a", workstream_action=action,
+                workstream_id=kw.get("workstream_id"),
+                feedback_kind=kw.get("feedback_kind"), note=kw.get("note"),
+                audience=kw.get("audience", "private"), root=kw.get("root", ""),
+            )
+            return cron_workstream(ns)
+
+        return run, scope_, row
+
+    def test_parser_registers_workstream_not_proactive(self):
+        import argparse
+
+        from clover_cli.subcommands.cron import build_cron_parser
+
+        root = argparse.ArgumentParser()
+        sub = root.add_subparsers(dest="cmd")
+        build_cron_parser(sub, cmd_cron=lambda a: 0)
+        ns = root.parse_args(["cron", "workstream", "proj-a", "show", "ws_1"])
+        assert (ns.project, ns.workstream_action, ns.workstream_id) == ("proj-a", "show", "ws_1")
+        with pytest.raises(SystemExit):
+            root.parse_args(["cron", "proactive", "proj-a"])
+
+    def test_list_and_show_work_without_tty_and_when_disabled(self, cli, capsys, monkeypatch):
+        from agent import workstreams as ws
+
+        run, scope_, row = cli
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ws.ProactiveSettings())
+        assert run("list", tty=False) == 0
+        assert row["workstream_id"] in capsys.readouterr().out
+        assert run("show", tty=False, workstream_id=row["workstream_id"]) == 0
+        assert "Never publish proj-a artifacts" in capsys.readouterr().out
+
+    def test_writes_refused_without_tty_and_change_nothing(self, cli, capsys):
+        run, scope_, row = cli
+        wid = row["workstream_id"]
+        assert run("feedback", tty=False, workstream_id=wid, feedback_kind="reject") == 1
+        assert run("approve", tty=False, workstream_id=wid) == 1
+        assert run("prune", tty=False) == 1
+        assert "interactive terminal" in capsys.readouterr().out
+        assert np.list_feedback(scope_, wid) == []
+        assert np.get_workstream(scope_, wid)["approved"] is False
+
+    def test_interactive_feedback_and_approve_are_attributed_to_user(self, cli):
+        run, scope_, row = cli
+        wid = row["workstream_id"]
+        assert run("feedback", workstream_id=wid, feedback_kind="defer", note="not now") == 0
+        fb = np.list_feedback(scope_, wid)
+        assert [(f["kind"], f["actor"], f["note"]) for f in fb] == [("defer", "user", "not now")]
+        assert run("approve", workstream_id=wid) == 0
+        assert np.get_workstream(scope_, wid)["approved"] is True
+
+    def test_disabled_feature_refuses_writes(self, cli, monkeypatch, capsys):
+        from agent import workstreams as ws
+
+        run, scope_, row = cli
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ws.ProactiveSettings())
+        assert run("feedback", workstream_id=row["workstream_id"], feedback_kind="reject") == 1
+        assert "disabled" in capsys.readouterr().out
+        assert np.list_feedback(scope_, row["workstream_id"]) == []
+
+    def test_unknown_feedback_kind_and_foreign_scope_rejected(self, cli):
+        run, scope_, row = cli
+        assert run("feedback", workstream_id=row["workstream_id"], feedback_kind="silence") == 1
+        assert run("show", workstream_id=row["workstream_id"], root="someone-else") == 1

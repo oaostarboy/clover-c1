@@ -17,6 +17,11 @@ Write path is the CLI (``clover cron notepad <job_id> set <key> <value>``),
 which the running agent invokes via its terminal tool; no model tool is
 added.
 
+The same DB also hosts the opt-in workstream ledger (see the section at the
+end of this module and ``agent/workstreams.py``). The legacy KV functions
+never create or touch those tables, and the DB path is resolved from the
+active profile at transaction time (``NOTEPAD_FILE`` is a test override).
+
 Inspired by: Amp (Sourcegraph) cron notepad (idea-level, proprietary — zero
 code).
 """

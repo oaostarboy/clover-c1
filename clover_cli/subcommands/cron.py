@@ -321,6 +321,31 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
     cron_notepad.add_argument("key", nargs="?", help="Notepad key (get/set/delete)")
     cron_notepad.add_argument("value", nargs="?", help="Value to store (set)")
 
+    # cron workstream — inspect/review the opt-in proactive workstream ledger
+    # (agent/workstreams.py). Reads are always allowed; writes need an
+    # interactive terminal so an agent's terminal tool cannot forge user
+    # feedback or approvals. There is deliberately no receipt/authority/link
+    # subcommand: those are written only by the owning runtime code.
+    cron_workstream = cron_subparsers.add_parser(
+        "workstream",
+        help="Inspect and review proactive workstream records for a project",
+    )
+    cron_workstream.add_argument("project", help="Project key the records belong to")
+    cron_workstream.add_argument(
+        "workstream_action",
+        nargs="?",
+        default="list",
+        choices=["list", "show", "feedback", "approve", "prune"],
+        help="Action (default: list)",
+    )
+    cron_workstream.add_argument("workstream_id", nargs="?", help="Workstream ID (show/feedback/approve)")
+    cron_workstream.add_argument(
+        "feedback_kind", nargs="?", help="accept|reject|correct|defer|done|stop (feedback)"
+    )
+    cron_workstream.add_argument("note", nargs="?", help="Optional note (feedback)")
+    cron_workstream.add_argument("--audience", default="private", help="Audience scope (default: private)")
+    cron_workstream.add_argument("--root", default="", help="Owner root scope (default: empty)")
+
     # cron tick (mostly for debugging)
     cron_tick = cron_subparsers.add_parser("tick", help="Run due jobs once and exit")
     add_accept_hooks_flag(cron_tick)

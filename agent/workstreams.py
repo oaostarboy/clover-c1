@@ -603,6 +603,28 @@ def record_verified_run(
     )
 
 
+def approve_workstream(
+    scope: Scope, workstream_id: str, *, settings: ProactiveSettings,
+    now: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    """Mark one record as explicitly approved for recall (CAS on revision).
+
+    Approval only makes the record's own text eligible for bounded recall into
+    the same private scope; it grants no authority to act.
+    """
+    if not _usable(scope, settings):
+        return None
+    from cron import notepad as np
+
+    row = np.get_workstream(scope, workstream_id)
+    if row is None:
+        raise np.NotFound(f"no workstream {workstream_id!r} in this scope")
+    if row["approved"]:
+        return row
+    return np.update_workstream(scope, workstream_id, expected_revision=row["revision"],
+                                approved=True, actor="user", now=_now(now))
+
+
 # ── feedback, timing, novelty ──────────────────────────────────────────────
 
 def record_feedback(
