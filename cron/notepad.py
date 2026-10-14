@@ -229,6 +229,7 @@ RECEIPT_KINDS = (
     "proposed", "scheduled", "authorized", "executed", "saved", "delivered",
     "deferred", "cancelled", "unknown",
     "feedback_accept", "feedback_reject", "feedback_correct", "feedback_defer",
+    "feedback_done", "feedback_stop",
 )
 FEEDBACK_KINDS = ("accept", "reject", "correct", "defer", "done", "stop")
 OCC_STATES = ("pending", "claimed", "executed", "deferred", "cancelled", "unknown")
@@ -816,12 +817,32 @@ def add_receipt(
 def add_feedback(
     scope: Any, workstream_id: str, *, kind: str, actor: str, note: str = "",
     defer_until: Optional[str] = None, now: Optional[datetime] = None,
+    ingress_event_id: Optional[str] = None,
 ) -> Dict[str, Any]:
+    """Append one feedback row.
+
+    With ``ingress_event_id`` the row and its ``feedback_<kind>`` receipt are
+    written in ONE transaction and a replay of the same event returns the
+    original row (a crash can neither lose the receipt nor duplicate the row).
+    """
     skey = _scope_key(scope)
     _check_choice(kind, FEEDBACK_KINDS, "feedback kind")
+    receipt_kind = f"feedback_{kind}"
+    if ingress_event_id:
+        _check_choice(receipt_kind, RECEIPT_KINDS, "receipt kind")
     at = _utc_iso(now)
     with _ws_write() as conn:
         _require(conn, skey, workstream_id)
+        if ingress_event_id:
+            prior = conn.execute(
+                f"SELECT f.* FROM work_receipts r JOIN work_feedback f "
+                f"ON f.feedback_id = r.detail WHERE r.profile=? AND r.project=? "
+                f"AND r.audience=? AND r.root=? AND r.workstream_id=? "
+                f"AND r.kind=? AND r.source_id=?",
+                (*skey, str(workstream_id), receipt_kind, str(ingress_event_id)),
+            ).fetchone()
+            if prior is not None:
+                return dict(prior)
         fid = _new_id("fb")
         conn.execute(
             "INSERT INTO work_feedback (feedback_id, profile, project, audience, "
@@ -830,6 +851,14 @@ def add_feedback(
             (fid, *skey, str(workstream_id), kind, str(actor), str(note)[:512],
              defer_until, at),
         )
+        if ingress_event_id:
+            conn.execute(
+                "INSERT INTO work_receipts (receipt_id, profile, project, audience, "
+                "root, workstream_id, kind, owner, source_id, detail, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                (_new_id("rc"), *skey, str(workstream_id), receipt_kind,
+                 "human_ingress", str(ingress_event_id), fid, at),
+            )
         return dict(conn.execute(
             "SELECT * FROM work_feedback WHERE feedback_id=?", (fid,)
         ).fetchone())

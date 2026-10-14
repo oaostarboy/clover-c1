@@ -40,6 +40,7 @@ RECEIPT_KINDS = (
     "proposed", "scheduled", "authorized", "executed", "saved", "delivered",
     "deferred", "cancelled", "unknown",
     "feedback_accept", "feedback_reject", "feedback_correct", "feedback_defer",
+    "feedback_done", "feedback_stop",
 )
 FEEDBACK_KINDS = ("accept", "reject", "correct", "defer", "done", "stop")
 OUTCOME_STATUSES = ("verified", "failed", "unverified", "not_run", "stopped")
@@ -760,6 +761,11 @@ def record_correction(
     clean = _clip(_redact(str(text).strip()), np.MAX_WORKSTREAM_SUMMARY_BYTES)
     title = "Correction: " + clean.splitlines()[0][:100]
     fp = _fp("correction", clean)
+    # A replay of this ingress event returns its durable prior result rather
+    # than re-running the write (covers a crash before the receipt was spent).
+    for prior in np.list_workstreams(scope, kinds=["correction"], limit=500):
+        if prior["source"] == source and prior["fingerprint"] == fp:
+            return prior
     if supersedes_id:
         current = np.get_workstream(scope, supersedes_id)
         if current is None:
@@ -1028,24 +1034,16 @@ def record_feedback(
         return None
     from cron import notepad as np
 
-    receipt_kind = f"feedback_{kind}"
-    if receipt_kind in RECEIPT_KINDS:
-        for r in np.list_receipts(scope, workstream_id, kinds=[receipt_kind]):
-            if r["source_id"] == owner.ingress_event_id:
-                prior = [f for f in np.list_feedback(scope, workstream_id)
-                         if f["feedback_id"] == r["detail"]]
-                if prior:
-                    return prior[0]
     moment = _now(now)
     until = defer_until
     if kind == "defer" and not until:
         until = (moment + timedelta(seconds=settings.suggestions_cooldown_seconds)).isoformat()
-    row = np.add_feedback(scope, workstream_id, kind=kind, actor="user",
-                          note=_redact(note), defer_until=until, now=moment)
-    if receipt_kind in RECEIPT_KINDS:
-        np.add_receipt(scope, workstream_id, kind=receipt_kind, owner="human_ingress",
-                       source_id=owner.ingress_event_id, detail=row["feedback_id"], now=moment)
-    return row
+    # Row + receipt commit together; a replay of this ingress event returns
+    # the original row, whatever the feedback kind.
+    return np.add_feedback(
+        scope, workstream_id, kind=kind, actor="user", note=_redact(note),
+        defer_until=until, now=moment, ingress_event_id=owner.ingress_event_id,
+    )
 
 
 def feedback_state(scope: Scope, workstream_id: str) -> str:
