@@ -478,6 +478,32 @@ def _default_occurrence_reader(scope: Scope, workstream_id: str, key: str) -> bo
     return any(r.get("occurrence_key") == key for r in rows)
 
 
+def _default_consumed_reader(delegation_id: str) -> bool:
+    """A consumer claimed (or the delivery owner delivered) the finished result
+    -- the lifecycle's own rule for ``verified_completion``."""
+    from tools.async_delegation import owned_receipts_ready
+
+    return str(delegation_id) in set(owned_receipts_ready([delegation_id]))
+
+
+def _default_session_root_reader(session_id: str) -> Optional[str]:
+    """Conversation root of an *existing* SessionDB session, else ``None``.
+
+    Compression rotates a conversation across session ids linked by
+    ``parent_session_id``; the root is the single authentic identity."""
+    from clover_state import SessionDB
+
+    if not str(session_id or ""):
+        return None
+    db = SessionDB(read_only=True)
+    try:
+        if db.get_session(session_id) is None:
+            return None
+        return db.get_conversation_root(session_id) or None
+    finally:
+        db.close()
+
+
 @dataclass(frozen=True)
 class OwnerReaders:
     """The owners' read paths. Overridable only to simulate an owner's state."""
@@ -486,6 +512,8 @@ class OwnerReaders:
     delegation: Callable[[str], Optional[Mapping[str, Any]]] = _default_delegation_reader
     file_sha256: Callable[[str], Optional[str]] = _default_file_reader
     occurrence: Callable[[Scope, str, str], bool] = _default_occurrence_reader
+    consumed: Callable[[str], bool] = _default_consumed_reader
+    session_root: Callable[[str], Optional[str]] = _default_session_root_reader
 
 
 def _delegation_clean(row: Optional[Mapping[str, Any]]) -> bool:
@@ -691,32 +719,101 @@ def record_correction(
     )
 
 
+def _verified_delegation_run(
+    delegation_id: str, session_id: str, readers: OwnerReaders,
+) -> Optional[str]:
+    """Conversation root when the delegation ledger proves a clean completed
+    result *that a consumer claimed* and ``session_id`` is a real session;
+    otherwise ``None`` (unknown / failed / unclaimed / unauthentic)."""
+    try:
+        row = readers.delegation(delegation_id)
+        if not _delegation_clean(row) or not readers.consumed(delegation_id):
+            return None
+        return readers.session_root(session_id) or None
+    except Exception:
+        logger.debug("verified-run check failed closed", exc_info=True)
+        return None
+
+
+def procedure_key_for_goal(goal: str) -> str:
+    """Stable workflow key for an identical (normalized) delegated goal."""
+    norm = _norm(goal)
+    slug = re.sub(r"[^a-z0-9]+", "-", norm).strip("-")[:40].strip("-") or "task"
+    return f"{slug}-{hashlib.sha1(norm.encode('utf-8')).hexdigest()[:8]}"
+
+
 def record_verified_run(
     scope: Scope, workstream_id: str, *, procedure_key: str, proof: Any,
     session_id: str, steps: str, settings: ProactiveSettings,
     now: Optional[datetime] = None, readers: Optional[OwnerReaders] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Record one *owner-confirmed* execution of a reusable workflow.
+    """Record one *verified successful* execution of a reusable workflow.
 
-    The ``executed`` receipt is written only after the owner confirms the
-    proof (so a failed/running/invented execution records nothing); the
-    evidence row then carries the procedure key, session and the transferable
-    ``steps``. Procedure intake counts only rows backed by both.
+    Verified means the durable delegation ledger holds a clean completed
+    result that a consumer claimed (``DelegationProof`` only: a cron executions
+    row is transport status, not a work result) **and** ``session_id`` is a
+    real SessionDB session, identified by its conversation root. Anything
+    failed, unknown, unclaimed, replayed under another id or unauthentic
+    records nothing. The ``executed`` (and, when the delivery owner says so,
+    ``delivered``) receipts come from the owning ledgers; the evidence row is
+    marked ``trust="owner_session"``, which procedure intake requires.
     """
     if not _usable(scope, settings) or not str(procedure_key or "").strip():
+        return None
+    if not isinstance(proof, DelegationProof):
+        return None
+    readers = readers or OwnerReaders()
+    root = _verified_delegation_run(proof.delegation_id, session_id, readers)
+    if root is None:
         return None
     receipt = record_receipt(scope, workstream_id, kind="executed", proof=proof,
                              settings=settings, now=now, readers=readers)
     if receipt is None:
         return None
+    row = readers.delegation(proof.delegation_id) or {}
+    if row.get("delivery_state") == "delivered":
+        record_receipt(scope, workstream_id, kind="delivered",
+                       proof=DeliveredProof(proof.delegation_id), settings=settings,
+                       now=now, readers=readers)
     from cron import notepad as np
 
     moment = _now(now)
     return np.add_evidence(
-        scope, workstream_id, source_kind="execution", source_id=receipt["source_id"],
+        scope, workstream_id, source_kind="delegation", source_id=receipt["source_id"],
         status="verified", key="procedure_run", procedure_key=str(procedure_key).strip(),
-        session_id=str(session_id or ""), summary=_clip(_redact(steps or ""), 512),
-        event_at=moment.isoformat(), now=moment,
+        session_id=root, summary=_clip(_redact(steps or ""), 512),
+        event_at=moment.isoformat(), trust="owner_session", now=moment,
+    )
+
+
+def record_delegation_run(
+    scope: Scope, *, delegation_id: str, goal: str, session_id: str,
+    settings: ProactiveSettings, now: Optional[datetime] = None,
+    readers: Optional[OwnerReaders] = None,
+) -> Optional[Dict[str, Any]]:
+    """Production producer: one finished single-task delegation -> one run of
+    the workflow keyed by its goal. Verifies before writing anything, so an
+    unverified outcome creates no workstream and no row."""
+    if not (_usable(scope, settings) and settings.procedures_enabled):
+        return None
+    goal = str(goal or "").strip()
+    if len(goal) < 8:
+        return None
+    readers = readers or OwnerReaders()
+    if _verified_delegation_run(delegation_id, session_id, readers) is None:
+        return None
+    from cron import notepad as np
+
+    row = np.create_workstream(
+        scope, kind="progress", title="Verified delegated runs",
+        summary="runs of delegated goals verified by the delegation ledger",
+        fingerprint="delegation-runs", source="runtime",
+        max_items=settings.threads_max_items, now=_now(now),
+    )
+    return record_verified_run(
+        scope, row["workstream_id"], procedure_key=procedure_key_for_goal(goal),
+        proof=DelegationProof(delegation_id), session_id=session_id, steps=goal,
+        settings=settings, now=now, readers=readers,
     )
 
 
@@ -824,70 +921,6 @@ def capture_user_correction(
         expected_revision=expected_revision, session_id=session_id,
         approved=True, now=now,
     )
-
-
-def collect_cron_verified_runs(
-    settings: ProactiveSettings, *, now: Optional[datetime] = None,
-    readers: Optional[OwnerReaders] = None,
-) -> int:
-    """Turn completed cron executions into owner-confirmed procedure runs.
-
-    The authoritative owners are the cron jobs file (the reusable instruction,
-    ``job['prompt']``) and the executions ledger (``status == completed``).
-    Only enrolled jobs (``proactive.eligible_jobs``) with a workdir (so the
-    project is deterministic) and a prompt are read. Each run is recorded once
-    per execution id (receipts and evidence are unique per owner id, so replay
-    is a no-op); a cron execution is its own isolated session. Only the
-    ``executed`` fact is claimed: nothing here says saved or delivered.
-    Returns the number of newly recorded runs.
-    """
-    if not (settings.enabled and settings.procedures_enabled and settings.eligible_jobs):
-        return 0
-    from cron import executions as cron_executions
-    from cron import jobs as cron_jobs
-    from cron import notepad as np
-
-    moment = _now(now)
-    recorded = 0
-    for job_id in settings.eligible_jobs:
-        try:
-            job = cron_jobs.get_job(job_id)
-            if not job or not job.get("workdir"):
-                continue
-            steps = str(job.get("prompt") or "").strip()
-            if not steps:
-                continue  # no transferable instruction to propose
-            scope = job_scope(job)
-            if not _usable(scope, settings):
-                continue
-            done = [e for e in cron_executions.list_executions(job_id=job_id, limit=200)
-                    if e.get("status") == "completed"]
-            if not done:
-                continue
-            key = str(job.get("name") or job_id).strip()
-            row = np.create_workstream(
-                scope, kind="progress", title=f"Runs of {key}"[:160],
-                summary=f"verified executions of cron job {job_id}",
-                fingerprint=f"cron-runs:{job_id}", source="runtime",
-                max_items=settings.threads_max_items, now=moment,
-            )
-            wid = row["workstream_id"]
-            seen = {e["source_id"] for e in np.list_evidence(scope, wid)}
-            for execution in sorted(done, key=lambda e: (e["claimed_at"], e["id"])):
-                if execution["id"] in seen:
-                    continue
-                run = record_verified_run(
-                    scope, wid, procedure_key=key,
-                    proof=ExecutedProof(job_id, execution["id"]),
-                    session_id=f"cron:{execution['id']}", steps=steps,
-                    settings=settings, now=_parse(execution.get("finished_at")) or moment,
-                    readers=readers,
-                )
-                if run is not None:
-                    recorded += 1
-        except Exception:
-            logger.debug("cron verified-run collection failed for %s", job_id, exc_info=True)
-    return recorded
 
 
 # ── feedback, timing, novelty ──────────────────────────────────────────────

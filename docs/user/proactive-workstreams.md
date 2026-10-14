@@ -44,18 +44,52 @@ executions across at least 2 sessions, each with transferable steps. It is
 staged through the normal skill write-approval store (`/skills pending`) and
 is never installed without your approval.
 
-## Inspecting from the CLI
+## Inspecting and managing from the CLI
 
 ```
 clover cron workstream <project> list
 clover cron workstream <project> show <id>
 clover cron workstream <project> feedback <id> <accept|reject|correct|defer|done|stop> [note]
 clover cron workstream <project> approve <id>     # allow bounded recall of this record
+clover cron workstream <project> link <id> --job <job_id> [--root ROOT]
+clover cron workstream <project> unlink --job <job_id>
 clover cron workstream <project> prune
 ```
 
-Listing and showing always work (including after the feature is disabled).
-Writes require an interactive terminal and `proactive.enabled: true`.
+`<project>` is the project's directory (`.` or an absolute path is resolved
+the same way chat turns resolve it) or a literal project key. `--root`
+defaults to `local`, the root used by CLI/TUI chat turns, so records you
+approve here are the ones those turns recall. Listing and showing always work
+(including after the feature is disabled). Writes require an interactive
+terminal and `proactive.enabled: true`. This is a management surface: it does
+not make the assistant raise suggestions in chat.
+
+### Corrections
+
+A correction is recorded only from a chat message you send that *starts with*
+`/correct` or `Correction:` (optionally `/correct ws_<id>: ...` to supersede a
+specific record). Clover reads that message back from the session store at the
+end of the turn; nothing is inferred from ordinary prose, assistant or tool
+text, quoted or replayed rows, or silence, and a terminal command cannot
+record one (a TTY does not prove a human). Secrets are redacted; paths, ids
+and test names are kept literally; superseded records keep their history.
+
+### Linking a monitor job
+
+`link` ties an enrolled monitor job (`proactive.eligible_jobs`) to one
+approved, open record so changed monitor output is recorded as evidence. The
+job needs a `workdir` equal to the project. Linking does not start, authorize
+or schedule work, and `unlink` leaves the record untouched.
+
+### Procedure evidence
+
+A run counts only when the durable delegation ledger holds a clean, completed
+single-task result that a consumer has claimed, and the turn belongs to a real
+session in the session store (compression-rotated segments are one
+conversation). Identical delegated goals form one workflow. Cron executions
+are *not* evidence: the executions ledger records transport status and carries
+no session identity. Failed, unknown, unclaimed, replayed or fabricated-session
+outcomes never count. A draft needs the thresholds below and is only staged.
 
 ## Settings
 

@@ -2132,6 +2132,8 @@ def propose_procedure_candidates(
             not key
             or row.get("status") != "verified"
             or row.get("key") != "procedure_run"
+            or row.get("source_kind") != "delegation"
+            or row.get("trust") != "owner_session"
             or not str(row.get("session_id") or "")
             or not str(row.get("summary") or "").strip()
             or (row["workstream_id"], row["source_id"]) not in receipts

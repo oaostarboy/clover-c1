@@ -36,6 +36,7 @@ def sc(project="proj-a", audience="private", root="root-1"):
 
 
 def _exec(job="audit-job", ok=True):
+    """A completed (or failed) row in the real cron executions ledger."""
     import cron.executions as ex
 
     rec = ex.create_execution(job, source="test")
@@ -44,19 +45,56 @@ def _exec(job="audit-job", ok=True):
     return rec["id"]
 
 
+_N = {"n": 0}
+
+
+def _session(sid, *, parent=None):
+    """A real SessionDB session row in the scratch CLOVER_HOME."""
+    from clover_state import SessionDB
+
+    db = SessionDB()
+    try:
+        if db.get_session(sid) is None:
+            db.create_session(sid, "cli", parent_session_id=parent)
+    finally:
+        db.close()
+    return sid
+
+
+def _deleg(*, status="completed", complete=True, deliver=True, did=None):
+    """A real durable delegation row; ``deliver`` = a consumer claimed it."""
+    import time
+
+    import tools.async_delegation as ad
+
+    _N["n"] += 1
+    did = did or f"del-{_N['n']:04d}"
+    ad._persist_dispatch({"delegation_id": did, "dispatched_at": time.time(),
+                          "goal": "g", "session_key": "s"})
+    if complete:
+        ad._persist_completion({"delegation_id": did, "status": status},
+                               {"status": status, "summary": "ok"})
+        if deliver:
+            assert ad.mark_completion_delivered(did)
+    return did
+
+
 def _wid(scope, name="release audit runs"):
     return np.create_workstream(scope, kind="progress", title=name, summary=name,
                                 fingerprint=name, now=NOW)["workstream_id"]
 
 
 def run(scope, wid, session, *, key="release-audit", ok=True, steps=STEPS,
-        execution_id=None, minutes=0, settings=ON):
-    eid = execution_id or _exec(ok=ok)
+        delegation_id=None, minutes=0, settings=ON, deliver=True, make_session=True):
+    """One run through the production verifier. Returns (evidence|None, id)."""
+    if make_session and session:
+        _session(session)
+    did = delegation_id or _deleg(status="completed" if ok else "failed", deliver=deliver)
     return ws.record_verified_run(
-        scope, wid, procedure_key=key,
-        proof=ws.ExecutedProof("audit-job", eid), session_id=session,
-        steps=steps, settings=settings, now=NOW + timedelta(minutes=minutes),
-    ), eid
+        scope, wid, procedure_key=key, proof=ws.DelegationProof(did),
+        session_id=session, steps=steps, settings=settings,
+        now=NOW + timedelta(minutes=minutes),
+    ), did
 
 
 def pending():
@@ -64,21 +102,65 @@ def pending():
 
 
 class TestRecordVerifiedRun:
-    def test_requires_owner_confirmed_execution(self):
+    def test_requires_owner_confirmed_consumed_success_and_a_real_session(self):
         scope = sc()
         wid = _wid(scope)
-        good, eid = run(scope, wid, "s1")
+        good, did = run(scope, wid, "s1")
         assert good["status"] == "verified" and good["procedure_key"] == "release-audit"
-        assert good["source_id"] == eid and good["session_id"] == "s1"
-        assert [r["kind"] for r in np.list_receipts(scope, wid)] == ["executed"]
-        bad, _ = run(scope, wid, "s1", ok=False)
-        assert bad is None
-        none = ws.record_verified_run(
-            scope, wid, procedure_key="release-audit",
-            proof=ws.ExecutedProof("audit-job", "invented"), session_id="s1",
-            steps=STEPS, settings=ON, now=NOW)
-        assert none is None
+        assert good["source_id"] == did and good["session_id"] == "s1"
+        assert good["trust"] == "owner_session" and good["source_kind"] == "delegation"
+        kinds = {r["kind"]: r["owner"] for r in np.list_receipts(scope, wid)}
+        assert kinds == {"executed": "execution", "delivered": "delivery"}
+
+    def test_transport_only_cron_completion_is_never_verified_success(self):
+        scope = sc()
+        wid = _wid(scope)
+        _session("s1")
+        eid = _exec()
+        got = ws.record_verified_run(
+            scope, wid, procedure_key="release-audit", proof=ws.ExecutedProof("audit-job", eid),
+            session_id="s1", steps=STEPS, settings=ON, now=NOW)
+        assert got is None
+        assert np.list_evidence(scope, wid) == [] and np.list_receipts(scope, wid) == []
+
+    @pytest.mark.parametrize("variant", ["failed", "running", "unclaimed", "missing"])
+    def test_failed_unknown_unconsumed_or_missing_outcomes_do_not_count(self, variant):
+        scope = sc()
+        wid = _wid(scope)
+        did = {
+            "failed": lambda: _deleg(status="failed"),
+            "running": lambda: _deleg(complete=False),
+            "unclaimed": lambda: _deleg(deliver=False),
+            "missing": lambda: "never-dispatched",
+        }[variant]()
+        got, _ = run(scope, wid, "s1", delegation_id=did)
+        assert got is None
+        assert np.list_evidence(scope, wid) == [] and np.list_receipts(scope, wid) == []
+
+    @pytest.mark.parametrize("session", ["", "invented-session"])
+    def test_missing_or_fabricated_session_never_counts(self, session):
+        scope = sc()
+        wid = _wid(scope)
+        got, _ = run(scope, wid, session, make_session=False)
+        assert got is None and np.list_evidence(scope, wid) == []
+
+    def test_compaction_rotated_segments_are_one_conversation(self):
+        scope = sc()
+        wid = _wid(scope)
+        _session("conv-1")
+        _session("conv-1b", parent="conv-1")      # context compression rotation
+        a, _ = run(scope, wid, "conv-1")
+        b, _ = run(scope, wid, "conv-1b")
+        assert a["session_id"] == b["session_id"] == "conv-1"
+
+    def test_same_delegation_replayed_is_one_evidence_row(self):
+        scope = sc()
+        wid = _wid(scope)
+        first, did = run(scope, wid, "s1")
+        again, _ = run(scope, wid, "s2", delegation_id=did)
+        assert again["evidence_id"] == first["evidence_id"]
         assert len(np.list_evidence(scope, wid)) == 1
+        assert len(np.list_receipts(scope, wid, kinds=["executed"])) == 1
 
     def test_disabled_is_inert(self):
         scope = sc()
@@ -157,9 +239,9 @@ class TestThreshold:
     def test_same_execution_repeated_counts_once(self):
         scope = sc()
         wid = _wid(scope)
-        _, eid = run(scope, wid, "s1")
+        _, did = run(scope, wid, "s1")
         for s in ("s2", "s3"):
-            run(scope, wid, s, execution_id=eid)
+            run(scope, wid, s, delegation_id=did)
         assert curator.propose_procedure_candidates(scope, ON, now=NOW) == []
 
     def test_failed_runs_never_count(self):
@@ -184,6 +266,18 @@ class TestThreshold:
         wid = _wid(scope)
         for i, s in enumerate(("s1", "s2", "s3")):
             run(scope, wid, s, steps="", minutes=i)
+        assert curator.propose_procedure_candidates(scope, ON, now=NOW) == []
+
+    def test_runs_without_owner_session_trust_do_not_count(self):
+        scope = sc()
+        wid = _wid(scope)
+        for i, sess in enumerate(("s1", "s2", "s3")):
+            did = _deleg()
+            np.add_receipt(scope, wid, kind="executed", owner="execution", source_id=did, now=NOW)
+            np.add_evidence(scope, wid, source_kind="delegation", source_id=did,
+                            status="verified", key="procedure_run",
+                            procedure_key="release-audit", session_id=sess, summary=STEPS,
+                            event_at=NOW.isoformat(), now=NOW)   # default trust: 'runtime'
         assert curator.propose_procedure_candidates(scope, ON, now=NOW) == []
 
     def test_evidence_without_owner_receipt_does_not_count(self):
@@ -334,3 +428,146 @@ class TestCuratorCadence:
         monkeypatch.setattr(curator, "run_procedure_intake",
                             lambda **k: (_ for _ in ()).throw(RuntimeError("db locked")))
         assert curator.maybe_run_curator() == {"ran": True}
+
+
+class TestCronCannotProveProcedures:
+    """The cron executions ledger records transport status and carries no
+    session identity: it must never stage a draft, however many runs."""
+
+    @pytest.fixture
+    def job(self, monkeypatch, tmp_path):
+        import cron.jobs as jobs_mod
+
+        home = tmp_path / "home"
+        (home / "cron" / "output").mkdir(parents=True)
+        monkeypatch.setattr(jobs_mod, "CLOVER_DIR", home)
+        monkeypatch.setattr(jobs_mod, "CRON_DIR", home / "cron")
+        monkeypatch.setattr(jobs_mod, "JOBS_FILE", home / "cron" / "jobs.json")
+        monkeypatch.setattr(jobs_mod, "OUTPUT_DIR", home / "cron" / "output")
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        return jobs_mod.create_job("Audit release artifacts and write the report.",
+                                   "every 1d", name="release-audit", workdir=str(proj))
+
+    def test_many_completed_executions_of_an_enrolled_job_stage_nothing(self, job, store):
+        for _ in range(5):
+            _exec(job["id"])
+        s = ws.ProactiveSettings(enabled=True, mode="active", procedures_enabled=True,
+                                 eligible_jobs=(job["id"],))
+        assert curator.run_procedure_intake(settings=s, now=NOW) == []
+        assert pending() == []
+        assert not hasattr(ws, "collect_cron_verified_runs")
+        # nothing was even recorded for the job
+        assert np.list_procedure_scopes() == []
+        assert curator.maybe_run_curator is not None
+
+
+class TestDelegationProducerChain:
+    """end_turn (production) -> delegation ledger + SessionDB owners -> ledger
+    evidence -> curator intake -> stage_write('skills')."""
+
+    GOAL = "Audit the release artifacts: list them, checksum each, compare the manifest, write the report"
+
+    @pytest.fixture(autouse=True)
+    def host(self, monkeypatch, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        monkeypatch.setenv("TERMINAL_CWD", str(proj))
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
+
+    def _agent(self, session_id, *specs, make_session=True):
+        import types
+
+        from agent import foreground_time_limit as fl
+        from clover_state import SessionDB
+
+        if make_session and session_id:
+            _session(session_id)
+        own = {d: fl.DispatchReceipt(delegation_id=d, seq=i + 1, goals=tuple(g), turn_id="t1")
+               for i, (d, g) in enumerate(specs)}
+        return types.SimpleNamespace(
+            platform="cli", session_id=session_id, _session_db=SessionDB(read_only=True),
+            _fg_own_dispatches=own, _fg_dispatch_seq=len(own), _wl_floor=0,
+            _wl_completion_ids=tuple(d for d, _ in specs))
+
+    def _end(self, session_id, *specs, **kw):
+        from agent import work_lifecycle as wl
+
+        agent = self._agent(session_id, *specs, **kw)
+        try:
+            wl.end_turn(agent)
+        finally:
+            agent._session_db.close()
+        return ws.scope_for_agent(agent)
+
+    def test_three_verified_runs_across_two_real_sessions_stage_one_draft(self):
+        ids = [_deleg() for _ in range(3)]
+        scope = self._end("conv-A", (ids[0], [self.GOAL]))
+        self._end("conv-A", (ids[1], [self.GOAL]))
+        assert curator.run_procedure_intake(settings=ON, now=NOW) == []   # 1 session so far
+        self._end("conv-B", (ids[2], [self.GOAL]))
+        staged = curator.run_procedure_intake(settings=ON, now=NOW)
+        assert len(staged) == 1
+        assert sorted(staged[0]["execution_ids"]) == sorted(ids)
+        assert staged[0]["session_ids"] == ["conv-A", "conv-B"]
+        recs = pending()
+        assert len(recs) == 1 and recs[0]["subsystem"] == "skills"
+        assert recs[0]["origin"] == "background_review" and recs[0]["action"] == "create"
+        assert "checksum each" in recs[0]["payload"]["content"]
+        from clover_constants import get_clover_home
+
+        skills = get_clover_home() / "skills"
+        assert not skills.exists() or not any(skills.rglob("SKILL.md"))
+        # receipts are the owners' own kinds, one per run
+        runs = [r for r in np.list_workstreams(scope, kinds=["progress"])
+                if r["fingerprint"] == "delegation-runs"]
+        assert len(runs) == 1
+        rc = np.list_receipts(scope, runs[0]["workstream_id"], kinds=["executed"])
+        assert sorted(r["source_id"] for r in rc) == sorted(ids)
+        # replaying the intake or the turns changes nothing
+        self._end("conv-B", (ids[2], [self.GOAL]))
+        assert curator.run_procedure_intake(settings=ON, now=NOW) == []
+        assert len(pending()) == 1
+
+    def test_one_session_however_many_runs_never_qualifies(self):
+        for _ in range(4):
+            self._end("conv-A", (_deleg(), [self.GOAL]))
+        assert curator.run_procedure_intake(settings=ON, now=NOW) == []
+        assert pending() == []
+
+    def test_failed_unconsumed_and_unknown_outcomes_do_not_increment(self):
+        self._end("conv-A", (_deleg(), [self.GOAL]))
+        self._end("conv-B", (_deleg(), [self.GOAL]))
+        for bad in (_deleg(status="failed"), _deleg(deliver=False), _deleg(complete=False),
+                    "never-dispatched"):
+            self._end("conv-C", (bad, [self.GOAL]))
+        assert curator.run_procedure_intake(settings=ON, now=NOW) == []
+        assert pending() == []
+
+    def test_fabricated_or_missing_session_does_not_count_as_a_session(self):
+        self._end("conv-A", (_deleg(), [self.GOAL]))
+        self._end("conv-A", (_deleg(), [self.GOAL]))
+        self._end("never-created", (_deleg(), [self.GOAL]), make_session=False)
+        self._end("", (_deleg(), [self.GOAL]), make_session=False)
+        assert curator.run_procedure_intake(settings=ON, now=NOW) == []
+
+    def test_same_delegation_replayed_from_other_sessions_counts_once(self):
+        did = _deleg()
+        for sess in ("conv-A", "conv-B", "conv-C"):
+            self._end(sess, (did, [self.GOAL]))
+        assert curator.run_procedure_intake(settings=ON, now=NOW) == []
+
+    def test_different_goals_and_batches_do_not_pool(self):
+        self._end("conv-A", (_deleg(), ["Rotate the signing keys for the staging cluster"]))
+        self._end("conv-B", (_deleg(), ["Rebuild the documentation search index fully"]))
+        self._end("conv-C", (_deleg(), [self.GOAL, "second batch task goal text"]))
+        self._end("conv-D", (_deleg(), [self.GOAL, "second batch task goal text"]))
+        assert curator.run_procedure_intake(settings=ON, now=NOW) == []
+
+    def test_disabled_procedures_record_nothing(self, monkeypatch, store):
+        off = ws.ProactiveSettings(enabled=True, mode="active", procedures_enabled=False)
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: off)
+        for sess in ("conv-A", "conv-B", "conv-C"):
+            self._end(sess, (_deleg(), [self.GOAL]))
+        assert np.list_procedure_scopes() == []
+        assert curator.run_procedure_intake(settings=off, now=NOW) == []

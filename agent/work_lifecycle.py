@@ -527,6 +527,38 @@ def begin_turn(
 _SCOPE_ATTR = "_workstream_scope"
 
 
+def _record_delegation_runs(agent: Any, scope: Any, settings: Any, session_id: str,
+                            receipts: Any) -> None:
+    """One verified run per finished single-task helper of this turn.
+
+    The ledger checks are the owners' own (clean completed delegation row,
+    consumer claim, an existing SessionDB conversation); nothing here asserts
+    success.  Batches and unfinished helpers are ignored.
+    """
+    from agent import workstreams as _ws
+
+    db = getattr(agent, "_session_db", None)
+    readers = _ws.OwnerReaders()
+    if db is not None:
+        def _root(sid: str, _db: Any = db) -> Any:
+            if not sid or _db.get_session(sid) is None:
+                return None
+            return _db.get_conversation_root(sid) or None
+
+        readers = _ws.OwnerReaders(session_root=_root)
+    for r in receipts:
+        goals = tuple(getattr(r, "goals", ()) or ())
+        if len(goals) != 1:
+            continue
+        try:
+            _ws.record_delegation_run(
+                scope, delegation_id=r.delegation_id, goal=str(goals[0]),
+                session_id=session_id, settings=settings, readers=readers,
+            )
+        except Exception:
+            logger.debug("delegation run not recorded", exc_info=True)
+
+
 def _record_unfinished(agent: Any) -> None:
     """Persist this turn's workstream facts for the opt-in ledger.
 
@@ -564,12 +596,14 @@ def _record_unfinished(agent: Any) -> None:
         floor = getattr(agent, _FLOOR, None)
         if not isinstance(floor, int) or isinstance(floor, bool):
             return
-        receipts = _turn_receipts(agent, floor)
-        if not receipts:
-            receipts = completion_group(agent, ids) if ids else []
-        if not receipts:
-            return
-        _ws.record_outcomes(scope, unfinished_outcomes(receipts), settings)
+        turn = _turn_receipts(agent, floor)
+        group = completion_group(agent, ids) if ids else []
+        receipts = turn or group
+        if receipts:
+            _ws.record_outcomes(scope, unfinished_outcomes(receipts), settings)
+        if settings.procedures_enabled and session_id:
+            _record_delegation_runs(agent, scope, settings, session_id,
+                                    {r.delegation_id: r for r in [*turn, *group]}.values())
     except Exception:
         logger.debug("workstream recording unavailable", exc_info=True)
 
