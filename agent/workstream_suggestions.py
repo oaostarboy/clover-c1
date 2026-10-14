@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Mapping, Optional
 
 from agent import workstream_origin as origin
@@ -180,6 +180,11 @@ def present_offer(agent: Any, result: Any, *, is_current) -> Optional[dict]:
             candidates.append(_candidate(row, turn.query))
         candidates.sort(key=lambda c: (-c.relevance, c.workstream_id))
         for candidate in candidates:
+            # Message-global attachment/audio directives cannot be made inert
+            # by quoting. Defer these records, never reinterpret them as sends.
+            # Also avoid an unhelpful footer duplicating the requested answer.
+            if "[[" in candidate.text or candidate.text in result["final_response"]:
+                continue
             decision = gate_candidate(candidate, turn.scope, settings,
                                       session_id=turn.conversation_root,
                                       timing=timing, now=moment)
@@ -217,9 +222,14 @@ def present_offer(agent: Any, result: Any, *, is_current) -> Optional[dict]:
     if committed is None or _artifact_detail(committed) != artifact or not is_current():
         return None
     artifact["receipt_id"] = receipt_id
+    # The existing response adapter treats bare paths and MEDIA: tags as
+    # attachment directives. Its blockquote mask is the supported literal
+    # presentation surface. Prefix EVERY line (including CR/Unicode newlines)
+    # so a stored identifier stays exact without becoming an upload command.
+    quoted = "\n".join("> " + line for line in artifact["text"].splitlines())
     artifact["footer"] = (
-        f"Optional workstream check [ws:{artifact['workstream_id']}]: "
-        f"{artifact['text']}\n"
+        f"Optional workstream check [ws:{artifact['workstream_id']}]:\n"
+        f"{quoted}\n"
         f"To defer: Feedback: {artifact['workstream_id']} defer: not now"
     )
     return artifact
