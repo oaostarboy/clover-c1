@@ -8995,6 +8995,10 @@ class AIAgent:
                             durable_turn_lease_turn_active = True
                         durable_turn_lease_thread.start()
                     self._trusted_human_ingress = trusted_human_ingress
+                    # Read-only fence before the real host loop. The producer
+                    # runs only after the finalizer's persistence has settled.
+                    from agent.workstream_procedures import begin_execution_turn
+                    _execution_turn = begin_execution_turn(self, conversation_history)
                     result = run_conversation(
                         self,
                         user_message,
@@ -9009,6 +9013,10 @@ class AIAgent:
                         moa_config=moa_config,
                         completion_delegation_ids=completion_delegation_ids,
                     )
+                    from agent.workstream_procedures import finish_execution_turn
+                    _execution_outcome = finish_execution_turn(self, result, _execution_turn)
+                    if _execution_outcome is not None and isinstance(result, dict):
+                        result["workstream_execution"] = _execution_outcome
                 finally:
                     # A cached agent must never carry one turn's capability
                     # into the next: always retire it with the turn.

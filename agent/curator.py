@@ -2111,7 +2111,7 @@ def propose_procedure_candidates(
     ``skill_manage``, never installed — and is recorded once by a typed
     ``proposed`` receipt, so a rejected or pending proposal is not repeated.
     """
-    if not (settings.enabled and settings.procedures_enabled):
+    if not (settings.enabled and settings.active and settings.procedures_enabled):
         return []
     if settings.private_only and not scope.private:
         return []
@@ -2132,12 +2132,15 @@ def propose_procedure_candidates(
             not key
             or row.get("status") != "verified"
             or row.get("key") != "procedure_run"
-            or row.get("source_kind") != "delegation"
+            or row.get("source_kind") != "execution"
             or row.get("trust") != "owner_session"
             or not str(row.get("session_id") or "")
             or not str(row.get("summary") or "").strip()
             or (row["workstream_id"], row["source_id"]) not in receipts
         ):
+            continue
+        from agent.workstream_procedures import verified_execution_evidence
+        if not verified_execution_evidence(scope, row):
             continue
         groups.setdefault(key, {}).setdefault(row["source_id"], row)
 
@@ -2147,8 +2150,8 @@ def propose_procedure_candidates(
         runs = sorted(by_exec.values(), key=lambda r: (r["observed_at"], r["source_id"]))
         sessions = {r["session_id"] for r in runs}
         if (
-            len(runs) < settings.procedures_min_verified_runs
-            or len(sessions) < settings.procedures_min_sessions
+            len(runs) < max(3, settings.procedures_min_verified_runs)
+            or len(sessions) < max(2, settings.procedures_min_sessions)
         ):
             continue
         name = procedure_skill_name(key)
@@ -2169,6 +2172,7 @@ def propose_procedure_candidates(
                 continue  # never shadow or overwrite an installed skill
         except Exception:
             logger.debug("skill lookup unavailable for %s", name, exc_info=True)
+            continue  # unknown collision state must not stage a draft
         row = existing[0] if existing else np.create_workstream(
             scope, kind="procedure", title=f"Procedure: {key}"[:160],
             summary=f"{len(runs)} verified executions across {len(sessions)} sessions",
@@ -2202,6 +2206,11 @@ def propose_procedure_candidates(
         except Exception:
             logger.warning("procedure draft for %s could not be staged", key, exc_info=True)
             continue
+        # stage_write is best effort and returns a record even on disk failure.
+        # A proposal receipt requires the persistence owner's exact readback.
+        if wa.get_pending(wa.SKILLS, str(record.get("id") or "")) != record:
+            logger.warning("procedure draft for %s was not persisted", key)
+            continue
         np.add_receipt(scope, wid, kind="proposed", owner="policy",
                        source_id=f"pending:{record['id']}",
                        detail=f"staged skill draft {name}", now=moment)
@@ -2226,7 +2235,7 @@ def run_procedure_intake(
     from agent import workstreams as _ws
 
     settings = settings if settings is not None else _ws.load_settings()
-    if not (settings.enabled and settings.procedures_enabled):
+    if not (settings.enabled and settings.active and settings.procedures_enabled):
         return []
     from cron import notepad as np
 
