@@ -49,29 +49,33 @@ is never installed without your approval.
 ```
 clover cron workstream <project> list
 clover cron workstream <project> show <id>
-clover cron workstream <project> feedback <id> <accept|reject|correct|defer|done|stop> [note]
-clover cron workstream <project> approve <id>     # allow bounded recall of this record
 clover cron workstream <project> link <id> --job <job_id> [--root ROOT]
 clover cron workstream <project> unlink --job <job_id>
 clover cron workstream <project> prune
 ```
 
+`feedback` and `approve` are intentionally not available from the CLI: they are
+user decisions and a terminal cannot prove a human is at it (an agent's shell
+can allocate one). They are carried by the chat ingress once it records a
+trusted human-origin receipt for the message.
+
 `<project>` is the project's directory (`.` or an absolute path is resolved
 the same way chat turns resolve it) or a literal project key. `--root`
 defaults to `local`, the root used by CLI/TUI chat turns, so records you
-approve here are the ones those turns recall. Listing and showing always work
-(including after the feature is disabled). Writes require an interactive
-terminal and `proactive.enabled: true`. This is a management surface: it does
-not make the assistant raise suggestions in chat.
+recall. Listing and showing always work (including after the feature is
+disabled). `prune`, `link` and `unlink` require an interactive terminal and
+`proactive.enabled: true`. This is a management surface: it does not make the
+assistant raise suggestions in chat.
 
 ### Corrections
 
 A correction is recorded only from a chat message you send that *starts with*
 `/correct` or `Correction:` (optionally `/correct ws_<id>: ...` to supersede a
-specific record). Clover reads that message back from the session store at the
-end of the turn; nothing is inferred from ordinary prose, assistant or tool
-text, quoted or replayed rows, or silence, and a terminal command cannot
-record one (a TTY does not prove a human). Secrets are redacted; paths, ids
+specific record) **and** whose stored row carries the session store's trusted
+human-origin receipt (written by the real user-input ingress, bound to the
+profile, session, message row and event). A database role of `user`, a
+terminal, assistant or tool text, quoted or replayed rows, and silence are not
+evidence; until that receipt exists nothing is recorded. Secrets are redacted; paths, ids
 and test names are kept literally; superseded records keep their history.
 
 ### Linking a monitor job

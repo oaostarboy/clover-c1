@@ -685,14 +685,18 @@ class TestWorkstreamCli:
         assert np.list_feedback(scope_, wid) == []
         assert np.get_workstream(scope_, wid)["approved"] is False
 
-    def test_interactive_feedback_and_approve_are_attributed_to_user(self, cli):
+    def test_tty_only_feedback_and_approve_persist_nothing(self, cli, capsys):
+        """A TTY/PTY an agent's shell can allocate is not human identity."""
         run, scope_, row = cli
         wid = row["workstream_id"]
-        assert run("feedback", workstream_id=wid, feedback_kind="defer", note="not now") == 0
-        fb = np.list_feedback(scope_, wid)
-        assert [(f["kind"], f["actor"], f["note"]) for f in fb] == [("defer", "user", "not now")]
-        assert run("approve", workstream_id=wid) == 0
-        assert np.get_workstream(scope_, wid)["approved"] is True
+        assert run("feedback", tty=True, workstream_id=wid, feedback_kind="reject") == 1
+        assert run("feedback", tty=True, workstream_id=wid, feedback_kind="defer", note="not now") == 1
+        assert run("approve", tty=True, workstream_id=wid) == 1
+        out = capsys.readouterr().out
+        assert "human-origin" in out
+        assert np.list_feedback(scope_, wid) == []
+        assert np.get_workstream(scope_, wid)["approved"] is False
+        assert np.list_receipts(scope_, wid) == []
 
     def test_disabled_feature_refuses_writes(self, cli, monkeypatch, capsys):
         from agent import workstreams as ws
@@ -700,8 +704,10 @@ class TestWorkstreamCli:
         run, scope_, row = cli
         monkeypatch.setattr(ws, "load_settings", lambda config=None: ws.ProactiveSettings())
         assert run("feedback", workstream_id=row["workstream_id"], feedback_kind="reject") == 1
-        assert "disabled" in capsys.readouterr().out
         assert np.list_feedback(scope_, row["workstream_id"]) == []
+        capsys.readouterr()
+        assert run("prune") == 1
+        assert "disabled" in capsys.readouterr().out
 
     def test_unknown_feedback_kind_and_foreign_scope_rejected(self, cli):
         run, scope_, row = cli

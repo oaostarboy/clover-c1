@@ -798,11 +798,13 @@ def cron_workstream(args) -> int:
     """Handle ``clover cron workstream <project> [list|show|feedback|approve|prune]``.
 
     Inspection never writes and works even when ``proactive.enabled`` is false
-    (additive rows stay inspectable after rollback). Writes require an
-    interactive terminal and the feature enabled: the notepad CLI is also
-    reachable from an agent's terminal tool, and user feedback/approval must
-    not be forgeable from there. Receipts, authority links and occurrences have
-    no command at all.
+    (additive rows stay inspectable after rollback). ``feedback`` and
+    ``approve`` are refused outright: they are user-origin decisions and a
+    TTY/PTY (which an agent's terminal tool can allocate) is not human
+    identity; they require the trusted SessionDB human-origin receipt carried
+    by the chat ingress. ``prune``/``link``/``unlink`` are management writes
+    gated on an interactive terminal and the feature enabled. Receipts,
+    authority links and occurrences have no command at all.
     """
     from agent import workstreams as ws
     from cron import notepad as np
@@ -855,39 +857,23 @@ def cron_workstream(args) -> int:
             return 0
 
         # --- writes -------------------------------------------------------
+        if action in {"feedback", "approve"}:
+            # User-origin decisions need the trusted SessionDB human-origin
+            # receipt. A TTY/PTY is not identity (an agent's shell can allocate
+            # one), so this CLI never persists them; they are carried by the
+            # chat ingress once the central owner publishes that receipt.
+            print(color(f"Refused: '{action}' needs a trusted human-origin receipt "
+                        "from the chat ingress; a terminal cannot supply one.", Colors.RED))
+            return 1
+
         if not sys.stdin.isatty():
-            print(color("Refused: workstream feedback/approval/prune need an interactive "
-                        "terminal (the user must give them).", Colors.RED))
+            print(color("Refused: prune/link/unlink need an interactive terminal.",
+                        Colors.RED))
             return 1
         settings = ws.load_settings()
         if not settings.enabled:
             print(color("proactive is disabled; enable it in config.yaml first.", Colors.YELLOW))
             return 1
-
-        if action == "feedback":
-            kind = getattr(args, "feedback_kind", None)
-            if not wid or not kind:
-                print(color("Usage: clover cron workstream <project> feedback <id> <kind> [note]",
-                            Colors.RED))
-                return 1
-            row = ws.record_feedback(scope, wid, kind=kind, settings=settings,
-                                     note=getattr(args, "note", None) or "")
-            if row is None:
-                print(color(f"Feedback not recorded (kind must be one of "
-                            f"{', '.join(ws.FEEDBACK_KINDS)}).", Colors.RED))
-                return 1
-            print(color(f"Recorded {kind} feedback for {wid}.", Colors.GREEN))
-            return 0
-
-        if action == "approve":
-            if not wid:
-                print(color("Usage: clover cron workstream <project> approve <id>", Colors.RED))
-                return 1
-            if ws.approve_workstream(scope, wid, settings=settings) is None:
-                print(color("Not approved (scope not eligible).", Colors.RED))
-                return 1
-            print(color(f"Approved {wid} for recall in this scope.", Colors.GREEN))
-            return 0
 
         if action == "prune":
             removed = np.prune(scope, retention_days=settings.threads_retention_days)

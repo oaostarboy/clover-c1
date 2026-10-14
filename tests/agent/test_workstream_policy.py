@@ -22,6 +22,75 @@ ON = ws.ProactiveSettings(enabled=True, mode="active", recall_enabled=True,
                           suggestions_enabled=True)
 
 
+class HumanDouble:
+    """Contract-conformance double for the trusted human-origin read API.
+
+    The central owner has NOT published that API (see
+    TRUSTED-HUMAN-ORIGIN-INTERFACE.md). This double returns exactly the
+    fields the interface requires so the consumer's binding/idempotency logic
+    can be exercised; it is not evidence that any real ingress is trusted.
+    """
+
+    def __init__(self):
+        self.rows = {}
+        self.n = 0
+
+    def issue(self, db, session_id, *, profile=None, origin="human", consumed=False):
+        row = [r for r in db.get_messages(session_id) if r["role"] == "user"][-1]
+        self.n += 1
+        got = ws.HumanOrigin(profile or ws.current_profile(), session_id, row["id"],
+                             f"evt-{self.n}", origin, consumed)
+        self.rows[(session_id, row["id"])] = got
+        return got
+
+    def reader(self, db, session_id, message_row_id):
+        return self.rows.get((session_id, message_row_id))
+
+
+H = HumanDouble()
+
+
+@pytest.fixture(autouse=True)
+def _reset_human_double():
+    H.rows.clear()
+    H.n = 0
+    yield
+
+
+def horigin():
+    """A fresh double-issued receipt bound to a real SessionDB user row."""
+    from clover_state import SessionDB
+
+    db = SessionDB()
+    try:
+        sid = "co-sess"
+        if db.get_session(sid) is None:
+            db.create_session(sid, "cli")
+        db.append_message(sid, "user", "ok")
+        return H.issue(db, sid)
+    finally:
+        db.close()
+
+
+def hfb(scope, wid, kind, **kw):
+    """Explicit feedback carried by an issued (double) human-origin receipt."""
+    from clover_state import SessionDB
+
+    db = SessionDB()
+    try:
+        sid = "fb-sess"
+        if db.get_session(sid) is None:
+            db.create_session(sid, "cli")
+        db.append_message(sid, "user", "ok")
+        origin = H.issue(db, sid)
+    finally:
+        db.close()
+    kw.setdefault("settings", ON)
+    kw.setdefault("now", NOW)
+    return ws.record_feedback(scope, wid, kind=kind, origin=origin,
+                              human_reader=H.reader, **kw)
+
+
 @pytest.fixture(autouse=True)
 def store(monkeypatch, tmp_path):
     monkeypatch.setattr(np, "NOTEPAD_FILE", tmp_path / "cron" / "notepad.db")
@@ -202,8 +271,10 @@ class TestCorrections:
         new = ws.record_correction(
             scope, text=text, supersedes_id=old["workstream_id"],
             session_id="sess-9", settings=ON, now=NOW,
+            origin=horigin(), human_reader=H.reader,
         )
         assert new["kind"] == "correction" and new["supersedes_id"] == old["workstream_id"]
+        assert new["source"].startswith("human:")
         assert "/srv/app/releases/v2.3.1" in new["summary"]
         assert "tests/test_x.py::test_z" in new["summary"]
         assert "sk-abcdefghijklmnopqrstuvwxyz0123456789" not in new["summary"]
@@ -217,16 +288,27 @@ class TestCorrections:
                              summary="b", now=NOW)
         with pytest.raises(np.StaleRevision):
             ws.record_correction(scope, text="fix", supersedes_id=old["workstream_id"],
-                                 expected_revision=1, settings=ON, now=NOW)
+                                 expected_revision=1, settings=ON, now=NOW,
+                                 origin=horigin(), human_reader=H.reader)
 
     def test_correction_and_failure_distinct_and_both_survive(self):
         scope = sc()
-        ws.record_correction(scope, text="Use path /x, not /y", settings=ON, now=NOW)
+        ws.record_correction(scope, text="Use path /x, not /y", settings=ON, now=NOW,
+                             origin=horigin(), human_reader=H.reader)
         ws.record_outcomes(scope, [out("tests", "failed", "d9",
                                        summary="test_z failed")], ON, now=NOW)
         text = ws.thread_context(scope, ON, now=NOW + timedelta(days=1))
         assert "Use path /x, not /y" in text
         assert "tests" in text and "test_z failed" in text
+
+
+    def test_correction_text_without_an_owner_receipt_is_not_recorded(self):
+        scope = sc()
+        assert ws.record_correction(scope, text="Use path /x", settings=ON, now=NOW) is None
+        assert ws.record_correction(scope, text="Use path /x", settings=ON, now=NOW,
+                                    origin=ws.HumanOrigin(ws.current_profile(), "s", 1, "e", "human"),
+                                    human_reader=H.reader) is None
+        assert np.list_workstreams(scope) == []
 
 
 # ── typed owner receipts ───────────────────────────────────────────────────
@@ -405,6 +487,58 @@ class TestFeedback:
         assert ws.feedback_state(scope, w) == "unknown"
         assert np.list_feedback(scope, w) == []
 
+    def test_tty_user_claim_without_an_owner_receipt_writes_nothing(self, item):
+        """The CLI/TTY and a caller's ``actor='user'`` are not human identity."""
+        scope, w = item
+        assert ws.record_feedback(scope, w, kind="reject", settings=ON, now=NOW) is None
+        assert ws.record_feedback(scope, w, kind="reject", actor="user", settings=ON,
+                                  origin=None, now=NOW) is None
+        fake = ws.HumanOrigin(ws.current_profile(), "s", 1, "evt-x", "human", False)
+        # default reader = the unpublished trusted API: fail closed
+        assert ws.record_feedback(scope, w, kind="reject", settings=ON, origin=fake,
+                                  now=NOW) is None
+        assert np.list_feedback(scope, w) == []
+        assert ws.approve_workstream(scope, w, settings=ON, now=NOW) is None
+        assert np.get_workstream(scope, w)["approved"] is False
+
+    def test_origin_binding_rejects_foreign_profile_synthetic_consumed_and_mismatch(self, item):
+        scope, w = item
+        from clover_state import SessionDB
+
+        db = SessionDB()
+        db.create_session("b-sess", "cli")
+        db.append_message("b-sess", "user", "ok")
+        good = H.issue(db, "b-sess")
+        db.close()
+        call = lambda o, **k: ws.record_feedback(  # noqa: E731
+            scope, w, kind="reject", settings=ON, origin=o, human_reader=H.reader, now=NOW, **k)
+        import dataclasses
+
+        assert call(dataclasses.replace(good, profile="/some/other/home")) is None
+        assert call(dataclasses.replace(good, origin="synthetic")) is None
+        assert call(dataclasses.replace(good, consumed=True)) is None
+        assert call(dataclasses.replace(good, message_row_id=good.message_row_id + 99)) is None
+        assert call(dataclasses.replace(good, session_id="other")) is None
+        assert call(dataclasses.replace(good, ingress_event_id="forged")) is None
+        assert np.list_feedback(scope, w) == []
+        assert call(good) is not None
+
+    def test_same_ingress_event_is_idempotent(self, item):
+        scope, w = item
+        from clover_state import SessionDB
+
+        db = SessionDB()
+        db.create_session("i-sess", "cli")
+        db.append_message("i-sess", "user", "not now")
+        origin = H.issue(db, "i-sess")
+        db.close()
+        first = ws.record_feedback(scope, w, kind="defer", settings=ON, origin=origin,
+                                   human_reader=H.reader, now=NOW)
+        again = ws.record_feedback(scope, w, kind="defer", settings=ON, origin=origin,
+                                   human_reader=H.reader, now=NOW + timedelta(minutes=5))
+        assert again["feedback_id"] == first["feedback_id"]
+        assert len(np.list_feedback(scope, w)) == 1
+
     def test_silence_is_unknown_and_never_rejection(self, item):
         scope, w = item
         d = decide(scope, cand(w), now=NOW + timedelta(days=30))
@@ -413,15 +547,15 @@ class TestFeedback:
 
     def test_feedback_attributed_with_typed_receipt(self, item):
         scope, w = item
-        row = ws.record_feedback(scope, w, kind="accept", settings=ON, now=NOW)
+        row = hfb(scope, w, "accept")
         assert row["actor"] == "user" and row["kind"] == "accept"
         assert [r["kind"] for r in np.list_receipts(scope, w)] == ["feedback_accept"]
         assert ws.feedback_state(scope, w) == "accept"
 
     def test_latest_feedback_wins(self, item):
         scope, w = item
-        ws.record_feedback(scope, w, kind="reject", settings=ON, now=NOW)
-        ws.record_feedback(scope, w, kind="accept", settings=ON, now=NOW + timedelta(seconds=5))
+        hfb(scope, w, "reject")
+        hfb(scope, w, "accept", now=NOW + timedelta(seconds=5))
         assert ws.feedback_state(scope, w) == "accept"
 
 
@@ -466,7 +600,7 @@ class TestSuggestionGate:
 
     def test_not_now_blocks_repeat_during_cooldown_then_new_item_offered_later(self, item):
         scope, w = item
-        ws.record_feedback(scope, w, kind="defer", note="not now", settings=ON, now=NOW)
+        hfb(scope, w, "defer", note="not now")
         during = NOW + timedelta(minutes=10)
         d = decide(scope, cand(w), now=during)
         assert (d.action, d.reason) == ("defer", "cooldown") and d.until
@@ -480,7 +614,7 @@ class TestSuggestionGate:
     def test_explicit_defer_until_is_honoured(self, item):
         scope, w = item
         until = (NOW + timedelta(hours=5)).isoformat()
-        ws.record_feedback(scope, w, kind="defer", defer_until=until, settings=ON, now=NOW)
+        hfb(scope, w, "defer", defer_until=until)
         assert decide(scope, cand(w), now=NOW + timedelta(hours=2)).action == "defer"
         # past scope cooldown (1h) but before the user-chosen time: still deferred
         assert decide(scope, cand(w), now=NOW + timedelta(hours=4)).reason == "cooldown"
@@ -489,7 +623,7 @@ class TestSuggestionGate:
     @pytest.mark.parametrize("kind,reason", [("reject", "rejected"), ("done", "done"), ("stop", "stopped")])
     def test_reject_done_stop_suppress_permanently(self, item, kind, reason):
         scope, w = item
-        ws.record_feedback(scope, w, kind=kind, settings=ON, now=NOW)
+        hfb(scope, w, kind)
         d = decide(scope, cand(w), now=NOW + timedelta(days=90))
         assert (d.action, d.reason) == ("suppress", reason)
 
@@ -998,8 +1132,11 @@ class TestExplicitCorrection:
         sdb.append_message("sess-1", "user", self.TEXT)
         sdb.append_message("sess-1", "assistant", "Noted.")
         scope = sc()
-        row = ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW)
-        assert row["kind"] == "correction" and row["approved"] is True and row["source"] == "user"
+        origin = H.issue(sdb, "sess-1")
+        row = ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW,
+                                         human_reader=H.reader)
+        assert row["kind"] == "correction" and row["approved"] is True
+        assert row["source"] == f"human:{origin.ingress_event_id}"
         assert row["session_id"] == "sess-1"
         fresh = SessionDB(tmp_path / "fresh.db")
         fresh.create_session("sess-2", "cli")
@@ -1008,26 +1145,63 @@ class TestExplicitCorrection:
         assert "/srv/app/releases/v2.3.1" in note and "tests/test_x.py::test_z" in note
         fresh.close()
 
+    def test_synthetic_role_user_row_with_marker_is_never_a_correction(self, sdb):
+        """PRESERVED PROBE: a database role of 'user' is not human origin."""
+        scope = sc()
+        sdb.append_message("sess-1", "user", self.TEXT)        # no owner receipt issued
+        assert ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW) is None
+        assert ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW,
+                                          human_reader=H.reader) is None
+        assert np.list_workstreams(scope) == []
+
+    def test_receipt_must_be_human_unconsumed_bound_to_this_profile_session_and_row(self, sdb):
+        import dataclasses
+
+        scope = sc()
+        sdb.append_message("sess-1", "user", self.TEXT)
+        good = H.issue(sdb, "sess-1")
+        key = ("sess-1", good.message_row_id)
+        for bad in (dataclasses.replace(good, origin="synthetic"),
+                    dataclasses.replace(good, origin="assistant"),
+                    dataclasses.replace(good, consumed=True),
+                    dataclasses.replace(good, profile="/other/profile"),
+                    dataclasses.replace(good, session_id="sess-9"),
+                    dataclasses.replace(good, message_row_id=good.message_row_id + 1)):
+            H.rows[key] = bad
+            assert ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW,
+                                              human_reader=H.reader) is None
+        assert np.list_workstreams(scope) == []
+        H.rows[key] = good
+        assert ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW,
+                                          human_reader=H.reader) is not None
+
     def test_assistant_tool_stale_and_unmarked_rows_are_not_corrections(self, sdb):
         scope = sc()
         sdb.append_message("sess-1", "assistant", self.TEXT)          # model prose, same words
-        assert ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW) is None
+        assert ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW,
+                                          human_reader=H.reader) is None
         sdb.append_message("sess-1", "user", self.TEXT)
+        H.issue(sdb, "sess-1")
         sdb.append_message("sess-1", "tool", self.TEXT, tool_call_id="c1")
-        assert ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW) is not None
-        # a newer, ordinary user message makes the old marker row stale: not "current"
+        assert ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW,
+                                          human_reader=H.reader) is not None
+        # a newer user row (even a receipted, ordinary one) makes the marker row stale
         other = sc(project="p2")
         sdb.append_message("sess-1", "user", "thanks, now run the audit")
-        assert ws.capture_user_correction(other, session_id="sess-1", settings=ON, now=NOW) is None
+        H.issue(sdb, "sess-1")
+        assert ws.capture_user_correction(other, session_id="sess-1", settings=ON, now=NOW,
+                                          human_reader=H.reader) is None
         assert np.list_workstreams(other) == []
 
     def test_unknown_session_and_untrusted_inputs_record_nothing(self, store):
         scope = sc()
         f = ws.capture_user_correction
-        assert f(scope, session_id="never-created", settings=ON, now=NOW) is None
-        assert f(scope, session_id="", settings=ON, now=NOW) is None
-        assert f(scope, session_id="sess-1", settings=ws.ProactiveSettings(), now=NOW) is None
-        assert f(sc(audience="group:c1"), session_id="sess-1", settings=ON, now=NOW) is None
+        assert f(scope, session_id="never-created", settings=ON, now=NOW, human_reader=H.reader) is None
+        assert f(scope, session_id="", settings=ON, now=NOW, human_reader=H.reader) is None
+        assert f(scope, session_id="sess-1", settings=ws.ProactiveSettings(), now=NOW,
+                 human_reader=H.reader) is None
+        assert f(sc(audience="group:c1"), session_id="sess-1", settings=ON, now=NOW,
+                 human_reader=H.reader) is None
         assert np.list_workstreams(scope) == []
 
     def test_supersedes_named_record_with_history_and_redacts(self, sdb):
@@ -1037,7 +1211,9 @@ class TestExplicitCorrection:
         sdb.append_message(
             "sess-1", "user",
             f"/correct {old['workstream_id']}: deploy /srv/new token ghp_abcdefghijklmnopqrstuvwxyz0123456789")
-        row = ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW)
+        H.issue(sdb, "sess-1")
+        row = ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW,
+                                         human_reader=H.reader)
         assert row["supersedes_id"] == old["workstream_id"]
         assert "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in row["summary"]
         assert "/srv/new" in row["summary"]
@@ -1046,20 +1222,30 @@ class TestExplicitCorrection:
     def test_unknown_named_target_is_not_recorded(self, sdb):
         scope = sc()
         sdb.append_message("sess-1", "user", "/correct ws_0000000000000000: fix it")
+        H.issue(sdb, "sess-1")
         with pytest.raises(np.NotFound):
-            ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW)
+            ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW,
+                                       human_reader=H.reader)
         assert np.list_workstreams(scope) == []
 
     def test_replay_adds_one_record(self, sdb):
         scope = sc()
         sdb.append_message("sess-1", "user", self.TEXT)
+        H.issue(sdb, "sess-1")
         for _ in range(3):
-            ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW)
+            ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW,
+                                       human_reader=H.reader)
         assert len(np.list_workstreams(scope, kinds=["correction"])) == 1
 
-    def test_end_turn_is_the_production_ingress(self, sdb, monkeypatch, tmp_path):
+    def _agent(self, sdb, ids=()):
         import types
 
+        return types.SimpleNamespace(platform="cli", session_id="sess-1", _session_db=sdb,
+                                     _fg_own_dispatches={}, _fg_dispatch_seq=0, _wl_floor=0,
+                                     _wl_completion_ids=tuple(ids))
+
+    def test_end_turn_records_nothing_until_the_trusted_api_exists(self, sdb, monkeypatch, tmp_path):
+        """PRESERVED PROBE: the production ingress fails closed by default."""
         from agent import work_lifecycle as wl
 
         proj = tmp_path / "proj"
@@ -1067,16 +1253,30 @@ class TestExplicitCorrection:
         monkeypatch.setenv("TERMINAL_CWD", str(proj))
         monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
         sdb.append_message("sess-1", "user", self.TEXT)
-        agent = types.SimpleNamespace(platform="cli", session_id="sess-1", _session_db=sdb,
-                                      _fg_own_dispatches={}, _fg_dispatch_seq=0, _wl_floor=0,
-                                      _wl_completion_ids=())
+        H.issue(sdb, "sess-1")                                  # receipt exists in the double only
+        agent = self._agent(sdb)
         wl.end_turn(agent)
+        assert np.list_workstreams(ws.scope_for_agent(agent)) == []
+
+    def test_end_turn_consumes_the_owner_receipt_once_published(self, sdb, monkeypatch, tmp_path):
+        from agent import work_lifecycle as wl
+
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        monkeypatch.setenv("TERMINAL_CWD", str(proj))
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
+        monkeypatch.setattr(ws, "_HUMAN_ORIGIN_READER", H.reader)
+        sdb.append_message("sess-1", "user", self.TEXT)
+        origin = H.issue(sdb, "sess-1")
+        agent = self._agent(sdb)
+        wl.end_turn(agent)
+        wl.end_turn(agent)                                      # replay: idempotent
         scope = ws.scope_for_agent(agent)
-        assert [r["kind"] for r in np.list_workstreams(scope)] == ["correction"]
+        rows = np.list_workstreams(scope)
+        assert [r["kind"] for r in rows] == ["correction"]
+        assert rows[0]["source"] == f"human:{origin.ingress_event_id}"
         # a helper-completion turn's synthetic user row is never a correction
-        other = types.SimpleNamespace(platform="cli", session_id="sess-1", _session_db=sdb,
-                                      _fg_own_dispatches={}, _fg_dispatch_seq=0, _wl_floor=0,
-                                      _wl_completion_ids=("d-1",))
+        other = self._agent(sdb, ids=("d-1",))
         monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
         wl.end_turn(other)
         assert np.list_workstreams(ws.scope_for_agent(other)) == []

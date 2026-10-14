@@ -683,16 +683,72 @@ def record_outcomes(
     return result
 
 
+@dataclass(frozen=True)
+class HumanOrigin:
+    """Trusted human-input receipt as the central SessionDB owner must expose
+    it (TRUSTED-HUMAN-ORIGIN-INTERFACE.md): exact profile, session, message
+    row and ingress event, ``origin == "human"``, and consumed state."""
+
+    profile: str
+    session_id: str
+    message_row_id: Any
+    ingress_event_id: str
+    origin: str
+    consumed: bool = False
+
+
+HumanOriginReader = Callable[[Any, str, Any], Optional[HumanOrigin]]
+
+# The owner's read accessor. ``None`` until the central Luna owner commits and
+# publishes it: every consumer then fails closed. Never infer human origin
+# from ``role == "user"``, a TTY/PTY, a text marker or a caller-supplied id.
+_HUMAN_ORIGIN_READER: Optional[HumanOriginReader] = None
+
+
+def verified_human_origin(
+    origin: Any, *, db: Any = None, human_reader: Optional[HumanOriginReader] = None,
+) -> Optional[HumanOrigin]:
+    """``origin`` only when the owner's own read-back of (session, row) equals
+    it, is ``human``, unconsumed, and belongs to this profile."""
+    reader = human_reader or _HUMAN_ORIGIN_READER
+    if reader is None or not isinstance(origin, HumanOrigin):
+        return None
+    try:
+        owner = reader(db, origin.session_id, origin.message_row_id)
+    except Exception:
+        logger.debug("human-origin read-back failed closed", exc_info=True)
+        return None
+    if (
+        not isinstance(owner, HumanOrigin)
+        or owner != origin
+        or owner.origin != "human"
+        or owner.consumed
+        or not owner.ingress_event_id
+        or owner.profile != current_profile()
+    ):
+        return None
+    return owner
+
+
 def record_correction(
     scope: Scope, *, text: str, settings: ProactiveSettings,
-    supersedes_id: Optional[str] = None, expected_revision: Optional[int] = None,
-    session_id: str = "", approved: bool = False, now: Optional[datetime] = None,
+    origin: Optional[HumanOrigin] = None, human_reader: Optional[HumanOriginReader] = None,
+    db: Any = None, supersedes_id: Optional[str] = None,
+    expected_revision: Optional[int] = None, session_id: str = "",
+    approved: bool = False, now: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Record a user correction; supersede the stale fact with provenance."""
+    """Record a user correction backed by a verified human-origin receipt;
+    supersede the stale fact with provenance. Without a receipt the owner
+    confirms, nothing is recorded."""
     if not _usable(scope, settings) or not str(text or "").strip():
+        return None
+    owner = verified_human_origin(origin, db=db, human_reader=human_reader)
+    if owner is None:
         return None
     from cron import notepad as np
 
+    session_id = session_id or owner.session_id
+    source = f"human:{owner.ingress_event_id}"
     moment = _now(now)
     clean = _clip(_redact(str(text).strip()), np.MAX_WORKSTREAM_SUMMARY_BYTES)
     title = "Correction: " + clean.splitlines()[0][:100]
@@ -704,17 +760,17 @@ def record_correction(
         revision = current["revision"] if expected_revision is None else int(expected_revision)
         row = np.supersede_workstream(
             scope, supersedes_id, expected_revision=revision, kind="correction",
-            title=title, summary=clean, fingerprint=fp, actor="user",
+            title=title, summary=clean, fingerprint=fp, actor=source,
             session_id=session_id, now=moment,
         )
         if approved:
             row = np.update_workstream(scope, row["workstream_id"],
                                        expected_revision=row["revision"],
-                                       approved=True, actor="user", now=moment)
+                                       approved=True, actor=source, now=moment)
         return row
     return np.create_workstream(
         scope, kind="correction", title=title, summary=clean, fingerprint=fp,
-        session_id=session_id, approved=approved, source="user",
+        session_id=session_id, approved=approved, source=source,
         max_items=settings.threads_max_items, now=moment,
     )
 
@@ -819,14 +875,16 @@ def record_delegation_run(
 
 def approve_workstream(
     scope: Scope, workstream_id: str, *, settings: ProactiveSettings,
-    now: Optional[datetime] = None,
+    origin: Optional[HumanOrigin] = None, human_reader: Optional[HumanOriginReader] = None,
+    db: Any = None, now: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Mark one record as explicitly approved for recall (CAS on revision).
-
-    Approval only makes the record's own text eligible for bounded recall into
-    the same private scope; it grants no authority to act.
-    """
+    """Mark one record as approved for recall (CAS on revision) on a verified
+    human-origin receipt. Approval only makes the record's own text eligible
+    for bounded recall into the same private scope; it grants no authority."""
     if not _usable(scope, settings):
+        return None
+    owner = verified_human_origin(origin, db=db, human_reader=human_reader)
+    if owner is None:
         return None
     from cron import notepad as np
 
@@ -836,7 +894,8 @@ def approve_workstream(
     if row["approved"]:
         return row
     return np.update_workstream(scope, workstream_id, expected_revision=row["revision"],
-                                approved=True, actor="user", now=_now(now))
+                                approved=True, actor=f"human:{owner.ingress_event_id}",
+                                now=_now(now))
 
 
 _CORRECTION_MARKER = re.compile(
@@ -868,35 +927,43 @@ def explicit_correction_from_message(message: Any) -> Optional[str]:
     return parsed[1] if parsed else None
 
 
-def latest_user_message(db: Any, session_id: str) -> Optional[str]:
-    """Text of the newest persisted ``user`` row of an existing SessionDB
-    session (tool-result and assistant rows are never returned), else None."""
+def latest_user_row(db: Any, session_id: str) -> Optional[Dict[str, Any]]:
+    """Newest persisted ``user`` row of an existing SessionDB session (never a
+    tool-result or assistant row), else ``None``. A database role is *not*
+    human origin; see ``verified_human_origin``."""
     if not session_id or db is None or db.get_session(session_id) is None:
         return None
     for row in reversed(db.get_messages(session_id, limit=200, latest=True)):
         if row.get("role") == "user" and not row.get("tool_call_id"):
-            content = row.get("content")
-            return content if isinstance(content, str) else None
+            return row if isinstance(row.get("content"), str) else None
     return None
+
+
+def latest_user_message(db: Any, session_id: str) -> Optional[str]:
+    row = latest_user_row(db, session_id)
+    return row["content"] if row else None
 
 
 def capture_user_correction(
     scope: Scope, *, session_id: str, settings: ProactiveSettings,
-    db: Any = None, expected_revision: Optional[int] = None,
-    now: Optional[datetime] = None,
+    db: Any = None, human_reader: Optional[HumanOriginReader] = None,
+    expected_revision: Optional[int] = None, now: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
     """Persist an explicit user correction found in the real conversation.
 
-    The text is read from the owner (the SessionDB's newest ``user`` row of
-    ``session_id``); the caller supplies neither text nor role, and a
-    terminal/TTY is never evidence of a human. The row must be current (a
-    newer ordinary user message makes an older marker row stale) and begin
-    with the explicit marker. Result: user-approved, redacted, literal ids
-    kept, superseding the explicitly named record with history, idempotent.
-    Unverifiable input records nothing; an unknown named target raises
-    ``NotFound``.
+    Three independent owner facts are required: the SessionDB's newest
+    persisted ``user`` row of ``session_id`` begins with the explicit marker;
+    that exact row (profile/session/row id) has an unconsumed owner-issued
+    ``human`` ingress receipt read back through the trusted API; and the row is
+    current. A database role, TTY, assistant/tool/model text or caller-supplied
+    id is never evidence. With the trusted API unpublished
+    (``_HUMAN_ORIGIN_READER is None``) this records nothing. Result: redacted,
+    literal ids kept, superseding the explicitly named record with history,
+    idempotent. An unknown named target raises ``NotFound``.
     """
     if not _usable(scope, settings) or not str(session_id or ""):
+        return None
+    if (human_reader or _HUMAN_ORIGIN_READER) is None:
         return None
     if db is None:
         from clover_state import SessionDB
@@ -909,17 +976,28 @@ def capture_user_correction(
         try:
             return capture_user_correction(
                 scope, session_id=session_id, settings=settings, db=db,
-                expected_revision=expected_revision, now=now)
+                human_reader=human_reader, expected_revision=expected_revision, now=now)
         finally:
             db.close()
-    parsed = parse_explicit_correction(latest_user_message(db, session_id))
+    row = latest_user_row(db, session_id)
+    if row is None:
+        return None
+    parsed = parse_explicit_correction(row["content"])
     if parsed is None:
+        return None
+    reader = human_reader or _HUMAN_ORIGIN_READER
+    try:
+        issued = reader(db, session_id, row["id"])
+    except Exception:
+        logger.debug("human-origin read failed closed", exc_info=True)
+        return None
+    if issued is None or issued.session_id != session_id or issued.message_row_id != row["id"]:
         return None
     target, text = parsed
     return record_correction(
-        scope, text=text, settings=settings, supersedes_id=target,
-        expected_revision=expected_revision, session_id=session_id,
-        approved=True, now=now,
+        scope, text=text, settings=settings, origin=issued, human_reader=human_reader,
+        db=db, supersedes_id=target, expected_revision=expected_revision,
+        session_id=session_id, approved=True, now=now,
     )
 
 
@@ -927,23 +1005,39 @@ def capture_user_correction(
 
 def record_feedback(
     scope: Scope, workstream_id: str, *, kind: str, settings: ProactiveSettings,
-    actor: str = "user", note: str = "", defer_until: Optional[str] = None,
-    now: Optional[datetime] = None,
+    origin: Optional[HumanOrigin] = None, human_reader: Optional[HumanOriginReader] = None,
+    db: Any = None, actor: str = "user", note: str = "",
+    defer_until: Optional[str] = None, now: Optional[datetime] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Explicit, attributed user feedback. Silence is never recorded."""
+    """Explicit user feedback backed by a verified human-origin receipt.
+
+    ``actor`` and a TTY prove nothing; with no owner-confirmed receipt
+    nothing is written. Silence is never recorded. One ingress event yields at
+    most one feedback row per kind (replay returns the original)."""
     if not _usable(scope, settings) or actor != "user" or kind not in FEEDBACK_KINDS:
+        return None
+    owner = verified_human_origin(origin, db=db, human_reader=human_reader)
+    if owner is None:
         return None
     from cron import notepad as np
 
+    receipt_kind = f"feedback_{kind}"
+    if receipt_kind in RECEIPT_KINDS:
+        for r in np.list_receipts(scope, workstream_id, kinds=[receipt_kind]):
+            if r["source_id"] == owner.ingress_event_id:
+                prior = [f for f in np.list_feedback(scope, workstream_id)
+                         if f["feedback_id"] == r["detail"]]
+                if prior:
+                    return prior[0]
     moment = _now(now)
     until = defer_until
     if kind == "defer" and not until:
         until = (moment + timedelta(seconds=settings.suggestions_cooldown_seconds)).isoformat()
     row = np.add_feedback(scope, workstream_id, kind=kind, actor="user",
                           note=_redact(note), defer_until=until, now=moment)
-    if f"feedback_{kind}" in RECEIPT_KINDS:
-        np.add_receipt(scope, workstream_id, kind=f"feedback_{kind}", owner="user",
-                       source_id=row["feedback_id"], now=moment)
+    if receipt_kind in RECEIPT_KINDS:
+        np.add_receipt(scope, workstream_id, kind=receipt_kind, owner="human_ingress",
+                       source_id=owner.ingress_event_id, detail=row["feedback_id"], now=moment)
     return row
 
 
