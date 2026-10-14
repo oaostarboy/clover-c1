@@ -214,12 +214,19 @@ def _apply_all(ops, *, scope, settings, db, origin, session_id, now) -> List[Ope
     skipped; a failure while writing rolls the whole event back."""
     results: List[Optional[OperationResult]] = [None] * len(ops)
     accepted = []
-    for i, op in enumerate(ops):
-        denial = _check(i, op, scope=scope, settings=settings)
-        if denial is not None:
-            results[i] = denial
-        else:
-            accepted.append(i)
+    try:
+        for i, op in enumerate(ops):
+            denial = _check(i, op, scope=scope, settings=settings)
+            if denial is not None:
+                results[i] = denial
+            else:
+                accepted.append(i)
+    except Exception:
+        # Validation precedes the write batch. An unavailable scoped read is
+        # unknown, not a successful save and not a reason to spend provenance.
+        logger.warning("human workstream validation unavailable", exc_info=True)
+        return [OperationResult(i, op.kind, "error", "validation unavailable; nothing was recorded")
+                for i, op in enumerate(ops)]
     if accepted:
         try:
             with notepad.write_batch():
