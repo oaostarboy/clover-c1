@@ -1,7 +1,6 @@
-"""Owner-authenticated DM metadata through real Telegram ingress and SQLite.
+"""Installed production DM consumer through real Telegram ingress and SQLite.
 
-The sole test-only wiring is the documented additive parent prologue hook;
-no main admission, SessionDB, gateway watcher or executor is replaced.
+No consumer hook, admission, SessionDB, watcher or executor is replaced.
 """
 import json
 from dataclasses import asdict
@@ -35,19 +34,17 @@ def dm(monkeypatch, tmp_path):
             assert asyncio.get_running_loop().time() < deadline, "human turn did not settle"
             await asyncio.sleep(0.02)
         await asyncio.sleep(0.05)
+        # Observe the actual cached owner after the real turn; never replace
+        # either consumer just to manufacture an integration seam.
+        for cached in h.runner._agent_cache.values():
+            agent = cached[0] if isinstance(cached, tuple) else cached
+            if getattr(agent, "session_id", None):
+                h.agents.append(agent)
+                h.admissions.append(getattr(agent, "_workstream_monitor_result", adapter.AdmissionResult()))
 
     h.settle = settled
-    real = hooks.consume_persisted_turn
     h.admissions = []
     h.agents = []
-
-    def composed(agent, *, message, row_id):
-        result = adapter.consume_persisted_turn(agent, message=message, row_id=row_id)
-        h.admissions.append(result)
-        h.agents.append(agent)
-        return real(agent, message=message, row_id=row_id)
-
-    monkeypatch.setattr(hooks, "consume_persisted_turn", composed)
     scope = ws.scope_for_surface(platform="telegram", chat_type="dm", chat_id="12345", user_id="12345")
     blocker = np.create_workstream(scope, kind="blocker", title="CI gate", summary="wait for CI", fingerprint="ci")
     h.scope, h.blocker = scope, blocker["workstream_id"]
