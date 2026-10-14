@@ -2955,6 +2955,7 @@ DEFAULT_CONFIG = {
             "enabled": False,
             "cooldown_seconds": 3600,
             "max_per_session": 1,
+            "preferred_timing": None,  # explicit "after_reply" or "never"
         },
         "procedures": {"enabled": False, "min_verified_runs": 3, "min_sessions": 2},
         "compaction_audit": {"enabled": False, "max_repairs": 0},

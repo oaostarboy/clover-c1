@@ -7024,6 +7024,22 @@ class TurnRunner:
                     history_offset=len(agent_history),
                 )
 
+        # Optional inline workstream artifact belongs to this response owner,
+        # not to model output/history. Compose before stream finalization so
+        # streaming and non-streaming see one identical final. No delivery
+        # receipt is inferred from composition or queueing.
+        try:
+            from agent.workstream_suggestions import present_offer
+
+            _offer_artifact = present_offer(
+                agent, result, is_current=ctx._run_still_current,
+            )
+            if _offer_artifact is not None:
+                result["final_response"] += "\n\n" + _offer_artifact["footer"]
+                result["workstream_suggestion"] = _offer_artifact
+        except Exception:
+            logger.debug("optional workstream offer deferred", exc_info=True)
+
         ctx.result_holder[0] = result
 
         # Signal the stream consumer that the agent is done. Pass the
@@ -7305,6 +7321,8 @@ class TurnRunner:
             "session_id": effective_session_id,
             "response_previewed": result.get("response_previewed", False),
             "response_transformed": result.get("response_transformed", False),
+            **({"workstream_suggestion": result["workstream_suggestion"]}
+               if "workstream_suggestion" in result else {}),
             # Pass through the agent_persisted flag so the persistence block
             # above can correctly determine whether the codex app-server path
             # self-persisted (it didn't — see codex_runtime.py).  Default

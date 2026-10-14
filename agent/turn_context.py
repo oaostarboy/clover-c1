@@ -549,6 +549,11 @@ def build_turn_context(
     # Guard stdio against OSError from broken pipes (systemd/headless/daemon).
     install_safe_stdio()
 
+    # A cached gateway agent must never present a previous turn's optional
+    # artifact. This is local presentation state, not provider context.
+    if hasattr(agent, "_workstream_suggestion_turn"):
+        agent._workstream_suggestion_turn = None
+
     # Recover a session rotated by another path before binding log/turn ids or
     # copying client-supplied history. Everything in this turn must consistently
     # belong to the canonical child, including observability metadata.
@@ -1690,6 +1695,14 @@ def build_turn_context(
                 )
             except Exception:
                 logger.debug("human workstream consumer unavailable", exc_info=True)
+        # Stage only a receipt-backed ordinary human turn. The response owner
+        # rechecks scope/Stop/caps after the requested reply, never in prompts.
+        try:
+            from agent.workstream_suggestions import prepare_offer_turn
+
+            prepare_offer_turn(agent, _human_row)
+        except Exception:
+            logger.debug("workstream suggestion input unavailable", exc_info=True)
     except Exception:
         logger.warning(
             "Early turn-start session persistence failed for session=%s",
