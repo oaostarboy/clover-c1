@@ -1347,6 +1347,7 @@ def _bind_plan(
     delegation_id: str, *, session_id: str, request: str, reason: str,
     tasks: List[Dict[str, Any]], stages: List[Dict[str, Any]], total: int,
     notes_path: str = "", excerpt: str = "",
+    hold: Optional[Dict[str, Any]] = None, runtime_policy: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Persist the remaining stages on the row of the stage just dispatched.
 
@@ -1365,11 +1366,16 @@ def _bind_plan(
             "version": 1, "kind": PLAN_KIND, "delegation_id": delegation_id,
             "request_id": f"router:{delegation_id}", "generation": 0,
             "receipt_ids": [delegation_id], "accepted_at": now,
-            "expires_at": now + MAX_PLAN_AGE_SECONDS, "runtime_policy": {},
+            "expires_at": now + MAX_PLAN_AGE_SECONDS,
+            "runtime_policy": runtime_policy or {},
             "consumed": 0, "session_id": session_id, "request": request,
             "reason": reason, "tasks": tasks, "total_stages": total,
             "stages": stages, "digests": [stage_digest(st) for st in stages],
         }
+        if hold:
+            # Runtime-written only (agent.continuation_bridge.select_hold): the
+            # next stage waits on a human-approved, monitor-linked blocker.
+            plan["hold"] = hold
         if notes_path:
             plan["notes_path"] = notes_path
         if excerpt:
@@ -1426,13 +1432,26 @@ def _adopt(agent: Any, state: RouterTurn) -> None:
         remaining = [
             {"stage": n, "tasks": list(stages[n])} for n in range(number + 1, len(stages))
         ]
+        from agent import continuation_bridge as _bridge
+
+        hold = _bridge.select_hold(agent)
         bound = _bind_plan(
             did, session_id=str(getattr(agent, "session_id", "") or ""),
             request=goal_text(state.user_message)[:REQUEST_CHARS],
             reason=verdict.reason, tasks=_plan_tasks(verdict),
             stages=remaining, total=len(stages), notes_path=state.notes_path,
-            excerpt=_excerpt_for(state),
+            excerpt=_excerpt_for(state), hold=hold,
+            runtime_policy=_bridge.runtime_fingerprint(agent) if hold else None,
         )
+        if bound and hold:
+            from tools import async_delegation as _ad
+
+            persisted = _ad.get_continuation_plan(did) or {}
+            if not (persisted.get("hold") and _bridge.record_authority(agent, hold, persisted)):
+                # No exact authority reference, no held stage: leave the later
+                # stages with the root exactly as an unbound plan would.
+                _ad.revoke_continuation_plan(did)
+                bound = False
         with state.lock:
             state.bound[did] = bound
         if bound:
@@ -1540,6 +1559,10 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
     number = int(stage.get("stage", 1))
     if outcome == "bad":
         ad.revoke_continuation_plan(delegation_id)
+        if isinstance(plan.get("hold"), dict):
+            from agent import continuation_bridge as bridge
+
+            bridge.deny(agent, plan, "the stage before did not finish cleanly")
         logger.warning(
             "router stages: stage %d of delegation=%s did not finish cleanly; "
             "later stages stopped", number, delegation_id,
@@ -1551,11 +1574,44 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
             "as done and do not start the later stages yourself unless the "
             "user asks."
         ), None
+    release = None
+    if isinstance(plan.get("hold"), dict):
+        # A blocker-held stage starts only on a claimed monitor release that
+        # every fence re-validates now (scope, stop, link, authority, budget,
+        # effective route/tools); otherwise it stays unconsumed.
+        from agent import continuation_bridge as bridge
+
+        release, why = bridge.admit_release(agent, plan, delegation_id)
+        if release is None:
+            if why == "waiting":
+                return _note(
+                    f"stage {number + 1} of {total} is waiting on a blocker the "
+                    "user approved ({}); the runtime starts it by itself when "
+                    "the linked monitor reports a change. Say plainly what "
+                    "finished and that the next stage has not started; do not "
+                    "start it yourself.".format(_one_line(
+                        str(plan["hold"].get("workstream_id") or ""), 40))
+                ), None
+            bridge.deny(agent, plan, why)
+            return _note(
+                f"stage {number + 1} of {total} was NOT started: {why}. Tell "
+                "the user plainly what finished and what has not run."
+            ), None
     if not ad.claim_continuation_stage(
         delegation_id=delegation_id, request_id=str(plan.get("request_id") or ""),
         generation=plan.get("generation"), receipt_id=delegation_id, stage=stage,
     ):
         return "", None  # spent already (another turn / a restart), or not delivered yet
+    if release is not None:
+        # Claim-before-effect is done; recheck every fence immediately before
+        # the effect owner is reached.
+        again, why = bridge.admit_release(agent, plan, delegation_id)
+        if again is None or again != release:
+            bridge.settle(agent, release, "cancelled", f"not started: {why or 'release changed'}")
+            return _note(
+                f"stage {number + 1} of {total} was NOT started: {why or 'release changed'}. "
+                "Tell the user plainly what finished and what has not run."
+            ), None
 
     tasks = plan["tasks"]
     try:
@@ -1590,6 +1646,8 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
         ))
     except Exception:
         logger.warning("router stages: stage plan unreadable", exc_info=True)
+        if release is not None:
+            bridge.settle(agent, release, "cancelled", "stage plan unreadable; nothing started")
         return _note(
             f"stage {number + 1} of {total} could not be started and the "
             "later stages did not run. Tell the user plainly what finished and "
@@ -1611,12 +1669,22 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
             _REASON_CHARS,
         )
         logger.warning("router stages: stage %d not started: %s", number + 1, reason)
+        if release is not None:
+            bridge.settle(agent, release, "cancelled", f"worker start not accepted: {reason}")
         return _note(
             f"stage {number + 1} of {total} could not be started ({reason}); "
             "the later stages did not run. Tell the user plainly what finished "
             "and what has not run; do not do the work yourself unless they ask."
         ), None
 
+    if release is not None:
+        # Accepted worker start: charge the original work's budget once. The
+        # stage's own completion, not this dispatch, confirms the effect.
+        bridge.settle(
+            agent, release, "executed",
+            f"stage dispatched as delegation {new_id}; effect pending its completion",
+            spend=True,
+        )
     remaining = plan["stages"][1:]
     bound = _bind_plan(
         new_id, session_id=str(plan.get("session_id") or ""),

@@ -5488,22 +5488,50 @@ def _record_workstream_monitor_occurrence(
 
 
 def _settle_monitor_occurrence_without_authority(job: dict, occurrence: dict):
-    """Consume a linked event as unknown when no safe continuation adapter exists.
+    """Consume a linked monitor event: hand it to the runtime's admission, or
+    settle it unknown.
 
-    A monitor event is evidence, not authority. Until the runtime can validate
-    the exact completed delegation/continuation binding and current policy, a
-    linked monitor change must not fall through to an ordinary model run.
+    A monitor event is evidence, not authority and not a completion. It never
+    dispatches from here. When the link's blocker holds an original, runtime-
+    bound next stage whose stage-before completed and was delivered, the
+    claimed occurrence is handed to the runtime as an internal continuation
+    event (``agent.continuation_bridge``); the runtime's own admission
+    (re-validation, claim-before-effect, dispatch) decides. With no such plan,
+    or while the stage-before is unsettled, nothing runs: the former settles
+    ``unknown`` (never an ordinary model run), the latter leaves the event
+    pending for a later tick.
     """
+    from agent import continuation_bridge as bridge
     from agent import workstreams
     from cron import notepad
 
     scope = workstreams.job_scope(job)
     workstream_id = str(job.get("workstream_id") or "")
     occurrence_key = str(occurrence.get("occurrence_key") or "")
-    claimer = f"scheduler:{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex}"
+    name = job.get("name") or job.get("id") or "monitor"
+    route, delegation_id = bridge.held_route(job)
+    if route == "waiting" and occurrence.get("state") == "pending":
+        return (
+            True,
+            f"# Cron Job: {name}\n\n"
+            "**Status:** blocker-clear event retained; the held stage's predecessor is unsettled\n",
+            SILENT_MARKER,
+            None,
+        )
+    claimer = f"{bridge.CLAIMER_PREFIX}{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex}"
     claim = notepad.claim_occurrence(
         scope, workstream_id, occurrence_key=occurrence_key, claimer=claimer
     )
+    if claim is not None and route == "ready":
+        evt = bridge.release_event(job, str(delegation_id), claim)
+        if evt is not None and bridge.emit(evt):
+            return (
+                True,
+                f"# Cron Job: {name}\n\n"
+                "**Status:** blocker-clear handed to the runtime's continuation admission\n",
+                SILENT_MARKER,
+                None,
+            )
     if claim is not None:
         notepad.settle_occurrence(
             scope,
@@ -5515,7 +5543,7 @@ def _settle_monitor_occurrence_without_authority(job: dict, occurrence: dict):
         )
     return (
         False,
-        f"# Cron Job: {job.get('name') or job.get('id') or 'monitor'}\n\n"
+        f"# Cron Job: {name}\n\n"
         "**Status:** unknown; linked monitor occurrence retained without dispatch\n",
         SILENT_MARKER,
         "no authorized runtime continuation route for linked monitor occurrence",

@@ -28607,6 +28607,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if evt.get("type") == "async_delegation":
             add(evt.get("delegation_id"))
             add(evt.get("batch_delegation_id"))
+        elif evt.get("type") == "continuation_release":
+            # Runtime-owned release of a blocker-held stage: same trusted
+            # completion-id channel, so the existing staged-continuation
+            # owner (not this gateway) admits or refuses the stage.
+            add(evt.get("delegation_id"))
         for sibling in evt.get("_coalesced_siblings") or ():
             key = str(sibling[0] or "") if sibling else ""
             if key.startswith("deleg:"):
@@ -29365,6 +29370,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # so requeue anything that isn't ours.
                 requeue = []
                 async_events = []
+                release_events = []
                 while not _pr.completion_queue.empty():
                     try:
                         evt = _pr.completion_queue.get_nowait()
@@ -29372,10 +29378,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         break
                     if evt.get("type") == "async_delegation":
                         async_events.append(evt)
+                    elif evt.get("type") == "continuation_release":
+                        release_events.append(evt)
                     else:
                         requeue.append(evt)
                 for evt in requeue:
                     _pr.completion_queue.put(evt)
+                for evt in release_events:
+                    try:
+                        self._enrich_async_delegation_routing(evt)
+                        text = (
+                            "[Clover runtime: a linked monitor reported a change. The "
+                            "runtime is validating the stage held for it; do not start "
+                            "any stage yourself.]"
+                        )
+                        if await self._inject_watch_notification(text, evt) is False:
+                            _pr.completion_queue.put(evt)
+                    except Exception as e:
+                        _pr.completion_queue.put(evt)
+                        logger.error("Continuation release injection error: %s", e)
                 # A same-tick drain often carries several completions for the
                 # SAME originating session (a fan-out of background subagents
                 # finishing together).  Delivering each one individually floods

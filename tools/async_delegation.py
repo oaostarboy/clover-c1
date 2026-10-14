@@ -1236,6 +1236,37 @@ def get_durable_delegation(delegation_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def get_delegation_route(delegation_id: str) -> Dict[str, Any]:
+    """Durable routing identity of a dispatch row (session key, origin session,
+    parent session and the dispatching turn's platform/chat origin), read only
+    from the persisted row -- the same fields a replayed completion event
+    carries. ``{}`` when the row is absent."""
+    if not delegation_id:
+        return {}
+    try:
+        with _DB_LOCK, _transaction() as conn:
+            row = conn.execute(
+                """SELECT origin_session, origin_ui_session_id, parent_session_id,
+                          task_json, origin_session_id
+                   FROM async_delegations WHERE delegation_id=?""", (delegation_id,),
+            ).fetchone()
+        if row is None:
+            return {}
+        session_key, origin_ui, parent_id, task_json, origin_sid = row
+        route: Dict[str, Any] = {
+            "session_key": session_key or "", "origin_ui_session_id": origin_ui or "",
+            "origin_session_id": origin_sid or "", "parent_session_id": parent_id or "",
+        }
+        task = json.loads(task_json or "{}")
+        for key in _ROUTING_ORIGIN_KEYS:
+            if isinstance(task, dict) and task.get(key):
+                route[key] = task[key]
+        return route
+    except Exception:
+        logger.debug("delegation route read failed closed", exc_info=True)
+        return {}
+
+
 def owned_receipts_ready(receipt_ids: Iterable[str]) -> tuple:
     """The subset of ``receipt_ids`` whose durable row is a claimed terminal result.
 
