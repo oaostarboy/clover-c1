@@ -5817,7 +5817,13 @@ def run_job(
         # validated an exact authorized continuation. Monitor output alone is
         # evidence, never authority. Unlinked/ineligible jobs retain the
         # established ordinary monitor prompt behavior.
-        _occurrence = _record_workstream_monitor_occurrence(job, _mon)
+        try:
+            _occurrence = _record_workstream_monitor_occurrence(job, _mon, strict=True)
+        except Exception:
+            # Persistence failure is not an ineligible/unlinked monitor. Do
+            # not downgrade it to ordinary model work on this second read.
+            _error = "Linked monitor occurrence persistence failed; agent run suppressed"
+            return False, f"# Cron Job: {job_name}\n\n**Status:** {_error}\n", _error, _error
         if _occurrence is not None:
             return _settle_monitor_occurrence_without_authority(job, _occurrence)
         _monitor_context = _mon.context_block

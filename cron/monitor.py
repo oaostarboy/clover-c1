@@ -207,7 +207,10 @@ def check_monitor(job: dict) -> MonitorOutcome:
             job_id,
             exc_info=True,
         )
-        return outcome
+        return MonitorOutcome(
+            ok=False,
+            error="Linked monitor occurrence persistence failed; agent run suppressed; detection retained for recovery",
+        )
 
     _persist_monitor_state(job_id, new_hash, output)
     return outcome
