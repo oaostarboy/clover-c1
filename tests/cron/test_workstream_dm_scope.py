@@ -166,6 +166,7 @@ def test_dm_monitor_real_watcher_releases_the_accepted_executor_once(
     scheduler.run_job(jobs.get_job(dm.job["id"]))
     assert len(np.list_occurrences(dm.scope, dm.blocker)) == 1
     assert len(_all_ids()) == 2
+    assert dm.job is not None
     print(json.dumps({"scope": asdict(dm.scope), "job_id": dm.job["id"],
         "owner": dm.job["workstream_scope"]["owner"], "delegation_id": first,
         "release_event": event, "occurrence": np.list_occurrences(dm.scope, dm.blocker)[0],
