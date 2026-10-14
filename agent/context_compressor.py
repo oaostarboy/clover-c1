@@ -1335,6 +1335,11 @@ def _audit_workstream_summary(summary: str, scope: Any) -> str:
     is appended only when the explicit audit setting is enabled.  Re-redaction
     happens after the splice so stored handoffs cannot reintroduce secrets.
     """
+    from agent.workstream_continuity import audit_current_summary
+
+    audited = audit_current_summary(summary)
+    if audited is not None:
+        return audited
     if not scope:
         return summary
     try:

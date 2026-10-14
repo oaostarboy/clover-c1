@@ -2782,6 +2782,9 @@ def compress_context(
     _attempt_generation = _claim_compressor_attempt(agent.context_compressor)
     _durable_cooldown_authoritative: Optional[bool] = None
     _durable_cooldown_state: Optional[dict[str, Any]] = None
+    # Attempt-local, never a cached turn scope or a model-writable envelope.
+    from agent import workstream_continuity as _continuity
+    _workstream_capsule = None
     if (
         defer_context_engine_notification
         and callable(getattr(agent, _PENDING_CONTEXT_ENGINE_NOTIFICATION, None))
@@ -3520,6 +3523,11 @@ def compress_context(
             except Exception:
                 pass
 
+        from agent.context_compressor import ContextCompressor
+        if isinstance(agent.context_compressor, ContextCompressor):
+            _workstream_capsule = _continuity.snapshot_for_agent(agent)
+            if _workstream_capsule is not None:
+                agent._last_workstream_compaction_audit = _workstream_capsule.verdict
         compress_fn = agent.context_compressor.compress
         compress_kwargs = _supported_compression_kwargs(
             compress_fn,
@@ -3604,7 +3612,7 @@ def compress_context(
             else:
                 with aux_progress_hook(_progress_hook), aux_interrupt_protection(
                     cancel_event=_hard_cancel_event
-                ):
+                ), _continuity.summary_audit(_workstream_capsule):
                     compressed = compress_fn(messages, **compress_kwargs)
                     # Freeze a hard stop that arrived after the final provider
                     # attempt unwound but before this transaction can rotate
@@ -4159,15 +4167,23 @@ def compress_context(
                         PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY,
                     )
 
-                    agent._session_db.archive_and_compact(
-                        agent.session_id,
-                        compressed,
-                        model_config_patch={
-                            PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY: None,
-                        },
-                        watermark=_commit_watermark,
-                        lock_holder=_lock_holder,
-                    )
+                    with _continuity.commit_guard(
+                        _workstream_capsule, agent,
+                        current_attempt=lambda: _compressor_attempt_is_current(
+                            agent.context_compressor, _attempt_generation),
+                    ):
+                        if _workstream_capsule is not None:
+                            _continuity.redact_handoffs(compressed)
+                        agent._session_db.archive_and_compact(
+                            agent.session_id,
+                            compressed,
+                            model_config_patch={
+                                PROACTIVE_PRUNE_REARM_MODEL_CONFIG_KEY: None,
+                            },
+                            watermark=_commit_watermark,
+                            lock_holder=_lock_holder,
+                        )
+                        _continuity.verify_readback(_workstream_capsule, agent)
                     split_status = "in_place_committed"
                     # Reset the flush identity set so the next turn's appends are
                     # diffed against the COMPACTED transcript: the compacted dicts
@@ -4292,26 +4308,35 @@ def compress_context(
                         f"{uuid.uuid4().hex[:6]}"
                     )
                     from agent.context_compressor import _DB_PERSISTED_MARKER
-                    agent._session_db.publish_compression_child(
-                        parent_session_id=old_session_id,
-                        child_session_id=new_session_id,
-                        source=agent.platform
-                        or os.environ.get("CLOVER_SESSION_SOURCE", "cli"),
-                        model=agent.model,
-                        model_config=agent._session_init_model_config,
-                        system_prompt=new_system_prompt,
-                        messages=compressed,
-                        cwd=getattr(agent, "working_directory", None),
-                        profile_name=_profile_for_child,
-                        compression_lock_holder=_lock_holder,
-                        require_compression_lease=_lock_holder is not None,
-                        watermark=(
-                            _commit_watermark
-                            if _foreign_tail_ceiling is not None
-                            else None
-                        ),
-                        watermark_ceiling=_foreign_tail_ceiling,
-                    )
+                    with _continuity.commit_guard(
+                        _workstream_capsule, agent,
+                        current_attempt=lambda: _compressor_attempt_is_current(
+                            agent.context_compressor, _attempt_generation),
+                    ):
+                        if _workstream_capsule is not None:
+                            _continuity.redact_handoffs(compressed)
+                        agent._session_db.publish_compression_child(
+                            parent_session_id=old_session_id,
+                            child_session_id=new_session_id,
+                            source=agent.platform
+                            or os.environ.get("CLOVER_SESSION_SOURCE", "cli"),
+                            model=agent.model,
+                            model_config=agent._session_init_model_config,
+                            system_prompt=new_system_prompt,
+                            messages=compressed,
+                            cwd=getattr(agent, "working_directory", None),
+                            profile_name=_profile_for_child,
+                            compression_lock_holder=_lock_holder,
+                            require_compression_lease=_lock_holder is not None,
+                            watermark=(
+                                _commit_watermark
+                                if _foreign_tail_ceiling is not None
+                                else None
+                            ),
+                            watermark_ceiling=_foreign_tail_ceiling,
+                        )
+                        _continuity.verify_readback(
+                            _workstream_capsule, agent, session_id=new_session_id)
                     # For the `already_present` outcome the live-dict stamping is
                     # handled by the run_agent _compress_context wrapper's
                     # _sync_persisted_markers (it mirrors the handoff stamps back
