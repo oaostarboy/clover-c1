@@ -43,6 +43,18 @@ def test_unknown_write_reports_nothing_recorded_without_success(human, monkeypat
     assert not human.db.get_human_origin(human.session_id(), human.user_rows()[-1]['id']).consumed
 
 
+def test_unknown_validation_read_never_leaves_model_saved_claim(human, monkeypatch):
+    def fault(*args, **kwargs):
+        raise sqlite3.OperationalError('test-only validation read fault')
+    monkeypatch.setattr(notepad, 'get_workstream', fault)
+    human.inbound_human('Correction: ws_0123456789abcdef use deployment-X not deployment-Y')
+    result = human.results[-1]['final_response']
+    assert result.startswith('Not recorded') and 'validation unavailable' in result
+    assert 'Saved' not in result and 'delivered' not in result
+    assert notepad.list_workstreams(scope(human)) == []
+    assert not human.db.get_human_origin(human.session_id(), human.user_rows()[-1]['id']).consumed
+
+
 def test_success_is_recorded_not_delivered_and_provider_history_unchanged(human):
     human.inbound_human('Correction: use deployment-X not deployment-Y')
     assert human.results[-1]['final_response'].startswith('Recorded correction ws_')
