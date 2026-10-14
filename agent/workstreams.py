@@ -274,6 +274,8 @@ def job_scope(job: Mapping[str, Any]) -> Scope:
     if "workstream_scope" in job:
         from cron import jobs
 
+        if not job.get("workdir"):
+            raise ValueError("explicit job scope requires its accepted project workdir")
         meta = job["workstream_scope"]
         if not isinstance(meta, dict) or meta.get("version") != 1:
             raise ValueError("invalid owner-bound job scope")
@@ -294,11 +296,14 @@ def job_scope(job: Mapping[str, Any]) -> Scope:
                 raise ValueError("job scope actor/root mismatch")
         elif (data["audience"], data["root"]) != ("private", "local"):
             raise ValueError("job scope is not a canonical private surface")
-        if str(job.get("workstream_root") or "") != data["root"]:
+        root = job.get("workstream_root")
+        if (job.get("workstream_id") or root is not None) and root != data["root"]:
             raise ValueError("job root changed after owner admission")
         stored = jobs.get_job(str(job.get("id") or ""))
         if not stored or meta.get("job_id") != job.get("id") or stored.get("workstream_scope") != meta:
             raise ValueError("job scope is not the persisted owner's metadata")
+        if stored.get("workstream_id") != job.get("workstream_id"):
+            raise ValueError("job blocker link differs from the persisted owner")
         return Scope(**data)
     return make_scope(project, audience="private", root=str(job.get("workstream_root") or ""))
 

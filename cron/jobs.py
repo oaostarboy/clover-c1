@@ -465,9 +465,37 @@ _workstream_scope_owner: ContextVar[Optional[dict]] = ContextVar(
     "cron_workstream_scope_owner", default=None)
 
 
+def _json_unique_object(pairs):
+    data = {}
+    for key, value in pairs:
+        if key in data:
+            raise ValueError("duplicate accepted request field")
+        data[key] = value
+    return data
+
+
 @contextlib.contextmanager
-def _use_workstream_scope_owner(metadata: dict):
-    """Internal owner seam; not a model-tool or general field writer."""
+def _use_workstream_scope_owner(agent, *, message: str, row_id: int):
+    """Internal authenticated owner seam; ordinary metadata cannot mint it."""
+    from agent import workstream_human_hooks as hooks, workstreams
+
+    if not workstreams.load_settings().enabled:
+        raise ValueError("proactive is disabled")
+    authenticated = hooks._authenticate(
+        agent, role="user", message=message, session_id=agent.session_id,
+        message_id=None, row_id=row_id)
+    if authenticated is None or not message.startswith("workstream-monitor: "):
+        raise ValueError("job scope needs the current authenticated owner")
+    _db, _row, receipt, _ingress = authenticated
+    request = json.loads(message[len("workstream-monitor: "):], object_pairs_hook=_json_unique_object)
+    scope = workstreams.scope_for_agent(agent)
+    data = {k: getattr(scope, k) for k in ("profile", "project", "audience", "root")}
+    if request.get("scope") != data or not scope.private:
+        raise ValueError("job scope differs from the original accepted scope")
+    metadata = {"version": 1, "scope": request["scope"], "request": request,
+                "owner": {"session_id": receipt.session_id,
+                          "message_row_id": receipt.message_row_id,
+                          "ingress_event_id": receipt.ingress_event_id}}
     token = _workstream_scope_owner.set(copy.deepcopy(metadata))
     try:
         yield
@@ -2440,6 +2468,12 @@ def create_job(
 
     metadata = _workstream_scope_owner.get()
     if metadata is not None:
+        accepted = metadata["request"]
+        if (normalized_workdir != metadata["scope"]["project"]
+                or prompt != accepted["prompt"] or schedule != accepted["schedule"]
+                or monitor_script != accepted["monitor_script"] or monitor_url
+                or deliver != "local"):
+            raise ValueError("job creation differs from the owner's accepted monitor request")
         job["workstream_scope"] = copy.deepcopy(metadata)
         job["workstream_scope"]["job_id"] = job_id
         job["workstream_root"] = metadata["scope"]["root"]
@@ -2531,6 +2565,21 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
         for i, job in enumerate(jobs):
             if job["id"] != job_id:
                 continue
+
+            metadata = job.get("workstream_scope")
+            if isinstance(metadata, dict):
+                if updates.get("workstream_id"):
+                    owner = _workstream_scope_owner.get() or {}
+                    request = dict(owner.get("request") or {})
+                    target = request.pop("job_id", None)
+                    if (target != job_id or owner.get("scope") != metadata.get("scope")
+                            or owner.get("owner", {}).get("session_id") != metadata.get("owner", {}).get("session_id")
+                            or request != metadata.get("request")
+                            or updates["workstream_id"] != request.get("workstream_id")):
+                        raise ValueError("linking scoped jobs needs their current authenticated owner")
+                root = updates.get("workstream_root")
+                if root is not None and root != metadata["scope"]["root"]:
+                    raise ValueError("cannot change the owner's accepted job root")
 
             # Validate / normalize workdir if present in updates.  Empty string
             # or None both mean "clear the field" (restore old behaviour).

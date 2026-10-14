@@ -179,6 +179,7 @@ def held_route(job: dict) -> Tuple[str, Optional[str]]:
         hold = plan.get("hold") if isinstance(plan, dict) else None
         if (
             not isinstance(hold, dict) or hold.get("workstream_id") != ws
+            or hold.get("job_id") != str(job.get("id") or "")
             or _hold_scope(hold) != scope or not plan_is_live(plan)
             or plan.get("consumed") != 0 or not plan.get("stages")
         ):
