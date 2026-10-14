@@ -14,6 +14,7 @@ import concurrent.futures
 import contextlib
 import contextvars
 import errno
+import hashlib
 import json
 import logging
 import os
@@ -5441,6 +5442,54 @@ class _BoundedCronSessionDB:
         return _bounded
 
 
+def _record_workstream_monitor_occurrence(
+    job: dict, outcome: Any, *, strict: bool = False
+) -> Optional[dict]:
+    """Persist a changed monitor event for an explicitly linked workstream.
+
+    This is evidence only. It never dispatches or authorizes continuation work.
+    ``strict=True`` is used by monitor detection before its hash advances; it
+    propagates persistence errors so the monitor can safely redetect.
+    """
+    workstream_id = str(job.get("workstream_id") or "")
+    job_id = str(job.get("id") or "")
+    context = getattr(outcome, "context_block", None)
+    if not workstream_id or not job_id or not isinstance(context, str) or not context:
+        return None
+    try:
+        from agent import workstreams
+        from cron import notepad
+
+        settings = workstreams.load_settings()
+        if not settings.enabled or not workstreams.job_eligible(settings, job_id):
+            return None
+        project = str(
+            Path(job.get("workdir") or os.getenv("TERMINAL_CWD") or os.getcwd()).resolve()
+        )
+        scope = workstreams.make_scope(project, audience="private", root="")
+        record = notepad.get_workstream(scope, workstream_id)
+        if not record or not record.get("approved") or record.get("status") not in {"open", "deferred"}:
+            return None
+        occurrence_key = hashlib.sha256(
+            f"{job_id}\0{context}".encode("utf-8", errors="replace")
+        ).hexdigest()
+        return notepad.ensure_occurrence(
+            scope,
+            workstream_id,
+            occurrence_key=occurrence_key,
+            source="monitor",
+        )
+    except Exception:
+        logger.warning(
+            "Job '%s': unable to persist linked workstream monitor occurrence",
+            job_id,
+            exc_info=True,
+        )
+        if strict:
+            raise
+        return None
+
+
 def run_job(
     job: dict,
     *,
@@ -5671,7 +5720,9 @@ def run_job(
             return True, _mon_doc, SILENT_MARKER, None
         # Changed (or first run): inject the monitor context into the prompt
         # through the existing per-run context seam and fall through to a
-        # normal agent run.
+        # normal agent run. A linked occurrence is recorded as evidence only;
+        # it cannot authorize or dispatch a continuation stage.
+        _record_workstream_monitor_occurrence(job, _mon)
         _monitor_context = _mon.context_block
         if _monitor_context:
             extra_prompt = (

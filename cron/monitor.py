@@ -189,10 +189,28 @@ def check_monitor(job: dict) -> MonitorOutcome:
             f"### Current output\n\n```\n{shown_output}\n```"
         )
 
-    _persist_monitor_state(job_id, new_hash, output)
-    return MonitorOutcome(
+    outcome = MonitorOutcome(
         ok=True, changed=True, first_run=first_run, context_block=context_block
     )
+    # Persist the deterministic, idempotent occurrence before advancing the
+    # hash. A crash after this point leaves a recoverable pending occurrence;
+    # a retry before the hash write recreates the same key and is a no-op.
+    # This event is evidence only, never authority or a completion receipt.
+    try:
+        from cron.scheduler import _record_workstream_monitor_occurrence
+
+        _record_workstream_monitor_occurrence(job, outcome, strict=True)
+    except Exception:
+        logger.warning(
+            "Monitor: failed to persist linked occurrence for %r; "
+            "leaving monitor hash unchanged for safe redetection",
+            job_id,
+            exc_info=True,
+        )
+        return outcome
+
+    _persist_monitor_state(job_id, new_hash, output)
+    return outcome
 
 
 def _persist_monitor_state(job_id: str, new_hash: str, output: str) -> None:
