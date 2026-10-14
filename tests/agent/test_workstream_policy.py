@@ -811,3 +811,71 @@ class TestExpiry:
         np.prune(scope, retention_days=30, now=NOW)
         assert np.get_workstream(scope, old["workstream_id"])["status"] == "expired"
         assert [h["op"] for h in np.list_history(scope, old["workstream_id"])] == ["create", "expire"]
+
+
+class TestEndTurnRecording:
+    """The finalizer's existing ``end_turn`` is the production producer."""
+
+    def _agent(self, *specs, scope=None, completion=()):
+        import types
+
+        from agent import foreground_time_limit as fl
+
+        own = {d: fl.DispatchReceipt(delegation_id=d, seq=i + 1, goals=(g,), turn_id="t1")
+               for i, (d, g) in enumerate(specs)}
+        a = types.SimpleNamespace(_fg_own_dispatches=own, _fg_dispatch_seq=len(own),
+                                  _wl_floor=0, _wl_completion_ids=tuple(completion))
+        if scope is not None:
+            a._workstream_scope = scope
+        return a
+
+    def test_dispatch_turn_records_unfinished_helpers_for_the_envelope_scope(self, monkeypatch):
+        from agent import work_lifecycle as wl
+
+        _delegation("e-ok", deliver=True)
+        _delegation("e-bad", status="failed")
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
+        scope = sc()
+        wl.end_turn(self._agent(("e-ok", "run audit"), ("e-bad", "build package"), scope=scope))
+        text = ws.thread_context(scope, ON, now=NOW)
+        assert "build package" in text and "run audit" not in text
+
+    def test_no_envelope_or_disabled_records_nothing_and_touches_no_db(self, monkeypatch, store):
+        from agent import work_lifecycle as wl
+
+        _delegation("e-bad2", status="failed")
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
+        wl.end_turn(self._agent(("e-bad2", "build package")))
+        assert not (store / "cron" / "notepad.db").exists()
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ws.ProactiveSettings())
+        wl.end_turn(self._agent(("e-bad2", "build package"), scope=sc()))
+        assert not (store / "cron" / "notepad.db").exists()
+
+    def test_foreign_scope_object_and_ledger_errors_never_raise(self, monkeypatch):
+        from agent import work_lifecycle as wl
+
+        _delegation("e-bad3", status="failed")
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
+        a = self._agent(("e-bad3", "build package"))
+        a._workstream_scope = "not-a-scope"
+        wl.end_turn(a)
+        a._workstream_scope = sc()
+        monkeypatch.setattr(ws, "record_outcomes",
+                            lambda *x, **k: (_ for _ in ()).throw(RuntimeError("locked")))
+        wl.end_turn(a)
+
+    def test_later_clean_consumed_completion_resolves_the_open_item(self, monkeypatch):
+        from agent import work_lifecycle as wl
+
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
+        scope = sc()
+        _delegation("r-1", complete=False)
+        wl.end_turn(self._agent(("r-1", "sign artifact"), scope=scope))
+        assert "sign artifact" in ws.thread_context(scope, ON, now=NOW)
+        import tools.async_delegation as ad
+
+        ad._persist_completion({"delegation_id": "r-1", "status": "completed"},
+                               {"status": "completed", "summary": "ok"})
+        assert ad.mark_completion_delivered("r-1")
+        wl.end_turn(self._agent(("r-1", "sign artifact"), scope=scope))
+        assert ws.thread_context(scope, ON, now=NOW) == ""

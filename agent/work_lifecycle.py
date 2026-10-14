@@ -520,9 +520,47 @@ def begin_turn(
         return ""
 
 
+# The host's scope envelope for the opt-in workstream ledger: an
+# ``agent.workstreams.Scope`` set on the instance by the turn seam.  Absent (or
+# the feature disabled) means this module does nothing and touches no storage.
+_SCOPE_ATTR = "_workstream_scope"
+
+
+def _record_unfinished(agent: Any) -> None:
+    """Persist this turn's unfinished/failed helper work as typed obligations.
+
+    Same receipts ``report`` answers for; the ledger rows only restate what the
+    durable delegation ledger says.  Best-effort and never raises.
+    """
+    try:
+        scope = getattr(agent, _SCOPE_ATTR, None)
+        if scope is None:
+            return
+        from agent import workstreams as _ws
+
+        if not isinstance(scope, _ws.Scope):
+            return
+        settings = _ws.load_settings()
+        if not settings.enabled:
+            return
+        floor = getattr(agent, _FLOOR, None)
+        if not isinstance(floor, int) or isinstance(floor, bool):
+            return
+        receipts = _turn_receipts(agent, floor)
+        if not receipts:
+            ids = _completion_ids(agent)
+            receipts = completion_group(agent, ids) if ids else []
+        if not receipts:
+            return
+        _ws.record_outcomes(scope, unfinished_outcomes(receipts), settings)
+    except Exception:
+        logger.debug("workstream recording unavailable", exc_info=True)
+
+
 def end_turn(agent: Any) -> None:
     """A completion turn that dispatched helpers marks them: their own
     completion is the end of the chain and is never handed back again."""
+    _record_unfinished(agent)
     try:
         if not _completion_ids(agent):
             return
