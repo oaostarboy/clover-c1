@@ -72,7 +72,9 @@ def current_workstream_context(agent: Any, query: Any) -> str:
         compressor = getattr(agent, "context_compressor", None)
         if compressor is not None:
             compressor._workstream_scope = scope
-        note = workstreams.current_turn_note(scope, query, settings) or ""
+        from agent.workstream_continuity import current_turn_context
+
+        note = current_turn_context(scope, query, settings)
         # Evidence-gap questions additionally get cited local evidence (or an
         # explicit "unknown"); nothing is added for any other turn.
         from agent.workstream_evidence import evidence_context
