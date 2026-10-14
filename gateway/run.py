@@ -6990,6 +6990,12 @@ class TurnRunner:
                 )
             if ctx.moa_config is not None:
                 _conversation_kwargs["moa_config"] = ctx.moa_config
+            if ctx.trusted_human_ingress is not None:
+                # Host-minted provenance capability (never a model-facing
+                # value); persistence binds a receipt to this turn's user row.
+                _conversation_kwargs["trusted_human_ingress"] = (
+                    ctx.trusted_human_ingress
+                )
             if _persist_user_timestamp_override is not None:
                 _conversation_kwargs["persist_user_timestamp"] = _persist_user_timestamp_override
             result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
@@ -22981,6 +22987,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 {"completion_delegation_ids": completion_delegation_ids}
                 if completion_delegation_ids else {}
             )
+            _human_ingress = self._redeem_trusted_human_ingress(
+                event, source, session_key, run_generation, _run_start_session_id,
+            )
+            if _human_ingress is not None:
+                _completion_kwargs["trusted_human_ingress"] = _human_ingress
             agent_result = await self._run_agent(
                 message=message_text,
                 context_prompt=context_prompt,
@@ -30207,6 +30218,40 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
         return generation
 
+    def _redeem_trusted_human_ingress(
+        self, event, source, session_key: str, run_generation: int, session_id: str,
+    ):
+        """Exchange an adapter-minted capability for this turn's sealed one.
+
+        ``None`` (no provenance, ordinary behaviour) unless an authenticated
+        platform adapter minted it for this exact event object, the turn is
+        not synthetic, and ``proactive.enabled`` is on. Never reads event
+        fields as authority; provenance grants no permission.
+        """
+        if getattr(event, "internal", False):
+            return None
+        try:
+            from agent import workstream_origin
+            from agent.workstreams import current_profile, load_settings
+
+            if not load_settings(_load_gateway_config()).enabled:
+                return None
+            platform = getattr(source.platform, "value", None) or str(source.platform)
+            return workstream_origin.redeem_human_ingress(
+                event,
+                platform=platform,
+                profile=current_profile(),
+                session_id=session_id,
+                session_key=session_key or "",
+                run_generation=run_generation,
+                is_current=lambda: self._is_session_run_current(
+                    session_key, run_generation
+                ),
+            )
+        except Exception:
+            logger.debug("trusted human ingress unavailable; no receipt", exc_info=True)
+            return None
+
     def _is_session_run_current(self, session_key: str, generation: int) -> bool:
         """Return True when ``generation`` is still current for ``session_key``."""
         if not session_key:
@@ -31498,6 +31543,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_display_kind: Optional[str] = None,
         message_type: Optional[str] = None,
         completion_delegation_ids: Optional[tuple] = None,
+        trusted_human_ingress: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Profile-scoping wrapper around the agent run.
 
@@ -31519,6 +31565,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_display_kind=persist_user_display_kind,
                 message_type=message_type,
                 completion_delegation_ids=completion_delegation_ids,
+                trusted_human_ingress=trusted_human_ingress,
             )
 
         profile_home = self._resolve_profile_home_for_source(source)
@@ -31533,6 +31580,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_display_kind=persist_user_display_kind,
                 message_type=message_type,
                 completion_delegation_ids=completion_delegation_ids,
+                trusted_human_ingress=trusted_human_ingress,
             )
 
     def _profile_name_for_source(self, source: SessionSource) -> Optional[str]:
@@ -31677,6 +31725,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_display_kind: Optional[str] = None,
         message_type: Optional[str] = None,
         completion_delegation_ids: Optional[tuple] = None,
+        trusted_human_ingress: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
@@ -32041,6 +32090,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             persist_user_timestamp=persist_user_timestamp,
             persist_user_display_kind=persist_user_display_kind,
             completion_delegation_ids=completion_delegation_ids,
+            trusted_human_ingress=trusted_human_ingress,
         )
         turn_runner = TurnRunner(self, turn_ctx)
         # Callback invoked by agent on tool lifecycle events — extracted to

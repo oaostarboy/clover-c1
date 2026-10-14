@@ -2441,6 +2441,17 @@ class AIAgent:
                 }
                 if isinstance(msg.get("_row_id"), int):
                     _row["_row_id"] = msg["_row_id"]
+                # Trusted-ingress capability binds to this turn's own user
+                # row only (never history, assistant, tool or scaffolding).
+                _ingress = getattr(self, "_trusted_human_ingress", None)
+                if (
+                    _ingress is not None
+                    and role == "user"
+                    and _ov_idx == _msg_idx
+                    and not msg.get("tool_call_id")
+                    and not msg.get(COMPRESSED_SUMMARY_METADATA_KEY)
+                ):
+                    _row["human_ingress"] = _ingress
                 _batch_rows.append(_row)
                 _batch_msgs.append(msg)
             # One transaction for the whole turn's new rows (typically 3-8
@@ -8543,8 +8554,15 @@ class AIAgent:
         persist_user_display_metadata: Optional[Dict[str, Any]] = None,
         moa_config: Optional[dict[str, Any]] = None,
         completion_delegation_ids: Optional[Sequence[str]] = None,
+        trusted_human_ingress: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """Forwarder — see ``agent.conversation_loop.run_conversation``."""
+        """Forwarder — see ``agent.conversation_loop.run_conversation``.
+
+        ``trusted_human_ingress`` is the host-minted capability from
+        ``agent.workstream_origin`` (gateway-supplied only). It is held for
+        this one turn so the persistence layer can bind a receipt to the exact
+        user row; it is provenance, never permission, and never replays.
+        """
         # A review deliberately shares this agent's session_id for prompt-cache
         # parity. Fence review startup or interrupt an admitted request, then
         # await that request's exit before opening any live-turn Relay or task
@@ -8976,6 +8994,7 @@ class AIAgent:
                         with durable_turn_lease_activity_lock:
                             durable_turn_lease_turn_active = True
                         durable_turn_lease_thread.start()
+                    self._trusted_human_ingress = trusted_human_ingress
                     result = run_conversation(
                         self,
                         user_message,
@@ -8991,6 +9010,13 @@ class AIAgent:
                         completion_delegation_ids=completion_delegation_ids,
                     )
                 finally:
+                    # A cached agent must never carry one turn's capability
+                    # into the next: always retire it with the turn.
+                    if trusted_human_ingress is not None:
+                        from agent.workstream_origin import retire_human_ingress
+
+                        retire_human_ingress(trusted_human_ingress)
+                    self._trusted_human_ingress = None
                     # However the turn ended (finalize_turn, the Codex
                     # app-server early return, an exception from the prologue
                     # or the loop) the per-message foreground time limit stops

@@ -24,6 +24,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 logger = logging.getLogger(__name__)
 
 from agent.deadline import run_bounded_async
+from agent.workstream_origin import mint_human_ingress
 
 
 def _redact_telegram_error_text(error: object) -> str:
@@ -10374,6 +10375,10 @@ class TelegramAdapter(BasePlatformAdapter):
         event.text = self._clean_bot_trigger_text(event.text)
         await self._cache_replied_media(msg, event)
         event = self._apply_telegram_group_observe_attribution(event)
+        # Authorized sender, real inbound Telegram update: the only place a
+        # human-origin capability is minted for Telegram text. Synthetic
+        # events never pass through here.
+        mint_human_ingress(event, platform="telegram")
         self._enqueue_text_event(event)
 
     async def _handle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
