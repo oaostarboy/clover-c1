@@ -19,7 +19,7 @@ import hashlib
 import logging
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -357,7 +357,7 @@ def _default_file_reader(path: str) -> Optional[str]:
 def _default_occurrence_reader(scope: Scope, workstream_id: str, key: str) -> bool:
     from cron import notepad as np
 
-    rows = np._list_children("work_occurrences", "created_at", scope, workstream_id)
+    rows = np.list_occurrences(scope, workstream_id)
     return any(r.get("occurrence_key") == key for r in rows)
 
 
@@ -941,20 +941,35 @@ def _fit(lines: Sequence[str], header: str, budget: int) -> Tuple[str, int]:
     return (body.rstrip("\n") if used else ""), used
 
 
+def _unexpired(rows: Sequence[Dict[str, Any]], moment: datetime) -> List[Dict[str, Any]]:
+    """Drop rows whose own ``expires_at`` has passed (prune will mark them)."""
+    keep = []
+    for row in rows:
+        until = _parse(row.get("expires_at"))
+        if until is None or moment < until:
+            keep.append(row)
+    return keep
+
+
 def thread_context(scope: Scope, settings: ProactiveSettings, *,
                    now: Optional[datetime] = None) -> str:
     """Open obligations/blockers/corrections for one scope, newest first,
     within ``threads_max_context_bytes``. Empty when there is nothing to say."""
     if not _usable(scope, settings):
         return ""
-    return _thread_rows_text(scope, settings)[0]
+    return _thread_rows_text(scope, settings, _now(now))[0]
 
 
-def _thread_rows_text(scope: Scope, settings: ProactiveSettings) -> Tuple[str, List[Dict[str, Any]]]:
+def _thread_rows_text(
+    scope: Scope, settings: ProactiveSettings, moment: datetime,
+) -> Tuple[str, List[Dict[str, Any]]]:
     from cron import notepad as np
 
-    rows = np.list_workstreams(scope, statuses=["open", "deferred"],
-                               kinds=list(_OPEN_KINDS), limit=settings.threads_max_items)
+    rows = _unexpired(
+        np.list_workstreams(scope, statuses=["open", "deferred"],
+                            kinds=list(_OPEN_KINDS), limit=settings.threads_max_items),
+        moment,
+    )
     if not rows:
         return "", []
     lines = [f"- {r['title']}: {r['summary']} {_cite(r)}" for r in rows]
@@ -979,8 +994,11 @@ def recall_context(scope: Scope, query: str, settings: ProactiveSettings, *,
         return empty
     from cron import notepad as np
 
-    rows = np.list_workstreams(scope, statuses=["open", "deferred"],
-                               kinds=list(_RECALL_KINDS), limit=200)
+    rows = _unexpired(
+        np.list_workstreams(scope, statuses=["open", "deferred"],
+                            kinds=list(_RECALL_KINDS), limit=200),
+        _now(now),
+    )
     scored = []
     for row in rows:
         if not row.get("approved") or row["workstream_id"] in exclude_ids:
@@ -1005,7 +1023,7 @@ def current_turn_note(scope: Scope, query: str, settings: ProactiveSettings, *,
     """The one string Luna appends at both composition sites. ``""`` = nothing."""
     if not _usable(scope, settings):
         return ""
-    threads, rows = _thread_rows_text(scope, settings)
+    threads, rows = _thread_rows_text(scope, settings, _now(now))
     recalled = recall_context(scope, query, settings, now=now,
                               exclude_ids=[r["workstream_id"] for r in rows])
     return "\n".join(part for part in (threads, recalled.text) if part)

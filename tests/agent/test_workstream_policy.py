@@ -796,3 +796,18 @@ class TestLifecycleProjection:
         monkeypatch.setattr(wl, "slots_for",
                             lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db gone")))
         assert wl.unfinished_outcomes(self._receipts(("x", "g"))) == []
+
+
+class TestExpiry:
+    def test_expired_record_is_neither_context_nor_recall_and_prune_marks_it(self):
+        scope = sc()
+        past = (NOW - timedelta(days=1)).isoformat()
+        old = np.create_workstream(
+            scope, kind="obligation", title="Unfinished: stale thing",
+            summary="stale publish release thing", fingerprint="stale",
+            approved=True, expires_at=past, now=NOW - timedelta(days=5))
+        assert ws.thread_context(scope, ON, now=NOW) == ""
+        assert ws.recall_context(scope, "publish release thing", ON, now=NOW).text == ""
+        np.prune(scope, retention_days=30, now=NOW)
+        assert np.get_workstream(scope, old["workstream_id"])["status"] == "expired"
+        assert [h["op"] for h in np.list_history(scope, old["workstream_id"])] == ["create", "expire"]

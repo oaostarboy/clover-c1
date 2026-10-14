@@ -941,6 +941,12 @@ def settle_occurrence(
         return _occ(conn, key, workstream_id, occurrence_key)
 
 
+def list_occurrences(scope: Any, workstream_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Every occurrence row (any state) in a scope, oldest first."""
+    return _list_children("work_occurrences", "created_at, occurrence_key",
+                          scope, workstream_id)
+
+
 def pending_occurrences(scope: Any, *, workstream_id: Optional[str] = None) -> List[Dict[str, Any]]:
     key = _scope_key(scope)
     clauses, params = [_SCOPE_WHERE, "state='pending'"], list(key)
