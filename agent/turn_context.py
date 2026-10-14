@@ -107,6 +107,7 @@ def compose_user_api_content(
     ext_prefetch_cache: str,
     plugin_user_context: str,
     work_plan: str = "",
+    workstream_context: str = "",
 ) -> Optional[str]:
     """Compose the API-bound content of the current turn's user message.
 
@@ -137,6 +138,8 @@ def compose_user_api_content(
         injections.append(plugin_user_context)
     if work_plan:
         injections.append(work_plan)
+    if workstream_context:
+        injections.append(workstream_context)
     if not injections:
         return None
     return content + "\n\n" + "\n\n".join(injections)
