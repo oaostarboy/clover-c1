@@ -15,6 +15,10 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.5.5 | Clover C1.5.5 | 2026-10-13
+- If an agent deletes the folder it's working in, its terminal and helpers keep working instead of getting stuck.
+- Helpers that start automatically now get their own clear name, the full instructions they need, and the default model.
+
 ## 1.5.4 | Clover C1.5.4 | 2026-10-12
 - Every subagent job now gets a clean card, and the card is back after a restart.
 - Joined cards say "3 subagents", and a finished card sits right under the reply.
