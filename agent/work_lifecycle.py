@@ -255,6 +255,46 @@ def build_report(
         return WorkReport((), WORK_DISPATCH_ACK)
 
 
+# ── typed unfinished-work projection (opt-in workstream ledger) ────────────
+
+_OUTCOME_STATUS = {OK: "verified", BAD: "failed", PENDING: "unverified", STOPPED: "stopped"}
+
+
+def unfinished_outcomes(receipts: Sequence["_fl.DispatchReceipt"]) -> List[Any]:
+    """Project dispatch receipts onto ``agent.workstreams.TypedOutcome`` rows.
+
+    A pure read of the same durable ledger ``report`` uses.  A clean result
+    counts as ``verified`` only once a consumer has claimed it (the same
+    ``owned_receipts_ready`` rule as ``WORK_VERIFIED``); a finished-but-unread
+    result is ``unverified``.  Failed, still-running and stopped helpers stay
+    open work.  Never raises: an unreadable ledger projects nothing.
+    """
+    try:
+        from agent.workstreams import TypedOutcome
+        from tools.async_delegation import owned_receipts_ready
+
+        ids = [r.delegation_id for r in receipts]
+        ready = set(owned_receipts_ready(ids))
+        out: List[Any] = []
+        for r in receipts:
+            slots = slots_for(r.delegation_id, r.goals)
+            for i, slot in enumerate(slots):
+                status = _OUTCOME_STATUS.get(slot.outcome, "unverified")
+                if status == "verified" and r.delegation_id not in ready:
+                    status = "unverified"
+                out.append(TypedOutcome(
+                    deliverable=slot.goal,
+                    status=status,
+                    source_kind="delegation",
+                    source_id=r.delegation_id if len(slots) == 1 else f"{r.delegation_id}#{i}",
+                    summary=f"{slot.goal}: {status}",
+                ))
+        return out
+    except Exception:
+        logger.debug("unfinished-work projection unavailable", exc_info=True)
+        return []
+
+
 # ── which helpers a turn is answerable for ─────────────────────────────────
 
 def _completion_ids(agent: Any) -> Tuple[str, ...]:

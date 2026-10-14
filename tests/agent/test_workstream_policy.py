@@ -736,3 +736,63 @@ class TestThreadContext:
         np.update_workstream(scope, row["workstream_id"], expected_revision=1,
                              approved=True, now=NOW)
         assert ws.recall_context(scope, "publish the release", ON, now=NOW).text != ""
+
+
+# ── work_lifecycle projection → ledger (producer → owner → consumer) ───────
+
+
+class TestLifecycleProjection:
+    def _receipts(self, *specs):
+        from agent import foreground_time_limit as fl
+
+        return [fl.DispatchReceipt(delegation_id=d, seq=i, goals=(g,))
+                for i, (d, g) in enumerate(specs)]
+
+    def test_durable_rows_become_typed_outcomes_then_open_obligations(self):
+        import tools.async_delegation as ad
+        from agent.work_lifecycle import unfinished_outcomes
+
+        _delegation("l-ok", deliver=True)
+        _delegation("l-unread")
+        _delegation("l-bad", status="failed")
+        _delegation("l-run", complete=False)
+        _delegation("l-stop", status="cancelled")
+        receipts = self._receipts(
+            ("l-ok", "run the audit"), ("l-unread", "write the docs"),
+            ("l-bad", "build the package"), ("l-run", "sign the artifact"),
+            ("l-stop", "publish notes draft"),
+        )
+        outcomes = unfinished_outcomes(receipts)
+        by_goal = {o.deliverable: o for o in outcomes}
+        assert by_goal["run the audit"].status == "verified"
+        assert by_goal["write the docs"].status == "unverified"   # result nobody consumed
+        assert by_goal["build the package"].status == "failed"
+        assert by_goal["sign the artifact"].status == "unverified"
+        assert by_goal["publish notes draft"].status == "stopped"
+        assert all(o.source_kind == "delegation" for o in outcomes)
+        assert by_goal["build the package"].source_id == "l-bad"
+
+        scope = sc()
+        rows = ws.record_outcomes(scope, outcomes, ON, now=NOW)
+        titles = sorted(r["title"] for r in rows)
+        assert titles == [
+            "Unfinished: build the package", "Unfinished: publish notes draft",
+            "Unfinished: sign the artifact", "Unfinished: write the docs",
+        ]
+        # fresh session: the clean-and-read audit is not open work
+        text = ws.thread_context(scope, ON, now=NOW + timedelta(days=1))
+        assert "build the package" in text and "run the audit" not in text
+        assert ad  # real ledger module used
+
+    def test_missing_rows_are_pending_not_success(self):
+        from agent.work_lifecycle import unfinished_outcomes
+
+        out_ = unfinished_outcomes(self._receipts(("never-dispatched", "ghost task")))
+        assert [(o.deliverable, o.status) for o in out_] == [("ghost task", "unverified")]
+
+    def test_projection_never_raises_when_ledger_unavailable(self, monkeypatch):
+        from agent import work_lifecycle as wl
+
+        monkeypatch.setattr(wl, "slots_for",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db gone")))
+        assert wl.unfinished_outcomes(self._receipts(("x", "g"))) == []
