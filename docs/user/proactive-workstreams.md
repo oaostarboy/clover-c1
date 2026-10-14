@@ -44,28 +44,24 @@ executions across at least 2 sessions, each with transferable steps. It is
 staged through the normal skill write-approval store (`/skills pending`) and
 is never installed without your approval.
 
-## Inspecting and managing from the CLI
+## Inspecting from the CLI
 
 ```
 clover cron workstream <project> list
 clover cron workstream <project> show <id>
-clover cron workstream <project> link <id> --job <job_id> [--root ROOT]
-clover cron workstream <project> unlink --job <job_id>
-clover cron workstream <project> prune
 ```
 
-`feedback` and `approve` are intentionally not available from the CLI: they are
-user decisions and a terminal cannot prove a human is at it (an agent's shell
-can allocate one). They are carried by the chat ingress once it records a
-trusted human-origin receipt for the message.
+Only these two read-only commands exist. `feedback`, `approve`, `prune`, `link`
+and `unlink` are refused before anything is read or written: they record a user
+decision or change durable state, and a terminal cannot prove a human is at it
+(an agent's shell can allocate a PTY). They are carried by the chat ingress once
+it records a trusted human-origin receipt for the message; until then nothing
+persists them.
 
-`<project>` is the project's directory (`.` or an absolute path is resolved
-the same way chat turns resolve it) or a literal project key. `--root`
-defaults to `local`, the root used by CLI/TUI chat turns, so records you
-recall. Listing and showing always work (including after the feature is
-disabled). `prune`, `link` and `unlink` require an interactive terminal and
-`proactive.enabled: true`. This is a management surface: it does not make the
-assistant raise suggestions in chat.
+`<project>` is the project's directory (`.` or an absolute path is resolved the
+same way chat turns resolve it) or a literal project key; `--root` defaults to
+`local`, the root CLI/TUI chat turns use. Listing and showing work even after
+the feature is disabled.
 
 ### Corrections
 
@@ -80,10 +76,11 @@ and test names are kept literally; superseded records keep their history.
 
 ### Linking a monitor job
 
-`link` ties an enrolled monitor job (`proactive.eligible_jobs`) to one
-approved, open record so changed monitor output is recorded as evidence. The
-job needs a `workdir` equal to the project. Linking does not start, authorize
-or schedule work, and `unlink` leaves the record untouched.
+A monitor job can be linked to one approved, open record so changed monitor
+output is recorded as evidence. Linking needs a verified human-origin receipt
+and an enrolled job (`proactive.eligible_jobs`) whose `workdir` equals the
+project, so it is unavailable until the chat ingress provides that receipt. It
+never starts, authorizes or schedules work.
 
 ### Procedure evidence
 

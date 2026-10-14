@@ -798,12 +798,11 @@ def cron_workstream(args) -> int:
     """Handle ``clover cron workstream <project> [list|show|feedback|approve|prune]``.
 
     Inspection never writes and works even when ``proactive.enabled`` is false
-    (additive rows stay inspectable after rollback). ``feedback`` and
-    ``approve`` are refused outright: they are user-origin decisions and a
-    TTY/PTY (which an agent's terminal tool can allocate) is not human
-    identity; they require the trusted SessionDB human-origin receipt carried
-    by the chat ingress. ``prune``/``link``/``unlink`` are management writes
-    gated on an interactive terminal and the feature enabled. Receipts,
+    (additive rows stay inspectable after rollback). Every other action
+    (``feedback``, ``approve``, ``prune``, ``link``, ``unlink``) is refused
+    before any read or write of state: a TTY/PTY (which an agent's terminal
+    tool can allocate) is not human identity, and the trusted SessionDB
+    human-origin receipt they would require does not exist yet. Receipts,
     authority links and occurrences have no command at all.
     """
     from agent import workstreams as ws
@@ -856,44 +855,16 @@ def cron_workstream(args) -> int:
                 print(f"  feedback {fb['kind']} by {fb['actor']}")
             return 0
 
-        # --- writes -------------------------------------------------------
-        if action in {"feedback", "approve"}:
-            # User-origin decisions need the trusted SessionDB human-origin
-            # receipt. A TTY/PTY is not identity (an agent's shell can allocate
-            # one), so this CLI never persists them; they are carried by the
-            # chat ingress once the central owner publishes that receipt.
-            print(color(f"Refused: '{action}' needs a trusted human-origin receipt "
-                        "from the chat ingress; a terminal cannot supply one.", Colors.RED))
-            return 1
-
-        if not sys.stdin.isatty():
-            print(color("Refused: prune/link/unlink need an interactive terminal.",
-                        Colors.RED))
-            return 1
-        settings = ws.load_settings()
-        if not settings.enabled:
-            print(color("proactive is disabled; enable it in config.yaml first.", Colors.YELLOW))
-            return 1
-
-        if action == "prune":
-            removed = np.prune(scope, retention_days=settings.threads_retention_days)
-            print(color(f"Pruned {removed} expired record(s).", Colors.GREEN))
-            return 0
-
-        if action in {"link", "unlink"}:
-            job_id = getattr(args, "job", None)
-            if not job_id or (action == "link" and not wid):
-                print(color("Usage: clover cron workstream <project> link <id> --job <job_id> "
-                            "[--root ROOT]  |  unlink --job <job_id>", Colors.RED))
-                return 1
-            if action == "link":
-                ws.link_job_to_workstream(scope, wid, job_id, settings)
-                print(color(f"Linked job {job_id} to workstream {wid} "
-                            "(monitor events are recorded as evidence only).", Colors.GREEN))
-            else:
-                ws.unlink_job(job_id)
-                print(color(f"Unlinked job {job_id}.", Colors.GREEN))
-            return 0
+        # --- state writes: disabled ---------------------------------------
+        # Every remaining action mutates durable state or records a user
+        # decision. An interactive terminal is not human identity (an agent's
+        # terminal tool can allocate a PTY), and the trusted SessionDB
+        # human-origin receipt does not exist yet, so nothing here persists
+        # and no TTY/caller/role/text is accepted as authorization.
+        print(color(f"Refused: '{action}' needs a trusted human-origin receipt "
+                    "from the chat ingress; a terminal cannot supply one. "
+                    "list and show remain available.", Colors.RED))
+        return 1
     except (np.WorkstreamError, ValueError) as exc:
         print(color(f"Workstream error: {exc}", Colors.RED))
         return 1

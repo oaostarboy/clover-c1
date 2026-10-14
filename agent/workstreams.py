@@ -275,12 +275,14 @@ def job_scope(job: Mapping[str, Any]) -> Scope:
 
 def link_job_to_workstream(
     scope: Scope, workstream_id: str, job_id: str, settings: "ProactiveSettings",
+    *, origin: Optional["HumanOrigin"] = None,
+    human_reader: Optional["HumanOriginReader"] = None, db: Any = None,
 ) -> Dict[str, Any]:
     """Validated writer of ``job['workstream_id']`` for a monitor job.
 
     The scheduler only records occurrences for an enrolled job whose linked
     record is approved and open in the job's own scope, so exactly that is
-    verified here. Evidence only: linking grants no authority and starts no
+    verified here, after an owner-verified human-origin receipt. Evidence only: linking grants no authority and starts no
     work. Raises ``LinkError`` (and writes nothing) on any mismatch.
     """
     from cron import jobs as cron_jobs
@@ -288,6 +290,11 @@ def link_job_to_workstream(
 
     if not settings.enabled:
         raise LinkError("proactive is disabled")
+    # A link makes a job's monitor events recorded against the workstream: a
+    # positive decision that only a verified human-origin receipt may make.
+    if verified_human_origin(origin, db=db, human_reader=human_reader) is None:
+        raise LinkError("linking needs a verified human-origin receipt "
+                        "(none is available from a terminal)")
     if not job_eligible(settings, job_id):
         raise LinkError(f"job {job_id!r} is not in proactive.eligible_jobs")
     job = cron_jobs.get_job(job_id)

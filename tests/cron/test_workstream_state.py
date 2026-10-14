@@ -681,7 +681,7 @@ class TestWorkstreamCli:
         assert run("feedback", tty=False, workstream_id=wid, feedback_kind="reject") == 1
         assert run("approve", tty=False, workstream_id=wid) == 1
         assert run("prune", tty=False) == 1
-        assert "interactive terminal" in capsys.readouterr().out
+        assert "human-origin" in capsys.readouterr().out
         assert np.list_feedback(scope_, wid) == []
         assert np.get_workstream(scope_, wid)["approved"] is False
 
@@ -707,7 +707,7 @@ class TestWorkstreamCli:
         assert np.list_feedback(scope_, row["workstream_id"]) == []
         capsys.readouterr()
         assert run("prune") == 1
-        assert "disabled" in capsys.readouterr().out
+        assert "human-origin" in capsys.readouterr().out
 
     def test_unknown_feedback_kind_and_foreign_scope_rejected(self, cli):
         run, scope_, row = cli
@@ -718,12 +718,43 @@ class TestWorkstreamCli:
 # ── monitor job → workstream link (producer of job['workstream_id']) ───────
 
 
+class _Human:
+    """Contract double for the (unpublished) owner receipt accessor."""
+
+    rows: dict = {}
+    n = 0
+
+    @classmethod
+    def issue(cls):
+        from agent import workstreams as ws
+        from clover_state import SessionDB
+
+        db = SessionDB()
+        try:
+            if db.get_session("lnk-sess") is None:
+                db.create_session("lnk-sess", "cli")
+            db.append_message("lnk-sess", "user", "ok")
+            row = [r for r in db.get_messages("lnk-sess") if r["role"] == "user"][-1]
+        finally:
+            db.close()
+        cls.n += 1
+        got = ws.HumanOrigin(ws.current_profile(), "lnk-sess", row["id"],
+                             f"lnk-evt-{cls.n}", "human", False)
+        cls.rows[("lnk-sess", row["id"])] = got
+        return got
+
+    @classmethod
+    def reader(cls, db, session_id, message_row_id):
+        return cls.rows.get((session_id, message_row_id))
+
+
 class TestMonitorLink:
+    """Validation of the link writer. Since a terminal cannot authorize a link,
+    these drive the API with a contract-conformance receipt double (not
+    provenance evidence); the CLI path is covered by TestCliStateWritesDisabled."""
+
     @pytest.fixture
     def env(self, db, monkeypatch, tmp_path):
-        import argparse
-        import sys
-
         import cron.jobs as jobs_mod
         from agent import workstreams as ws
 
@@ -750,16 +781,26 @@ class TestMonitorLink:
                                    fingerprint="ci", approved=True, now=NOW)
 
         def cli(action, *, tty=True, project=None, **kw):
-            monkeypatch.setattr(sys.stdin, "isatty", lambda: tty, raising=False)
-            from clover_cli.cron import cron_workstream
+            """Historic name: drives the API; ``tty=False`` = no owner receipt."""
+            import pathlib
 
-            ns = argparse.Namespace(
-                project=project or str(proj), workstream_action=action,
-                workstream_id=kw.get("workstream_id"), feedback_kind=None, note=None,
-                audience="private", root=kw.get("root", ""), job=kw.get("job"),
-                text=kw.get("text"),
-            )
-            return cron_workstream(ns)
+            if action == "unlink":
+                try:
+                    ws.unlink_job(kw.get("job"))
+                except ws.LinkError:
+                    return 1
+                return 0
+            scope = ws.Scope(ws.current_profile(),
+                             str(pathlib.Path(project or proj).resolve()),
+                             "private", kw.get("root", ""))
+            origin = _Human.issue() if tty else None
+            try:
+                ws.link_job_to_workstream(
+                    scope, kw.get("workstream_id"), kw.get("job"), ws.load_settings(),
+                    origin=origin, human_reader=_Human.reader)
+            except (ws.LinkError, np.WorkstreamError):
+                return 1
+            return 0
 
         return dict(cli=cli, jobs=jobs_mod, job=job, scope=scope_, row=row,
                     proj=proj, ws=ws, settings=settings, mp=monkeypatch)
@@ -843,6 +884,19 @@ class TestMonitorLink:
         assert env["ws"].job_scope(job).root == "local"
 
 
+    def test_link_without_an_owner_receipt_is_refused_and_writes_nothing(self, env):
+        wid, jid = env["row"]["workstream_id"], env["job"]["id"]
+        ws = env["ws"]
+        scope = env["scope"]
+        for origin in (None, ws.HumanOrigin(ws.current_profile(), "s", 1, "e", "human")):
+            with pytest.raises(ws.LinkError, match="human-origin"):
+                ws.link_job_to_workstream(scope, wid, jid, env["settings"], origin=origin,
+                                          human_reader=_Human.reader)
+        with pytest.raises(ws.LinkError):
+            ws.link_job_to_workstream(scope, wid, jid, env["settings"])   # default: unpublished
+        assert not env["jobs"].get_job(jid).get("workstream_id")
+
+
 class TestCliCannotPersistCorrections:
     """A TTY (or PTY) does not authenticate a human: no CLI correction path."""
 
@@ -856,3 +910,145 @@ class TestCliCannotPersistCorrections:
         build_cron_parser(sub, cmd_cron=lambda a: 0)
         with pytest.raises(SystemExit):
             root.parse_args(["cron", "workstream", "proj-a", "correct", "--text", "x"])
+
+
+# ── CLI state writes are disabled: a PTY is not a human ────────────────────
+
+_DRIVER = r"""
+import argparse, json, sys
+from pathlib import Path
+cfg = json.loads(sys.argv[1])
+sys.path.insert(0, cfg["repo"])
+import agent.workstreams as ws
+if cfg["enabled"]:
+    ws.load_settings = lambda config=None: ws.ProactiveSettings(
+        enabled=True, mode="active", eligible_jobs=tuple(cfg["jobs"]))
+else:
+    ws.load_settings = lambda config=None: ws.ProactiveSettings()
+from cron import notepad as np
+np.NOTEPAD_FILE = Path(cfg["db"])
+import cron.jobs as j
+home = Path(cfg["home"])
+j.CLOVER_DIR, j.CRON_DIR = home, home / "cron"
+j.JOBS_FILE, j.OUTPUT_DIR = home / "cron" / "jobs.json", home / "cron" / "output"
+from clover_cli.cron import cron_command
+from clover_cli.subcommands.cron import build_cron_parser
+root = argparse.ArgumentParser()
+build_cron_parser(root.add_subparsers(dest="cmd"), cmd_cron=lambda a: 0)
+ns = root.parse_args(cfg["argv"])
+print("ISATTY", sys.stdin.isatty())
+sys.exit(cron_command(ns))
+"""
+
+
+class TestCliStateWritesDisabled:
+    @pytest.fixture
+    def world(self, db, monkeypatch, tmp_path):
+        import cron.jobs as jobs_mod
+        from agent import workstreams as ws
+
+        home = tmp_path / "home"
+        (home / "cron" / "output").mkdir(parents=True)
+        monkeypatch.setattr(jobs_mod, "CLOVER_DIR", home)
+        monkeypatch.setattr(jobs_mod, "CRON_DIR", home / "cron")
+        monkeypatch.setattr(jobs_mod, "JOBS_FILE", home / "cron" / "jobs.json")
+        monkeypatch.setattr(jobs_mod, "OUTPUT_DIR", home / "cron" / "output")
+        monkeypatch.setattr(np, "NOTEPAD_FILE", home / "cron" / "notepad.db")
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        script = tmp_path / "mon.sh"
+        script.write_text("#!/bin/sh\necho ok\n")
+        job = jobs_mod.create_job("check ci", "every 30m", name="ci-watch",
+                                  workdir=str(proj), monitor_script=str(script))
+        # the subprocess runs with CLOVER_HOME=home, so its profile key is home
+        scope_ = ws.Scope(str(home.resolve()), str(proj.resolve()), "private", "")
+        open_row = np.create_workstream(scope_, kind="blocker", title="after CI",
+                                        summary="run checklist", fingerprint="ci",
+                                        approved=True, now=NOW)
+        old = np.create_workstream(scope_, kind="obligation", title="old", summary="old done",
+                                   fingerprint="old", now=NOW - timedelta(days=90))
+        np.update_workstream(scope_, old["workstream_id"], expected_revision=1,
+                             status="resolved", now=NOW - timedelta(days=80))
+        return dict(home=home, db=home / "cron" / "notepad.db", jobs=jobs_mod, job=job,
+                    scope=scope_, open=open_row, old=old, proj=proj)
+
+    @staticmethod
+    def _snapshot(w):
+        import hashlib
+
+        return (
+            hashlib.sha256((w["home"] / "cron" / "jobs.json").read_bytes()).hexdigest(),
+            hashlib.sha256(w["db"].read_bytes()).hexdigest(),
+        )
+
+    def _run(self, w, argv, *, pty_stdin, enabled=True):
+        import json
+        import os
+        import pty
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        cfg = dict(repo=str(Path(__file__).resolve().parents[2]), enabled=enabled,
+                   jobs=[w["job"]["id"]], db=str(w["db"]), home=str(w["home"]), argv=argv)
+        env = dict(os.environ, CLOVER_HOME=str(w["home"]))
+        master = slave = None
+        if pty_stdin:
+            master, slave = pty.openpty()
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", _DRIVER, json.dumps(cfg)],
+                stdin=slave if pty_stdin else subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=120, env=env,
+            )
+        finally:
+            for fd in (master, slave):
+                if fd is not None:
+                    os.close(fd)
+        return proc
+
+    def _argv(self, w, action):
+        base = ["cron", "workstream", str(w["proj"]), action]
+        if action == "link":
+            return base + [w["open"]["workstream_id"], "--job", w["job"]["id"], "--root", ""]
+        if action == "unlink":
+            return base + ["--job", w["job"]["id"], "--root", ""]
+        return base + ["--root", ""]
+
+    @pytest.mark.parametrize("action", ["prune", "link", "unlink"])
+    @pytest.mark.parametrize("mode", ["pty_enabled", "pipe_enabled", "pty_disabled"])
+    def test_no_state_is_mutated_however_the_cli_is_invoked(self, world, action, mode):
+        w = world
+        if action == "unlink":
+            w["jobs"].update_job(w["job"]["id"],
+                                 {"workstream_id": w["open"]["workstream_id"],
+                                  "workstream_root": ""})
+        before = self._snapshot(w)
+        old_rows = np.list_workstreams(w["scope"], limit=50)
+        proc = self._run(w, self._argv(w, action), pty_stdin=mode.startswith("pty"),
+                         enabled=mode.endswith("enabled"))
+        if mode.startswith("pty"):
+            assert "ISATTY True" in proc.stdout, proc.stdout + proc.stderr  # a real PTY
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "human-origin" in proc.stdout
+        assert self._snapshot(w) == before
+        assert np.list_workstreams(w["scope"], limit=50) == old_rows
+        job = w["jobs"].get_job(w["job"]["id"])
+        if action == "unlink":
+            assert job["workstream_id"] == w["open"]["workstream_id"]
+        else:
+            assert not job.get("workstream_id")
+        assert np.get_workstream(w["scope"], w["old"]["workstream_id"]) is not None
+
+    def test_read_only_commands_still_work_over_a_pty(self, world):
+        w = world
+        before = self._snapshot(w)
+        for action in ("list",):
+            proc = self._run(w, ["cron", "workstream", str(w["proj"]), action, "--root", ""],
+                             pty_stdin=True)
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            assert w["open"]["workstream_id"] in proc.stdout
+        proc = self._run(w, ["cron", "workstream", str(w["proj"]), "show",
+                             w["open"]["workstream_id"], "--root", ""], pty_stdin=False)
+        assert proc.returncode == 0 and "run checklist" in proc.stdout
+        assert self._snapshot(w) == before
