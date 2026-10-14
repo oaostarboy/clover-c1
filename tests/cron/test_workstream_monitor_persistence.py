@@ -5,6 +5,7 @@ Only provider/network boundaries and the explicitly faulted SQLite write edge
 are scripted. This is a negative failure gate, not an all-seven positive claim.
 """
 import sqlite3
+import pytest
 from pathlib import Path
 
 from tests.gateway.test_trusted_human_origin_ingress import Harness
@@ -34,7 +35,8 @@ def test_actual_correction_end_turn_fallback_matches_next_turn_scope(monkeypatch
         h.close()
 
 
-def test_linked_monitor_persistence_failure_never_falls_through_to_model(monkeypatch, tmp_path):
+@pytest.mark.parametrize('fault_at', ['all', 'second_read'])
+def test_linked_monitor_persistence_failure_never_falls_through_to_model(monkeypatch, tmp_path, fault_at):
     h = Harness(monkeypatch, tmp_path, proactive={'enabled': True, 'mode': 'active'})
     monkeypatch.setattr(notepad, 'NOTEPAD_FILE', h.home / 'notepad.db')
     try:
@@ -74,8 +76,13 @@ def test_linked_monitor_persistence_failure_never_falls_through_to_model(monkeyp
 
         # Conditional failure injected at the real durable occurrence I/O seam.
         # No occurrence/plan/authority/event is synthetically attached.
+        original_write = notepad.ensure_occurrence
+        writes = []
         def fail_write(*args, **kwargs):
-            raise sqlite3.OperationalError('deterministic occurrence-write failure')
+            writes.append(1)
+            if fault_at == 'all' or len(writes) == 2:
+                raise sqlite3.OperationalError('deterministic occurrence-write failure')
+            return original_write(*args, **kwargs)
         monkeypatch.setattr(notepad, 'ensure_occurrence', fail_write)
         before = h.scripted.calls
         outcomes = []
@@ -87,7 +94,25 @@ def test_linked_monitor_persistence_failure_never_falls_through_to_model(monkeyp
         print('REAL_OWNER_FAILURE', {'provider_calls': after-before,
             'scheduler_results': outcomes, 'monitor_state':persisted,
             'pending_occurrences':pending})
-        assert persisted is None and pending == []
+        if fault_at == 'all':
+            assert persisted is None and pending == []
+        else:
+            assert persisted['last_output_hash'] and pending == []
+            assert len(notepad.list_occurrences(scope, row['workstream_id'])) == 1
         assert after == before, 'failed occurrence persistence must not launch ordinary model work'
+        assert outcomes[0][0] is False
+        if fault_at == 'all':
+            assert outcomes[1][0] is False
+        # Recovery redetects the identical source and settles unknown without
+        # inferring authorization or retrying any ambiguous effect.
+        monkeypatch.setattr(notepad, 'ensure_occurrence', original_write)
+        scheduler.run_job(dict(job))
+        recovered = jobs.get_job(job['id'])
+        assert recovered['monitor_state']['last_output_hash']
+        occurrences = notepad.list_occurrences(scope, row['workstream_id'])
+        assert len(occurrences) == 1 and occurrences[0]['state'] == 'unknown'
+        scheduler.run_job(recovered)
+        assert h.scripted.calls == before
+        assert notepad.list_occurrences(scope, row['workstream_id']) == occurrences
     finally:
         h.close()
