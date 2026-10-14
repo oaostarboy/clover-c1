@@ -127,7 +127,7 @@ def test_monitor_occurrence_without_runtime_link_is_not_guessed(monkeypatch, tmp
     assert notepad.pending_occurrences(scope) == []
 
 
-def test_run_job_records_changed_monitor_occurrence_before_agent_dispatch(
+def test_run_job_does_not_turn_monitor_evidence_into_agent_authority(
     monkeypatch, tmp_path
 ):
     from cron import jobs, monitor, scheduler
@@ -136,7 +136,12 @@ def test_run_job_records_changed_monitor_occurrence_before_agent_dispatch(
         monkeypatch, tmp_path
     )
     monkeypatch.setattr(jobs, "job_payload_is_empty", lambda _job: False)
-    monkeypatch.setattr(scheduler, "_build_job_prompt", lambda *_args, **_kwargs: None)
+    dispatches = []
+    monkeypatch.setattr(
+        scheduler,
+        "_build_job_prompt",
+        lambda *_args, **_kwargs: dispatches.append("prompt") or "prompt",
+    )
     monkeypatch.setattr(monitor, "job_has_monitor", lambda _job: True)
     monkeypatch.setattr(
         monitor,
@@ -160,13 +165,14 @@ def test_run_job_records_changed_monitor_occurrence_before_agent_dispatch(
 
     success, _doc, final, error = scheduler.run_job(job)
 
-    assert success is True
+    assert success is False
     assert final == scheduler.SILENT_MARKER
-    assert error is None
-    occurrences = notepad.pending_occurrences(
-        scope, workstream_id=record["workstream_id"]
-    )
-    assert len(occurrences) == 1
+    assert error and "no authorized runtime continuation route" in error
+    assert dispatches == []
+    assert notepad.pending_occurrences(scope, workstream_id=record["workstream_id"]) == []
+    receipts = notepad.list_occurrences(scope, workstream_id=record["workstream_id"])
+    assert len(receipts) == 1
+    assert receipts[0]["state"] == "unknown"
 
 
 def test_monitor_hash_persistence_precedes_occurrence_and_exposes_crash_gap(

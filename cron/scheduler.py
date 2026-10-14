@@ -5490,6 +5490,41 @@ def _record_workstream_monitor_occurrence(
         return None
 
 
+def _settle_monitor_occurrence_without_authority(job: dict, occurrence: dict):
+    """Consume a linked event as unknown when no safe continuation adapter exists.
+
+    A monitor event is evidence, not authority. Until the runtime can validate
+    the exact completed delegation/continuation binding and current policy, a
+    linked monitor change must not fall through to an ordinary model run.
+    """
+    from agent import workstreams
+    from cron import notepad
+
+    scope = workstreams.job_scope(job)
+    workstream_id = str(job.get("workstream_id") or "")
+    occurrence_key = str(occurrence.get("occurrence_key") or "")
+    claimer = f"scheduler:{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex}"
+    claim = notepad.claim_occurrence(
+        scope, workstream_id, occurrence_key=occurrence_key, claimer=claimer
+    )
+    if claim is not None:
+        notepad.settle_occurrence(
+            scope,
+            workstream_id,
+            occurrence_key=occurrence_key,
+            claimer=claimer,
+            state="unknown",
+            detail="no authorized runtime continuation route; monitor evidence is not authority",
+        )
+    return (
+        False,
+        f"# Cron Job: {job.get('name') or job.get('id') or 'monitor'}\n\n"
+        "**Status:** unknown; linked monitor occurrence retained without dispatch\n",
+        SILENT_MARKER,
+        "no authorized runtime continuation route for linked monitor occurrence",
+    )
+
+
 def run_job(
     job: dict,
     *,
@@ -5718,11 +5753,14 @@ def run_job(
                 f"**Status:** no_change (agent run suppressed)\n"
             )
             return True, _mon_doc, SILENT_MARKER, None
-        # Changed (or first run): inject the monitor context into the prompt
-        # through the existing per-run context seam and fall through to a
-        # normal agent run. A linked occurrence is recorded as evidence only;
-        # it cannot authorize or dispatch a continuation stage.
-        _record_workstream_monitor_occurrence(job, _mon)
+        # Changed (or first run): an eligible linked workstream occurrence
+        # must be claimed and settled without dispatch until the runtime has
+        # validated an exact authorized continuation. Monitor output alone is
+        # evidence, never authority. Unlinked/ineligible jobs retain the
+        # established ordinary monitor prompt behavior.
+        _occurrence = _record_workstream_monitor_occurrence(job, _mon)
+        if _occurrence is not None:
+            return _settle_monitor_occurrence_without_authority(job, _occurrence)
         _monitor_context = _mon.context_block
         if _monitor_context:
             extra_prompt = (
