@@ -646,6 +646,7 @@ class TestWorkstreamCli:
                 workstream_id=kw.get("workstream_id"),
                 feedback_kind=kw.get("feedback_kind"), note=kw.get("note"),
                 audience=kw.get("audience", "private"), root=kw.get("root", ""),
+                job=kw.get("job"), text=kw.get("text"),
             )
             return cron_workstream(ns)
 
@@ -706,3 +707,146 @@ class TestWorkstreamCli:
         run, scope_, row = cli
         assert run("feedback", workstream_id=row["workstream_id"], feedback_kind="silence") == 1
         assert run("show", workstream_id=row["workstream_id"], root="someone-else") == 1
+
+
+# ── monitor job → workstream link (producer of job['workstream_id']) ───────
+
+
+class TestMonitorLink:
+    @pytest.fixture
+    def env(self, db, monkeypatch, tmp_path):
+        import argparse
+        import sys
+
+        import cron.jobs as jobs_mod
+        from agent import workstreams as ws
+
+        home = tmp_path / "home"
+        (home / "cron" / "output").mkdir(parents=True)
+        monkeypatch.setattr(jobs_mod, "CLOVER_DIR", home)
+        monkeypatch.setattr(jobs_mod, "CRON_DIR", home / "cron")
+        monkeypatch.setattr(jobs_mod, "JOBS_FILE", home / "cron" / "jobs.json")
+        monkeypatch.setattr(jobs_mod, "OUTPUT_DIR", home / "cron" / "output")
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        script = tmp_path / "mon.sh"
+        script.write_text("#!/bin/sh\necho ok\n")
+        job = jobs_mod.create_job(
+            "check ci then run checklist", "every 30m", name="ci-watch",
+            workdir=str(proj), monitor_script=str(script),
+        )
+        settings = ws.ProactiveSettings(enabled=True, mode="active",
+                                        eligible_jobs=(job["id"],))
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: settings)
+        scope_ = ws.Scope(ws.current_profile(), str(proj.resolve()), "private", "")
+        row = np.create_workstream(scope_, kind="blocker", title="after CI green",
+                                   summary="run local read-only checklist",
+                                   fingerprint="ci", approved=True, now=NOW)
+
+        def cli(action, *, tty=True, project=None, **kw):
+            monkeypatch.setattr(sys.stdin, "isatty", lambda: tty, raising=False)
+            from clover_cli.cron import cron_workstream
+
+            ns = argparse.Namespace(
+                project=project or str(proj), workstream_action=action,
+                workstream_id=kw.get("workstream_id"), feedback_kind=None, note=None,
+                audience="private", root=kw.get("root", ""), job=kw.get("job"),
+                text=kw.get("text"),
+            )
+            return cron_workstream(ns)
+
+        return dict(cli=cli, jobs=jobs_mod, job=job, scope=scope_, row=row,
+                    proj=proj, ws=ws, settings=settings, mp=monkeypatch)
+
+    def test_link_writes_job_field_read_back_from_jobs_file(self, env):
+        wid, jid = env["row"]["workstream_id"], env["job"]["id"]
+        assert env["cli"]("link", workstream_id=wid, job=jid) == 0
+        job = env["jobs"].get_job(jid)
+        assert job["workstream_id"] == wid
+        # the exact record the scheduler resolves is reachable from the job
+        sc_ = env["ws"].job_scope(job)
+        assert sc_ == env["scope"]
+        assert np.get_workstream(sc_, job["workstream_id"])["approved"] is True
+
+    def test_link_is_idempotent_and_refuses_a_second_workstream(self, env):
+        wid, jid = env["row"]["workstream_id"], env["job"]["id"]
+        assert env["cli"]("link", workstream_id=wid, job=jid) == 0
+        assert env["cli"]("link", workstream_id=wid, job=jid) == 0
+        other = np.create_workstream(env["scope"], kind="blocker", title="t", summary="s",
+                                     fingerprint="other", approved=True, now=NOW)
+        assert env["cli"]("link", workstream_id=other["workstream_id"], job=jid) == 1
+        assert env["jobs"].get_job(jid)["workstream_id"] == wid
+
+    def test_unlink_clears_the_field(self, env):
+        wid, jid = env["row"]["workstream_id"], env["job"]["id"]
+        env["cli"]("link", workstream_id=wid, job=jid)
+        assert env["cli"]("unlink", job=jid) == 0
+        assert not env["jobs"].get_job(jid).get("workstream_id")
+
+    def test_refusals_leave_the_job_untouched(self, env, monkeypatch, tmp_path):
+        ws = env["ws"]
+        wid, jid = env["row"]["workstream_id"], env["job"]["id"]
+        # not enrolled
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ws.ProactiveSettings(
+            enabled=True, mode="active"))
+        assert env["cli"]("link", workstream_id=wid, job=jid) == 1
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: env["settings"])
+        # unapproved record
+        raw = np.create_workstream(env["scope"], kind="blocker", title="t", summary="s",
+                                   fingerprint="raw", now=NOW)
+        assert env["cli"]("link", workstream_id=raw["workstream_id"], job=jid) == 1
+        # closed record
+        np.update_workstream(env["scope"], wid, expected_revision=1, status="cancelled", now=NOW)
+        assert env["cli"]("link", workstream_id=wid, job=jid) == 1
+        # unknown job / unknown workstream / no tty
+        assert env["cli"]("link", workstream_id=wid, job="nope") == 1
+        assert env["cli"]("link", workstream_id="ws_missing", job=jid) == 1
+        live = np.create_workstream(env["scope"], kind="blocker", title="t2", summary="s2",
+                                    fingerprint="live", approved=True, now=NOW)
+        assert env["cli"]("link", tty=False, workstream_id=live["workstream_id"], job=jid) == 1
+        assert not env["jobs"].get_job(jid).get("workstream_id")
+
+    def test_wrong_project_audience_or_non_monitor_job_refused(self, env, tmp_path):
+        jobs = env["jobs"]
+        wid, jid = env["row"]["workstream_id"], env["job"]["id"]
+        other_dir = tmp_path / "other"
+        other_dir.mkdir()
+        assert env["cli"]("link", project=str(other_dir), workstream_id=wid, job=jid) == 1
+        plain = jobs.create_job("do thing", "every 1h", name="plain", workdir=str(env["proj"]))
+        s = env["ws"].ProactiveSettings(enabled=True, mode="active",
+                                        eligible_jobs=(jid, plain["id"]))
+        env["mp"].setattr(env["ws"], "load_settings", lambda config=None: s)
+        assert env["cli"]("link", workstream_id=wid, job=plain["id"]) == 1
+        assert not jobs.get_job(plain["id"]).get("workstream_id")
+
+    def test_job_without_workdir_is_refused_because_project_is_not_deterministic(self, env, tmp_path):
+        jobs = env["jobs"]
+        script = tmp_path / "m2.sh"
+        script.write_text("#!/bin/sh\necho 1\n")
+        nowd = jobs.create_job("p", "every 1h", name="nowd", monitor_script=str(script))
+        s = env["ws"].ProactiveSettings(enabled=True, mode="active",
+                                        eligible_jobs=(nowd["id"],))
+        env["mp"].setattr(env["ws"], "load_settings", lambda config=None: s)
+        assert env["cli"]("link", workstream_id=env["row"]["workstream_id"],
+                          job=nowd["id"]) == 1
+
+    def test_job_scope_matches_scheduler_derivation_and_honours_root(self, env):
+        job = dict(env["job"])
+        assert env["ws"].job_scope(job).root == ""
+        job["workstream_root"] = "local"
+        assert env["ws"].job_scope(job).root == "local"
+
+
+class TestCliCannotPersistCorrections:
+    """A TTY (or PTY) does not authenticate a human: no CLI correction path."""
+
+    def test_correct_is_not_a_cli_action(self):
+        import argparse
+
+        from clover_cli.subcommands.cron import build_cron_parser
+
+        root = argparse.ArgumentParser()
+        sub = root.add_subparsers(dest="cmd")
+        build_cron_parser(sub, cmd_cron=lambda a: 0)
+        with pytest.raises(SystemExit):
+            root.parse_args(["cron", "workstream", "proj-a", "correct", "--text", "x"])

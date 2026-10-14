@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -218,6 +219,122 @@ def make_scope(
         audience=str(audience).strip(),
         root=str(root or ""),
     )
+
+
+def scope_for_surface(
+    *, platform: str = "", chat_type: str = "", chat_id: str = "",
+    user_id: str = "", project: Optional[str] = None,
+) -> Scope:
+    """The one canonical Scope for a host surface (turn, end-of-turn, CLI).
+
+    Project identity is the terminal working directory (the gateway bridges
+    ``terminal.cwd`` through ``TERMINAL_CWD``). A local CLI/TUI session is the
+    private ``local`` root; a DM with a user id is ``private:<user>``; groups,
+    channels, DMs without an identity and non-chat transports fail closed to a
+    ``shared:`` audience (which ``private_only`` never records or injects).
+    """
+    plat = str(platform or "").lower()
+    ctype = str(chat_type or "").lower()
+    cid, uid = str(chat_id or ""), str(user_id or "")
+    if plat in {"cli", "tui"} and not ctype:
+        audience, root = "private", "local"
+    elif ctype in {"dm", "private"} and uid:
+        audience, root = f"private:{uid}", uid
+    elif ctype in {"group", "forum", "channel", "thread"}:
+        audience, root = f"shared:{ctype}:{cid}", cid
+    else:
+        audience, root = f"shared:{plat or 'unknown'}:{cid}", cid
+    proj = project or str(Path(os.getenv("TERMINAL_CWD") or os.getcwd()).resolve())
+    return make_scope(proj, audience=audience, root=root)
+
+
+def scope_for_agent(agent: Any) -> Scope:
+    """``scope_for_surface`` from an agent instance's transport attributes."""
+    return scope_for_surface(
+        platform=getattr(agent, "platform", ""),
+        chat_type=getattr(agent, "_chat_type", ""),
+        chat_id=getattr(agent, "_chat_id", ""),
+        user_id=getattr(agent, "_user_id", ""),
+    )
+
+
+class LinkError(ValueError):
+    """A monitor-job link request failed validation (nothing was written)."""
+
+
+def job_scope(job: Mapping[str, Any]) -> Scope:
+    """The Scope a cron job's linked workstream lives in.
+
+    Mirrors the scheduler's occurrence writer: project is the job's workdir
+    (falling back to ``TERMINAL_CWD``/cwd), audience ``private``, and root is
+    ``job['workstream_root']`` (empty by default).
+    """
+    project = str(Path(job.get("workdir") or os.getenv("TERMINAL_CWD") or os.getcwd()).resolve())
+    return make_scope(project, audience="private", root=str(job.get("workstream_root") or ""))
+
+
+def link_job_to_workstream(
+    scope: Scope, workstream_id: str, job_id: str, settings: "ProactiveSettings",
+) -> Dict[str, Any]:
+    """Validated writer of ``job['workstream_id']`` for a monitor job.
+
+    The scheduler only records occurrences for an enrolled job whose linked
+    record is approved and open in the job's own scope, so exactly that is
+    verified here. Evidence only: linking grants no authority and starts no
+    work. Raises ``LinkError`` (and writes nothing) on any mismatch.
+    """
+    from cron import jobs as cron_jobs
+    from cron import notepad as np
+
+    if not settings.enabled:
+        raise LinkError("proactive is disabled")
+    if not job_eligible(settings, job_id):
+        raise LinkError(f"job {job_id!r} is not in proactive.eligible_jobs")
+    job = cron_jobs.get_job(job_id)
+    if not job:
+        raise LinkError(f"no cron job {job_id!r}")
+    if not (job.get("monitor_script") or job.get("monitor_url")):
+        raise LinkError("only monitor jobs (monitor_script/monitor_url) can be linked")
+    if not job.get("workdir"):
+        raise LinkError("set the job's workdir to the project first; "
+                        "the project must not depend on the scheduler's cwd")
+    expected = job_scope({**job, "workstream_root": scope.root})
+    if scope != expected:
+        raise LinkError(
+            f"scope mismatch: job resolves to project={expected.project!r} "
+            f"audience={expected.audience!r} root={expected.root!r}"
+        )
+    record = np.get_workstream(scope, workstream_id)
+    if record is None:
+        raise LinkError(f"no workstream {workstream_id!r} in this scope")
+    if not record.get("approved"):
+        raise LinkError("workstream is not approved (approve it first)")
+    if record.get("status") not in ("open", "deferred"):
+        raise LinkError(f"workstream is {record.get('status')}, not open")
+    current = job.get("workstream_id")
+    if current and current != workstream_id:
+        raise LinkError(f"job already linked to {current!r}; unlink it first")
+    if current == workstream_id and str(job.get("workstream_root") or "") == scope.root:
+        return job
+    updated = cron_jobs.update_job(
+        job_id, {"workstream_id": workstream_id, "workstream_root": scope.root}
+    )
+    if not updated or updated.get("workstream_id") != workstream_id:
+        raise LinkError("job update was not persisted")
+    return updated
+
+
+def unlink_job(job_id: str) -> Dict[str, Any]:
+    """Clear a job's workstream link (never touches the workstream record)."""
+    from cron import jobs as cron_jobs
+
+    job = cron_jobs.get_job(job_id)
+    if not job:
+        raise LinkError(f"no cron job {job_id!r}")
+    updated = cron_jobs.update_job(job_id, {"workstream_id": None, "workstream_root": None})
+    if not updated:
+        raise LinkError("job update was not persisted")
+    return updated
 
 
 def _usable(scope: Scope, settings: ProactiveSettings) -> bool:
@@ -623,6 +740,154 @@ def approve_workstream(
         return row
     return np.update_workstream(scope, workstream_id, expected_revision=row["revision"],
                                 approved=True, actor="user", now=_now(now))
+
+
+_CORRECTION_MARKER = re.compile(
+    r"^\s*(?:/correct(?:ion)?(?:\s*:\s*|\s+)|correction\s*:\s*)(\S.*?)\s*$",
+    re.IGNORECASE | re.DOTALL,
+)
+_CORRECTION_TARGET = re.compile(r"^(ws_[0-9a-f]{16})\s*:?\s+(\S.*)$", re.DOTALL)
+
+
+def parse_explicit_correction(message: Any) -> Optional[Tuple[Optional[str], str]]:
+    """``(target_workstream_id | None, text)`` of an explicit ``/correct`` or
+    ``Correction:`` message, else ``None``. Anchored at the start: nothing is
+    ever inferred from prose, tone or silence. A target id counts only when
+    written as the first word (``/correct ws_<16 hex>: ...``)."""
+    if not isinstance(message, str):
+        return None
+    match = _CORRECTION_MARKER.match(message)
+    if not match:
+        return None
+    body = match.group(1)
+    target = _CORRECTION_TARGET.match(body)
+    if target:
+        return target.group(1), target.group(2).strip()
+    return None, body
+
+
+def explicit_correction_from_message(message: Any) -> Optional[str]:
+    parsed = parse_explicit_correction(message)
+    return parsed[1] if parsed else None
+
+
+def latest_user_message(db: Any, session_id: str) -> Optional[str]:
+    """Text of the newest persisted ``user`` row of an existing SessionDB
+    session (tool-result and assistant rows are never returned), else None."""
+    if not session_id or db is None or db.get_session(session_id) is None:
+        return None
+    for row in reversed(db.get_messages(session_id, limit=200, latest=True)):
+        if row.get("role") == "user" and not row.get("tool_call_id"):
+            content = row.get("content")
+            return content if isinstance(content, str) else None
+    return None
+
+
+def capture_user_correction(
+    scope: Scope, *, session_id: str, settings: ProactiveSettings,
+    db: Any = None, expected_revision: Optional[int] = None,
+    now: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    """Persist an explicit user correction found in the real conversation.
+
+    The text is read from the owner (the SessionDB's newest ``user`` row of
+    ``session_id``); the caller supplies neither text nor role, and a
+    terminal/TTY is never evidence of a human. The row must be current (a
+    newer ordinary user message makes an older marker row stale) and begin
+    with the explicit marker. Result: user-approved, redacted, literal ids
+    kept, superseding the explicitly named record with history, idempotent.
+    Unverifiable input records nothing; an unknown named target raises
+    ``NotFound``.
+    """
+    if not _usable(scope, settings) or not str(session_id or ""):
+        return None
+    if db is None:
+        from clover_state import SessionDB
+
+        try:
+            db = SessionDB(read_only=True)
+        except Exception:
+            logger.debug("session store unavailable; correction not recorded", exc_info=True)
+            return None
+        try:
+            return capture_user_correction(
+                scope, session_id=session_id, settings=settings, db=db,
+                expected_revision=expected_revision, now=now)
+        finally:
+            db.close()
+    parsed = parse_explicit_correction(latest_user_message(db, session_id))
+    if parsed is None:
+        return None
+    target, text = parsed
+    return record_correction(
+        scope, text=text, settings=settings, supersedes_id=target,
+        expected_revision=expected_revision, session_id=session_id,
+        approved=True, now=now,
+    )
+
+
+def collect_cron_verified_runs(
+    settings: ProactiveSettings, *, now: Optional[datetime] = None,
+    readers: Optional[OwnerReaders] = None,
+) -> int:
+    """Turn completed cron executions into owner-confirmed procedure runs.
+
+    The authoritative owners are the cron jobs file (the reusable instruction,
+    ``job['prompt']``) and the executions ledger (``status == completed``).
+    Only enrolled jobs (``proactive.eligible_jobs``) with a workdir (so the
+    project is deterministic) and a prompt are read. Each run is recorded once
+    per execution id (receipts and evidence are unique per owner id, so replay
+    is a no-op); a cron execution is its own isolated session. Only the
+    ``executed`` fact is claimed: nothing here says saved or delivered.
+    Returns the number of newly recorded runs.
+    """
+    if not (settings.enabled and settings.procedures_enabled and settings.eligible_jobs):
+        return 0
+    from cron import executions as cron_executions
+    from cron import jobs as cron_jobs
+    from cron import notepad as np
+
+    moment = _now(now)
+    recorded = 0
+    for job_id in settings.eligible_jobs:
+        try:
+            job = cron_jobs.get_job(job_id)
+            if not job or not job.get("workdir"):
+                continue
+            steps = str(job.get("prompt") or "").strip()
+            if not steps:
+                continue  # no transferable instruction to propose
+            scope = job_scope(job)
+            if not _usable(scope, settings):
+                continue
+            done = [e for e in cron_executions.list_executions(job_id=job_id, limit=200)
+                    if e.get("status") == "completed"]
+            if not done:
+                continue
+            key = str(job.get("name") or job_id).strip()
+            row = np.create_workstream(
+                scope, kind="progress", title=f"Runs of {key}"[:160],
+                summary=f"verified executions of cron job {job_id}",
+                fingerprint=f"cron-runs:{job_id}", source="runtime",
+                max_items=settings.threads_max_items, now=moment,
+            )
+            wid = row["workstream_id"]
+            seen = {e["source_id"] for e in np.list_evidence(scope, wid)}
+            for execution in sorted(done, key=lambda e: (e["claimed_at"], e["id"])):
+                if execution["id"] in seen:
+                    continue
+                run = record_verified_run(
+                    scope, wid, procedure_key=key,
+                    proof=ExecutedProof(job_id, execution["id"]),
+                    session_id=f"cron:{execution['id']}", steps=steps,
+                    settings=settings, now=_parse(execution.get("finished_at")) or moment,
+                    readers=readers,
+                )
+                if run is not None:
+                    recorded += 1
+        except Exception:
+            logger.debug("cron verified-run collection failed for %s", job_id, exc_info=True)
+    return recorded
 
 
 # ── feedback, timing, novelty ──────────────────────────────────────────────

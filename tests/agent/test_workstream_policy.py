@@ -879,3 +879,204 @@ class TestEndTurnRecording:
         assert ad.mark_completion_delivered("r-1")
         wl.end_turn(self._agent(("r-1", "sign artifact"), scope=scope))
         assert ws.thread_context(scope, ON, now=NOW) == ""
+
+
+class TestHostScopeDerivation:
+    """One canonical Scope per host surface; end_turn needs no hand-set attribute."""
+
+    def _agent(self, *specs, **attrs):
+        import types
+
+        from agent import foreground_time_limit as fl
+
+        own = {d: fl.DispatchReceipt(delegation_id=d, seq=i + 1, goals=(g,), turn_id="t1")
+               for i, (d, g) in enumerate(specs)}
+        return types.SimpleNamespace(_fg_own_dispatches=own, _fg_dispatch_seq=len(own),
+                                     _wl_floor=0, _wl_completion_ids=(), **attrs)
+
+    @pytest.fixture
+    def project(self, monkeypatch, tmp_path):
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        monkeypatch.setenv("TERMINAL_CWD", str(proj))
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
+        return proj.resolve()
+
+    def test_cli_turn_end_records_in_the_scope_the_context_seam_reads(self, project):
+        from agent import work_lifecycle as wl
+
+        _delegation("h-bad", status="failed")
+        a = self._agent(("h-bad", "build package"), platform="cli")
+        wl.end_turn(a)
+        expect = ws.Scope(profile=ws.current_profile(), project=str(project),
+                          audience="private", root="local")
+        assert ws.scope_for_agent(a) == expect
+        assert [r["title"] for r in np.list_workstreams(expect)] == ["Unfinished: build package"]
+        # a fresh process/session derives the same scope and sees the open work
+        fresh = self._agent(platform="cli")
+        text = ws.current_turn_note(ws.scope_for_agent(fresh), "anything", ON)
+        assert "build package" in text
+
+    def test_direct_message_scope_uses_the_dm_identity(self, project):
+        from agent import work_lifecycle as wl
+
+        _delegation("h-dm", status="failed")
+        a = self._agent(("h-dm", "send report"), platform="telegram",
+                        _chat_type="dm", _user_id="u1", _chat_id="c9")
+        wl.end_turn(a)
+        scope = ws.scope_for_agent(a)
+        assert (scope.audience, scope.root) == ("private:u1", "u1")
+        assert len(np.list_workstreams(scope)) == 1
+
+    @pytest.mark.parametrize("attrs", [
+        dict(platform="telegram", _chat_type="group", _chat_id="g1", _user_id="u1"),
+        dict(platform="telegram", _chat_type="dm"),        # DM without identity
+        dict(platform="cron"),
+        dict(),
+    ])
+    def test_shared_or_unidentified_surfaces_stay_inert(self, project, store, attrs):
+        from agent import work_lifecycle as wl
+
+        _delegation("h-grp", status="failed")
+        wl.end_turn(self._agent(("h-grp", "x"), **attrs))
+        assert not (store / "cron" / "notepad.db").exists()
+
+    def test_explicit_host_envelope_wins_and_foreign_object_is_inert(self, project, store):
+        from agent import work_lifecycle as wl
+
+        _delegation("h-env", status="failed")
+        env = sc(project="envelope-proj")
+        wl.end_turn(self._agent(("h-env", "x"), platform="cli", _workstream_scope=env))
+        assert len(np.list_workstreams(env)) == 1
+        other = ws.Scope(ws.current_profile(), str(project), "private", "local")
+        assert np.list_workstreams(other) == []
+        wl.end_turn(self._agent(("h-env", "x"), platform="cli", _workstream_scope=object()))
+        assert np.list_workstreams(other) == []
+
+    def test_disabled_is_byte_inert(self, project, store, monkeypatch):
+        from agent import work_lifecycle as wl
+
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ws.ProactiveSettings())
+        _delegation("h-off", status="failed")
+        wl.end_turn(self._agent(("h-off", "x"), platform="cli"))
+        assert not (store / "cron" / "notepad.db").exists()
+
+
+class TestExplicitCorrection:
+    """Persisted only from an owner-confirmed, current, user-role row of the
+    real SessionDB carrying the explicit marker — never inferred or claimed."""
+
+    TEXT = "Correction: use /srv/app/releases/v2.3.1 not /srv/app/old; tests/test_x.py::test_z failed, fix remains"
+
+    @pytest.fixture
+    def sdb(self):
+        from clover_state import SessionDB
+
+        db = SessionDB()
+        db.create_session("sess-1", "cli")
+        yield db
+        db.close()
+
+    def test_marker_is_anchored_and_explicit(self):
+        f = ws.explicit_correction_from_message
+        assert f("/correct use /a not /b") == "use /a not /b"
+        assert f("  /correction: use /a not /b") == "use /a not /b"
+        assert f("Correction: use /a\nnot /b") == "use /a\nnot /b"
+        assert f("correction : use /a") == "use /a"
+        for no in ("I think the correction: use /a", "that's not right, use /a", "",
+                   "Correction:", "/correct   ", "please /correct use /a", None, 7):
+            assert f(no) is None
+
+    def test_target_id_is_parsed_only_when_explicit(self):
+        p = ws.parse_explicit_correction
+        assert p("/correct ws_0123456789abcdef: use /a") == ("ws_0123456789abcdef", "use /a")
+        assert p("/correct use ws_0123456789abcdef as base") == (None, "use ws_0123456789abcdef as base")
+
+    def test_current_user_row_is_recorded_and_survives_a_fresh_sessiondb(self, sdb, tmp_path):
+        from clover_state import SessionDB
+
+        sdb.append_message("sess-1", "user", self.TEXT)
+        sdb.append_message("sess-1", "assistant", "Noted.")
+        scope = sc()
+        row = ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW)
+        assert row["kind"] == "correction" and row["approved"] is True and row["source"] == "user"
+        assert row["session_id"] == "sess-1"
+        fresh = SessionDB(tmp_path / "fresh.db")
+        fresh.create_session("sess-2", "cli")
+        assert fresh.get_messages("sess-2") == []
+        note = ws.current_turn_note(scope, "which release path?", ON, now=NOW + timedelta(days=3))
+        assert "/srv/app/releases/v2.3.1" in note and "tests/test_x.py::test_z" in note
+        fresh.close()
+
+    def test_assistant_tool_stale_and_unmarked_rows_are_not_corrections(self, sdb):
+        scope = sc()
+        sdb.append_message("sess-1", "assistant", self.TEXT)          # model prose, same words
+        assert ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW) is None
+        sdb.append_message("sess-1", "user", self.TEXT)
+        sdb.append_message("sess-1", "tool", self.TEXT, tool_call_id="c1")
+        assert ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW) is not None
+        # a newer, ordinary user message makes the old marker row stale: not "current"
+        other = sc(project="p2")
+        sdb.append_message("sess-1", "user", "thanks, now run the audit")
+        assert ws.capture_user_correction(other, session_id="sess-1", settings=ON, now=NOW) is None
+        assert np.list_workstreams(other) == []
+
+    def test_unknown_session_and_untrusted_inputs_record_nothing(self, store):
+        scope = sc()
+        f = ws.capture_user_correction
+        assert f(scope, session_id="never-created", settings=ON, now=NOW) is None
+        assert f(scope, session_id="", settings=ON, now=NOW) is None
+        assert f(scope, session_id="sess-1", settings=ws.ProactiveSettings(), now=NOW) is None
+        assert f(sc(audience="group:c1"), session_id="sess-1", settings=ON, now=NOW) is None
+        assert np.list_workstreams(scope) == []
+
+    def test_supersedes_named_record_with_history_and_redacts(self, sdb):
+        scope = sc()
+        old = np.create_workstream(scope, kind="decision", title="p", summary="deploy /srv/old",
+                                   fingerprint="d", now=NOW)
+        sdb.append_message(
+            "sess-1", "user",
+            f"/correct {old['workstream_id']}: deploy /srv/new token ghp_abcdefghijklmnopqrstuvwxyz0123456789")
+        row = ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW)
+        assert row["supersedes_id"] == old["workstream_id"]
+        assert "ghp_abcdefghijklmnopqrstuvwxyz0123456789" not in row["summary"]
+        assert "/srv/new" in row["summary"]
+        assert [h["op"] for h in np.list_history(scope, old["workstream_id"])] == ["create", "supersede"]
+
+    def test_unknown_named_target_is_not_recorded(self, sdb):
+        scope = sc()
+        sdb.append_message("sess-1", "user", "/correct ws_0000000000000000: fix it")
+        with pytest.raises(np.NotFound):
+            ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW)
+        assert np.list_workstreams(scope) == []
+
+    def test_replay_adds_one_record(self, sdb):
+        scope = sc()
+        sdb.append_message("sess-1", "user", self.TEXT)
+        for _ in range(3):
+            ws.capture_user_correction(scope, session_id="sess-1", settings=ON, now=NOW)
+        assert len(np.list_workstreams(scope, kinds=["correction"])) == 1
+
+    def test_end_turn_is_the_production_ingress(self, sdb, monkeypatch, tmp_path):
+        import types
+
+        from agent import work_lifecycle as wl
+
+        proj = tmp_path / "proj"
+        proj.mkdir()
+        monkeypatch.setenv("TERMINAL_CWD", str(proj))
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
+        sdb.append_message("sess-1", "user", self.TEXT)
+        agent = types.SimpleNamespace(platform="cli", session_id="sess-1", _session_db=sdb,
+                                      _fg_own_dispatches={}, _fg_dispatch_seq=0, _wl_floor=0,
+                                      _wl_completion_ids=())
+        wl.end_turn(agent)
+        scope = ws.scope_for_agent(agent)
+        assert [r["kind"] for r in np.list_workstreams(scope)] == ["correction"]
+        # a helper-completion turn's synthetic user row is never a correction
+        other = types.SimpleNamespace(platform="cli", session_id="sess-1", _session_db=sdb,
+                                      _fg_own_dispatches={}, _fg_dispatch_seq=0, _wl_floor=0,
+                                      _wl_completion_ids=("d-1",))
+        monkeypatch.setenv("TERMINAL_CWD", str(tmp_path))
+        wl.end_turn(other)
+        assert np.list_workstreams(ws.scope_for_agent(other)) == []

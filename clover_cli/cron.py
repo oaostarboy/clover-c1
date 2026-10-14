@@ -808,6 +808,10 @@ def cron_workstream(args) -> int:
     from cron import notepad as np
 
     project = str(getattr(args, "project", "") or "")
+    # A path-like project is the resolved directory (the turn seam's project
+    # identity); anything else is a literal project key.
+    if project in {".", ""} or project.startswith(("/", "./", "../", "~")):
+        project = str(Path(project or ".").expanduser().resolve())
     action = getattr(args, "workstream_action", None) or "list"
     wid = getattr(args, "workstream_id", None)
     try:
@@ -888,6 +892,21 @@ def cron_workstream(args) -> int:
         if action == "prune":
             removed = np.prune(scope, retention_days=settings.threads_retention_days)
             print(color(f"Pruned {removed} expired record(s).", Colors.GREEN))
+            return 0
+
+        if action in {"link", "unlink"}:
+            job_id = getattr(args, "job", None)
+            if not job_id or (action == "link" and not wid):
+                print(color("Usage: clover cron workstream <project> link <id> --job <job_id> "
+                            "[--root ROOT]  |  unlink --job <job_id>", Colors.RED))
+                return 1
+            if action == "link":
+                ws.link_job_to_workstream(scope, wid, job_id, settings)
+                print(color(f"Linked job {job_id} to workstream {wid} "
+                            "(monitor events are recorded as evidence only).", Colors.GREEN))
+            else:
+                ws.unlink_job(job_id)
+                print(color(f"Unlinked job {job_id}.", Colors.GREEN))
             return 0
     except (np.WorkstreamError, ValueError) as exc:
         print(color(f"Workstream error: {exc}", Colors.RED))

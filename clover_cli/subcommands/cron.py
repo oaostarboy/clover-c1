@@ -335,7 +335,7 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
         "workstream_action",
         nargs="?",
         default="list",
-        choices=["list", "show", "feedback", "approve", "prune"],
+        choices=["list", "show", "feedback", "approve", "prune", "link", "unlink"],
         help="Action (default: list)",
     )
     cron_workstream.add_argument("workstream_id", nargs="?", help="Workstream ID (show/feedback/approve)")
@@ -344,7 +344,12 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
     )
     cron_workstream.add_argument("note", nargs="?", help="Optional note (feedback)")
     cron_workstream.add_argument("--audience", default="private", help="Audience scope (default: private)")
-    cron_workstream.add_argument("--root", default="", help="Owner root scope (default: empty)")
+    cron_workstream.add_argument(
+        "--root", default="local",
+        help="Owner root scope (default: local, the CLI/TUI root; monitor-linked "
+             "records use the job's own root, empty by default)",
+    )
+    cron_workstream.add_argument("--job", default=None, help="Cron job ID (link/unlink)")
 
     # cron tick (mostly for debugging)
     cron_tick = cron_subparsers.add_parser("tick", help="Run due jobs once and exit")

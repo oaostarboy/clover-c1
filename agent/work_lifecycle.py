@@ -520,35 +520,52 @@ def begin_turn(
         return ""
 
 
-# The host's scope envelope for the opt-in workstream ledger: an
-# ``agent.workstreams.Scope`` set on the instance by the turn seam.  Absent (or
-# the feature disabled) means this module does nothing and touches no storage.
+# Optional explicit host envelope for the opt-in workstream ledger: an
+# ``agent.workstreams.Scope`` set on the instance.  When absent the canonical
+# ``workstreams.scope_for_agent`` derivation is used; a non-``Scope`` value is
+# ignored.  With the feature disabled this module touches no storage.
 _SCOPE_ATTR = "_workstream_scope"
 
 
 def _record_unfinished(agent: Any) -> None:
-    """Persist this turn's unfinished/failed helper work as typed obligations.
+    """Persist this turn's workstream facts for the opt-in ledger.
 
-    Same receipts ``report`` answers for; the ledger rows only restate what the
-    durable delegation ledger says.  Best-effort and never raises.
+    * unfinished/failed helper work, restated from the durable delegation
+      ledger (the same receipts ``report`` answers for);
+    * an explicit user correction, read back from the SessionDB's current
+      ``user`` row (never on a helper-completion turn, whose user row is
+      synthetic).
+
+    Best-effort and never raises; inert unless ``proactive.enabled``.
     """
     try:
-        scope = getattr(agent, _SCOPE_ATTR, None)
-        if scope is None:
-            return
         from agent import workstreams as _ws
 
-        if not isinstance(scope, _ws.Scope):
-            return
         settings = _ws.load_settings()
         if not settings.enabled:
             return
+        scope = getattr(agent, _SCOPE_ATTR, None)
+        if scope is None:
+            # No explicit host envelope: the same canonical derivation the
+            # turn-context seam uses, so both read and write one scope.
+            scope = _ws.scope_for_agent(agent)
+        elif not isinstance(scope, _ws.Scope):
+            return  # a foreign object is never a scope
+        ids = _completion_ids(agent)
+        session_id = str(getattr(agent, "session_id", "") or "")
+        if not ids and session_id:
+            try:
+                _ws.capture_user_correction(
+                    scope, session_id=session_id, settings=settings,
+                    db=getattr(agent, "_session_db", None) or None,
+                )
+            except Exception:
+                logger.debug("user correction not recorded", exc_info=True)
         floor = getattr(agent, _FLOOR, None)
         if not isinstance(floor, int) or isinstance(floor, bool):
             return
         receipts = _turn_receipts(agent, floor)
         if not receipts:
-            ids = _completion_ids(agent)
             receipts = completion_group(agent, ids) if ids else []
         if not receipts:
             return
