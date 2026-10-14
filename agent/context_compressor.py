@@ -1346,7 +1346,8 @@ def _audit_workstream_summary(summary: str, scope: Any) -> str:
         from agent import workstreams
 
         settings = workstreams.load_settings()
-        if not settings.enabled or not settings.compaction_audit_enabled:
+        if (not settings.enabled or not settings.compaction_audit_enabled
+                or not getattr(settings, "active", True)):
             return summary
         capsule = workstreams.thread_context(scope, settings)
         if not isinstance(capsule, str) or not capsule.strip():

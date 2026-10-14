@@ -102,6 +102,23 @@ def read_capsule(scope: ws.Scope, settings: ws.ProactiveSettings) -> Capsule | N
                    tuple(entries), tuple(omitted))
 
 
+def current_turn_context(scope: ws.Scope, query: str, settings: ws.ProactiveSettings) -> str:
+    """Parent-owned ordinary compose adapter; no history/system prompt edits.
+
+    Preserve existing behavior unless active audited continuity is opted in.
+    Under that policy, retrieve the same bounded capsule independently of any
+    provider-native summary, including verified progress and force-redaction.
+    """
+    if not settings.active or not settings.compaction_audit_enabled:
+        return ws.current_turn_note(scope, query, settings) or ""
+    capsule = read_capsule(scope, settings)
+    if capsule is None:
+        return redact_capsule(ws.current_turn_note(scope, query, settings) or "")
+    recalled = ws.recall_context(scope, query, settings,
+                                 exclude_ids=[wid for wid, _ in capsule.entries])
+    return redact_capsule("\n".join(p for p in (capsule.text, recalled.text) if p))
+
+
 def snapshot_for_agent(agent: Any) -> Capsule | None:
     # Derive at THIS boundary, including preflight/manual before the first turn;
     # never rely on a previous turn's cached compressor scope.
@@ -173,10 +190,15 @@ def redact_handoffs(messages: list) -> None:
 def verify_readback(capsule: Capsule | None, agent: Any, *, session_id: str | None = None) -> None:
     if capsule is None:
         return
-    rows = agent._session_db.get_messages(session_id or agent.session_id)
-    # Readback is comparison-only: do not return raw legacy secrets to a caller.
-    text = redact_capsule("\n".join(str(r.get("content", "")) for r in rows))
-    if capsule.text and redact_capsule(capsule.text) not in text:
-        capsule.verdict.update(commit_status="unknown", reason="capsule_readback_missing")
-        raise ContinuityBlocked("committed compaction capsule could not be read back")
+    try:
+        rows = agent._session_db.get_messages(session_id or agent.session_id)
+        # Comparison-only: never return raw legacy secrets to a caller.
+        text = redact_capsule("\n".join(str(r.get("content", "")) for r in rows))
+        if capsule.text and redact_capsule(capsule.text) not in text:
+            raise ContinuityBlocked("capsule_readback_missing")
+    except Exception as exc:
+        # The write already committed. Do NOT roll it back in memory, retry it,
+        # or orphan an atomically published child because readback is unknown.
+        capsule.verdict.update(commit_status="unknown", reason=type(exc).__name__)
+        return
     capsule.verdict["commit_status"] = "committed"

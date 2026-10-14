@@ -4554,6 +4554,20 @@ def compress_context(
                     agent._flushed_db_message_session_id = agent.session_id
                 _session_commit_succeeded = True
             except Exception as e:
+                if _workstream_capsule is not None:
+                    # An opted-in audited handoff is publishable only if the
+                    # actual owner committed it. In-place failures must not
+                    # leak the uncommitted candidate into the live host loop.
+                    _workstream_capsule.verdict.update(
+                        commit_status="aborted", reason=type(e).__name__)
+                    messages[:] = copy.deepcopy(messages_before_compression)
+                    compressed = messages
+                    _compression_made_progress = False
+                    agent._cached_system_prompt = cached_system_prompt
+                    _restore_compressor_attempt_state(
+                        agent.context_compressor, _compressor_attempt_snapshot,
+                        attempt_generation=_attempt_generation,
+                    )
                 if (
                     not in_place
                     and locals().get("old_session_id")
