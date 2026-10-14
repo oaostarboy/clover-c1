@@ -574,6 +574,35 @@ def record_correction(
     )
 
 
+def record_verified_run(
+    scope: Scope, workstream_id: str, *, procedure_key: str, proof: Any,
+    session_id: str, steps: str, settings: ProactiveSettings,
+    now: Optional[datetime] = None, readers: Optional[OwnerReaders] = None,
+) -> Optional[Dict[str, Any]]:
+    """Record one *owner-confirmed* execution of a reusable workflow.
+
+    The ``executed`` receipt is written only after the owner confirms the
+    proof (so a failed/running/invented execution records nothing); the
+    evidence row then carries the procedure key, session and the transferable
+    ``steps``. Procedure intake counts only rows backed by both.
+    """
+    if not _usable(scope, settings) or not str(procedure_key or "").strip():
+        return None
+    receipt = record_receipt(scope, workstream_id, kind="executed", proof=proof,
+                             settings=settings, now=now, readers=readers)
+    if receipt is None:
+        return None
+    from cron import notepad as np
+
+    moment = _now(now)
+    return np.add_evidence(
+        scope, workstream_id, source_kind="execution", source_id=receipt["source_id"],
+        status="verified", key="procedure_run", procedure_key=str(procedure_key).strip(),
+        session_id=str(session_id or ""), summary=_clip(_redact(steps or ""), 512),
+        event_at=moment.isoformat(), now=moment,
+    )
+
+
 # ── feedback, timing, novelty ──────────────────────────────────────────────
 
 def record_feedback(

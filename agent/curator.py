@@ -2039,3 +2039,171 @@ def maybe_run_curator(
     except Exception as e:
         logger.debug("maybe_run_curator failed: %s", e, exc_info=True)
         return None
+
+
+# ---------------------------------------------------------------------------
+# Procedure candidate intake (opt-in workstream ledger, PLAN-v1 capability 5)
+# ---------------------------------------------------------------------------
+
+_PROCEDURE_DESC_LIMIT = 60
+
+
+def procedure_skill_name(procedure_key: str) -> str:
+    """Valid skill name (``[a-z0-9][a-z0-9._-]*``, <=64) for a procedure key."""
+    slug = re.sub(r"[^a-z0-9._-]+", "-", str(procedure_key).casefold()).strip("-._")
+    return (slug or "procedure")[:64].rstrip("-._") or "procedure"
+
+
+def _render_procedure_skill(name: str, key: str, runs: List[Dict[str, Any]]) -> str:
+    desc = f"Repeat the verified {name} procedure."
+    if len(desc) > _PROCEDURE_DESC_LIMIT:
+        desc = "Repeat a verified, reviewed workflow."
+    steps: List[str] = []
+    for run in runs:
+        text = str(run.get("summary") or "").strip()
+        if text and text not in steps:
+            steps.append(text)
+    sessions = sorted({r["session_id"] for r in runs})
+    lines = [
+        "---",
+        f"name: {json.dumps(name)}",
+        f"description: {json.dumps(desc)}",
+        "---",
+        "",
+        f"# {name}",
+        "",
+        f"> Proposed by Clover's proactive workstream ledger after {len(runs)} "
+        f"independently verified executions across {len(sessions)} sessions. "
+        "Draft only: review and edit before approving; nothing is installed "
+        "until you approve it.",
+        "",
+        "## When to use",
+        f"Work matching procedure key `{key}`.",
+        "",
+        "## Steps seen in the verified runs",
+    ]
+    lines += [f"- {step}" for step in steps[:3]]
+    lines += ["", "## Verified executions"]
+    lines += [f"- execution `{r['source_id']}` (session `{r['session_id']}`)" for r in runs]
+    return "\n".join(lines) + "\n"
+
+
+def propose_procedure_candidates(
+    scope: Any,
+    settings: Any,
+    *,
+    now: Optional[datetime] = None,
+    stage: Optional[Callable[..., Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    """Stage at most one reviewable skill draft per repeated verified workflow.
+
+    Counts only evidence rows that (a) are ``verified`` procedure runs, (b) are
+    backed by a typed ``executed`` receipt from the owning execution ledger,
+    (c) carry transferable steps and a session id.  A draft needs
+    ``procedures_min_verified_runs`` *distinct* execution ids across
+    ``procedures_min_sessions`` distinct sessions.  The draft goes through
+    ``tools.write_approval.stage_write('skills', ...)`` only — never
+    ``skill_manage``, never installed — and is recorded once by a typed
+    ``proposed`` receipt, so a rejected or pending proposal is not repeated.
+    """
+    if not (settings.enabled and settings.procedures_enabled):
+        return []
+    if settings.private_only and not scope.private:
+        return []
+    from agent import workstreams as _ws
+    from cron import notepad as np
+    from tools import write_approval as wa
+
+    moment = _ws._now(now)
+    evidence = np.list_scope_evidence(scope)
+    receipts = {
+        (r["workstream_id"], r["source_id"])
+        for r in np.list_receipts(scope, None, kinds=["executed"])
+    }
+    groups: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for row in evidence:
+        key = str(row.get("procedure_key") or "")
+        if (
+            not key
+            or row.get("status") != "verified"
+            or row.get("key") != "procedure_run"
+            or not str(row.get("session_id") or "")
+            or not str(row.get("summary") or "").strip()
+            or (row["workstream_id"], row["source_id"]) not in receipts
+        ):
+            continue
+        groups.setdefault(key, {}).setdefault(row["source_id"], row)
+
+    out: List[Dict[str, Any]] = []
+    stage_fn = stage or wa.stage_write
+    for key, by_exec in sorted(groups.items()):
+        runs = sorted(by_exec.values(), key=lambda r: (r["observed_at"], r["source_id"]))
+        sessions = {r["session_id"] for r in runs}
+        if (
+            len(runs) < settings.procedures_min_verified_runs
+            or len(sessions) < settings.procedures_min_sessions
+        ):
+            continue
+        name = procedure_skill_name(key)
+        fingerprint = _ws._fp("procedure", key)
+        existing = [
+            r for r in np.list_workstreams(scope, kinds=["procedure"], limit=500)
+            if r["fingerprint"] == fingerprint
+        ]
+        if any(
+            np.list_receipts(scope, r["workstream_id"], kinds=["proposed"])
+            for r in existing
+        ):
+            continue  # already proposed once: one reviewable proposal, no nagging
+        try:
+            from tools.skill_manager_tool import _find_skill
+
+            if _find_skill(name) is not None:
+                continue  # never shadow or overwrite an installed skill
+        except Exception:
+            logger.debug("skill lookup unavailable for %s", name, exc_info=True)
+        row = existing[0] if existing else np.create_workstream(
+            scope, kind="procedure", title=f"Procedure: {key}"[:160],
+            summary=f"{len(runs)} verified executions across {len(sessions)} sessions",
+            fingerprint=fingerprint, source="runtime",
+            max_items=settings.threads_max_items, now=moment,
+        )
+        wid = row["workstream_id"]
+        # A previous attempt may have staged and died before its receipt.
+        pending = next(
+            (p for p in wa.list_pending(wa.SKILLS)
+             if p.get("action") == "create"
+             and (p.get("payload") or {}).get("name") == name),
+            None,
+        )
+        if pending is not None:
+            np.add_receipt(scope, wid, kind="proposed", owner="policy",
+                           source_id=f"pending:{pending['id']}",
+                           detail="recovered existing pending draft", now=moment)
+            continue
+        content = _render_procedure_skill(name, key, runs)
+        try:
+            record = stage_fn(
+                wa.SKILLS,
+                {"action": "create", "name": name, "content": content},
+                summary=(
+                    f"proactive: create '{name}' from {len(runs)} verified "
+                    f"executions in {len(sessions)} sessions"
+                ),
+                origin="background_review",
+            )
+        except Exception:
+            logger.warning("procedure draft for %s could not be staged", key, exc_info=True)
+            continue
+        np.add_receipt(scope, wid, kind="proposed", owner="policy",
+                       source_id=f"pending:{record['id']}",
+                       detail=f"staged skill draft {name}", now=moment)
+        out.append({
+            "procedure_key": key,
+            "name": name,
+            "pending_id": record["id"],
+            "workstream_id": wid,
+            "execution_ids": [r["source_id"] for r in runs],
+            "session_ids": sorted(sessions),
+        })
+    return out
