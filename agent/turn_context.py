@@ -1663,6 +1663,33 @@ def build_turn_context(
                 _inbound_cb()
             except Exception:
                 logger.debug("inbound_persisted_callback failed", exc_info=True)
+        # Explicit human corrections/feedback: only after the exact user row
+        # (and its trusted-origin receipt) is durable, and before the model
+        # call. Fails closed and never raises into the turn.
+        _human_row = (
+            messages[current_turn_user_idx]
+            if 0 <= current_turn_user_idx < len(messages)
+            else None
+        )
+        if (
+            getattr(agent, "_trusted_human_ingress", None) is not None
+            and isinstance(_human_row, dict)
+            and _human_row.get("role") == "user"
+            and _human_row.get("_db_persisted")
+            and isinstance(_human_row.get("_row_id"), int)
+        ):
+            try:
+                from agent.workstream_human_hooks import consume_persisted_turn
+
+                agent._human_workstream_result = consume_persisted_turn(
+                    agent,
+                    message=persist_user_message
+                    if isinstance(persist_user_message, str)
+                    else _human_row.get("content"),
+                    row_id=_human_row["_row_id"],
+                )
+            except Exception:
+                logger.debug("human workstream consumer unavailable", exc_info=True)
     except Exception:
         logger.warning(
             "Early turn-start session persistence failed for session=%s",

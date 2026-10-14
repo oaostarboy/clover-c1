@@ -106,6 +106,10 @@ class Harness:
     """Real runner + real Telegram adapter + real SessionDB in a temp home."""
 
     def __init__(self, monkeypatch, tmp_path, *, proactive):
+        project = tmp_path / "project"
+        project.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("TERMINAL_CWD", str(project))
+        self.project = project
         home = tmp_path / "profile-home"
         home.mkdir(parents=True, exist_ok=True)
         os_home = tmp_path / "os-home"
@@ -128,8 +132,17 @@ class Harness:
             "compression": {"enabled": False},
             "auxiliary": {"background_review": {"enabled": False}, "free_only": True},
         }
+        # ``proactive`` is False (off), True (enabled) or a settings mapping.
+        # The same section is written to the profile's config.yaml, which is
+        # where the agent-side consumers read it from.
         if proactive:
-            config["proactive"] = {"enabled": True}
+            config["proactive"] = (
+                dict(proactive) if isinstance(proactive, dict) else {"enabled": True}
+            )
+            import yaml
+
+            (home / "config.yaml").write_text(
+                yaml.safe_dump({"proactive": config["proactive"]}), encoding="utf-8")
         monkeypatch.setattr(gateway_run, "_load_gateway_config", lambda: config)
         monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: dict(runtime))
         monkeypatch.setattr(gateway_run, "_clover_home", home)
@@ -219,9 +232,11 @@ class Harness:
         )
 
     def inbound_human(self, text, **kw):
+        expected = self.scripted.calls + 1
+
         async def _run():
             await self.adapter._handle_text_message(self.update(text, **kw), SimpleNamespace())
-            await self.settle()
+            await self.settle(calls=expected)
         asyncio.run(_run())
 
     def dispatch(self, *events):
