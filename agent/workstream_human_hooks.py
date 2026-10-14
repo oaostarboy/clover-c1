@@ -173,40 +173,83 @@ def _authenticate(agent, *, role: str, message: str, session_id: str,
         return None
 
 
-def _apply(index: int, op: Operation, *, scope, settings, db, origin, session_id, now):
-    reader = workstream_origin.read_human_origin
-    try:
-        if op.kind == "correction":
-            if not op.text.strip():
-                return OperationResult(index, op.kind, "denied", "empty correction")
-            if op.target and notepad.get_workstream(scope, op.target) is None:
-                return OperationResult(index, op.kind, "denied",
-                                       f"unknown workstream {op.target} in this scope")
-            row = workstreams.record_correction(
-                scope, text=op.text, settings=settings, origin=origin, human_reader=reader,
-                db=db, supersedes_id=op.target, session_id=session_id, approved=True, now=now)
-            if row is None:
-                return OperationResult(index, op.kind, "denied", "scope not eligible")
-            return OperationResult(index, op.kind, "applied", workstream_id=str(row["workstream_id"]))
-        if not settings.suggestions_enabled:
-            return OperationResult(index, op.kind, "denied", "suggestions are off")
-        if notepad.get_workstream(scope, op.target) is None:
+def _check(index: int, op: Operation, *, scope, settings) -> Optional[OperationResult]:
+    """A denial for ``op`` before anything is written, else ``None``."""
+    if op.kind == "correction":
+        if not op.text.strip():
+            return OperationResult(index, op.kind, "denied", "empty correction")
+        if op.target and notepad.get_workstream(scope, op.target) is None:
             return OperationResult(index, op.kind, "denied",
                                    f"unknown workstream {op.target} in this scope")
-        row = workstreams.record_feedback(
-            scope, op.target, kind=op.feedback_kind, settings=settings, origin=origin,
-            human_reader=reader, db=db, note=op.text, now=now)
+        return None
+    if not settings.suggestions_enabled:
+        return OperationResult(index, op.kind, "denied", "suggestions are off")
+    if notepad.get_workstream(scope, op.target) is None:
+        return OperationResult(index, op.kind, "denied",
+                               f"unknown workstream {op.target} in this scope")
+    return None
+
+
+def _apply_one(index: int, op: Operation, *, scope, settings, db, origin, session_id, now):
+    reader = workstream_origin.read_human_origin
+    if op.kind == "correction":
+        row = workstreams.record_correction(
+            scope, text=op.text, settings=settings, origin=origin, human_reader=reader,
+            db=db, supersedes_id=op.target, session_id=session_id, approved=True, now=now)
         if row is None:
             return OperationResult(index, op.kind, "denied", "scope not eligible")
-        return OperationResult(index, op.kind, "applied", workstream_id=op.target,
-                               feedback_id=str(row["feedback_id"]))
-    except (notepad.WorkstreamError, ValueError) as exc:
-        # Known policy denials (cap, stale revision, bad value): nothing was
-        # acknowledged as success.
-        return OperationResult(index, op.kind, "denied", f"{type(exc).__name__}: {exc}"[:200])
-    except Exception:
-        logger.warning("human workstream operation failed", exc_info=True)
-        return OperationResult(index, op.kind, "error", "write failed; not recorded")
+        return OperationResult(index, op.kind, "applied", workstream_id=str(row["workstream_id"]))
+    row = workstreams.record_feedback(
+        scope, op.target, kind=op.feedback_kind, settings=settings, origin=origin,
+        human_reader=reader, db=db, note=op.text, now=now)
+    if row is None:
+        return OperationResult(index, op.kind, "denied", "scope not eligible")
+    return OperationResult(index, op.kind, "applied", workstream_id=op.target,
+                           feedback_id=str(row["feedback_id"]))
+
+
+def _apply_all(ops, *, scope, settings, db, origin, session_id, now) -> List[OperationResult]:
+    """Validate every operation, then commit the accepted ones as one
+    all-or-nothing notepad transaction. A denied operation is reported and
+    skipped; a failure while writing rolls the whole event back."""
+    results: List[Optional[OperationResult]] = [None] * len(ops)
+    accepted = []
+    for i, op in enumerate(ops):
+        denial = _check(i, op, scope=scope, settings=settings)
+        if denial is not None:
+            results[i] = denial
+        else:
+            accepted.append(i)
+    if accepted:
+        try:
+            with notepad.write_batch():
+                for i in accepted:
+                    results[i] = _apply_one(
+                        i, ops[i], scope=scope, settings=settings, db=db,
+                        origin=origin, session_id=session_id, now=now)
+                if any(results[i].status != "applied" for i in accepted):
+                    # An eligibility denial inside the batch: nothing from
+                    # this event may be half-recorded.
+                    raise _Rollback()
+        except _Rollback:
+            for i in accepted:
+                if results[i].status == "applied":
+                    results[i] = OperationResult(
+                        i, ops[i].kind, "denied", "another operation in this message was denied")
+        except (notepad.WorkstreamError, ValueError) as exc:
+            reason = f"{type(exc).__name__}: {exc}"[:200]
+            for i in accepted:
+                results[i] = OperationResult(i, ops[i].kind, "denied", reason)
+        except Exception:
+            logger.warning("human workstream operations rolled back", exc_info=True)
+            for i in accepted:
+                results[i] = OperationResult(
+                    i, ops[i].kind, "error", "write failed; nothing was recorded")
+    return [r for r in results if r is not None]
+
+
+class _Rollback(Exception):
+    pass
 
 
 def _report(results: List[OperationResult]) -> str:
@@ -254,11 +297,9 @@ def consume_human_workstream_message(
             f"Not recorded: more than {MAX_OPERATIONS} operations in one message.",
             event_id=ingress.event_id,
         )
-    results = [
-        _apply(i, op, scope=scope, settings=settings, db=db, origin=origin,
-               session_id=session_id, now=now)
-        for i, op in enumerate(ops)
-    ]
+    results = _apply_all(
+        ops, scope=scope, settings=settings, db=db, origin=origin,
+        session_id=session_id, now=now)
     settled = all(r.status != "error" for r in results)
     consumed = False
     if settled and any(r.status in ("applied", "already_applied") for r in results):

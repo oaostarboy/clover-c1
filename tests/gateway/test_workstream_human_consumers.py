@@ -242,3 +242,154 @@ def test_disabled_mode_has_no_notepad_receipts_or_extra_bytes(monkeypatch, tmp_p
         assert not h.user_rows()[1].get("api_content")
     finally:
         h.close()
+
+
+# ── bounded evidence for a real evidence-gap question ──────────────────────
+
+
+def _seed_cron(h, monkeypatch, *, prompt, workdir=None, success=True):
+    """A job and an execution in the harness profile's real cron owners."""
+    import cron.executions as executions
+    import cron.jobs as jobs
+
+    cron_dir = h.home / "cron"
+    (cron_dir / "output").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(jobs, "CLOVER_DIR", h.home)
+    monkeypatch.setattr(jobs, "CRON_DIR", cron_dir)
+    monkeypatch.setattr(jobs, "JOBS_FILE", cron_dir / "jobs.json")
+    monkeypatch.setattr(jobs, "OUTPUT_DIR", cron_dir / "output")
+    monkeypatch.setattr(executions, "EXECUTIONS_FILE", cron_dir / "executions.db")
+    job = jobs.create_job(prompt, "every 1h", name="nightly",
+                          workdir=str(workdir or h.project))
+    run = executions.create_execution(job["id"], source="test")
+    executions.finish_execution(run["id"], success=success)
+    return job["id"], run["id"]
+
+
+def test_evidence_gap_question_gets_cited_local_evidence(enabled, monkeypatch):
+    job_id, run_id = _seed_cron(
+        enabled, monkeypatch, prompt="nightly reports database backup")
+    enabled.inbound_human("Did the nightly reports backup run?", message_id=400)
+
+    api_text = _user_content(enabled.scripted.requests[0])
+    assert api_text.startswith("Did the nightly reports backup run?")
+    assert f"[cron-execution:{job_id}:{run_id}]" in api_text
+    assert "does not establish the requested deliverable outcome" in api_text
+    assert enabled.user_rows()[0]["content"] == "Did the nightly reports backup run?"
+    assert enabled.user_rows()[0].get("api_content", "").endswith(api_text.split("\n\n", 1)[1])
+
+
+def test_evidence_gap_without_a_local_record_is_explicitly_unknown(enabled, monkeypatch):
+    _seed_cron(enabled, monkeypatch, prompt="nightly reports database backup")
+    enabled.inbound_human("Did the quarterly audit export finish?", message_id=410)
+    api_text = _user_content(enabled.scripted.requests[0])
+    assert "Evidence unknown: no matching, scope-verified local record was found." in api_text
+    assert "cron-execution" not in api_text
+
+
+def test_evidence_from_another_project_is_not_exposed(enabled, monkeypatch, tmp_path):
+    other = tmp_path / "somewhere-else"
+    other.mkdir()
+    _seed_cron(enabled, monkeypatch, prompt="nightly reports database backup", workdir=other)
+    enabled.inbound_human("Did the nightly reports backup run?", message_id=420)
+    api_text = _user_content(enabled.scripted.requests[0])
+    assert "cron-execution" not in api_text
+    assert "Evidence unknown" in api_text
+
+
+def test_ordinary_turns_get_no_evidence_bytes(enabled, monkeypatch):
+    _seed_cron(enabled, monkeypatch, prompt="nightly reports database backup")
+    enabled.inbound_human("Thanks, that looks good to me", message_id=430)
+    enabled.inbound_human("Which reports database is configured?", message_id=431)
+    for request in enabled.scripted.requests:
+        content = _user_content(request)
+        assert "cron-execution" not in content and "Evidence" not in content
+
+
+def test_evidence_is_off_when_recall_is_not_enabled(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path, proactive={"enabled": True})
+    try:
+        _seed_cron(h, monkeypatch, prompt="nightly reports database backup")
+        h.inbound_human("Did the nightly reports backup run?", message_id=440)
+        assert _user_content(h.scripted.requests[0]) == "Did the nightly reports backup run?"
+    finally:
+        h.close()
+
+
+# ── explicit timing / novelty feedback ─────────────────────────────────────
+
+
+def _suggestion(h, wid):
+    return workstreams.evaluate_suggestion(
+        workstreams.Candidate(workstream_id=wid, text="review the rollback owner",
+                              relevance=1.0, unsolicited=False),
+        _scope(h), workstreams.load_settings(SETTINGS_ROOT),
+    )
+
+
+def test_explicit_feedback_drives_cooldown_and_stop_controls(enabled):
+    enabled.inbound_human("Correction: the rollback owner is dana", message_id=500)
+    wid = _all(enabled, "correction")[0]["workstream_id"]
+    assert workstreams.feedback_state(_scope(enabled), wid) == "unknown"  # silence
+
+    enabled.inbound_human(f"Feedback: {wid} defer: not this week", message_id=501)
+    (deferred,) = _feedback(enabled, wid)
+    assert deferred["kind"] == "defer" and deferred["defer_until"]
+    assert deferred["note"] == "not this week"
+    decision = _suggestion(enabled, wid)
+    assert (decision.action, decision.reason) == ("defer", "cooldown")
+
+    enabled.inbound_human(f"Feedback: {wid} stop", message_id=502)
+    assert [f["kind"] for f in _feedback(enabled, wid)] == ["defer", "stop"]
+    decision = _suggestion(enabled, wid)
+    assert (decision.action, decision.reason) == ("suppress", "stopped")
+
+
+def test_feedback_for_unknown_or_foreign_workstream_is_denied(enabled, agents):
+    enabled.inbound_human("Feedback: ws_0123456789abcdef accept", message_id=510)
+    result = agents[-1]._human_workstream_result
+    assert result.handled is False
+    assert result.operations[0].status == "denied"
+
+
+def test_feedback_is_off_when_suggestions_are_not_enabled(monkeypatch, tmp_path):
+    h = Harness(monkeypatch, tmp_path,
+                proactive={"enabled": True, "recall": {"enabled": True}})
+    try:
+        h.inbound_human("Correction: the rollback owner is dana", message_id=520)
+        wid = notepad.list_workstreams(_scope(h), kinds=["correction"])[0]["workstream_id"]
+        h.inbound_human(f"Feedback: {wid} reject", message_id=521)
+        assert notepad.list_feedback(_scope(h), wid) == []
+    finally:
+        h.close()
+
+
+# ── all-or-nothing within one event ────────────────────────────────────────
+
+
+def test_failure_in_a_later_operation_leaves_no_partial_effect(enabled, agents, monkeypatch):
+    enabled.inbound_human("Correction: the rollback owner is dana", message_id=600)
+    wid = _all(enabled, "correction")[0]["workstream_id"]
+    before = [r["workstream_id"] for r in _all(enabled)]
+
+    real = notepad._new_id
+
+    def _fail_feedback_id(prefix):
+        if prefix == "fb":
+            raise RuntimeError("simulated crash while writing feedback")
+        return real(prefix)
+
+    monkeypatch.setattr(notepad, "_new_id", _fail_feedback_id)
+    enabled.inbound_human(
+        "Correction: the deploy window is Tuesday\n"
+        f"Feedback: {wid} accept", message_id=601)
+    monkeypatch.setattr(notepad, "_new_id", real)
+
+    assert [r["workstream_id"] for r in _all(enabled)] == before  # nothing partial
+    assert _feedback(enabled, wid) == []
+    result = agents[-1]._human_workstream_result
+    assert result.handled is False and not result.consumed
+    assert {o.status for o in result.operations} == {"error"}
+    row = enabled.user_rows()[1]
+    # Still unconsumed: no success was reported or spent before the commit.
+    assert enabled.db.get_human_origin(enabled.session_id(), row["id"]) is not None

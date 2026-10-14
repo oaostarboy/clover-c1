@@ -323,3 +323,54 @@ def retrieve_turn_evidence(
     if len(cited_ids) != len(source_ids):
         missing.append("truncated_evidence")
     return TurnEvidence(status, text, cited_ids, tuple(dict.fromkeys(missing)))
+
+
+# ── host demand path ───────────────────────────────────────────────────────
+
+_ASKS_OUTCOME = re.compile(
+    r"\b(did|does|do|has|have|had|was|were|is|are|will)\b", re.IGNORECASE)
+_OUTCOME_WORD = re.compile(
+    r"\b(run|ran|running|pass|passed|passing|fail|failed|failing|finish|finished|"
+    r"complete|completed|succeed|succeeded|done|deployed|merged|ready|status|"
+    r"result|outcome|stuck|working|worked|healthy|finishing|started|stopped)\b",
+    re.IGNORECASE,
+)
+_MAX_QUERY_CHARS = 512
+
+
+def is_evidence_request(query: Any) -> bool:
+    """Deterministic, local test for a question about whether/what happened.
+
+    Needs a question mark, an auxiliary/aspect verb and an outcome word.
+    Ordinary statements and lookups ("which target is configured?") never
+    trigger retrieval, so they carry no extra context bytes.
+    """
+    if not isinstance(query, str):
+        return False
+    text = query.strip()
+    if not text or len(text) > _MAX_QUERY_CHARS or "?" not in text:
+        return False
+    return bool(_ASKS_OUTCOME.search(text) and _OUTCOME_WORD.search(text))
+
+
+def evidence_context(
+    agent: Any, scope: workstreams.Scope, query: Any, *, now: Optional[datetime] = None,
+) -> str:
+    """Bounded current-turn evidence block for an evidence-gap question, else "".
+
+    Cited local owners only; absence is reported as explicitly unknown and
+    never as success. Read-only: no network, no model, no state write.
+    """
+    if not is_evidence_request(query):
+        return ""
+    result = retrieve_turn_evidence(agent, scope=scope, query=str(query), now=now)
+    if result.status == "disabled" or not result.text:
+        return ""
+    lines = [
+        "Local evidence for this question (read-only, cited; a record is not "
+        "proof of an outcome unless it says so):",
+        result.text,
+    ]
+    if result.missing_keys:
+        lines.append("Not established: " + ", ".join(result.missing_keys) + ".")
+    return "\n".join(lines)

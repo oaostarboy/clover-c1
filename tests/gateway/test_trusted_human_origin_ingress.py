@@ -180,12 +180,12 @@ class Harness:
             "gpt-4o-mini", dict(runtime),
         )
         self.db = SessionDB(db_path=self.db_path)
-        # A prior session keeps first-contact onboarding (a per-install,
-        # one-time request sidecar) out of every run, so request bytes are
-        # comparable between enabled and disabled homes.
-        self.db.create_session("prior-session", source="telegram")
         self.runner._session_db = AsyncSessionDB(self.db)
         self.runner.session_store = SessionStore(home / "sessions", GatewayConfig())
+        # First-contact onboarding is a once-per-install request sidecar that
+        # is unrelated to provenance; keep it out of every run so request
+        # bytes are comparable.
+        monkeypatch.setattr(SessionStore, "has_any_sessions", lambda _self: True)
 
         from plugins.platforms.telegram.adapter import TelegramAdapter
 

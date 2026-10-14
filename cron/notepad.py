@@ -403,10 +403,41 @@ def _migrate_workstreams(conn: sqlite3.Connection) -> None:
     )
 
 
+# Connection of the write batch currently open on this thread (see
+# ``write_batch``); ``_ws_write``/``_ws_read`` join it instead of opening
+# their own transaction.
+_BATCH = threading.local()
+
+
+@contextmanager
+def write_batch() -> Iterator[None]:
+    """Run several workstream writes as ONE all-or-nothing transaction.
+
+    Every ``create_workstream`` / ``supersede_workstream`` / ``add_feedback``
+    (etc.) issued inside the block joins the same ``BEGIN IMMEDIATE``
+    transaction, and later reads in the block see earlier writes. Any
+    exception rolls the whole batch back; the block owns commit. Not
+    re-entrant across threads.
+    """
+    if getattr(_BATCH, "conn", None) is not None:
+        yield
+        return
+    with _ws_write() as conn:
+        _BATCH.conn = conn
+        try:
+            yield
+        finally:
+            _BATCH.conn = None
+
+
 @contextmanager
 def _ws_write() -> Iterator[sqlite3.Connection]:
     """Write transaction: ``BEGIN IMMEDIATE`` so cap checks and CAS are
     serialised across processes, migration inside the same transaction."""
+    joined = getattr(_BATCH, "conn", None)
+    if joined is not None:
+        yield joined
+        return
     with _lock:
         conn = _connect()
         try:
@@ -430,6 +461,10 @@ def _ws_read() -> Iterator[Optional[sqlite3.Connection]]:
 
     Never creates the file or any table. A newer schema fails closed.
     """
+    joined = getattr(_BATCH, "conn", None)
+    if joined is not None:
+        yield joined
+        return
     with _lock:
         path = _notepad_path()
         if not path.exists():
