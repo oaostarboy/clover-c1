@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set
@@ -2102,9 +2103,10 @@ def propose_procedure_candidates(
 ) -> List[Dict[str, Any]]:
     """Stage at most one reviewable skill draft per repeated verified workflow.
 
-    Counts only evidence rows that (a) are ``verified`` procedure runs, (b) are
-    backed by a typed ``executed`` receipt from the owning execution ledger,
-    (c) carry transferable steps and a session id.  A draft needs
+    Counts only evidence rows that (a) are ``verified`` foreground execution
+    runs, (b) are backed by a typed ``executed`` receipt and still pass the
+    SessionDB owner's readback, (c) carry exact transferable commands and an
+    authentic conversation root.  A draft needs
     ``procedures_min_verified_runs`` *distinct* execution ids across
     ``procedures_min_sessions`` distinct sessions.  The draft goes through
     ``tools.write_approval.stage_write('skills', ...)`` only — never
@@ -2192,6 +2194,13 @@ def propose_procedure_candidates(
                            source_id=f"pending:{pending['id']}",
                            detail="recovered existing pending draft", now=moment)
             continue
+        proposal_key = f"procedure-proposal:{fingerprint}"
+        np.ensure_occurrence(scope, wid, occurrence_key=proposal_key,
+                             source="curator")
+        proposal_owner = f"curator:{uuid.uuid4().hex}"
+        if np.claim_occurrence(scope, wid, occurrence_key=proposal_key,
+                               claimer=proposal_owner, now=moment) is None:
+            continue
         content = _render_procedure_skill(name, key, runs)
         try:
             record = stage_fn(
@@ -2205,15 +2214,25 @@ def propose_procedure_candidates(
             )
         except Exception:
             logger.warning("procedure draft for %s could not be staged", key, exc_info=True)
+            np.settle_occurrence(scope, wid, occurrence_key=proposal_key,
+                                 claimer=proposal_owner, state="unknown",
+                                 detail="stage_write raised; external effect ambiguous",
+                                 now=moment)
             continue
         # stage_write is best effort and returns a record even on disk failure.
         # A proposal receipt requires the persistence owner's exact readback.
         if wa.get_pending(wa.SKILLS, str(record.get("id") or "")) != record:
             logger.warning("procedure draft for %s was not persisted", key)
+            np.settle_occurrence(scope, wid, occurrence_key=proposal_key,
+                                 claimer=proposal_owner, state="unknown",
+                                 detail="pending draft readback failed", now=moment)
             continue
         np.add_receipt(scope, wid, kind="proposed", owner="policy",
                        source_id=f"pending:{record['id']}",
                        detail=f"staged skill draft {name}", now=moment)
+        np.settle_occurrence(scope, wid, occurrence_key=proposal_key,
+                             claimer=proposal_owner, state="executed",
+                             detail=f"pending:{record['id']}", now=moment)
         out.append({
             "procedure_key": key,
             "name": name,

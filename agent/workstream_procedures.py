@@ -230,9 +230,38 @@ def finish_execution_turn(agent: Any, result: Any, turn: ExecutionTurn | None) -
             summary="Exact foreground command exits; not task, save or delivery confirmation",
             fingerprint="foreground-workflows", source="runtime", session_id=root,
             max_items=settings.threads_max_items)
+        occurrence = np.ensure_occurrence(
+            turn.scope, row["workstream_id"], occurrence_key=source,
+            source="foreground_execution",
+        )
+        # Deterministic owner permits an exact post-crash replay to finish the
+        # internal write; it never permits another execution or external retry.
+        owner = f"execution:{source}"
+        claim = np.claim_occurrence(
+            turn.scope, row["workstream_id"], occurrence_key=source, claimer=owner,
+        )
+        if claim is None and not (
+            occurrence.get("state") == "claimed" and occurrence.get("claimer") == owner
+        ):
+            outcome["execution_ids"] = [source]
+            from agent.curator import run_procedure_intake
+            outcome["drafts"] = run_procedure_intake(settings=settings)
+            return outcome
         np.add_receipt(turn.scope, row["workstream_id"], kind="executed", owner="execution",
                        source_id=source, detail="foreground commands exited zero; read back from SessionDB")
         np.add_evidence(turn.scope, row["workstream_id"], status="verified", key="procedure_run", **evidence)
+        np.settle_occurrence(
+            turn.scope, row["workstream_id"], occurrence_key=source, claimer=owner,
+            state="executed", detail="owner evidence committed and read back",
+        )
+        committed = next(
+            (r for r in np.list_scope_evidence(turn.scope)
+             if r.get("source_kind") == "execution" and r.get("source_id") == source),
+            None,
+        )
+        if committed is None or not verified_execution_evidence(turn.scope, committed, db=db):
+            outcome["status"] = "unknown"
+            return outcome
         outcome["execution_ids"] = [source]
         from agent.curator import run_procedure_intake
         outcome["drafts"] = run_procedure_intake(settings=settings)

@@ -174,57 +174,29 @@ class TestThreshold:
         for i, s in enumerate(sessions):
             run(scope, wid, s, minutes=i)
 
-    def test_three_executions_two_sessions_stage_exactly_one_reviewable_draft(self, store):
+    def test_legacy_delegation_completions_never_stage_a_draft(self, store):
         scope = sc()
         wid = _wid(scope)
         self._three(scope, wid)
         cands = curator.propose_procedure_candidates(scope, ON, now=NOW + timedelta(hours=1))
-        assert len(cands) == 1
-        c = cands[0]
-        assert c["procedure_key"] == "release-audit"
-        assert len(c["execution_ids"]) == 3 and len(c["session_ids"]) == 2
-        recs = pending()
-        assert len(recs) == 1
-        rec = recs[0]
-        assert rec["id"] == c["pending_id"] and rec["subsystem"] == "skills"
-        assert rec["action"] == "create" and rec["origin"] == "background_review"
-        assert set(rec["payload"]) == {"action", "name", "content"}
-        content = rec["payload"]["content"]
-        for eid in c["execution_ids"]:
-            assert eid in content            # attribution to the verified runs
-        assert "list artifacts" in content   # the transferable steps
-        assert "proactive" in rec["summary"].lower()
-        from tools.skill_manager_tool import _validate_frontmatter, _validate_name
+        assert cands == []
+        assert pending() == []
 
-        assert _validate_name(rec["payload"]["name"]) is None
-        assert _validate_frontmatter(content, new_skill=True) is None
-        # staged, never installed
-        from clover_constants import get_clover_home
-
-        skills_dir = get_clover_home() / "skills"
-        assert not skills_dir.exists() or not any(skills_dir.rglob("SKILL.md"))
-        # typed 'proposed' receipt with the pending id, on a procedure record
-        proc = np.list_workstreams(scope, kinds=["procedure"])
-        assert len(proc) == 1
-        rc = np.list_receipts(scope, proc[0]["workstream_id"], kinds=["proposed"])
-        assert [r["source_id"] for r in rc] == [f"pending:{rec['id']}"]
-
-    def test_replay_does_not_stage_again(self):
+    def test_legacy_replay_does_not_stage(self):
         scope = sc()
         wid = _wid(scope)
         self._three(scope, wid)
-        assert len(curator.propose_procedure_candidates(scope, ON, now=NOW)) == 1
+        assert curator.propose_procedure_candidates(scope, ON, now=NOW) == []
         assert curator.propose_procedure_candidates(scope, ON, now=NOW) == []
         run(scope, wid, "s3", minutes=9)
         assert curator.propose_procedure_candidates(scope, ON, now=NOW) == []
-        assert len(pending()) == 1
+        assert pending() == []
 
-    def test_rejected_proposal_is_not_nagged_again(self):
+    def test_legacy_rows_never_create_a_proposal_to_reject(self):
         scope = sc()
         wid = _wid(scope)
         self._three(scope, wid)
-        c = curator.propose_procedure_candidates(scope, ON, now=NOW)[0]
-        assert wa.discard_pending("skills", c["pending_id"])
+        assert curator.propose_procedure_candidates(scope, ON, now=NOW) == []
         assert curator.propose_procedure_candidates(scope, ON, now=NOW) == []
         assert pending() == []
 
@@ -318,16 +290,16 @@ class TestThreshold:
         assert curator.propose_procedure_candidates(grp, ON, now=NOW) == []
         assert pending() == []
 
-    def test_thresholds_come_from_settings(self):
+    def test_settings_cannot_lower_minimum_or_admit_legacy_rows(self):
         scope = sc()
         wid = _wid(scope)
         run(scope, wid, "s1")
         run(scope, wid, "s2", minutes=1)
         loose = ws.ProactiveSettings(enabled=True, mode="active", procedures_enabled=True,
                                      procedures_min_verified_runs=2, procedures_min_sessions=2)
-        assert len(curator.propose_procedure_candidates(scope, loose, now=NOW)) == 1
+        assert curator.propose_procedure_candidates(scope, loose, now=NOW) == []
 
-    def test_stage_failure_leaves_no_receipt_so_next_run_retries(self):
+    def test_legacy_rows_never_reach_stage_boundary(self):
         scope = sc()
         wid = _wid(scope)
         self._three(scope, wid)
@@ -339,26 +311,17 @@ class TestThreshold:
         proc = np.list_workstreams(scope, kinds=["procedure"])
         assert proc == [] or np.list_receipts(scope, proc[0]["workstream_id"],
                                                kinds=["proposed"]) == []
-        assert len(curator.propose_procedure_candidates(scope, ON, now=NOW)) == 1
+        assert curator.propose_procedure_candidates(scope, ON, now=NOW) == []
 
-    def test_crash_after_stage_before_receipt_does_not_double_stage(self):
+    def test_legacy_rows_cannot_create_a_stage_crash_window(self):
         scope = sc()
         wid = _wid(scope)
         self._three(scope, wid)
         real = wa.stage_write
         c1 = curator.propose_procedure_candidates(scope, ON, now=NOW)
-        assert len(c1) == 1
-        # simulate losing the receipt (crash): remove ledger knowledge, pending remains
-        proc = np.list_workstreams(scope, kinds=["procedure"])[0]
-        import sqlite3
-
-        conn = sqlite3.connect(np._notepad_path())
-        conn.execute("DELETE FROM work_receipts WHERE kind='proposed'")
-        conn.commit()
-        conn.close()
+        assert c1 == []
         assert curator.propose_procedure_candidates(scope, ON, now=NOW) == []
-        assert len(pending()) == 1 and real is wa.stage_write
-        assert proc["kind"] == "procedure"
+        assert pending() == [] and real is wa.stage_write
 
     def test_existing_skill_of_same_name_is_not_overwritten(self, store):
         scope = sc()
@@ -382,7 +345,7 @@ class TestThreshold:
         scope = sc()
         wid = _wid(scope)
         self._three(scope, wid)
-        assert len(curator.propose_procedure_candidates(scope, ON, now=NOW)) == 1
+        assert curator.propose_procedure_candidates(scope, ON, now=NOW) == []
         assert called == []
 
 
@@ -401,7 +364,7 @@ class TestCuratorCadence:
         got = np.list_procedure_scopes()
         assert [(r["project"], r["audience"], r["root"]) for r in got] == [("a", "private", "root-1")]
 
-    def test_maybe_run_curator_stages_drafts_for_enrolled_scopes(self, monkeypatch):
+    def test_maybe_run_curator_rejects_legacy_delegation_evidence(self, monkeypatch):
         scope = sc(project="p", audience="private", root="r")
         scope = ws.Scope(profile=ws.current_profile(), project="p", audience="private", root="r")
         self._three_runs(scope)
@@ -409,11 +372,9 @@ class TestCuratorCadence:
         monkeypatch.setattr(curator, "run_curator_review", lambda **k: {"ran": True})
         monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
         assert curator.maybe_run_curator() == {"ran": True}
-        recs = pending()
-        assert len(recs) == 1 and recs[0]["action"] == "create"
-        # second pass is a no-op (typed proposed receipt)
+        assert pending() == []
         curator.maybe_run_curator()
-        assert len(pending()) == 1
+        assert pending() == []
 
     def test_default_settings_stage_nothing_and_touch_no_db(self, monkeypatch, store):
         monkeypatch.setattr(curator, "should_run_now", lambda *a, **k: True)
@@ -500,34 +461,19 @@ class TestDelegationProducerChain:
             agent._session_db.close()
         return ws.scope_for_agent(agent)
 
-    def test_three_verified_runs_across_two_real_sessions_stage_one_draft(self):
+    def test_delegation_transport_chain_never_stages_a_procedure(self):
         ids = [_deleg() for _ in range(3)]
         scope = self._end("conv-A", (ids[0], [self.GOAL]))
         self._end("conv-A", (ids[1], [self.GOAL]))
-        assert curator.run_procedure_intake(settings=ON, now=NOW) == []   # 1 session so far
-        self._end("conv-B", (ids[2], [self.GOAL]))
-        staged = curator.run_procedure_intake(settings=ON, now=NOW)
-        assert len(staged) == 1
-        assert sorted(staged[0]["execution_ids"]) == sorted(ids)
-        assert staged[0]["session_ids"] == ["conv-A", "conv-B"]
-        recs = pending()
-        assert len(recs) == 1 and recs[0]["subsystem"] == "skills"
-        assert recs[0]["origin"] == "background_review" and recs[0]["action"] == "create"
-        assert "checksum each" in recs[0]["payload"]["content"]
-        from clover_constants import get_clover_home
-
-        skills = get_clover_home() / "skills"
-        assert not skills.exists() or not any(skills.rglob("SKILL.md"))
-        # receipts are the owners' own kinds, one per run
-        runs = [r for r in np.list_workstreams(scope, kinds=["progress"])
-                if r["fingerprint"] == "delegation-runs"]
-        assert len(runs) == 1
-        rc = np.list_receipts(scope, runs[0]["workstream_id"], kinds=["executed"])
-        assert sorted(r["source_id"] for r in rc) == sorted(ids)
-        # replaying the intake or the turns changes nothing
         self._end("conv-B", (ids[2], [self.GOAL]))
         assert curator.run_procedure_intake(settings=ON, now=NOW) == []
-        assert len(pending()) == 1
+        assert pending() == []
+        runs = [r for r in np.list_workstreams(scope, kinds=["progress"])
+                if r["fingerprint"] == "delegation-runs"]
+        assert runs == []
+        self._end("conv-B", (ids[2], [self.GOAL]))
+        assert curator.run_procedure_intake(settings=ON, now=NOW) == []
+        assert pending() == []
 
     def test_one_session_however_many_runs_never_qualifies(self):
         for _ in range(4):
