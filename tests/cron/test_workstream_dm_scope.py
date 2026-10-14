@@ -34,17 +34,19 @@ def dm(monkeypatch, tmp_path):
             assert asyncio.get_running_loop().time() < deadline, "human turn did not settle"
             await asyncio.sleep(0.02)
         await asyncio.sleep(0.05)
-        # Observe the actual cached owner after the real turn; never replace
-        # either consumer just to manufacture an integration seam.
-        for cached in h.runner._agent_cache.values():
-            agent = cached[0] if isinstance(cached, tuple) else cached
-            if getattr(agent, "session_id", None):
-                h.agents.append(agent)
-                h.admissions.append(getattr(agent, "_workstream_monitor_result", adapter.AdmissionResult()))
+        for agent in h.agents[-1:]:
+            h.admissions.append(getattr(agent, "_workstream_monitor_result", None) or adapter.AdmissionResult())
 
     h.settle = settled
     h.admissions = []
     h.agents = []
+    # Observe construction at the already-scripted provider boundary. The
+    # production prologue and both installed consumers remain untouched.
+    from run_agent import AIAgent
+    def provider(agent, *args, **kwargs):
+        h.agents.append(agent)
+        return h.scripted.client
+    monkeypatch.setattr(AIAgent, "_create_openai_client", provider)
     scope = ws.scope_for_surface(platform="telegram", chat_type="dm", chat_id="12345", user_id="12345")
     blocker = np.create_workstream(scope, kind="blocker", title="CI gate", summary="wait for CI", fingerprint="ci")
     h.scope, h.blocker = scope, blocker["workstream_id"]

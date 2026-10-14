@@ -553,6 +553,9 @@ def build_turn_context(
     # artifact. This is local presentation state, not provider context.
     if hasattr(agent, "_workstream_suggestion_turn"):
         agent._workstream_suggestion_turn = None
+    # Results are presentation-only and must not escape a cached prior turn.
+    agent._human_workstream_result = None
+    agent._workstream_monitor_result = None
 
     # Recover a session rotated by another path before binding log/turn ids or
     # copying client-supplied history. Everything in this turn must consistently
@@ -1683,14 +1686,29 @@ def build_turn_context(
             and _human_row.get("_db_persisted")
             and isinstance(_human_row.get("_row_id"), int)
         ):
+            _original_human_message = (
+                persist_user_message if isinstance(persist_user_message, str)
+                else _human_row.get("content")
+            )
+            try:
+                from agent.workstream_job_scope import consume_persisted_turn as consume_monitor
+
+                agent._workstream_monitor_result = consume_monitor(
+                    agent, message=_original_human_message, row_id=_human_row["_row_id"],
+                )
+            except Exception:
+                # Ambiguous persistence never becomes a saved/linked claim.
+                from agent.workstream_job_scope import AdmissionResult
+
+                if isinstance(_original_human_message, str) and _original_human_message.startswith("workstream-monitor: "):
+                    agent._workstream_monitor_result = AdmissionResult(reason="unknown: persistence failed; inspect local state before retry")
+                logger.debug("monitor workstream consumer unavailable", exc_info=True)
             try:
                 from agent.workstream_human_hooks import consume_persisted_turn
 
                 agent._human_workstream_result = consume_persisted_turn(
                     agent,
-                    message=persist_user_message
-                    if isinstance(persist_user_message, str)
-                    else _human_row.get("content"),
+                    message=_original_human_message,
                     row_id=_human_row["_row_id"],
                 )
             except Exception:

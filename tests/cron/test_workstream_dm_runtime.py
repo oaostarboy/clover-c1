@@ -226,12 +226,14 @@ def test_unauthorized_actual_actor_never_reaches_owner_admission(dm):
 
 def test_pending_stop_uses_real_agent_interrupt_and_never_executes(
         dm, helpers, real_stage_executor, monkeypatch, tmp_path):
-    from tests.agent.test_router_staged_continuation import _completion_turn
     first = held_dm(dm, helpers, monkeypatch, tmp_path)
     release_source(dm)
     agent = dm.agents[-1]
     agent.interrupt("stop", hard_cancel=True)
-    _completion_turn(agent, first)
+    agent.run_conversation(
+        f"[helper {first} finished]", persist_user_display_kind="internal_notification",
+        completion_delegation_ids=[first],
+    )
     assert len(_all_ids()) == 1
     assert not real_stage_executor.effect.exists()
     assert np.list_occurrences(dm.scope, dm.blocker)[0]["state"] != "executed"
