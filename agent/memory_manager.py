@@ -29,8 +29,10 @@ import json
 import logging
 import re
 import inspect
+import os
 import threading
 from concurrent.futures import Future, ThreadPoolExecutor, wait
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from agent.memory_provider import MemoryProvider, PRE_COMPRESS_CHECKPOINT_API_VERSION
@@ -49,6 +51,50 @@ logger = logging.getLogger(__name__)
 # running past this window dies with the interpreter.
 _SYNC_DRAIN_TIMEOUT_S = 5.0
 _EXTERNAL_PREFETCH_TIMEOUT_S = 8.0
+
+
+def current_workstream_context(agent: Any, query: Any) -> str:
+    """Return bounded, private workstream context for this current turn.
+
+    Project identity follows the terminal working directory (the gateway
+    bridges ``terminal.cwd`` through ``TERMINAL_CWD``). Messaging surfaces
+    fail closed to a shared audience unless they carry an explicit DM identity.
+    """
+    if not isinstance(query, str) or not query.strip():
+        return ""
+    try:
+        from agent import workstreams
+
+        settings = workstreams.load_settings()
+        if not settings.enabled:
+            return ""
+
+        project = str(Path(os.getenv("TERMINAL_CWD") or os.getcwd()).resolve())
+        platform = str(getattr(agent, "platform", "") or "").lower()
+        chat_type = str(getattr(agent, "_chat_type", "") or "").lower()
+        chat_id = str(getattr(agent, "_chat_id", "") or "")
+        user_id = str(getattr(agent, "_user_id", "") or "")
+        if platform in {"cli", "tui"} and not chat_type:
+            audience = "private"
+            root = "local"
+        elif chat_type in {"dm", "private"} and user_id:
+            audience = f"private:{user_id}"
+            root = user_id
+        elif chat_type in {"group", "forum", "channel", "thread"}:
+            audience = f"shared:{chat_type}:{chat_id}"
+            root = chat_id
+        else:
+            # Missing transport identity must not be mistaken for a private DM.
+            audience = f"shared:{platform or 'unknown'}:{chat_id}"
+            root = chat_id
+        scope = workstreams.make_scope(project, audience=audience, root=root)
+        compressor = getattr(agent, "context_compressor", None)
+        if compressor is not None:
+            compressor._workstream_scope = scope
+        return workstreams.current_turn_note(scope, query, settings) or ""
+    except Exception:
+        logger.debug("workstream context unavailable", exc_info=True)
+        return ""
 
 
 def normalize_tool_schema(schema: Any) -> Optional[Dict[str, Any]]:

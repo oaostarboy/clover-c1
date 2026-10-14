@@ -509,9 +509,11 @@ class TurnContext:
     plugin_user_context: str = ""
     # External-memory prefetch result, reused across loop iterations.
     ext_prefetch_cache: str = ""
-    # The delegation router's ``[Clover runtime] work plan:`` block for this
+    # The delegation router's ``(Clover runtime) work plan:`` block for this
     # turn (API copy of the user message only); "" when there is no plan.
     work_plan: str = ""
+    # Scoped current-turn workstream context, shared with the loop composer.
+    workstream_context: str = ""
     # Turn-start preflight already proved an immediate retry ineffective.
     preflight_compression_blocked: bool = False
 
@@ -1559,6 +1561,18 @@ def build_turn_context(
     except Exception:
         logger.debug("helper-work lifecycle unavailable", exc_info=True)
 
+    try:
+        from agent.memory_manager import current_workstream_context
+
+        workstream_context = current_workstream_context(
+            agent,
+            _router_user_msg.get("content") if isinstance(_router_user_msg, dict) else "",
+        )
+    except Exception:
+        logger.debug("workstream context unavailable", exc_info=True)
+        workstream_context = ""
+    agent._workstream_context_for_turn = workstream_context
+
     # ── api_content sidecar: persist what you send ──
     # The prefetch/plugin context above is injected into the API copy of this
     # turn's user message, never into the stored content — so on the next
@@ -1588,6 +1602,7 @@ def build_turn_context(
             ext_prefetch_cache,
             plugin_user_context,
             work_plan,
+            workstream_context,
         )
         if _api_content is not None and _api_content != _turn_user_msg.get("content"):
             _turn_user_msg["api_content"] = _api_content
@@ -1684,5 +1699,6 @@ def build_turn_context(
         plugin_user_context=plugin_user_context,
         ext_prefetch_cache=ext_prefetch_cache,
         work_plan=work_plan,
+        workstream_context=workstream_context,
         preflight_compression_blocked=_preflight_compression_blocked,
     )
