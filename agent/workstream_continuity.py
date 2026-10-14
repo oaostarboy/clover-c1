@@ -110,7 +110,10 @@ def current_turn_context(scope: ws.Scope, query: str, settings: ws.ProactiveSett
     Under that policy, retrieve the same bounded capsule independently of any
     provider-native summary, including verified progress and force-redaction.
     """
-    if not settings.active or not settings.compaction_audit_enabled:
+    # Older selector-only settings do not enroll the optional audit. Preserve
+    # their canonical recall interface rather than swallowing that recall in
+    # the parent compose exception handler.
+    if not getattr(settings, "active", False) or not getattr(settings, "compaction_audit_enabled", False):
         return ws.current_turn_note(scope, query, settings) or ""
     if scope.profile != ws.current_profile():
         return ""
