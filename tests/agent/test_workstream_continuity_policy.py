@@ -14,6 +14,37 @@ from tests.agent.test_workstream_continuity_host import (  # noqa: F401
 from tests.gateway.test_trusted_human_origin_ingress import network_guard  # noqa: F401
 
 
+def test_unsupported_engine_negative_control_cannot_inherit_previous_audit(host, monkeypatch):
+    from agent.context_engine import ContextEngine
+
+    class UnsupportedNoop(ContextEngine):
+        """Negative contract control, NOT a positive opaque-provider proof."""
+        @property
+        def name(self):
+            return "unsupported-noop"
+
+        def update_from_response(self, usage):
+            pass
+
+        def should_compress(self, prompt_tokens=None):
+            return True
+
+        def compress(self, messages, current_tokens=None, focus_topic=None, force=False, memory_context=""):
+            return messages
+
+    _, live = produce(host)
+    agent = fresh_agent(host)
+    compact(host, agent, monkeypatch)
+    assert agent._last_workstream_compaction_audit["audited"] is True
+    agent.context_compressor = UnsupportedNoop()
+    _, _, calls = compact(host, agent, monkeypatch)
+    assert calls == []
+    audit = agent._last_workstream_compaction_audit
+    assert audit["audited"] is False and audit["status"] == "unsupported_opaque"
+    capsule = read_capsule(scope(host), ws.load_settings())
+    assert capsule is not None and live["workstream_id"] in capsule.text
+
+
 def test_host_preflight_cannot_fall_back_to_previous_turn_scope(host, monkeypatch):
     produce(host)
     agent = fresh_agent(host)

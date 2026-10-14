@@ -122,6 +122,19 @@ def current_turn_context(scope: ws.Scope, query: str, settings: ws.ProactiveSett
     return redact_capsule("\n".join(p for p in (capsule.text, recalled.text) if p))
 
 
+def begin_attempt(agent: Any, *, native: bool) -> Capsule | None:
+    """Do not misattribute a previous audited summary to opaque compaction."""
+    settings = ws.load_settings()
+    if not settings.active or not settings.compaction_audit_enabled:
+        return None  # disabled policy must not mutate live agent state
+    capsule = read_capsule(ws.scope_for_agent(agent), settings) if native else None
+    agent._last_workstream_compaction_audit = capsule.verdict if capsule is not None else {
+        "status": "no_eligible_capsule" if native else "unsupported_opaque",
+        "audited": False, "repair_model_calls": 0, "commit_status": "not_audited",
+    }
+    return capsule
+
+
 def snapshot_for_agent(agent: Any) -> Capsule | None:
     # Derive at THIS boundary, including preflight/manual before the first turn;
     # never rely on a previous turn's cached compressor scope.

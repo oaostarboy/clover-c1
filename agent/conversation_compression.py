@@ -3524,10 +3524,8 @@ def compress_context(
                 pass
 
         from agent.context_compressor import ContextCompressor
-        if isinstance(agent.context_compressor, ContextCompressor):
-            _workstream_capsule = _continuity.snapshot_for_agent(agent)
-            if _workstream_capsule is not None:
-                agent._last_workstream_compaction_audit = _workstream_capsule.verdict
+        _workstream_capsule = _continuity.begin_attempt(
+            agent, native=isinstance(agent.context_compressor, ContextCompressor))
         compress_fn = agent.context_compressor.compress
         compress_kwargs = _supported_compression_kwargs(
             compress_fn,
