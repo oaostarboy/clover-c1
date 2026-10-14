@@ -317,6 +317,28 @@ def consume_human_workstream_message(
     )
 
 
+def inline_operation_report(agent) -> str:
+    """Current-turn owner outcome for the existing inline response surface.
+
+    Prologue clears these values every invocation. This never reads historical
+    messages, infers a delivery receipt, or changes provider history.
+    """
+    result = getattr(agent, "_human_workstream_result", None)
+    if isinstance(result, HumanHookResult) and result.event_id and result.response_text:
+        return result.response_text
+    from agent.workstream_job_scope import AdmissionResult
+    monitor = getattr(agent, "_workstream_monitor_result", None)
+    if isinstance(monitor, AdmissionResult) and monitor.reason:
+        # Rejection reasons may contain provider/parser error values. Keep the
+        # adapter surface literal, secret-redacted and directive-free.
+        from agent.redact import redact_sensitive_text
+        reason = redact_sensitive_text(monitor.reason, force=True)
+        if "[[" in reason or "MEDIA:" in reason:
+            reason = "operation not confirmed; inspect local state before retry"
+        return reason if monitor.handled else "Monitor operation not confirmed: " + reason
+    return ""
+
+
 def consume_persisted_turn(agent, *, message: Any, row_id: Any) -> HumanHookResult:
     """Prologue entry: the exact just-persisted current-turn user row."""
     if not isinstance(message, str):

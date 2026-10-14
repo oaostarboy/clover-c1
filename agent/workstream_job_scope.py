@@ -69,15 +69,23 @@ def consume_persisted_turn(agent, *, message, row_id):
                 job = jobs.create_job(data["prompt"], data["schedule"], deliver="local",
                                       workdir=scope.project, monitor_script=data["monitor_script"])
         # This approves evidence linkage only, not an executable stage.
-        ws.approve_workstream(scope, blocker["workstream_id"], settings=settings,
+        approved = ws.approve_workstream(scope, blocker["workstream_id"], settings=settings,
                              origin=receipt, human_reader=origin.read_human_origin, db=db)
+        if not approved or not approved.get("approved"):
+            return AdmissionResult(reason="unknown: blocker approval was not confirmed; inspect local state before retry")
         if job_id is not None:
             with jobs._use_workstream_scope_owner(agent, message=message, row_id=row_id):
-                ws.link_job_to_workstream(scope, blocker["workstream_id"], job_id, settings,
+                linked = ws.link_job_to_workstream(scope, blocker["workstream_id"], job_id, settings,
                                           origin=receipt, human_reader=origin.read_human_origin, db=db)
+            persisted = jobs.get_job(job_id)
+            if not linked or not persisted or persisted.get("workstream_id") != blocker["workstream_id"]:
+                return AdmissionResult(reason="unknown: monitor link was not confirmed; inspect local state before retry")
         # Creation never auto-enrolls a job or widens the eligibility gate.
         # A separate current human link request is needed after enrollment.
-        db.consume_human_origin(agent.session_id, row["id"], consumer="workstream_job_scope")
-        return AdmissionResult(True, job["id"])
+        if not db.consume_human_origin(agent.session_id, row["id"], consumer="workstream_job_scope"):
+            return AdmissionResult(reason="unknown: operation receipt was not consumed; inspect local state before retry")
+        action = ("linked locally to blocker evidence; no execution permission granted" if job_id is not None
+                  else "created locally; not enrolled or linked; no execution permission granted")
+        return AdmissionResult(True, job["id"], f"Monitor job {job['id']} {action}.")
     except (ValueError, notepad.WorkstreamError) as exc:
         return AdmissionResult(reason=str(exc))

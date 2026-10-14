@@ -7024,6 +7024,17 @@ class TurnRunner:
                     history_offset=len(agent_history),
                 )
 
+        # Explicit operation replies come from the persistence owner, not an
+        # unverified model 'saved' claim. No new send or provider-context edit.
+        if (isinstance(result, dict) and ctx._run_still_current()
+                and not result.get("failed") and not result.get("interrupted")
+                and result.get("completed") is not False):
+            from agent.workstream_human_hooks import inline_operation_report
+
+            _operation_report = inline_operation_report(agent)
+            if _operation_report:
+                result["final_response"] = _operation_report
+
         # Optional inline workstream artifact belongs to this response owner,
         # not to model output/history. Compose before stream finalization so
         # streaming and non-streaming see one identical final. No delivery
