@@ -308,10 +308,11 @@ def _build_state(agent: Any, messages: List[Dict[str, Any]]):
     )
     if getattr(settings, "handoff_notes", True):
         state.work_log = notes.WorkLog()
-        try:
-            state.history = notes.recent_turns(messages[:start])
-        except Exception:
-            logger.debug("could not read the conversation for the notes", exc_info=True)
+    try:
+        # Also with the notes off: the helper's context carries an excerpt.
+        state.history = notes.recent_turns(messages[:start])
+    except Exception:
+        logger.debug("could not read the conversation for the notes", exc_info=True)
     if completion:
         clipped = completion if len(completion) <= _COMPLETION_CHARS else completion[:_COMPLETION_CHARS] + " …"
         rb.record_result(state, "helper_results", {"delivered": "this turn"}, f"{_COMPLETION_LEAD}\n{clipped}")

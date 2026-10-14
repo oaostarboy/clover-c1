@@ -1422,6 +1422,16 @@ def _capture_parent_workspace(parent_agent, task_id: Optional[str] = None):
         session_key = raw_task
     key = session_key or raw_task
     cwd = get_session_cwd(key) if key else None
+    if isinstance(cwd, str) and os.path.isabs(cwd) and not os.path.isdir(cwd):
+        # The recorded folder was deleted. Handing it on would block required
+        # isolation ("workspace is not a git repository") and seed the child
+        # with a shell that can't cd anywhere. Fall through to the same
+        # fallbacks a session without a record gets.
+        logger.warning(
+            "Parent session cwd %r no longer exists; resolving a fallback for delegation.",
+            cwd,
+        )
+        cwd = None
     platform = getattr(parent_agent, "platform", None)
     if cwd is None and not session_key:
         if platform in (None, "", "cli"):

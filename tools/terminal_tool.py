@@ -2802,7 +2802,47 @@ def _resolve_command_cwd(
             recorded, env_type, default_cwd,
         )
         return default_cwd
+    if recorded and _is_vanished_local_cwd(recorded, env_type):
+        # The session's folder was deleted out from under it (e.g. the agent
+        # removed a temp checkout while sitting in it). Every later command
+        # would be prefixed with ``cd <gone>`` and fail with exit 126 before
+        # it ran — including a command that itself ``cd``s somewhere valid —
+        # so the session could never recover on its own. Drop the dead record
+        # and start from the session default instead.
+        logger.warning(
+            "Recorded session cwd %r no longer exists; resetting session %r to %r.",
+            recorded, session_key or "default", default_cwd,
+        )
+        _drop_session_cwd_if(session_key, recorded)
+        return default_cwd
     return recorded or default_cwd
+
+
+def _is_vanished_local_cwd(path: Optional[str], env_type: Optional[str]) -> bool:
+    """True when *path* is a host directory that has been deleted.
+
+    Local backend only: on container/remote backends the recorded path lives
+    inside the sandbox, so the host filesystem says nothing about it.
+    """
+    if not isinstance(path, str) or not path.strip():
+        return False
+    # Only judge paths when the caller has told us this is the local backend:
+    # an unspecified backend could be a sandbox whose paths don't exist on the
+    # host, and wrongly discarding a valid record would move the session.
+    if env_type != "local":
+        return False
+    try:
+        return os.path.isabs(path) and not os.path.isdir(path)
+    except Exception:
+        return False
+
+
+def _drop_session_cwd_if(session_key: Optional[str], expected: str) -> None:
+    """Remove a session's cwd record only if it still holds *expected*."""
+    key = str(session_key or "default")
+    with _session_cwd_lock:
+        if _session_cwd.get(key) == expected:
+            _session_cwd.pop(key, None)
 
 
 def _resolve_task_default_cwd(
@@ -2829,9 +2869,12 @@ def _resolve_task_default_cwd(
     (RL/benchmark sandboxes that set cwd to /workspace, /root, etc.) are
     absolute non-host paths and pass through untouched.
     """
+    recorded = get_session_cwd(task_id)
+    if recorded and _is_vanished_local_cwd(recorded, env_type):
+        recorded = None
     cwd = (
         resolve_task_overrides(task_id).get("cwd")
-        or get_session_cwd(task_id)
+        or recorded
         or default_cwd
     )
     if _is_container_backend(env_type) and _is_unusable_container_cwd(cwd):
@@ -3268,6 +3311,7 @@ def terminal_tool(
                 workdir=workdir,
                 default_cwd=cwd,
                 session_key=session_key,
+                env_type="local",
             )
             _self_repo_hit, _self_repo_msg = (
                 detect_self_repo_git_mutation(command, guard_cwd)

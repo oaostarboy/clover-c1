@@ -218,7 +218,7 @@ class TestCommandCwdReadsTheRecord:
         )
         assert resolved == "/config/default"
 
-    def test_cd_then_next_command_runs_in_the_new_dir(self, monkeypatch):
+    def test_cd_then_next_command_runs_in_the_new_dir(self, monkeypatch, tmp_path):
         """E2E through terminal_tool: the record round-trips cd state."""
         import json
 
@@ -246,7 +246,10 @@ class TestCommandCwdReadsTheRecord:
             lambda command, env_type, **kwargs: {"approved": True},
         )
 
-        json.loads(tt.terminal_tool(command="cd /project", task_id="sess-a"))
-        assert tt.get_session_cwd("sess-a") == "/project"
+        # A real directory: the local backend now drops records whose folder
+        # no longer exists, so a made-up path would be (correctly) discarded.
+        project = str(tmp_path)
+        json.loads(tt.terminal_tool(command=f"cd {project}", task_id="sess-a"))
+        assert tt.get_session_cwd("sess-a") == project
         json.loads(tt.terminal_tool(command="pwd", task_id="sess-a"))
-        assert fake.last_cwd_arg == "/project"
+        assert fake.last_cwd_arg == project

@@ -72,6 +72,7 @@ MAX_GOAL_CHARS = 2000
 # (tools.delegate_tool._MIN_BATCH_GOAL_LEN); a plan it would reject is invalid.
 MIN_MULTI_TASK_GOAL_CHARS = 10
 MAX_ACCEPTANCE_CHARS = 400
+MAX_TASK_TITLE_CHARS = 60
 MAX_REASON_CHARS = 300
 CONTEXT_TURNS = 4
 CONTEXT_TURN_CHARS = 300
@@ -281,6 +282,9 @@ class PlanTask:
     goal: str
     depends_on: Tuple[int, ...] = ()
     acceptance: str = ""
+    # The router's short label for the task (the chat card's row).  Optional:
+    # ``agent.handoff_title.distinct_task_titles`` fills in or de-duplicates it.
+    title: str = ""
 
 
 @dataclass(frozen=True)
@@ -407,6 +411,9 @@ def parse_verdict(payload: Any, *, max_tasks: int = MAX_TASKS) -> Verdict:
             goal=cleaned,
             depends_on=tuple(sorted(deps)),
             acceptance=_opt_text(item.get("acceptance"), f"task {i} acceptance", MAX_ACCEPTANCE_CHARS),
+            # A bad title never invalidates the plan: the runtime builds one.
+            title=clean_text(item["title"], MAX_TASK_TITLE_CHARS)
+            if isinstance(item.get("title"), str) else "",
         ))
 
     # Cycle check (Kahn): every task must become ready eventually.
@@ -641,6 +648,17 @@ def _derive_v2(text: str) -> str:
     """The v1 rubric with the calibration-v2 edits applied; each edit must find
     its anchor (a test pins this) so v1 and v2 cannot drift apart silently."""
     edits = (
+        ("- Each goal is one or two sentences, self-contained, written as an "
+         "instruction to a worker: a helper sees only its goal, so include the "
+         "user's format, scope, inputs and length requirements.\n",
+         "- Each goal is one or two sentences, written as an instruction to a "
+         "worker. A helper sees ONLY its goal, not this chat, so name the exact "
+         "items, files, constraints and format; never write \"the last review\" "
+         "or \"item 3\" without saying what it is.\n"
+         "- Each task also has a unique 2-5 word \"title\".\n"),
+        ('"tasks": [{{"goal": "<what to do>", "depends_on": []}}]}}',
+         '"tasks": [{{"goal": "<what to do>", "title": "<short label>", '
+         '"depends_on": []}}]}}'),
         ("reading or editing known files, one small fix.\n",
          "reading or editing known files, one small fix, or sending a link or "
          "text from the chat.\n"),

@@ -76,7 +76,7 @@ def test_the_flag_does_not_touch_router_settings():
 
 def test_v2_rubric_is_a_small_addition_with_the_same_structure():
     v1, v2 = dr.ROUTER_SYSTEM_PROMPT, dr.ROUTER_SYSTEM_PROMPT_V2
-    assert 0 < len(v2) - len(v1) < 700
+    assert 0 < len(v2) - len(v1) < 1000  # 433 for the calibration edits + the title / self-contained-goal rules
     for heading in ('1. "direct"', '2. "parallel"', '3. "staged"', '4. "single"',
                     "**Task rules:**", "**Reply:**"):
         assert heading in v1 and heading in v2
