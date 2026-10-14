@@ -290,3 +290,47 @@ class TestThreshold:
         self._three(scope, wid)
         assert len(curator.propose_procedure_candidates(scope, ON, now=NOW)) == 1
         assert called == []
+
+
+class TestCuratorCadence:
+    """The existing curator pass is the production caller of procedure intake."""
+
+    def _three_runs(self, scope):
+        wid = _wid(scope)
+        for i, s in enumerate(("s1", "s1", "s2")):
+            run(scope, wid, s, minutes=i)
+
+    def test_enumerates_only_scopes_with_procedure_evidence(self):
+        a, b = sc(project="a"), sc(project="b")
+        self._three_runs(a)
+        _wid(b)   # a scope with records but no procedure runs
+        got = np.list_procedure_scopes()
+        assert [(r["project"], r["audience"], r["root"]) for r in got] == [("a", "private", "root-1")]
+
+    def test_maybe_run_curator_stages_drafts_for_enrolled_scopes(self, monkeypatch):
+        scope = sc(project="p", audience="private", root="r")
+        scope = ws.Scope(profile=ws.current_profile(), project="p", audience="private", root="r")
+        self._three_runs(scope)
+        monkeypatch.setattr(curator, "should_run_now", lambda *a, **k: True)
+        monkeypatch.setattr(curator, "run_curator_review", lambda **k: {"ran": True})
+        monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
+        assert curator.maybe_run_curator() == {"ran": True}
+        recs = pending()
+        assert len(recs) == 1 and recs[0]["action"] == "create"
+        # second pass is a no-op (typed proposed receipt)
+        curator.maybe_run_curator()
+        assert len(pending()) == 1
+
+    def test_default_settings_stage_nothing_and_touch_no_db(self, monkeypatch, store):
+        monkeypatch.setattr(curator, "should_run_now", lambda *a, **k: True)
+        monkeypatch.setattr(curator, "run_curator_review", lambda **k: {"ran": True})
+        assert curator.maybe_run_curator() == {"ran": True}
+        assert pending() == []
+        assert not (store / "cron" / "notepad.db").exists()
+
+    def test_intake_failure_never_blocks_the_curator_pass(self, monkeypatch):
+        monkeypatch.setattr(curator, "should_run_now", lambda *a, **k: True)
+        monkeypatch.setattr(curator, "run_curator_review", lambda **k: {"ran": True})
+        monkeypatch.setattr(curator, "run_procedure_intake",
+                            lambda **k: (_ for _ in ()).throw(RuntimeError("db locked")))
+        assert curator.maybe_run_curator() == {"ran": True}

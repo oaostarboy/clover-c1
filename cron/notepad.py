@@ -574,6 +574,23 @@ def list_history(scope: Any, workstream_id: str) -> List[Dict[str, Any]]:
     return _list_children("work_history", "history_id", scope, workstream_id)
 
 
+def list_procedure_scopes() -> List[Dict[str, str]]:
+    """Distinct scopes holding verified procedure-run evidence (intake sweep).
+
+    Never creates the DB or tables. Rows are plain dicts with the four scope
+    fields, ordered for deterministic sweeps.
+    """
+    with _ws_read() as conn:
+        if conn is None:
+            return []
+        rows = conn.execute(
+            "SELECT DISTINCT profile, project, audience, root FROM work_evidence "
+            "WHERE procedure_key<>'' AND status='verified' "
+            "ORDER BY profile, project, audience, root"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_scope_evidence(scope: Any, *, procedure_key: Optional[str] = None) -> List[Dict[str, Any]]:
     """Every evidence row in a scope (procedure intake reads this)."""
     rows = _list_children("work_evidence", "observed_at, evidence_id", scope, None)

@@ -2035,6 +2035,11 @@ def maybe_run_curator(
             min_idle_s = get_min_idle_hours() * 3600.0
             if idle_for_seconds < min_idle_s:
                 return None
+        try:
+            # Deterministic, no model call; disabled by default (no DB access).
+            run_procedure_intake()
+        except Exception as e:
+            logger.debug("procedure intake failed: %s", e, exc_info=True)
         return run_curator_review(on_summary=on_summary)
     except Exception as e:
         logger.debug("maybe_run_curator failed: %s", e, exc_info=True)
@@ -2207,3 +2212,32 @@ def propose_procedure_candidates(
             "session_ids": sorted(sessions),
         })
     return out
+
+
+def run_procedure_intake(
+    *, settings: Any = None, now: Optional[datetime] = None,
+) -> List[Dict[str, Any]]:
+    """Sweep every scope with verified procedure evidence in this profile and
+    stage reviewable drafts. Called from the curator cadence; returns the
+    candidates staged. A no-op (no DB access) unless
+    ``proactive.enabled`` and ``proactive.procedures.enabled`` are both true."""
+    from agent import workstreams as _ws
+
+    settings = settings if settings is not None else _ws.load_settings()
+    if not (settings.enabled and settings.procedures_enabled):
+        return []
+    from cron import notepad as np
+
+    profile = _ws.current_profile()
+    staged: List[Dict[str, Any]] = []
+    for row in np.list_procedure_scopes():
+        if row["profile"] != profile:
+            continue
+        scope = _ws.Scope(profile=row["profile"], project=row["project"],
+                          audience=row["audience"], root=row["root"])
+        try:
+            staged.extend(propose_procedure_candidates(scope, settings, now=now))
+        except Exception:
+            logger.warning("procedure intake failed for project %s", row["project"],
+                           exc_info=True)
+    return staged
