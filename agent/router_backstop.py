@@ -1548,6 +1548,14 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
     from tools import async_delegation as ad
 
     plan = ad.get_continuation_plan(delegation_id)
+    if isinstance(plan, dict) and isinstance(plan.get("hold"), dict):
+        from agent.delegation_followthrough import plan_is_live
+        from agent import continuation_bridge as bridge
+
+        if plan.get("cancelled") or not plan_is_live(plan):
+            # Stopped / expired while held: a claimed release must not linger.
+            bridge.deny(agent, plan, "the plan was revoked or expired")
+            return "", None
     if not _plan_runnable(plan, agent):
         return "", None
     row = ad.get_durable_delegation(delegation_id)
