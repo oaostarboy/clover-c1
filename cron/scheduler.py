@@ -5463,10 +5463,7 @@ def _record_workstream_monitor_occurrence(
         settings = workstreams.load_settings()
         if not settings.enabled or not workstreams.job_eligible(settings, job_id):
             return None
-        project = str(
-            Path(job.get("workdir") or os.getenv("TERMINAL_CWD") or os.getcwd()).resolve()
-        )
-        scope = workstreams.make_scope(project, audience="private", root="")
+        scope = workstreams.job_scope(job)
         record = notepad.get_workstream(scope, workstream_id)
         if not record or not record.get("approved") or record.get("status") not in {"open", "deferred"}:
             return None
