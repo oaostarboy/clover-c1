@@ -457,7 +457,22 @@ def fire_claim_fence(job_id: str, *, expected_owner: str):
 # as a filesystem path component under ``OUTPUT_DIR``; allowing it to be
 # updated lets an unsafe value (``../escape``, absolute path, nested) leak
 # into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
+_IMMUTABLE_JOB_FIELDS = frozenset({"id", "workstream_scope"})
+
+# Set only by the current, authenticated human admission owner. Delivery
+# origin, session environment and model arguments are deliberately not inputs.
+_workstream_scope_owner: ContextVar[Optional[dict]] = ContextVar(
+    "cron_workstream_scope_owner", default=None)
+
+
+@contextlib.contextmanager
+def _use_workstream_scope_owner(metadata: dict):
+    """Internal owner seam; not a model-tool or general field writer."""
+    token = _workstream_scope_owner.set(copy.deepcopy(metadata))
+    try:
+        yield
+    finally:
+        _workstream_scope_owner.reset(token)
 
 
 def _job_output_dir(job_id: str) -> Path:
@@ -2422,6 +2437,12 @@ def create_job(
     # absent key = job follows config resolution (pre-feature behavior).
     if normalized_reasoning_effort is not None:
         job["reasoning_effort"] = normalized_reasoning_effort
+
+    metadata = _workstream_scope_owner.get()
+    if metadata is not None:
+        job["workstream_scope"] = copy.deepcopy(metadata)
+        job["workstream_scope"]["job_id"] = job_id
+        job["workstream_root"] = metadata["scope"]["root"]
 
     with _jobs_lock():
         jobs = load_jobs()

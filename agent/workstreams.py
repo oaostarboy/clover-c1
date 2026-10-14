@@ -266,11 +266,40 @@ class LinkError(ValueError):
 def job_scope(job: Mapping[str, Any]) -> Scope:
     """The Scope a cron job's linked workstream lives in.
 
-    Mirrors the scheduler's occurrence writer: project is the job's workdir
-    (falling back to ``TERMINAL_CWD``/cwd), audience ``private``, and root is
-    ``job['workstream_root']`` (empty by default).
+    Explicit owner-bound metadata is exact, validated data, not permission.
+    Legacy records retain private audience and the existing root/workdir
+    derivation. Neither delivery origin nor the last caller supplies scope.
     """
     project = str(Path(job.get("workdir") or os.getenv("TERMINAL_CWD") or os.getcwd()).resolve())
+    if "workstream_scope" in job:
+        from cron import jobs
+
+        meta = job["workstream_scope"]
+        if not isinstance(meta, dict) or meta.get("version") != 1:
+            raise ValueError("invalid owner-bound job scope")
+        data, owner = meta.get("scope"), meta.get("owner")
+        fields = {"profile", "project", "audience", "root"}
+        if not isinstance(data, dict) or set(data) != fields or any(
+            not isinstance(data[k], str) or not data[k] or data[k] != data[k].strip()
+            for k in fields
+        ):
+            raise ValueError("incomplete literal job scope")
+        if not isinstance(owner, dict) or any(not owner.get(k) for k in (
+            "session_id", "message_row_id", "ingress_event_id")):
+            raise ValueError("missing job scope owner correlation")
+        if data["profile"] != current_profile() or data["project"] != project:
+            raise ValueError("job scope profile/project mismatch")
+        if data["audience"].startswith("private:"):
+            if data["audience"] != "private:" + data["root"]:
+                raise ValueError("job scope actor/root mismatch")
+        elif (data["audience"], data["root"]) != ("private", "local"):
+            raise ValueError("job scope is not a canonical private surface")
+        if str(job.get("workstream_root") or "") != data["root"]:
+            raise ValueError("job root changed after owner admission")
+        stored = jobs.get_job(str(job.get("id") or ""))
+        if not stored or meta.get("job_id") != job.get("id") or stored.get("workstream_scope") != meta:
+            raise ValueError("job scope is not the persisted owner's metadata")
+        return Scope(**data)
     return make_scope(project, audience="private", root=str(job.get("workstream_root") or ""))
 
 
