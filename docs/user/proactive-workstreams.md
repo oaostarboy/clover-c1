@@ -63,16 +63,23 @@ same way chat turns resolve it) or a literal project key; `--root` defaults to
 `local`, the root CLI/TUI chat turns use. Listing and showing work even after
 the feature is disabled.
 
-### Corrections
+### Corrections and feedback
 
-A correction is recorded only from a chat message you send that *starts with*
-`/correct` or `Correction:` (optionally `/correct ws_<id>: ...` to supersede a
-specific record) **and** whose stored row carries the session store's trusted
-human-origin receipt (written by the real user-input ingress, bound to the
-profile, session, message row and event). A database role of `user`, a
-terminal, assistant or tool text, quoted or replayed rows, and silence are not
-evidence; until that receipt exists nothing is recorded. Secrets are redacted; paths, ids
-and test names are kept literally; superseded records keep their history.
+Use a plain-text message that starts with `Correction:` to record a correction.
+To supersede a specific record, include its ID after the prefix, for example
+`Correction: ws_0123456789abcdef: use staging-2`. Feedback uses
+`Feedback: ws_<16 lowercase hex characters> <kind>`, where `<kind>` is
+`accept`, `reject`, `correct`, `defer`, `done`, or `stop`; an optional note can
+follow a colon, for example `Feedback: ws_0123456789abcdef defer: not now`.
+
+These operations are recorded only when the stored message row carries the
+session store's trusted human-origin receipt (written by the real user-input
+ingress and bound to the profile, session, row, and event). A database role of
+`user`, a terminal, assistant or tool text, quoted or replayed rows, and
+silence are not evidence. Leading-slash forms such as `/correct` and
+`/feedback` are rejected as gateway commands and do not reach this consumer.
+Secrets are redacted; paths, IDs and test names are kept literally;
+superseded records keep their history.
 
 ### Linking a monitor job
 
@@ -84,13 +91,48 @@ never starts, authorizes or schedules work.
 
 ### Procedure evidence
 
-A run counts only when the durable delegation ledger holds a clean, completed
-single-task result that a consumer has claimed, and the turn belongs to a real
-session in the session store (compression-rotated segments are one
-conversation). Identical delegated goals form one workflow. Cron executions
-are *not* evidence: the executions ledger records transport status and carries
-no session identity. Failed, unknown, unclaimed, replayed or fabricated-session
-outcomes never count. A draft needs the thresholds below and is only staged.
+A run counts only when the foreground execution owner reads authentic stored
+terminal command/result rows with successful exit codes and transferable
+steps. Receipts bind the original session, row interval and exact scope;
+compression-rotated segments remain one conversation. Three distinct verified
+executions across at least two conversation roots can stage one attributed
+draft. Delegation completion and cron transport success are not procedure
+execution evidence. Model prose, failed/unknown results, repeated receipts,
+foreign scope and invented sessions never count. Draft staging is not skill
+installation and still needs explicit human review.
+
+### Supported surface and operation replies
+
+The combined candidate tests authenticated Telegram private plain-text ingress
+for these explicit markers, not universal natural-language understanding.
+Correction/feedback replies use the persistence owner's inline response:
+`Recorded ...` or `Not recorded ...`, never an unverified model save/delivery
+claim. Ordinary replies and provider history are unchanged. A monitor request
+uses exactly `workstream-monitor: ` followed by a JSON object with `scope`
+(`profile`, `project`, `audience`, `root`), `workstream_id`, `prompt`, `schedule`,
+`monitor_script`, and boolean `approve: true`. All scope values must match the
+current authenticated surface literally. It creates a local-only job, not
+enrollment, linking or continuation permission. After independent job
+enrollment, a new current message repeats the original request plus the actual
+`job_id` to link that same session owner's job. Other DM/group/foreign scope,
+model/tool text, historical replay and malformed identifiers cannot adopt it.
+Denied/unknown operations are reported without a new send route; ambiguous
+partial persistence requires inspection, not automatic retry.
+
+Suggestions require explicit `proactive.suggestions.preferred_timing:
+after_reply`; they are optional inline local artifacts, not delivery proofs.
+Recall uses bounded lexical triggers; semantic/paraphrase completeness is not
+claimed. A known missed-need paraphrase remains measured in the test fixtures.
+Only supported native text-summary compaction is audited; opaque provider
+compaction is not. The durable scoped capsule is independent evidence.
+
+This is an unapproved opt-in candidate, not a released or enabled capability.
+All seven local acceptance contracts and independent exact-candidate review
+are required together. Windows/macOS, live providers/transports,
+phone/desktop/TUI suggestions and opaque-native gates are not certified by
+the isolated Linux scripted-provider tests. Procedure provenance includes a
+source builder model-substitution exception; separate exact-model review and
+final independent Fable closure remain required before release.
 
 ## Settings
 
