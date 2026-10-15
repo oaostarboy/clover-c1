@@ -223,7 +223,7 @@ def test_all_three_reported_cleanly_and_read_is_verified_without_a_footer(
     provider.queue[:] = [text('Everything checked out.')]
     result = completion_turn(agent, [batch], task_id='c-clean')
 
-    assert result['work_status'] == 'verified_completion'
+    assert result['work_status'] == 'result_received'
     assert result['final_response'] == 'Everything checked out.'
     assert STATUS_NOTE not in last_user_wire(provider.captured[0])
 
@@ -321,7 +321,7 @@ def test_a_short_check_on_the_completion_turn_stays_direct(
     assert all((tmp_path / f'w{i}.txt').exists() for i in range(calls))
     assert dispatches == [], 'no hand-back for a short check'
     assert result['final_response'] == 'Checked: all three agree.'
-    assert result['work_status'] == 'verified_completion'
+    assert result['work_status'] == 'result_received'
 
 
 def test_the_hand_backs_own_completion_is_never_handed_back_again(
@@ -571,5 +571,5 @@ def test_a_clean_hand_back_of_clean_work_is_verified_without_a_footer(
     provider.queue[:] = [text('All three checks agree.')]
     final = completion_turn(agent, [integration], task_id='c-final')
 
-    assert final['work_status'] == 'verified_completion', final
+    assert final['work_status'] == 'result_received', final
     assert final['final_response'] == 'All three checks agree.'

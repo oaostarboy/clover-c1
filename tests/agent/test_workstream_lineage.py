@@ -2,8 +2,8 @@
 
 Real lifecycle, dispatch receipts and SQLite owners in a temporary CLOVER_HOME.
 No provider is called. These are status/authority probes, not live model UX proof.
-Intentionally RED: preserved under the task's missing-authority fallback; not a
-merge-ready fix. See the external RESULT.md for the exact blocker and receipts.
+Originally RED incident probes; assertions remain preserved after the fix.
+Positive authoritative acceptance is tested at the real gateway owner seam.
 """
 from __future__ import annotations
 
@@ -58,6 +58,14 @@ def handback(h, *, first_result=None):
     assert [r.delegation_id for r in h.agent._wl_handback_dispatches["deleg_126703c7"]] == [
         "deleg_292cc8e4"]
     return original
+
+
+def test_consumed_status_means_result_received_not_verified(incident):
+    h = incident
+    handback(h)
+    complete("deleg_126703c7", summary="Everything verified and published")
+    wl.begin_turn(h.agent, "", "internal", ["deleg_126703c7"], may_note=False)
+    assert wl.report(h.agent).status == "result_received"
 
 
 def test_consumed_handback_does_not_verify_acceptance(incident):

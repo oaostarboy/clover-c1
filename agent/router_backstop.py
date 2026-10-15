@@ -121,7 +121,8 @@ _FAILED_STATUSES = frozenset({
 WORK_DISPATCH_ACK = "dispatch_ack"
 WORK_PARTIAL = "partial"
 WORK_INCOMPLETE = "incomplete"
-WORK_VERIFIED = "verified_completion"
+WORK_VERIFIED = "verified_completion"  # reserved for authoritative acceptance
+WORK_RESULT_RECEIVED = "result_received"
 EXIT_REASON = "delegation_handoff"
 
 
@@ -2013,9 +2014,9 @@ def work_status(agent: Any) -> Optional[str]:
     ``None`` when no helper was accepted for the turn.  ``dispatch_ack``: all
     still running.  ``partial``: some finished, some pending or not yet
     checked.  ``incomplete``: any failed, stopped or lost.
-    ``verified_completion``: every durable result is a clean success AND was
-    handed to a consumer (claimed/delivered) -- a finished result nobody has
-    read is not verification.  Read from the durable rows, never from text.
+    ``result_received``: each helper returned cleanly and a consumer received
+    its output. This is transport completion, NOT acceptance verification.
+    Read from the durable rows, never from text.
     """
     receipts = _turn_receipts(agent)
     if not receipts:
@@ -2032,7 +2033,7 @@ def work_status(agent: Any) -> Optional[str]:
         if "pending" in outcomes:
             return WORK_PARTIAL
         if set(owned_receipts_ready(ids)) >= set(ids):
-            return WORK_VERIFIED
+            return WORK_RESULT_RECEIVED
         return WORK_PARTIAL
     except Exception:
         logger.debug("router work status unavailable", exc_info=True)

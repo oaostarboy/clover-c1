@@ -9,8 +9,8 @@ instance noted -- never from model text:
   failed, was truncated at its iteration cap, or never reported is *not* a
   success: pending helpers make the status ``partial``, a failed or truncated
   one makes it ``incomplete``, and only a clean result that a consumer has read
-  is ``verified_completion``.  The finalizer stamps it on the result and, when
-  the work is not fully verified, appends one plain line to the reply so the
+  is ``result_received`` (not acceptance verification). The finalizer stamps
+  it on the result and, when helper transport is incomplete, adds a line so the
   user never reads a combined verdict over work that is still running or did
   not finish (same pattern as the file-mutation footer).  The completion turn
   also gets the same facts as a ``[Clover runtime]`` note on the API copy of
@@ -47,6 +47,7 @@ from agent.router_backstop import (
     WORK_INCOMPLETE,
     WORK_PARTIAL,
     WORK_VERIFIED,
+    WORK_RESULT_RECEIVED,
 )
 from agent.turn_notices import runtime_note
 
@@ -229,9 +230,9 @@ def _aggregate(slots: Sequence[Slot], ids: Sequence[str]) -> str:
     try:
         from tools.async_delegation import owned_receipts_ready
 
-        # A finished result nobody has read is not verification.
+        # Delivery proves receipt of output, never acceptance of its work.
         if set(owned_receipts_ready(list(ids))) >= set(ids):
-            return WORK_VERIFIED
+            return WORK_RESULT_RECEIVED
     except Exception:
         logger.debug("delivery check unavailable", exc_info=True)
     return WORK_PARTIAL

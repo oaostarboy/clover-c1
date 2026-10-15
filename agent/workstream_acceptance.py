@@ -146,6 +146,7 @@ def finish(agent, goal, rows, result):
     """Owner result readback plus atomic exact-ID acceptance; no model API."""
     from agent.workstream_human_hooks import _authenticate
     from agent.workstream_procedures import _workflow
+    from agent.work_lifecycle import is_silent_reply
     if goal is None:
         return None
     scope = goal.scope
@@ -160,7 +161,8 @@ def finish(agent, goal, rows, result):
                 and 0 <= time.monotonic() - goal.started <= 300
                 and _read(scope, goal.path, 8192) == goal.content)
 
-    if (not current() or not result.get("completed") or not str(result.get("final_response") or "").strip()
+    if (not current() or not result.get("completed") or is_silent_reply(result.get("final_response"))
+            or not str(result.get("final_response") or "").strip()
             or any(result.get(k) for k in ("failed", "interrupted", "partial", "error", "cleanup_errors"))):
         return None
     if _workflow(rows, min_commands=1)[0] != "success":
@@ -170,7 +172,7 @@ def finish(agent, goal, rows, result):
         return None
     for call in calls:
         args = json.loads(call["function"]["arguments"])
-        if args.get("workdir") not in (None, scope.project):
+        if args.get("workdir") != scope.project:
             return None
     live = {m.get("tool_call_id"): m.get("content") for m in result.get("messages", []) if m.get("role") == "tool"}
     tool_rows = [r for r in rows if r["role"] == "tool"]
@@ -184,9 +186,13 @@ def finish(agent, goal, rows, result):
         root = ElementTree.fromstring(value)
         cases = root.findall(".//testcase")
         if (len(cases) < check["min_tests"] or root.tag not in ("testsuites", "testsuite")
-                or any(root.iter("failure")) or any(root.iter("error")) or any(root.iter("skipped"))):
+                or any(True for tag in ("failure", "error", "skipped") for _ in root.iter(tag))):
             return None
         reports.append(hashlib.sha256(value).hexdigest())
+    def reports_current():
+        return all(hashlib.sha256(_read(scope, check["report"])).hexdigest() == digest
+                   for check, digest in zip(spec["checks"], reports))
+
     artifact_digest = _artifacts(scope, spec["artifacts"])
     proof = {"v": 1, "owner": "foreground_pytest", "spec_digest": hashlib.sha256(goal.content).hexdigest(),
              "artifact_digest": artifact_digest, "check_ids": _digest([
@@ -197,7 +203,7 @@ def finish(agent, goal, rows, result):
     if len(detail) > 512:
         return None
     with np.write_batch():
-        if not current() or _artifacts(scope, spec["artifacts"]) != artifact_digest:
+        if not current() or not reports_current() or _artifacts(scope, spec["artifacts"]) != artifact_digest:
             raise ValueError("acceptance lost current ownership")
         for target, (wid, snapshot) in zip(spec["coverage"], goal.evidence):
             row = np.get_workstream(scope, wid)
@@ -211,7 +217,7 @@ def finish(agent, goal, rows, result):
                 summary=summary, key=proof["spec_digest"])
             np.update_workstream(scope, wid, expected_revision=row["revision"],
                                  status="resolved", summary=summary, actor="acceptance")
-        if not current() or _artifacts(scope, spec["artifacts"]) != artifact_digest:
+        if not current() or not reports_current() or _artifacts(scope, spec["artifacts"]) != artifact_digest:
             raise ValueError("acceptance changed during commit")
     # Exact target readback is required before success is exposed.
     if any(np.get_workstream(scope, t["workstream_id"])["status"] != "resolved" for t in spec["coverage"]):
