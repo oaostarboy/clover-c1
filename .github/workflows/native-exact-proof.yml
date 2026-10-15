@@ -1,0 +1,227 @@
+name: Exact-target native proof (review before dispatch)
+# Candidate product code, workflow code, and next marker are different identities.
+# This workflow never publishes refs and never uses real messaging credentials.
+# Chat rows use the real gateway handler over LOCAL IRC, not Telegram transport.
+on:
+  workflow_dispatch:
+    inputs:
+      old_ref:
+        description: Previous released tag
+        type: string
+        default: v1.5.5
+        required: false
+      target_ref:
+        description: Exact immutable candidate commit (40 lowercase hex)
+        type: string
+        required: true
+      target_tree:
+        description: Independently reviewed candidate tree (40 lowercase hex)
+        type: string
+        required: true
+      next_ref:
+        description: Unique ci/native-next/name branch (candidate plus marker only)
+        type: string
+        required: true
+  workflow_call:
+    inputs:
+      old_ref:
+        type: string
+        default: v1.5.5
+        required: false
+      target_ref:
+        type: string
+        required: true
+      target_tree:
+        type: string
+        required: true
+      next_ref:
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: native-exact-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+env:
+  OLD_REF: ${{ inputs.old_ref }}
+  TARGET_REF: ${{ inputs.target_ref }}
+  TARGET_TREE: ${{ inputs.target_tree }}
+  NEXT_REF: ${{ inputs.next_ref }}
+jobs:
+  pins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      old_sha: ${{ steps.plan.outputs.old_sha }}
+      next_sha: ${{ steps.plan.outputs.next_sha }}
+      next_tree: ${{ steps.plan.outputs.next_tree }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: helpers
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+      - name: Resolve and validate immutable source pins
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/evidence"
+          git -C source check-ref-format "refs/heads/$NEXT_REF"
+          git -C source fetch origin "+refs/heads/$NEXT_REF:refs/remotes/origin/$NEXT_REF"
+          python helpers/.github/native-proof/proof.py plan --repo source --old-ref "$OLD_REF" --target-ref "$TARGET_REF" --target-tree "$TARGET_TREE" --next-ref "$NEXT_REF" --output "$RUNNER_TEMP/evidence/plan.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: source-pins-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+
+  fresh:
+    name: Native fresh install + SQLite/report-only/Stop/restart / ${{ matrix.os }}
+    needs: pins
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    env:
+      OLD_SHA: ${{ needs.pins.outputs.old_sha }}
+      NEXT_SHA: ${{ needs.pins.outputs.next_sha }}
+      NEXT_TREE: ${{ needs.pins.outputs.next_tree }}
+      SETUP: zyra
+      UPDATE_PATH: cli
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: helpers
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+      - name: macOS/Linux fresh native installer and installed feature contracts
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash helpers/.github/native-proof/posix.sh fresh
+      - name: Windows fresh native installer and installed feature contracts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./helpers/.github/native-proof/windows.ps1 -Mode fresh
+      - name: Preserve actual evidence and row outcome
+        if: always()
+        shell: bash
+        env:
+          ROW_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          python helpers/.github/native-proof/row.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: fresh-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+
+  posix:
+    name: Running-gateway CLI --gateway (not chat) / ${{ matrix.os }} / ${{ matrix.phase }}
+    needs: pins
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        phase: [old2new, new2next]
+    env:
+      OLD_SHA: ${{ needs.pins.outputs.old_sha }}
+      NEXT_SHA: ${{ needs.pins.outputs.next_sha }}
+      NEXT_TREE: ${{ needs.pins.outputs.next_tree }}
+      PHASE: ${{ matrix.phase }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: helpers
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+      - name: Update with original gateway verified running, then hold 90s
+        shell: bash
+        run: bash helpers/.github/native-proof/posix.sh "$PHASE"
+      - name: Preserve actual evidence and row outcome
+        if: always()
+        shell: bash
+        env:
+          ROW_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          python helpers/.github/native-proof/row.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: posix-${{ matrix.os }}-${{ matrix.phase }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+
+  windows:
+    name: Windows / ${{ matrix.setup }} / ${{ matrix.path }} / ${{ matrix.phase }}
+    needs: pins
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        setup: [troy, zyra]
+        path: [cli, chat]
+        phase: [old2new, new2next]
+    env:
+      OLD_SHA: ${{ needs.pins.outputs.old_sha }}
+      NEXT_SHA: ${{ needs.pins.outputs.next_sha }}
+      NEXT_TREE: ${{ needs.pins.outputs.next_tree }}
+      SETUP: ${{ matrix.setup }}
+      UPDATE_PATH: ${{ matrix.path }}
+      PHASE: ${{ matrix.phase }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: helpers
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+      - name: Native supervisor update, current-run receipt, final local chat result
+        shell: pwsh
+        run: ./helpers/.github/native-proof/windows.ps1 -Mode $env:PHASE
+      - name: Preserve actual evidence and row outcome
+        if: always()
+        shell: bash
+        env:
+          ROW_STATUS: ${{ job.status }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          python helpers/.github/native-proof/row.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-${{ matrix.setup }}-${{ matrix.path }}-${{ matrix.phase }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
