@@ -29,8 +29,21 @@ git -C $env:INSTALL_DIR checkout --detach $from
 if ($LASTEXITCODE -ne 0) { throw 'starting commit missing' }
 git -C $source show "$($env:TARGET_REF):scripts/install.ps1" | Set-Content "$env:RUNNER_TEMP\install.ps1" -Encoding utf8
 if ($LASTEXITCODE -ne 0) { throw 'pinned installer missing' }
-& "$env:RUNNER_TEMP\install.ps1" -Branch $env:NEXT_REF -Commit $from -NonInteractive -SkipComputerUse -CloverHome $env:CLOVER_HOME -InstallDir $env:INSTALL_DIR 2>&1 | Tee-Object "$evidence\install.log" | Out-Host
-if ($LASTEXITCODE -ne 0) { throw 'installer failed' }
+function Save-NpmEvidence([string]$destination) {
+  # The installer logs are outside the checkout. Preserve them before any
+  # identity refusal, including incomplete debug logs from a killed npm tree.
+  $npmEvidence = Join-Path $destination 'npm'
+  New-Item -ItemType Directory -Force $npmEvidence | Out-Null
+  Get-ChildItem -LiteralPath $env:TEMP -Filter 'clover-npm-*' -ErrorAction SilentlyContinue |
+    Copy-Item -Destination $npmEvidence -Recurse -Force -ErrorAction Continue
+}
+try {
+  & "$env:RUNNER_TEMP\install.ps1" -Branch $env:NEXT_REF -Commit $from -NonInteractive -SkipComputerUse -CloverHome $env:CLOVER_HOME -InstallDir $env:INSTALL_DIR 2>&1 | Tee-Object "$evidence\install.log" | Out-Host
+  $installerExit = $LASTEXITCODE
+} finally {
+  Save-NpmEvidence $evidence
+}
+if ($installerExit -ne 0) { throw 'installer failed' }
 $script:py = "$env:INSTALL_DIR\venv\Scripts\python.exe"
 $env:CLOVER_BIN = "$env:INSTALL_DIR\venv\Scripts\clover.exe"
 function Invoke-Proof {
