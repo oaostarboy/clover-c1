@@ -15,6 +15,13 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.5.6 | Clover C1.5.6 | 2026-10-15
+- Optional work tracking keeps unfinished work and corrections across chats; it stays off until you enable it.
+- A helper returning a result no longer means its work passed your checks.
+- Separate jobs with the same wording stay separate, and repeated results no longer add duplicate notes.
+- Local checks can verify the exact work you named; review, installation and release stay separate.
+- Direct answers now stay in your reply when a helper takes over the rest of the job.
+
 ## 1.5.5 | Clover C1.5.5 | 2026-10-13
 - If an agent deletes the folder it's working in, its terminal and helpers keep working instead of getting stuck.
 - Helpers that start automatically now get their own clear name, the full instructions they need, and the default model.
