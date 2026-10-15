@@ -1822,7 +1822,44 @@ def turn_is_armed(agent: Any) -> bool:
     )
 
 
-def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None) -> str:
+def _pending_handoff_text(agent: Any, messages: Any, opener: str = "") -> str:
+    """Keep this turn's visible, not-yet-delivered root text, never tool/history text.
+
+    A dispatch acknowledgement is a delivery decision, not permission to discard
+    an answer the root already wrote.  Use the same visible-text and delivery
+    owners as interim messages; do not ask another model to reconstruct facts.
+    """
+    if agent is None or not isinstance(messages, (list, tuple)):
+        return ""
+    boundary = next((i for i in range(len(messages) - 1, -1, -1)
+                     if isinstance(messages[i], dict) and messages[i].get("role") == "user"), None)
+    if boundary is None:
+        return ""  # no current request boundary: never replay old answers
+    visible_text = getattr(agent, "_interim_assistant_visible_text", None)
+    was_delivered = getattr(agent, "_interim_text_was_delivered", None)
+    if not callable(visible_text):
+        return ""
+    norm = lambda value: " ".join(str(value or "").split()).casefold()
+    existing = norm(opener)
+    kept: List[str] = []
+    seen = set()
+    for message in messages[boundary + 1:]:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        if message.get("channel") in ("analysis", "reasoning"):
+            continue
+        text = _notes.redact(str(visible_text(message) or "")).strip()
+        key = norm(text)
+        if not key or key in seen or key in existing:
+            continue
+        if callable(was_delivered) and was_delivered(text):
+            continue
+        kept.append(text)
+        seen.add(key)
+    return "\n\n".join(kept)
+
+
+def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None, messages: Any = None) -> str:
     """What the user is told when helpers took over: the root's own short
     summary of each dispatch, never the helper's raw task text.
 
@@ -1831,13 +1868,26 @@ def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None) -> str:
     The gateway sends the card as a second message right under it when it
     delivers that reply (``bind_ack_card`` -> ``match_unbound_opener``).  No
     opener (or no chat platform): the reply is the card text, as before."""
+    pending = _pending_handoff_text(agent, messages)
     lines = [r.summary for r in receipts if getattr(r, "summary", "")]
     if lines:
         try:
-            from agent.ack_checklist import card_for
+            from agent.ack_checklist import card_for, _LOCK
 
             card = card_for(receipts)
             if card is not None:
+                pending = _pending_handoff_text(agent, messages, card.say_text())
+                if pending:
+                    # Preserve the root's already-written answer in the opener,
+                    # not the checklist body.  The card and opener are one
+                    # delivery unit; mutate only this dispatch's transient card.
+                    dispatch_ids = {r.delegation_id for r in receipts}
+                    first = next((part for part in card.parts
+                                  if part.delegation_id in dispatch_ids), None)
+                    if first is not None:
+                        with _LOCK:
+                            say = first.checklist.say
+                            first.checklist.say = f"{pending}\n\n{say}" if say else pending
                 # The same text, with the steps under each header; the gateway
                 # edits the message this becomes as the helper works.  The
                 # text it was created with (the live card shows a running
@@ -1845,18 +1895,24 @@ def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None) -> str:
                 if _opener_is_own_message(card, agent):
                     card.split_opener = True
                     return card.say_text()
+                if pending:
+                    return card.render()
                 return card.initial_text
         except Exception:
             logger.debug("ack checklist unavailable; plain summary lines", exc_info=True)
-        return "\n".join(lines)
+        status = "\n".join(lines)
+        pending = _pending_handoff_text(agent, messages, status)
+        return f"{pending}\n\n{status}" if pending else status
     state = _state(agent) if agent is not None else None
     if state is not None:
         did, line = state.opener
         if line and any(str(getattr(r, "delegation_id", "")) == did for r in receipts):
             # The agent's own line (``_voice``), which read the user's message.
-            return line
+            pending = _pending_handoff_text(agent, messages, line)
+            return f"{pending}\n\n{line}" if pending else line
     count = sum(len(r.goals) for r in receipts) or sum(len(r.subagent_ids) for r in receipts) or 1
-    return _fallback_ack(count, receipts)
+    status = _fallback_ack(count, receipts)
+    return f"{pending}\n\n{status}" if pending else status
 
 
 # The FLOOR when the agent's own line (``_voice``) could not be had -- the
@@ -1929,7 +1985,7 @@ def completion_directive(agent: Any, messages: Any = None):
         # The agent's own line, written now that the helper is running (one
         # model turn over the messages it already has).
         _voice(agent, state, receipts, messages)
-    return dc.Directive(EXIT_REASON, _ack_text(receipts, agent))
+    return dc.Directive(EXIT_REASON, _ack_text(receipts, agent, messages))
 
 
 def _row_outcome(row: Optional[Dict[str, Any]]) -> str:
