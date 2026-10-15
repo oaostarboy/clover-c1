@@ -188,15 +188,23 @@ def finish(agent, goal, rows, result):
         if (len(cases) < check["min_tests"] or root.tag not in ("testsuites", "testsuite")
                 or any(True for tag in ("failure", "error", "skipped") for _ in root.iter(tag))):
             return None
+        suites = list(root.iter("testsuite"))
+        if (not suites or sum(int(s.attrib["tests"]) for s in suites) != len(cases)
+                or any(int(s.attrib[k]) != 0 for s in suites for k in ("failures", "errors", "skipped"))):
+            return None
         reports.append(hashlib.sha256(value).hexdigest())
     def reports_current():
         return all(hashlib.sha256(_read(scope, check["report"])).hexdigest() == digest
                    for check, digest in zip(spec["checks"], reports))
 
     artifact_digest = _artifacts(scope, spec["artifacts"])
+    by_call = {r["tool_call_id"]: r for r in tool_rows}
+    check_receipts = [{"call_id": call["id"], "row": by_call[call["id"]]["id"],
+                       "result_digest": hashlib.sha256(by_call[call["id"]]["content"].encode()).hexdigest(),
+                       "report_digest": report}
+                      for call, report in zip(calls, reports)]
     proof = {"v": 1, "owner": "foreground_pytest", "spec_digest": hashlib.sha256(goal.content).hexdigest(),
-             "artifact_digest": artifact_digest, "check_ids": _digest([
-                 [(r["id"], r["tool_call_id"], r["content"]) for r in tool_rows], reports]),
+             "artifact_digest": artifact_digest, "check_ids": _digest(check_receipts),
              "event": goal.event_id, "row": rows[0]["id"]}
     source = "accept:" + _digest(proof)
     detail = json.dumps(proof, separators=(",", ":"))
@@ -211,6 +219,9 @@ def finish(agent, goal, rows, result):
                     or row["status"] not in ("open", "deferred") or _evidence(scope, wid) != snapshot):
                 raise ValueError("work changed since acceptance declaration")
             summary = "Candidate artifacts and declared checks verified; review/install/release not implied"
+            np.record_acceptance_contract(scope, wid, expected_revision=row["revision"],
+                                          contract=goal.content.decode("utf-8"), proof=proof,
+                                          check_receipts=check_receipts)
             np.add_receipt(scope, wid, kind="executed", owner="acceptance", source_id=source, detail=detail)
             np.add_evidence(scope, wid, source_kind="acceptance", source_id=source,
                 status="verified", trust="owner_session", session_id=goal.session_id,

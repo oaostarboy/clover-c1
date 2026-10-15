@@ -792,7 +792,15 @@ def add_evidence(
         ).fetchone()
         if found is not None:
             # verified/failed are settled; unknown/unverified may resolve once.
-            if found["status"] in ("unknown", "unverified") and status != found["status"]:
+            if found["status"] in ("unknown", "unverified") and (
+                    status != found["status"] or summary != found["summary"]):
+                # Receiving clean output can change the current description
+                # while acceptance remains unverified. Preserve the old fact;
+                # identical replay does not refresh timestamps or add history.
+                current = _require(conn, skey, workstream_id)
+                _history(conn, skey, str(workstream_id), current["revision"],
+                         "evidence_refresh", "runtime",
+                         f"{found['evidence_id']}: {found['status']}: {found['summary']}", at)
                 conn.execute(
                     "UPDATE work_evidence SET status=?, summary=?, event_at=?, "
                     "observed_at=? WHERE evidence_id=?",
@@ -816,6 +824,31 @@ def add_evidence(
         return dict(conn.execute(
             "SELECT * FROM work_evidence WHERE evidence_id=?", (eid,)
         ).fetchone())
+
+
+def record_acceptance_contract(
+    scope: Any, workstream_id: str, *, expected_revision: int, contract: str,
+    proof: Dict[str, Any], check_receipts: List[Dict[str, Any]], now: Optional[datetime] = None,
+) -> None:
+    """Retain bounded owner acceptance in the existing append-only audit trail.
+
+    Called in the acceptance write batch with evidence/status settlement, not
+    an authority intake. The original spec survives later file edits/removal.
+    """
+    import hashlib
+    import json
+
+    if (len(contract.encode()) > 8192 or not 1 <= len(check_receipts) <= 4
+            or hashlib.sha256(contract.encode()).hexdigest() != proof.get("spec_digest")):
+        raise ValueError("acceptance contract identity mismatch")
+    key = _scope_key(scope)
+    with _ws_write() as conn:
+        row = _require(conn, key, workstream_id)
+        if row["revision"] != expected_revision:
+            raise StaleRevision("acceptance contract revision changed")
+        _history(conn, key, str(workstream_id), expected_revision, "acceptance_contract",
+                 "acceptance", json.dumps({"contract": contract, "proof": proof, "checks": check_receipts},
+                                          separators=(",", ":")), _utc_iso(now))
 
 
 def add_receipt(

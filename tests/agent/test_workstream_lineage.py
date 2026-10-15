@@ -81,6 +81,7 @@ def test_consumed_handback_does_not_verify_acceptance(incident):
     integration = next(r for r in np.list_workstreams(h.scope)
                        if "runtime answer" in r["title"])
     assert integration["status"] == "open", "consumption is not parent acceptance verification"
+    assert "result received" in integration["summary"], "latest state must not look still running"
     assert not any(e["status"] == "verified" for e in np.list_evidence(
         h.scope, integration["workstream_id"]))
 

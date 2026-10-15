@@ -18,14 +18,15 @@ def isolated_terminal_owner():
     cleanup_all_environments()
 
 
-def contract(h, *, covers=None):
+def contract(h, *, covers=None, rows=None):
     # These are accepted tasks, not planted verification or provenance receipts.
     scope = h.scope()
     sid = h.session_id()
-    rows = ws.record_outcomes(scope, [
-        ws.TypedOutcome("Build and test candidate", "failed", "delegation", "original", session_id=sid),
-        ws.TypedOutcome("Review and release candidate", "not_run", "rollout", "release", session_id=sid),
-    ], ws.load_settings())
+    if rows is None:
+        rows = ws.record_outcomes(scope, [
+            ws.TypedOutcome("Build and test candidate", "failed", "delegation", "original", session_id=sid),
+            ws.TypedOutcome("Review and release candidate", "not_run", "rollout", "release", session_id=sid),
+        ], ws.load_settings())
     probe = h.project / "acceptance_probe.py"
     probe.write_text("def test_candidate():\n    assert 2 + 2 == 4\n")
     command = "python -m pytest acceptance_probe.py --junitxml=acceptance.xml -q"
@@ -59,6 +60,13 @@ def test_real_owner_checks_close_only_exact_covered_work(workflow):
     assert len(receipts) == 1
     proof = json.loads(receipts[0]["detail"])
     assert proof["check_ids"] and proof["artifact_digest"] and proof["spec_digest"]
+    contracts = [r for r in np.list_history(h.scope(), current["workstream_id"])
+                 if r["op"] == "acceptance_contract"]
+    assert len(contracts) == 1, "the owner must retain the pre-execution contract for later audit"
+    saved_contract = json.loads(contracts[0]["detail"])
+    assert hashlib.sha256(saved_contract["contract"].encode()).hexdigest() == proof["spec_digest"]
+    assert json.loads(saved_contract["contract"])["coverage"][0]["workstream_id"] == current["workstream_id"]
+    assert saved_contract["proof"] == proof
     assert result["workstream_execution"]["status"] == "success"
     # A fresh read, not instance lineage, removes the completed warning and
     # keeps the separate review/install/release work visible.
@@ -91,7 +99,7 @@ def test_changed_report_during_commit_cannot_verify(workflow, monkeypatch):
 
 @pytest.mark.parametrize("variant", [
     "helper_prose", "untrusted", "zero_only", "stale_report", "failed_test", "skipped_test",
-    "empty_report", "bad_report", "changed_artifact", "changed_spec", "changed_evidence",
+    "empty_report", "bad_report", "report_totals", "changed_artifact", "changed_spec", "changed_evidence",
     "changed_revision", "wrong_session", "new_session", "foreign_id", "foreign_scope",
     "stop", "stop_during_commit", "origin_consumed_during_commit", "silent", "shadow",
     "disabled", "expired", "duplicate_coverage", "partial_check_coverage", "wrong_cwd",
@@ -119,6 +127,9 @@ def test_acceptance_fails_closed(workflow, monkeypatch, variant):
     elif variant in ("empty_report", "bad_report"):
         text = "<testsuite tests='0'/>" if variant == "empty_report" else "not XML"
         mutate = lambda: (h.project / "acceptance.xml").write_text(text)
+    elif variant == "report_totals":
+        mutate = lambda: (h.project / "acceptance.xml").write_text(
+            "<testsuite tests='0' failures='1' errors='0' skipped='0'><testcase name='fake'/></testsuite>")
     elif variant == "changed_artifact":
         mutate = lambda: (h.project / "acceptance_probe.py").write_text("changed after tests passed")
     elif variant == "changed_spec":
@@ -185,6 +196,64 @@ def test_acceptance_fails_closed(workflow, monkeypatch, variant):
     assert np.list_receipts(scope, rows[0]["workstream_id"]) == []
     assert np.get_workstream(scope, rows[1]["workstream_id"]) == rows[1]
     assert result.get("workstream_execution", {}).get("status", "unknown") != "success"
+
+
+def test_concurrent_owner_acceptance_commits_once(workflow, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from agent import workstream_acceptance as acceptance
+    h = workflow
+    h.run(commands=(), final="Ready")
+    rows, command, _ = contract(h)
+    real_finish = acceptance.finish
+    results = []
+
+    def concurrent(*args):
+        def attempt():
+            try:
+                return real_finish(*args)
+            except (ValueError, np.StaleRevision):
+                return None
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results.extend(pool.map(lambda _: attempt(), range(2)))
+        return next(r for r in results if r is not None)
+
+    monkeypatch.setattr(acceptance, "finish", concurrent)
+    h.run(message="Verify work acceptance acceptance.json",
+          commands=((command, {"workdir": str(h.project)}),))
+    assert sum(r is not None for r in results) == 1
+    assert np.get_workstream(h.scope(), rows[0]["workstream_id"])["status"] == "resolved"
+    assert len(np.list_receipts(h.scope(), rows[0]["workstream_id"])) == 1
+    assert len([e for e in np.list_evidence(h.scope(), rows[0]["workstream_id"])
+                if e["source_kind"] == "acceptance"]) == 1
+
+
+def test_real_lifecycle_handback_accepts_explicit_ancestor_coverage_only(workflow):
+    from types import SimpleNamespace
+    from agent import work_lifecycle as wl
+    from tests.agent.test_workstream_lineage import handback, complete
+    h = workflow
+    h.run(commands=(), final="Ready")
+    lifecycle = SimpleNamespace(agent=h.active_agent, scope=h.scope(), settings=ws.load_settings())
+    original = handback(lifecycle, first_result={"incomplete": True})
+    complete("deleg_126703c7", summary="Everything fixed, reviewed and released")
+    wl.begin_turn(h.active_agent, "", "internal", ["deleg_126703c7"], may_note=False)
+    wl.end_turn(h.active_agent)
+    rows = np.list_workstreams(h.scope(), kinds=["obligation"])
+    assert len(rows) == 2 and all(r["status"] == "open" for r in rows)
+    covers = [{"workstream_id": r["workstream_id"], "revision": r["revision"],
+               "session_id": h.session_id(), "checks": [0]} for r in rows]
+    _, command, _ = contract(h, covers=covers, rows=rows)
+    result = h.run(message="Verify work acceptance acceptance.json",
+                   commands=((command, {"workdir": str(h.project)}),))
+    assert result["workstream_execution"]["status"] == "success"
+    assert all(np.get_workstream(h.scope(), r["workstream_id"])["status"] == "resolved" for r in rows)
+    assert any(e["status"] == "failed" for e in np.list_evidence(h.scope(), original["workstream_id"]))
+    assert "Unfinished:" not in ws.thread_context(h.scope(), ws.load_settings())
+    # Replaying the old helper result cannot reopen accepted work or add notes.
+    before = np.list_workstreams(h.scope())
+    wl.begin_turn(lifecycle.agent, "", "internal", ["deleg_126703c7"], may_note=False)
+    wl.end_turn(lifecycle.agent)
+    assert np.list_workstreams(h.scope()) == before
 
 
 def test_acceptance_does_not_require_procedure_learning_or_duplicate_replay(workflow):

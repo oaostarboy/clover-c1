@@ -174,9 +174,83 @@ This is an unapproved opt-in candidate, not a released or enabled capability.
 All seven local acceptance contracts and independent exact-candidate review
 are required together. Windows/macOS, live providers/transports,
 phone/desktop/TUI suggestions and opaque-native gates are not certified by
-the isolated Linux scripted-provider tests. Procedure provenance includes a
-source builder model-substitution exception; separate exact-model review and
-final independent Fable closure remain required before release.
+the isolated Linux scripted-provider tests. The original procedure build
+recorded a historical model-substitution exception; this candidate still needs
+independent review of its exact final tree before release.
+
+## Verification and helper results (1.5.6 candidate)
+
+A helper return is **result received**, not verified work. Reading or delivering
+that output, a zero exit, or a sentence saying “tests passed” does not close an
+obligation. The current summary follows the owning result; older failed
+attempts stay in evidence and the audit trail. Replays do not create new notes.
+
+Task identity includes the exact source kind, source ID, session and deliverable,
+inside the profile/project/audience/root scope. The same words in another job
+are not the same work. No migration guesses which old notes belong together;
+legacy or unsupported work remains unverified until exact owner proof exists.
+
+### Explicit local software acceptance
+
+The current foreground execution owner supports one bounded software contract:
+unchanged local artifacts plus explicit pytest checks with fresh JUnit reports.
+It is not a general verifier for arbitrary tools, remote jobs, builds, review,
+installation, publication or delivery. Those require their own evidence.
+
+In an authenticated private chat, the human first inspects a local JSON contract,
+then sends exactly `Verify work acceptance acceptance.json`. A model-generated
+message, helper return, shell invocation or historical message cannot replace
+that current human input. The contract declares which checks fully cover each
+named obligation; the runtime does not infer coverage or close its ancestors.
+Do not name a work item unless these criteria cover its entire accepted scope.
+
+The JSON has exactly these fields (replace example identifiers, revisions,
+session ID and digest with real values; placeholder digests are rejected):
+
+```json
+{
+  "version": 1,
+  "coverage": [
+    {"workstream_id": "ws_0123456789abcdef", "revision": 2,
+     "session_id": "current-exact-session-id", "checks": [0]}
+  ],
+  "artifacts": {"candidate.zip": "<64 lowercase SHA-256 hex characters>"},
+  "checks": [
+    {"command": "python -m pytest tests/test_candidate.py --junitxml=acceptance.xml -q",
+     "report": "acceptance.xml", "min_tests": 1}
+  ]
+}
+```
+
+Pin **all relevant candidate inputs**, for example a complete candidate archive,
+not just an unrelated passing test. Contract and artifacts must already exist
+before the turn. Reports must not exist yet; use a new report name for a new
+attempt. Commands still run through the normal foreground terminal owner and
+its existing permissions/approvals, with explicit `workdir` equal to the scoped
+project. This feature launches no command and grants no permission. Missing or
+unsupported execution leaves the obligation open.
+
+Limits: active opt-in mode, same exact session/scope, an 8 KiB contract, up to
+8 obligations, 4 checks and 32 regular local artifacts (4 MiB total), reports
+up to 1 MiB each and acceptance within 300 seconds. Paths must be relative,
+without traversal or symlinks. Every declared check must run in this turn,
+return zero, and produce a consistent report with enough actual test cases and
+no errors, failures or skips. The owner independently reads artifact digests;
+exit zero alone is never sufficient. Model prose is not inspected as proof.
+
+Stop/cancel, changed scope/session/revision/evidence, stale input, partial check
+execution, changed contract/artifacts/reports and concurrent acceptance fail
+closed. Receipt, immutable contract/check identities, evidence and current
+summary settle in one existing-notepad transaction. Exact readback precedes a
+success result. Old failed attempts remain failed. Only explicitly covered IDs
+close; separate review/install/release work remains open. Procedure learning
+need not be enabled, and this path never creates a skill draft.
+
+The Linux tests exercise real local pytest, the authenticated scripted gateway,
+durable storage, Stop/races and context readback. They do not prove live provider
+behavior or Windows/macOS support. This remains a local release candidate:
+independent review, CI/native-install checks and separately authorized rollout
+are still required. No profile or fleet is enabled by preparing the candidate.
 
 ## Settings
 
