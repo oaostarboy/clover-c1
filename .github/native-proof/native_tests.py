@@ -35,6 +35,14 @@ def dependency_command(repo, python, platform):
     return [str(uv), 'pip', 'install', '--python', python, '-e', str(repo) + '[dev]']
 
 
+def suite_command(repo, file, expression, xml):
+    command = ['bash', str(repo / 'scripts/run_tests.sh'), file, '-j', '1',
+               '--file-retries', '0', '-o', 'addopts=', '--junitxml=' + str(xml)]
+    if expression:
+        command += ['-k', expression]
+    return command
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--repo', type=Path, required=True)
@@ -53,10 +61,7 @@ def main():
         if not (args.repo / file).is_file():
             raise FileNotFoundError(file)
         xml = (args.evidence / (label + '.xml')).resolve()
-        command = ['bash', str(args.repo / 'scripts/run_tests.sh'), file, '-j', '1',
-                   '--file-retries', '0', '-o', 'addopts=', '--junitxml', str(xml)]
-        if expression:
-            command += ['-k', expression]
+        command = suite_command(args.repo, file, expression, xml)
         log = args.evidence / (label + '.log')
         with log.open('w') as stream:
             proc = subprocess.run(command, cwd=args.repo, stdout=stream, stderr=subprocess.STDOUT,
