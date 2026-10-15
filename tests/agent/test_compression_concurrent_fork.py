@@ -1471,10 +1471,18 @@ def test_review_fork_compacts_oversized_snapshot_in_memory(tmp_path: Path) -> No
         ]
         return result
 
+    from tools.skill_provenance import get_current_write_origin
+    origin_before = get_current_write_origin()
     try:
         with patch.object(AIAgent, "run_conversation", _run_threshold_crossing_review):
-            br._run_review_in_thread(parent, snapshot, "review this conversation")
+            # Production starts this worker on a separate thread. This direct,
+            # deterministic invocation must not leak its ContextVars to pytest.
+            from contextvars import copy_context
+            copy_context().run(
+                br._run_review_in_thread, parent, snapshot, "review this conversation"
+            )
 
+        assert get_current_write_origin() == origin_before
         assert captured["compression_calls"] >= 1, (
             "FIX REGRESSION: the review fork did not compact its oversized "
             "snapshot. compression_enabled was historically set False on the "
