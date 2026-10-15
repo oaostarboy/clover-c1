@@ -8,6 +8,7 @@ session can still auto-compact after it grows real compressible material.
 """
 
 import time
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 from unittest.mock import MagicMock, patch
 
 from agent.context_compressor import ContextCompressor

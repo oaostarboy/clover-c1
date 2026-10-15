@@ -1,6 +1,7 @@
 """Regression coverage for zero-user compaction integrity (#64539)."""
 
 import os
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 from types import SimpleNamespace
 from unittest.mock import patch
 

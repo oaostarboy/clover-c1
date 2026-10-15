@@ -14,6 +14,7 @@ asserts the logging context follows the rotation.
 from __future__ import annotations
 
 import os
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 

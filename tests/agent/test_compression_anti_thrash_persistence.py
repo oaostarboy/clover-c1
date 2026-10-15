@@ -20,6 +20,7 @@ The counter now round-trips the durable session-state channel exactly like
   is durable too.
 """
 from pathlib import Path
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 from unittest.mock import patch
 
 from agent.context_compressor import ContextCompressor

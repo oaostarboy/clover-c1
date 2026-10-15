@@ -17,6 +17,7 @@ ContextVar resolves to the child id (get_session_env / CLOVER_SESSION_ID).
 from __future__ import annotations
 
 import copy
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 import os
 import threading
 import time

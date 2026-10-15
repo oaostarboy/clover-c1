@@ -18,6 +18,7 @@ model run, the provider and the clock are faked.
 from __future__ import annotations
 
 import json
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 import re
 import threading
 import time

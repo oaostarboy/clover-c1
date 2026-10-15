@@ -12,6 +12,7 @@ proves ``compress()`` routes into ``_generate_summary``.
 """
 
 from datetime import datetime, timezone
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 from unittest.mock import MagicMock, patch
 
 import clover_time

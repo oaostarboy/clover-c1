@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 import json
 import logging
 import os

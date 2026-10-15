@@ -21,6 +21,7 @@ These tests pin the contract:
 from __future__ import annotations
 
 import threading
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 from types import SimpleNamespace
 from unittest.mock import patch
 

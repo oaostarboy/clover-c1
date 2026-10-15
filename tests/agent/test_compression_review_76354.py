@@ -20,6 +20,7 @@ Covers:
 from __future__ import annotations
 
 import concurrent.futures
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 import logging
 import threading
 import time

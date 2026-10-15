@@ -18,6 +18,7 @@ These tests drive the real ``compress_context`` path against a real SessionDB.
 from __future__ import annotations
 
 import copy
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 import os
 import time
 from pathlib import Path

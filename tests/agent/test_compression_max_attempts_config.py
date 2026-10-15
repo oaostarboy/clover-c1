@@ -15,6 +15,7 @@ value honored, floor and ceiling enforced, garbage tolerated.
 from __future__ import annotations
 
 import contextlib
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 import io
 from pathlib import Path
 

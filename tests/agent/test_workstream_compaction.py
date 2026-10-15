@@ -1,6 +1,7 @@
 """Focused workstream compaction-audit behavior tests."""
 
 from unittest.mock import MagicMock, patch
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 
 from agent import workstreams
 from agent.context_compressor import ContextCompressor, _audit_workstream_summary
