@@ -19,6 +19,7 @@ handler; only the auxiliary model call is faked):
 from __future__ import annotations
 
 import time
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -57,23 +58,54 @@ KNOWN_JSON = '{"known": ["The site has no Google Ads tag.", "Plan: carry the gcl
 
 @pytest.fixture
 def small_model(monkeypatch):
-    """The auxiliary model, faked per call kind with its own delay."""
+    """Script calls with explicit release events and own all worker lifetimes."""
     import agent.auxiliary_client as ac
 
-    box = SimpleNamespace(calls=[], delay={'title': 0.0, 'known': 0.0},
+    box = SimpleNamespace(calls=[], timeouts=[],
+                          entered={k: threading.Event() for k in ('title', 'known')},
+                          release={k: threading.Event() for k in ('title', 'known')},
                           reply={'title': TITLE_JSON, 'known': KNOWN_JSON})
+    for event in box.release.values():
+        event.set()
+    workers = []
+    start = threading.Thread.start
+
+    def owned_start(worker, *args, **kwargs):
+        if worker.name in {'handoff-known', 'handoff-notes-call'}:
+            workers.append(worker)
+        return start(worker, *args, **kwargs)
 
     def fake(task=None, *, messages=None, **kw):
         system = str(messages[0]['content'])
         kind = ('title' if system.startswith('You name a half-finished job')
                 else 'known' if system.startswith('You brief a colleague') else 'other')
         box.calls.append({'kind': kind, 'task': task, 'messages': messages, **kw})
-        time.sleep(box.delay.get(kind, 0.0))
+        if kind in box.entered:
+            box.entered[kind].set()
+            assert box.release[kind].wait(10), 'test did not release scripted auxiliary call'
         return SimpleNamespace(choices=[SimpleNamespace(
             message=SimpleNamespace(content=box.reply.get(kind, '{}')))])
 
+    timed_call = hn._timed_call
+
+    def observed_timeout(kwargs, timeout):
+        try:
+            return timed_call(kwargs, timeout)
+        except TimeoutError:
+            box.timeouts.append(timeout)
+            raise
+
+    monkeypatch.setattr(threading.Thread, 'start', owned_start)
+    monkeypatch.setattr(hn, '_timed_call', observed_timeout)
     monkeypatch.setattr(ac, 'call_llm', fake)
-    return box
+    yield box
+    # Timed-out model calls and late note writers belong to this fixture.
+    # Release and join before monkeypatch removes their external boundary.
+    for event in box.release.values():
+        event.set()
+    for worker in workers:
+        worker.join(5)
+        assert not worker.is_alive(), 'scripted handoff worker outlived its fixture'
 
 
 def _arm_chat(agent, *, message=GO_AHEAD, history=HISTORY, session='chat-deadline'):
@@ -89,24 +121,24 @@ def short_deadlines(monkeypatch):
 
 def test_a_title_model_past_its_deadline_still_gives_the_offered_work(
         tmp_path, children, dispatches, small_model, short_deadlines):
-    small_model.delay['title'] = 2.0  # slower than the deadline: the brief is lost
+    small_model.release['title'].clear()  # slower than the deadline: the brief is lost
     agent = _root()
     _arm_chat(agent)
 
-    started = time.monotonic()
     _trip(agent, tmp_path)
-    took = time.monotonic() - started
 
     work = dispatches[0]['handoff']['work']
     assert work != ht.FALLBACK_TITLE
     assert work == 'starting on the tracking', 'the go-ahead answers the assistant\'s own offer'
     assert dispatches[0]['handoff']['outcome'] != ht.FALLBACK_GOAL
-    assert took < 1.9, 'the dispatch did not wait for the slow model'
+    assert small_model.entered['title'].is_set()
+    assert not small_model.release['title'].is_set(), 'dispatch returned before the model was released'
+    assert small_model.timeouts == [hn.TITLE_TIMEOUT_SECONDS], 'real model deadline fired'
 
 
 def test_a_slow_title_model_falls_back_to_the_chats_last_real_handoff(
         tmp_path, children, dispatches, small_model, short_deadlines):
-    small_model.delay['title'] = 2.0
+    small_model.release['title'].clear()
     hn.remember_title('chat-prior', 'adding Google Ads quote tracking')
     agent = _root()
     # no offer to answer in the history, and the agent object is a fresh one
@@ -122,7 +154,7 @@ def test_a_slow_title_model_falls_back_to_the_chats_last_real_handoff(
 
 def test_the_placeholder_is_a_last_resort_when_there_is_truly_nothing(
         tmp_path, children, dispatches, small_model, short_deadlines):
-    small_model.delay['title'] = 2.0
+    small_model.release['title'].clear()
     agent = _root()
     _arm_chat(agent, history=[], session='chat-empty', message='ok')
 
@@ -133,19 +165,19 @@ def test_the_placeholder_is_a_last_resort_when_there_is_truly_nothing(
 
 def test_a_slow_known_call_does_not_hold_back_the_title_or_the_dispatch(
         tmp_path, children, dispatches, small_model, short_deadlines):
-    small_model.delay['known'] = 1.5
+    small_model.release['known'].clear()
     agent = _root()
     _arm_chat(agent)
 
-    started = time.monotonic()
     _trip(agent, tmp_path)
-    took = time.monotonic() - started
 
     assert dispatches[0]['handoff']['work'] == 'adding Google Ads quote tracking', 'the title model answered'
-    assert took < 1.4, 'the dispatch did not wait for the bullets'
+    assert small_model.entered['known'].is_set()
+    assert not small_model.release['known'].is_set(), 'dispatch returned with bullets still blocked'
     context = dispatches[0]['tasks'][0]['context']
     assert 'Known so far' not in context, 'the bullets had not landed yet'
     path = _path_in(context)
+    small_model.release['known'].set()
 
     deadline = time.monotonic() + 6
     while 'Known so far' not in _read(path) and time.monotonic() < deadline:
@@ -158,7 +190,8 @@ def test_a_slow_known_call_does_not_hold_back_the_title_or_the_dispatch(
 
 def test_bullets_that_are_in_time_ride_the_helper_context(
         tmp_path, children, dispatches, small_model, short_deadlines):
-    small_model.delay['known'] = 0.05
+    # An immediately available script, not a sleep racing the grace window.
+    assert small_model.release['known'].is_set()
     agent = _root()
     _arm_chat(agent)
 
