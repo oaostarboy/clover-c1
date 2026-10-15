@@ -16,6 +16,13 @@ from gateway.session import SessionSource
 
 
 def _patch_agent_bootstrap(monkeypatch):
+    # These host-wiring tests use scripted API responses. Keep context-length
+    # discovery local as well; otherwise AIAgent initialization starts a real
+    # Codex metadata probe before the fake API client is exercised.
+    monkeypatch.setattr(
+        "agent.model_metadata._fetch_codex_oauth_context_lengths_with_source",
+        lambda *args, **kwargs: ({}, False),
+    )
     monkeypatch.setattr(
         run_agent,
         "get_tool_definitions",

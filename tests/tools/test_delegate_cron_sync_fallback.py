@@ -51,6 +51,7 @@ def _make_real_child():
         patch("run_agent.check_toolset_requirements", return_value={}),
         patch("clover_cli.config.load_config", return_value={}),
         patch("run_agent.OpenAI"),
+        patch("agent.model_metadata.fetch_model_metadata", return_value={}),
     ):
         child = AIAgent(
             api_key="test-key-1234567890",
