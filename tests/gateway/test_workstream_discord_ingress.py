@@ -103,3 +103,26 @@ def test_nonlive_nonhuman_or_unauthorized_discord_input_cannot_write(channel, ki
         assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='human_origin_receipts'").fetchone()[0] == 0
     if kind == 'noauth':
         assert channel.scripted.calls == 0
+
+
+@pytest.mark.parametrize('change', ['actor', 'audience', 'stop'])
+def test_discord_live_turn_scope_cannot_change_after_persistence(channel, monkeypatch, change):
+    from run_agent import AIAgent
+    real = AIAgent._persist_session
+    changed_scopes = []
+    def persist_then_change(agent, *args, **kwargs):
+        out = real(agent, *args, **kwargs)
+        if not changed_scopes:
+            if change == 'stop':
+                agent.interrupt(hard_cancel=True)
+                agent.clear_interrupt()
+            else:
+                agent._user_id = 'foreign-actor'
+                if change == 'audience':
+                    agent._chat_type, agent._chat_id = 'group', 'foreign-group'
+            changed_scopes.append(workstreams.scope_for_agent(agent))
+        return out
+    monkeypatch.setattr(AIAgent, '_persist_session', persist_then_change)
+    dispatch(channel, message())
+    assert changed_scopes and notepad.list_workstreams(scope(channel)) == []
+    assert notepad.list_workstreams(changed_scopes[0]) == []

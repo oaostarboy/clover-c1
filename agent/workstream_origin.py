@@ -223,6 +223,34 @@ def ingress_matches_turn(ingress: Any, agent: Any, content: Any) -> bool:
     return (not binding or binding == scope_binding(scope_for_agent(agent))) and ingress_matches_content(ingress, content)
 
 
+def bind_human_ingress_to_turn(ingress: Any, agent: Any, content: Any):
+    """Tighten new scoped input capabilities at the real agent invocation.
+
+    Input owners know the checked sender; the agent owner also knows the
+    actual turn scope and Stop generation. Every later consumer must retain
+    both, including after row persistence. Legacy adapter capabilities keep
+    their existing gateway generation/readback contract.
+    """
+    if not ingress_matches_turn(ingress, agent, content):
+        return None
+    if not getattr(ingress, "scope", ()):
+        return ingress
+    from agent.workstreams import scope_for_agent, current_profile
+    if not ingress_is_valid(ingress, profile=current_profile()):
+        return None
+    stop = int(getattr(agent, "_human_ingress_stop_generation", 0))
+    with _LOCK:
+        prior = _LIVE.get(ingress.event_id)
+        if prior is None:
+            return None
+        _LIVE[ingress.event_id] = lambda: (
+            prior() and getattr(agent, "_trusted_human_ingress", None) is ingress
+            and int(getattr(agent, "_human_ingress_stop_generation", 0)) == stop
+            and scope_binding(scope_for_agent(agent)) == ingress.scope
+        )
+    return ingress
+
+
 class ComposerSubmission(str):
     """Queue-compatible input identity; constructing/copying text is not minting.
 

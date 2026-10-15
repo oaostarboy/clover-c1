@@ -8996,12 +8996,10 @@ class AIAgent:
                         with durable_turn_lease_activity_lock:
                             durable_turn_lease_turn_active = True
                         durable_turn_lease_thread.start()
-                    from agent.workstream_origin import ingress_matches_turn
+                    from agent.workstream_origin import bind_human_ingress_to_turn
                     original_input = persist_user_message if persist_user_message is not None else user_message
-                    self._trusted_human_ingress = (
-                        trusted_human_ingress
-                        if ingress_matches_turn(trusted_human_ingress, self, original_input)
-                        else None
+                    self._trusted_human_ingress = bind_human_ingress_to_turn(
+                        trusted_human_ingress, self, original_input,
                     )
                     # Read-only fence before the real host loop. The producer
                     # runs only after the finalizer's persistence has settled.
