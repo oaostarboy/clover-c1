@@ -20,7 +20,7 @@ function Assert-NativeProofBasePython($identity) {
       }).Count) { throw 'IRC fixture must use system Python, never a venv holder' }
 }
 # Own this preinstall identity independently of generic variables in sourced helpers.
-Set-Variable -Name NativeProofBasePython -Scope Script -Option ReadOnly -Value (Get-NativeProofPythonIdentity ((Get-Command python -CommandType Application).Source))
+Set-Variable -Name NativeProofBasePython -Scope Script -Option ReadOnly -Value (Get-NativeProofPythonIdentity ((Get-Command python -CommandType Application | Select-Object -First 1).Source))
 $helpers = "$env:GITHUB_WORKSPACE\helpers"
 $source = "$env:GITHUB_WORKSPACE\source"
 $proof = "$helpers\.github\native-proof\proof.py"

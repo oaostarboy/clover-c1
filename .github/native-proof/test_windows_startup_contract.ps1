@@ -27,7 +27,12 @@ try {
     # Execute the real preinstall assignment, then the real import seam.
     $init = @($ast.EndBlock.Statements | Where-Object { $_.Extent.Text -match '^\$systemPy\s*=|^Set-Variable -Name NativeProofBasePython ' })
     Assert-True ($init.Count -eq 1) 'Missing unique preinstall identity capture'
-    function Get-Command { param($Name,$CommandType) [pscustomobject]@{ Source=$Python } }
+    # Get-Command -CommandType Application can emit multiple Python matches on
+    # a real Windows PATH. Preserve the first command, not a joined path list.
+    function Get-Command { param($Name,$CommandType)
+      [pscustomobject]@{ Source=$Python }
+      [pscustomobject]@{ Source=(Join-Path $temp 'other-python.exe') }
+    }
     . ([scriptblock]::Create($init[0].Extent.Text))
     . (Join-Path $PSScriptRoot '../win-e2e/supervisor-proof.ps1')
     Assert-True ($script:NativeProofBasePython.executable -eq $Python) 'Actual helper changed preinstall identity'

@@ -127,7 +127,7 @@ print('npm_' + 'B' * 160000)
 print('STDOUT_TAIL')
 PY
 '''
-    installer.write_text(installer.read_text().replace('  exit 1\n', extra + '  exit 1\n'))
+    installer.write_text(installer.read_text(encoding='utf-8').replace('  exit 1\n', extra + '  exit 1\n'), encoding='utf-8')
     proc = subprocess.run(['bash', str(SCRIPT), 'old2new'], env=env, cwd=tmp_path,
                           text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           timeout=35)
@@ -190,7 +190,7 @@ binary.parent.mkdir(parents=True)
 binary.symlink_to(sys.executable)
 print('successful fixture installer')
 PY
-''')
+''', encoding='utf-8')
     proc = subprocess.run(['bash', str(SCRIPT), 'old2new'], env=env, cwd=tmp_path,
                           text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           timeout=35)
