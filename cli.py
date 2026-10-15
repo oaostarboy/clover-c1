@@ -16743,11 +16743,16 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
         from agent import workstream_origin as _human_origin, workstreams as _human_workstreams
         self._human_turn_generation = int(getattr(self, "_human_turn_generation", 0)) + 1
         _human_generation = self._human_turn_generation
-        _human_stop = int(getattr(agent, "_human_ingress_stop_generation", 0))
-        _human_scope = _human_workstreams.scope_for_agent(agent)
-        _human_sid = self.session_id
         _trusted_ingress = None
-        if isinstance(trusted_human_submission, _human_origin.ComposerSubmission):
+        # Context-only/direct callers have no composer capability or durable
+        # session. Leave them inert rather than inventing session provenance.
+        if (isinstance(trusted_human_submission, _human_origin.ComposerSubmission)
+                and getattr(self, "session_id", None)
+                and getattr(agent, "session_id", None)
+                and getattr(agent, "_session_db", None) is not None):
+            _human_stop = int(getattr(agent, "_human_ingress_stop_generation", 0))
+            _human_scope = _human_workstreams.scope_for_agent(agent)
+            _human_sid = self.session_id
             _trusted_ingress = _human_origin.redeem_human_ingress(
                 trusted_human_submission, platform="cli", profile=_human_workstreams.current_profile(),
                 session_id=agent.session_id, session_key=self.session_id,
