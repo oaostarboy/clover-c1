@@ -100,7 +100,7 @@ def test_changed_report_during_commit_cannot_verify(workflow, monkeypatch):
 @pytest.mark.parametrize("variant", [
     "helper_prose", "untrusted", "zero_only", "stale_report", "failed_test", "skipped_test",
     "empty_report", "bad_report", "report_totals", "changed_artifact", "changed_spec", "changed_evidence",
-    "changed_revision", "wrong_session", "new_session", "foreign_id", "foreign_scope",
+    "changed_revision", "wrong_session", "new_session", "foreign_id", "foreign_scope", "rollout_coverage",
     "stop", "stop_during_commit", "origin_consumed_during_commit", "silent", "shadow",
     "disabled", "expired", "duplicate_coverage", "partial_check_coverage", "wrong_cwd",
 ])
@@ -144,6 +144,9 @@ def test_acceptance_fails_closed(workflow, monkeypatch, variant):
         spec["coverage"][0]["session_id"] = "other-session"
     elif variant == "foreign_id":
         spec["coverage"][0]["workstream_id"] = "ws_0000000000000000"
+    elif variant == "rollout_coverage":
+        spec["coverage"] = [{"workstream_id": rows[1]["workstream_id"], "revision": rows[1]["revision"],
+                             "session_id": h.session_id(), "checks": [0]}]
     elif variant == "foreign_scope":
         mutate = lambda: setattr(h.active_agent, "_chat_type", "group")
     elif variant in ("stop", "stop_during_commit"):

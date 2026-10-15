@@ -77,6 +77,11 @@ def prepare(agent, message, scope):
                     or row["revision"] != target["revision"] or row["session_id"] != sid
                     or target["session_id"] != sid):
                 return None
+            prior = np.list_evidence(scope, row["workstream_id"])
+            # This software-check owner cannot certify rollout, review, delivery,
+            # or other owners' obligation types, even when a contract names one.
+            if not prior or any(e["source_kind"] not in ("delegation", "project_check") for e in prior):
+                return None
             evidence.append((row["workstream_id"], _evidence(scope, row["workstream_id"])))
         for check in spec["checks"]:
             # A pre-existing report is not fresh execution evidence, even if

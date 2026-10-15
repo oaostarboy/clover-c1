@@ -194,8 +194,10 @@ legacy or unsupported work remains unverified until exact owner proof exists.
 
 The current foreground execution owner supports one bounded software contract:
 unchanged local artifacts plus explicit pytest checks with fresh JUnit reports.
-It is not a general verifier for arbitrary tools, remote jobs, builds, review,
-installation, publication or delivery. Those require their own evidence.
+It only accepts obligations backed by delegation/project-check evidence, not
+rollout or other owner types. It is not a general verifier for arbitrary tools,
+remote jobs, builds, review, installation, publication or delivery. Those
+require their own evidence.
 
 In an authenticated private chat, the human first inspects a local JSON contract,
 then sends exactly `Verify work acceptance acceptance.json`. A model-generated
