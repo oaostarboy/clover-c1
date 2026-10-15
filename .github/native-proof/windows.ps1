@@ -79,6 +79,15 @@ if ($Mode -ne 'fresh') {
   if ($LASTEXITCODE -ne 0) { throw 'target object fetch failed' }
   Invoke-Proof origin --repo $env:INSTALL_DIR --mirror "$env:RUNNER_TEMP\origin.git" --target $to
 }
+# Measure the installed venv's own base interpreter, not the unrelated Python
+# captured for the IRC fixture. Windows venv launchers retain a parent process
+# while their base interpreter child owns gateway state and the listening port.
+Set-Variable -Name NativeProofGatewayPython -Scope Script -Option ReadOnly -Value (Get-NativeProofPythonIdentity $script:py)
+$script:NativeProofGatewayPython | ConvertTo-Json -Depth 6 | Set-Content "$evidence\gateway-python.json" -Encoding utf8
+if ($script:NativeProofGatewayPython.executable -ne $script:py -or
+    $script:NativeProofGatewayPython.prefix -ne "$env:INSTALL_DIR\venv" -or
+    $script:NativeProofGatewayPython.prefix -eq $script:NativeProofGatewayPython.base_prefix -or
+    -not $script:NativeProofGatewayPython.base_executable) { throw 'Installed gateway interpreter identity mismatch' }
 . "$env:E2E\supervisor-proof.ps1"
 # The inherited Set-MainIsTarget/expected-failure helpers are NEVER invoked.
 # Ordinary git objects in a new bare origin drive the user's default command.
@@ -94,6 +103,26 @@ function Read-ExactGateway {
     $_.CommandLine -match 'gateway\s+run' -and $_.CommandLine -notmatch '\s-c\s'
   }) } catch { $observationErrors += 'gateway_process_query_failed' }
   $ids = @($processes | Where-Object { $_.CommandLine.Contains($env:INSTALL_DIR) } | ForEach-Object { [int]$_.ProcessId })
+  $venvExecutables = @($script:NativeProofGatewayPython.executable,
+    ($script:NativeProofGatewayPython.executable -replace 'python[.]exe$', 'pythonw.exe'))
+  $baseExecutables = @($script:NativeProofGatewayPython.base_executable,
+    ($script:NativeProofGatewayPython.base_executable -replace 'python[.]exe$', 'pythonw.exe'))
+  $runtimeIds = @(); $topologyValid = $false
+  if ($roots.Count -eq 1 -and $ids -contains [int]$roots[0].ProcessId -and
+      $venvExecutables -contains $roots[0].ExecutablePath) {
+    $rootPid = [int]$roots[0].ProcessId
+    if ($processes.Count -eq 1) {
+      $runtimeIds = @($rootPid); $topologyValid = $true
+    } elseif ($processes.Count -eq 2) {
+      $children = @($processes | Where-Object {
+        [int]$_.ParentProcessId -eq $rootPid -and
+        $baseExecutables -contains $_.ExecutablePath
+      })
+      if ($children.Count -eq 1) {
+        $runtimeIds = @([int]$children[0].ProcessId); $topologyValid = $true
+      }
+    }
+  }
   try { $listeners = @(Get-NetTCPConnection -State Listen -LocalPort ([int]$env:API_PORT) -ErrorAction Stop | Select-Object -ExpandProperty OwningProcess -Unique) }
   catch { $observationErrors += 'listener_query_failed' }
   try { $schedule = Get-ScheduleServiceInfo } catch { $observationErrors += 'schedule_query_failed' }
@@ -120,7 +149,8 @@ function Read-ExactGateway {
     state_running = ($st.gateway_state -eq 'running')
     restart_clear = ($st.restart_requested -eq $false)
     start_identity_present = [bool]$st.start_time
-    state_pid_matches_install_command = ($ids -contains [int]$st.pid)
+    gateway_process_topology_valid = $topologyValid
+    state_pid_matches_install_command = ($runtimeIds -contains [int]$st.pid)
     one_listener_owner = ($listeners.Count -eq 1)
     listener_matches_state_pid = ($listeners.Count -eq 1 -and $listeners[0] -eq [int]$st.pid)
     expected_source_sha = ($st.code_sha -eq $script:expectedSha)
@@ -144,7 +174,8 @@ function Read-ExactGateway {
         command_has_install_dir = $_.CommandLine.Contains($env:INSTALL_DIR)
         command_is_module_gateway_run = ($_.CommandLine -match 'clover_cli[.]main' -and $_.CommandLine -match 'gateway\s+run')
       } })
-      install_command_pids = $ids; listeners = $listeners; ancestors = $chains
+      install_command_pids = $ids; owned_runtime_pids = $runtimeIds; listeners = $listeners; ancestors = $chains
+      gateway_python = $script:NativeProofGatewayPython
       schedule = $schedule; via_schedule = [bool]$viaSchedule
       task = $(if ($task) { $task | Select-Object TaskName,State } else { $null })
       base_python = $script:NativeProofBasePython

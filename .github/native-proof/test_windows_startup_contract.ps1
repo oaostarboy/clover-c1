@@ -65,6 +65,7 @@ try {
   function Reset-Gateway([string]$setup) {
     $env:SETUP=$setup; $script:expectedSha='expected-sha'; $script:portUp=$true
     $script:state=[pscustomobject]@{ pid=100; gateway_state='running'; restart_requested=$false; start_time=123; code_sha=$script:expectedSha }
+    $script:NativeProofGatewayPython=[pscustomobject]@{ executable="$env:INSTALL_DIR\venv\Scripts\python.exe"; base_executable='C:\base\python.exe'; prefix="$env:INSTALL_DIR\venv"; base_prefix='C:\base' }
     $script:schedule=[pscustomobject]@{ State='Running'; ProcessId=9 }
     $parent=if ($setup -eq 'troy') { 9 } else { 8 }
     $script:processes=@(
@@ -81,16 +82,31 @@ try {
       $actual=Read-ExactGateway
       Assert-True ($actual.pid -eq 100) 'Wrong returned identity'
     }
-    Case "$setup reports base-child exclusion rather than silently trusting health" {
+    Case "$setup accepts only the installed venv launcher and its measured base interpreter child" {
       Reset-Gateway $setup
       $script:processes += [pscustomobject]@{ ProcessId=101; ParentProcessId=100; Name='pythonw.exe'; ExecutablePath='C:\base\pythonw.exe'; CommandLine='"C:\base\pythonw.exe" -m clover_cli.main gateway run' }
       $script:state.pid=101; $script:listeners=@(101)
-      $refused=$false
-      try { $null=Read-ExactGateway } catch { $refused=$true }
-      Assert-True $refused 'Unproved base interpreter ownership was waived'
-      $diag=Get-Content (Join-Path $evidence 'gateway-refusal.json') -Raw | ConvertFrom-Json
-      Assert-True ($diag.failed_predicates.Count -eq 1 -and $diag.failed_predicates[0] -eq 'state_pid_matches_install_command') 'Base-child counterexample was not identified precisely'
-      Assert-True ($diag.roots[0].ProcessId -eq 100 -and $diag.state.pid -eq 101) 'Root/state identities were conflated'
+      $actual=Read-ExactGateway
+      Assert-True ($actual.pid -eq 101) 'Measured launcher child was not recognized as the runtime'
+    }
+    foreach ($badChild in @('foreign-executable','foreign-launcher','extra-child','unrelated-parent','missing-venv-identity')) {
+      Case "$setup refuses $badChild despite healthy matching runtime state" {
+        Reset-Gateway $setup
+        $child=[pscustomobject]@{ ProcessId=101; ParentProcessId=100; Name='pythonw.exe'; ExecutablePath='C:\base\pythonw.exe'; CommandLine='"C:\base\pythonw.exe" -m clover_cli.main gateway run' }
+        $script:processes += $child
+        $script:state.pid=101; $script:listeners=@(101)
+        switch ($badChild) {
+          'foreign-executable' { $child.ExecutablePath='C:\foreign\pythonw.exe' }
+          'foreign-launcher' { $script:processes[0].ExecutablePath='C:\foreign\pythonw.exe' }
+          'extra-child' { $script:processes += [pscustomobject]@{ ProcessId=102; ParentProcessId=100; Name='pythonw.exe'; ExecutablePath='C:\base\pythonw.exe'; CommandLine='"C:\base\pythonw.exe" -m clover_cli.main gateway run' } }
+          'unrelated-parent' { $child.ParentProcessId=8 }
+          'missing-venv-identity' { $script:NativeProofGatewayPython=$null }
+        }
+        $refused=$false
+        try { $null=Read-ExactGateway } catch { $refused=$true }
+        Assert-True $refused 'Unowned or ambiguous runtime was accepted'
+        Assert-True (Test-Path (Join-Path $evidence 'gateway-refusal.json')) 'Ownership refusal lost diagnostics'
+      }
     }
     foreach ($mutation in @('wrong-sha','wrong-state-pid','wrong-listener','duplicate-root','missing-root','missing-host','stopped-task','stopped-schedule')) {
       if ($setup -eq 'zyra' -and $mutation -eq 'stopped-task') { continue }
