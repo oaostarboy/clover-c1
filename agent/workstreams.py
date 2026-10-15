@@ -245,7 +245,9 @@ def scope_for_surface(
         audience, root = f"shared:{ctype}:{cid}", cid
     else:
         audience, root = f"shared:{plat or 'unknown'}:{cid}", cid
-    proj = project or str(Path(os.getenv("TERMINAL_CWD") or os.getcwd()).resolve())
+    # Gateways pin cwd per session; share the terminal owner's resolution.
+    from agent.runtime_cwd import resolve_agent_cwd
+    proj = project or str(resolve_agent_cwd().resolve())
     return make_scope(proj, audience=audience, root=root)
 
 

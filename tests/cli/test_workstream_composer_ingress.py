@@ -18,13 +18,54 @@ from run_agent import AIAgent
 from tests.gateway.test_trusted_human_origin_ingress import Harness, network_guard  # noqa: F401
 
 
+def observe_edges(h, monkeypatch, request):
+    """Capture actual scripted provider/aux/metadata entry calls, never fabricate replies."""
+    import agent.auxiliary_client as aux
+    h.aux_history, h.metadata_history = [], []
+    for name in ('call_llm', 'async_call_llm'):
+        old = getattr(aux, name)
+        if name == 'async_call_llm':
+            async def wrapped(*args, _old=old, _name=name, **kwargs):
+                h.aux_history.append(_name)
+                return await _old(*args, **kwargs)
+        else:
+            def wrapped(*args, _old=old, _name=name, **kwargs):
+                h.aux_history.append(_name)
+                return _old(*args, **kwargs)
+        monkeypatch.setattr(aux, name, wrapped)
+    for module_name in ('agent.model_metadata', 'agent.context_compressor'):
+        import importlib
+        module = importlib.import_module(module_name)
+        old = module.get_model_context_length
+        def wrapped(*args, _old=old, _name=module_name, **kwargs):
+            h.metadata_history.append(_name + '.get_model_context_length')
+            return _old(*args, **kwargs)
+        monkeypatch.setattr(module, 'get_model_context_length', wrapped)
+
+
+def save_edges(h, request):
+    import hashlib
+    import os
+    from pathlib import Path
+    target = os.getenv('INGRESS_MODEL_HISTORY_DIR')
+    if target:
+        directory = Path(target)
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / (hashlib.sha256(request.node.nodeid.encode()).hexdigest() + '.json')).write_text(json.dumps({
+            'nodeid': request.node.nodeid, 'primary': h.scripted.requests,
+            'auxiliary_entry_calls': h.aux_history, 'metadata_entry_calls': h.metadata_history,
+            'all_external_edges_scripted': True, 'live_provider_calls': 0,
+        }, indent=2))
+
+
 @pytest.fixture
-def local(monkeypatch, tmp_path):
+def local(monkeypatch, tmp_path, request):
     # Reuse the established hermetic primary+all-aux/metadata scripting, not
     # its Telegram producer, gateway dispatch, or authorization stubs.
     h = Harness(monkeypatch, tmp_path, proactive={
         'enabled': True, 'mode': 'active', 'recall': {'enabled': True},
     })
+    observe_edges(h, monkeypatch, request)
     import cli
     monkeypatch.setattr(cli, 'CLI_CONFIG', {
         'model': {'default': 'scripted/test'},
@@ -48,6 +89,7 @@ def local(monkeypatch, tmp_path):
     })
     monkeypatch.setattr(c, '_flush_credit_notices', lambda: None)
     yield SimpleNamespace(cli=c, agent=a, h=h)
+    save_edges(h, request)
     h.close()
 
 
@@ -101,7 +143,9 @@ def test_composer_scope_or_invocation_change_fails_closed(local, monkeypatch, ch
     if change == 'body':
         text = 'Correction: middleware-derived input'
     elif change == 'project':
-        monkeypatch.setenv('TERMINAL_CWD', str(local.h.project / 'foreign'))
+        foreign = local.h.project / 'foreign'
+        foreign.mkdir()
+        monkeypatch.setenv('TERMINAL_CWD', str(foreign))
     elif change == 'profile':
         monkeypatch.setenv('CLOVER_HOME', str(local.h.home / 'foreign'))
     elif change == 'session':
@@ -160,3 +204,50 @@ def test_real_prompt_toolkit_enter_queue_process_loop(local, monkeypatch):
     assert apps and local.h.scripted.calls == 1
     assert len(notepad.list_workstreams(workstreams.scope_for_agent(local.agent))) == 1
     assert rows(local)[0]['content'] == 'Correction: use composer-X not composer-Y'
+
+
+@pytest.mark.parametrize('change', ['stop', 'generation', 'row-content', 'row-inactive', 'actor', 'audience'])
+def test_composer_revoked_after_real_persist_cannot_write(local, monkeypatch, change):
+    scope = workstreams.scope_for_agent(local.agent)
+    real = AIAgent._persist_session
+    fired = []
+    def persist_then_revoke(agent, *args, **kw):
+        out = real(agent, *args, **kw)
+        if not fired:
+            fired.append(True)
+            if change == 'stop':
+                agent.interrupt(hard_cancel=True)
+                agent.clear_interrupt()  # Clearing cancellation must not revive provenance.
+            elif change == 'generation':
+                local.cli._human_turn_generation += 1
+            elif change in {'actor', 'audience'}:
+                agent._chat_type = 'dm' if change == 'actor' else 'group'
+                agent._user_id, agent._chat_id = 'other-actor', 'other-chat'
+            else:
+                def mutate(db):
+                    if change == 'row-content':
+                        db.execute("UPDATE messages SET content='Correction: changed-by-replay' WHERE session_id=? AND role='user'", (agent.session_id,))
+                    else:
+                        db.execute("UPDATE messages SET active=0 WHERE session_id=? AND role='user'", (agent.session_id,))
+                local.h.db._execute_write(mutate)
+        return out
+    monkeypatch.setattr(AIAgent, '_persist_session', persist_then_revoke)
+    submit(local, 'Correction: use revoked-X not revoked-Y')
+    assert fired and notepad.list_workstreams(scope) == []
+    assert notepad.list_workstreams(workstreams.scope_for_agent(local.agent)) == []
+
+
+def test_disabled_composer_has_identical_provider_bytes_and_no_provenance_db(local):
+    text = 'Correction: ordinary disabled text'
+    # Enabled but generic chat cannot mint; compare to the real composer while disabled.
+    local.cli.chat(text)
+    before = local.h.scripted.requests[-1]
+    (local.h.home / 'config.yaml').write_text('proactive:\n  enabled: false\n')
+    local.cli.conversation_history = []
+    submit(local, text)
+    after = local.h.scripted.requests[-1]
+    assert before['messages'] == after['messages']
+    assert local.h.scripted.calls == 2
+    assert not (local.h.home / 'cron' / 'notepad.db').exists()
+    with local.h.db._read_ctx() as db:
+        assert db.execute("SELECT count(*) FROM sqlite_master WHERE name='human_origin_receipts'").fetchone()[0] == 0

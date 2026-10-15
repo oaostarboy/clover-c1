@@ -16674,12 +16674,13 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
         sid = self.session_id
         agent = self.agent
         stop = int(getattr(agent, "_human_ingress_stop_generation", 0))
-        submission.is_current = lambda: (
+        is_current = lambda: (
             self.session_id == sid and not self._should_exit
             and int(getattr(agent, "_human_ingress_stop_generation", 0)) == stop
             and workstreams.scope_for_surface(platform="cli") == scope
         )
-        origin.mint_human_ingress(submission, platform="cli", scope=scope, original_text=text)
+        origin.mint_human_ingress(submission, platform="cli", scope=scope,
+                                  original_text=text, is_current=is_current)
         return submission
 
     def chat(self, message, images: list = None, voice_input: bool = False,
@@ -16752,8 +16753,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
                 session_id=agent.session_id, session_key=self.session_id,
                 run_generation=_human_generation,
                 is_current=lambda: (
-                    trusted_human_submission.is_current()
-                    and self._human_turn_generation == _human_generation
+                    self._human_turn_generation == _human_generation
                     and self.session_id == _human_sid and self.agent is agent
                     and int(getattr(agent, "_human_ingress_stop_generation", 0)) == _human_stop
                     and _human_workstreams.scope_for_agent(agent) == _human_scope

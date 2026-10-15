@@ -487,7 +487,9 @@ async def handle_ws(
                 continue
 
             try:
-                resp = await asyncio.to_thread(server.dispatch, req, transport)
+                submission = server._capture_ws_human_submission(req, transport)
+                resp = await asyncio.to_thread(server.dispatch, req, transport,
+                                               trusted_human_submission=submission)
             except Exception:
                 dispatch_crashes += 1
                 _log.exception(
