@@ -3366,6 +3366,8 @@ class AIAgent:
             if session_has_running_agent:
                 running_agent.interrupt(new_message.text)
         """
+        # clear_interrupt must never revive a stopped provenance capability.
+        self._human_ingress_stop_generation = int(getattr(self, "_human_ingress_stop_generation", 0)) + 1
         if hard_cancel:
             checkpoint = getattr(self, "_delegation_checkpoint", None)
             if checkpoint is not None:
@@ -8559,7 +8561,7 @@ class AIAgent:
         """Forwarder — see ``agent.conversation_loop.run_conversation``.
 
         ``trusted_human_ingress`` is the host-minted capability from
-        ``agent.workstream_origin`` (gateway-supplied only). It is held for
+        ``agent.workstream_origin`` (trusted input owners only). It is held for
         this one turn so the persistence layer can bind a receipt to the exact
         user row; it is provenance, never permission, and never replays.
         """
@@ -8994,7 +8996,13 @@ class AIAgent:
                         with durable_turn_lease_activity_lock:
                             durable_turn_lease_turn_active = True
                         durable_turn_lease_thread.start()
-                    self._trusted_human_ingress = trusted_human_ingress
+                    from agent.workstream_origin import ingress_matches_turn
+                    original_input = persist_user_message if persist_user_message is not None else user_message
+                    self._trusted_human_ingress = (
+                        trusted_human_ingress
+                        if ingress_matches_turn(trusted_human_ingress, self, original_input)
+                        else None
+                    )
                     # Read-only fence before the real host loop. The producer
                     # runs only after the finalizer's persistence has settled.
                     from agent.workstream_procedures import begin_execution_turn

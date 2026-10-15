@@ -11510,6 +11510,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     or row.get("tool_call_id")
                     or not isinstance(row_id, int)
                     or not _origin.ingress_is_valid(ingress, profile=profile)
+                    or not _origin.ingress_matches_content(ingress, row.get("content"))
                 ):
                     continue
                 root = self._conversation_root_on(conn, session_id)

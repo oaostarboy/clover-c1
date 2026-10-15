@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import secrets
 import threading
 import uuid
@@ -43,6 +44,8 @@ class _Issue:
     event_ref: "weakref.ref[Any]"
     platform: str
     event_id: str
+    scope: tuple = ()
+    content_digest: str = ""
 
 
 # id(event) -> issue, for events an authenticated adapter minted and the
@@ -68,19 +71,23 @@ class HumanIngress:
     session_key: str
     run_generation: int
     seal: str = ""
+    scope: tuple = ()
+    content_digest: str = ""
 
     def _payload(self) -> bytes:
-        return "\x1f".join((
+        return json.dumps((
             self.event_id, self.platform, self.profile, self.session_id,
             self.session_key, str(int(self.run_generation)),
-        )).encode("utf-8")
+            self.scope, self.content_digest,
+        ), ensure_ascii=True, separators=(",", ":")).encode("utf-8")
 
 
 def _seal(ingress: HumanIngress) -> str:
     return hmac.new(_SECRET, ingress._payload(), hashlib.sha256).hexdigest()
 
 
-def mint_human_ingress(event: Any, *, platform: str) -> bool:
+def mint_human_ingress(event: Any, *, platform: str, scope: Any = None,
+                       original_text: Optional[str] = None) -> bool:
     """Adapter-side producer. Call only after the adapter authenticated the
     sender on its own transport and built ``event`` from that inbound message.
 
@@ -102,7 +109,9 @@ def mint_human_ingress(event: Any, *, platform: str) -> bool:
     with _LOCK:
         if key in _ISSUED:
             return False
-        _ISSUED[key] = _Issue(ref, str(platform), uuid.uuid4().hex)
+        binding = scope_binding(scope) if scope is not None else ()
+        digest = text_digest(original_text) if original_text is not None else ""
+        _ISSUED[key] = _Issue(ref, str(platform), uuid.uuid4().hex, binding, digest)
     return True
 
 
@@ -129,6 +138,7 @@ def redeem_human_ingress(
         event_id=issue.event_id, platform=issue.platform, profile=str(profile),
         session_id=str(session_id), session_key=str(session_key),
         run_generation=int(run_generation),
+        scope=issue.scope, content_digest=issue.content_digest,
     )
     return replace(ingress, seal=_seal(ingress))
 
@@ -158,6 +168,35 @@ def retire_human_ingress(ingress: Any) -> None:
     if event_id:
         with _LOCK:
             _LIVE.pop(event_id, None)
+
+
+def scope_binding(scope: Any) -> tuple:
+    """Literal canonical scope, never an inferred private audience."""
+    return tuple(str(getattr(scope, k)) for k in ("profile", "project", "audience", "root"))
+
+
+def text_digest(text: Any) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest() if isinstance(text, str) else ""
+
+
+def ingress_matches_content(ingress: Any, content: Any) -> bool:
+    """New input owners bind exact original text; legacy adapters unchanged."""
+    digest = getattr(ingress, "content_digest", "")
+    return not digest or hmac.compare_digest(digest, text_digest(content))
+
+
+def ingress_matches_turn(ingress: Any, agent: Any, content: Any) -> bool:
+    from agent.workstreams import scope_for_agent
+    binding = getattr(ingress, "scope", ())
+    return (not binding or binding == scope_binding(scope_for_agent(agent))) and ingress_matches_content(ingress, content)
+
+
+class ComposerSubmission(str):
+    """Queue-compatible input identity; constructing/copying text is not minting.
+
+    Only the actual composer input owner mints on this object. String
+    operations deliberately lose its registry identity.
+    """
 
 
 def read_human_origin(db: Any, session_id: str, message_row_id: Any):
