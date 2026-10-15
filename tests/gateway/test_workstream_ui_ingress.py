@@ -49,6 +49,11 @@ class SocketFixture:
 
 @pytest.fixture
 def ui(local, monkeypatch):
+    # server imports kick off this unrelated network owner immediately.
+    # Patch its launch boundary BEFORE import; suppressing session startup
+    # callbacks below is too late for the banner worker.
+    from clover_cli import banner
+    monkeypatch.setattr(banner, 'prefetch_update_check', lambda: None)
     from tui_gateway import server
     from clover_cli import web_server
     monkeypatch.setattr(web_server.app.state, 'auth_required', True, raising=False)
@@ -103,6 +108,15 @@ def inbound(ui, *, identity='login', params=None, user='fixture-owner', text='Co
     finally:
         ui.server.register_live_transport = real_register
     return ws, None
+
+
+def test_ui_fixture_never_starts_unrelated_update_discovery(local, monkeypatch, request):
+    from clover_cli import banner
+
+    started = []
+    monkeypatch.setattr(banner, 'prefetch_update_check', lambda: started.append(True))
+    request.getfixturevalue('ui')
+    assert started == [], 'script the startup edge before importing the server'
 
 
 def test_authenticated_desktop_input_persists_correction_in_actor_scope(ui):

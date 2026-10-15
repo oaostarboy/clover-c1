@@ -11,7 +11,8 @@ from agent import workstream_job_scope as adapter, workstreams as ws
 from cron import jobs, notepad as np, scheduler
 from tests.cron.test_workstream_dm_scope import (  # noqa: F401
     dm, network_guard, helpers, isolated, real_stage_executor,
-    request, enrolled_link, scripted_stage, watcher_until, _all_ids, _wait, ad, _text)
+    request, enrolled_link, scripted_stage, _all_ids, _wait, ad, _text)
+from tests.cron.workstream_fixture_support import scripted_vision_discovery, watcher_until  # noqa: F401
 
 pytestmark = pytest.mark.real_delegation_router
 
@@ -116,6 +117,19 @@ def test_two_real_private_dms_same_project_do_not_share_scope_or_owner(dm):
     assert not dm.admissions[-1].handled
     assert jobs.get_job(first["id"]) == first
     assert not jobs.get_job(second_job["id"]).get("workstream_id")
+
+
+def test_dm_fixture_never_discovers_live_vision_capabilities(dm, monkeypatch):
+    import agent.auxiliary_client as aux
+
+    probes = []
+    monkeypatch.setattr(aux, '_main_model_supports_vision', lambda *a, **kw: probes.append((a, kw)) or False)
+    monkeypatch.setattr(aux, '_strict_vision_backend_available', lambda *a, **kw: False)
+    aux.resolve_vision_provider_client(provider='auto', main_runtime={
+        'provider': 'openai', 'model': 'scripted/test',
+        'api_key': 'test-key', 'base_url': 'http://127.0.0.1:1/v1',
+    })
+    assert probes == [], 'text-only fixture leaked vision metadata discovery'
 
 
 def release_source(h):

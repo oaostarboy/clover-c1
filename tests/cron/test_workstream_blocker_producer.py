@@ -14,7 +14,8 @@ from cron import jobs, notepad as np
 from tests.gateway.test_trusted_human_origin_ingress import Harness, network_guard  # noqa: F401
 from tests.agent.test_continuation_bridge import real_stage_executor  # noqa: F401
 from tests.agent.test_router_staged_continuation import helpers, isolated, _all_ids, _wait  # noqa: F401
-from tests.cron.test_workstream_dm_scope import scripted_stage, watcher_until, ad
+from tests.cron.test_workstream_dm_scope import scripted_stage, ad
+from tests.cron.workstream_fixture_support import scripted_vision_discovery, watcher_until  # noqa: F401
 
 pytestmark = pytest.mark.real_delegation_router
 
@@ -105,6 +106,49 @@ def enroll(h, job):
     h.inbound_human(request(h, job_id=job["id"]), message_id=43)
     assert h.admissions[-1].handled, h.admissions[-1].reason
     return jobs.get_job(job["id"])
+
+
+def test_blocker_delivery_waits_for_the_accepted_reentry(
+        human, helpers, monkeypatch, tmp_path):
+    import threading
+
+    human.job = enroll(human, create(human))
+    first = scripted_stage(human, monkeypatch, tmp_path)
+    helpers.gate.set()
+    _wait(lambda: (ad.get_durable_delegation(first) or {}).get('state') == 'completed', 'stage')
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+    original = human.runner._run_agent
+
+    async def blocked_reentry(*args, **kwargs):
+        started.set()
+        assert await asyncio.to_thread(release.wait, 5), 'test did not release reentry'
+        result = await original(*args, **kwargs)
+        finished.set()
+        return result
+
+    monkeypatch.setattr(human.runner, '_run_agent', blocked_reentry)
+    returned, errors = threading.Event(), []
+
+    def watch():
+        try:
+            watcher_until(human, lambda: (ad.get_durable_delegation(first) or {}).get('delivery_state') == 'delivered')
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            returned.set()
+
+    worker = threading.Thread(target=watch)
+    worker.start()
+    try:
+        assert started.wait(6), 'real completion reentry never started'
+        # Delivery is adapter acceptance, not model-turn completion. Hold that
+        # turn at an event so a fixed sleep cannot masquerade as a join.
+        assert not returned.wait(0.5), 'watcher fixture abandoned an accepted reentry'
+    finally:
+        release.set()
+        worker.join(8)
+    assert not worker.is_alive() and not errors, errors
+    assert finished.is_set() and not human.adapter._active_sessions
 
 
 def test_created_blocker_reaches_original_runtime_and_changed_file_once(
