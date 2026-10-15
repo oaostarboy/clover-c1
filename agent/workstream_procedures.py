@@ -32,6 +32,7 @@ class ExecutionTurn:
     floor: int
     imported_call_ids: frozenset[str]
     audit: Any = None
+    acceptance: Any = None
 
 
 def _enabled(settings: Any) -> bool:
@@ -47,7 +48,8 @@ def begin_execution_turn(agent: Any, history: Any = None, message: Any = None) -
     """Read-only runtime fence; disabled/shadow do not even open the ledger."""
     try:
         settings = ws.load_settings()
-        if not _enabled(settings):
+        acceptance_request = isinstance(message, str) and message.startswith("Verify work acceptance ")
+        if not (_enabled(settings) or (settings.active and acceptance_request)):
             return None
         scope = ws.scope_for_agent(agent)
         if not ws._usable(scope, settings) or scope.profile != ws.current_profile():
@@ -63,8 +65,10 @@ def begin_execution_turn(agent: Any, history: Any = None, message: Any = None) -
         imported = frozenset(str(c.get("id")) for m in (history or []) if isinstance(m, dict)
                              for c in (m.get("tool_calls") or []) if isinstance(c, dict))
         from agent.work_lifecycle import prepare_local_audit
+        from agent.workstream_acceptance import prepare
         return ExecutionTurn(scope, sid, int(tail[-1]["id"]) if tail else 0, imported,
-                             prepare_local_audit(agent, message, scope))
+                             prepare_local_audit(agent, message, scope),
+                             prepare(agent, message, scope) if acceptance_request else None)
     except Exception:
         logger.debug("execution turn fence unavailable", exc_info=True)
         return None
@@ -79,7 +83,7 @@ def _json(value: Any) -> Any:
     return value
 
 
-def _workflow(rows: list[dict], imported: frozenset[str] = frozenset()) -> tuple[str, str]:
+def _workflow(rows: list[dict], imported: frozenset[str] = frozenset(), *, min_commands: int = 2) -> tuple[str, str]:
     """Typed owner result -> status and transferable command sequence.
 
     Deliberately narrow: 2..8 distinct, simple foreground terminal commands;
@@ -126,7 +130,7 @@ def _workflow(rows: list[dict], imported: frozenset[str] = frozenset()) -> tuple
             return "unknown", ""
         commands.append(command)
     steps = "\n".join(f"{i + 1}. {c}" for i, c in enumerate(commands))
-    if not 2 <= len(commands) <= 8 or len(set(commands)) != len(commands) or len(steps.encode()) > 512:
+    if not min_commands <= len(commands) <= 8 or len(set(commands)) != len(commands) or len(steps.encode()) > 512:
         return "unknown", ""
     return "success", steps
 
@@ -212,7 +216,7 @@ def finish_execution_turn(agent: Any, result: Any, turn: ExecutionTurn | None) -
         return None
     try:
         settings = ws.load_settings()
-        if not _enabled(settings) or ws.scope_for_agent(agent) != turn.scope:
+        if not (_enabled(settings) or (settings.active and turn.acceptance is not None)) or ws.scope_for_agent(agent) != turn.scope:
             return None
         outcome = {"status": "unknown", "execution_ids": [], "drafts": []}
         if not isinstance(result, dict):
@@ -230,6 +234,12 @@ def finish_execution_turn(agent: Any, result: Any, turn: ExecutionTurn | None) -
             return outcome
         if any(r["role"] == "user" for r in rows[1:]):
             return outcome
+        if turn.acceptance is not None:
+            if any(str(c.get("id")) in turn.imported_call_ids for r in rows
+                   for c in (r.get("tool_calls") or [])):
+                return outcome
+            from agent.workstream_acceptance import finish
+            return finish(agent, turn.acceptance, rows, result) or outcome
         status, steps = _workflow(rows, turn.imported_call_ids)
         outcome["status"] = status
         if status != "success":

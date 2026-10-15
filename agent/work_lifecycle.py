@@ -257,37 +257,35 @@ def build_report(
 
 # ── typed unfinished-work projection (opt-in workstream ledger) ────────────
 
-_OUTCOME_STATUS = {OK: "verified", BAD: "failed", PENDING: "unverified", STOPPED: "stopped"}
+# A helper's clean result is only a delivery fact.  The parent must explicitly
+# verify the artifact before work can be marked complete; consumption alone is
+# not acceptance evidence.
+_OUTCOME_STATUS = {OK: "unverified", BAD: "failed", PENDING: "unverified", STOPPED: "stopped"}
 
 
-def unfinished_outcomes(receipts: Sequence["_fl.DispatchReceipt"]) -> List[Any]:
+def unfinished_outcomes(receipts: Sequence["_fl.DispatchReceipt"], *, session_id: str = "") -> List[Any]:
     """Project dispatch receipts onto ``agent.workstreams.TypedOutcome`` rows.
 
-    A pure read of the same durable ledger ``report`` uses.  A clean result
-    counts as ``verified`` only once a consumer has claimed it (the same
-    ``owned_receipts_ready`` rule as ``WORK_VERIFIED``); a finished-but-unread
-    result is ``unverified``.  Failed, still-running and stopped helpers stay
-    open work.  Never raises: an unreadable ledger projects nothing.
+    A clean helper result remains ``unverified`` even once it has been claimed:
+    consumption proves delivery, not independent acceptance.  Failed, still-running
+    and stopped helpers stay open work.  Never raises: an unreadable ledger
+    projects nothing.
     """
     try:
         from agent.workstreams import TypedOutcome
-        from tools.async_delegation import owned_receipts_ready
-
-        ids = [r.delegation_id for r in receipts]
-        ready = set(owned_receipts_ready(ids))
         out: List[Any] = []
         for r in receipts:
             slots = slots_for(r.delegation_id, r.goals)
             for i, slot in enumerate(slots):
                 status = _OUTCOME_STATUS.get(slot.outcome, "unverified")
-                if status == "verified" and r.delegation_id not in ready:
-                    status = "unverified"
                 out.append(TypedOutcome(
                     deliverable=slot.goal,
                     status=status,
                     source_kind="delegation",
                     source_id=r.delegation_id if len(slots) == 1 else f"{r.delegation_id}#{i}",
-                    summary=f"{slot.goal}: {status}",
+                    summary=(f"{slot.goal}: result received; acceptance unverified"
+                             if slot.outcome == OK else f"{slot.goal}: {status}"),
+                    session_id=session_id,
                 ))
         return out
     except Exception:
@@ -690,9 +688,13 @@ def _record_unfinished(agent: Any) -> None:
             return
         turn = _turn_receipts(agent, floor)
         group = completion_group(agent, ids) if ids else []
-        receipts = turn or group
+        # A hand-back turn can dispatch new work while also receiving the
+        # previous helper's result. Preserve both owner receipts; `turn or
+        # group` silently dropped the just-received original completion.
+        by_id = {r.delegation_id: r for r in [*group, *turn]}
+        receipts = sorted(by_id.values(), key=lambda r: r.seq)
         if receipts:
-            _ws.record_outcomes(scope, unfinished_outcomes(receipts), settings)
+            _ws.record_outcomes(scope, unfinished_outcomes(receipts, session_id=session_id), settings)
     except Exception:
         logger.debug("workstream recording unavailable", exc_info=True)
 

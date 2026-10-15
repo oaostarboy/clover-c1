@@ -226,16 +226,19 @@ class TestUnfinishedBusiness:
         wid = np.list_workstreams(scope)[0]["workstream_id"]
         assert len(np.list_evidence(scope, wid)) == 1
 
-    def test_only_verified_evidence_resolves_an_obligation(self):
+    def test_only_same_owner_verified_evidence_resolves_an_obligation(self):
         scope = sc()
         ws.record_outcomes(scope, [out("packaging", "failed", "d1")], ON, now=NOW)
         ws.record_outcomes(scope, [out("packaging", "unverified", "d2")], ON, now=NOW)
-        assert np.list_workstreams(scope, statuses=["open"])
+        assert len(np.list_workstreams(scope, statuses=["open"])) == 2
+        # Identical wording from another owner is not verification of either task.
         ws.record_outcomes(scope, [out("packaging", "verified", "d3")], ON, now=NOW)
-        assert np.list_workstreams(scope, statuses=["open"]) == []
+        assert len(np.list_workstreams(scope, statuses=["open"])) == 2
+        # A verified receipt from the exact original owner can resolve its item.
+        ws.record_outcomes(scope, [out("packaging", "verified", "d1")], ON, now=NOW)
+        assert len(np.list_workstreams(scope, statuses=["open"])) == 1
         resolved = np.list_workstreams(scope, statuses=["resolved"])
-        assert len(resolved) == 1
-        assert ws.thread_context(scope, ON, now=NOW) == ""
+        assert len(resolved) == 2  # one unrelated verified progress item plus d1 obligation
 
     def test_verified_without_obligation_is_progress_not_open_work(self):
         scope = sc()
@@ -898,7 +901,7 @@ class TestLifecycleProjection:
         )
         outcomes = unfinished_outcomes(receipts)
         by_goal = {o.deliverable: o for o in outcomes}
-        assert by_goal["run the audit"].status == "verified"
+        assert by_goal["run the audit"].status == "unverified"  # delivered, not independently checked
         assert by_goal["write the docs"].status == "unverified"   # result nobody consumed
         assert by_goal["build the package"].status == "failed"
         assert by_goal["sign the artifact"].status == "unverified"
@@ -911,11 +914,12 @@ class TestLifecycleProjection:
         titles = sorted(r["title"] for r in rows)
         assert titles == [
             "Unfinished: build the package", "Unfinished: publish notes draft",
-            "Unfinished: sign the artifact", "Unfinished: write the docs",
+            "Unfinished: run the audit", "Unfinished: sign the artifact",
+            "Unfinished: write the docs",
         ]
-        # fresh session: the clean-and-read audit is not open work
+        # A delivered audit remains open until an independent check verifies it.
         text = ws.thread_context(scope, ON, now=NOW + timedelta(days=1))
-        assert "build the package" in text and "run the audit" not in text
+        assert "build the package" in text and "run the audit" in text
         assert ad  # real ledger module used
 
     def test_missing_rows_are_pending_not_success(self):
@@ -972,7 +976,7 @@ class TestEndTurnRecording:
         scope = sc()
         wl.end_turn(self._agent(("e-ok", "run audit"), ("e-bad", "build package"), scope=scope))
         text = ws.thread_context(scope, ON, now=NOW)
-        assert "build package" in text and "run audit" not in text
+        assert "build package" in text and "run audit" in text
 
     def test_no_envelope_or_disabled_records_nothing_and_touches_no_db(self, monkeypatch, store):
         from agent import work_lifecycle as wl
@@ -998,7 +1002,7 @@ class TestEndTurnRecording:
                             lambda *x, **k: (_ for _ in ()).throw(RuntimeError("locked")))
         wl.end_turn(a)
 
-    def test_later_clean_consumed_completion_resolves_the_open_item(self, monkeypatch):
+    def test_later_clean_consumed_completion_stays_open_until_independently_verified(self, monkeypatch):
         from agent import work_lifecycle as wl
 
         monkeypatch.setattr(ws, "load_settings", lambda config=None: ON)
@@ -1012,7 +1016,8 @@ class TestEndTurnRecording:
                                {"status": "completed", "summary": "ok"})
         assert ad.mark_completion_delivered("r-1")
         wl.end_turn(self._agent(("r-1", "sign artifact"), scope=scope))
-        assert ws.thread_context(scope, ON, now=NOW) == ""
+        assert "sign artifact" in ws.thread_context(scope, ON, now=NOW)
+        assert np.list_workstreams(scope, statuses=["open"])
 
 
 class TestHostScopeDerivation:

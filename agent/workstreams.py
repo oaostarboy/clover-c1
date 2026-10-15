@@ -683,47 +683,54 @@ def record_outcomes(
     for o in outcomes:
         if o.status not in OUTCOME_STATUSES or not o.deliverable.strip():
             continue
-        fp = _fp("obligation", o.deliverable)
-        evidence = dict(
+        # Identity is exact, not normalized prose. Scope is part of the primary
+        # key below. A new owner/session never adopts an older same-text task.
+        import json
+        fp = "outcome:" + hashlib.sha256(json.dumps(
+            [o.source_kind, o.source_id, o.session_id, o.deliverable],
+            ensure_ascii=False, separators=(",", ":"),
+        ).encode()).hexdigest()
+        wid = "ws_" + hashlib.sha256(json.dumps(
+            [scope.profile, scope.project, scope.audience, scope.root, fp],
+            separators=(",", ":"),
+        ).encode()).hexdigest()[:16]
+        evidence: Dict[str, Any] = dict(
             source_kind=o.source_kind, source_id=o.source_id,
             status=_EVIDENCE_FOR[o.status], session_id=o.session_id,
             summary=_redact(o.summary or f"{o.deliverable}: {o.status}"),
             key=_norm(o.deliverable), event_at=moment.isoformat(), now=moment,
         )
         try:
-            if o.status == "verified":
-                open_rows = [
-                    r for r in np.list_workstreams(scope, statuses=["open", "deferred"],
-                                                   kinds=["obligation"], limit=500)
-                    if r["fingerprint"] == fp
-                ]
-                if open_rows:
-                    row = open_rows[0]
-                    np.add_evidence(scope, row["workstream_id"], **evidence)
-                    np.update_workstream(scope, row["workstream_id"],
-                                         expected_revision=row["revision"],
-                                         status="resolved", actor="runtime", now=moment)
-                else:
+            # Serialize identity lookup, evidence and current state. In particular,
+            # a replay after resolution finds the same row, not a new progress note.
+            with np.write_batch():
+                row = np.get_workstream(scope, wid)
+                if row is not None and row["status"] not in ("open", "deferred"):
+                    continue  # settled state is never downgraded by an old helper
+                if row is None:
                     row = np.create_workstream(
-                        scope, kind="progress", title=f"Done: {o.deliverable}",
-                        summary=_clip(_redact(o.summary or f"{o.deliverable} verified"), 512),
-                        fingerprint=_fp("progress", f"{o.deliverable}|{o.source_id}"),
-                        session_id=o.session_id, source="runtime",
+                        scope, kind="progress" if o.status == "verified" else "obligation",
+                        title=f"{'Done' if o.status == 'verified' else 'Unfinished'}: {o.deliverable}",
+                        summary=_clip(evidence["summary"], 512), fingerprint=fp,
+                        workstream_id=wid, session_id=o.session_id, source="runtime",
                         max_items=settings.threads_max_items, now=moment,
                     )
-                    np.add_evidence(scope, row["workstream_id"], **evidence)
-                    np.update_workstream(scope, row["workstream_id"],
-                                         expected_revision=row["revision"],
-                                         status="resolved", actor="runtime", now=moment)
-                continue
-            row = np.create_workstream(
-                scope, kind="obligation", title=f"Unfinished: {o.deliverable}",
-                summary=_clip(_redact(o.summary or f"{o.deliverable}: {o.status}"), 512),
-                fingerprint=fp, session_id=o.session_id, source="runtime",
-                max_items=settings.threads_max_items, now=moment,
-            )
-            np.add_evidence(scope, row["workstream_id"], **evidence)
-            result.append(row)
+                recorded = np.add_evidence(scope, wid, **evidence)
+                if o.status == "verified" and recorded["status"] != "verified":
+                    # Retain the failed attempt; acceptance is a distinct fact.
+                    recorded = np.add_evidence(scope, wid, **{
+                        **evidence, "source_kind": "acceptance",
+                        "source_id": f"{o.source_kind}:{o.source_id}",
+                    })
+                summary = _clip(recorded["summary"], 512)
+                status = "resolved" if o.status == "verified" else row["status"]
+                if row["summary"] != summary or row["status"] != status:
+                    row = np.update_workstream(
+                        scope, wid, expected_revision=row["revision"], status=status,
+                        summary=summary, actor="runtime", now=moment,
+                    )
+                if o.status != "verified":
+                    result.append(row)
         except np.WorkstreamCapError:
             logger.debug("workstream cap reached; outcome %r not recorded", o.deliverable)
         except np.StaleRevision:
