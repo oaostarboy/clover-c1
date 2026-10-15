@@ -81,7 +81,10 @@ def test_live_authorized_discord_dm_correction_and_next_turn_recall(channel):
     dispatch(channel, message())
     records = notepad.list_workstreams(scope(channel))
     assert len(records) == 1 and records[0]['kind'] == 'correction', '\n'.join(str(v) for pair in channel.observed for v in pair)
-    assert scope(channel).audience == 'private:12345' and scope(channel).root == '12345'
+    telegram = workstreams.scope_for_surface(platform='telegram', chat_type='dm',
+        chat_id='12345', user_id='12345', project=str(channel.project))
+    assert notepad.list_workstreams(telegram) == []
+    assert scope(channel).audience == 'private:principal:discord:12345' and scope(channel).root == 'principal:discord:12345'
     with channel.db._read_ctx() as db:
         row = db.execute('SELECT message_row_id,consumed_by FROM human_origin_receipts').fetchone()
         assert row[1] == 'workstream_human_hooks'

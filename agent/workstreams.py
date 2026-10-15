@@ -240,7 +240,11 @@ def scope_for_surface(
     if plat in {"cli", "tui"} and not ctype:
         audience, root = "private", "local"
     elif ctype in {"dm", "private"} and uid:
-        audience, root = f"private:{uid}", uid
+        # Different transports' numeric ids are not a shared identity. Keep
+        # the established Telegram namespace unchanged; Discord is newly
+        # admitted and must not read/write a same-number Telegram owner's rows.
+        principal = f"principal:discord:{uid}" if plat == "discord" else uid
+        audience, root = f"private:{principal}", principal
     elif ctype in {"group", "forum", "channel", "thread"}:
         audience, root = f"shared:{ctype}:{cid}", cid
     else:
