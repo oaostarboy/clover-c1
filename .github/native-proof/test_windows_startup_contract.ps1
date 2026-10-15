@@ -10,7 +10,7 @@ function Import-Function([string]$name) {
   $node = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }.GetNewClosure(), $true)
   if ($node) { . ([scriptblock]::Create($node.Extent.Text)); Set-Item "Function:script:$name" (Get-Item "Function:$name").ScriptBlock }
 }
-foreach ($name in @('Get-NativeProofPythonIdentity','Assert-NativeProofBasePython','Read-ExactGateway')) { Import-Function $name }
+foreach ($name in @('Get-NativeProofPythonIdentity','Assert-NativeProofBasePython','Get-NativeProofInstalledGatewayPython','Read-ExactGateway')) { Import-Function $name }
 . (Join-Path $PSScriptRoot '../win-e2e/supervisor-proof.ps1')
 function Assert-True($value, [string]$message) { if (-not $value) { throw $message } }
 $results = @()
@@ -52,6 +52,32 @@ try {
     try { Assert-NativeProofBasePython $identity } catch { $refused = $_ -match 'IRC fixture must use system Python' }
     Assert-True $refused 'Venv guard failed to refuse'
   }
+  foreach ($identityCase in @('valid','wrong-executable','wrong-prefix','non-venv','missing-base')) {
+    Case "installed gateway capture $identityCase preserves exact venv ownership" {
+      $script:py="$env:INSTALL_DIR\venv\Scripts\python.exe"
+      $fixture=[pscustomobject]@{ executable=$script:py; base_executable='C:\measured\python.exe'; prefix="$env:INSTALL_DIR\venv"; base_prefix='C:\measured' }
+      switch ($identityCase) {
+        'wrong-executable' { $fixture.executable='C:\foreign\python.exe' }
+        'wrong-prefix' { $fixture.prefix='C:\foreign\venv' }
+        'non-venv' { $fixture.base_prefix=$fixture.prefix }
+        'missing-base' { $fixture.base_executable=$null }
+      }
+      function Get-NativeProofPythonIdentity([string]$executable) {
+        Assert-True ($executable -eq $script:py) 'Capture did not query the installed venv'
+        return $fixture
+      }
+      $rejected=$false
+      try { $null=Get-NativeProofInstalledGatewayPython } catch { $rejected=$true }
+      Assert-True ($rejected -eq ($identityCase -ne 'valid')) 'Incorrect installed identity decision'
+      if ($identityCase -eq 'valid') {
+        $init=@($ast.EndBlock.Statements | Where-Object { $_.Extent.Text -match '^Set-Variable -Name NativeProofGatewayPython ' })
+        try {
+          . ([scriptblock]::Create($init[0].Extent.Text))
+          Assert-True ((Get-Variable NativeProofGatewayPython -Scope Script).Options -band [System.Management.Automation.ScopedItemOptions]::ReadOnly) 'Installed identity capture not ReadOnly'
+        } finally { Remove-Variable NativeProofGatewayPython -Scope Script -Force -ErrorAction SilentlyContinue }
+      }
+    }
+  }
   # Real helper functions consume these trusted CIM/task/port boundary fixtures.
   function Get-CimInstance { param($ClassName,$Filter)
     if ($ClassName -eq 'Win32_Service') { return $script:schedule }
@@ -66,6 +92,7 @@ try {
     $env:SETUP=$setup; $script:expectedSha='expected-sha'; $script:portUp=$true
     $script:state=[pscustomobject]@{ pid=100; gateway_state='running'; restart_requested=$false; start_time=123; code_sha=$script:expectedSha }
     $script:NativeProofGatewayPython=[pscustomobject]@{ executable="$env:INSTALL_DIR\venv\Scripts\python.exe"; base_executable='C:\base\python.exe'; prefix="$env:INSTALL_DIR\venv"; base_prefix='C:\base' }
+    $script:NativeProofGatewayPythonAfter=$null
     $script:schedule=[pscustomobject]@{ State='Running'; ProcessId=9 }
     $parent=if ($setup -eq 'troy') { 9 } else { 8 }
     $script:processes=@(
@@ -88,6 +115,32 @@ try {
       $script:state.pid=101; $script:listeners=@(101)
       $actual=Read-ExactGateway
       Assert-True ($actual.pid -eq 101) 'Measured launcher child was not recognized as the runtime'
+    }
+    Case "$setup binds post-update runtime to a freshly measured managed generation" {
+      Reset-Gateway $setup
+      $script:NativeProofGatewayPythonAfter=[pscustomobject]@{ executable="$env:INSTALL_DIR\venv\Scripts\python.exe"; base_executable="$env:INSTALL_DIR\.clover-runtime\python\generation-proved\python.exe"; prefix="$env:INSTALL_DIR\venv"; base_prefix="$env:INSTALL_DIR\.clover-runtime\python\generation-proved" }
+      $script:processes[0].ParentProcessId=8
+      $script:task.State='Ready'
+      $script:processes += [pscustomobject]@{ ProcessId=101; ParentProcessId=100; Name='python.exe'; ExecutablePath=$script:NativeProofGatewayPythonAfter.base_executable; CommandLine="`"$($script:NativeProofGatewayPythonAfter.base_executable)`" -m clover_cli.main gateway run" }
+      $script:state.pid=101; $script:listeners=@(101)
+      $actual=Read-ExactGateway
+      Assert-True ($actual.pid -eq 101) 'Valid new runtime generation was rejected'
+      if ($setup -eq 'troy') {
+        $script:task.State='Disabled'
+        $refused=$false
+        try { $null=Read-ExactGateway } catch { $refused=$true }
+        Assert-True $refused 'Disabled original task was accepted after handoff'
+        $script:task.State='Ready'
+        $script:processes[0].ParentProcessId=9
+        $refused=$false
+        try { $null=Read-ExactGateway } catch { $refused=$true }
+        Assert-True $refused 'Unproved second Schedule-hosted path was accepted after detached handoff'
+        $script:processes[0].ParentProcessId=8
+      }
+      $script:processes[-1].ExecutablePath='C:\foreign\python.exe'
+      $refused=$false
+      try { $null=Read-ExactGateway } catch { $refused=$true }
+      Assert-True $refused 'Foreign runtime accepted after a legitimate generation change'
     }
     foreach ($badChild in @('foreign-executable','foreign-launcher','extra-child','unrelated-parent','missing-venv-identity')) {
       Case "$setup refuses $badChild despite healthy matching runtime state" {
@@ -112,7 +165,7 @@ try {
       if ($setup -eq 'zyra' -and $mutation -eq 'stopped-task') { continue }
       Case "$setup refuses $mutation with per-predicate evidence" {
         Reset-Gateway $setup
-        $expectedPredicate = @{ 'wrong-sha'='expected_source_sha'; 'wrong-state-pid'='state_pid_matches_install_command'; 'wrong-listener'='listener_matches_state_pid'; 'duplicate-root'='one_gateway_root'; 'missing-root'='one_gateway_root'; 'missing-host'='expected_host_mode'; 'stopped-task'='troy_task_running'; 'stopped-schedule'='schedule_still_running' }[$mutation]
+        $expectedPredicate = @{ 'wrong-sha'='expected_source_sha'; 'wrong-state-pid'='state_pid_matches_install_command'; 'wrong-listener'='listener_matches_state_pid'; 'duplicate-root'='one_gateway_root'; 'missing-root'='one_gateway_root'; 'missing-host'='expected_host_mode'; 'stopped-task'='troy_task_expected_state'; 'stopped-schedule'='schedule_still_running' }[$mutation]
         switch ($mutation) {
           'wrong-sha' { $script:state.code_sha='wrong' }
           'wrong-state-pid' { $script:state.pid=101 }

@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -35,9 +36,29 @@ def dependency_command(repo, python, platform):
     return [str(uv), 'pip', 'install', '--python', python, '-e', str(repo) + '[dev]']
 
 
+def canonical_shell():
+    if os.name != 'nt':
+        return 'bash'
+    # Bare bash on a Windows runner resolves to the WSL shim. Use only the
+    # Git-for-Windows installation already required by the native installer.
+    git = shutil.which('git')
+    if not git:
+        raise FileNotFoundError('Git for Windows is required for the canonical runner')
+    parent = Path(git).parent
+    if parent.name.lower() not in {'cmd', 'bin'}:
+        raise FileNotFoundError('Cannot identify the Git for Windows shell root')
+    root = parent.parent
+    if root.name.lower() in {'mingw32', 'mingw64'}:
+        root = root.parent
+    bash = root / 'bin' / 'bash.exe'
+    if not bash.is_file():
+        raise FileNotFoundError(f'Git Bash missing: {bash}')
+    return str(bash)
+
+
 def suite_command(repo, file, expression, xml):
-    command = ['bash', str(repo / 'scripts/run_tests.sh'), file, '-j', '1',
-               '--file-retries', '0', '-o', 'addopts=', '--junitxml=' + str(xml)]
+    command = [canonical_shell(), (repo / 'scripts/run_tests.sh').as_posix(), file, '-j', '1',
+               '--file-retries', '0', '-o', 'addopts=', '--junitxml=' + xml.as_posix()]
     if expression:
         command += ['-k', expression]
     return command

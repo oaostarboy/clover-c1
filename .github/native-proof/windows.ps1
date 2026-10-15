@@ -19,6 +19,15 @@ function Assert-NativeProofBasePython($identity) {
         $_.StartsWith("$venv\", [StringComparison]::OrdinalIgnoreCase))
       }).Count) { throw 'IRC fixture must use system Python, never a venv holder' }
 }
+function Get-NativeProofInstalledGatewayPython {
+  $identity = Get-NativeProofPythonIdentity $script:py
+  if ($identity.executable -ne $script:py -or
+      $identity.prefix -ne "$env:INSTALL_DIR\venv" -or
+      $identity.prefix -eq $identity.base_prefix -or -not $identity.base_executable) {
+    throw 'Installed gateway interpreter identity mismatch'
+  }
+  return $identity
+}
 # Own this preinstall identity independently of generic variables in sourced helpers.
 Set-Variable -Name NativeProofBasePython -Scope Script -Option ReadOnly -Value (Get-NativeProofPythonIdentity ((Get-Command python -CommandType Application | Select-Object -First 1).Source))
 $helpers = "$env:GITHUB_WORKSPACE\helpers"
@@ -82,16 +91,14 @@ if ($Mode -ne 'fresh') {
 # Measure the installed venv's own base interpreter, not the unrelated Python
 # captured for the IRC fixture. Windows venv launchers retain a parent process
 # while their base interpreter child owns gateway state and the listening port.
-Set-Variable -Name NativeProofGatewayPython -Scope Script -Option ReadOnly -Value (Get-NativeProofPythonIdentity $script:py)
+Set-Variable -Name NativeProofGatewayPython -Scope Script -Option ReadOnly -Value (Get-NativeProofInstalledGatewayPython)
 $script:NativeProofGatewayPython | ConvertTo-Json -Depth 6 | Set-Content "$evidence\gateway-python.json" -Encoding utf8
-if ($script:NativeProofGatewayPython.executable -ne $script:py -or
-    $script:NativeProofGatewayPython.prefix -ne "$env:INSTALL_DIR\venv" -or
-    $script:NativeProofGatewayPython.prefix -eq $script:NativeProofGatewayPython.base_prefix -or
-    -not $script:NativeProofGatewayPython.base_executable) { throw 'Installed gateway interpreter identity mismatch' }
 . "$env:E2E\supervisor-proof.ps1"
 # The inherited Set-MainIsTarget/expected-failure helpers are NEVER invoked.
 # Ordinary git objects in a new bare origin drive the user's default command.
 function Read-ExactGateway {
+  $afterUpdate = [bool]$script:NativeProofGatewayPythonAfter
+  $gatewayPython = if ($afterUpdate) { $script:NativeProofGatewayPythonAfter } else { $script:NativeProofGatewayPython }
   $observationErrors = @(); $st = $null; $roots = @()
   try { $st = Get-GatewayState } catch { $observationErrors += 'state_query_failed' }
   # The shared helper emits a single array object (including for zero roots).
@@ -103,10 +110,10 @@ function Read-ExactGateway {
     $_.CommandLine -match 'gateway\s+run' -and $_.CommandLine -notmatch '\s-c\s'
   }) } catch { $observationErrors += 'gateway_process_query_failed' }
   $ids = @($processes | Where-Object { $_.CommandLine.Contains($env:INSTALL_DIR) } | ForEach-Object { [int]$_.ProcessId })
-  $venvExecutables = @($script:NativeProofGatewayPython.executable,
-    ($script:NativeProofGatewayPython.executable -replace 'python[.]exe$', 'pythonw.exe'))
-  $baseExecutables = @($script:NativeProofGatewayPython.base_executable,
-    ($script:NativeProofGatewayPython.base_executable -replace 'python[.]exe$', 'pythonw.exe'))
+  $venvExecutables = @($gatewayPython.executable,
+    ($gatewayPython.executable -replace 'python[.]exe$', 'pythonw.exe'))
+  $baseExecutables = @($gatewayPython.base_executable,
+    ($gatewayPython.base_executable -replace 'python[.]exe$', 'pythonw.exe'))
   $runtimeIds = @(); $topologyValid = $false
   if ($roots.Count -eq 1 -and $ids -contains [int]$roots[0].ProcessId -and
       $venvExecutables -contains $roots[0].ExecutablePath) {
@@ -157,8 +164,13 @@ function Read-ExactGateway {
     # Schedule remaining Running is an existing no-collateral-damage assertion
     # for BOTH setups. It does not imply that Zyra is Schedule-hosted.
     schedule_still_running = ($schedule.State -eq 'Running')
-    expected_host_mode = ($roots.Count -eq 1 -and ($viaSchedule -eq ($env:SETUP -eq 'troy')))
-    troy_task_running = ($env:SETUP -ne 'troy' -or ($task -and $task.State -eq 'Running'))
+    # Before the trigger Troy MUST be a running Schedule-owned task. The
+    # product's Windows resume deliberately replays its captured argv detached;
+    # after that automatic handoff the task must be Ready, not disabled, and
+    # the owned successor must no longer descend from Schedule. No test restart.
+    expected_host_mode = ($roots.Count -eq 1 -and ($viaSchedule -eq ($env:SETUP -eq 'troy' -and -not $afterUpdate)))
+    troy_task_expected_state = ($env:SETUP -ne 'troy' -or ($task -and
+      $task.State -eq $(if ($afterUpdate) { 'Ready' } else { 'Running' })))
     observations_complete = ($observationErrors.Count -eq 0)
   }
   $failed = @($predicates.Keys | Where-Object { -not $predicates[$_] })
@@ -175,7 +187,7 @@ function Read-ExactGateway {
         command_is_module_gateway_run = ($_.CommandLine -match 'clover_cli[.]main' -and $_.CommandLine -match 'gateway\s+run')
       } })
       install_command_pids = $ids; owned_runtime_pids = $runtimeIds; listeners = $listeners; ancestors = $chains
-      gateway_python = $script:NativeProofGatewayPython
+      gateway_python = $gatewayPython; after_update = $afterUpdate
       schedule = $schedule; via_schedule = [bool]$viaSchedule
       task = $(if ($task) { $task | Select-Object TaskName,State } else { $null })
       base_python = $script:NativeProofBasePython
@@ -245,8 +257,41 @@ if ($Mode -ne 'fresh') {
   $logStart = (Get-LogLines).Count
   # Reassert the exact running base immediately before the update trigger.
   $null = Read-ExactGateway
-  $exitCode = Invoke-PathUpdate "$env:SETUP $env:UPDATE_PATH $Mode"
+  # Use pre-install non-venv Python for a read-only bounded sampler. Preserve
+  # the real parent/child bridge before latest is overwritten, never hold venv.
+  Assert-NativeProofBasePython $script:NativeProofBasePython
+  $probeStop = "$env:RUNNER_TEMP\native-handoff-probe.stop"
+  $probeOutput = "$evidence\handoff-observations.json"
+  $probe = Start-Process -FilePath $script:NativeProofBasePython.executable -ArgumentList @(
+    '-I', "`"$helpers\.github\native-proof\handoff_probe.py`"",
+    '--home', "`"$env:CLOVER_HOME`"", '--repo', "`"$env:INSTALL_DIR`"",
+    '--output', "`"$probeOutput`"", '--stop', "`"$probeStop`""
+  ) -WindowStyle Hidden -PassThru -RedirectStandardError "$evidence\handoff-probe.stderr.txt"
+  $updateFailure = $null
+  try {
+    $probeStartDeadline = (Get-Date).AddSeconds(10)
+    while (-not (Test-Path $probeOutput) -and (Get-Date) -lt $probeStartDeadline) { Start-Sleep -Milliseconds 100 }
+    if (-not (Test-Path $probeOutput)) { throw 'Read-only handoff sampler did not start' }
+    $exitCode = Invoke-PathUpdate "$env:SETUP $env:UPDATE_PATH $Mode"
+    Wait-UpdateChainDone 1800
+  } catch {
+    $updateFailure = $_
+    throw
+  } finally {
+    try {
+      New-Item -ItemType File -Path $probeStop -Force | Out-Null
+      if (-not $probe.WaitForExit(10000) -or $probe.ExitCode -ne 0) { throw 'Read-only handoff sampler did not complete cleanly' }
+    } catch {
+      if (-not $updateFailure) { throw }
+      Write-Warning 'Read-only handoff sampler also failed; preserving the original update error'
+    }
+  }
   $script:expectedSha = $to
+  # Dependency sync can replace a vulnerable base Python with a private fixed
+  # SQLite generation. Measure the completed update's venv again; never accept
+  # an arbitrary generation-directory prefix or reuse the IRC interpreter.
+  Set-Variable -Name NativeProofGatewayPythonAfter -Scope Script -Option ReadOnly -Value (Get-NativeProofInstalledGatewayPython)
+  $script:NativeProofGatewayPythonAfter | ConvertTo-Json -Depth 6 | Set-Content "$evidence\gateway-python-after-update.json" -Encoding utf8
   Assert-UpdateSucceeded "$env:SETUP $env:UPDATE_PATH $Mode" $logStart $exitCode ([int]$own.Pid)
   $after = Read-ExactGateway
   if ($after.pid -eq $before.pid -or $after.start_time -eq $before.start_time) { throw 'Gateway did not restart' }
