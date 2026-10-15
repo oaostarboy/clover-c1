@@ -2085,6 +2085,8 @@ def _render_procedure_skill(name: str, key: str, runs: List[Dict[str, Any]]) -> 
         "",
         "## When to use",
         f"Work matching procedure key `{key}`.",
+        "Bounded outcome: local SHA-256 manifest verification against the pre-tool manifest. "
+        "Not packaging, release completion, save, delivery, or execution permission.",
         "",
         "## Steps seen in the verified runs",
     ]
@@ -2103,9 +2105,9 @@ def propose_procedure_candidates(
 ) -> List[Dict[str, Any]]:
     """Stage at most one reviewable skill draft per repeated verified workflow.
 
-    Counts only evidence rows that (a) are ``verified`` foreground execution
+    Counts only evidence rows that (a) are owner-accepted local audit outcomes
     runs, (b) are backed by a typed ``executed`` receipt and still pass the
-    SessionDB owner's readback, (c) carry exact transferable commands and an
+    lifecycle acceptance and SessionDB readback, (c) carry transferable steps and an
     authentic conversation root.  A draft needs
     ``procedures_min_verified_runs`` *distinct* execution ids across
     ``procedures_min_sessions`` distinct sessions.  The draft goes through

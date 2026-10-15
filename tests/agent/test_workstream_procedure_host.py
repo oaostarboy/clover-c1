@@ -3,113 +3,38 @@
 No host/executor replacements. Only provider/metadata/auxiliary network edges
 are scripted; socket and DNS attempts fail. All effects stay in temp HOME.
 """
-import hashlib
-import json
-from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock
-
 import pytest
 import yaml
 
 from agent import curator, workstreams as ws
-from clover_state import SessionDB
 from cron import notepad as np
-from run_agent import AIAgent
 from tools import write_approval as wa
 from tests.gateway.test_trusted_human_origin_ingress import network_guard  # noqa: F401
-
-
-class Script:
-    def __init__(self):
-        self.queue = []
-        self.requests = []
-        self.client = MagicMock()
-        self.client.chat.completions.create.side_effect = self.create
-
-    def create(self, **kwargs):
-        self.requests.append(kwargs)
-        assert self.queue, "unplanned provider call"
-        return self.queue.pop(0)
-
-    def text(self, content="Done; all saved and delivered"):
-        self.queue.append(SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=None),
-                                     finish_reason="stop")], usage=None))
-
-    def terminal(self, command, cid, **kwargs):
-        call = SimpleNamespace(id=cid, type="function", function=SimpleNamespace(
-            name="terminal", arguments=json.dumps({"command": command, **kwargs})))
-        self.queue.append(SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="", tool_calls=[call]),
-                                     finish_reason="tool_calls")], usage=None))
+from tests.gateway.test_workstream_verified_workflow import workflow  # noqa: F401
 
 
 @pytest.fixture
-def host(monkeypatch, tmp_path, network_guard):
-    home = tmp_path / "profile"
-    home.mkdir()
-    os_home = tmp_path / "home"
-    os_home.mkdir()
-    project = tmp_path / "project"
-    project.mkdir()
-    (project / "manifest.txt").write_text("real local audit artifact\n")
-    digest = hashlib.sha256((project / "manifest.txt").read_bytes()).hexdigest()
-    (project / "manifest.sha256").write_text(f"{digest}  manifest.txt\n")
-    monkeypatch.setenv("HOME", str(os_home))
-    monkeypatch.setenv("CLOVER_HOME", str(home))
-    monkeypatch.setenv("TERMINAL_CWD", str(project))
-    monkeypatch.setenv("TERMINAL_ENV", "local")
-    monkeypatch.setattr(np, "NOTEPAD_FILE", home / "cron" / "notepad.db")
-    config = {"proactive": {"enabled": True, "mode": "active", "procedures": {"enabled": True}},
-              "compression": {"enabled": False}, "delegation": {"router": {"enabled": False}},
-              "terminal": {"env_type": "local"}}
-    (home / "config.yaml").write_text(yaml.safe_dump(config))
-    script = Script()
-    monkeypatch.setattr(AIAgent, "_create_openai_client", lambda *a, **k: script.client)
-    for target in ("agent.model_metadata.get_model_context_length",
-                   "agent.context_compressor.get_model_context_length"):
-        monkeypatch.setattr(target, lambda *a, **k: 100_000)
-    for target in ("agent.model_metadata.query_ollama_num_ctx", "agent.agent_init.query_ollama_num_ctx"):
-        monkeypatch.setattr(target, lambda *a, **k: None)
-    import agent.auxiliary_client as aux
+def host(workflow):
+    """Legacy test IDs now use real authenticated ingress, not CLI roles.
 
-    def forbidden(*a, **k):
-        raise AssertionError("unexpected auxiliary provider call")
-
-    monkeypatch.setattr(aux, "call_llm", forbidden)
-    monkeypatch.setattr(aux, "async_call_llm", forbidden)
-    db = SessionDB(home / "state.db")
-    agents = {}
-    turns = []
+    The gateway/adapter produce all sessions, original-human receipts and turn
+    tokens. The aliases below select actual conversation resets only.
+    """
+    h = workflow
+    actual_run = h.run
+    h.agents = {}
+    h.last_alias = None
 
     def run(sid, *, commands=("test -f manifest.txt", "sha256sum -c manifest.sha256"), history=None):
-        if sid not in agents:
-            agents[sid] = AIAgent(provider="openai-compat", model="scripted-offline",
-                base_url="http://127.0.0.1:1/v1",
-                api_mode="chat_completions", api_key="test-key", model_pinned=True,
-                enabled_toolsets=["terminal"], max_iterations=8, quiet_mode=True,
-                tool_progress_mode="off", skip_context_files=True, load_soul_identity=False,
-                skip_memory=True, skip_background_review=True, platform="cli",
-                session_id=sid, session_db=db)
-        agent = agents[sid]
-        from agent.workstream_procedures import begin_execution_turn
-        token = begin_execution_turn(agent, history or [])
-        n = len(script.requests)
-        for i, command in enumerate(commands):
-            script.terminal(command, f"call-{sid}-{n}-{i}")
-        script.text()
-        result = agent.run_conversation("Verify the local manifest", conversation_history=history or [],
-                                        task_id=f"audit-{sid}-{n}")
-        assert not script.queue
-        turns.append((agent, token, result))
+        assert not history, "imported history is not an originating human request"
+        new = h.last_alias is not None and h.last_alias != sid
+        result = actual_run(commands=commands, new=new)
+        h.last_alias = sid
+        h.agents[sid] = h.active_agent
         return result
 
-    h = SimpleNamespace(home=home, project=project, config=config, db=db, script=script,
-                        agents=agents, turns=turns, run=run)
-    h.scope = lambda: ws.scope_for_agent(next(iter(agents.values())))
+    h.run = run
     yield h
-    db.close()
 
 
 def test_three_real_verified_workflows_two_sessions_stage_one_attributed_draft(host):
@@ -123,7 +48,9 @@ def test_three_real_verified_workflows_two_sessions_stage_one_attributed_draft(h
     assert len(candidates) == 1
     candidate = candidates[0]
     assert len(candidate["execution_ids"]) == 3
-    assert candidate["session_ids"] == ["authentic-a", "authentic-b"]
+    assert len(candidate["session_ids"]) == 2
+    assert set(candidate["session_ids"]) == {
+        host.db.get_conversation_root(a.session_id) for a in host.agents.values()}
     drafts = wa.list_pending("skills")
     assert len(drafts) == 1
     assert drafts[0]["action"] == "create"
@@ -171,8 +98,8 @@ def test_exact_same_owner_receipt_replay_does_not_increment(host):
     replay = finish_execution_turn(agent, result, token)
     after = np.list_scope_evidence(scope)
     assert replay is not None
-    assert replay["status"] == "success"
-    assert replay["execution_ids"] == [before[0]["source_id"]]
+    assert replay["status"] == "unknown"  # original live invocation retired
+    assert replay["execution_ids"] == []
     assert [r["evidence_id"] for r in after] == [r["evidence_id"] for r in before]
     assert len(np.list_receipts(scope, None, kinds=["executed"])) == 1
 

@@ -8998,7 +8998,7 @@ class AIAgent:
                     # Read-only fence before the real host loop. The producer
                     # runs only after the finalizer's persistence has settled.
                     from agent.workstream_procedures import begin_execution_turn
-                    _execution_turn = begin_execution_turn(self, conversation_history)
+                    _execution_turn = begin_execution_turn(self, conversation_history, user_message)
                     result = run_conversation(
                         self,
                         user_message,
