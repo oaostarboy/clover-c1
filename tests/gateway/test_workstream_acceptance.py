@@ -1,4 +1,4 @@
-"""Authenticated host -> real pytest -> exact accepted work -> durable capsule."""
+"""Real gateway/pytest reports stay unverified; narrow audit acceptance is separate."""
 import hashlib
 import json
 
@@ -41,37 +41,40 @@ def contract(h, *, covers=None, rows=None):
     return rows, command, spec
 
 
-def test_real_owner_checks_close_only_exact_covered_work(workflow):
+def test_real_owner_checks_remain_unverified_supporting_evidence(workflow):
+    # 1.5.6 correction: project-controlled pytest is not an independent owner.
+    # This intentionally replaces the removed generic positive capability.
     h = workflow
-    # Establish a real authenticated session before accepting work in it.
     h.run(commands=(), final="Ready")
     rows, command, _ = contract(h)
     result = h.run(message="Verify work acceptance acceptance.json", commands=((command, {"workdir": str(h.project)}),))
     current = np.get_workstream(h.scope(), rows[0]["workstream_id"])
-    assert current["status"] == "resolved"
-    assert "verified" in current["summary"] and "unverified" not in current["summary"]
+    assert current["status"] == "open"
+    assert "reported" in current["summary"] and "unverified" in current["summary"]
     assert np.get_workstream(h.scope(), rows[1]["workstream_id"]) == rows[1]
     evidence = np.list_evidence(h.scope(), current["workstream_id"])
     assert any(e["source_id"] == "original" and e["status"] == "failed" for e in evidence)
-    accepted = [e for e in evidence if e["source_kind"] == "acceptance" and e["status"] == "verified"]
-    assert len(accepted) == 1
-    assert accepted[0]["trust"] == "owner_session"
-    receipts = np.list_receipts(h.scope(), current["workstream_id"])
-    assert len(receipts) == 1
-    proof = json.loads(receipts[0]["detail"])
-    assert proof["check_ids"] and proof["artifact_digest"] and proof["spec_digest"]
+    reported = [e for e in evidence if e["source_kind"] == "check_report"]
+    assert len(reported) == 1
+    assert reported[0]["status"] == "unverified"
+    assert reported[0]["trust"] == "project_report"
+    assert not any(e["status"] == "verified" for e in evidence)
+    assert np.list_receipts(h.scope(), current["workstream_id"]) == []
     contracts = [r for r in np.list_history(h.scope(), current["workstream_id"])
-                 if r["op"] == "acceptance_contract"]
-    assert len(contracts) == 1, "the owner must retain the pre-execution contract for later audit"
-    saved_contract = json.loads(contracts[0]["detail"])
-    assert hashlib.sha256(saved_contract["contract"].encode()).hexdigest() == proof["spec_digest"]
-    assert json.loads(saved_contract["contract"])["coverage"][0]["workstream_id"] == current["workstream_id"]
-    assert saved_contract["proof"] == proof
-    assert result["workstream_execution"]["status"] == "success"
-    # A fresh read, not instance lineage, removes the completed warning and
-    # keeps the separate review/install/release work visible.
+                 if r["op"] == "check_report"]
+    assert len(contracts) == 1
+    saved = json.loads(contracts[0]["detail"])
+    observation = saved["observation"]
+    assert hashlib.sha256(saved["contract"].encode()).hexdigest() == observation["spec_digest"]
+    assert json.loads(saved["contract"])["coverage"][0]["workstream_id"] == current["workstream_id"]
+    assert observation["assurance"] == "unverified"
+    assert observation["artifact_binding"] == "endpoint_only"
+    assert saved["checks"][0]["reported_tests"] == 1
+    assert saved["checks"][0]["call_id"] and saved["checks"][0]["row"]
+    assert result["workstream_execution"]["status"] == "unverified"
+    assert result["workstream_execution"]["execution_ids"] == []
     text = ws.thread_context(h.scope(), ws.load_settings())
-    assert "Build and test candidate" not in text
+    assert "Build and test candidate" in text
     assert "Review and release candidate" in text
 
 
@@ -79,17 +82,17 @@ def test_changed_report_during_commit_cannot_verify(workflow, monkeypatch):
     h = workflow
     h.run(commands=(), final="Ready")
     rows, command, _ = contract(h)
-    real_add = np.add_receipt
+    real_add = np.add_evidence
     mutated = []
 
     def replace_report(*args, **kwargs):
         saved = real_add(*args, **kwargs)
-        if kwargs.get("owner") == "acceptance":
+        if kwargs.get("source_kind") == "check_report":
             mutated.append(True)
             (h.project / "acceptance.xml").write_text("<testsuite tests='0'/>")
         return saved
 
-    monkeypatch.setattr(np, "add_receipt", replace_report)
+    monkeypatch.setattr(np, "add_evidence", replace_report)
     result = h.run(message="Verify work acceptance acceptance.json", commands=((command, {"workdir": str(h.project)}),))
     assert mutated, {"token": h.token, "tools": [m.get("content") for m in result["messages"] if m.get("role") == "tool"]}
     assert np.get_workstream(h.scope(), rows[0]["workstream_id"])["status"] == "open"
@@ -173,10 +176,10 @@ def test_acceptance_fails_closed(workflow, monkeypatch, variant):
         commands = ((command, {}),)
     (h.project / "acceptance.json").write_text(json.dumps(spec))
     if variant in ("stop_during_commit", "origin_consumed_during_commit"):
-        real_add = np.add_receipt
+        real_add = np.add_evidence
         def race(*args, **kwargs):
             receipt = real_add(*args, **kwargs)
-            if kwargs.get("owner") == "acceptance":
+            if kwargs.get("source_kind") == "check_report":
                 if variant == "stop_during_commit":
                     mutate()
                 else:
@@ -185,7 +188,7 @@ def test_acceptance_fails_closed(workflow, monkeypatch, variant):
                                if r["role"] == "user")
                     assert agent._session_db.consume_human_origin(agent.session_id, row["id"], consumer="race")
             return receipt
-        monkeypatch.setattr(np, "add_receipt", race)
+        monkeypatch.setattr(np, "add_evidence", race)
     at = len(h.script.requests) + len(commands)
     def callback(n):
         if mutate and n == at and variant != "stop_during_commit":
@@ -201,7 +204,7 @@ def test_acceptance_fails_closed(workflow, monkeypatch, variant):
     assert result.get("workstream_execution", {}).get("status", "unknown") != "success"
 
 
-def test_concurrent_owner_acceptance_commits_once(workflow, monkeypatch):
+def test_concurrent_owner_reports_commit_once_without_acceptance(workflow, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from agent import workstream_acceptance as acceptance
     h = workflow
@@ -224,13 +227,13 @@ def test_concurrent_owner_acceptance_commits_once(workflow, monkeypatch):
     h.run(message="Verify work acceptance acceptance.json",
           commands=((command, {"workdir": str(h.project)}),))
     assert sum(r is not None for r in results) == 1
-    assert np.get_workstream(h.scope(), rows[0]["workstream_id"])["status"] == "resolved"
-    assert len(np.list_receipts(h.scope(), rows[0]["workstream_id"])) == 1
+    assert np.get_workstream(h.scope(), rows[0]["workstream_id"])["status"] == "open"
+    assert not np.list_receipts(h.scope(), rows[0]["workstream_id"])
     assert len([e for e in np.list_evidence(h.scope(), rows[0]["workstream_id"])
-                if e["source_kind"] == "acceptance"]) == 1
+                if e["source_kind"] == "check_report" and e["status"] == "unverified"]) == 1
 
 
-def test_real_lifecycle_handback_accepts_explicit_ancestor_coverage_only(workflow):
+def test_real_lifecycle_handback_reports_cannot_accept_ancestors(workflow):
     from types import SimpleNamespace
     from agent import work_lifecycle as wl
     from tests.agent.test_workstream_lineage import handback, complete
@@ -248,18 +251,20 @@ def test_real_lifecycle_handback_accepts_explicit_ancestor_coverage_only(workflo
     _, command, _ = contract(h, covers=covers, rows=rows)
     result = h.run(message="Verify work acceptance acceptance.json",
                    commands=((command, {"workdir": str(h.project)}),))
-    assert result["workstream_execution"]["status"] == "success"
-    assert all(np.get_workstream(h.scope(), r["workstream_id"])["status"] == "resolved" for r in rows)
+    # Removed capability: even explicitly named ancestors stay open.
+    assert result["workstream_execution"]["status"] == "unverified"
+    assert all(np.get_workstream(h.scope(), r["workstream_id"])["status"] == "open" for r in rows)
     assert any(e["status"] == "failed" for e in np.list_evidence(h.scope(), original["workstream_id"]))
-    assert "Unfinished:" not in ws.thread_context(h.scope(), ws.load_settings())
-    # Replaying the old helper result cannot reopen accepted work or add notes.
+    assert "Unfinished:" in ws.thread_context(h.scope(), ws.load_settings())
+    assert not np.list_receipts(h.scope())
+    # Replaying the old helper result must not duplicate obligations or notes.
     before = np.list_workstreams(h.scope())
     wl.begin_turn(lifecycle.agent, "", "internal", ["deleg_126703c7"], may_note=False)
     wl.end_turn(lifecycle.agent)
     assert np.list_workstreams(h.scope()) == before
 
 
-def test_acceptance_does_not_require_procedure_learning_or_duplicate_replay(workflow):
+def test_unverified_reports_do_not_require_learning_or_duplicate_replay(workflow):
     h = workflow
     h.run(commands=(), final="Ready")
     rows, command, _ = contract(h)
@@ -268,9 +273,51 @@ def test_acceptance_does_not_require_procedure_learning_or_duplicate_replay(work
     (h.home / "config.yaml").write_text(yaml.safe_dump(h.config))
     result = h.run(message="Verify work acceptance acceptance.json",
                    commands=((command, {"workdir": str(h.project)}),))
-    assert np.get_workstream(h.scope(), rows[0]["workstream_id"])["status"] == "resolved"
+    assert np.get_workstream(h.scope(), rows[0]["workstream_id"])["status"] == "open"
+    assert result["workstream_execution"]["status"] == "unverified"
     before = (np.list_workstreams(h.scope()), np.list_scope_evidence(h.scope()), np.list_receipts(h.scope()))
     from agent.workstream_procedures import finish_execution_turn
     agent, turn, _ = h.turns[-1]
     assert finish_execution_turn(agent, result, turn)["status"] == "unknown"
     assert (np.list_workstreams(h.scope()), np.list_scope_evidence(h.scope()), np.list_receipts(h.scope())) == before
+
+
+def test_fresh_report_attempts_stay_unverified_and_keep_prior_audit(workflow):
+    h = workflow
+    h.run(commands=(), final="Ready")
+    rows, command, spec = contract(h)
+    first = h.run(message="Verify work acceptance acceptance.json",
+                  commands=((command, {"workdir": str(h.project)}),))
+    assert first["workstream_execution"]["status"] == "unverified"
+    current = np.get_workstream(h.scope(), rows[0]["workstream_id"])
+    spec["coverage"][0]["revision"] = current["revision"]
+    command = command.replace("acceptance.xml", "second.xml")
+    spec["checks"][0].update(command=command, report="second.xml")
+    (h.project / "acceptance.json").write_text(json.dumps(spec))
+    second = h.run(message="Verify work acceptance acceptance.json",
+                   commands=((command, {"workdir": str(h.project)}),))
+    assert second["workstream_execution"]["status"] == "unverified"
+    evidence = np.list_evidence(h.scope(), rows[0]["workstream_id"])
+    assert len([e for e in evidence if e["source_kind"] == "check_report"]) == 2
+    assert any(e["source_id"] == "original" and e["status"] == "failed" for e in evidence)
+    assert not any(e["status"] == "verified" for e in evidence)
+    assert np.get_workstream(h.scope(), rows[0]["workstream_id"])["status"] == "open"
+    assert not np.list_receipts(h.scope())
+    assert len([r for r in np.list_history(h.scope(), rows[0]["workstream_id"])
+                if r["op"] == "check_report"]) == 2
+
+
+def test_narrow_manifest_audit_cannot_close_delegated_obligations(workflow):
+    h = workflow
+    h.run(commands=(), final="Ready")
+    rows, _, _ = contract(h)
+    before = [np.get_workstream(h.scope(), row["workstream_id"]) for row in rows]
+    result = h.run(commands=(("test -f manifest.txt", {"workdir": str(h.project)}),
+                             ("sha256sum -c manifest.sha256", {"workdir": str(h.project)})))
+    assert result["workstream_execution"]["status"] == "success"
+    assert [np.get_workstream(h.scope(), row["workstream_id"]) for row in rows] == before
+    assert all(not np.list_receipts(h.scope(), row["workstream_id"]) for row in rows)
+    progress = np.list_workstreams(h.scope(), kinds=["progress"])
+    assert len(progress) == 1
+    assert "SHA-256 manifest" in progress[0]["summary"]
+    assert any(e["status"] == "verified" for e in np.list_evidence(h.scope(), progress[0]["workstream_id"]))

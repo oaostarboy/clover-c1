@@ -19,7 +19,7 @@ HOW TO EDIT (by hand, at release time)
 - Optional work tracking keeps unfinished work and corrections across chats; it stays off until you enable it.
 - A helper returning a result no longer means its work passed your checks.
 - Separate jobs with the same wording stay separate, and repeated results no longer add duplicate notes.
-- Local checks can verify the exact work you named; review, installation and release stay separate.
+- Project test reports no longer mark work done; review, installation and release stay open.
 - Direct answers now stay in your reply when a helper takes over the rest of the job.
 
 ## 1.5.5 | Clover C1.5.5 | 2026-10-13

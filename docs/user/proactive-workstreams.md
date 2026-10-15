@@ -190,24 +190,32 @@ inside the profile/project/audience/root scope. The same words in another job
 are not the same work. No migration guesses which old notes belong together;
 legacy or unsupported work remains unverified until exact owner proof exists.
 
-### Explicit local software acceptance
+### Project checks are reports, not software acceptance
 
-The current foreground execution owner supports one bounded software contract:
-unchanged local artifacts plus explicit pytest checks with fresh JUnit reports.
-It only accepts obligations backed by delegation/project-check evidence, not
-rollout or other owner types. It is not a general verifier for arbitrary tools,
-remote jobs, builds, review, installation, publication or delivery. Those
-require their own evidence.
+**1.5.6 correction: generic pytest auto-verification is removed.** Even an
+explicit human declaration, zero exit, consistent fresh JUnit, and matching
+artifact digests cannot prove that required tests ran against those bytes.
+Project hooks can fabricate reports, an executable named `python` need not be
+Python, and files can change during a check then return to their original
+contents. Pinning the interpreter or comparing endpoint hashes is not enough.
 
-In an authenticated private chat, the human first inspects a local JSON contract,
-then sends exactly `Verify work acceptance acceptance.json`. A model-generated
-message, helper return, shell invocation or historical message cannot replace
-that current human input. The contract declares which checks fully cover each
-named obligation; the runtime does not infer coverage or close its ancestors.
-Do not name a work item unless these criteria cover its entire accepted scope.
+The legacy marker `Verify work acceptance acceptance.json` remains a bounded,
+authenticated **check-report intake only**. It never resolves an obligation,
+creates verified evidence, creates an executed/acceptance receipt, counts toward
+procedure learning, or returns acceptance success. A passing-looking report is
+stored as `check_report`, status `unverified`, trust `project_report`. The current
+summary says the checks **reported** passing and acceptance is unverified.
+Earlier failed evidence remains intact. No separate “user accepted” capability
+is introduced by this marker.
 
-The JSON has exactly these fields (replace example identifiers, revisions,
-session ID and digest with real values; placeholder digests are rejected):
+This applies to every named obligation, including software-only, unknown and
+mixed tasks. `delegation` describes transport, not semantic acceptance type.
+Human-declared coverage cannot turn “build, review, install and release” into a
+software-only criterion. No title keywords classify or close work. An independent
+owner with an exact immutable criterion and execution snapshot would be needed
+before restoring any generic software acceptance; 1.5.6 provides none.
+
+The existing declaration format is retained for supporting reports only:
 
 ```json
 {
@@ -224,35 +232,38 @@ session ID and digest with real values; placeholder digests are rejected):
 }
 ```
 
-Pin **all relevant candidate inputs**, for example a complete candidate archive,
-not just an unrelated passing test. Contract and artifacts must already exist
-before the turn. Reports must not exist yet; use a new report name for a new
-attempt. Commands still run through the normal foreground terminal owner and
-its existing permissions/approvals, with explicit `workdir` equal to the scoped
-project. This feature launches no command and grants no permission. Missing or
-unsupported execution leaves the obligation open.
+In an authenticated private chat, inspect this declaration before sending the
+marker. Literal IDs, revisions and session must be current. Contract/artifacts
+must already exist; reports must be absent. Every command still uses the normal
+foreground terminal and its permissions, with explicit scoped project `workdir`.
+The marker launches nothing and grants no permission. The command shape and XML
+consistency checks bound admitted data; they do **not** authenticate an
+interpreter or attest test execution. Reported test counts are report data.
 
-Limits: active opt-in mode, same exact session/scope, an 8 KiB contract, up to
-8 obligations, 4 checks and 32 regular local artifacts (4 MiB total), reports
-up to 1 MiB each and acceptance within 300 seconds. Paths must be relative,
-without traversal or symlinks. Every declared check must run in this turn,
-return zero, and produce a consistent report with enough actual test cases and
-no errors, failures or skips. The owner independently reads artifact digests;
-exit zero alone is never sufficient. Model prose is not inspected as proof.
+Limits remain active opt-in mode, exact session/scope, an 8 KiB declaration,
+8 obligations, 4 checks, 32 regular local artifacts (4 MiB total), reports up to
+1 MiB each, and a 300-second window. Traversal and symlinks are rejected.
+Stop/cancel, stale or changed scope/session/revision/evidence, partial checks,
+changed declarations/reports/artifact endpoints and concurrent writes fail
+closed. Observation identity, original declaration, result row/call IDs and
+report digests persist with unverified evidence and current summary atomically.
+Exact readback precedes the unverified result. Duplicate replay adds no notes.
 
-Stop/cancel, changed scope/session/revision/evidence, stale input, partial check
-execution, changed contract/artifacts/reports and concurrent acceptance fail
-closed. Receipt, immutable contract/check identities, evidence and current
-summary settle in one existing-notepad transaction. Exact readback precedes a
-success result. Old failed attempts remain failed. Only explicitly covered IDs
-close; separate review/install/release work remains open. Procedure learning
-need not be enabled, and this path never creates a skill draft.
+### Narrow deterministic audits remain separate
 
-The Linux tests exercise real local pytest, the authenticated scripted gateway,
-durable storage, Stop/races and context readback. They do not prove live provider
-behavior or Windows/macOS support. This remains a local release candidate:
-independent review, CI/native-install checks and separately authorized rollout
-are still required. No profile or fleet is enabled by preparing the candidate.
+`Verify SHA-256 manifest manifest.sha256` still supports its own runtime-read
+file-digest criterion. It proves only that the owner read bytes matching the
+predeclared manifest. It does not prove software correctness, review, install,
+release or delivery, and it never closes generic delegated obligations. Its
+narrow progress evidence and reviewable procedure drafts remain supported.
+
+The Linux tests exercise real local pytest and manifest reads, the authenticated
+scripted gateway, temporary SQLite storage, Stop/races and context readback.
+They do not prove live provider behavior or Windows/macOS support. This remains
+an unapproved local 1.5.6 release candidate: independent exact-commit review,
+CI/native-install checks and separately authorized rollout are still required.
+No profile or fleet is enabled by preparing it. Historical records are not
+rewritten or reconciled by this correction.
 
 ## Settings
 

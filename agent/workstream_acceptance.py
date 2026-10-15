@@ -1,9 +1,11 @@
-"""Bounded, human-declared acceptance at the existing foreground owner seam.
+"""Bounded check-report intake at the existing foreground owner seam.
 
-No model proof, subprocess launcher, permission grant or ancestor closure.
-A current authenticated human names an immutable local contract before tools.
-The owner reads actual current-turn check results, fresh JUnit and frozen
-artifacts, then settles only exact named work revisions in one transaction.
+The legacy acceptance marker now records supporting evidence only. Project
+pytest hooks, executables and JUnit are not independent execution attestation;
+endpoint digests do not identify the artifact version read by a check. Neither
+human-declared coverage nor delegation transport establishes semantic scope.
+Consequently this module NEVER verifies or resolves any obligation in 1.5.6.
+The separate deterministic manifest-audit owner is not a software verifier.
 """
 from __future__ import annotations
 
@@ -57,7 +59,7 @@ class Acceptance:
 
 
 def prepare(agent, message, scope):
-    """Freeze explicit coverage/criteria before execution, never from prose."""
+    """Capture a bounded report declaration; it cannot authorize acceptance."""
     from agent.workstream_origin import ingress_is_valid
     from tools.terminal_tool import _get_env_config
     match = re.fullmatch(r"Verify work acceptance ([A-Za-z0-9][A-Za-z0-9_./-]*)", str(message or ""))
@@ -78,9 +80,9 @@ def prepare(agent, message, scope):
                     or target["session_id"] != sid):
                 return None
             prior = np.list_evidence(scope, row["workstream_id"])
-            # This software-check owner cannot certify rollout, review, delivery,
-            # or other owners' obligation types, even when a contract names one.
-            if not prior or any(e["source_kind"] not in ("delegation", "project_check") for e in prior):
+            # Legacy admission limit for collecting reports only. Transport
+            # is NOT an obligation type; even these rows can never be closed.
+            if not prior or any(e["source_kind"] not in ("delegation", "project_check", "check_report") for e in prior):
                 return None
             evidence.append((row["workstream_id"], _evidence(scope, row["workstream_id"])))
         for check in spec["checks"]:
@@ -148,7 +150,7 @@ def _spec(content):
 
 
 def finish(agent, goal, rows, result):
-    """Owner result readback plus atomic exact-ID acceptance; no model API."""
+    """Read project reports as unverified data; never accept or resolve work."""
     from agent.workstream_human_hooks import _authenticate
     from agent.workstream_procedures import _workflow
     from agent.work_lifecycle import is_silent_reply
@@ -161,6 +163,7 @@ def finish(agent, goal, rows, result):
         binding = _authenticate(agent, role="user", message=goal.message,
             session_id=goal.session_id, message_id=None, row_id=rows[0]["id"])
         return (binding is not None and binding[2].ingress_event_id == goal.event_id
+                and str(getattr(agent, "session_id", "")) == goal.session_id
                 and ws.scope_for_agent(agent) == scope and ws.load_settings().active
                 and not getattr(agent, "_interrupt_requested", False)
                 and 0 <= time.monotonic() - goal.started <= 300
@@ -184,6 +187,7 @@ def finish(agent, goal, rows, result):
     if any(live.get(r.get("tool_call_id")) != r["content"] for r in tool_rows):
         return None
     reports = []
+    reported_counts = []
     for check in spec["checks"]:
         value = _read(scope, check["report"])
         if b"<!" in value:
@@ -197,7 +201,10 @@ def finish(agent, goal, rows, result):
         if (not suites or sum(int(s.attrib["tests"]) for s in suites) != len(cases)
                 or any(int(s.attrib[k]) != 0 for s in suites for k in ("failures", "errors", "skipped"))):
             return None
+        # Consistency of project-written XML is a data-quality check only.
+        # A hook or a fake executable can invent every one of these cases.
         reports.append(hashlib.sha256(value).hexdigest())
+        reported_counts.append(len(cases))
     def reports_current():
         return all(hashlib.sha256(_read(scope, check["report"])).hexdigest() == digest
                    for check, digest in zip(spec["checks"], reports))
@@ -206,37 +213,38 @@ def finish(agent, goal, rows, result):
     by_call = {r["tool_call_id"]: r for r in tool_rows}
     check_receipts = [{"call_id": call["id"], "row": by_call[call["id"]]["id"],
                        "result_digest": hashlib.sha256(by_call[call["id"]]["content"].encode()).hexdigest(),
-                       "report_digest": report}
-                      for call, report in zip(calls, reports)]
-    proof = {"v": 1, "owner": "foreground_pytest", "spec_digest": hashlib.sha256(goal.content).hexdigest(),
-             "artifact_digest": artifact_digest, "check_ids": _digest(check_receipts),
-             "event": goal.event_id, "row": rows[0]["id"]}
-    source = "accept:" + _digest(proof)
-    detail = json.dumps(proof, separators=(",", ":"))
-    if len(detail) > 512:
-        return None
+                       "report_digest": report, "reported_tests": count}
+                      for call, report, count in zip(calls, reports, reported_counts)]
+    observation = {"v": 1, "owner": "foreground_check_report", "assurance": "unverified",
+                   "artifact_binding": "endpoint_only",
+                   "spec_digest": hashlib.sha256(goal.content).hexdigest(),
+                   "artifact_digest": artifact_digest, "check_ids": _digest(check_receipts),
+                   "event": goal.event_id, "row": rows[0]["id"]}
+    source = "check-report:" + _digest(observation)
+    saved = []
     with np.write_batch():
         if not current() or not reports_current() or _artifacts(scope, spec["artifacts"]) != artifact_digest:
-            raise ValueError("acceptance lost current ownership")
+            raise ValueError("check report lost current ownership")
         for target, (wid, snapshot) in zip(spec["coverage"], goal.evidence):
             row = np.get_workstream(scope, wid)
             if (row is None or row["revision"] != target["revision"]
                     or row["status"] not in ("open", "deferred") or _evidence(scope, wid) != snapshot):
-                raise ValueError("work changed since acceptance declaration")
-            summary = "Candidate artifacts and declared checks verified; review/install/release not implied"
-            np.record_acceptance_contract(scope, wid, expected_revision=row["revision"],
-                                          contract=goal.content.decode("utf-8"), proof=proof,
-                                          check_receipts=check_receipts)
-            np.add_receipt(scope, wid, kind="executed", owner="acceptance", source_id=source, detail=detail)
-            np.add_evidence(scope, wid, source_kind="acceptance", source_id=source,
-                status="verified", trust="owner_session", session_id=goal.session_id,
-                summary=summary, key=proof["spec_digest"])
-            np.update_workstream(scope, wid, expected_revision=row["revision"],
-                                 status="resolved", summary=summary, actor="acceptance")
+                raise ValueError("work changed since check declaration")
+            summary = "Declared checks reported passing; work acceptance unverified"
+            np.record_check_report(scope, wid, expected_revision=row["revision"],
+                                   contract=goal.content.decode("utf-8"), observation=observation,
+                                   check_receipts=check_receipts)
+            # No acceptance/executed receipt and no status transition. These
+            # reports cannot attest actual execution, exact bytes, or coverage
+            # of software, unknown, mixed, review, install or release work.
+            np.add_evidence(scope, wid, source_kind="check_report", source_id=source,
+                status="unverified", trust="project_report", session_id=goal.session_id,
+                summary=summary, key=observation["spec_digest"])
+            saved.append(np.update_workstream(scope, wid, expected_revision=row["revision"],
+                                              summary=summary, actor="check_report"))
         if not current() or not reports_current() or _artifacts(scope, spec["artifacts"]) != artifact_digest:
-            raise ValueError("acceptance changed during commit")
-    # Exact target readback is required before success is exposed.
-    if any(np.get_workstream(scope, t["workstream_id"])["status"] != "resolved" for t in spec["coverage"]):
+            raise ValueError("check report changed during commit")
+    if any(np.get_workstream(scope, row["workstream_id"]) != row for row in saved):
         return None
-    return {"status": "success", "execution_ids": [source], "drafts": [],
-            "covered_work_ids": [t["workstream_id"] for t in spec["coverage"]]}
+    return {"status": "unverified", "execution_ids": [], "drafts": [],
+            "reported_work_ids": [row["workstream_id"] for row in saved]}

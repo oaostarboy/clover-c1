@@ -715,7 +715,14 @@ def record_outcomes(
                         workstream_id=wid, session_id=o.session_id, source="runtime",
                         max_items=settings.threads_max_items, now=moment,
                     )
+                prior = next((e for e in np.list_evidence(scope, wid)
+                              if e["source_kind"] == o.source_kind and e["source_id"] == o.source_id), None)
                 recorded = np.add_evidence(scope, wid, **evidence)
+                if prior == recorded and o.status != "verified":
+                    # Replaying an unchanged helper observation must not replace
+                    # a newer unverified check report/current owner summary.
+                    result.append(row)
+                    continue
                 if o.status == "verified" and recorded["status"] != "verified":
                     # Retain the failed attempt; acceptance is a distinct fact.
                     recorded = np.add_evidence(scope, wid, **{

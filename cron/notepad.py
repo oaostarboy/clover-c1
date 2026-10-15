@@ -826,29 +826,32 @@ def add_evidence(
         ).fetchone())
 
 
-def record_acceptance_contract(
+def record_check_report(
     scope: Any, workstream_id: str, *, expected_revision: int, contract: str,
-    proof: Dict[str, Any], check_receipts: List[Dict[str, Any]], now: Optional[datetime] = None,
+    observation: Dict[str, Any], check_receipts: List[Dict[str, Any]], now: Optional[datetime] = None,
 ) -> None:
-    """Retain bounded owner acceptance in the existing append-only audit trail.
+    """Retain an unverified report, not acceptance, in the append-only audit.
 
-    Called in the acceptance write batch with evidence/status settlement, not
-    an authority intake. The original spec survives later file edits/removal.
+    The pre-tool declaration and stored result identities survive file edits.
+    Historical acceptance_contract entries remain untouched; this new operation
+    must not imply those old records or new project reports prove execution.
     """
     import hashlib
     import json
 
     if (len(contract.encode()) > 8192 or not 1 <= len(check_receipts) <= 4
-            or hashlib.sha256(contract.encode()).hexdigest() != proof.get("spec_digest")):
-        raise ValueError("acceptance contract identity mismatch")
+            or observation.get("assurance") != "unverified"
+            or hashlib.sha256(contract.encode()).hexdigest() != observation.get("spec_digest")):
+        raise ValueError("check report identity mismatch")
     key = _scope_key(scope)
     with _ws_write() as conn:
         row = _require(conn, key, workstream_id)
         if row["revision"] != expected_revision:
-            raise StaleRevision("acceptance contract revision changed")
-        _history(conn, key, str(workstream_id), expected_revision, "acceptance_contract",
-                 "acceptance", json.dumps({"contract": contract, "proof": proof, "checks": check_receipts},
-                                          separators=(",", ":")), _utc_iso(now))
+            raise StaleRevision("check report revision changed")
+        _history(conn, key, str(workstream_id), expected_revision, "check_report",
+                 "check_report", json.dumps({"contract": contract, "observation": observation,
+                                             "checks": check_receipts},
+                                            separators=(",", ":")), _utc_iso(now))
 
 
 def add_receipt(
