@@ -61,9 +61,15 @@ def fixture_origin(repo, mirror, target):
         raise ValueError('fixture origin must be new for this run')
     if git(repo, 'replace', '-l'):
         raise ValueError('replacement refs are prohibited')
+    target_tree = git(repo, 'rev-parse', '--verify', target + '^{tree}')
     subprocess.run(['git', 'init', '--bare', str(mirror)], check=True)
-    subprocess.run(['git', '-C', str(mirror), 'fetch', '--no-tags', str(Path(repo).resolve()),
-                    target + ':refs/heads/main'], check=True)
+    # Installer checkouts are shallow. Accept their real shallow boundary in
+    # this disposable bare download source; do not rewrite/unshallow the install.
+    subprocess.run(['git', '-C', str(mirror), 'fetch', '--no-tags', '--update-shallow',
+                    str(Path(repo).resolve()), target + ':refs/heads/main'], check=True)
+    if (git(mirror, 'rev-parse', 'refs/heads/main^{commit}') != target
+            or git(mirror, 'rev-parse', 'refs/heads/main^{tree}') != target_tree):
+        raise ValueError('fixture origin commit/tree mismatch')
     git(repo, 'remote', 'set-url', 'origin', str(mirror))
     git(repo, 'config', 'remote.origin.fetch', '+refs/heads/main:refs/remotes/origin/main')
     git(repo, 'config', 'remote.upstream.url', str(mirror))
@@ -136,23 +142,43 @@ def installed(repo, sha, tree):
 
 def observe_gateway(repo, home, sha, port):
     import psutil
+    import sys
     import urllib.request
     home = Path(home).resolve()
     repo = Path(repo).resolve()
     state = json.loads((home / 'gateway_state.json').read_text())
     processes = []
     for proc in psutil.process_iter(['cmdline']):
+        candidate = False
         try:
             argv = proc.info['cmdline'] or []
-            if ('gateway' in argv and 'run' in argv and '-c' not in argv
-                    and str(repo) in ' '.join(argv) and proc.environ().get('CLOVER_HOME') == str(home)):
+            candidate = ('gateway' in argv and 'run' in argv and '-c' not in argv
+                         and str(repo) in ' '.join(argv))
+            if candidate and proc.environ().get('CLOVER_HOME') == str(home):
                 processes.append(proc.pid)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+        except psutil.NoSuchProcess:
             continue
-    listeners = sorted({c.pid for c in psutil.net_connections(kind='inet')
-                        if c.status == psutil.CONN_LISTEN and c.laddr.port == port})
+        except psutil.AccessDenied:
+            # Ignore unrelated host processes, never an unobservable owned PID
+            # or possible second gateway from this disposable install.
+            if candidate or proc.pid == state.get('pid'):
+                raise
+    proc = None
+    if sys.platform == 'darwin':
+        if sorted(processes) != [state.get('pid')]:
+            raise ValueError(f'gateway process count/ownership mismatch: {processes}')
+        proc = psutil.Process(state['pid'])
+        # macOS's system-wide scan walks protected host processes. The native
+        # per-process API can inspect our own gateway without root. A denied
+        # or empty observation is NOT ownership evidence and must fail closed.
+        listeners = sorted({proc.pid for c in proc.net_connections(kind='inet')
+                            if c.status == psutil.CONN_LISTEN and c.laddr.port == port})
+    else:
+        listeners = sorted({c.pid for c in psutil.net_connections(kind='inet')
+                            if c.status == psutil.CONN_LISTEN and c.laddr.port == port})
     check_gateway(state, sha, sorted(processes), listeners)
-    proc = psutil.Process(state['pid'])
+    if proc is None:
+        proc = psutil.Process(state['pid'])
     if proc.status() == psutil.STATUS_ZOMBIE:
         raise ValueError('gateway is a zombie')
     recorded = str(state['start_time'])
