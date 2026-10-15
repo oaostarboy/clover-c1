@@ -53,6 +53,8 @@ jobs:
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test ! -e "$HOME/.clover"
           [[ $TARGET_REF =~ ^[0-9a-f]{40}$ && $TARGET_TREE =~ ^[0-9a-f]{40}$ ]]
+          test "$TARGET_REF" = ed52cc4079cc55f14e75a9e10bb95e15bf4d240f
+          test "$TARGET_TREE" = 94e278faf861460d6a8e84bdcd1c6aa9c81e36dd
           test "$(git rev-parse HEAD)" = "$TARGET_REF"
           test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
           test -z "$(git replace -l)"
@@ -104,6 +106,44 @@ jobs:
           git diff --exit-code
           git diff --cached --exit-code
           exit "$status"
+      - name: Require complete nonempty JUnit with no waived cases
+        if: always()
+        shell: bash
+        env:
+          EVIDENCE: ${{ runner.temp }}/evidence
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          evidence = Path(os.environ['EVIDENCE'])
+          evidence.mkdir(parents=True, exist_ok=True)
+          expected = sorted(Path('tests/docker').glob('test_*.py'))
+          problems = [] if expected else ['no expected Docker integration files']
+          results = []
+          for source in expected:
+              expected_junit = evidence / (source.stem + '.xml')
+              entry = {'file': str(source), 'junit': expected_junit.name}
+              try:
+                  root = ET.parse(expected_junit).getroot()
+                  cases = list(root.iter('testcase'))
+                  nonpassing = [case.get('name') for case in cases if
+                      case.find('skipped') is not None or case.find('failure') is not None or
+                      case.find('error') is not None]
+                  suite_bad = any(int(suite.get(key, '0')) != 0
+                      for suite in root.iter('testsuite') for key in ['failures', 'errors', 'skipped'])
+                  entry.update(tests=len(cases), nonpassing=nonpassing)
+                  if not cases or nonpassing or suite_bad:
+                      problems.append(str(source) + ': empty or non-passing JUnit')
+              except (OSError, ET.ParseError, ValueError) as exc:
+                  entry['error'] = type(exc).__name__
+                  problems.append(str(source) + ': missing or invalid JUnit')
+              results.append(entry)
+          summary = {'expected_files': len(expected), 'results': results, 'problems': problems}
+          (evidence / 'junit-acceptance.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+          print(json.dumps(summary))
+          raise SystemExit(1 if problems else 0)
+          PY
       - name: Preserve exact source, build and per-file evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
