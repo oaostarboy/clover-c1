@@ -169,6 +169,13 @@ class Harness:
             if hasattr(aux, name):
                 monkeypatch.setattr(aux, name, _aux_refusal(name))
 
+        # A preceding file can import this consumer before aux is scripted.
+        # Its from-import binding must use the same refusal boundary, not the
+        # real credential/provider resolver. Keep title/persistence logic real.
+        import agent.title_generator as titles
+
+        monkeypatch.setattr(titles, "call_llm", aux.call_llm)
+
         from gateway.session import SessionStore
 
         self.runner = gateway_run.GatewayRunner(GatewayConfig())
@@ -268,6 +275,12 @@ class Harness:
                 "SELECT name FROM sqlite_master WHERE type='table'")}
 
     def close(self):
+        # Complete real background title work before closing its SQLite owner
+        # and before monkeypatch removes the scripted auxiliary boundary.
+        for worker in threading.enumerate():
+            if worker.name == "auto-title":
+                worker.join(timeout=5)
+                assert not worker.is_alive(), "scripted auto-title worker did not finish"
         self.db.close()
 
 
