@@ -89,6 +89,50 @@ and an enrolled job (`proactive.eligible_jobs`) whose `workdir` equals the
 project, so it is unavailable until the chat ingress provides that receipt. It
 never starts, authorizes or schedules work.
 
+### Creating an explicit blocker and linking its monitor
+
+The same authenticated `workstream-monitor: ` consumer can create a missing
+blocker when the request includes an additional `blocker` object containing
+exactly `title` and `summary`. This is explicit record approval, not permission
+to execute a stage. Example (replace every scope value with the current
+canonical private scope; do not use these example paths literally):
+
+```text
+workstream-monitor: {"scope":{"profile":"/absolute/profile-home","project":"/absolute/project","audience":"private:12345","root":"12345"},"workstream_id":"ws_0123456789abcdef","blocker":{"title":"CI gate","summary":"Wait for the monitored CI result"},"prompt":"watch CI","schedule":"every 1h","monitor_script":"ci-status.sh","approve":true}
+```
+
+The record ID must be `ws_` followed by exactly 16 lowercase hex characters;
+no case conversion, whitespace repair, audience collapse or root adoption is
+performed. The title/summary must be non-empty, unpadded and within the existing
+notepad limits. Recognized secrets are refused before any ledger write; submit
+redacted text. A missing record without `blocker` is still refused. Existing
+records are not rewritten by the new form: kind, live status, original session,
+literal ID, title and summary must match this producer's owned record.
+
+The response confirms a local-only monitor job, not enrollment or linking.
+Independently enroll the exact returned job ID in `proactive.eligible_jobs`,
+then send a new authenticated message with the identical request (including
+`blocker`) plus `job_id`. The job's original session/request and all canonical
+scope fields must still match. Existing-record requests without `blocker`
+retain the original grammar and linking behavior.
+
+Record creation, provenance and approval CAS use one existing-notepad SQLite
+transaction. The creation intent commits before crossing into the existing
+jobs.json owner, followed by exact job readback and a saved receipt. Repeating
+the exact owned create request returns the same confirmed job. Conflicting
+requests or an intent without a confirmed save are denied/unknown, never a
+second creation attempt; a partial save needs owner inspection. These are
+cross-store failure fences, not a claim of one distributed SQLite/JSON commit.
+
+Creating/approving/linking a blocker does not install a continuation plan or
+spend execution authority. Only an original runtime-accepted continuation
+stage can be held and resumed; permission intersection, Stop, approval,
+revocation, expiry and remaining budget are rechecked at admission. Unchanged
+monitor input produces no model call or effect. A source change is evidence,
+not inferred authorization. This path is exercised through the real Telegram
+private ingress and installed hooks with scripted providers; other surface
+coverage belongs to their ingress owners and is not certified here.
+
 ### Procedure evidence
 
 A run counts only when the foreground execution owner reads authentic stored

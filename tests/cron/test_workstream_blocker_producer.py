@@ -516,4 +516,3 @@ def test_two_processes_race_the_actual_authenticated_consumer(human, monkeypatch
     finally:
         os.close(read_fd)
         os.close(write_fd)
-
