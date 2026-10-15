@@ -360,14 +360,31 @@ def test_committed_write_with_sqlite_readback_failure_is_unknown_not_retried(hos
 
     def read(*args, **kwargs):
         if state["committed"] and not state["denials"]:
+            from contextlib import contextmanager
+
+            real_ctx = host.db._read_ctx
+
             def deny(action, *_args):
-                return sqlite3.SQLITE_DENY if action == sqlite3.SQLITE_SELECT else sqlite3.SQLITE_OK
-            host.db._conn.set_authorizer(deny)
-            try:
-                state["denials"] += 1
+                if action == sqlite3.SQLITE_SELECT:
+                    state["denials"] += 1
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            @contextmanager
+            def denied_read():
+                # WAL reads borrow a pooled connection, not the writer's
+                # _conn. Install the real SQLite fault on the actual checkout
+                # and remove it before returning that handle to the pool.
+                with real_ctx() as conn:
+                    conn.set_authorizer(deny)
+                    try:
+                        yield conn
+                    finally:
+                        conn.set_authorizer(None)
+
+            with monkeypatch.context() as fault:
+                fault.setattr(host.db, '_read_ctx', denied_read)
                 return real_read(*args, **kwargs)
-            finally:
-                host.db._conn.set_authorizer(None)
         return real_read(*args, **kwargs)
 
     monkeypatch.setattr(host.db, method, publish)
