@@ -26,10 +26,36 @@ TAILS = {
 }
 
 
+def _bootstrap_read_only_cli() -> None:
+    # -I does not suppress application import side effects. Install these
+    # process-local TEST-ONLY fences before importing scanner dependencies.
+    # Keep sys.argv intact: classifiers must see the real process command line.
+    os.environ["CLOVER_IMPORT_PROBE"] = "1"  # existing early-recovery opt-out
+    from clover_cli import _install_repair
+
+    def refuse_launcher_repair(*_args, **_kwargs):
+        raise RuntimeError("inert holder refuses startup launcher mutation")
+
+    _install_repair.ensure_windows_bin_launchers = refuse_launcher_repair
+
+    from clover_cli import env_loader
+
+    load_dotenv = env_loader.load_clover_dotenv
+
+    def load_without_external_secrets(**kwargs):
+        # Use the existing explicit opt-out even when main.py requests True.
+        # Leave the synthetic hostile config in place; do not replace it.
+        kwargs["load_external_secrets"] = False
+        return load_dotenv(**kwargs)
+
+    env_loader.load_clover_dotenv = load_without_external_secrets
+
+
 def scan() -> int:
     # -I makes imports independent of caller cwd/environment. Only the reviewed
     # repository is added, to exercise the REAL read-only detector/classifiers.
     sys.path.insert(0, str(ROOT))
+    _bootstrap_read_only_cli()
     import psutil
     from clover_cli.update_cmd import (
         _classify_concurrent_instance, _detect_venv_python_processes,

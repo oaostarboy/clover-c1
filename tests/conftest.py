@@ -1557,8 +1557,8 @@ def _live_system_guard(request, monkeypatch):
     _inert_python_resolved = Path(_inert_python).resolve()
     # Raw LF and CRLF checkouts only (Git on native Windows may use CRLF).
     _inert_digests = {
-        "7582b77c2b3ac48194763aec317a80bf7f07a023ef476a2efb1914524b855510",
-        "a281a73f4650ce5bcab06e07d8e4367be4a51669deb78f9ce5d9eb6be9d60b06",
+        "fa5af9c6e3b91e0f64d4527f416f8425d05a9beddf3508e9fb6d5d8dee9a219e",
+        "2b87f0e5c1e52373edf1df5a22b31f9e60f01dd2679c334b2fa71dfe5423c890",
     }
     _inert_env = {k: _os.environ[k] for k in (
         "SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP",
