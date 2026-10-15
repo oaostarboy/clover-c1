@@ -1,11 +1,17 @@
 """Real gateway/pytest reports stay unverified; narrow audit acceptance is separate."""
 import hashlib
 import json
+import shlex
+import sys
 
 from agent import workstreams as ws
 from cron import notepad as np
 from tests.gateway.test_workstream_verified_workflow import workflow, network_guard  # noqa: F401
 import pytest
+
+# Preserve Windows' existing command spelling: the unchanged contract parser
+# accepts python/python3, not native python.exe paths.
+_PYTEST_PYTHON = "python" if sys.platform == "win32" else shlex.quote(sys.executable)
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +35,9 @@ def contract(h, *, covers=None, rows=None):
         ], ws.load_settings())
     probe = h.project / "acceptance_probe.py"
     probe.write_text("def test_candidate():\n    assert 2 + 2 == 4\n")
-    command = "python -m pytest acceptance_probe.py --junitxml=acceptance.xml -q"
+    # The real project shell need not resolve bare python to the test venv.
+    # Pin only this test command; project reports still cannot verify work.
+    command = _PYTEST_PYTHON + " -m pytest acceptance_probe.py --junitxml=acceptance.xml -q"
     spec = {
         "version": 1,
         "coverage": [{"workstream_id": rows[0]["workstream_id"], "revision": rows[0]["revision"],
@@ -169,7 +177,7 @@ def test_acceptance_fails_closed(workflow, monkeypatch, variant):
     elif variant == "duplicate_coverage":
         spec["coverage"].append(dict(spec["coverage"][0]))
     elif variant == "partial_check_coverage":
-        spec["checks"].append({"command": "python -m pytest second.py --junitxml=second.xml -q",
+        spec["checks"].append({"command": _PYTEST_PYTHON + " -m pytest second.py --junitxml=second.xml -q",
                                "report": "second.xml", "min_tests": 1})
         spec["coverage"][0]["checks"].append(1)
     elif variant == "wrong_cwd":
