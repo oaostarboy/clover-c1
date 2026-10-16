@@ -285,17 +285,25 @@ def _recover_publication(parent, current, directory, owned, latest_raw):
 
 def resume(current, directory, project_root, *, process_chain, interpreter, now, wait_seconds=5):
     """Adopt only an owned legacy parent; return canonical path or an explicit refusal."""
-    deadline = time.monotonic() + wait_seconds
+    began = time.monotonic()
+    deadline = began + wait_seconds
+    probe = {'elapsed_seconds': 0.0, 'attempt_count': 0, 'attempts': []}
     reason = 'handoff unavailable'
     while True:
+        probe_phase = 'parent_receipt'
+        process_timeout = None
         try:
             parent, latest_raw = _read(directory / 'latest.json')
             _validate_parent(parent, current, project_root, interpreter)
-            chain = process_chain(current['pid'], timeout=max(.1, min(5, deadline - time.monotonic())))
+            probe_phase = 'process_chain'
+            process_timeout = max(.1, min(5, deadline - time.monotonic()))
+            chain = process_chain(current['pid'], timeout=process_timeout)
+            probe_phase = 'process_witness'
             owned = _witness(chain, current, parent, project_root, interpreter, now)
             handoff = parent.get(TAG)
             if isinstance(handoff, dict) and handoff.get('state') in ('adopted', 'completed', 'incomplete'):
                 return _resume_existing(parent, current, directory, owned)
+            probe_phase = 'parent_completion'
             modern = isinstance(handoff, dict) and handoff.get('state') == 'transferred'
             if modern:
                 _require(parent.get('outcome') == 'running' and parent.get('finished_at') is None, 'transfer is not pending')
@@ -307,7 +315,9 @@ def resume(current, directory, project_root, *, process_chain, interpreter, now,
                 _require(parent.get('outcome') == 'success' and parent.get('stop_reason') == 'sys.exit(0)' and type(parent.get('exit_code')) is int and parent['exit_code'] == 0, 'parent has not completed legacy handoff')
                 finished = _stamp(parent.get('finished_at'))
             _require(owned[-1]['created'] <= finished <= now() + 1, 'stale original completion')
+            probe_phase = 'beacon'
             resume_expected = _beacon(directory, parent, owned, project_root, now)
+            probe_phase = 'publication'
             recovered = _recover_publication(parent, current, directory, owned, latest_raw)
             if recovered is not None:
                 return recovered
@@ -334,6 +344,7 @@ def resume(current, directory, project_root, *, process_chain, interpreter, now,
             else:
                 with phase.open('xb') as handle:
                     handle.write(raw)
+            probe['elapsed_seconds'] = time.monotonic() - began
             tag = {'state': 'adopted', 'root_pid': parent['pid'], 'root_started_at': parent['started_at'],
                    'continuation_pid': current['pid'], 'continuation_created_at': owned[0]['created'],
                    'anchor_pid': owned[-1]['pid'], 'anchor_created_at': owned[-1]['created'],
@@ -353,6 +364,7 @@ def resume(current, directory, project_root, *, process_chain, interpreter, now,
             parent['outcome'] = 'running'; parent['finished_at'] = None
             parent.pop('exit_code', None); parent.pop('stop_reason', None)
             parent[TAG] = tag
+            parent[TAG + '_probe'] = probe
             payload = _json(parent)
             _atomic(canonical, payload)
             _atomic(directory / 'latest.json', payload)
@@ -360,7 +372,15 @@ def resume(current, directory, project_root, *, process_chain, interpreter, now,
             return canonical, 'adopted'
         except Exception as exc:
             reason = str(exc) if isinstance(exc, Unverified) else type(exc).__name__
+            probe['elapsed_seconds'] = time.monotonic() - began
+            probe['attempt_count'] += 1
+            probe['attempts'].append({'phase': probe_phase, 'elapsed_seconds': probe['elapsed_seconds'],
+                                      'process_timeout_seconds': process_timeout, 'reason': reason})
+            # Retain the first failure and recent predicates without logging
+            # subprocess commands, exception payloads, config or unbounded data.
+            if len(probe['attempts']) > 16:
+                del probe['attempts'][1]
             if time.monotonic() >= deadline:
-                current[TAG] = {'state': 'unverified', 'reason': reason}
+                current[TAG] = {'state': 'unverified', 'reason': reason, 'probe': probe}
                 return None, 'unverified'
             time.sleep(min(.05, max(0, deadline - time.monotonic())))

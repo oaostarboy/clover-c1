@@ -83,6 +83,8 @@ def main():
     suites = dict(SUITES)
     if os.name == 'nt':
         suites['windows-secure-reader'] = ('tests/agent/test_windows_audit_native.py', '')
+        suites['windows-receipt-handoff'] = ('tests/clover_cli/test_windows_update_receipt_handoff.py', '')
+        suites['windows-handoff-clock'] = ('tests/clover_cli/test_windows_handoff_clock_native.py', '')
     results = []
     failed = False
     for label, (file, expression) in suites.items():
