@@ -35,3 +35,16 @@ def test_host_mount_is_refused(built_image):
     with pytest.raises((AssertionError, ValueError)):
         subprocess.run(['docker', 'run', '--rm', '-v', '/:/opt/data', built_image,
                         'gateway', 'run'], capture_output=True, timeout=10)
+
+
+def test_direct_docker_mutation_has_no_implicit_grant():
+    with pytest.raises(AssertionError, match='ungranted Docker'):
+        subprocess.Popen(['docker', 'rm', '-f', 'foreign-container'])
+
+
+def test_readonly_docker_cannot_override_executable():
+    import sys
+    with pytest.raises(AssertionError, match='ungranted Docker'):
+        with subprocess.Popen(['docker', 'inspect', 'foreign-container'], executable=sys.executable,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) as proc:
+            proc.wait(timeout=10)

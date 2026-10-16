@@ -1632,6 +1632,9 @@ def _live_system_guard(request, monkeypatch):
         if (docker_capability is not None
                 and docker_capability.admit(name, cmd, args, options)):
             return
+        if (docker_capability is not None and docker_capability.involves_docker(cmd)
+                and not docker_capability.readonly(cmd, args, options)):
+            raise AssertionError('live-system guard: ungranted Docker mutation refused')
         if _is_blocked_systemctl(cmd):
             raise RuntimeError(
                 f"tests/conftest.py live-system guard: blocked "

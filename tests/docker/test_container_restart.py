@@ -55,8 +55,6 @@ def restart_container(request, built_image: str):
     name = f"clover-restart-{safe}"
     import uuid
     volume = f"clover-test-volume-{uuid.uuid4().hex}"
-    _docker("rm", "-f", name)
-    _docker("volume", "rm", "-f", volume)
     _docker("volume", "create", volume, timeout=10).check_returncode()
     r = _docker(
         "run", "-d", "--name", name,
@@ -72,8 +70,7 @@ def restart_container(request, built_image: str):
     # readiness signal.
     wait_for_log(name, "/opt/data/logs/container-boot.log", "profile=default")
     yield name
-    _docker("rm", "-f", name)
-    _docker("volume", "rm", "-f", volume)
+    # The test capability removes only its inspected IDs and labelled volume.
 
 
 

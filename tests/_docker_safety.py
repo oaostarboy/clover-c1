@@ -58,8 +58,12 @@ class DockerTestCapability:
 
     def prepare(self, cmd, args, options):
         if not self._plain(cmd, args, options):
+            if self.involves_docker(cmd):
+                raise ValueError('Docker subprocess override refused')
             return None
         verb = cmd[1] if len(cmd) > 1 else ''
+        if verb == 'rm' or (verb in {'container', 'volume'} and cmd[2:3] == ['rm']):
+            return self._removal(cmd)
         if verb == 'volume' and len(cmd) == 4 and cmd[2] == 'create':
             if not re.fullmatch(r'clover-test-volume-[0-9a-f]{32}', cmd[3]):
                 raise ValueError('Docker volume name refused')
@@ -67,6 +71,8 @@ class DockerTestCapability:
         if verb == 'run':
             return self._create(cmd)
         if verb not in {'exec', 'restart'}:
+            if not self.readonly(cmd):
+                raise ValueError('ungranted Docker operation refused')
             return None
         index = 2
         if verb == 'exec':
@@ -87,12 +93,46 @@ class DockerTestCapability:
             raise ValueError('Docker restart target list refused')
         return result
 
+    def _removal(self, cmd):
+        volume = cmd[1:3] == ['volume', 'rm']
+        index = 3 if cmd[1] in {'container', 'volume'} else 2
+        flags = []
+        while index < len(cmd) and cmd[index] in {'-f', '--force'}:
+            flags.append(cmd[index])
+            index += 1
+        if index != len(cmd) - 1:
+            raise ValueError('Docker removal target/options refused')
+        target = cmd[index]
+        if volume:
+            if target not in self.volumes:
+                raise ValueError('Docker removal volume is not owned')
+            info = self._inspect('volume', target)
+            if (info.get('Name') != target or info.get('Driver') != 'local' or info.get('Options')
+                    or info.get('Labels', {}).get('clover.test-owner') != self.label.split('=', 1)[1]):
+                raise ValueError('Docker removal volume ownership changed')
+            return [self.docker, 'volume', 'rm', *flags, target]
+        if target not in self.owned:
+            raise ValueError('Docker removal container is not owned')
+        # IDs cannot be recycled. Never resolve a mutable name during removal.
+        return [self.docker, 'rm', *flags, self.owned[target]]
+
+    def involves_docker(self, cmd):
+        if isinstance(cmd, (list, tuple)):
+            return any(re.search(r'(^|[\s/])docker(?:\s|$)', str(part)) for part in cmd)
+        return bool(re.search(r'(^|[\s/])docker(?:\s|$)', str(cmd)))
+
+    def readonly(self, cmd, args=(), options=None):
+        return (self._plain(cmd, args, options or {})
+                and (cmd[1] in {'info', 'inspect', 'logs', 'ps', 'version'}
+                     or cmd[1:3] in [['container', 'inspect'], ['volume', 'inspect'], ['image', 'inspect']]))
+
     def _plain(self, cmd, args, options):
         return (type(cmd) is list and len(cmd) >= 2 and all(type(x) is str for x in cmd)
                 and cmd[0] in {'docker', self.docker} and not args
                 and not (options.keys() - {'capture_output', 'text', 'timeout', 'check',
                     'stdout', 'stderr', 'stdin', 'encoding', 'errors', 'shell', 'close_fds'})
                 and options.get('shell', False) is False
+                and options.get('close_fds', True) is True
                 and options.get('stdin') is None)
 
     def _create(self, cmd):
@@ -195,8 +235,8 @@ class DockerTestCapability:
             self._confined(info)
             if info['Id'] != target:
                 raise ValueError('Docker cleanup identity changed')
-            self.run([self.docker, 'rm', '-f', target], check=True,
-                     capture_output=True, timeout=30)
+            self.execute(self.run, [self.docker, 'rm', '-f', target], check=True,
+                         capture_output=True, timeout=30)
         for volume in self.volumes:
             result = self.run([self.docker, 'volume', 'inspect', '--', volume],
                               capture_output=True, text=True, timeout=10)
@@ -205,5 +245,5 @@ class DockerTestCapability:
             info = json.loads(result.stdout)[0]
             if info.get('Labels', {}).get('clover.test-owner') != self.label.split('=', 1)[1]:
                 raise ValueError('Docker cleanup volume ownership changed')
-            self.run([self.docker, 'volume', 'rm', volume], check=True,
-                     capture_output=True, timeout=30)
+            self.execute(self.run, [self.docker, 'volume', 'rm', volume], check=True,
+                         capture_output=True, timeout=30)

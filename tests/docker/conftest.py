@@ -100,10 +100,7 @@ def container_name(request) -> Iterator[str]:
     safe = request.node.name.replace("[", "_").replace("]", "_")
     name = f"clover-test-{safe}"
     yield name
-    subprocess.run(
-        ["docker", "rm", "-f", name],
-        capture_output=True, timeout=10,
-    )
+    # The capability owns cleanup by immutable ID, including failed setup.
 
 
 # ---------------------------------------------------------------------------
