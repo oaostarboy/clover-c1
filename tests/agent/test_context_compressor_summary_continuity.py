@@ -1,6 +1,7 @@
 """Regression tests for iterative context-summary continuity."""
 
 from unittest.mock import MagicMock, patch
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 
 from agent.context_compressor import (
     COMPRESSED_SUMMARY_METADATA_KEY,

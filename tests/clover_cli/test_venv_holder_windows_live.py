@@ -35,24 +35,49 @@ pytestmark = pytest.mark.skipif(
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+INERT_HELPER = PROJECT_ROOT / "tests/clover_cli/_inert_venv_holder.py"
+_SPAWNED: set[subprocess.Popen] = set()
+
+
+def _inert_options(cwd: Path | None = None) -> dict:
+    """No inherited loader/Python hooks; -I also excludes cwd/user-site imports."""
+    return {
+        "cwd": str(cwd or PROJECT_ROOT),
+        "env": {k: os.environ[k] for k in (
+            "SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP",
+            "TMPDIR", "HOME", "USERPROFILE", "LANG", "TZ", "CLOVER_HOME",
+            "CLOVER_TEST_ISOLATION",
+        ) if k in os.environ},
+        "shell": False, "close_fds": True, "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True,
+    }
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_inert_processes():
+    # Covers failure of a SECOND spawn before the test enters its try/finally.
+    yield
+    _kill(*list(_SPAWNED))
 
 
 def _spawn(args: list[str], cwd: Path | None = None) -> subprocess.Popen:
-    """Spawn a real sleeper process whose argv carries the given tail.
+    """Reviewed fixed helper; truthful argv is inert data, never Python code.
 
-    ``python -c "sleep" <tail...>`` — the tail is inert data to the child
-    but fully visible to psutil cmdline scans, which is what the detection
-    code classifies on.
+    The shared guard validates bytes, argv, interpreter and execution options.
+    A 15-second helper lifetime also bounds residue if the pytest process dies.
     """
     proc = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(300)", *args],
-        cwd=str(cwd or PROJECT_ROOT),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        [sys.executable, "-I", "-B", str(INERT_HELPER), "sleep", *args],
+        **_inert_options(cwd),
     )
-    time.sleep(0.8)  # let the process table settle
-    assert proc.poll() is None, "sleeper died at spawn"
-    return proc
+    _SPAWNED.add(proc)  # register BEFORE readiness assertions can fail
+    try:
+        time.sleep(0.8)  # let the real process table / Windows shim settle
+        assert proc.poll() is None, "inert sleeper died at spawn"
+        return proc
+    except BaseException:
+        _kill(proc)
+        raise
 
 
 def _detect() -> list[tuple[int, str, str]]:
@@ -62,12 +87,33 @@ def _detect() -> list[tuple[int, str, str]]:
 
 
 def _kill(*procs: subprocess.Popen) -> None:
+    import psutil
+
     for proc in procs:
         try:
-            proc.kill()
-            proc.wait(timeout=10)
-        except Exception:
-            pass
+            if proc.poll() is not None:
+                continue
+            try:
+                descendants = psutil.Process(proc.pid).children(recursive=True)
+            except psutil.NoSuchProcess:
+                descendants = []
+            # Preserve the Windows venv launcher/worker chain: kill workers
+            # while their launcher can still reap them, then reap our Popen.
+            for child in reversed(descendants):
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
+            _, alive = psutil.wait_procs(descendants, timeout=3)
+            if proc.poll() is None:
+                proc.kill()
+            proc.wait(timeout=5)
+            assert not alive, f"inert descendants survived cleanup: {alive}"
+        finally:
+            _SPAWNED.discard(proc)
+            for stream in (proc.stdin, proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
 
 
 class TestDetection:
@@ -90,20 +136,21 @@ class TestDetection:
         must not be reported as a holder."""
         import tempfile
 
-        outside = Path(tempfile.mkdtemp())
-        proc = _spawn(["totally", "unrelated"], cwd=outside)
-        try:
-            pids = [pid for pid, _, _ in _detect()]
-            assert proc.pid not in pids
-        finally:
-            _kill(proc)
+        with tempfile.TemporaryDirectory() as outside:
+            proc = _spawn(["totally", "unrelated"], cwd=Path(outside).resolve())
+            try:
+                pids = [pid for pid, _, _ in _detect()]
+                assert proc.pid not in pids
+            finally:
+                _kill(proc)
 
     def test_long_runtime_path_gateway_detected_with_full_argv(self):
         """#78089: a gateway launched via a long managed-runtime interpreter
         path must surface with its FULL argv so the pausable exemption can
         see `gateway run` past the 120-char mark."""
-        # Pad the argv front so `gateway run` sits beyond 120 chars.
-        padding = os.path.join("C:\\", "Users", "x" * 90, ".clover-runtime")
+        # Windows-path DATA padding, not a relocated interpreter-path claim.
+        # Keep `gateway run` beyond 120 chars without hiding it from the guard.
+        padding = 'C:\\Users\\' + "x" * 90 + '\\.clover-runtime'
         proc = _spawn([padding, "-m", "clover_cli.main", "gateway", "run"])
         try:
             matches = _detect()
@@ -112,6 +159,7 @@ class TestDetection:
             assert "gateway run" in cmdline.lower(), (
                 f"argv truncated before `gateway run`: {cmdline!r}"
             )
+            assert cmdline.lower().index("gateway run") > 120
         finally:
             _kill(proc)
 
@@ -122,11 +170,12 @@ class TestClassification:
         classify the long-path gateway as pausable (not None)."""
         from clover_cli.update_cmd import _leftover_pausable_gateway_pids
 
-        padding = os.path.join("C:\\", "Users", "y" * 90, ".clover-runtime")
+        padding = 'C:\\Users\\' + "y" * 90 + '\\.clover-runtime'
         proc = _spawn([padding, "-m", "clover_cli.main", "gateway", "run"])
         try:
             matches = [m for m in _detect() if m[0] == proc.pid]
             assert matches, "gateway not detected"
+            assert matches[0][2].lower().index("gateway run") > 120
             pids = _leftover_pausable_gateway_pids(matches)
             assert pids == [proc.pid], (
                 f"pausable exemption failed for long-path gateway: {pids}"
@@ -189,62 +238,20 @@ class TestAncestorExclusion:
     the gateway must still be visible to the pause machinery."""
 
     def test_gateway_parent_visible_to_child_scan(self, tmp_path):
-        # Simulate the /update topology: parent (gateway-argv process) spawns
-        # a child python that runs the REAL detection and reports whether it
-        # can see its gateway parent. The child's code lives in a FILE so the
-        # parent's cmdline stays realistic (a real gateway's argv is clean
-        # `... -m clover_cli.main gateway run`, not a multi-line -c blob).
-        child_file = tmp_path / "child_scan.py"
-        child_file.write_text(
-            "import json, os, sys\n"
-            f"sys.path.insert(0, {str(PROJECT_ROOT)!r})\n"
-            "from clover_cli.update_cmd import _detect_venv_python_processes\n"
-            "import psutil\n"
-            "from gateway.status import looks_like_gateway_command_line\n"
-            "# The venv shim makes every spawn a launcher/worker CHAIN, so the\n"
-            "# gateway is an ANCESTOR, not necessarily the direct parent —\n"
-            "# find it the same way the pause machinery would: by argv.\n"
-            "gw = [int(a.pid) for a in psutil.Process().parents()\n"
-            "      if looks_like_gateway_command_line(' '.join(a.cmdline() or []))]\n"
-            "matches = _detect_venv_python_processes()\n"
-            "print(json.dumps({'gateway_ancestors': gw,"
-            " 'pids': [p for p, _, _ in matches]}))\n",
-            encoding="utf-8",
-        )
-        parent_oneliner = (
-            "import subprocess, sys;"
-            f" r = subprocess.run([sys.executable, {str(child_file)!r}],"
-            f" capture_output=True, text=True, cwd={str(PROJECT_ROOT)!r});"
-            " print(r.stdout.strip());"
-            " sys.stderr.write(r.stderr[-500:])"
-        )
-        # The parent's argv carries `gateway run` so it IS a gateway to any
-        # cmdline classifier; it runs the child synchronously.
+        # Fixed same-helper parent -> scan child; no caller-provided code/path.
+        # The Windows venv shim can insert a launcher: inspect ALL ancestors.
         result = subprocess.run(
-            [
-                sys.executable,
-                "-c",
-                parent_oneliner,
-                "-m",
-                "clover_cli.main",
-                "gateway",
-                "run",
-            ],
-            capture_output=True,
-            text=True,
-            cwd=str(PROJECT_ROOT),
-            timeout=120,
+            [sys.executable, "-I", "-B", str(INERT_HELPER), "parent-scan",
+             "-m", "clover_cli.main", "gateway", "run"],
+            timeout=20, **_inert_options(),
         )
         import json
 
-        line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "{}"
-        payload = json.loads(line)
-        assert payload, f"child scan produced no output: {result.stderr[-500:]}"
+        assert result.returncode == 0, result.stderr[-500:]
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
         assert payload["gateway_ancestors"], (
             f"harness broke: no gateway-argv ancestor found: {payload}"
         )
-        # The gateway ancestor must be visible to the scan so the pause
-        # machinery can stop it (#87594). Blanket ancestor-exclusion hid it.
         visible = set(payload["gateway_ancestors"]) & set(payload["pids"])
         assert visible, (
             "gateway ancestor invisible to venv scan — /update from the "

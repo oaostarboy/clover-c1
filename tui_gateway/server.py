@@ -2950,7 +2950,70 @@ def _current_session_steer_authority(
         return transport, session
 
 
-def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
+_human_rpc_submission = contextvars.ContextVar("human_rpc_submission", default=None)
+
+
+def _capture_ws_human_submission(req, transport):
+    """WS input owner only, before RPC middleware. No generic API inference.
+
+    Only a fresh visible text submit on the session's exact, authenticated
+    login transport. Legacy tokens, service credentials, busy queues,
+    rewinds, imports and caller identity metadata are unsupported.
+    """
+    from agent import workstream_origin as origin, workstreams
+    from tui_gateway.methods_browser_control import _is_authenticated_identity, _principal_digest
+    identity = getattr(transport, "auth_identity", None)
+    if not _is_authenticated_identity(identity) or getattr(transport, "closed", True):
+        return None
+    if not isinstance(req, dict) or req.get("method") != "prompt.submit":
+        return None
+    params = req.get("params")
+    if not isinstance(params, dict) or set(params) != {"session_id", "text"}:
+        return None
+    sid, text = params["session_id"], params["text"]
+    if not isinstance(sid, str) or not isinstance(text, str) or not text.strip():
+        return None
+    with _sessions_lock:
+        session = _sessions.get(sid)
+        if session is None or session.get("transport") is not transport:
+            return None
+        if session.get("running") or session.get("_closing"):
+            return None
+        generation = int(session.get("_queued_prompt_generation", 0))
+        key = session.get("session_key")
+        principal = _principal_digest(identity)
+        home = _session_home(session)
+        project = str(Path(_session_cwd(session)).resolve())
+    token = set_clover_home_override(str(home))
+    try:
+        if not workstreams.load_settings().enabled:
+            return None
+        scope = workstreams.scope_for_surface(platform="desktop", chat_type="dm",
+                    user_id=principal, project=project)
+    finally:
+        reset_clover_home_override(token)
+    identity_snapshot = dict(identity)
+
+    def current():
+        with _sessions_lock:
+            return (
+                _sessions.get(sid) is session and session.get("transport") is transport
+                and not transport.closed and transport.auth_identity == identity_snapshot
+                and not session.get("_closing") and not session.get("_turn_cancel_requested")
+                and session.get("session_key") == key
+                and int(session.get("_queued_prompt_generation", 0)) == generation
+                and str(_session_home(session)) == str(home)
+                and str(Path(_session_cwd(session)).resolve()) == project
+            )
+
+    submission = origin.ComposerSubmission(text)
+    origin.mint_human_ingress(submission, platform="desktop", scope=scope,
+                              original_text=text, is_current=current)
+    return submission
+
+
+def dispatch(req: dict, transport: Optional[Transport] = None,
+             *, trusted_human_submission=None) -> dict | None:
     """Route inbound RPCs — long handlers to the pool, everything else inline.
 
     Returns a response dict when handled inline. Returns None when the
@@ -2964,6 +3027,7 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
     """
     t = transport or _stdio_transport
     token = bind_transport(t)
+    human_token = _human_rpc_submission.set(trusted_human_submission)
     try:
         normalized = _normalize_request(req)
         if isinstance(normalized, dict):
@@ -2989,6 +3053,7 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
         return None
     finally:
         reset_transport(token)
+        _human_rpc_submission.reset(human_token)
 
 
 def _wait_agent(session: dict, rid: str, timeout: float = 30.0) -> dict | None:
@@ -12269,6 +12334,7 @@ def _run_prompt_submit(
     display_metadata: dict | None = None,
     image_paths: list[str] | None = None,
     queued_prompt_generation: int | None = None,
+    trusted_human_submission=None,
 ) -> bool:
     with session["history_lock"]:
         if session.get("_closing"):
@@ -12291,6 +12357,8 @@ def _run_prompt_submit(
         if not isinstance(inflight, dict) or inflight.get("status") == "error":
             _start_inflight_turn(session, text)
         agent = session["agent"]
+        session["_human_ingress_generation"] = int(session.get("_human_ingress_generation", 0)) + 1
+        human_generation = session["_human_ingress_generation"]
         if hasattr(agent, "clear_interrupt"):
             try:
                 agent.clear_interrupt()
@@ -12587,6 +12655,30 @@ def _run_prompt_submit(
                     _build_persist_user_message(prompt, images, run_message) if images else prompt
                 ),
             }
+            # Only the authenticated WS input owner supplies this capability.
+            from agent import workstream_origin as _origin, workstreams as _workstreams
+            from tui_gateway.methods_browser_control import _is_authenticated_identity, _principal_digest
+            _transport = session.get("transport")
+            _identity = getattr(_transport, "auth_identity", None)
+            if _is_authenticated_identity(_identity):
+                agent._chat_type = "dm"
+                agent._user_id = _principal_digest(_identity)
+                agent._chat_id = sid
+            if trusted_human_submission is not None and not display_kind:
+                _scope = _workstreams.scope_for_agent(agent)
+                _stop = int(getattr(agent, "_human_ingress_stop_generation", 0))
+                run_kwargs["trusted_human_ingress"] = _origin.redeem_human_ingress(
+                    trusted_human_submission, platform="desktop", profile=_workstreams.current_profile(),
+                    session_id=agent.session_id, session_key=session["session_key"],
+                    run_generation=human_generation,
+                    is_current=lambda: (
+                        session.get("agent") is agent and session.get("running")
+                        and session.get("_human_ingress_generation") == human_generation
+                        and int(getattr(agent, "_human_ingress_stop_generation", 0)) == _stop
+                        and _workstreams.scope_for_agent(agent) == _scope
+                    ),
+                )
+
             # Type a synthesized turn at turn START so the crash persist writes
             # its row as a timeline event, instead of leaving a raw user bubble
             # until the turn ends — and forever if it never does, which is

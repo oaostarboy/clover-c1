@@ -3473,6 +3473,125 @@ You are Clover Cognition, Built by Anthony Nguyen. Be direct: match the length o
     }
 }
 
+# Helper: run a native command with a hard wall-clock timeout while
+# still streaming its output live.  Returns the exit code, or 124 on
+# timeout (the same convention as coreutils ``timeout`` and bash's
+# run_with_timeout).
+#
+# Launcher notes: ``Start-Process -FilePath npm.cmd`` fails with
+# ``%1 is not a valid Win32 application`` on some PowerShell versions
+# because Start-Process bypasses cmd.exe / PATHEXT and expects a real
+# PE file -- so route through cmd.exe, which IS a real PE, honours .cmd
+# batch shims, and performs the stdout+stderr merge into the log file
+# natively.  The parent then tails the log into the console each poll
+# tick, preserving the live progress that makes a 3-minute download
+# distinguishable from a hang (the whole reason _Run-NpmInstall streams
+# output in the first place).  ``Wait-Job -Timeout`` was rejected: jobs
+# swallow live output, and Stop-Job leaves the npm child running.
+# taskkill /T kills the real process tree.  Works on Windows PowerShell
+# 5.1 -- no pwsh-only primitives.
+function _Invoke-NativeWithTimeout(
+    [string]$exePath, [string]$argLine, [string]$workDir,
+    [string]$logPath, [int]$timeoutSec
+) {
+    $cmdLine = "/d /s /c "" ""$exePath"" $argLine > ""$logPath"" 2>&1 """
+    $proc = Start-Process -FilePath $env:ComSpec -ArgumentList $cmdLine `
+        -WorkingDirectory $workDir -NoNewWindow -PassThru
+    $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSec)
+    $shown = 0
+    function _Drain-NewLines([string]$path, [ref]$count) {
+        $lines = @(Get-Content $path -ErrorAction SilentlyContinue)
+        if ($lines.Count -gt $count.Value) {
+            $lines[$count.Value..($lines.Count - 1)] | ForEach-Object {
+                Write-Host "    $_" -ForegroundColor DarkGray
+            }
+            $count.Value = $lines.Count
+        }
+    }
+    try {
+        while (-not $proc.HasExited) {
+            if ([DateTime]::UtcNow -gt $deadline) {
+                return 124
+            }
+            Start-Sleep -Milliseconds 750
+            _Drain-NewLines $logPath ([ref]$shown)
+        }
+        _Drain-NewLines $logPath ([ref]$shown)
+        return $proc.ExitCode
+    } finally {
+        # Also reap the whole tree if polling/output fails or is interrupted.
+        # A PowerShell job/Stop-Process on cmd.exe alone leaves npm children.
+        if (-not $proc.HasExited) {
+            & taskkill /T /F /PID $proc.Id 2>&1 | Out-Null
+        }
+    }
+}
+
+# Install only from the committed root lock. npm 10's `install` rewrites
+# newer lock metadata even without dependency changes; never repair the checkout
+# or retry with install. Workspace ci cleans the root node_modules, so TUI must
+# include the root and its linked workspace dependencies rather than disabling
+# workspaces globally. Desktop still installs the full workspace graph.
+function _Run-NpmInstall(
+    [string]$label, [string]$installDir, [string]$logPath, [string]$npmPath,
+    [ValidateSet('root', 'tui', 'desktop')][string]$scope = 'root',
+    [int]$timeoutSec = 600
+) {
+    if (-not (Test-Path -LiteralPath (Join-Path $installDir 'package-lock.json'))) {
+        Write-Warn "$label dependency install refused: committed package-lock.json is required. No lockfile will be generated."
+        return $false
+    }
+    $selection = switch ($scope) {
+        'root' { '--workspaces=false' }
+        'tui' { '--workspace=ui-tui --include-workspace-root' }
+        'desktop' { '--workspaces --include-workspace-root' }
+    }
+    # Keep lifecycle scripts (Electron, node-pty, esbuild) enabled and visible.
+    # npm verbose records node/npm versions and phases, including during a
+    # timeout. Retain both logs on success/failure; do not guess a hang cause.
+    $npmLogDir = "$logPath.npm"
+    $argLine = "ci $selection --no-audit --no-fund --foreground-scripts --loglevel=verbose --logs-dir=`"$npmLogDir`""
+    Write-Info "npm command: `"$npmPath`" $argLine"
+    Write-Info "npm working directory: $installDir"
+    Write-Info "npm output: $logPath; debug logs: $npmLogDir"
+    Push-Location -LiteralPath $installDir
+    $prevEAP = $ErrorActionPreference
+    try {
+        # Native stderr is not failure under Windows PowerShell 5.1. Use only
+        # the bounded launcher's exit status, not PowerShell's error stream.
+        $ErrorActionPreference = 'Continue'
+        $code = _Invoke-NativeWithTimeout $npmPath $argLine $installDir $logPath $timeoutSec
+        $ErrorActionPreference = $prevEAP
+        if ($code -eq 0) {
+            Write-Success "$label dependencies installed"
+            return $true
+        }
+        if ($code -eq 124) {
+            Write-Warn "$label npm ci timed out after $timeoutSec seconds. Cause unknown; inspect the retained phase/debug logs."
+        } else {
+            Write-Warn "$label npm ci failed -- exit code $code. The lockfile was not repaired; no npm install fallback was attempted."
+        }
+        if (Test-Path -LiteralPath $logPath) {
+            $errText = Get-Content -LiteralPath $logPath -Raw -ErrorAction SilentlyContinue
+            if ($errText) {
+                $snippet = if ($errText.Length -gt 1200) { $errText.Substring($errText.Length - 1200) } else { $errText }
+                foreach ($line in $snippet -split "`n") { Write-Host "    $line" -ForegroundColor DarkGray }
+                Show-NpmCertHint $errText | Out-Null
+            }
+        }
+        Write-Info "Retained npm output: $logPath; debug logs: $npmLogDir"
+        Write-Info "Retry from a consistent committed manifest/lock: cd `"$installDir`"; npm ci $selection --foreground-scripts"
+        return $false
+    } catch {
+        Write-Warn "$label npm ci could not be launched: $_"
+        Write-Info "Retained npm output: $logPath; debug logs: $npmLogDir"
+        return $false
+    } finally {
+        $ErrorActionPreference = $prevEAP
+        Pop-Location
+    }
+}
+
 function Install-NodeDeps {
     if (-not $HasNode) {
         # Cross-process driver mode (Clover-Setup.exe runs each -Stage NAME
@@ -3532,120 +3651,11 @@ function Install-NodeDeps {
         $nodeDepsTimeoutSec = [int]$env:NODE_DEPS_TIMEOUT
     }
 
-    # Helper: run a native command with a hard wall-clock timeout while
-    # still streaming its output live.  Returns the exit code, or 124 on
-    # timeout (the same convention as coreutils ``timeout`` and bash's
-    # run_with_timeout).
-    #
-    # Launcher notes: ``Start-Process -FilePath npm.cmd`` fails with
-    # ``%1 is not a valid Win32 application`` on some PowerShell versions
-    # because Start-Process bypasses cmd.exe / PATHEXT and expects a real
-    # PE file -- so route through cmd.exe, which IS a real PE, honours .cmd
-    # batch shims, and performs the stdout+stderr merge into the log file
-    # natively.  The parent then tails the log into the console each poll
-    # tick, preserving the live progress that makes a 3-minute download
-    # distinguishable from a hang (the whole reason _Run-NpmInstall streams
-    # output in the first place).  ``Wait-Job -Timeout`` was rejected: jobs
-    # swallow live output, and Stop-Job leaves the npm child running.
-    # taskkill /T kills the real process tree.  Works on Windows PowerShell
-    # 5.1 -- no pwsh-only primitives.
-    function _Invoke-NativeWithTimeout(
-        [string]$exePath, [string]$argLine, [string]$workDir,
-        [string]$logPath, [int]$timeoutSec
-    ) {
-        $cmdLine = "/d /s /c "" ""$exePath"" $argLine > ""$logPath"" 2>&1 """
-        $proc = Start-Process -FilePath $env:ComSpec -ArgumentList $cmdLine `
-            -WorkingDirectory $workDir -NoNewWindow -PassThru
-        $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSec)
-        $shown = 0
-        function _Drain-NewLines([string]$path, [ref]$count) {
-            $lines = @(Get-Content $path -ErrorAction SilentlyContinue)
-            if ($lines.Count -gt $count.Value) {
-                $lines[$count.Value..($lines.Count - 1)] | ForEach-Object {
-                    Write-Host "    $_" -ForegroundColor DarkGray
-                }
-                $count.Value = $lines.Count
-            }
-        }
-        while (-not $proc.HasExited) {
-            if ([DateTime]::UtcNow -gt $deadline) {
-                & taskkill /T /F /PID $proc.Id 2>&1 | Out-Null
-                return 124
-            }
-            Start-Sleep -Milliseconds 750
-            _Drain-NewLines $logPath ([ref]$shown)
-        }
-        _Drain-NewLines $logPath ([ref]$shown)
-        return $proc.ExitCode
-    }
-
-    # Helper: run "npm install" in a given directory and surface the real
-    # error when it fails.  Returns $true on success.
-    function _Run-NpmInstall([string]$label, [string]$installDir, [string]$logPath, [string]$npmPath) {
-        Push-Location $installDir
-        # Capture EAP outside the try block so the catch's restore call always
-        # has a meaningful value (see Install-Uv for the full rationale).
-        $prevEAP = $ErrorActionPreference
-        try {
-            # The helper streams npm's output to BOTH the console and the log
-            # file, so the user watches real progress instead of a frozen
-            # "Installing..." line (on a fresh VM the install is 1-3 minutes;
-            # total silence is indistinguishable from a hang) -- and the
-            # wall-clock ceiling turns a genuinely stalled install (#76222
-            # class) into a diagnosable failure instead of an overnight freeze.
-            #
-            # Relax EAP around the invocation: with EAP=Stop (set at the top
-            # of this script), PowerShell can wrap stray stderr from the
-            # launcher plumbing as ErrorRecord objects and throw even though
-            # npm exited 0.  This is the same issue Test-Python and Install-Uv
-            # work around for uv's stderr-emitting installer.  Check success
-            # via the returned exit code, which is reliable regardless of
-            # stderr noise.
-            $ErrorActionPreference = "Continue"
-            $code = _Invoke-NativeWithTimeout $npmPath "install --silent" `
-                $installDir $logPath $nodeDepsTimeoutSec
-            $ErrorActionPreference = $prevEAP
-            if ($code -eq 0) {
-                Write-Success "$label dependencies installed"
-                Remove-Item -Force $logPath -ErrorAction SilentlyContinue
-                return $true
-            }
-            if ($code -eq 124) {
-                Write-Warn "$label npm install timed out after $([math]::Round($nodeDepsTimeoutSec / 60)) minutes -- a stalled download, wedged extraction, or file lock is the usual cause."
-                Write-Info "  Re-run the installer to retry (completed stages are skipped)."
-                Write-Info "  Slow connection? Raise the ceiling: set NODE_DEPS_TIMEOUT to seconds (default 600)."
-            } else {
-                Write-Warn "$label npm install failed -- exit code $code"
-            }
-            if (Test-Path $logPath) {
-                $errText = (Get-Content $logPath -Raw -ErrorAction SilentlyContinue)
-                if ($errText) {
-                    $snippet = if ($errText.Length -gt 1200) { $errText.Substring(0, 1200) + "..." } else { $errText }
-                    Write-Info "  npm output:"
-                    foreach ($line in $snippet -split "`n") {
-                        Write-Host "    $line" -ForegroundColor DarkGray
-                    }
-                    Write-Info "  Full log: $logPath"
-                    Show-NpmCertHint $errText | Out-Null
-                    Write-NpmDebugLogTail -NpmOutput $errText
-                }
-            }
-            Write-Info "Run manually later: cd `"$installDir`"; npm install"
-            return $false
-        } catch {
-            if ($prevEAP) { $ErrorActionPreference = $prevEAP }
-            Write-Warn "$label npm install could not be launched: $_"
-            return $false
-        } finally {
-            Pop-Location
-        }
-    }
-
     # Browser tools
     if (Test-Path "$InstallDir\package.json") {
         Write-Info "Installing Node.js dependencies (browser tools)..."
         $browserLog = "$env:TEMP\clover-npm-browser-$(Get-Random).log"
-        $browserNpmOk = _Run-NpmInstall "Browser tools" $InstallDir $browserLog $npmExe
+        $browserNpmOk = _Run-NpmInstall "Browser tools" $InstallDir $browserLog $npmExe 'root' $nodeDepsTimeoutSec
 
         # Install Playwright Chromium (mirrors scripts/install.sh behaviour for
         # Linux).  Without this, tools/browser_tool.py::check_browser_requirements
@@ -3754,7 +3764,7 @@ function Install-NodeDeps {
     if (Test-Path "$tuiDir\package.json") {
         Write-Info "Installing TUI dependencies..."
         $tuiLog = "$env:TEMP\clover-npm-tui-$(Get-Random).log"
-        [void](_Run-NpmInstall "TUI" $tuiDir $tuiLog $npmExe)
+        [void](_Run-NpmInstall "TUI" $InstallDir $tuiLog $npmExe 'tui' $nodeDepsTimeoutSec)
     }
 
     Install-BrowserUseCli
@@ -4063,13 +4073,10 @@ function Install-Desktop {
     # Stage-Desktop, which is itself only included in the manifest when
     # -IncludeDesktop was passed to install.ps1.
     #
-    # The workspace npm install at repo root (done by Install-NodeDeps for
-    # browser tools) does NOT pull apps/desktop's dependencies, because the
-    # browser-tools workspace at $InstallDir\package.json is a separate
-    # workspace from apps/*. We do a full root-level `npm install` here
-    # so the workspace resolves apps/desktop's deps (including Electron
-    # itself, ~150MB), then run `npm run pack` in apps/desktop which
-    # produces the unpacked binary at apps/desktop/release/<os>-unpacked/.
+    # Browser/root and TUI stages do not install the desktop graph. This
+    # opt-in stage installs all locked workspaces (including native lifecycle
+    # scripts), then packs apps/desktop into a launchable unpacked binary.
+    # Never fall back to lock-mutating npm install on a failed npm ci.
     #
     # The Tauri bootstrap installer's launch_clover_desktop command
     # resolves apps/desktop/release/win-unpacked/Clover.exe directly,
@@ -4108,71 +4115,17 @@ function Install-Desktop {
         if (Test-Path $sibling) { $npmExe = $sibling }
     }
 
-    # 1. Workspace-level install so apps/desktop's deps (Electron, Vite,
-    # node-pty prebuilds, etc.) actually land in node_modules. This is
-    # the SAME `npm install` Install-NodeDeps does for browser tools,
-    # but at the root rather than the browser-tools workspace, so all
-    # apps/* workspaces resolve.
-    Write-Info "Installing desktop workspace dependencies (this includes Electron ~150MB, takes 1-3min)..."
-    Push-Location $InstallDir
-    $prevEAP = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        # Drop --silent so npm emits its full progress + error trail.
-        # When this fails on a non-dev box (e.g. native-module build
-        # without VS Build Tools, ETARGET on a transitive, etc.), the
-        # actual reason needs to reach the Tauri installer's log; with
-        # --silent it was completely suppressed and the user just saw
-        # "exit 1" with no actionable detail.
-        #
-        # The streaming sink in bootstrap.rs's run_install_script
-        # captures every stdout/stderr line as it's emitted, so we don't
-        # need a side TEMP log file -- the installer's bootstrap log
-        # IS the artifact a support engineer reads.
-        #
-        # Prefer `npm ci`: it wipes node_modules and reinstalls from the
-        # lockfile, always producing a complete tree. Bare `npm install`
-        # can report "up to date" against a stale
-        # node_modules\.package-lock.json marker while node_modules is
-        # actually empty (Windows workspace-hoisting flake), leaving
-        # tsc/typescript unresolved so `npm run pack`'s `tsc -b` dies with
-        # no obvious cause. Fall back to `npm install` only if `npm ci`
-        # fails (lockfile out of sync / very old npm without ci).
-        #
-        # Tee the merged output into $npmOut while still emitting every line
-        # live. We don't need a side log file (the bootstrap streaming sink
-        # is the artifact), but on failure we scan $npmOut for the TLS-trust
-        # signature so corporate-proxy users get the NODE_EXTRA_CA_CERTS hint
-        # instead of an opaque "exit 1" (issue #38016).
-        & $npmExe ci 2>&1 | ForEach-Object { "$_" } | Tee-Object -Variable npmOut
-        $code = $LASTEXITCODE
-        if ($code -ne 0) {
-            Write-Info "  npm ci failed (exit $code) -- retrying with npm install..."
-            & $npmExe install 2>&1 | ForEach-Object { "$_" } | Tee-Object -Variable npmOut
-            $code = $LASTEXITCODE
-        }
-        $ErrorActionPreference = $prevEAP
-        if ($code -ne 0) {
-            if (Test-ElectronPkgStagedMissingDist -InstallDir $InstallDir) {
-                Write-Warn "Desktop dependency install failed with a missing Electron dist; attempting self-heal..."
-                Try-RestoreElectronDist -InstallDir $InstallDir | Out-Null
-            } else {
-                Show-NpmCertHint ($npmOut -join "`n") | Out-Null
-                # Replay npm's own debug log into our stream: the terse
-                # summary above rarely contains the postinstall stderr
-                # (e.g. Electron's install.js) that explains the failure.
-                Write-NpmDebugLogTail -NpmOutput ($npmOut -join "`n")
-                throw "desktop workspace npm install failed (exit $code) -- see lines above for cause"
-            }
-        } else {
-            Write-Success "Desktop workspace dependencies installed"
-        }
-    } catch {
-        if ($prevEAP) { $ErrorActionPreference = $prevEAP }
-        Pop-Location
-        throw
+    # Full-workspace ci shares the same finite, tree-cleaning launcher as
+    # browser/TUI dependencies. Preserve logs even when the install fails.
+    $nodeDepsTimeoutSec = 600
+    if ($env:NODE_DEPS_TIMEOUT -match '^\d+$') {
+        $nodeDepsTimeoutSec = [int]$env:NODE_DEPS_TIMEOUT
     }
-    Pop-Location
+    Write-Info "Installing desktop workspace dependencies (includes Electron)..."
+    $desktopLog = "$env:TEMP\clover-npm-desktop-$(Get-Random).log"
+    if (-not (_Run-NpmInstall "Desktop workspace" $InstallDir $desktopLog $npmExe 'desktop' $nodeDepsTimeoutSec)) {
+        throw "Desktop locked dependency install failed -- see $desktopLog and $desktopLog.npm. No npm install fallback was attempted."
+    }
 
     # 2. Build apps/desktop. `npm run pack` runs:
     #      assert-root-install + write-build-stamp + stage-native-deps +

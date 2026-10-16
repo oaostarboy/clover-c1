@@ -65,6 +65,7 @@ import re
 import threading
 import time
 import zlib
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -121,7 +122,8 @@ _FAILED_STATUSES = frozenset({
 WORK_DISPATCH_ACK = "dispatch_ack"
 WORK_PARTIAL = "partial"
 WORK_INCOMPLETE = "incomplete"
-WORK_VERIFIED = "verified_completion"
+WORK_VERIFIED = "verified_completion"  # reserved for authoritative acceptance
+WORK_RESULT_RECEIVED = "result_received"
 EXIT_REASON = "delegation_handoff"
 
 
@@ -185,6 +187,8 @@ class RouterTurn:
     # the root's own line for the chat was already written for it.
     title: str = ""
     voiced: bool = False
+    job_identity: str = field(default_factory=lambda: uuid.uuid4().hex)
+    route_bindings: Optional[Dict[str, Any]] = None
     # The root's own line for a dispatch that has no ``handoff`` summary (no
     # card part to carry it): ``(delegation_id, line)``; ``_ack_text`` sends it
     # as the turn's reply.  Empty when the voice-line call failed.
@@ -221,7 +225,7 @@ def _capture_identity(agent: Any) -> Dict[str, Any]:
     ``request_id`` is kept for the record but is not matched on: a dispatch
     made in an integration window is attributed to the request it answers.
     """
-    identity: Dict[str, Any] = {}
+    identity: Dict[str, Any] = {'stop_epoch': int(getattr(agent, '_orchestration_stop_epoch', 0))}
     try:
         turn_id = str(getattr(agent, "_current_turn_id", "") or "")
         if turn_id:
@@ -334,6 +338,10 @@ def begin(
             identity=_capture_identity(agent),
             planned=not direct, direct=direct,
         )
+        from agent.delegation_routes import route_catalog
+        from tools.delegate_tool import _load_config
+        catalog = route_catalog(_load_config())
+        turn.route_bindings = {t.route: catalog.get(t.route) for t in turn.verdict.tasks if t.route}
         if getattr(settings, "handoff_notes", True):
             turn.work_log = _notes.WorkLog()
         try:
@@ -641,9 +649,11 @@ def _follow_through_for(
         return None
     nxt = stages[1][0]
     task = state.verdict.tasks[nxt]
+    if task.existing_delegation_id:
+        return None  # status ownership is not a next-child spawn payload
     if len(task.goal) > 2000:
         return None
-    return [{"goal": task.goal, "context": _helper_context(state, nxt, 1, "")}]
+    return [{"goal": task.goal, "context": _helper_context(state, nxt, 1, ""), **_task_route_args(task)}]
 
 
 # ── the hand-off ───────────────────────────────────────────────────────────
@@ -1060,6 +1070,32 @@ def _receipts_work(receipts: List["_fl.DispatchReceipt"]) -> str:
 
 
 def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
+    if (_stop_pending(agent) or state.identity.get('stop_epoch', 0)
+            != int(getattr(agent, '_orchestration_stop_epoch', 0))):
+        return {'ok': False, 'reason': 'Request interrupted; no automatic handoff started.'}
+    if any(t.existing_delegation_id for t in state.verdict.tasks):
+        return _dispatch_unclaimed(agent, state, task_id)
+    from agent.delegation_ownership import claim_dispatch, existing_owner, settle_dispatch
+    request = str(state.identity.get('turn_id') or state.job_identity)
+    token, claim = claim_dispatch(agent, request, task_id)
+    if not token:
+        owner = existing_owner(agent, claim.get('delegation_id') or '', task_id)
+        if owner:
+            return {'ok': True, 'delegation_id': owner['delegation_id'], 'subagent_ids': [],
+                    'later': [], 'next_stage': None, 'runtime_stages': False,
+                    'by_runtime': True, 'reused_owner': True, 'actual_model': ', '.join(owner['runtime_models']) or None,
+                    'owner_state': owner['state']}
+        return {'ok': False, 'reason': 'This exact request already has a launch claim ('
+                + str(claim.get('state') or 'unknown') + '); no second helper was started.'}
+    result: Dict[str, Any] = {'ok': False}
+    try:
+        result = _dispatch_unclaimed(agent, state, task_id)
+        return result
+    finally:
+        settle_dispatch(claim, token, result)
+
+
+def _dispatch_unclaimed(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
     """Dispatch the first stage; returns ``{"ok": bool, ...}``.
 
     The call goes through the same authorization funnel as a ``delegate_task``
@@ -1073,6 +1109,22 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     stages = verdict.stages()
     first = stages[0]
     stage_tasks = [verdict.tasks[i] for i in first]
+    # A correction/status plan refers to an exact live accepted job, not its
+    # goal text. Do not dispatch another setup operator beside that owner.
+    from agent.delegation_ownership import existing_owner
+    existing = [t.existing_delegation_id for t in stage_tasks if t.existing_delegation_id]
+    if existing:
+        if len(existing) != len(stage_tasks) or len(set(existing)) != 1:
+            return {'ok': False, 'reason': 'Existing-owner status and new work must be separate plans.'}
+        owner = existing_owner(agent, existing[0], task_id)
+        if owner is None:
+            return {'ok': False, 'reason': 'Referenced launch owner is not active in this profile/session/project/lifecycle; no replacement was started.'}
+        if any(t.existing_job_epoch != owner['job_epoch'] for t in stage_tasks):
+            return {'ok': False, 'reason': 'Referenced launch lifecycle is missing or stale; no duplicate/replacement was started.'}
+        return {'ok': True, 'delegation_id': existing[0], 'subagent_ids': [],
+                'later': [], 'next_stage': None, 'runtime_stages': False,
+                'by_runtime': True, 'reused_owner': True, 'actual_model': ', '.join(owner['runtime_models']) or None,
+                'owner_state': owner['state']}
     handoff = _runtime_handoff(
         verdict, state.user_message, agent=agent, history=state.history, stage_tasks=stage_tasks,
     )
@@ -1093,6 +1145,7 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     args: Dict[str, Any] = {
         "tasks": [
             {"goal": verdict.tasks[i].goal, "context": _helper_context(state, i, 0, findings),
+             **_task_route_args(verdict.tasks[i]),
              **_task_title_arg(verdict, i, handoff)}
             for i in first
         ],
@@ -1103,8 +1156,15 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     args["handoff"] = handoff
     if notes_id:
         args[_RESERVED_ID_ARG] = notes_id
+    if (_stop_pending(agent) or state.identity.get('stop_epoch', 0)
+            != int(getattr(agent, '_orchestration_stop_epoch', 0))):
+        _drop_notes(state, notes_id)
+        return {'ok': False, 'reason': 'Stop revoked this request during launch preparation; no child was started.'}
     try:
-        raw = dispatch_generated_tool(agent, "delegate_task", args, task_id=task_id)
+        from agent.delegation_ownership import admitted_dispatch
+        with admitted_dispatch(agent, stop_epoch=state.identity.get('stop_epoch', 0),
+                               tasks=args['tasks'], route_bindings=state.route_bindings or {}):
+            raw = dispatch_generated_tool(agent, "delegate_task", args, task_id=task_id)
     except Exception as exc:
         logger.warning("router backstop dispatch raised: %s", exc)
         _drop_notes(state, notes_id)
@@ -1165,6 +1225,12 @@ def _handoff_from(
 
 
 def _handoff_text(info: Dict[str, Any]) -> str:
+    if info.get('reused_owner'):
+        return runtime_note(
+            f"Existing launch owner {info['delegation_id']} is {info.get('owner_state') or 'active'} (runtime child model: {info.get('actual_model') or 'not started/verified'}). "
+            "No new helper was launched. A setup operator is not proof the requested adviser has started. "
+            "Inspect/report the original job's verified status and answer the user's correction; do not start a second setup job."
+        )
     ids = ", ".join(info["subagent_ids"]) if info["subagent_ids"] else info["delegation_id"]
     text = f"Handed off to helpers {ids}"
     if info["subagent_ids"]:
@@ -1335,10 +1401,17 @@ def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str 
 
 # ── later stages: bound to the stage before, driven by the runtime ─────────
 
+def _task_route_args(task: PlanTask) -> Dict[str, str]:
+    return {key: value for key in ('route', 'account')
+            if (value := getattr(task, key, None)) is not None}
+
+
 def _plan_tasks(verdict: PlanVerdict) -> List[Dict[str, Any]]:
     return [
         {"goal": t.goal, "depends_on": list(t.depends_on), "acceptance": t.acceptance,
-         "title": str(getattr(t, "title", "") or "")}
+         "title": str(getattr(t, "title", "") or ""), **_task_route_args(t),
+         **({'existing_delegation_id': t.existing_delegation_id,
+             'existing_job_epoch': t.existing_job_epoch} if t.existing_delegation_id else {})}
         for t in verdict.tasks
     ]
 
@@ -1347,6 +1420,8 @@ def _bind_plan(
     delegation_id: str, *, session_id: str, request: str, reason: str,
     tasks: List[Dict[str, Any]], stages: List[Dict[str, Any]], total: int,
     notes_path: str = "", excerpt: str = "",
+    hold: Optional[Dict[str, Any]] = None, runtime_policy: Optional[Dict[str, Any]] = None,
+    route_bindings: Optional[Dict[str, Any]] = None, owner_scope: Optional[Dict[str, str]] = None,
 ) -> bool:
     """Persist the remaining stages on the row of the stage just dispatched.
 
@@ -1361,15 +1436,26 @@ def _bind_plan(
         from tools.async_delegation import bind_continuation_plan
 
         now = time.time()
+        from agent.delegation_routes import route_catalog
+        from tools.delegate_tool import _load_config
+        catalog = route_catalog(_load_config())
+        bindings = ({t['route']: catalog.get(t['route']) for t in tasks if t.get('route')}
+                    if route_bindings is None else route_bindings)
         plan = {
             "version": 1, "kind": PLAN_KIND, "delegation_id": delegation_id,
             "request_id": f"router:{delegation_id}", "generation": 0,
             "receipt_ids": [delegation_id], "accepted_at": now,
-            "expires_at": now + MAX_PLAN_AGE_SECONDS, "runtime_policy": {},
+            "expires_at": now + MAX_PLAN_AGE_SECONDS,
+            "runtime_policy": runtime_policy or {},
             "consumed": 0, "session_id": session_id, "request": request,
             "reason": reason, "tasks": tasks, "total_stages": total,
             "stages": stages, "digests": [stage_digest(st) for st in stages],
+            "route_bindings": bindings, "owner_scope": owner_scope,
         }
+        if hold:
+            # Runtime-written only (agent.continuation_bridge.select_hold): the
+            # next stage waits on a human-approved, monitor-linked blocker.
+            plan["hold"] = hold
         if notes_path:
             plan["notes_path"] = notes_path
         if excerpt:
@@ -1426,13 +1512,29 @@ def _adopt(agent: Any, state: RouterTurn) -> None:
         remaining = [
             {"stage": n, "tasks": list(stages[n])} for n in range(number + 1, len(stages))
         ]
+        from agent import continuation_bridge as _bridge
+
+        hold = _bridge.select_hold(agent)
+        from agent.delegation_ownership import scope_for
         bound = _bind_plan(
             did, session_id=str(getattr(agent, "session_id", "") or ""),
             request=goal_text(state.user_message)[:REQUEST_CHARS],
             reason=verdict.reason, tasks=_plan_tasks(verdict),
             stages=remaining, total=len(stages), notes_path=state.notes_path,
-            excerpt=_excerpt_for(state),
+            excerpt=_excerpt_for(state), hold=hold,
+            runtime_policy=_bridge.runtime_fingerprint(agent) if hold else None,
+            owner_scope=scope_for(agent),
+            route_bindings=state.route_bindings,
         )
+        if bound and hold:
+            from tools import async_delegation as _ad
+
+            persisted = _ad.get_continuation_plan(did) or {}
+            if not (persisted.get("hold") and _bridge.record_authority(agent, hold, persisted)):
+                # No exact authority reference, no held stage: leave the later
+                # stages with the root exactly as an unbound plan would.
+                _ad.revoke_continuation_plan(did)
+                bound = False
         with state.lock:
             state.bound[did] = bound
         if bound:
@@ -1529,6 +1631,34 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
     from tools import async_delegation as ad
 
     plan = ad.get_continuation_plan(delegation_id)
+    admitted_stop_epoch = int(getattr(agent, '_orchestration_stop_epoch', 0))
+    with ad._records_lock:
+        revoked = bool((ad._records.get(delegation_id) or {}).get('_ownership_revoked'))
+    if revoked:
+        return _note('Stop revoked this exact job; its next stage was NOT started.'), None
+    if isinstance(plan, dict) and not plan.get('cancelled') and str(plan.get('session_id') or '') == str(getattr(agent, 'session_id', '') or ''):
+        from agent.delegation_routes import route_catalog
+        from agent.delegation_ownership import scope_for
+        from tools.delegate_tool import _load_config
+        catalog = route_catalog(_load_config())
+        bindings = plan.get('route_bindings') or {}
+        changed = any(catalog.get(name) != route for name, route in bindings.items())
+        current_scope = scope_for(agent)
+        same_lifecycle = all(plan.get('owner_scope', {}).get(k) == current_scope.get(k)
+                             for k in ('profile_home', 'session_id', 'session_key')) if plan.get('owner_scope') else True
+        if (changed or not same_lifecycle
+                or _stop_pending(agent)):
+            ad.revoke_continuation_plan(delegation_id)
+            return _note('The next stage was NOT started: its exact route or owning lifecycle changed, or Stop revoked it. '
+                         'Preserve the completed artifact and report this blocked state; do not substitute a model/account.'), None
+    if isinstance(plan, dict) and isinstance(plan.get("hold"), dict):
+        from agent.delegation_followthrough import plan_is_live
+        from agent import continuation_bridge as bridge
+
+        if plan.get("cancelled") or not plan_is_live(plan):
+            # Stopped / expired while held: a claimed release must not linger.
+            bridge.deny(agent, plan, "the plan was revoked or expired")
+            return "", None
     if not _plan_runnable(plan, agent):
         return "", None
     row = ad.get_durable_delegation(delegation_id)
@@ -1540,6 +1670,10 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
     number = int(stage.get("stage", 1))
     if outcome == "bad":
         ad.revoke_continuation_plan(delegation_id)
+        if isinstance(plan.get("hold"), dict):
+            from agent import continuation_bridge as bridge
+
+            bridge.deny(agent, plan, "the stage before did not finish cleanly")
         logger.warning(
             "router stages: stage %d of delegation=%s did not finish cleanly; "
             "later stages stopped", number, delegation_id,
@@ -1551,11 +1685,44 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
             "as done and do not start the later stages yourself unless the "
             "user asks."
         ), None
+    release = None
+    if isinstance(plan.get("hold"), dict):
+        # A blocker-held stage starts only on a claimed monitor release that
+        # every fence re-validates now (scope, stop, link, authority, budget,
+        # effective route/tools); otherwise it stays unconsumed.
+        from agent import continuation_bridge as bridge
+
+        release, why = bridge.admit_release(agent, plan, delegation_id)
+        if release is None:
+            if why == "waiting":
+                return _note(
+                    f"stage {number + 1} of {total} is waiting on a blocker the "
+                    "user approved ({}); the runtime starts it by itself when "
+                    "the linked monitor reports a change. Say plainly what "
+                    "finished and that the next stage has not started; do not "
+                    "start it yourself.".format(_one_line(
+                        str(plan["hold"].get("workstream_id") or ""), 40))
+                ), None
+            bridge.deny(agent, plan, why)
+            return _note(
+                f"stage {number + 1} of {total} was NOT started: {why}. Tell "
+                "the user plainly what finished and what has not run."
+            ), None
     if not ad.claim_continuation_stage(
         delegation_id=delegation_id, request_id=str(plan.get("request_id") or ""),
         generation=plan.get("generation"), receipt_id=delegation_id, stage=stage,
     ):
         return "", None  # spent already (another turn / a restart), or not delivered yet
+    if release is not None:
+        # Claim-before-effect is done; recheck every fence immediately before
+        # the effect owner is reached.
+        again, why = bridge.admit_release(agent, plan, delegation_id)
+        if again is None or again != release:
+            bridge.settle(agent, release, "cancelled", f"not started: {why or 'release changed'}")
+            return _note(
+                f"stage {number + 1} of {total} was NOT started: {why or 'release changed'}. "
+                "Tell the user plainly what finished and what has not run."
+            ), None
 
     tasks = plan["tasks"]
     try:
@@ -1567,6 +1734,9 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
                     depends_on=tuple(int(d) for d in t.get("depends_on") or ()),
                     acceptance=str(t.get("acceptance") or ""),
                     title=str(t.get("title") or ""),
+                    route=t.get('route'), account=t.get('account'),
+                    existing_delegation_id=str(t.get('existing_delegation_id') or ''),
+                    existing_job_epoch=str(t.get('existing_job_epoch') or ''),
                 )
                 for t in tasks
             ),
@@ -1578,9 +1748,26 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
             excerpt=str(plan.get("excerpt") or ""),
         )
         findings = _stage_findings(row)
+        existing = [verdict.tasks[i] for i in index if verdict.tasks[i].existing_delegation_id]
+        if existing:
+            # A status reference can never turn into fresh spawn authority.
+            from agent.delegation_ownership import existing_owner, original_workspace
+            with original_workspace(agent, plan.get('owner_scope')):
+                owner = existing_owner(agent, existing[0].existing_delegation_id)
+            if (len(existing) != len(index) or owner is None
+                    or any(t.existing_delegation_id != owner['delegation_id']
+                           or t.existing_job_epoch != owner['job_epoch'] for t in existing)):
+                return _note('The next stage refers to a stale, cancelled or foreign existing launch owner; '
+                             'no new helper/replacement was started.'), None
+            info = {'delegation_id': owner['delegation_id'], 'subagent_ids': [], 'later': [],
+                    'next_stage': None, 'runtime_stages': False, 'by_runtime': True, 'reused_owner': True,
+                    'actual_model': ', '.join(owner['runtime_models']) or None, 'owner_state': owner['state'],
+                    'verdict': verdict, 'request': str(plan.get('request') or '')}
+            return _handoff_text(info), info
         args = {"tasks": [
             {"goal": verdict.tasks[i].goal,
              "context": _helper_context(pseudo, i, number, findings),
+             **_task_route_args(verdict.tasks[i]),
              **_task_title_arg(verdict, i)}
             for i in index
         ]}
@@ -1590,6 +1777,8 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
         ))
     except Exception:
         logger.warning("router stages: stage plan unreadable", exc_info=True)
+        if release is not None:
+            bridge.settle(agent, release, "cancelled", "stage plan unreadable; nothing started")
         return _note(
             f"stage {number + 1} of {total} could not be started and the "
             "later stages did not run. Tell the user plainly what finished and "
@@ -1599,7 +1788,12 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
     from agent.tool_executor import dispatch_generated_tool
 
     try:
-        raw = dispatch_generated_tool(agent, "delegate_task", args, task_id="")
+        from agent.delegation_ownership import original_workspace, admitted_dispatch
+        with original_workspace(agent, plan.get('owner_scope')), admitted_dispatch(
+            agent, stop_epoch=admitted_stop_epoch, tasks=args['tasks'],
+            route_bindings=plan.get('route_bindings') or {}, plan=plan,
+        ):
+            raw = dispatch_generated_tool(agent, "delegate_task", args, task_id="")
         data = _decode(raw)
     except Exception as exc:
         logger.warning("router stages: dispatch raised: %s", exc)
@@ -1611,18 +1805,29 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
             _REASON_CHARS,
         )
         logger.warning("router stages: stage %d not started: %s", number + 1, reason)
+        if release is not None:
+            bridge.settle(agent, release, "cancelled", f"worker start not accepted: {reason}")
         return _note(
             f"stage {number + 1} of {total} could not be started ({reason}); "
             "the later stages did not run. Tell the user plainly what finished "
             "and what has not run; do not do the work yourself unless they ask."
         ), None
 
+    if release is not None:
+        # Accepted worker start: charge the original work's budget once. The
+        # stage's own completion, not this dispatch, confirms the effect.
+        bridge.settle(
+            agent, release, "executed",
+            f"stage dispatched as delegation {new_id}; effect pending its completion",
+            spend=True,
+        )
     remaining = plan["stages"][1:]
     bound = _bind_plan(
         new_id, session_id=str(plan.get("session_id") or ""),
         request=str(plan.get("request") or ""), reason=str(plan.get("reason") or ""),
         tasks=tasks, stages=remaining, total=total,
         excerpt=str(plan.get("excerpt") or ""),
+        route_bindings=plan.get('route_bindings'), owner_scope=plan.get('owner_scope'),
     ) if remaining else False
     goals = [verdict.tasks[i].goal for i in index]
     ids = [str(s) for s in (data.get("subagent_ids") or []) if s]
@@ -1746,7 +1951,44 @@ def turn_is_armed(agent: Any) -> bool:
     )
 
 
-def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None) -> str:
+def _pending_handoff_text(agent: Any, messages: Any, opener: str = "") -> str:
+    """Keep this turn's visible, not-yet-delivered root text, never tool/history text.
+
+    A dispatch acknowledgement is a delivery decision, not permission to discard
+    an answer the root already wrote.  Use the same visible-text and delivery
+    owners as interim messages; do not ask another model to reconstruct facts.
+    """
+    if agent is None or not isinstance(messages, (list, tuple)):
+        return ""
+    boundary = next((i for i in range(len(messages) - 1, -1, -1)
+                     if isinstance(messages[i], dict) and messages[i].get("role") == "user"), None)
+    if boundary is None:
+        return ""  # no current request boundary: never replay old answers
+    visible_text = getattr(agent, "_interim_assistant_visible_text", None)
+    was_delivered = getattr(agent, "_interim_text_was_delivered", None)
+    if not callable(visible_text):
+        return ""
+    norm = lambda value: " ".join(str(value or "").split()).casefold()
+    existing = norm(opener)
+    kept: List[str] = []
+    seen = set()
+    for message in messages[boundary + 1:]:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        if message.get("channel") in ("analysis", "reasoning"):
+            continue
+        text = _notes.redact(str(visible_text(message) or "")).strip()
+        key = norm(text)
+        if not key or key in seen or key in existing:
+            continue
+        if callable(was_delivered) and was_delivered(text):
+            continue
+        kept.append(text)
+        seen.add(key)
+    return "\n\n".join(kept)
+
+
+def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None, messages: Any = None) -> str:
     """What the user is told when helpers took over: the root's own short
     summary of each dispatch, never the helper's raw task text.
 
@@ -1755,13 +1997,26 @@ def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None) -> str:
     The gateway sends the card as a second message right under it when it
     delivers that reply (``bind_ack_card`` -> ``match_unbound_opener``).  No
     opener (or no chat platform): the reply is the card text, as before."""
+    pending = _pending_handoff_text(agent, messages)
     lines = [r.summary for r in receipts if getattr(r, "summary", "")]
     if lines:
         try:
-            from agent.ack_checklist import card_for
+            from agent.ack_checklist import card_for, _LOCK
 
             card = card_for(receipts)
             if card is not None:
+                pending = _pending_handoff_text(agent, messages, card.say_text())
+                if pending:
+                    # Preserve the root's already-written answer in the opener,
+                    # not the checklist body.  The card and opener are one
+                    # delivery unit; mutate only this dispatch's transient card.
+                    dispatch_ids = {r.delegation_id for r in receipts}
+                    first = next((part for part in card.parts
+                                  if part.delegation_id in dispatch_ids), None)
+                    if first is not None:
+                        with _LOCK:
+                            say = first.checklist.say
+                            first.checklist.say = f"{pending}\n\n{say}" if say else pending
                 # The same text, with the steps under each header; the gateway
                 # edits the message this becomes as the helper works.  The
                 # text it was created with (the live card shows a running
@@ -1769,18 +2024,24 @@ def _ack_text(receipts: List["_fl.DispatchReceipt"], agent: Any = None) -> str:
                 if _opener_is_own_message(card, agent):
                     card.split_opener = True
                     return card.say_text()
+                if pending:
+                    return card.render()
                 return card.initial_text
         except Exception:
             logger.debug("ack checklist unavailable; plain summary lines", exc_info=True)
-        return "\n".join(lines)
+        status = "\n".join(lines)
+        pending = _pending_handoff_text(agent, messages, status)
+        return f"{pending}\n\n{status}" if pending else status
     state = _state(agent) if agent is not None else None
     if state is not None:
         did, line = state.opener
         if line and any(str(getattr(r, "delegation_id", "")) == did for r in receipts):
             # The agent's own line (``_voice``), which read the user's message.
-            return line
+            pending = _pending_handoff_text(agent, messages, line)
+            return f"{pending}\n\n{line}" if pending else line
     count = sum(len(r.goals) for r in receipts) or sum(len(r.subagent_ids) for r in receipts) or 1
-    return _fallback_ack(count, receipts)
+    status = _fallback_ack(count, receipts)
+    return f"{pending}\n\n{status}" if pending else status
 
 
 # The FLOOR when the agent's own line (``_voice``) could not be had -- the
@@ -1853,7 +2114,7 @@ def completion_directive(agent: Any, messages: Any = None):
         # The agent's own line, written now that the helper is running (one
         # model turn over the messages it already has).
         _voice(agent, state, receipts, messages)
-    return dc.Directive(EXIT_REASON, _ack_text(receipts, agent))
+    return dc.Directive(EXIT_REASON, _ack_text(receipts, agent, messages))
 
 
 def _row_outcome(row: Optional[Dict[str, Any]]) -> str:
@@ -1881,9 +2142,9 @@ def work_status(agent: Any) -> Optional[str]:
     ``None`` when no helper was accepted for the turn.  ``dispatch_ack``: all
     still running.  ``partial``: some finished, some pending or not yet
     checked.  ``incomplete``: any failed, stopped or lost.
-    ``verified_completion``: every durable result is a clean success AND was
-    handed to a consumer (claimed/delivered) -- a finished result nobody has
-    read is not verification.  Read from the durable rows, never from text.
+    ``result_received``: each helper returned cleanly and a consumer received
+    its output. This is transport completion, NOT acceptance verification.
+    Read from the durable rows, never from text.
     """
     receipts = _turn_receipts(agent)
     if not receipts:
@@ -1900,7 +2161,7 @@ def work_status(agent: Any) -> Optional[str]:
         if "pending" in outcomes:
             return WORK_PARTIAL
         if set(owned_receipts_ready(ids)) >= set(ids):
-            return WORK_VERIFIED
+            return WORK_RESULT_RECEIVED
         return WORK_PARTIAL
     except Exception:
         logger.debug("router work status unavailable", exc_info=True)

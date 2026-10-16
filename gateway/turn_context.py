@@ -115,6 +115,9 @@ class TurnContext:
     # Trusted delegation ids of the helper completion this internal turn
     # delivers (from the producer event's metadata; empty for human turns).
     completion_delegation_ids: Optional[tuple] = None
+    # Sealed host-minted human-ingress capability for this turn (provenance
+    # only, see agent/workstream_origin.py); ``None`` for every other turn.
+    trusted_human_ingress: Optional[Any] = None
     user_config: Any = None
     enabled_toolsets: Any = None
     disabled_toolsets: Any = None

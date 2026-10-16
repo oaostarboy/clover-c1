@@ -1328,6 +1328,38 @@ def _redact_compaction_text(text: Any) -> str:
     )
 
 
+def _audit_workstream_summary(summary: str, scope: Any) -> str:
+    """Deterministically retain the scoped workstream capsule after summarizing.
+
+    This is postprocessing, not authority: the ledger's read-only thread context
+    is appended only when the explicit audit setting is enabled.  Re-redaction
+    happens after the splice so stored handoffs cannot reintroduce secrets.
+    """
+    from agent.workstream_continuity import audit_current_summary
+
+    audited = audit_current_summary(summary)
+    if audited is not None:
+        return audited
+    if not scope:
+        return summary
+    try:
+        from agent import workstreams
+
+        settings = workstreams.load_settings()
+        if (not settings.enabled or not settings.compaction_audit_enabled
+                or not getattr(settings, "active", True)):
+            return summary
+        capsule = workstreams.thread_context(scope, settings)
+        if not isinstance(capsule, str) or not capsule.strip():
+            return summary
+        if capsule not in summary:
+            summary = f"{summary.rstrip()}\n\n{capsule.strip()}"
+        return _redact_compaction_text(summary)
+    except Exception:
+        logger.debug("workstream compaction audit unavailable", exc_info=True)
+        return summary
+
+
 def _dedupe_append(items: list[str], value: str, *, limit: int) -> None:
     value = value.strip()
     if value and value not in items and len(items) < limit:
@@ -5259,6 +5291,11 @@ This compaction should PRIORITISE preserving all information related to the focu
             summary = self._ground_historical_task_snapshot(summary, turns_to_summarize)
             summary = self._augment_summary_lean(summary, turns_to_summarize)
             self._validate_summary_user_provenance(summary, has_user_turn)
+            # Audit after all model-derived postprocessing and before the
+            # persisted iterative-summary fence; the capsule is read-only.
+            summary = _audit_workstream_summary(
+                summary, getattr(self, "_workstream_scope", None)
+            )
             # Store for iterative updates on next compaction
             self._previous_summary = summary
             self._clear_compression_failure_cooldown()

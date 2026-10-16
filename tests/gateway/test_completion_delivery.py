@@ -18,7 +18,11 @@ import pytest
 from gateway.config import Platform
 from gateway.run import GatewayRunner
 from gateway.session import SessionSource
-from tools.process_registry import ProcessRegistry, ProcessSession
+from tools.process_registry import (
+    ProcessRegistry,
+    ProcessSession,
+    format_process_notification,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -95,6 +99,197 @@ def _stop_after_sleeps(monkeypatch, runner, count):
             runner._running = False
 
     monkeypatch.setattr(asyncio, "sleep", _bounded_sleep)
+
+
+def test_council_report_completion_warns_not_to_repeat_delivered_answer():
+    event = _completion_event(started_at=1.0, session_id="proc_council_check")
+    event["output"] = (
+        "runner exit=0\n"
+        "report /home/user/.clover/council/runs/council-20261013-223748/report.md\n"
+        "PREMISE requested=gemini-4-argon-high actual=gemini-4-argon-high"
+    )
+
+    text = format_process_notification(event)
+
+    assert "council result card was already delivered" in text.lower()
+    assert "do not repeat or summarize the council answer" in text.lower()
+    assert "report only new process-specific findings" in text.lower()
+
+
+def test_verified_delivered_council_audit_does_not_start_model_turn(
+    monkeypatch, isolated_registry, tmp_path,
+):
+    """A route-check that only confirms an already-shown council stays local."""
+    from gateway.council_context import GATEWAY_ACK
+
+    home = tmp_path / "clover-home"
+    work = home / "council" / "runs" / "council-test"
+    work.mkdir(parents=True)
+    origin = {
+        "session_key": "agent:main:telegram:dm:123",
+        "session_id": "session-1",
+        "created_at": 10.0,
+    }
+    (work / "origin.json").write_text(json.dumps(origin), encoding="utf-8")
+    (work / GATEWAY_ACK).write_text(json.dumps({"pid": 1, "at": 11}), encoding="utf-8")
+    (work / "progress.json").write_text(json.dumps({
+        "status": "done", "seat_done": 2, "seat_total": 2,
+        "review_done": 2, "review_total": 2, "stalled": [],
+    }), encoding="utf-8")
+    (work / "summary.json").write_text(json.dumps({"verdict": "Keep it"}), encoding="utf-8")
+    # The real route-check has colons, both blind/review calls for each
+    # seat, and a chairman call not counted by progress.seat_total.
+    risk = "- If the proxy returns an error, global fallback may fail the run."
+    report = f"# COUNCIL council-test\nVERDICT: Keep it\n{risk}\n"
+    (work / "report.md").write_text(report, encoding="utf-8")
+    routes = [
+        ("PREMISE", "gemini-high", 20), ("PREMISE", "gemini-high", 21),
+        ("STEELMAN", "opus", 30), ("STEELMAN", "opus", 31),
+        ("CHAIRMAN", "chair-model", 40),
+    ]
+    usage_lines = []
+    for index, (seat, model, tokens) in enumerate(routes):
+        (work / f"usage-{seat}-{index}.json").write_text(json.dumps({
+            "requested_model": model, "actual_model": model,
+            "model_substituted": False, "completed": True, "failed": False,
+            "output_tokens": tokens,
+        }), encoding="utf-8")
+        usage_lines.append(
+            f"{seat}: requested={model} actual={model} substituted=False "
+            f"completed=True failed=False out_tokens={tokens}"
+        )
+    monkeypatch.setenv("CLOVER_HOME", str(home))
+    output = (
+        f"runner exit=0\nreport {work / 'report.md'}\n"
+        + "\n".join(usage_lines) + f"\n{risk}"
+    )
+    process = ProcessSession(
+        id="proc_council_check", command="route-check.sh", started_at=10.0,
+        output_buffer=output, session_key="agent:main:telegram:dm:123",
+        parent_session_id="session-1", exited=True, exit_code=0,
+    )
+    isolated_registry._finished[process.id] = process
+    monkeypatch.setattr("clover_cli.config.get_clover_home", lambda: home)
+    adapter = SimpleNamespace(handle_message=AsyncMock())
+    runner = _runner(adapter)
+    runner._inject_watch_notification = AsyncMock(return_value=True)
+    runner._preflight_completion = AsyncMock(return_value=None)
+    event = _completion_event(started_at=10.0, session_id=process.id)
+    event.update({
+        "parent_session_id": "session-1",
+        "output_truncated": False,
+        "output": output,
+        "command": "/home/starboy/agent-scratch/council/route-check.sh 2324257",
+        "origin_clover_home": str(home.resolve()),
+    })
+
+    # The actual council audit must never start its own model turn.
+    assert asyncio.run(runner._enqueue_process_completion_notification("audit", event)) is True
+    runner._inject_watch_notification.assert_not_awaited()
+
+    # A concurrent ordinary sibling remains deliverable. Filtering at enqueue
+    # removes only the proven audit before the shared batch window.
+    sibling = _completion_event(started_at=11.0, session_id="proc_unrelated")
+    sibling.update({"output": "new useful output", "command": "ordinary-job"})
+    async def _exercise_mixed_batch():
+        return await asyncio.gather(
+            runner._enqueue_process_completion_notification("audit", event),
+            runner._enqueue_process_completion_notification("sibling", sibling),
+        )
+
+    results = asyncio.run(_exercise_mixed_batch())
+    assert results == [True, True]
+    runner._inject_watch_notification.assert_awaited_once()
+    adapter.handle_message.assert_not_awaited()
+
+
+def test_council_duplicate_guard_fails_open_without_complete_proof(
+    monkeypatch, isolated_registry, tmp_path,
+):
+    from gateway.council_context import GATEWAY_ACK, should_consume_council_check
+
+    home = tmp_path / "clover-home"
+    work = home / "council" / "runs" / "council-safe"
+    work.mkdir(parents=True)
+    (work / "origin.json").write_text(json.dumps({
+        "session_key": "agent:main:telegram:dm:123", "session_id": "session-1",
+    }), encoding="utf-8")
+    ack_path = work / GATEWAY_ACK
+    ack_path.write_text(json.dumps({"pid": 1, "at": 11}), encoding="utf-8")
+    (work / "progress.json").write_text(json.dumps({
+        "status": "done", "seat_done": 1, "seat_total": 1,
+        "review_done": 1, "review_total": 1, "stalled": [],
+    }), encoding="utf-8")
+    (work / "summary.json").write_text(json.dumps({"verdict": "Yes"}), encoding="utf-8")
+    report = "# COUNCIL council-safe\nVERDICT: Yes\n"
+    report_path = work / "report.md"
+    report_path.write_text(report, encoding="utf-8")
+    receipts = [
+        ("SEAT", 1), ("SEAT", 2), ("CHAIRMAN", 3),
+    ]
+    audit_lines = []
+    usage_paths = []
+    for index, (seat, tokens) in enumerate(receipts):
+        usage_path = work / f"usage-{seat}-{index}.json"
+        usage_path.write_text(json.dumps({
+            "requested_model": "model", "actual_model": "model",
+            "model_substituted": False, "completed": True, "failed": False,
+            "output_tokens": tokens,
+        }), encoding="utf-8")
+        usage_paths.append(usage_path)
+        audit_lines.append(
+            f"{seat}: requested=model actual=model substituted=False "
+            f"completed=True failed=False out_tokens={tokens}"
+        )
+    output = f"runner exit=0\nreport {report_path}\n" + "\n".join(audit_lines)
+    process = ProcessSession(
+        id="proc_guard", command="route-check.sh", output_buffer=output,
+        output_truncated=False, session_key="agent:main:telegram:dm:123",
+        parent_session_id="session-1",
+    )
+    isolated_registry._finished[process.id] = process
+    event = _completion_event(started_at=1, session_id=process.id)
+    event.update({
+        "command": "/tmp/route-check.sh 1", "parent_session_id": "session-1",
+        "output": output, "output_truncated": False,
+        "origin_clover_home": str(home.resolve()),
+    })
+    usage_original = usage_paths[0].read_text(encoding="utf-8")
+    progress_original = (work / "progress.json").read_text(encoding="utf-8")
+    mutations = [
+        lambda: ack_path.unlink(),
+        lambda: (ack_path.unlink(), (work / "gateway-card-uncertain.json").write_text("{}", encoding="utf-8")),
+        lambda: event.update(exit_code=1),
+        lambda: event.update(parent_session_id="different-session"),
+        lambda: event.update(output=output + "\nNOVEL FAILURE: quota proxy down"),
+        lambda: event.update(output_truncated=True),
+        lambda: event.update(command="ordinary-job"),
+        lambda: event.update(session_key="wrong-session-key"),
+        lambda: event.update(origin_clover_home=str(tmp_path / "other-home")),
+        lambda: event.update(output=output.replace("actual=model", "actual=fallback")),
+        lambda: (work / "progress.json").write_text("{broken", encoding="utf-8"),
+        lambda: usage_paths[0].unlink(),
+        lambda: usage_paths[0].write_text("{broken", encoding="utf-8"),
+        lambda: usage_paths[0].write_text(usage_original.replace('"failed": false', '"failed": true'), encoding="utf-8"),
+        lambda: setattr(process, "output_truncated", True),
+        lambda: setattr(process, "output_buffer", output + "\nNOVEL FINDING: fix quota"),
+    ]
+    for mutate in mutations:
+        # Prove the baseline is eligible before each independent safety case.
+        ack_path.write_text(json.dumps({"pid": 1, "at": 11}), encoding="utf-8")
+        (work / "gateway-card-uncertain.json").unlink(missing_ok=True)
+        (work / "progress.json").write_text(progress_original, encoding="utf-8")
+        usage_paths[0].write_text(usage_original, encoding="utf-8")
+        process.output_buffer, process.output_truncated = output, False
+        event.update(exit_code=0, parent_session_id="session-1", output=output,
+                     output_truncated=False, command="/tmp/route-check.sh 1",
+                     session_key="agent:main:telegram:dm:123",
+                     origin_clover_home=str(home.resolve()))
+        assert should_consume_council_check(event, home=home, registry=isolated_registry)
+        mutate()
+        assert not should_consume_council_check(
+            event, home=home, registry=isolated_registry,
+        )
 
 
 def test_duplicate_async_queue_replay_injects_once(monkeypatch, isolated_registry):

@@ -1245,6 +1245,44 @@ platform_toolsets:
 #   retry_unreachable: true
 
 # =============================================================================
+# Proactive workstreams (opt-in, off by default)
+# =============================================================================
+# A typed, scoped ledger of obligations, corrections, evidence and receipts in
+# the profile's cron/notepad.db. With `enabled: false` (the default) nothing is
+# created, injected or called. `shadow` records candidates without surfacing
+# or executing anything; `active` is for explicitly enrolled profiles after
+# canary checks. No setting here grants authority to act, send, pay, delete or
+# publish. See docs/user/proactive-workstreams.md.
+# proactive:
+#   enabled: false
+#   mode: shadow            # shadow | active
+#   eligible_jobs: []       # cron job ids allowed to link to workstreams
+#   private_only: true      # never inject group/shared-audience records
+#   threads:
+#     max_items: 16
+#     max_context_bytes: 4096
+#     retention_days: 30
+#   recall:
+#     enabled: false
+#     max_items: 3
+#     max_bytes: 1200
+#   suggestions:
+#     enabled: false
+#     cooldown_seconds: 3600
+#     max_per_session: 1
+#   procedures:
+#     enabled: false
+#     min_verified_runs: 3
+#     min_sessions: 2
+#   compaction_audit:
+#     enabled: false
+#     max_repairs: 0
+#   aux:
+#     max_calls_per_event: 1
+#     max_calls_per_day: 4
+#     max_output_tokens: 512
+
+# =============================================================================
 # Gateway Platform Settings
 # =============================================================================
 # Optional per-platform messaging settings.

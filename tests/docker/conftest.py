@@ -70,16 +70,37 @@ def built_image() -> str:
     return IMAGE_TAG
 
 
+@pytest.fixture(autouse=True)
+def confined_docker_commands(request, monkeypatch, tmp_path, built_image, _live_system_guard):
+    """Grant only inspected containers created by this test in private storage.
+
+    Keep the host live-system guard installed. Its narrow capability check
+    recognizes the exact immutable Docker argv while this wrapper executes it.
+    """
+    import tempfile
+    from tests._docker_safety import DockerTestCapability
+    guarded_run = subprocess.run
+    capability = DockerTestCapability(guarded_run, built_image, tmp_path)
+    monkeypatch.setattr(request.node, '_docker_test_capability', capability, raising=False)
+    monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+    def run(cmd, *args, **options):
+        return capability.execute(guarded_run, cmd, *args, **options)
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    try:
+        yield
+    finally:
+        capability.cleanup()
+
+
 @pytest.fixture
 def container_name(request) -> Iterator[str]:
     """Generate a unique container name and ensure cleanup on test exit."""
     safe = request.node.name.replace("[", "_").replace("]", "_")
     name = f"clover-test-{safe}"
     yield name
-    subprocess.run(
-        ["docker", "rm", "-f", name],
-        capture_output=True, timeout=10,
-    )
+    # The capability owns cleanup by immutable ID, including failed setup.
 
 
 # ---------------------------------------------------------------------------

@@ -1546,7 +1546,95 @@ def _live_system_guard(request, monkeypatch):
                     return True
         return False
 
-    def _check_subprocess_cmd(name, cmd):
+    # Affirmative, test-only exception, NOT a marker/environment bypass.
+    # -I excludes cwd/PYTHONPATH/user-site injection; -B avoids bytecode writes.
+    # Only this reviewed file may consume truthful gateway-shaped argv DATA.
+    import hashlib as _hashlib
+
+    _inert_root = Path(__file__).resolve().parents[1]
+    _inert_helper = _inert_root / "tests/clover_cli/_inert_venv_holder.py"
+    _inert_python = sys.executable
+    _inert_python_resolved = Path(_inert_python).resolve()
+    # Raw LF and CRLF checkouts only (Git on native Windows may use CRLF).
+    _inert_digests = {
+        "fa5af9c6e3b91e0f64d4527f416f8425d05a9beddf3508e9fb6d5d8dee9a219e",
+        "2b87f0e5c1e52373edf1df5a22b31f9e60f01dd2679c334b2fa71dfe5423c890",
+    }
+    _inert_env = {k: _os.environ[k] for k in (
+        "SYSTEMROOT", "SystemRoot", "WINDIR", "COMSPEC", "TEMP", "TMP",
+        "TMPDIR", "HOME", "USERPROFILE", "LANG", "TZ", "CLOVER_HOME",
+        "CLOVER_TEST_ISOLATION",
+    ) if k in _os.environ}
+    _gateway_tail = ("-m", "clover_cli.main", "gateway", "run")
+    _inert_tails = {
+        (), ("totally", "unrelated"), ("-m", "clover_cli.main"), _gateway_tail,
+        ("-m", "clover_cli.main", "gateway", "status"),
+        ("-m", "clover_cli.main", "serve"),
+        ("-m", "clover_cli.main", "serve", "--port", "8127"),
+        ("-m", "clover_cli.main", "dashboard"),
+        ("-m", "clover_cli.main", "kanban", "--preserve-cache"),
+        *(('C:\\Users\\' + letter * 90 + '\\.clover-runtime', *_gateway_tail)
+          for letter in ("x", "y")),
+    }
+
+    def _admit_inert_fixture(name, cmd, args, options):
+        if name not in {"Popen", "run", "call", "check_call", "check_output",
+                        "asyncio.create_subprocess_exec"}:
+            return False
+        if args or type(cmd) is not list or any(type(t) is not str for t in cmd):
+            return False
+        if len(cmd) < 5 or cmd[:4] != [
+            _inert_python, "-I", "-B", str(_inert_helper)
+        ]:
+            return False
+        tail = tuple(cmd[5:])
+        if not ((cmd[4] == "sleep" and tail in _inert_tails)
+                or (cmd[4] == "parent-scan" and tail == _gateway_tail)
+                or (cmd[4] == "scan" and not tail)):
+            return False
+        # Reject ALL process-control overrides, including benign-looking zero
+        # creationflags/startupinfo/executable values. No positional Popen opts.
+        allowed = {"cwd", "env", "shell", "close_fds", "stdin", "stdout",
+                   "stderr", "text", "encoding", "errors", "bufsize",
+                   "timeout", "check", "capture_output"}
+        if options.keys() - allowed:
+            return False
+        if (options.get("shell") is not False
+                or options.get("close_fds") is not True
+                or options.get("stdin") != _subprocess.DEVNULL
+                or type(options.get("env")) is not dict
+                or options["env"] != _inert_env):
+            return False
+        try:
+            cwd = Path(options["cwd"])
+            if not cwd.is_absolute() or cwd.resolve() != cwd or not cwd.is_dir():
+                return False
+            # The foreign-process negative alone may use an outside cwd.
+            if tuple(cmd[5:]) != ("totally", "unrelated") and cwd != _inert_root:
+                return False
+            if (Path(cmd[0]).resolve() != _inert_python_resolved
+                    or _inert_helper.resolve() != _inert_helper
+                    or not _inert_helper.is_file()
+                    or _hashlib.sha256(_inert_helper.read_bytes()).hexdigest()
+                    not in _inert_digests):
+                return False
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+        return True
+
+    def _check_subprocess_cmd(name, cmd, args=(), options=None):
+        options = options or {}
+        # Affirmative, per-test container capability: exact argv grants only.
+        # Created by the Docker fixture after image/namespace/mount validation;
+        # exec targets are inspected immutable IDs owned by this same test.
+        # No marker, environment flag, command obfuscation or host exception.
+        docker_capability = getattr(request.node, "_docker_test_capability", None)
+        if (docker_capability is not None
+                and docker_capability.admit(name, cmd, args, options)):
+            return
+        if (docker_capability is not None and docker_capability.involves_docker(cmd)
+                and not docker_capability.readonly(cmd, args, options)):
+            raise AssertionError('live-system guard: ungranted Docker mutation refused')
         if _is_blocked_systemctl(cmd):
             raise RuntimeError(
                 f"tests/conftest.py live-system guard: blocked "
@@ -1621,7 +1709,11 @@ def _live_system_guard(request, monkeypatch):
         # outside the sandbox and leaves orphans behind.
         _parts = cmd if isinstance(cmd, (list, tuple)) else [cmd]
         _rendered = " ".join(str(p) for p in _parts)
-        if "gateway" in _rendered and " run" in f" {_rendered}":
+        _inert_admitted = _admit_inert_fixture(name, cmd, args, options)
+        if _inert_helper.name in _rendered and not _inert_admitted:
+            raise AssertionError("live-system guard: rejected inert fixture invocation")
+        if ("gateway" in _rendered and " run" in f" {_rendered}"
+                and not _inert_admitted):
             raise AssertionError(
                 f"subprocess.{name}({cmd!r}) — this would spawn a REAL "
                 "gateway process. The argv carries --replace, so it "
@@ -1636,7 +1728,7 @@ def _live_system_guard(request, monkeypatch):
 
     def _wrap_subprocess(name, real):
         def _guarded(cmd, *args, **kwargs):
-            _check_subprocess_cmd(name, cmd)
+            _check_subprocess_cmd(name, cmd, args, kwargs)
             return real(cmd, *args, **kwargs)
         _guarded.__name__ = f"_guarded_{name}"
         # Make the wrapper subscriptable like the wrapped callable when
@@ -1654,7 +1746,7 @@ def _live_system_guard(request, monkeypatch):
 
         class _GuardedPopen(real):  # type: ignore[misc, valid-type]
             def __init__(self, cmd, *args, **kwargs):
-                _check_subprocess_cmd("Popen", cmd)
+                _check_subprocess_cmd("Popen", cmd, args, kwargs)
                 super().__init__(cmd, *args, **kwargs)
 
         _GuardedPopen.__name__ = "Popen"
@@ -1726,7 +1818,7 @@ def _live_system_guard(request, monkeypatch):
 
         async def _guarded_async_exec(program, *args, **kwargs):
             _check_subprocess_cmd(
-                "asyncio.create_subprocess_exec", [program, *args]
+                "asyncio.create_subprocess_exec", [program, *args], (), kwargs
             )
             return await real_async_exec(program, *args, **kwargs)
 

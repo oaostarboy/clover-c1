@@ -53,9 +53,8 @@ def restart_container(request, built_image: str):
     preserves $CLOVER_HOME/profiles/."""
     safe = request.node.name.replace("[", "_").replace("]", "_")
     name = f"clover-restart-{safe}"
-    volume = f"clover-restart-vol-{safe}"
-    _docker("rm", "-f", name)
-    _docker("volume", "rm", "-f", volume)
+    import uuid
+    volume = f"clover-test-volume-{uuid.uuid4().hex}"
     _docker("volume", "create", volume, timeout=10).check_returncode()
     r = _docker(
         "run", "-d", "--name", name,
@@ -71,8 +70,7 @@ def restart_container(request, built_image: str):
     # readiness signal.
     wait_for_log(name, "/opt/data/logs/container-boot.log", "profile=default")
     yield name
-    _docker("rm", "-f", name)
-    _docker("volume", "rm", "-f", volume)
+    # The test capability removes only its inspected IDs and labelled volume.
 
 
 

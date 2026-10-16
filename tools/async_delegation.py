@@ -358,7 +358,8 @@ def _persist_dispatch(record: Dict[str, Any]) -> None:
     task_payload = {
         key: record.get(key)
         for key in (
-            "goal", "goals", "context", "toolsets", "role", "model", "is_batch",
+            "goal", "goals", "context", "toolsets", "role", "model", "is_batch", "requested_routes",
+            "owner_scope", "job_epoch",
             # Routing origin (scope_id/user_id/user_name): persisted so a
             # restart-recovered completion can reconstruct a full
             # SessionSource — see _capture_routing_origin.
@@ -1234,6 +1235,37 @@ def get_durable_delegation(delegation_id: str) -> Optional[Dict[str, Any]]:
         "delivery_state": row[5], "delivery_attempts": row[6],
         "origin_session_id": row[7] or "",
     }
+
+
+def get_delegation_route(delegation_id: str) -> Dict[str, Any]:
+    """Durable routing identity of a dispatch row (session key, origin session,
+    parent session and the dispatching turn's platform/chat origin), read only
+    from the persisted row -- the same fields a replayed completion event
+    carries. ``{}`` when the row is absent."""
+    if not delegation_id:
+        return {}
+    try:
+        with _DB_LOCK, _transaction() as conn:
+            row = conn.execute(
+                """SELECT origin_session, origin_ui_session_id, parent_session_id,
+                          task_json, origin_session_id
+                   FROM async_delegations WHERE delegation_id=?""", (delegation_id,),
+            ).fetchone()
+        if row is None:
+            return {}
+        session_key, origin_ui, parent_id, task_json, origin_sid = row
+        route: Dict[str, Any] = {
+            "session_key": session_key or "", "origin_ui_session_id": origin_ui or "",
+            "origin_session_id": origin_sid or "", "parent_session_id": parent_id or "",
+        }
+        task = json.loads(task_json or "{}")
+        for key in _ROUTING_ORIGIN_KEYS:
+            if isinstance(task, dict) and task.get(key):
+                route[key] = task[key]
+        return route
+    except Exception:
+        logger.debug("delegation route read failed closed", exc_info=True)
+        return {}
 
 
 def owned_receipts_ready(receipt_ids: Iterable[str]) -> tuple:
@@ -2550,6 +2582,9 @@ def dispatch_async_delegation_batch(
     progress_fn: Optional[Callable[[], tuple]] = None,
     fanout_delivery: str = FANOUT_EACH,
     request_identity: Optional[Dict[str, Any]] = None,
+    requested_routes: Optional[List[Dict[str, Any]]] = None,
+    owner_scope: Optional[Dict[str, str]] = None,
+    accept_guard: Optional[Callable[[], bool]] = None,
     straggler_seconds: float = 0,
     straggler_notify: Optional[Callable[[List[int], bool], None]] = None,
 ) -> Dict[str, Any]:
@@ -2618,6 +2653,11 @@ def dispatch_async_delegation_batch(
         "_interrupted_at": None,
     }
     identity = request_identity or {}
+    if requested_routes is not None:
+        record['requested_routes'] = requested_routes
+    if owner_scope:
+        record['owner_scope'] = dict(owner_scope)
+        record['job_epoch'] = __import__('uuid').uuid4().hex
     for _key, _src in (
         ("request_turn_id", "turn_id"),
         ("request_id", "request_id"),
@@ -2700,6 +2740,7 @@ def dispatch_async_delegation_batch(
             _worker()
 
     submitted = False
+    admitted = False
     try:
         # Propagate the dispatching profile to the detached batch children.
         executor.submit(propagate_context_to_thread(_admitted_worker))
@@ -2713,9 +2754,23 @@ def dispatch_async_delegation_batch(
         }
     finally:
         if submitted:
-            gate.accept()
+            # Order actual child acceptance against scoped Stop's epoch fence.
+            # The guard is runtime-only, memory-only, and never model supplied.
+            with _records_lock:
+                try:
+                    admitted = accept_guard is None or bool(accept_guard())
+                except Exception:
+                    admitted = False
+                if admitted:
+                    gate.accept()
+                else:
+                    gate.abort()
         else:
             gate.abort()
+    if not admitted:
+        _withdraw_unscheduled_batch(delegation_id)
+        return {'status': 'rejected', 'reason': 'revoked',
+                'error': 'The admitted request was stopped before child acceptance; no child was started.'}
     if progress_fn is not None or record["_straggler_seconds"]:
         _ensure_stale_monitor_best_effort(delegation_id)
 

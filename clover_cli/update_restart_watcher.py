@@ -523,8 +523,14 @@ def hand_off_beacon(child_pid: int, *, clover_home: Optional[Path] = None) -> bo
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         data["updater_pid"] = int(child_pid)
-        data["updater_create_time"] = _process_create_time(int(child_pid))
-        data["refreshed_at"] = time.time()
+        created = _process_create_time(int(child_pid))
+        data["updater_create_time"] = created
+        # Windows' wall clock can lag GetProcessTimes within its clock tick.
+        # We have already observed this exact child's birth; publishing a
+        # refresh before that observation makes a valid owned handoff stale.
+        # Keep the reader's birth/identity/source predicates unchanged.
+        refreshed = time.time()
+        data["refreshed_at"] = max(refreshed, created) if created is not None else refreshed
         data.pop("ready_for_probe", None)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(data), encoding="utf-8")

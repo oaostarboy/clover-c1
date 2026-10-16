@@ -2,6 +2,7 @@
 compressor scan past messages, causing IndexError in _find_context_summaries()."""
 
 import pytest
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 from unittest.mock import patch
 
 from agent.context_compressor import ContextCompressor

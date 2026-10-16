@@ -9,8 +9,8 @@ instance noted -- never from model text:
   failed, was truncated at its iteration cap, or never reported is *not* a
   success: pending helpers make the status ``partial``, a failed or truncated
   one makes it ``incomplete``, and only a clean result that a consumer has read
-  is ``verified_completion``.  The finalizer stamps it on the result and, when
-  the work is not fully verified, appends one plain line to the reply so the
+  is ``result_received`` (not acceptance verification). The finalizer stamps
+  it on the result and, when helper transport is incomplete, adds a line so the
   user never reads a combined verdict over work that is still running or did
   not finish (same pattern as the file-mutation footer).  The completion turn
   also gets the same facts as a ``[Clover runtime]`` note on the API copy of
@@ -47,6 +47,7 @@ from agent.router_backstop import (
     WORK_INCOMPLETE,
     WORK_PARTIAL,
     WORK_VERIFIED,
+    WORK_RESULT_RECEIVED,
 )
 from agent.turn_notices import runtime_note
 
@@ -229,9 +230,9 @@ def _aggregate(slots: Sequence[Slot], ids: Sequence[str]) -> str:
     try:
         from tools.async_delegation import owned_receipts_ready
 
-        # A finished result nobody has read is not verification.
+        # Delivery proves receipt of output, never acceptance of its work.
         if set(owned_receipts_ready(list(ids))) >= set(ids):
-            return WORK_VERIFIED
+            return WORK_RESULT_RECEIVED
     except Exception:
         logger.debug("delivery check unavailable", exc_info=True)
     return WORK_PARTIAL
@@ -253,6 +254,44 @@ def build_report(
     except Exception:
         logger.debug("work report unavailable", exc_info=True)
         return WorkReport((), WORK_DISPATCH_ACK)
+
+
+# ── typed unfinished-work projection (opt-in workstream ledger) ────────────
+
+# A helper's clean result is only a delivery fact.  The parent must explicitly
+# verify the artifact before work can be marked complete; consumption alone is
+# not acceptance evidence.
+_OUTCOME_STATUS = {OK: "unverified", BAD: "failed", PENDING: "unverified", STOPPED: "stopped"}
+
+
+def unfinished_outcomes(receipts: Sequence["_fl.DispatchReceipt"], *, session_id: str = "") -> List[Any]:
+    """Project dispatch receipts onto ``agent.workstreams.TypedOutcome`` rows.
+
+    A clean helper result remains ``unverified`` even once it has been claimed:
+    consumption proves delivery, not independent acceptance.  Failed, still-running
+    and stopped helpers stay open work.  Never raises: an unreadable ledger
+    projects nothing.
+    """
+    try:
+        from agent.workstreams import TypedOutcome
+        out: List[Any] = []
+        for r in receipts:
+            slots = slots_for(r.delegation_id, r.goals)
+            for i, slot in enumerate(slots):
+                status = _OUTCOME_STATUS.get(slot.outcome, "unverified")
+                out.append(TypedOutcome(
+                    deliverable=slot.goal,
+                    status=status,
+                    source_kind="delegation",
+                    source_id=r.delegation_id if len(slots) == 1 else f"{r.delegation_id}#{i}",
+                    summary=(f"{slot.goal}: result received; acceptance unverified"
+                             if slot.outcome == OK else f"{slot.goal}: {status}"),
+                    session_id=session_id,
+                ))
+        return out
+    except Exception:
+        logger.debug("unfinished-work projection unavailable", exc_info=True)
+        return []
 
 
 # ── which helpers a turn is answerable for ─────────────────────────────────
@@ -414,6 +453,134 @@ def status_note(work: Optional[WorkReport]) -> str:
 
 # ── turn entry / exit ──────────────────────────────────────────────────────
 
+@dataclass(frozen=True)
+class LocalAuditGoal:
+    """Pre-execution specification, not model-written completion or authority.
+
+    Bounded positive path: the entire human request is to verify a named local
+    SHA-256 manifest. Extra deliverables (e.g. packaging) are not inferred away.
+    The original manifest is frozen before tools run so rewriting a checksum
+    file cannot manufacture acceptance. No commands are executed here.
+    """
+    message: str
+    manifest: str
+    digest: str
+    entries: Tuple[Tuple[str, str], ...]
+    event_id: str
+
+
+def _audit_bytes(project: str, name: str, limit: int) -> bytes:
+    """Bounded regular-file read, no symlinks (including parent components)."""
+    import os
+    import stat
+    from pathlib import PurePosixPath
+
+    parts = PurePosixPath(name).parts
+    if not parts or tuple(name.split("/")) != parts or any(p in (".", "..", "/") for p in parts):
+        raise ValueError("nonlocal audit path")
+    import sys
+    if sys.platform == "win32":
+        from agent.windows_audit_reader import read_bytes
+        return read_bytes(project, name, limit)
+    # Fail closed on other hosts lacking directory-relative, no-follow opens.
+    fd = os.open(project, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in parts[:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        child = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        with os.fdopen(child, "rb") as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or before.st_size > limit:
+                raise ValueError("audit file is not bounded regular data")
+            value = stream.read(limit + 1)
+            after = os.fstat(stream.fileno())
+            if len(value) > limit or (before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                    after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+                raise ValueError("audit file changed during read")
+            return value
+    finally:
+        os.close(fd)
+
+
+def prepare_local_audit(agent: Any, message: Any, scope: Any) -> Optional[LocalAuditGoal]:
+    """Existing host turn entry captures the supported outcome before tools."""
+    import hashlib
+    import re
+    from agent import workstream_origin as origin
+    from tools.terminal_tool import _get_env_config
+
+    if not isinstance(message, str):
+        return None
+    match = re.fullmatch(r"(?:Please )?[Vv]erify SHA-256 manifest ([A-Za-z0-9][A-Za-z0-9_./-]*)", message.strip())
+    ingress = getattr(agent, "_trusted_human_ingress", None)
+    if (not match or ingress is None or not scope.private or not origin.ingress_is_valid(ingress, profile=scope.profile)
+            or ingress.session_id != str(getattr(agent, "session_id", ""))
+            or _get_env_config().get("env_type") != "local"):
+        return None
+    try:
+        name = match[1]
+        content = _audit_bytes(scope.project, name, 8192)
+        entries = []
+        for line in content.decode("ascii").splitlines():
+            entry = re.fullmatch(r"([0-9a-f]{64}) [ *]([A-Za-z0-9][A-Za-z0-9_./-]*)", line)
+            if not entry:
+                return None
+            # Entries are relative to the project, matching sha256sum -c.
+            entries.append((entry[2], entry[1]))
+        if not 1 <= len(entries) <= 32 or len({p for p, _ in entries}) != len(entries):
+            return None
+        return LocalAuditGoal(message, name, hashlib.sha256(content).hexdigest(), tuple(entries), ingress.event_id)
+    except (OSError, ValueError):
+        return None
+
+
+def verify_local_audit(agent: Any, goal: Optional[LocalAuditGoal], scope: Any,
+                       row: dict, steps: str, result: dict) -> Optional[dict]:
+    """Actual outcome owner callback. Shell success is necessary, not sufficient.
+
+    Independently reads every requested artifact against the pre-tool manifest;
+    requires an actual foreground check, original current human binding, a
+    non-silent clean turn and no unresolved helper work. No save/delivery claim.
+    """
+    import hashlib
+    from agent.workstream_human_hooks import _authenticate
+
+    if goal is None or is_silent_reply(result.get("final_response")):
+        return None
+    if (not str(result.get("final_response") or "").strip()
+            or any(result.get(k) for k in ("failed", "interrupted", "partial", "error", "cleanup_errors"))
+            or result.get("work_status") not in (None, WORK_VERIFIED)
+            or getattr(agent, "_interrupt_requested", False)):
+        return None
+    authenticated = _authenticate(agent, role="user", message=goal.message,
+        session_id=agent.session_id, message_id=None, row_id=row["id"])
+    if not authenticated or authenticated[2].ingress_event_id != goal.event_id:
+        return None
+    if f"sha256sum -c {goal.manifest}" not in [s.partition(". ")[2] for s in steps.splitlines()]:
+        return None
+    try:
+        if hashlib.sha256(_audit_bytes(scope.project, goal.manifest, 8192)).hexdigest() != goal.digest:
+            return None
+        remaining = 4 * 1024 * 1024
+        for name, expected in goal.entries:
+            value = _audit_bytes(scope.project, name, remaining)
+            remaining -= len(value)
+            if hashlib.sha256(value).hexdigest() != expected:
+                return None
+        # Read the original again after artifact verification, then fence Stop.
+        if hashlib.sha256(_audit_bytes(scope.project, goal.manifest, 8192)).hexdigest() != goal.digest:
+            return None
+        from agent.workstream_origin import ingress_is_valid
+        if not ingress_is_valid(authenticated[3], profile=scope.profile):
+            return None
+        return {"v": 1, "owner": "local_sha256_audit", "goal": hashlib.sha256(goal.message.encode()).hexdigest(),
+                "manifest": goal.digest, "count": len(goal.entries), "event": goal.event_id, "row": row["id"]}
+    except (OSError, ValueError):
+        return None
+
+
 def _arm_handback(agent: Any, message: str, group: Sequence["_fl.DispatchReceipt"]) -> bool:
     """Arm the router backstop with the one-task integration plan."""
     from agent import delegation_router as dr
@@ -480,9 +647,67 @@ def begin_turn(
         return ""
 
 
+# Optional explicit host envelope for the opt-in workstream ledger: an
+# ``agent.workstreams.Scope`` set on the instance.  When absent the canonical
+# ``workstreams.scope_for_agent`` derivation is used; a non-``Scope`` value is
+# ignored.  With the feature disabled this module touches no storage.
+_SCOPE_ATTR = "_workstream_scope"
+
+
+def _record_unfinished(agent: Any) -> None:
+    """Persist this turn's workstream facts for the opt-in ledger.
+
+    * unfinished/failed helper work, restated from the durable delegation
+      ledger (the same receipts ``report`` answers for);
+    * an explicit user correction, read back from the SessionDB's current
+      ``user`` row (never on a helper-completion turn, whose user row is
+      synthetic).
+
+    Best-effort and never raises; inert unless ``proactive.enabled``.
+    """
+    try:
+        from agent import workstreams as _ws
+
+        settings = _ws.load_settings()
+        if not settings.enabled:
+            return
+        scope = getattr(agent, _SCOPE_ATTR, None)
+        if scope is None:
+            # No explicit host envelope: the same canonical derivation the
+            # turn-context seam uses, so both read and write one scope.
+            scope = _ws.scope_for_agent(agent)
+        elif not isinstance(scope, _ws.Scope):
+            return  # a foreign object is never a scope
+        ids = _completion_ids(agent)
+        session_id = str(getattr(agent, "session_id", "") or "")
+        if not ids and session_id:
+            try:
+                _ws.capture_user_correction(
+                    scope, session_id=session_id, settings=settings,
+                    db=getattr(agent, "_session_db", None) or None,
+                )
+            except Exception:
+                logger.debug("user correction not recorded", exc_info=True)
+        floor = getattr(agent, _FLOOR, None)
+        if not isinstance(floor, int) or isinstance(floor, bool):
+            return
+        turn = _turn_receipts(agent, floor)
+        group = completion_group(agent, ids) if ids else []
+        # A hand-back turn can dispatch new work while also receiving the
+        # previous helper's result. Preserve both owner receipts; `turn or
+        # group` silently dropped the just-received original completion.
+        by_id = {r.delegation_id: r for r in [*group, *turn]}
+        receipts = sorted(by_id.values(), key=lambda r: r.seq)
+        if receipts:
+            _ws.record_outcomes(scope, unfinished_outcomes(receipts, session_id=session_id), settings)
+    except Exception:
+        logger.debug("workstream recording unavailable", exc_info=True)
+
+
 def end_turn(agent: Any) -> None:
     """A completion turn that dispatched helpers marks them: their own
     completion is the end of the chain and is never handed back again."""
+    _record_unfinished(agent)
     try:
         if not _completion_ids(agent):
             return

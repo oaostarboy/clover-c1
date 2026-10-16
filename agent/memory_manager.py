@@ -51,6 +51,41 @@ _SYNC_DRAIN_TIMEOUT_S = 5.0
 _EXTERNAL_PREFETCH_TIMEOUT_S = 8.0
 
 
+def current_workstream_context(agent: Any, query: Any) -> str:
+    """Return bounded, private workstream context for this current turn.
+
+    Project identity follows the terminal working directory (the gateway
+    bridges ``terminal.cwd`` through ``TERMINAL_CWD``). Messaging surfaces
+    fail closed to a shared audience unless they carry an explicit DM identity.
+    """
+    if not isinstance(query, str) or not query.strip():
+        return ""
+    try:
+        from agent import workstreams
+
+        settings = workstreams.load_settings()
+        if not settings.enabled:
+            return ""
+
+        # The one canonical scope shared with the record writers/consumers.
+        scope = workstreams.scope_for_agent(agent)
+        compressor = getattr(agent, "context_compressor", None)
+        if compressor is not None:
+            compressor._workstream_scope = scope
+        from agent.workstream_continuity import current_turn_context
+
+        note = current_turn_context(scope, query, settings)
+        # Evidence-gap questions additionally get cited local evidence (or an
+        # explicit "unknown"); nothing is added for any other turn.
+        from agent.workstream_evidence import evidence_context
+
+        evidence = evidence_context(agent, scope, query)
+        return "\n\n".join(part for part in (note, evidence) if part)
+    except Exception:
+        logger.debug("workstream context unavailable", exc_info=True)
+        return ""
+
+
 def normalize_tool_schema(schema: Any) -> Optional[Dict[str, Any]]:
     """Return a function-tool dict with a resolvable top-level ``name``.
 

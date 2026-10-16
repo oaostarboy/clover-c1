@@ -592,13 +592,10 @@ class DelegationActivityPublisher:
         # transcript creation failed). Per publisher, so two turns in one chat
         # never share a status key like "delegation:delegation".
         self._fallback_group = f"deleg_{uuid.uuid4().hex[:8]}"
-        with _LIVE_LOCK:
-            pubs = _LIVE.setdefault(_inbox_key(adapter, self._chat_id), [])
-            pubs.append(self)
-            # Publishers are per turn and never explicitly closed; idle ones
-            # drop out on the next follow pass. Cap as a backstop.
-            if len(pubs) > _LIVE_MAX_PER_CHAT:
-                del pubs[: len(pubs) - _LIVE_MAX_PER_CHAT]
+        # Join the follow registry only when observe() receives activity via
+        # _ensure_live(). Empty per-turn publishers own no card; in combined
+        # mode their repost is a no-op, so eagerly registering them would fill
+        # the registry and evict a still-running unified card across turns.
 
     def external_job_identity(self) -> Tuple[str, int]:
         """Group id + index for an external agent job registered this turn.

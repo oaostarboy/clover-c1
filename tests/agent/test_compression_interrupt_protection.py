@@ -13,6 +13,7 @@ compression task only (timeouts and other aux tasks stay interruptible).
 from __future__ import annotations
 
 from unittest.mock import patch
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 
 import pytest
 

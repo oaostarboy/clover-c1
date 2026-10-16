@@ -285,6 +285,10 @@ def interrupt_subagent(subagent_id: str) -> bool:
     try:
         if not request_hard_interrupt(agent, f"Interrupted via TUI ({subagent_id})"):
             return False
+        delegation_id = record.get('delegation_id')
+        if isinstance(delegation_id, str) and delegation_id:
+            from agent.delegation_ownership import revoke_owned_job
+            revoke_owned_job(delegation_id)
     except Exception as exc:
         logger.debug("interrupt_subagent(%s) failed: %s", subagent_id, exc)
         return False
@@ -1415,6 +1419,10 @@ def _capture_parent_workspace(parent_agent, task_id: Optional[str] = None):
 
     raw_task = task_id or getattr(parent_agent, "_current_task_id", None)
     raw_task = raw_task if isinstance(raw_task, str) else ""
+    from agent.delegation_ownership import owned_workspace
+    original = owned_workspace(parent_agent)
+    if original:
+        return (raw_task or None, original)
     session_key = get_current_session_key(default="")
     depth = getattr(parent_agent, "_delegate_depth", 0)
     if isinstance(depth, int) and depth > 0:
@@ -3735,6 +3743,15 @@ def _run_single_child(
         # only feeds the parent session rollup).
         # Inspired by: Perplexity Agent API result shape (idea-level).
         entry["cost_usd"] = round(entry["_child_cost_usd"], 6)
+        requested_route = getattr(child, '_delegate_requested_route', None)
+        if isinstance(requested_route, dict):
+            entry['route_provenance'] = {
+                'requested': dict(requested_route),
+                'runtime_provider': getattr(child, 'provider', None),
+                'runtime_model': getattr(child, 'model', None),
+                'fallback_active': bool(getattr(child, '_provider_fallback_active', False)),
+                'api_calls': api_calls, 'completed': bool(completed),
+            }
         _cost_status = getattr(child, "session_cost_status", None)
         entry["cost_status"] = (
             _cost_status if isinstance(_cost_status, str) and _cost_status
@@ -4407,6 +4424,10 @@ def _record_inflight_dispatch(
                 "title": t.get("title"),
                 "steps": t.get("steps"),
                 "tier": t.get("tier"),
+                "route": t.get("route"),
+                "account": t.get("account"),
+                "_route_binding": getattr(child_agents[i] if i < len(child_agents) else None,
+                                           '_delegate_requested_route', None),
                 "role": t.get("role"),
                 "output_schema": t.get("output_schema"),
                 "child_session_id": getattr(
@@ -4496,6 +4517,7 @@ def delegate_task(
         return tool_error(
             f"Unknown action '{action}'. Use spawn (default), list, steer, or stop."
         )
+    _request_stop_epoch = int(getattr(parent_agent, '_orchestration_stop_epoch', 0))
 
     # Operator-controlled kill switch — lets the TUI freeze new fan-out
     # when a runaway tree is detected, without interrupting already-running
@@ -4556,39 +4578,6 @@ def delegate_task(
             max_iterations, default_max_iter,
         )
     effective_max_iter = default_max_iter
-
-    # Resolve delegation credentials (provider:model pair).
-    # When delegation.provider is configured, this resolves the full credential
-    # bundle (base_url, api_key, api_mode) via the same runtime provider system
-    # used by CLI/gateway startup.  When unconfigured, returns None values so
-    # children inherit from the parent.
-    #
-    # ``credentials_cfg`` (internal callers only — never model-facing) is a
-    # per-call override shaped like the delegation config section
-    # ({provider, model, base_url, api_key, api_mode}); the /review engine
-    # uses it to route its reviewer subagent onto ``auxiliary.review``
-    # without touching the global delegation pin.
-    try:
-        creds = _resolve_delegation_credentials(
-            credentials_cfg if credentials_cfg else cfg, parent_agent
-        )
-    except ValueError as exc:
-        return tool_error(str(exc))
-
-    # Bind later stages to the effective route and inherited tools, without
-    # persisting credentials or accepting model-requested pin changes.
-    from agent.delegation_followthrough import runtime_policy_for
-    try:
-        runtime_policy = runtime_policy_for(creds, parent_agent)
-        from agent.delegation_checkpoint import get_checkpoint
-        _checkpoint = get_checkpoint(parent_agent)
-        _expected_policy = (
-            _checkpoint.expected_followthrough_policy() if _checkpoint else None
-        )
-        if _expected_policy is not None and _expected_policy != runtime_policy:
-            return tool_error("The predeclared follow-through cannot change the admitted model, provider, endpoint, inherited tools, or approval restrictions.")
-    except Exception:
-        return tool_error("Follow-through runtime policy could not be verified; no child was started.")
 
     # Normalize to task list
     max_children = _get_max_concurrent_children()
@@ -4666,6 +4655,53 @@ def delegate_task(
             return tool_error(f"Task {i} output_schema invalid: {schema_err}")
         task_schemas.append(coerced_schema)
 
+    # Exact routes are configuration-backed selectors, never credential payloads.
+    # Preflight the entire batch before constructing any child. A failed named
+    # route must not fall through to the default or a cheaper tier.
+    from agent.delegation_routes import resolve_named_route
+    from agent.delegation_ownership import dispatch_admission
+    _dispatch_admission = dispatch_admission(parent_agent)
+    from agent.delegation_checkpoint import get_checkpoint
+    _checkpoint = get_checkpoint(parent_agent)
+    _expected_policy = _checkpoint.expected_followthrough_policy() if _checkpoint else None
+    # A predeclared payload contains only work. The trusted receipt, not a
+    # model-authored next-stage override, carries its already-admitted route.
+    inherited_route_indexes = set()
+    if _expected_policy and _expected_policy.get('requested_route'):
+        requested = _expected_policy['requested_route']
+        inherited_route_indexes = {i for i, t in enumerate(task_list) if not t.get('route')}
+        task_list = [{**t, 'route': requested['route']} if not t.get('route') else t for t in task_list]
+    try:
+        if _dispatch_admission is not None:
+            _dispatch_admission.validate(parent_agent, task_list, cfg)
+        task_route_creds = [resolve_named_route(t, cfg, parent_agent) for t in task_list]
+        if follow_through and len(task_list) > 1 and any(c is not None for c in task_route_creds):
+            return tool_error('Mixed exact-route follow-through requires a staged plan with an explicit route for each stage; no child was started.')
+        creds = (_resolve_delegation_credentials(
+            credentials_cfg if credentials_cfg else cfg, parent_agent
+        ) if any(c is None for c in task_route_creds) else task_route_creds[0])
+    except ValueError as exc:
+        return tool_error(str(exc))
+
+    from agent.delegation_followthrough import runtime_policy_for
+    try:
+        runtime_policy = runtime_policy_for(creds, parent_agent)
+        if _expected_policy is not None and _expected_policy != runtime_policy:
+            return tool_error("The predeclared follow-through cannot change the admitted model, provider, endpoint, inherited tools, or approval restrictions.")
+    except Exception:
+        return tool_error("Follow-through runtime policy could not be verified; no child was started.")
+
+    continuation_policy = runtime_policy
+    from agent.delegation_followthrough import canonical_stages
+    proposed_stages = canonical_stages(follow_through)
+    if proposed_stages and any(k in proposed_stages[0] for k in ('route', 'account')):
+        try:
+            next_creds = resolve_named_route(proposed_stages[0], cfg, parent_agent)
+            if next_creds is not None:
+                continuation_policy = runtime_policy_for(next_creds, parent_agent)
+        except ValueError as exc:
+            return tool_error(str(exc))
+
     overall_start = time.monotonic()
     results = []
 
@@ -4727,6 +4763,8 @@ def delegate_task(
     # Capture on the trusted caller, before child construction and before any
     # thread handoff. Queued work must not re-read a later turn's parent/cwd.
     _parent_workspace = _capture_parent_workspace(parent_agent, parent_task_id)
+    from agent.delegation_ownership import scope_for
+    _owner_scope = scope_for(parent_agent, parent_task_id or '')
 
     # Strict background: a conversational root (the checkpoint applies to it)
     # asked for a detached job. If one cannot be had, say so; never run the
@@ -4778,7 +4816,7 @@ def delegate_task(
         apply_default_tier
         and not credentials_cfg
         and any(
-            not (isinstance(t.get("tier"), str) and t["tier"].strip())
+            not t.get("route") and not (isinstance(t.get("tier"), str) and t["tier"].strip())
             for t in task_list
         )
     ):
@@ -4839,10 +4877,12 @@ def delegate_task(
             # A tier that doesn't resolve, or whose credential resolution raises,
             # falls back to the batch-level `creds` (the pin-or-inherit result
             # already computed above) instead of failing the whole batch.
-            task_creds = creds
+            task_creds = task_route_creds[i] or creds
             task_tier_fallback: Optional[str] = None
             requested_tier = t.get("tier")
-            if isinstance(requested_tier, str) and requested_tier.strip():
+            if task_route_creds[i] is not None:
+                pass  # exact selector already resolved; tiers cannot replace it
+            elif isinstance(requested_tier, str) and requested_tier.strip():
                 tier_name = requested_tier.strip()
                 tier_match = _resolve_tier(tier_name, cfg, parent_agent)
                 if tier_match is None:
@@ -4916,6 +4956,8 @@ def delegate_task(
             # From here the child is owned by `children`, so a failure while wiring
             # it up releases it with the rest.
             children.append((i, t, child))
+            if task_route_creds[i] is not None:
+                child._delegate_requested_route = task_creds['requested_route']
             if _steps_i:
                 try:
                     from agent.ack_checklist import seed_todos
@@ -5426,6 +5468,22 @@ def delegate_task(
             fanout_delivery=_fanout_mode,
         )
         try:
+            if _dispatch_admission is not None:
+                try:
+                    _dispatch_admission.validate(parent_agent, task_list, _load_config())
+                except ValueError as exc:
+                    _fg_limit.release_ack_part(_batch_delegation_id)
+                    _drop_inflight_record(_batch_delegation_id)
+                    for _bi, _bt, _built in children:
+                        _release_child_resources(_built, parent_agent)
+                    return tool_error(str(exc))
+            if (getattr(parent_agent, '_interrupt_requested', False) is True or
+                    _request_stop_epoch != int(getattr(parent_agent, '_orchestration_stop_epoch', 0))):
+                _fg_limit.release_ack_part(_batch_delegation_id)
+                _drop_inflight_record(_batch_delegation_id)
+                for _bi, _bt, _built in children:
+                    _release_child_resources(_built, parent_agent)
+                return tool_error('Stop revoked this launch while it was preparing; no background child was started.')
             dispatch = dispatch_async_delegation_batch(
                 goals=_goals,
                 context=context,
@@ -5448,8 +5506,14 @@ def delegate_task(
                 fanout_delivery=_fanout_mode,
                 request_identity=dict(_admitted_identity),
                 straggler_seconds=(
+                    # Requested route metadata is stored separately from auth.
                     _get_fanout_straggler_seconds() if _fanout_mode == "joined" else 0
                 ),
+                requested_routes=[(c or {}).get('requested_route', {}) for c in task_route_creds],
+                owner_scope=_owner_scope,
+                accept_guard=(_dispatch_admission.memory_valid if _dispatch_admission is not None else
+                              lambda: getattr(parent_agent, '_interrupt_requested', False) is not True and
+                              _request_stop_epoch == int(getattr(parent_agent, '_orchestration_stop_epoch', 0))),
                 straggler_notify=_straggler_notify,
             )
         except BaseException:
@@ -5514,10 +5578,11 @@ def delegate_task(
                     handoff=handoff,
                     continuation_plan=follow_through,
                     accepted_task_data=[
-                        {"goal": t["goal"], **({"context": t["context"]} if t.get("context") is not None else {})}
-                        for t in task_list
+                        {"goal": t["goal"], **({"context": t["context"]} if t.get("context") is not None else {}),
+                         **({k: t[k] for k in ('route', 'account') if k in t} if i not in inherited_route_indexes else {})}
+                        for i, t in enumerate(task_list)
                     ],
-                    runtime_policy=runtime_policy,
+                    runtime_policy=continuation_policy,
                 )
             if any(isinstance(s, str) and s for s in _sids):
                 payload["subagent_ids"] = _sids
@@ -6312,6 +6377,19 @@ def _build_dynamic_schema_overrides() -> dict:
 
     cfg = _load_config()
     resolved_tiers = _resolved_tiers(cfg)
+    from agent.delegation_routes import route_catalog
+    routes = route_catalog(cfg)
+    if routes:
+        tasks_prop = dict(overrides_params['properties']['tasks'])
+        tasks_items = dict(tasks_prop['items'])
+        tasks_items['properties'] = dict(tasks_items['properties'])
+        tasks_items['properties']['route'] = {
+            'type': 'string', 'enum': sorted(routes),
+            'description': 'Exact configured model route (no fallback): ' + '; '.join(
+                f"{name} = {value['provider']}/{value['model']}" for name, value in sorted(routes.items())),
+        }
+        tasks_prop['items'] = tasks_items
+        overrides_params['properties']['tasks'] = tasks_prop
     if resolved_tiers:
         # Deep-copy the tasks property (including its nested items.properties)
         # before mutating -- the shallow dict(v) copy above still shares the
@@ -6375,6 +6453,14 @@ DELEGATE_TASK_SCHEMA = {
                                 "Short label (≤60 chars) shown to the user "
                                 "while this child runs."
                             ),
+                        },
+                        "route": {
+                            "type": "string",
+                            "description": "Exact named selector in delegation.routes. Unavailable or unknown routes fail; never substitute a tier/default. Omit to use the default.",
+                        },
+                        "account": {
+                            "type": "string",
+                            "description": "Exact account constraint. Currently fails closed: the shared delegation resolver cannot bind accounts. Never replace account proof with a title or promise.",
                         },
                         "steps": {
                             "type": "array",
@@ -6471,6 +6557,8 @@ DELEGATE_TASK_SCHEMA = {
                     "properties": {
                         "goal": {"type": "string", "minLength": 1, "maxLength": 2000},
                         "context": {"type": "string", "maxLength": 8000},
+                        "route": {"type": "string", "maxLength": 160},
+                        "account": {"type": "string", "maxLength": 200},
                     },
                     "required": ["goal"],
                     "additionalProperties": False,
@@ -6529,7 +6617,7 @@ def _model_background_value(args: dict, parent_agent=None) -> bool:
     return not is_subagent
 
 
-_MODEL_HIDDEN_TASK_FIELDS = {"acp_command", "acp_args"}
+_MODEL_HIDDEN_TASK_FIELDS = {"acp_command", "acp_args", "_route_binding"}
 
 
 def _strip_model_hidden_task_fields(tasks: Any) -> Any:
@@ -6551,14 +6639,29 @@ def _strip_model_hidden_task_fields(tasks: Any) -> Any:
     return stripped_tasks if changed else tasks
 
 
+def _model_route_error(args: dict) -> Optional[str]:
+    if args.get('tasks') and any(k in args for k in ('route', 'account')):
+        return tool_error('Exact route/account constraints must be inside each task when tasks is present; '
+                          'ambiguous mixed carriers were refused and no child was started.')
+    return None
+
+
+def _model_route_tasks(args: dict) -> Any:
+    """Retain exact constraints in a legacy single-stage payload too."""
+    tasks = _strip_model_hidden_task_fields(args.get('tasks'))
+    if not tasks and args.get('goal') and any(k in args for k in ('route', 'account')):
+        return [{k: args[k] for k in ('goal', 'context', 'route', 'account') if k in args}]
+    return tasks
+
+
 registry.register(
     name="delegate_task",
     toolset="delegation",
     schema=DELEGATE_TASK_SCHEMA,
-    handler=lambda args, **kw: delegate_task(
+    handler=lambda args, **kw: _model_route_error(args) or delegate_task(
         goal=args.get("goal"),
         context=args.get("context"),
-        tasks=_strip_model_hidden_task_fields(args.get("tasks")),
+        tasks=_model_route_tasks(args),
         max_iterations=args.get("max_iterations"),
         role=args.get("role"),
         background=_model_background_value(args, kw.get("parent_agent")),

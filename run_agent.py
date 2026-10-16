@@ -2441,6 +2441,17 @@ class AIAgent:
                 }
                 if isinstance(msg.get("_row_id"), int):
                     _row["_row_id"] = msg["_row_id"]
+                # Trusted-ingress capability binds to this turn's own user
+                # row only (never history, assistant, tool or scaffolding).
+                _ingress = getattr(self, "_trusted_human_ingress", None)
+                if (
+                    _ingress is not None
+                    and role == "user"
+                    and _ov_idx == _msg_idx
+                    and not msg.get("tool_call_id")
+                    and not msg.get(COMPRESSED_SUMMARY_METADATA_KEY)
+                ):
+                    _row["human_ingress"] = _ingress
                 _batch_rows.append(_row)
                 _batch_msgs.append(msg)
             # One transaction for the whole turn's new rows (typically 3-8
@@ -3355,7 +3366,17 @@ class AIAgent:
             if session_has_running_agent:
                 running_agent.interrupt(new_message.text)
         """
+        # clear_interrupt must never revive a stopped provenance capability.
+        self._human_ingress_stop_generation = int(getattr(self, "_human_ingress_stop_generation", 0)) + 1
         if hard_cancel:
+            from tools.async_delegation import _records_lock as _orchestration_acceptance_lock
+            with _orchestration_acceptance_lock:
+                self._orchestration_stop_epoch = int(getattr(self, '_orchestration_stop_epoch', 0)) + 1
+            from agent.delegation_ownership import revoke_current_jobs
+            try:
+                revoke_current_jobs(self)
+            except Exception:
+                logger.warning('Could not persist scoped orchestration revocation; the current request remains stopped.', exc_info=True)
             checkpoint = getattr(self, "_delegation_checkpoint", None)
             if checkpoint is not None:
                 checkpoint.revoke_current_followthrough()
@@ -8405,9 +8426,13 @@ class AIAgent:
         invocation paths (concurrent, sequential, inline).
         """
         from tools.delegate_tool import (
-            _strip_model_hidden_task_fields,
+            _model_route_tasks,
+            _model_route_error,
             delegate_task as _delegate_task,
         )
+        route_error = _model_route_error(function_args)
+        if route_error:
+            return route_error
         # Delegations from the top-level MODEL always run in the background —
         # the model does not get to choose. delegate_task returns immediately
         # with a handle (one per task) and each subagent's result re-enters the
@@ -8423,7 +8448,7 @@ class AIAgent:
         return _delegate_task(
             goal=function_args.get("goal"),
             context=function_args.get("context"),
-            tasks=_strip_model_hidden_task_fields(function_args.get("tasks")),
+            tasks=_model_route_tasks(function_args),
             max_iterations=function_args.get("max_iterations"),
             role=function_args.get("role"),
             background=(not _is_subagent),
@@ -8543,8 +8568,15 @@ class AIAgent:
         persist_user_display_metadata: Optional[Dict[str, Any]] = None,
         moa_config: Optional[dict[str, Any]] = None,
         completion_delegation_ids: Optional[Sequence[str]] = None,
+        trusted_human_ingress: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """Forwarder — see ``agent.conversation_loop.run_conversation``."""
+        """Forwarder — see ``agent.conversation_loop.run_conversation``.
+
+        ``trusted_human_ingress`` is the host-minted capability from
+        ``agent.workstream_origin`` (trusted input owners only). It is held for
+        this one turn so the persistence layer can bind a receipt to the exact
+        user row; it is provenance, never permission, and never replays.
+        """
         # A review deliberately shares this agent's session_id for prompt-cache
         # parity. Fence review startup or interrupt an admitted request, then
         # await that request's exit before opening any live-turn Relay or task
@@ -8976,6 +9008,15 @@ class AIAgent:
                         with durable_turn_lease_activity_lock:
                             durable_turn_lease_turn_active = True
                         durable_turn_lease_thread.start()
+                    from agent.workstream_origin import bind_human_ingress_to_turn
+                    original_input = persist_user_message if persist_user_message is not None else user_message
+                    self._trusted_human_ingress = bind_human_ingress_to_turn(
+                        trusted_human_ingress, self, original_input,
+                    )
+                    # Read-only fence before the real host loop. The producer
+                    # runs only after the finalizer's persistence has settled.
+                    from agent.workstream_procedures import begin_execution_turn
+                    _execution_turn = begin_execution_turn(self, conversation_history, user_message)
                     result = run_conversation(
                         self,
                         user_message,
@@ -8990,7 +9031,18 @@ class AIAgent:
                         moa_config=moa_config,
                         completion_delegation_ids=completion_delegation_ids,
                     )
+                    from agent.workstream_procedures import finish_execution_turn
+                    _execution_outcome = finish_execution_turn(self, result, _execution_turn)
+                    if _execution_outcome is not None and isinstance(result, dict):
+                        result["workstream_execution"] = _execution_outcome
                 finally:
+                    # A cached agent must never carry one turn's capability
+                    # into the next: always retire it with the turn.
+                    if trusted_human_ingress is not None:
+                        from agent.workstream_origin import retire_human_ingress
+
+                        retire_human_ingress(trusted_human_ingress)
+                    self._trusted_human_ingress = None
                     # However the turn ended (finalize_turn, the Codex
                     # app-server early return, an exception from the prologue
                     # or the loop) the per-message foreground time limit stops

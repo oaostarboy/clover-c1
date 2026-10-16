@@ -107,6 +107,7 @@ def compose_user_api_content(
     ext_prefetch_cache: str,
     plugin_user_context: str,
     work_plan: str = "",
+    workstream_context: str = "",
 ) -> Optional[str]:
     """Compose the API-bound content of the current turn's user message.
 
@@ -137,6 +138,8 @@ def compose_user_api_content(
         injections.append(plugin_user_context)
     if work_plan:
         injections.append(work_plan)
+    if workstream_context:
+        injections.append(workstream_context)
     if not injections:
         return None
     return content + "\n\n" + "\n\n".join(injections)
@@ -506,9 +509,11 @@ class TurnContext:
     plugin_user_context: str = ""
     # External-memory prefetch result, reused across loop iterations.
     ext_prefetch_cache: str = ""
-    # The delegation router's ``[Clover runtime] work plan:`` block for this
+    # The delegation router's ``(Clover runtime) work plan:`` block for this
     # turn (API copy of the user message only); "" when there is no plan.
     work_plan: str = ""
+    # Scoped current-turn workstream context, shared with the loop composer.
+    workstream_context: str = ""
     # Turn-start preflight already proved an immediate retry ineffective.
     preflight_compression_blocked: bool = False
 
@@ -543,6 +548,14 @@ def build_turn_context(
     """
     # Guard stdio against OSError from broken pipes (systemd/headless/daemon).
     install_safe_stdio()
+
+    # A cached gateway agent must never present a previous turn's optional
+    # artifact. This is local presentation state, not provider context.
+    if hasattr(agent, "_workstream_suggestion_turn"):
+        agent._workstream_suggestion_turn = None
+    # Results are presentation-only and must not escape a cached prior turn.
+    agent._human_workstream_result = None
+    agent._workstream_monitor_result = None
 
     # Recover a session rotated by another path before binding log/turn ids or
     # copying client-supplied history. Everything in this turn must consistently
@@ -1556,6 +1569,18 @@ def build_turn_context(
     except Exception:
         logger.debug("helper-work lifecycle unavailable", exc_info=True)
 
+    try:
+        from agent.memory_manager import current_workstream_context
+
+        workstream_context = current_workstream_context(
+            agent,
+            _router_user_msg.get("content") if isinstance(_router_user_msg, dict) else "",
+        )
+    except Exception:
+        logger.debug("workstream context unavailable", exc_info=True)
+        workstream_context = ""
+    agent._workstream_context_for_turn = workstream_context
+
     # ── api_content sidecar: persist what you send ──
     # The prefetch/plugin context above is injected into the API copy of this
     # turn's user message, never into the stored content — so on the next
@@ -1585,6 +1610,7 @@ def build_turn_context(
             ext_prefetch_cache,
             plugin_user_context,
             work_plan,
+            workstream_context,
         )
         if _api_content is not None and _api_content != _turn_user_msg.get("content"):
             _turn_user_msg["api_content"] = _api_content
@@ -1645,6 +1671,56 @@ def build_turn_context(
                 _inbound_cb()
             except Exception:
                 logger.debug("inbound_persisted_callback failed", exc_info=True)
+        # Explicit human corrections/feedback: only after the exact user row
+        # (and its trusted-origin receipt) is durable, and before the model
+        # call. Fails closed and never raises into the turn.
+        _human_row = (
+            messages[current_turn_user_idx]
+            if 0 <= current_turn_user_idx < len(messages)
+            else None
+        )
+        if (
+            getattr(agent, "_trusted_human_ingress", None) is not None
+            and isinstance(_human_row, dict)
+            and _human_row.get("role") == "user"
+            and _human_row.get("_db_persisted")
+            and isinstance(_human_row.get("_row_id"), int)
+        ):
+            _original_human_message = (
+                persist_user_message if isinstance(persist_user_message, str)
+                else _human_row.get("content")
+            )
+            try:
+                from agent.workstream_job_scope import consume_persisted_turn as consume_monitor
+
+                agent._workstream_monitor_result = consume_monitor(
+                    agent, message=_original_human_message, row_id=_human_row["_row_id"],
+                )
+            except Exception:
+                # Ambiguous persistence never becomes a saved/linked claim.
+                from agent.workstream_job_scope import AdmissionResult
+
+                if isinstance(_original_human_message, str) and _original_human_message.startswith("workstream-monitor: "):
+                    agent._workstream_monitor_result = AdmissionResult(reason="unknown: persistence failed; inspect local state before retry")
+                logger.debug("monitor workstream consumer unavailable", exc_info=True)
+            try:
+                from agent.workstream_human_hooks import consume_persisted_turn
+
+                agent._human_workstream_result = consume_persisted_turn(
+                    agent,
+                    message=_original_human_message,
+                    row_id=_human_row["_row_id"],
+                )
+            except Exception:
+                logger.debug("human workstream consumer unavailable", exc_info=True)
+        # Stage only a receipt-backed ordinary human turn. The response owner
+        # rechecks scope/Stop/caps after the requested reply, never in prompts.
+        try:
+            from agent.workstream_suggestions import prepare_offer_turn
+
+            prepare_offer_turn(agent, _human_row)
+        except Exception:
+            logger.debug("workstream suggestion input unavailable", exc_info=True)
     except Exception:
         logger.warning(
             "Early turn-start session persistence failed for session=%s",
@@ -1681,5 +1757,6 @@ def build_turn_context(
         plugin_user_context=plugin_user_context,
         ext_prefetch_cache=ext_prefetch_cache,
         work_plan=work_plan,
+        workstream_context=workstream_context,
         preflight_compression_blocked=_preflight_compression_blocked,
     )

@@ -14,6 +14,7 @@ import concurrent.futures
 import contextlib
 import contextvars
 import errno
+import hashlib
 import json
 import logging
 import os
@@ -5441,6 +5442,142 @@ class _BoundedCronSessionDB:
         return _bounded
 
 
+def _record_workstream_monitor_occurrence(
+    job: dict, outcome: Any, *, strict: bool = False
+) -> Optional[dict]:
+    """Persist a changed monitor event for an explicitly linked workstream.
+
+    This is evidence only. It never dispatches or authorizes continuation work.
+    ``strict=True`` is used by monitor detection before its hash advances; it
+    propagates persistence errors so the monitor can safely redetect.
+    """
+    workstream_id = str(job.get("workstream_id") or "")
+    job_id = str(job.get("id") or "")
+    context = getattr(outcome, "context_block", None)
+    if not workstream_id or not job_id or not isinstance(context, str) or not context:
+        return None
+    try:
+        from agent import workstreams
+        from cron import notepad
+
+        settings = workstreams.load_settings()
+        if not settings.enabled or not workstreams.job_eligible(settings, job_id):
+            return None
+        scope = workstreams.job_scope(job)
+        record = notepad.get_workstream(scope, workstream_id)
+        if not record or not record.get("approved") or record.get("status") not in {"open", "deferred"}:
+            return None
+        occurrence_key = hashlib.sha256(
+            f"{job_id}\0{context}".encode("utf-8", errors="replace")
+        ).hexdigest()
+        return notepad.ensure_occurrence(
+            scope,
+            workstream_id,
+            occurrence_key=occurrence_key,
+            source="monitor",
+        )
+    except Exception:
+        logger.warning(
+            "Job '%s': unable to persist linked workstream monitor occurrence",
+            job_id,
+            exc_info=True,
+        )
+        if strict:
+            raise
+        return None
+
+
+def _settle_monitor_occurrence_without_authority(job: dict, occurrence: dict):
+    """Consume a linked monitor event: hand it to the runtime's admission, or
+    settle it unknown.
+
+    A monitor event is evidence, not authority and not a completion. It never
+    dispatches from here. When the link's blocker holds an original, runtime-
+    bound next stage whose stage-before completed and was delivered, the
+    claimed occurrence is handed to the runtime as an internal continuation
+    event (``agent.continuation_bridge``); the runtime's own admission
+    (re-validation, claim-before-effect, dispatch) decides. With no such plan,
+    or while the stage-before is unsettled, nothing runs: the former settles
+    ``unknown`` (never an ordinary model run), the latter leaves the event
+    pending for a later tick.
+    """
+    from agent import continuation_bridge as bridge
+    from agent import workstreams
+    from cron import notepad
+
+    scope = workstreams.job_scope(job)
+    workstream_id = str(job.get("workstream_id") or "")
+    occurrence_key = str(occurrence.get("occurrence_key") or "")
+    name = job.get("name") or job.get("id") or "monitor"
+    route, delegation_id = bridge.held_route(job)
+    if route == "waiting" and occurrence.get("state") == "pending":
+        return (
+            True,
+            f"# Cron Job: {name}\n\n"
+            "**Status:** blocker-clear event retained; the held stage's predecessor is unsettled\n",
+            SILENT_MARKER,
+            None,
+        )
+    claimer = f"{bridge.CLAIMER_PREFIX}{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex}"
+    claim = notepad.claim_occurrence(
+        scope, workstream_id, occurrence_key=occurrence_key, claimer=claimer
+    )
+    if claim is not None and route == "ready":
+        evt = bridge.release_event(job, str(delegation_id), claim)
+        if evt is not None and bridge.emit(evt):
+            return (
+                True,
+                f"# Cron Job: {name}\n\n"
+                "**Status:** blocker-clear handed to the runtime's continuation admission\n",
+                SILENT_MARKER,
+                None,
+            )
+    if claim is not None:
+        notepad.settle_occurrence(
+            scope,
+            workstream_id,
+            occurrence_key=occurrence_key,
+            claimer=claimer,
+            state="unknown",
+            detail="no authorized runtime continuation route; monitor evidence is not authority",
+        )
+    return (
+        False,
+        f"# Cron Job: {name}\n\n"
+        "**Status:** unknown; linked monitor occurrence retained without dispatch\n",
+        SILENT_MARKER,
+        "no authorized runtime continuation route for linked monitor occurrence",
+    )
+
+
+def _pending_linked_monitor_occurrence(job: dict) -> Optional[dict]:
+    """Find crash-recovered pending work only for an approved eligible link."""
+    workstream_id = str(job.get("workstream_id") or "")
+    job_id = str(job.get("id") or "")
+    if not workstream_id or not job_id:
+        return None
+    try:
+        from agent import workstreams
+        from cron import notepad
+
+        settings = workstreams.load_settings()
+        if not settings.enabled or not workstreams.job_eligible(settings, job_id):
+            return None
+        scope = workstreams.job_scope(job)
+        record = notepad.get_workstream(scope, workstream_id)
+        if not record or not record.get("approved") or record.get("status") not in {"open", "deferred"}:
+            return None
+        pending = notepad.pending_occurrences(scope, workstream_id=workstream_id)
+        return pending[0] if pending else None
+    except Exception:
+        logger.warning(
+            "Job '%s': unable to read linked pending monitor occurrence",
+            job_id,
+            exc_info=True,
+        )
+        return None
+
+
 def run_job(
     job: dict,
     *,
@@ -5654,6 +5791,12 @@ def run_job(
             )
             return False, _mon_doc, _mon_alert, _mon.error
         if not _mon.changed:
+            # Detection may have committed the occurrence and hash before a
+            # prior scheduler process crashed. Consume that durable pending
+            # row even though this poll's source hash is unchanged.
+            _pending = _pending_linked_monitor_occurrence(job)
+            if _pending is not None:
+                return _settle_monitor_occurrence_without_authority(job, _pending)
             # Unchanged output — suppress the agent run entirely. Recorded
             # as a silent no_change tick (visible in the executions ledger
             # via this doc; SILENT_MARKER blocks delivery).
@@ -5669,9 +5812,20 @@ def run_job(
                 f"**Status:** no_change (agent run suppressed)\n"
             )
             return True, _mon_doc, SILENT_MARKER, None
-        # Changed (or first run): inject the monitor context into the prompt
-        # through the existing per-run context seam and fall through to a
-        # normal agent run.
+        # Changed (or first run): an eligible linked workstream occurrence
+        # must be claimed and settled without dispatch until the runtime has
+        # validated an exact authorized continuation. Monitor output alone is
+        # evidence, never authority. Unlinked/ineligible jobs retain the
+        # established ordinary monitor prompt behavior.
+        try:
+            _occurrence = _record_workstream_monitor_occurrence(job, _mon, strict=True)
+        except Exception:
+            # Persistence failure is not an ineligible/unlinked monitor. Do
+            # not downgrade it to ordinary model work on this second read.
+            _error = "Linked monitor occurrence persistence failed; agent run suppressed"
+            return False, f"# Cron Job: {job_name}\n\n**Status:** {_error}\n", _error, _error
+        if _occurrence is not None:
+            return _settle_monitor_occurrence_without_authority(job, _occurrence)
         _monitor_context = _mon.context_block
         if _monitor_context:
             extra_prompt = (

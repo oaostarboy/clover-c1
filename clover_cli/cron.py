@@ -794,6 +794,83 @@ def cron_notepad(args) -> int:
         return 1
 
 
+def cron_workstream(args) -> int:
+    """Handle ``clover cron workstream <project> [list|show|feedback|approve|prune]``.
+
+    Inspection never writes and works even when ``proactive.enabled`` is false
+    (additive rows stay inspectable after rollback). Every other action
+    (``feedback``, ``approve``, ``prune``, ``link``, ``unlink``) is refused
+    before any read or write of state: a TTY/PTY (which an agent's terminal
+    tool can allocate) is not human identity, and the trusted SessionDB
+    human-origin receipt they would require does not exist yet. Receipts,
+    authority links and occurrences have no command at all.
+    """
+    from agent import workstreams as ws
+    from cron import notepad as np
+
+    project = str(getattr(args, "project", "") or "")
+    # A path-like project is the resolved directory (the turn seam's project
+    # identity); anything else is a literal project key.
+    if project in {".", ""} or project.startswith(("/", "./", "../", "~")):
+        project = str(Path(project or ".").expanduser().resolve())
+    action = getattr(args, "workstream_action", None) or "list"
+    wid = getattr(args, "workstream_id", None)
+    try:
+        scope = ws.make_scope(
+            project,
+            audience=getattr(args, "audience", None) or "private",
+            root=getattr(args, "root", None) or "",
+        )
+    except ValueError as exc:
+        print(color(f"Workstream error: {exc}", Colors.RED))
+        return 1
+
+    try:
+        if action == "list":
+            rows = np.list_workstreams(scope, limit=100)
+            if not rows:
+                print(color(f"No workstream records for project {project}.", Colors.DIM))
+                return 0
+            for row in rows:
+                flag = " approved" if row["approved"] else ""
+                print(f"  {color(row['workstream_id'], Colors.YELLOW)} "
+                      f"[{row['status']}] {row['kind']} r{row['revision']}{flag}: {row['title']}")
+            return 0
+
+        if action == "show":
+            if not wid:
+                print(color("Usage: clover cron workstream <project> show <id>", Colors.RED))
+                return 1
+            row = np.get_workstream(scope, wid)
+            if row is None:
+                print(color(f"No workstream '{wid}' in this scope.", Colors.YELLOW))
+                return 1
+            print(f"{row['workstream_id']} [{row['status']}] {row['kind']} r{row['revision']}")
+            print(f"  {row['title']}\n  {row['summary']}")
+            for ev in np.list_evidence(scope, wid):
+                print(f"  evidence {ev['source_kind']}:{ev['source_id']} {ev['status']}")
+            for rc in np.list_receipts(scope, wid):
+                print(f"  receipt {rc['kind']} ({rc['owner']}) {rc['source_id']}")
+            for fb in np.list_feedback(scope, wid):
+                print(f"  feedback {fb['kind']} by {fb['actor']}")
+            return 0
+
+        # --- state writes: disabled ---------------------------------------
+        # Every remaining action mutates durable state or records a user
+        # decision. An interactive terminal is not human identity (an agent's
+        # terminal tool can allocate a PTY), and the trusted SessionDB
+        # human-origin receipt does not exist yet, so nothing here persists
+        # and no TTY/caller/role/text is accepted as authorization.
+        print(color(f"Refused: '{action}' needs a trusted human-origin receipt "
+                    "from the chat ingress; a terminal cannot supply one. "
+                    "list and show remain available.", Colors.RED))
+        return 1
+    except (np.WorkstreamError, ValueError) as exc:
+        print(color(f"Workstream error: {exc}", Colors.RED))
+        return 1
+    return 1
+
+
 def cron_command(args):
     """Handle cron subcommands."""
     subcmd = getattr(args, 'cron_command', None)
@@ -819,6 +896,9 @@ def cron_command(args):
 
     if subcmd == "notepad":
         return cron_notepad(args)
+
+    if subcmd == "workstream":
+        return cron_workstream(args)
 
     if subcmd in {"create", "add"}:
         return cron_create(args)

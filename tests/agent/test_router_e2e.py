@@ -208,6 +208,37 @@ def test_parallel_turn_is_handed_off_after_two_calls_and_the_turn_ends_cleanly(
     assert record and record['mode'] == 'parallel' and record['tasks'] == 3
 
 
+def test_mixed_test_request_keeps_version_answer_and_handoff(provider, aux, tmp_path,
+                                                              children, dispatches):
+    """A hand-off opener must answer the user's version question, not only report status."""
+    aux.replies[:] = [verdict_json('parallel', [
+        T('Run the requested test suite and report its result'),
+        T('Verify the installed version and report whether it is 1.5.5'),
+    ])]
+    provider.queue[:] = [
+        _write(tmp_path / 'a.txt', 'a', 'c1'), _write(tmp_path / 'b.txt', 'b', 'c2'),
+        _write(tmp_path / 'c.txt', 'c', 'c3'),
+        text('Yes, this is version 1.5.5. I handed the test to one helper.'),
+    ]
+    agent = make_agent(provider, session_id='e2e-version-question')
+    request = 'Run the test—is this version 1.5.5?'
+
+    result = agent.run_conversation(request, conversation_history=[], task_id='e2e-version')
+
+    assert result['turn_exit_reason'] == 'delegation_handoff'
+    assert result['final_response'].startswith('Yes, this is version 1.5.5.'), result['final_response']
+    assert 'test' in result['final_response'].lower(), result['final_response']
+    assert '\U0001f504 ' in result['final_response'] or '\u2192' in result['final_response']
+    assert len(dispatches) == 1
+    _wait_started(children, 2)
+    assert len(children) == 2
+    voice_request = provider.captured[-1]
+    prompt_text = ' '.join(str(m.get('content') or '') for m in voice_request['messages'])
+    assert request in prompt_text
+    assert 'answer yes or no directly and include the fact asked about before the work status' in prompt_text.lower()
+    _roles_ok(result['messages'])
+
+
 # ── staged ─────────────────────────────────────────────────────────────────
 
 def test_staged_turn_dispatches_stage_one_and_carries_the_next_stage(

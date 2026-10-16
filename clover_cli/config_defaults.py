@@ -2932,6 +2932,40 @@ DEFAULT_CONFIG = {
         "media_send_timeout_seconds": 300,
     },
 
+    # Proactive workstream ledger (opt-in; see agent/workstreams.py). Typed,
+    # scoped obligations/corrections/receipts in the profile's notepad DB.
+    # Everything is OFF by default: with ``enabled: false`` no workstream
+    # tables are created, no context is injected and no model call is added.
+    # ``mode: shadow`` records candidates without surfacing or executing;
+    # ``active`` is only reachable after the canary gates in PLAN-v1. No
+    # setting here grants authority — dispatch authority comes only from the
+    # original runtime continuation plan.
+    "proactive": {
+        "enabled": False,
+        "mode": "shadow",
+        "eligible_jobs": [],
+        "private_only": True,
+        "threads": {
+            "max_items": 16,
+            "max_context_bytes": 4096,
+            "retention_days": 30,
+        },
+        "recall": {"enabled": False, "max_items": 3, "max_bytes": 1200},
+        "suggestions": {
+            "enabled": False,
+            "cooldown_seconds": 3600,
+            "max_per_session": 1,
+            "preferred_timing": None,  # explicit "after_reply" or "never"
+        },
+        "procedures": {"enabled": False, "min_verified_runs": 3, "min_sessions": 2},
+        "compaction_audit": {"enabled": False, "max_repairs": 0},
+        "aux": {
+            "max_calls_per_event": 1,
+            "max_calls_per_day": 4,
+            "max_output_tokens": 512,
+        },
+    },
+
     # Kanban multi-agent coordination — controls the dispatcher loop that
     # spawns workers for ready tasks. The dispatcher ticks every N seconds
     # (default 60), reclaims stale claims, promotes dependency-satisfied

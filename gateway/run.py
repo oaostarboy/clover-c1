@@ -4288,7 +4288,7 @@ def _drain_gateway_watch_events(completion_queue) -> "list[dict]":
             "watch_overflow_released",
         }:
             watch_events.append(evt)
-        elif evt_type == "async_delegation":
+        elif evt_type in {"async_delegation", "continuation_release"}:
             requeue.append(evt)
         # else: process completion events are handled by the watcher task
     for evt in requeue:
@@ -6990,6 +6990,12 @@ class TurnRunner:
                 )
             if ctx.moa_config is not None:
                 _conversation_kwargs["moa_config"] = ctx.moa_config
+            if ctx.trusted_human_ingress is not None:
+                # Host-minted provenance capability (never a model-facing
+                # value); persistence binds a receipt to this turn's user row.
+                _conversation_kwargs["trusted_human_ingress"] = (
+                    ctx.trusted_human_ingress
+                )
             if _persist_user_timestamp_override is not None:
                 _conversation_kwargs["persist_user_timestamp"] = _persist_user_timestamp_override
             result = agent.run_conversation(_api_run_message, **_conversation_kwargs)
@@ -7017,6 +7023,33 @@ class TurnRunner:
                     result.get("messages", []),
                     history_offset=len(agent_history),
                 )
+
+        # Explicit operation replies come from the persistence owner, not an
+        # unverified model 'saved' claim. No new send or provider-context edit.
+        if (isinstance(result, dict) and ctx._run_still_current()
+                and not result.get("failed") and not result.get("interrupted")
+                and result.get("completed") is not False):
+            from agent.workstream_human_hooks import inline_operation_report
+
+            _operation_report = inline_operation_report(agent)
+            if _operation_report:
+                result["final_response"] = _operation_report
+
+        # Optional inline workstream artifact belongs to this response owner,
+        # not to model output/history. Compose before stream finalization so
+        # streaming and non-streaming see one identical final. No delivery
+        # receipt is inferred from composition or queueing.
+        try:
+            from agent.workstream_suggestions import present_offer
+
+            _offer_artifact = present_offer(
+                agent, result, is_current=ctx._run_still_current,
+            )
+            if _offer_artifact is not None:
+                result["final_response"] += "\n\n" + _offer_artifact["footer"]
+                result["workstream_suggestion"] = _offer_artifact
+        except Exception:
+            logger.debug("optional workstream offer deferred", exc_info=True)
 
         ctx.result_holder[0] = result
 
@@ -7299,6 +7332,8 @@ class TurnRunner:
             "session_id": effective_session_id,
             "response_previewed": result.get("response_previewed", False),
             "response_transformed": result.get("response_transformed", False),
+            **({"workstream_suggestion": result["workstream_suggestion"]}
+               if "workstream_suggestion" in result else {}),
             # Pass through the agent_persisted flag so the persistence block
             # above can correctly determine whether the codex app-server path
             # self-persisted (it didn't — see codex_runtime.py).  Default
@@ -22981,6 +23016,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 {"completion_delegation_ids": completion_delegation_ids}
                 if completion_delegation_ids else {}
             )
+            _human_ingress = self._redeem_trusted_human_ingress(
+                event, source, session_key, run_generation, _run_start_session_id,
+            )
+            if _human_ingress is not None:
+                _completion_kwargs["trusted_human_ingress"] = _human_ingress
             agent_result = await self._run_agent(
                 message=message_text,
                 context_prompt=context_prompt,
@@ -28596,6 +28636,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if evt.get("type") == "async_delegation":
             add(evt.get("delegation_id"))
             add(evt.get("batch_delegation_id"))
+        elif evt.get("type") == "continuation_release":
+            # Runtime-owned release of a blocker-held stage: same trusted
+            # completion-id channel, so the existing staged-continuation
+            # owner (not this gateway) admits or refuses the stage.
+            add(evt.get("delegation_id"))
         for sibling in evt.get("_coalesced_siblings") or ():
             key = str(sibling[0] or "") if sibling else ""
             if key.startswith("deleg:"):
@@ -29084,6 +29129,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         self, synth_text: str, evt: dict,
     ) -> Optional[bool]:
         """Fan in concurrent process completions that share one conversation."""
+        if evt.get("type") == "completion":
+            try:
+                from clover_cli.config import get_clover_home
+                from gateway.council_context import should_consume_council_check
+                from tools.process_registry import process_registry
+
+                if should_consume_council_check(
+                    evt, home=get_clover_home(), registry=process_registry,
+                ):
+                    logger.info(
+                        "Consumed verified council route-check completion %s; "
+                        "the council card already owns the user-facing result",
+                        evt.get("session_id"),
+                    )
+                    return True
+            except Exception:
+                # Classification is deliberately fail-open: uncertainty keeps
+                # the normal completion notification path intact.
+                logger.debug("Council completion classifier failed open", exc_info=True)
         # Some unit tests construct GatewayRunner with object.__new__.  Keep the
         # batching seam lazy so those focused lifecycle tests remain valid.
         if not hasattr(self, "_completion_notification_batches"):
@@ -29354,6 +29418,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # so requeue anything that isn't ours.
                 requeue = []
                 async_events = []
+                release_events = []
                 while not _pr.completion_queue.empty():
                     try:
                         evt = _pr.completion_queue.get_nowait()
@@ -29361,10 +29426,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         break
                     if evt.get("type") == "async_delegation":
                         async_events.append(evt)
+                    elif evt.get("type") == "continuation_release":
+                        release_events.append(evt)
                     else:
                         requeue.append(evt)
                 for evt in requeue:
                     _pr.completion_queue.put(evt)
+                for evt in release_events:
+                    try:
+                        self._enrich_async_delegation_routing(evt)
+                        text = (
+                            "[Clover runtime: a linked monitor reported a change. The "
+                            "runtime is validating the stage held for it; do not start "
+                            "any stage yourself.]"
+                        )
+                        if await self._inject_watch_notification(text, evt) is False:
+                            _pr.completion_queue.put(evt)
+                    except Exception as e:
+                        _pr.completion_queue.put(evt)
+                        logger.error("Continuation release injection error: %s", e)
                 # A same-tick drain often carries several completions for the
                 # SAME originating session (a fan-out of background subagents
                 # finishing together).  Delivering each one individually floods
@@ -29459,6 +29539,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if agent_notify and not _pr_check.is_completion_consumed(session_id):
                     from agent.redact import redact_terminal_output
                     from tools.ansi_strip import strip_ansi
+                    from clover_cli.config import get_clover_home
                     _command = getattr(session, "command", "") or ""
                     _raw = strip_ansi(session.output_buffer) if session.output_buffer else ""
                     _raw = redact_terminal_output(_raw, _command)
@@ -29493,6 +29574,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         "completion_reason": getattr(session, "completion_reason", "exited"),
                         "termination_source": getattr(session, "termination_source", ""),
                         "output": _out,
+                        "origin_clover_home": str(get_clover_home().resolve()),
+                        "output_truncated": bool(
+                            getattr(session, "output_truncated", False)
+                            or len(_raw) > _LIMIT
+                        ),
                         # Spawning conversation's session-db id (stamped at
                         # spawn time in terminal_tool). Lets the delivery
                         # pre-flight drop this completion when the user closed
@@ -30206,6 +30292,40 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 reason,
             )
         return generation
+
+    def _redeem_trusted_human_ingress(
+        self, event, source, session_key: str, run_generation: int, session_id: str,
+    ):
+        """Exchange an adapter-minted capability for this turn's sealed one.
+
+        ``None`` (no provenance, ordinary behaviour) unless an authenticated
+        platform adapter minted it for this exact event object, the turn is
+        not synthetic, and ``proactive.enabled`` is on. Never reads event
+        fields as authority; provenance grants no permission.
+        """
+        if getattr(event, "internal", False):
+            return None
+        try:
+            from agent import workstream_origin
+            from agent.workstreams import current_profile, load_settings
+
+            if not load_settings(_load_gateway_config()).enabled:
+                return None
+            platform = getattr(source.platform, "value", None) or str(source.platform)
+            return workstream_origin.redeem_human_ingress(
+                event,
+                platform=platform,
+                profile=current_profile(),
+                session_id=session_id,
+                session_key=session_key or "",
+                run_generation=run_generation,
+                is_current=lambda: self._is_session_run_current(
+                    session_key, run_generation
+                ),
+            )
+        except Exception:
+            logger.debug("trusted human ingress unavailable; no receipt", exc_info=True)
+            return None
 
     def _is_session_run_current(self, session_key: str, generation: int) -> bool:
         """Return True when ``generation`` is still current for ``session_key``."""
@@ -31498,6 +31618,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_display_kind: Optional[str] = None,
         message_type: Optional[str] = None,
         completion_delegation_ids: Optional[tuple] = None,
+        trusted_human_ingress: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """Profile-scoping wrapper around the agent run.
 
@@ -31519,6 +31640,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_display_kind=persist_user_display_kind,
                 message_type=message_type,
                 completion_delegation_ids=completion_delegation_ids,
+                trusted_human_ingress=trusted_human_ingress,
             )
 
         profile_home = self._resolve_profile_home_for_source(source)
@@ -31533,6 +31655,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 persist_user_display_kind=persist_user_display_kind,
                 message_type=message_type,
                 completion_delegation_ids=completion_delegation_ids,
+                trusted_human_ingress=trusted_human_ingress,
             )
 
     def _profile_name_for_source(self, source: SessionSource) -> Optional[str]:
@@ -31677,6 +31800,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         persist_user_display_kind: Optional[str] = None,
         message_type: Optional[str] = None,
         completion_delegation_ids: Optional[tuple] = None,
+        trusted_human_ingress: Optional[Any] = None,
     ) -> Dict[str, Any]:
         """
         Run the agent with the given message and context.
@@ -32041,6 +32165,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             persist_user_timestamp=persist_user_timestamp,
             persist_user_display_kind=persist_user_display_kind,
             completion_delegation_ids=completion_delegation_ids,
+            trusted_human_ingress=trusted_human_ingress,
         )
         turn_runner = TurnRunner(self, turn_ctx)
         # Callback invoked by agent on tool lifecycle events — extracted to

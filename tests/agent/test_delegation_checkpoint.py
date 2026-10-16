@@ -8,6 +8,7 @@ that is or is not created), never on a hand-built state object.
 from __future__ import annotations
 
 import json
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 from types import SimpleNamespace
 from typing import Any
 

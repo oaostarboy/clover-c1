@@ -16661,7 +16661,30 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
             except Exception:
                 pass
 
-    def chat(self, message, images: list = None, voice_input: bool = False) -> Optional[str]:
+    def _capture_composer_submission(self, text):
+        """Enter input owner only, never chat/seed/notification/TTY inference.
+
+        Imported editor/file/voice content is deliberately unsupported here.
+        """
+        from agent import workstream_origin as origin, workstreams
+        if not isinstance(text, str) or not workstreams.load_settings().enabled:
+            return text
+        submission = origin.ComposerSubmission(text)
+        scope = workstreams.scope_for_surface(platform="cli")
+        sid = self.session_id
+        agent = self.agent
+        stop = int(getattr(agent, "_human_ingress_stop_generation", 0))
+        is_current = lambda: (
+            self.session_id == sid and not self._should_exit
+            and int(getattr(agent, "_human_ingress_stop_generation", 0)) == stop
+            and workstreams.scope_for_surface(platform="cli") == scope
+        )
+        origin.mint_human_ingress(submission, platform="cli", scope=scope,
+                                  original_text=text, is_current=is_current)
+        return submission
+
+    def chat(self, message, images: list = None, voice_input: bool = False,
+             *, trusted_human_submission=None) -> Optional[str]:
         """
         Send a message to the agent and get a response.
         
@@ -16716,6 +16739,31 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
         agent = self.agent
         if agent is None:
             return None
+
+        from agent import workstream_origin as _human_origin, workstreams as _human_workstreams
+        self._human_turn_generation = int(getattr(self, "_human_turn_generation", 0)) + 1
+        _human_generation = self._human_turn_generation
+        _trusted_ingress = None
+        # Context-only/direct callers have no composer capability or durable
+        # session. Leave them inert rather than inventing session provenance.
+        if (isinstance(trusted_human_submission, _human_origin.ComposerSubmission)
+                and getattr(self, "session_id", None)
+                and getattr(agent, "session_id", None)
+                and getattr(agent, "_session_db", None) is not None):
+            _human_stop = int(getattr(agent, "_human_ingress_stop_generation", 0))
+            _human_scope = _human_workstreams.scope_for_agent(agent)
+            _human_sid = self.session_id
+            _trusted_ingress = _human_origin.redeem_human_ingress(
+                trusted_human_submission, platform="cli", profile=_human_workstreams.current_profile(),
+                session_id=agent.session_id, session_key=self.session_id,
+                run_generation=_human_generation,
+                is_current=lambda: (
+                    self._human_turn_generation == _human_generation
+                    and self.session_id == _human_sid and self.agent is agent
+                    and int(getattr(agent, "_human_ingress_stop_generation", 0)) == _human_stop
+                    and _human_workstreams.scope_for_agent(agent) == _human_scope
+                ),
+            )
 
         # Route image attachments based on the active model's vision capability.
         # "native" → pass pixels as OpenAI-style content parts (adapters
@@ -17027,6 +17075,7 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
                         task_id=self.session_id,
                         persist_user_message=_persist_clean_user_message,
                         moa_config=_moa_cfg,
+                        trusted_human_ingress=_trusted_ingress,
                     )
                     if getattr(self, "_pending_moa_disable_after_turn", False):
                         _restore = getattr(self, "_pending_moa_restore_model", None) or {}
@@ -18460,7 +18509,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
                 self._attached_images.clear()
                 event.app.invalidate()
                 # Bundle text + images as a tuple when images are present
-                payload = (text, images) if images else text
+                # Capture at the checked composer owner BEFORE queueing or
+                # processing middleware; plain/synthetic queued strings have no entry.
+                submitted = self._capture_composer_submission(text) if not images else text
+                payload = (submitted, images) if images else submitted
                 # A bang command is treated like a slash command while the
                 # agent is busy: it must never be routed into steer/redirect
                 # (which would inject `!git status` into the model's context as
@@ -20764,6 +20816,11 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
                                 pass
                         continue
 
+                    # Preserve input identity separately: every transformation
+                    # below loses provenance unless the original text persists.
+                    from agent.workstream_origin import ComposerSubmission
+                    _human_submission = user_input if isinstance(user_input, ComposerSubmission) else None
+
                     # Voice-transcribed messages arrive wrapped in a sentinel
                     # so only genuine STT output gets the voice prefix (#65827).
                     is_voice_input = isinstance(user_input, _VoiceInputMessage)
@@ -20908,7 +20965,8 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
                     app.invalidate()  # Refresh status line
 
                     try:
-                        self.chat(user_input, images=submit_images or None, voice_input=is_voice_input)
+                        self.chat(user_input, images=submit_images or None, voice_input=is_voice_input,
+                                  trusted_human_submission=_human_submission)
                     finally:
                         self._agent_running = False
                         self._spinner_text = ""

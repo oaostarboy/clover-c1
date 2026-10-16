@@ -36,6 +36,152 @@ logger = logging.getLogger(__name__)
 CONTEXT_RECEIPT = "gateway-context.json"
 CONTEXT_FAILED = "gateway-context-failed.json"
 OBSERVED_SESSION = "gateway-origin-session.json"
+GATEWAY_ACK = "gateway-card.json"
+
+
+def should_consume_council_check(
+    event: Mapping[str, Any], *, home: Path, registry: Any,
+) -> bool:
+    """Consume only a fully proven, already-delivered council route audit.
+
+    Every uncertainty returns False so the ordinary completion notification
+    remains the fail-open path. The caller must invoke this before batching.
+    """
+    import re
+
+    if event.get("type") != "completion" or event.get("exit_code") != 0:
+        return False
+    if event.get("completion_reason", "exited") != "exited":
+        return False
+    if event.get("output_truncated") is not False:
+        return False
+    command = str(event.get("command") or "").split()
+    if not command or Path(command[0]).name != "route-check.sh":
+        return False
+    session_key = str(event.get("session_key") or "")
+    parent_session_id = str(event.get("parent_session_id") or "")
+    if not session_key or not parent_session_id:
+        return False
+    sid = str(event.get("session_id") or "")
+    process = registry.get(sid) if registry is not None and sid else None
+    if (
+        process is None or getattr(process, "output_truncated", True)
+        or getattr(process, "detached", False)
+    ):
+        return False
+    if (
+        str(getattr(process, "session_key", "") or "") != session_key
+        or str(getattr(process, "parent_session_id", "") or "") != parent_session_id
+    ):
+        return False
+    full_output = str(getattr(process, "output_buffer", "") or "")
+    output = str(event.get("output") or "")
+    if not full_output or not output or len(full_output) > 200_000:
+        return False
+    if output not in full_output:
+        return False
+    lines = [line.strip() for line in full_output.splitlines() if line.strip()]
+    if not lines or lines[0] != "runner exit=0":
+        return False
+    reports = [line[7:].strip() for line in lines if line.startswith("report ")]
+    if len(reports) != 1:
+        return False
+    try:
+        trusted_home = Path(home).resolve(strict=True)
+        report_path = Path(reports[0]).resolve(strict=True)
+        runs_root = (trusted_home / "council" / "runs").resolve(strict=True)
+        report_path.relative_to(runs_root)
+    except (OSError, ValueError):
+        return False
+    if str(event.get("origin_clover_home") or "") != str(trusted_home):
+        return False
+    work = report_path.parent
+    try:
+        report_text = report_path.read_text(encoding="utf-8")
+        origin = json.loads((work / "origin.json").read_text(encoding="utf-8"))
+        ack = json.loads((work / GATEWAY_ACK).read_text(encoding="utf-8"))
+        progress = json.loads((work / "progress.json").read_text(encoding="utf-8"))
+        summary = json.loads((work / "summary.json").read_text(encoding="utf-8"))
+        observed_path = work / OBSERVED_SESSION
+        observed = json.loads(observed_path.read_text(encoding="utf-8")) if observed_path.exists() else {}
+    except (OSError, ValueError, TypeError):
+        return False
+    if not all(isinstance(value, dict) for value in (origin, ack, progress, summary, observed)):
+        return False
+    if origin.get("session_key") != session_key:
+        return False
+    origin_session = str(origin.get("session_id") or observed.get("session_id") or "")
+    if origin_session != parent_session_id:
+        return False
+    if (
+        not isinstance(ack.get("pid"), int)
+        or ack["pid"] <= 0
+        or not isinstance(ack.get("at"), (int, float))
+        or not ack.get("at")
+    ):
+        return False
+    if not report_text.startswith(f"# COUNCIL {work.name}\n") or not summary:
+        return False
+    if progress.get("status") != "done" or progress.get("stalled"):
+        return False
+    try:
+        seat_done, seat_total = int(progress["seat_done"]), int(progress["seat_total"])
+        review_done, review_total = int(progress["review_done"]), int(progress["review_total"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if not seat_total or seat_done != seat_total or review_done != review_total:
+        return False
+    if f"{report_path}" not in output or "runner exit=0" not in output:
+        return False
+    from collections import Counter
+
+    audit = re.compile(
+        r"^[A-Z][A-Z0-9_-]*:? requested=\S+ actual=\S+ substituted=False "
+        r"completed=True failed=False out_tokens=\d+$"
+    )
+    usage_lines = [line for line in lines if " requested=" in line]
+    if not usage_lines or not all(audit.fullmatch(line) for line in usage_lines):
+        return False
+    # Audit output is not proof of routing. Read the actual per-call receipts;
+    # full mode includes two calls per seat AND an extra chairman call.
+    expected = []
+    try:
+        usage_paths = sorted(work.glob("usage-*.json"))
+        for path in usage_paths:
+            usage = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(usage, dict):
+                return False
+            requested, actual = usage.get("requested_model"), usage.get("actual_model")
+            tokens = usage.get("output_tokens")
+            if (
+                not isinstance(requested, str) or not requested
+                or actual != requested
+                or usage.get("model_substituted") is not False
+                or usage.get("completed") is not True
+                or usage.get("failed") is not False
+                or type(tokens) is not int or tokens < 0
+            ):
+                return False
+            seat = path.name.split("-")[1]
+            expected.append(
+                f"{seat} requested={requested} actual={actual} substituted=False "
+                f"completed=True failed=False out_tokens={tokens}"
+            )
+    except (OSError, ValueError, IndexError):
+        return False
+    normalized = [line.replace(": requested=", " requested=", 1) for line in usage_lines]
+    if len(expected) < seat_total + review_total + 1 or Counter(normalized) != Counter(expected):
+        return False
+    if not any(line.startswith("CHAIRMAN requested=") for line in expected):
+        return False
+    known = set(report_text.splitlines()) | {
+        str(value) for value in summary.values() if isinstance(value, str)
+    }
+    allowed = {"runner exit=0", f"report {report_path}", *usage_lines}
+    if any(line not in allowed and line not in known for line in lines):
+        return False
+    return True
+
 
 _HEADER = (
     "[Council result already shown to the user in this chat — do not repost; "

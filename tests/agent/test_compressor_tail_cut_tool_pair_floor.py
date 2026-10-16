@@ -22,6 +22,7 @@ group and the call/result pair is summarised together.
 from __future__ import annotations
 
 import itertools
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 
 import pytest
 

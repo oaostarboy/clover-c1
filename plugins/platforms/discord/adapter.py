@@ -1642,8 +1642,34 @@ class DiscordAdapter(BasePlatformAdapter):
         )
         if not admitted:
             return False
+        # Only this live SDK callback is an input owner. Recovery/history and
+        # direct _handle_message calls never receive a registered submission.
+        trusted_human_submission = None
+        if (
+            not getattr(message.author, "bot", True)
+            and not getattr(message, "webhook_id", None)
+            and message.type == discord.MessageType.default
+            and isinstance(message.channel, discord.DMChannel)
+            and not getattr(message, "message_snapshots", None)
+            and not message.attachments and not message.reference
+            and isinstance(message.content, str) and message.content.strip()
+        ):
+            from agent import workstream_origin as origin, workstreams
+            if workstreams.load_settings().enabled:
+                text = message.content.strip()
+                actor, chat = str(message.author.id), str(message.channel.id)
+                scope = workstreams.scope_for_surface(platform="discord", chat_type="dm",
+                    chat_id=chat, user_id=actor)
+                trusted_human_submission = origin.ComposerSubmission(text)
+                origin.mint_human_ingress(trusted_human_submission, platform="discord",
+                    scope=scope, original_text=text, is_current=lambda: (
+                        not message.author.bot and not message.webhook_id
+                        and str(message.author.id) == actor and str(message.channel.id) == chat
+                        and self._is_allowed_user(actor, message.author, is_dm=True)
+                    ))
         return await self._handle_message(
             message, role_authorized=role_authorized,
+            trusted_human_submission=trusted_human_submission,
         )
 
     # ------------------------------------------------------------------
@@ -8106,6 +8132,7 @@ class DiscordAdapter(BasePlatformAdapter):
         role_authorized: bool = False,
         *,
         recovered: bool = False,
+        trusted_human_submission=None,
     ) -> bool:
         """Handle one Discord message and report whether it reached dispatch."""
         # In server channels (not DMs), require the bot to be @mentioned
@@ -8573,6 +8600,11 @@ class DiscordAdapter(BasePlatformAdapter):
             channel_prompt=_channel_prompt,
             channel_context=_channel_context,
         )
+
+        if trusted_human_submission is not None and not recovered:
+            from agent.workstream_origin import transfer_human_ingress
+            transfer_human_ingress(trusted_human_submission, event,
+                platform="discord", original_text=event.text)
 
         # Track thread participation so the bot won't require @mention for
         # follow-up messages in threads it has already engaged in.

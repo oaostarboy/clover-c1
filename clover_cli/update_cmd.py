@@ -8072,8 +8072,9 @@ def _resume_windows_gateways_after_update(token: dict | None) -> None:
         print(
             f"  ✓ Restarting {unmapped_relaunched} unmapped Windows gateway process(es)"
         )
+    token['unmapped_relaunched'] = unmapped_relaunched
     if relaunched or unmapped_relaunched:
-        _m()._verify_windows_gateway_relaunch(
+        token['relaunch_verification_result'] = _m()._verify_windows_gateway_relaunch(
             current_profile="default" in relaunched or bool(unmapped_relaunched)
         )
 
@@ -9325,6 +9326,9 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 )
                 print("  Restart each of them to pick up the repaired runtime.")
             _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
+            if handed_off_sync and _m()._is_windows():
+                from clover_cli.update_receipt import record_windows_continuation_result
+                record_windows_continuation_result(healthy=healthy_after, token=_windows_gateway_resume)
             if _windows_gateways_relaunched_now(_windows_gateway_resume):
                 # This run paused the Windows gateways and just relaunched
                 # them on the current checkout, which IS the restart a prior

@@ -13,6 +13,7 @@ Two invariants:
    permitted", poisoning the session.
 """
 from unittest.mock import MagicMock, patch
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 
 import pytest
 

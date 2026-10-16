@@ -17,6 +17,7 @@ Two failure amplifiers when the auxiliary compression route times out:
 """
 
 from types import SimpleNamespace
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 from unittest.mock import patch
 
 import pytest

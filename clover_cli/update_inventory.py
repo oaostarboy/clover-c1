@@ -532,6 +532,8 @@ def record_plan_in_receipt(plan: UpdatePlan) -> None:
         import clover_cli.update_receipt as ur
 
         if ur._current is not None:
-            ur._current.data["plan"] = plan.to_dict()
+            handoff = ur._current.data.get("windows_dependency_handoff", {})
+            key = "continuation_plan" if handoff.get("state") == "adopted" else "plan"
+            ur._current.data[key] = plan.to_dict()
     except Exception as exc:
         logger.debug("Could not record plan in receipt: %s", exc)

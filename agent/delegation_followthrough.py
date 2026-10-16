@@ -26,14 +26,17 @@ def canonical_stages(value: Any) -> Optional[tuple[dict, ...]]:
         return None
     stages = []
     for stage in value:
-        if not isinstance(stage, dict) or set(stage) - {"goal", "context"}:
+        if not isinstance(stage, dict) or set(stage) - {"goal", "context", "route", "account"}:
             return None
         goal, context = stage.get("goal"), stage.get("context")
         if not isinstance(goal, str) or not goal.strip() or len(goal) > MAX_GOAL_CHARS:
             return None
         if context is not None and (not isinstance(context, str) or len(context) > MAX_CONTEXT_CHARS):
             return None
-        stages.append({"goal": goal, **({"context": context} if context is not None else {})})
+        constraints = {k: stage[k] for k in ('route', 'account') if k in stage}
+        if any(not isinstance(v, str) or not v or len(v) > 200 or v != v.strip() for v in constraints.values()):
+            return None
+        stages.append({"goal": goal, **({"context": context} if context is not None else {}), **constraints})
     encoded = json.dumps(stages, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     if len(encoded.encode("utf-8")) > MAX_PLAN_BYTES:
         return None
@@ -80,6 +83,7 @@ def runtime_policy_for(creds: Any, parent_agent: Any) -> dict:
         }
     approval_digest = sha256(json.dumps(approval_state, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     return {
+        **({'requested_route': dict(creds['requested_route'])} if creds.get('requested_route') else {}),
         "provider": creds.get("provider") or getattr(parent_agent, "provider", None),
         "model": creds.get("model") or getattr(parent_agent, "model", None),
         "api_mode": creds.get("api_mode") or getattr(parent_agent, "api_mode", None),
@@ -105,7 +109,7 @@ def stage_digest(stage: dict) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-_SPAWN_TOP_LEVEL_KEYS = frozenset({"goal", "context", "action", "tasks", "handoff"})
+_SPAWN_TOP_LEVEL_KEYS = frozenset({"goal", "context", "action", "tasks", "handoff", "route", "account"})
 _HANDOFF_KEYS = frozenset(
     {"work", "outcome", "estimated_minutes_min", "estimated_minutes_max"}
 )
@@ -147,7 +151,8 @@ def _requested_stage(args: Any) -> Optional[dict]:
             not isinstance(tasks, list) or len(tasks) != 1
             or not isinstance(tasks[0], dict)
             or args.get("goal") is not None or args.get("context") is not None
-            or set(tasks[0]) - ({"goal", "context"} | _TASK_DISPLAY_KEYS)
+            or any(k in args for k in ('route', 'account'))
+            or set(tasks[0]) - ({"goal", "context", "route", "account"} | _TASK_DISPLAY_KEYS)
         ):
             return None
         else:
@@ -155,6 +160,9 @@ def _requested_stage(args: Any) -> Optional[dict]:
     requested = {"goal": source.get("goal")}
     if source.get("context") is not None:
         requested["context"] = source.get("context")
+    for key in ('route', 'account'):
+        if key in source:
+            requested[key] = source[key]
     return requested
 
 

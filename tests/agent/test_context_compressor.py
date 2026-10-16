@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from tests.agent.provider_fixtures import scripted_provider_edges  # noqa: F401
 import pytest
 import time
 from unittest.mock import patch, MagicMock

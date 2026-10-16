@@ -94,10 +94,21 @@ def _resp(text: str):
 @pytest.fixture
 def aux(monkeypatch):
     import agent.auxiliary_client as ac
+    import agent.title_generator as titles
 
     fake = FakeAux()
     monkeypatch.setattr(ac, 'call_llm', fake)
-    return fake
+    # title_generator binds call_llm at import time. A preceding test file can
+    # import it before this fixture; patch the consumer's provider boundary too.
+    # Keep the actual title generation/persistence and other turn owners real.
+    monkeypatch.setattr(titles, 'call_llm', fake)
+    yield fake
+    # A real turn may have forked a title request. Finish those requests while
+    # their scripted provider is still installed, never after fixture teardown.
+    for worker in threading.enumerate():
+        if worker.name == 'auto-title':
+            worker.join(timeout=5)
+            assert not worker.is_alive(), 'scripted auto-title worker did not finish'
 
 
 def T(goal: str, deps=(), acceptance: str = 'it is done and checked') -> dict:

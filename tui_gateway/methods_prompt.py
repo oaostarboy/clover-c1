@@ -290,6 +290,7 @@ def _(rid, params: dict) -> dict:
 
     sid = params.get("session_id", "")
     raw_text = params.get("text", "")
+    trusted_human_submission = _human_rpc_submission.get()
     text = sanitize_user_prompt_text(raw_text) if isinstance(raw_text, str) else raw_text
     # Off-screen sends (widget intents): type the persisted user row so no
     # client renders it as a bubble. Whitelisted to "hidden" — display_kind
@@ -908,7 +909,8 @@ def _(rid, params: dict) -> dict:
                     },
                 )
                 return
-        _run_prompt_submit(rid, sid, session, text, display_kind=display_kind)
+        _run_prompt_submit(rid, sid, session, text, display_kind=display_kind,
+                           trusted_human_submission=trusted_human_submission)
 
     run_thread = threading.Thread(target=run_after_agent_ready, daemon=True)
     # Keep a handle so session.interrupt can tell a live turn from a stuck

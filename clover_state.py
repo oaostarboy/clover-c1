@@ -11443,6 +11443,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 inserted, tool_calls_total = self._insert_message_rows(
                     conn, session_id, inserted_rows
                 )
+                self._write_human_origin_receipts(conn, session_id, inserted_rows)
 
             # One aggregated counter update for the newly inserted rows.
             if tool_calls_total > 0:
@@ -11462,6 +11463,168 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         return self._execute_write(
             _do, patience_s=self._TRANSCRIPT_WRITE_PATIENCE_S
         )
+
+    # ── trusted human-origin receipts ──────────────────────────────────────
+    #
+    # Provenance only (see agent/workstream_origin.py): a receipt says the
+    # gateway's authenticated adapter delivered this exact user row. It is
+    # created lazily by the first real receipt, so a database that never saw
+    # an enabled trusted turn never has the table.
+
+    _HUMAN_ORIGIN_TABLE = "human_origin_receipts"
+
+    def _conversation_root_on(self, conn, session_id: str) -> str:
+        """Lineage root of *session_id* read on the caller's own connection."""
+        current, seen = session_id, set()
+        while current and current not in seen and len(seen) < 64:
+            seen.add(current)
+            row = conn.execute(
+                "SELECT parent_session_id FROM sessions WHERE id = ?", (current,)
+            ).fetchone()
+            parent = row[0] if row else None
+            if not parent:
+                break
+            current = parent
+        return current
+
+    def _write_human_origin_receipts(self, conn, session_id: str, rows) -> None:
+        """Bind a receipt to each just-inserted user row that carries a valid
+        host-minted ingress capability. Never raises into the transcript write."""
+        pending = [
+            r for r in rows
+            if isinstance(r, dict) and r.get("human_ingress") is not None
+        ]
+        if not pending:
+            return
+        from agent import workstream_origin as _origin
+        from agent.workstreams import current_profile
+
+        profile = current_profile()
+        conn.execute("SAVEPOINT human_origin_receipts")
+        try:
+            for row in pending:
+                ingress = row["human_ingress"]
+                row_id = row.get("_row_id")
+                if (
+                    row.get("role") != "user"
+                    or row.get("tool_call_id")
+                    or not isinstance(row_id, int)
+                    or not _origin.ingress_is_valid(ingress, profile=profile)
+                    or not _origin.ingress_matches_content(ingress, row.get("content"))
+                ):
+                    continue
+                root = self._conversation_root_on(conn, session_id)
+                if self._conversation_root_on(conn, ingress.session_id) != root:
+                    continue
+                conn.execute(
+                    f"""CREATE TABLE IF NOT EXISTS {self._HUMAN_ORIGIN_TABLE} (
+                        ingress_event_id TEXT PRIMARY KEY,
+                        profile TEXT NOT NULL,
+                        session_id TEXT NOT NULL,
+                        root_session_id TEXT NOT NULL,
+                        message_row_id INTEGER NOT NULL,
+                        origin TEXT NOT NULL,
+                        platform TEXT NOT NULL,
+                        run_generation INTEGER NOT NULL,
+                        created_at REAL NOT NULL,
+                        expires_at REAL NOT NULL,
+                        consumed_at REAL,
+                        consumed_by TEXT,
+                        UNIQUE (session_id, message_row_id)
+                    )"""
+                )
+                now = time.time()
+                conn.execute(
+                    f"""INSERT OR IGNORE INTO {self._HUMAN_ORIGIN_TABLE}
+                        (ingress_event_id, profile, session_id, root_session_id,
+                         message_row_id, origin, platform, run_generation,
+                         created_at, expires_at)
+                        VALUES (?, ?, ?, ?, ?, 'human', ?, ?, ?, ?)""",
+                    (
+                        ingress.event_id, profile, session_id, root, row_id,
+                        ingress.platform, int(ingress.run_generation), now,
+                        now + _origin.HUMAN_ORIGIN_TTL_SECONDS,
+                    ),
+                )
+            conn.execute("RELEASE SAVEPOINT human_origin_receipts")
+        except Exception:
+            logger.warning("human-origin receipt not written", exc_info=True)
+            conn.execute("ROLLBACK TO SAVEPOINT human_origin_receipts")
+            conn.execute("RELEASE SAVEPOINT human_origin_receipts")
+
+    def get_human_origin(self, session_id: str, message_row_id: int):
+        """Receipt for the exact persisted user row, else ``None``.
+
+        ``None`` for a missing, foreign-profile, expired, consumed, inactive,
+        non-user or non-matching row. Never inferred from role or content.
+        """
+        if (
+            not session_id
+            or isinstance(message_row_id, bool)
+            or not isinstance(message_row_id, int)
+        ):
+            return None
+
+        def _read():
+            with self._read_ctx() as conn:
+                if conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    (self._HUMAN_ORIGIN_TABLE,),
+                ).fetchone() is None:
+                    return None
+                return conn.execute(
+                    f"""SELECT r.profile, r.session_id, r.message_row_id,
+                               r.ingress_event_id, r.origin, r.consumed_at, r.expires_at
+                        FROM {self._HUMAN_ORIGIN_TABLE} r
+                        JOIN messages m ON m.id = r.message_row_id
+                                       AND m.session_id = r.session_id
+                        WHERE r.session_id = ? AND r.message_row_id = ?
+                          AND m.role = 'user' AND m.active = 1
+                          AND m.tool_call_id IS NULL""",
+                    (session_id, message_row_id),
+                ).fetchone()
+
+        row = self._retry_locked_read(_read)
+        if row is None:
+            return None
+        profile, sid, rid, event_id, origin, consumed_at, expires_at = tuple(row)
+        from agent.workstreams import HumanOrigin, current_profile
+
+        if (
+            origin != "human"
+            or not event_id
+            or consumed_at is not None
+            or float(expires_at) <= time.time()
+            or profile != current_profile()
+        ):
+            return None
+        return HumanOrigin(
+            profile=profile, session_id=sid, message_row_id=rid,
+            ingress_event_id=event_id, origin="human", consumed=False,
+        )
+
+    def consume_human_origin(
+        self, session_id: str, message_row_id: int, *, consumer: str,
+    ) -> bool:
+        """Atomically mark the receipt consumed. True for exactly one caller;
+        the receipt then reads as ``None``. Grants no permission by itself."""
+        if (
+            self.get_human_origin(session_id, message_row_id) is None
+            or not str(consumer or "").strip()
+        ):
+            return False
+
+        def _do(conn):
+            cur = conn.execute(
+                f"""UPDATE {self._HUMAN_ORIGIN_TABLE}
+                    SET consumed_at = ?, consumed_by = ?
+                    WHERE session_id = ? AND message_row_id = ?
+                      AND consumed_at IS NULL AND expires_at > ?""",
+                (time.time(), str(consumer)[:128], session_id, message_row_id, time.time()),
+            )
+            return cur.rowcount == 1
+
+        return bool(self._execute_write(_do))
 
     def set_latest_matching_message_display_kind(
         self, session_id: str, *, role: str, content: str, display_kind: str,
