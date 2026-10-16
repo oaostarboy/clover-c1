@@ -297,9 +297,13 @@ repository for the release scope and verification boundaries.
 
 ## Settings menu
 
-`/proactive` opens the current profile's settings: saved On/Off and mode,
-plus the effective values read by the workstream runtime. Telegram shows native
-**Enable** / **Disable** buttons. Other gateway platforms use explicit text
+`/proactive` opens a short current-profile menu with effective On/Off state and
+an explanation: “Tracks scoped unfinished work through conversation changes.”
+When saved and effective settings differ, the short menu says so explicitly.
+`/proactive status` shows the technical details (saved/effective state, mode,
+reload behavior and authority limits). Telegram shows native **Enable** /
+**Disable** buttons for an authenticated, explicitly enrolled admin. Other
+gateway platforms use explicit text
 controls unless their adapter supports the same owned-picker guard. Slack uses
 `/clover proactive [status|on|off]` (to keep its 50 native-slash slots intact),
 or `!proactive`; Matrix also supports `!proactive`. Gateway replies use the
@@ -318,6 +322,36 @@ An ordinary chat allowlist, pairing, allow-all, or permission to use the
 `proactive` command is **not** admin authority. With no explicit admin list,
 the menu stays read-only. CLI/TUI use the local config-file authority, like
 `clover config set`. No model request is needed for any of these controls.
+The read-only menu explains that controls are locked and points to `/whoami`
+and `/proactive status` for owner setup; it does not display unusable controls.
+
+### Enrolling the owner for Telegram controls
+
+There is no implicit first-DM/single-allowlisted-user bootstrap. An authorized
+chat sender or a paired user is not automatically the profile administrator.
+Enrollment uses the existing local config CLI, not an in-chat trust claim:
+
+1. The operator verifies the owner's **sender user ID** from `/whoami` on the
+   trusted Telegram account. Never use a chat ID, username, forwarded message
+   or text assertion as proof. Do not use a wildcard or open-access grant.
+2. In the **current profile's** local terminal, inspect existing admin and
+   non-admin command lists. After reviewing the permission change, use:
+   `clover config set platforms.telegram.allow_admin_from '["VERIFIED_USER_ID"]'`.
+   This is a template: replace the placeholder with the verified sender ID;
+   preserve existing admin entries if any. For groups, use
+   `platforms.telegram.group_allow_admin_from` instead; DM admin authority does
+   not carry into groups. Keep the existing source allowlist/pairing policy.
+3. This existing setting enables slash-command gating for that platform/chat
+   type: other users can lose access to commands outside their configured
+   command list (apart from the always-allowed discovery commands). Review
+   that side effect before saving; do not blindly open all commands to guests.
+4. **Enrollment is not a hot-reloaded proactive toggle.** A single-profile
+   gateway retains its loaded admin policy and adapter/env admission gates;
+   the operator must apply the normal, separately approved gateway lifecycle
+   to load the enrollment. Then send a new `/proactive` command. This menu
+   never reloads or restarts the gateway itself.
+
+### Toggle behavior
 
 The first Enable transition from `shadow` selects this bounded preset:
 `enabled: true`, `mode: active`, `recall.enabled: true` and

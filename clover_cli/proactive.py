@@ -18,7 +18,10 @@ MIGRATION = (
 )
 
 
-def proactive_command(args: str = "", *, can_change: bool) -> str:
+PROACTIVE_ACTIONS = "/proactive on — Enable; /proactive off — Disable"
+
+
+def proactive_command(args: str = "", *, can_change: bool, show_commands: bool = True) -> str:
     """Read status or apply a bounded preset through the config persistence owner.
 
     Gateway callers MUST pass a decision from their authenticated admin boundary.
@@ -29,8 +32,9 @@ def proactive_command(args: str = "", *, can_change: bool) -> str:
         return MIGRATION
     changing = action in {"on", "off", "enable", "disable"}
     if changing and not can_change:
-        return ("Only an explicitly configured gateway admin can change proactive settings. "
-                "Ask the owner to set allow_admin_from (group_allow_admin_from in groups).")
+        return ("Controls locked: admin enrollment required.\n"
+                "Ask the owner to verify your /whoami user ID.\n"
+                "/proactive status — details and owner setup.")
     note = ""
     try:
         if changing:
@@ -75,7 +79,7 @@ def proactive_command(args: str = "", *, can_change: bool) -> str:
                     persisted = config_api.require_readable_config_before_write()
                     if persisted.get("proactive") != root:
                         raise RuntimeError("settings readback did not match the requested change")
-                    note = "Saved; settings readers use this on the next turn/operation. "
+                    note = "Saved; applies next turn/operation."
                 else:
                     note = "Already saved; no change. "
         # Read both the saved file and the real merged/managed reader. Never
@@ -96,6 +100,25 @@ def proactive_command(args: str = "", *, can_change: bool) -> str:
         return "Proactive settings could not be confirmed; no success claimed. Check config permissions and administrator policy."
     saved_state = "On" if persisted.enabled else "Off"
     effective_state = "On" if effective.enabled else "Off"
+    if action != "status":
+        text = f"Proactive: {effective_state}\n"
+        if (persisted.enabled, persisted.mode) != (effective.enabled, effective.mode):
+            text += (f"Saved: {saved_state} ({persisted.mode}); effective: {effective_state} "
+                     f"({effective.mode}, managed policy).\n")
+        elif effective.enabled and effective.mode != "active":
+            text += f"Mode: {effective.mode} (not active).\n"
+        if note:
+            text += note + "\n"
+        if not changing:
+            text += "Tracks scoped unfinished work through conversation changes.\n"
+        if can_change:
+            if show_commands:
+                text += PROACTIVE_ACTIONS + "\n"
+            text += "/proactive status — Details"
+        else:
+            text += ("Controls locked: admin enrollment required. Verify /whoami with the owner.\n"
+                     "/proactive status — details and owner setup.")
+        return text
     text = (
         f"{note}Proactive: {saved_state} (saved, mode: {persisted.mode}).\n"
         f"Effective settings: {effective_state} (mode: {effective.mode}); "
@@ -103,9 +126,10 @@ def proactive_command(args: str = "", *, can_change: bool) -> str:
         "Keeps scoped unfinished work, corrections and bounded recall. "
         "Not a universal autonomous executor: enabling creates no jobs, "
         "external-action permission or extra model-call opt-in. "
-        "Existing schedules and explicitly configured opt-ins stay unchanged.\n"
-        "/proactive on — Enable; /proactive off — Disable; /proactive status"
+        "Existing schedules and explicitly configured opt-ins stay unchanged."
     )
-    if not can_change:
-        text += "\nChanging settings requires an explicitly configured gateway admin."
+    if can_change:
+        text += "\n" + PROACTIVE_ACTIONS
+    else:
+        text += "\nControls require an explicitly enrolled gateway admin."
     return text

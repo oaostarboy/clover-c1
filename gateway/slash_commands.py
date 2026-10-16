@@ -3614,7 +3614,7 @@ class GatewaySlashCommandsMixin:
         import copy
         import time
         from clover_constants import get_clover_home
-        from clover_cli.proactive import proactive_command
+        from clover_cli.proactive import proactive_command, PROACTIVE_ACTIONS
         from gateway.run import _profile_runtime_scope
 
         if getattr(event, "internal", False):
@@ -3623,10 +3623,24 @@ class GatewaySlashCommandsMixin:
             return self._stale_offline_command_reply("proactive")
         can_change = self._proactive_caller_is_admin(event.source)
         args = event.get_command_args().strip()
-        text = proactive_command(args, can_change=can_change)
+        text = proactive_command(args, can_change=can_change, show_commands=bool(args) or not can_change)
+        if args.lower() == "status" and not can_change:
+            from gateway.slash_access import _keys_for_scope, _scope_for_chat_type
+            admin_key, _ = _keys_for_scope(_scope_for_chat_type(event.source.chat_type))
+            platform_key = event.source.platform.value
+            text += (
+                "\nOwner setup (local terminal, current profile): verify the sender's /whoami user ID "
+                "with the owner, not a chat ID, username or message claim. Inspect and preserve any existing admins.\n"
+                f"clover config set platforms.{platform_key}.{admin_key} '[\"VERIFIED_USER_ID\"]'\n"
+                "Replace the placeholder with the verified user ID (and retain existing admin IDs). "
+                "This enables slash-command gating for this chat type: other users' slash commands may be restricted. "
+                "It does not grant chat access; keep the existing source allowlist. "
+                "The operator must reload gateway policy through the normal approved lifecycle, then reopen /proactive."
+            )
         prefix = self._typed_command_prefix_for(event.source.platform)
         if isinstance(prefix, str) and prefix != "/":
-            text = text.replace("/proactive", f"{prefix}proactive").replace("/loop", f"{prefix}loop")
+            text = (text.replace("/proactive", f"{prefix}proactive")
+                    .replace("/loop", f"{prefix}loop").replace("/whoami", f"{prefix}whoami"))
         if args or not can_change:
             return text
 
@@ -3654,7 +3668,7 @@ class GatewaySlashCommandsMixin:
                 return "Picker expired or no longer authorized; run /proactive again."
             used = True
             with _profile_runtime_scope(home):
-                return proactive_command(value, can_change=True)
+                return proactive_command(value, can_change=True, show_commands=False)
 
         sent = await self._try_send_choice_picker(
             event, self._session_key_for_source(source), text,
@@ -3662,7 +3676,12 @@ class GatewaySlashCommandsMixin:
             on_selected, choice_guard={"owner_user_id": str(source.user_id),
                                        "expires_at": expires_at, "authorize": authorized},
         )
-        return None if sent else text
+        if sent:
+            return None
+        controls = PROACTIVE_ACTIONS
+        if isinstance(prefix, str) and prefix != "/":
+            controls = controls.replace("/proactive", f"{prefix}proactive")
+        return text + "\n" + controls
 
     async def _get_loop_manager_for_event(self, event: "MessageEvent"):
         """Return a LoopManager bound to the session for this gateway event.

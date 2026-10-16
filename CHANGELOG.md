@@ -5,6 +5,13 @@ This changelog records the broader scope and limits of the 1.5.6 release.
 
 ## Unreleased
 
+- Keep the default `/proactive` menu phone-sized; put technical diagnostics in
+  `/proactive status`. Native controls remain available only to explicitly
+  enrolled admins. Read-only replies explain missing enrollment and link to
+  scoped local setup with its slash-policy side effects; chat admission is not
+  silently promoted to admin authority. Callback replies remain compact and
+  distinguish saved from effective state under managed policy.
+
 - Add `/proactive` as a deterministic current-profile settings menu, with
   owned, expiring Telegram Enable/Disable buttons and explicit text controls
   on other gateways, CLI and TUI. Show saved and effective settings; workstream
