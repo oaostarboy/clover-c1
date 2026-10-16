@@ -148,7 +148,11 @@ def _validate_parent(parent, current, project_root, interpreter):
     _require(parent.get('pre_pull_sha', pre['sha']) == pre['sha'], 'original source disagreement')
     argv = parent.get('argv')
     _require(isinstance(argv, list) and all(isinstance(a, str) for a in argv) and len(argv) > 1, 'invalid original argv')
-    _require(_key(argv[0]) == _key(project_root / 'venv/Scripts/clover.exe'), 'foreign original launcher')
+    # distlib's console stub removes .exe from sys.argv[0]; the immutable old
+    # producer records that exact extensionless spelling. Accept only these
+    # two full paths in this install, never a basename or another environment.
+    launchers = {_key(project_root / 'venv/Scripts' / name) for name in ('clover', 'clover.exe')}
+    _require(_key(argv[0]) in launchers, 'foreign original launcher')
     _require(argv[1:] == interpreter['argv'][1:], 'different update invocation')
     _require(isinstance(parent.get('steps'), list) and isinstance(parent.get('skips'), list), 'invalid receipt collections')
     _require(isinstance(parent.get('plan'), dict), 'missing original runtime plan')

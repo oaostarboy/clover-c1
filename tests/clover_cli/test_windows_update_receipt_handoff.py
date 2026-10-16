@@ -21,6 +21,8 @@ from clover_cli import update_restart_watcher as watcher
 
 @pytest.fixture
 def handoff(tmp_path, monkeypatch, request):
+    mode = getattr(request, 'param', True)
+    options = mode if isinstance(mode, dict) else {}
     home = tmp_path / 'home'
     repo = home / 'clover-c1'
     venv = repo / 'venv'
@@ -29,7 +31,7 @@ def handoff(tmp_path, monkeypatch, request):
     now = datetime.now(timezone.utc).timestamp()
     phase = {'pid': 101, 'epoch': now, 'sha': 'a' * 40}
     arguments = ['update', '--yes']
-    fake_sys = SimpleNamespace(platform='win32', argv=[str(venv / 'Scripts/clover.exe'), *arguments],
+    fake_sys = SimpleNamespace(platform='win32', argv=[str(venv / 'Scripts' / options.get('launcher', 'clover.exe')), *arguments],
                                executable=python, _base_executable=base_python,
                                prefix=str(venv), base_prefix=str(tmp_path / 'base'), stderr=sys.stderr)
     fake_os = SimpleNamespace(getpid=lambda: phase['pid'], environ={})
@@ -63,7 +65,8 @@ def handoff(tmp_path, monkeypatch, request):
     phase['epoch'] = now + 2
     parent_path = None
     parent_bytes = None
-    if getattr(request, 'param', True):
+    legacy = options.get('legacy', True) if options else mode
+    if legacy:
         parent_path = receipt.finalize_pending_update_receipt(0, stop_reason='sys.exit(0)')
         assert parent_path is not None
         parent_bytes = parent_path.read_bytes()
@@ -238,4 +241,50 @@ def test_unproved_handoff_never_modifies_original_receipt(handoff, fault):
     assert handoff.parent.read_bytes() == payload
     assert (handoff.directory / 'latest.json').read_bytes() == payload
     assert current['pre_update']['sha'] == 'b' * 40
+    assert not (handoff.directory / 'handoff_phases').exists()
+
+
+@pytest.mark.parametrize('handoff', [
+    {'launcher': 'clover', 'legacy': True},
+    {'launcher': 'clover', 'legacy': False},
+], indirect=True)
+def test_distlib_extensionless_owned_launcher_preserves_original_receipt(handoff, monkeypatch):
+    """Hosted v1.5.5 console stub strips .exe from sys.argv[0]."""
+    if handoff.parent is None:
+        monkeypatch.setattr(receipt, '_windows_handoff_child_pid', lambda: 202)
+        assert receipt.finalize_pending_update_receipt(0) is None
+        monkeypatch.setattr(receipt, '_windows_handoff_child_pid', lambda: 0)
+    handoff.child()
+    current = receipt._current
+    assert current is not None
+    assert current.data['pre_update']['sha'] == 'a' * 40, current.data.get('windows_dependency_handoff')
+    assert Path(current.data['argv'][0]).name == 'clover'
+    receipt.record_windows_continuation_result(healthy=True, token={
+        'resume_needed': False, 'relaunched_profiles': ['default'],
+        'restarted_services': [], 'relaunch_verification_result': True})
+    assert receipt.finalize_pending_update_receipt(0) is not None
+    latest = receipt.read_latest_receipt()
+    assert latest is not None and latest['outcome'] == 'success'
+    assert latest['pre_update']['sha'] == 'a' * 40 and latest['post_update']['sha'] == 'b' * 40
+    assert Path(latest['argv'][0]).name == 'clover'
+    assert len(list(handoff.directory.glob('update_*.json'))) == 1
+
+
+@pytest.mark.parametrize('handoff', [
+    {'launcher': 'clover.exe.bak'}, {'launcher': 'clover.py'},
+    {'launcher': 'other/clover'}, {'launcher': '../other/clover'},
+], indirect=True)
+def test_similar_or_other_directory_launcher_is_not_promoted(handoff):
+    from clover_cli import windows_update_receipt_handoff as bridge
+    handoff.phase.update(pid=202, epoch=handoff.phase['epoch'] + 1)
+    current = receipt.UpdateReceipt().data
+    interpreter = {'prefix': handoff.fake_sys.prefix, 'executable': handoff.fake_sys.executable,
+                   'base_executable': handoff.fake_sys._base_executable,
+                   'argv': list(handoff.fake_sys.argv)}
+    path, status = bridge.resume(current, handoff.directory, handoff.repo,
+        process_chain=lambda *_args, **_kwargs: copy.deepcopy(handoff.chain),
+        interpreter=interpreter, now=lambda: handoff.phase['epoch'], wait_seconds=0)
+    assert path is None and status == 'unverified'
+    assert current['windows_dependency_handoff']['reason'] == 'foreign original launcher'
+    assert handoff.parent.read_bytes() == handoff.parent_bytes
     assert not (handoff.directory / 'handoff_phases').exists()
