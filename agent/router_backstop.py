@@ -65,6 +65,7 @@ import re
 import threading
 import time
 import zlib
+import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -186,6 +187,7 @@ class RouterTurn:
     # the root's own line for the chat was already written for it.
     title: str = ""
     voiced: bool = False
+    job_identity: str = field(default_factory=lambda: uuid.uuid4().hex)
     # The root's own line for a dispatch that has no ``handoff`` summary (no
     # card part to carry it): ``(delegation_id, line)``; ``_ack_text`` sends it
     # as the turn's reply.  Empty when the voice-line call failed.
@@ -1061,6 +1063,30 @@ def _receipts_work(receipts: List["_fl.DispatchReceipt"]) -> str:
 
 
 def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
+    if _stop_pending(agent):
+        return {'ok': False, 'reason': 'Request interrupted; no automatic handoff started.'}
+    if any(t.existing_delegation_id for t in state.verdict.tasks):
+        return _dispatch_unclaimed(agent, state, task_id)
+    from agent.delegation_ownership import claim_dispatch, existing_owner, settle_dispatch
+    request = str(state.identity.get('turn_id') or state.job_identity)
+    token, claim = claim_dispatch(agent, request, task_id)
+    if not token:
+        owner = existing_owner(agent, claim.get('delegation_id') or '', task_id)
+        if owner:
+            return {'ok': True, 'delegation_id': owner['delegation_id'], 'subagent_ids': [],
+                    'later': [], 'next_stage': None, 'runtime_stages': False,
+                    'by_runtime': True, 'reused_owner': True, 'actual_model': owner['model']}
+        return {'ok': False, 'reason': 'This exact request already has a launch claim ('
+                + str(claim.get('state') or 'unknown') + '); no second helper was started.'}
+    result: Dict[str, Any] = {'ok': False}
+    try:
+        result = _dispatch_unclaimed(agent, state, task_id)
+        return result
+    finally:
+        settle_dispatch(claim, token, result)
+
+
+def _dispatch_unclaimed(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
     """Dispatch the first stage; returns ``{"ok": bool, ...}``.
 
     The call goes through the same authorization funnel as a ``delegate_task``
@@ -1074,6 +1100,19 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     stages = verdict.stages()
     first = stages[0]
     stage_tasks = [verdict.tasks[i] for i in first]
+    # A correction/status plan refers to an exact live accepted job, not its
+    # goal text. Do not dispatch another setup operator beside that owner.
+    from agent.delegation_ownership import existing_owner
+    existing = [t.existing_delegation_id for t in stage_tasks if t.existing_delegation_id]
+    if existing:
+        if len(existing) != len(stage_tasks) or len(set(existing)) != 1:
+            return {'ok': False, 'reason': 'Existing-owner status and new work must be separate plans.'}
+        owner = existing_owner(agent, existing[0], task_id)
+        if owner is None:
+            return {'ok': False, 'reason': 'Referenced launch owner is not active in this profile/session/project/lifecycle; no replacement was started.'}
+        return {'ok': True, 'delegation_id': existing[0], 'subagent_ids': [],
+                'later': [], 'next_stage': None, 'runtime_stages': False,
+                'by_runtime': True, 'reused_owner': True, 'actual_model': owner['model']}
     handoff = _runtime_handoff(
         verdict, state.user_message, agent=agent, history=state.history, stage_tasks=stage_tasks,
     )
@@ -1094,6 +1133,7 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
     args: Dict[str, Any] = {
         "tasks": [
             {"goal": verdict.tasks[i].goal, "context": _helper_context(state, i, 0, findings),
+             **_task_route_args(verdict.tasks[i]),
              **_task_title_arg(verdict, i, handoff)}
             for i in first
         ],
@@ -1166,6 +1206,12 @@ def _handoff_from(
 
 
 def _handoff_text(info: Dict[str, Any]) -> str:
+    if info.get('reused_owner'):
+        return runtime_note(
+            f"Existing launch owner {info['delegation_id']} is still active (actual model: {info.get('actual_model') or 'unverified'}). "
+            "No new helper was launched. A setup operator is not proof the requested adviser has started. "
+            "Inspect/report the original job's verified status and answer the user's correction; do not start a second setup job."
+        )
     ids = ", ".join(info["subagent_ids"]) if info["subagent_ids"] else info["delegation_id"]
     text = f"Handed off to helpers {ids}"
     if info["subagent_ids"]:
@@ -1336,10 +1382,15 @@ def refusal(agent: Any, function_name: str, function_args: Any, *, task_id: str 
 
 # ── later stages: bound to the stage before, driven by the runtime ─────────
 
+def _task_route_args(task: PlanTask) -> Dict[str, str]:
+    return {key: value for key in ('route', 'account')
+            if (value := getattr(task, key, None)) is not None}
+
+
 def _plan_tasks(verdict: PlanVerdict) -> List[Dict[str, Any]]:
     return [
         {"goal": t.goal, "depends_on": list(t.depends_on), "acceptance": t.acceptance,
-         "title": str(getattr(t, "title", "") or "")}
+         "title": str(getattr(t, "title", "") or ""), **_task_route_args(t)}
         for t in verdict.tasks
     ]
 
@@ -1632,6 +1683,7 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
                     depends_on=tuple(int(d) for d in t.get("depends_on") or ()),
                     acceptance=str(t.get("acceptance") or ""),
                     title=str(t.get("title") or ""),
+                    route=t.get('route'), account=t.get('account'),
                 )
                 for t in tasks
             ),
@@ -1646,6 +1698,7 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
         args = {"tasks": [
             {"goal": verdict.tasks[i].goal,
              "context": _helper_context(pseudo, i, number, findings),
+             **_task_route_args(verdict.tasks[i]),
              **_task_title_arg(verdict, i)}
             for i in index
         ]}

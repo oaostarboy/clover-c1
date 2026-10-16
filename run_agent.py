@@ -3369,6 +3369,7 @@ class AIAgent:
         # clear_interrupt must never revive a stopped provenance capability.
         self._human_ingress_stop_generation = int(getattr(self, "_human_ingress_stop_generation", 0)) + 1
         if hard_cancel:
+            self._orchestration_stop_epoch = int(getattr(self, '_orchestration_stop_epoch', 0)) + 1
             checkpoint = getattr(self, "_delegation_checkpoint", None)
             if checkpoint is not None:
                 checkpoint.revoke_current_followthrough()

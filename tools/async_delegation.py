@@ -358,7 +358,8 @@ def _persist_dispatch(record: Dict[str, Any]) -> None:
     task_payload = {
         key: record.get(key)
         for key in (
-            "goal", "goals", "context", "toolsets", "role", "model", "is_batch",
+            "goal", "goals", "context", "toolsets", "role", "model", "is_batch", "requested_routes",
+            "owner_scope", "job_epoch",
             # Routing origin (scope_id/user_id/user_name): persisted so a
             # restart-recovered completion can reconstruct a full
             # SessionSource — see _capture_routing_origin.
@@ -2581,6 +2582,8 @@ def dispatch_async_delegation_batch(
     progress_fn: Optional[Callable[[], tuple]] = None,
     fanout_delivery: str = FANOUT_EACH,
     request_identity: Optional[Dict[str, Any]] = None,
+    requested_routes: Optional[List[Dict[str, Any]]] = None,
+    owner_scope: Optional[Dict[str, str]] = None,
     straggler_seconds: float = 0,
     straggler_notify: Optional[Callable[[List[int], bool], None]] = None,
 ) -> Dict[str, Any]:
@@ -2649,6 +2652,11 @@ def dispatch_async_delegation_batch(
         "_interrupted_at": None,
     }
     identity = request_identity or {}
+    if requested_routes is not None:
+        record['requested_routes'] = requested_routes
+    if owner_scope:
+        record['owner_scope'] = dict(owner_scope)
+        record['job_epoch'] = __import__('uuid').uuid4().hex
     for _key, _src in (
         ("request_turn_id", "turn_id"),
         ("request_id", "request_id"),
