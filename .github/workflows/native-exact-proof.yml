@@ -1,4 +1,5 @@
-name: Exact-target native proof (review before dispatch)
+# DIAGNOSTIC BRANCH ONLY. This run cannot certify release acceptance.
+name: Diagnostic ONLY - Windows SQLite baseline candidate A/B
 # Candidate product code, workflow code, and next marker are different identities.
 # This workflow never publishes refs and never uses real messaging credentials.
 # Chat rows use the real gateway handler over LOCAL IRC, not Telegram transport.
@@ -84,14 +85,14 @@ jobs:
           if-no-files-found: error
 
   fresh:
-    name: Native fresh install + SQLite/report-only/Stop/restart / ${{ matrix.os }}
+    name: Diagnostic ONLY - same Windows fixture / ${{ matrix.os }}
     needs: pins
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [windows-latest]
     env:
       OLD_SHA: ${{ needs.pins.outputs.old_sha }}
       NEXT_SHA: ${{ needs.pins.outputs.next_sha }}
@@ -117,7 +118,7 @@ jobs:
       - name: Windows fresh native installer and installed feature contracts
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./helpers/.github/native-proof/windows.ps1 -Mode fresh
+        run: ./helpers/.github/native-proof/windows-sqlite-diagnosis.ps1 -Mode fresh
       - name: Preserve actual evidence and row outcome
         if: always()
         shell: bash
@@ -129,99 +130,7 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: fresh-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: sqlite-diagnosis-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/evidence
           if-no-files-found: error
 
-  posix:
-    name: Running-gateway CLI --gateway (not chat) / ${{ matrix.os }} / ${{ matrix.phase }}
-    needs: pins
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        phase: [old2new, new2next]
-    env:
-      OLD_SHA: ${{ needs.pins.outputs.old_sha }}
-      NEXT_SHA: ${{ needs.pins.outputs.next_sha }}
-      NEXT_TREE: ${{ needs.pins.outputs.next_tree }}
-      PHASE: ${{ matrix.phase }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          path: helpers
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ inputs.target_ref }}
-          fetch-depth: 0
-          persist-credentials: false
-          path: source
-      - name: Update with original gateway verified running, then hold 90s
-        shell: bash
-        run: bash helpers/.github/native-proof/posix.sh "$PHASE"
-      - name: Preserve actual evidence and row outcome
-        if: always()
-        shell: bash
-        env:
-          ROW_STATUS: ${{ job.status }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/evidence"
-          python helpers/.github/native-proof/row.py
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: posix-${{ matrix.os }}-${{ matrix.phase }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/evidence
-          if-no-files-found: error
-
-  windows:
-    name: Windows / ${{ matrix.setup }} / ${{ matrix.path }} / ${{ matrix.phase }}
-    needs: pins
-    runs-on: windows-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        setup: [troy, zyra]
-        path: [cli, chat]
-        phase: [old2new, new2next]
-    env:
-      OLD_SHA: ${{ needs.pins.outputs.old_sha }}
-      NEXT_SHA: ${{ needs.pins.outputs.next_sha }}
-      NEXT_TREE: ${{ needs.pins.outputs.next_tree }}
-      SETUP: ${{ matrix.setup }}
-      UPDATE_PATH: ${{ matrix.path }}
-      PHASE: ${{ matrix.phase }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          path: helpers
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          ref: ${{ inputs.target_ref }}
-          fetch-depth: 0
-          persist-credentials: false
-          path: source
-      - name: Native supervisor update, current-run receipt, final local chat result
-        shell: pwsh
-        run: ./helpers/.github/native-proof/windows.ps1 -Mode $env:PHASE
-      - name: Preserve actual evidence and row outcome
-        if: always()
-        shell: bash
-        env:
-          ROW_STATUS: ${{ job.status }}
-        run: |
-          mkdir -p "$RUNNER_TEMP/evidence"
-          python helpers/.github/native-proof/row.py
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: windows-${{ matrix.setup }}-${{ matrix.path }}-${{ matrix.phase }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/evidence
-          if-no-files-found: error
