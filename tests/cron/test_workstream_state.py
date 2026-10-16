@@ -984,28 +984,15 @@ class TestCliStateWritesDisabled:
     def _run(self, w, argv, *, pty_stdin, enabled=True):
         import json
         import os
-        import pty
-        import subprocess
         import sys
         from pathlib import Path
+        from tests.native_boundaries import run_python_cli
 
         cfg = dict(repo=str(Path(__file__).resolve().parents[2]), enabled=enabled,
                    jobs=[w["job"]["id"]], db=str(w["db"]), home=str(w["home"]), argv=argv)
         env = dict(os.environ, CLOVER_HOME=str(w["home"]))
-        master = slave = None
-        if pty_stdin:
-            master, slave = pty.openpty()
-        try:
-            proc = subprocess.run(
-                [sys.executable, "-c", _DRIVER, json.dumps(cfg)],
-                stdin=slave if pty_stdin else subprocess.DEVNULL,
-                capture_output=True, text=True, timeout=120, env=env,
-            )
-        finally:
-            for fd in (master, slave):
-                if fd is not None:
-                    os.close(fd)
-        return proc
+        return run_python_cli(sys.executable, _DRIVER, [json.dumps(cfg)],
+                              tty=pty_stdin, env=env, timeout=120)
 
     def _argv(self, w, action):
         base = ["cron", "workstream", str(w["proj"]), action]

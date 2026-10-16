@@ -41,11 +41,13 @@ REPO = Path(__file__).resolve().parents[2]
 
 @pytest.fixture(autouse=True)
 def network_guard(monkeypatch):
-    """Fail the test on ANY socket connect / DNS lookup.
+    """Fail on every application socket connect / DNS lookup.
 
     The primary provider is scripted (``AIAgent._create_openai_client``) and
     every auxiliary route is scripted below, so a connection attempt here is a
-    leaked provider/network effect, never an expected one.
+    leaked provider/network effect, never an expected one. The synchronous
+    stdlib socketpair may connect its own private loopback pair on Windows;
+    that unaddressable event-loop IPC is not application network access.
     """
     attempts = []
 
@@ -62,7 +64,11 @@ def network_guard(monkeypatch):
             raise OSError(f"network attempt refused by test guard: {kind}")
         return blocked
 
-    monkeypatch.setattr(socket.socket, "connect", _refuse("connect"))
+    from tests.native_boundaries import private_socketpair_boundary
+    pair, connect = private_socketpair_boundary(
+        socket.socketpair, socket.socket.connect, _refuse('connect'))
+    monkeypatch.setattr(socket, 'socketpair', pair)
+    monkeypatch.setattr(socket.socket, 'connect', connect)
     monkeypatch.setattr(socket.socket, "connect_ex", _refuse("connect_ex"))
     monkeypatch.setattr(socket, "create_connection", _refuse("create_connection"))
     monkeypatch.setattr(socket, "getaddrinfo", _refuse("getaddrinfo"))
