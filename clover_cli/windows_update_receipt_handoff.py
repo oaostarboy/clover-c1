@@ -100,7 +100,7 @@ ConvertTo-Json -InputObject $chain -Depth 4 -Compress
 '''.replace('CURRENT_PID', str(pid))
     powershell = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
     result = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-Command', command],
-                            capture_output=True, text=True, encoding='utf-8-sig', errors='strict',
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding='utf-8-sig', errors='strict',
                             timeout=timeout, check=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     chain = json.loads(result.stdout)
     _require(isinstance(chain, list) and 0 < len(chain) <= 8, 'missing process ancestry')
