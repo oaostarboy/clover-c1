@@ -53,8 +53,8 @@ jobs:
           test "$RUNNER_ENVIRONMENT" = github-hosted
           test ! -e "$HOME/.clover"
           [[ $TARGET_REF =~ ^[0-9a-f]{40}$ && $TARGET_TREE =~ ^[0-9a-f]{40}$ ]]
-          test "$TARGET_REF" = 25d029d99add1a6ed175c253dbc53f7aca4004f8
-          test "$TARGET_TREE" = 88ba473fb6451d498baef907b41fe04791b37982
+          test "$TARGET_REF" = 71d2e92e3ba3c80fa67114f716779042059c059e
+          test "$TARGET_TREE" = f71eda7f392dd139da6af604042061917a5f8814
           test "$(git rev-parse HEAD)" = "$TARGET_REF"
           test "$(git rev-parse HEAD^{tree})" = "$TARGET_TREE"
           test -z "$(git replace -l)"
