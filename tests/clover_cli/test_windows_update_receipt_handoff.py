@@ -136,6 +136,40 @@ def test_handoff_clock_tick_before_measured_birth_preserves_owned_receipt(handof
     assert len(list(handoff.directory.glob('update_*.json'))) == 1
 
 
+@pytest.mark.parametrize('fault', [None, 'before_parent', 'after_completion', 'missing_birth', 'reused_pid'])
+def test_immutable_legacy_publisher_uses_proven_parent_phase_not_child_clock_tick(handoff, fault):
+    """Replay R10's actual old-release publisher; do not run the corrected writer."""
+    from clover_cli import windows_update_receipt_handoff as bridge
+    path = handoff.home / '.clover-update-heartbeat.json'
+    beacon = json.loads(path.read_text())
+    parent = json.loads(handoff.parent_bytes)
+    # Real native old2new inversion: 1792122513.0407076 < 1792122513.0415337.
+    beacon['refreshed_at'] = beacon['updater_create_time'] - .0008261
+    if fault == 'before_parent':
+        beacon['refreshed_at'] = bridge._stamp(parent['started_at']) - .001
+    elif fault == 'after_completion':
+        beacon['refreshed_at'] = bridge._stamp(parent['finished_at']) + .001
+    elif fault == 'missing_birth':
+        beacon['updater_create_time'] = None
+    elif fault == 'reused_pid':
+        beacon['updater_create_time'] -= 10
+    path.write_text(json.dumps(beacon))
+    handoff.child()
+    current = receipt._current
+    assert current is not None
+    if fault is None:
+        assert current.data['windows_dependency_handoff']['state'] == 'adopted', current.data
+        assert current.data['pre_update']['sha'] == 'a' * 40 and current.data['pid'] == 101
+        receipt.record_windows_continuation_result(healthy=True, token={
+            'resume_needed': False, 'relaunched_profiles': ['default'], 'relaunch_verification_result': True})
+        final = receipt.finalize_pending_update_receipt(0)
+        assert final is not None and len(list(handoff.directory.glob('update_*.json'))) == 1
+    else:
+        assert current.data['windows_dependency_handoff']['state'] == 'unverified'
+        assert handoff.parent.read_bytes() == handoff.parent_bytes
+        assert not (handoff.directory / 'handoff_phases').exists()
+
+
 def test_refusal_retains_predicate_before_later_process_query_timeout(handoff, monkeypatch):
     from clover_cli import windows_update_receipt_handoff as bridge
     import subprocess
@@ -144,7 +178,8 @@ def test_refusal_retains_predicate_before_later_process_query_timeout(handoff, m
         monotonic=lambda: clock[0], sleep=lambda delay: clock.__setitem__(0, clock[0] + delay)))
     beacon_path = handoff.home / '.clover-update-heartbeat.json'
     beacon = json.loads(beacon_path.read_text())
-    beacon['refreshed_at'] = beacon['updater_create_time'] - .000468
+    # Keep this a truly stale legacy phase, not a coarse child-clock tick.
+    beacon['refreshed_at'] = bridge._stamp(json.loads(handoff.parent_bytes)['started_at']) - .001
     beacon_path.write_text(json.dumps(beacon))
     calls = []
 

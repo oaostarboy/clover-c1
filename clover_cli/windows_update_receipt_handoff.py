@@ -159,7 +159,7 @@ def _validate_parent(parent, current, project_root, interpreter):
     _stamp(parent.get('started_at'))
 
 
-def _beacon(directory, parent, owned, project_root, now):
+def _beacon(directory, parent, owned, project_root, now, *, legacy_completed_at=None):
     path = directory.parent.parent / '.clover-update-heartbeat.json'
     if not path.exists():
         return False
@@ -180,7 +180,16 @@ def _beacon(directory, parent, owned, project_root, now):
     if beacon.get('pre_update_snapshot_id') is not None:
         _require(beacon['pre_update_snapshot_id'] == parent.get('pre_update_snapshot_id'), 'foreign_beacon_snapshot')
     refreshed = beacon.get('refreshed_at')
-    _require(type(refreshed) in (int, float) and owners[0]['created'] <= refreshed <= now() + 1, 'stale beacon')
+    lower, upper = owners[0]['created'], now() + 1
+    if legacy_completed_at is not None:
+        # The immutable legacy producer used a coarse Windows wall clock for
+        # refresh, independently of GetProcessTimes' child birth timestamp.
+        # Bind that observation to its proven original producer phase instead:
+        # same PID+birth/chain/source above, refresh inside parent begin/exit.
+        # No clock tolerance or identity waiver; modern transfers stay strict.
+        lower = _stamp(parent['started_at'])
+        upper = min(upper, legacy_completed_at)
+    _require(type(refreshed) in (int, float) and lower <= refreshed <= upper, 'stale beacon')
     _require(beacon.get('ready_for_probe') is not True, 'completed beacon is not a handoff')
     return True
 
@@ -316,7 +325,8 @@ def resume(current, directory, project_root, *, process_chain, interpreter, now,
                 finished = _stamp(parent.get('finished_at'))
             _require(owned[-1]['created'] <= finished <= now() + 1, 'stale original completion')
             probe_phase = 'beacon'
-            resume_expected = _beacon(directory, parent, owned, project_root, now)
+            resume_expected = _beacon(directory, parent, owned, project_root, now,
+                                      legacy_completed_at=None if modern else finished)
             probe_phase = 'publication'
             recovered = _recover_publication(parent, current, directory, owned, latest_raw)
             if recovered is not None:
