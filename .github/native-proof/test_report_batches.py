@@ -12,7 +12,7 @@ SCRIPT = Path(__file__).with_name('native_tests.py')
 
 
 class ReportBatchContract(unittest.TestCase):
-    def exercise(self, *, bad=False, exhaust=False):
+    def exercise(self, *, bad=False, exhaust=False, windows_default=False):
         spec = importlib.util.spec_from_file_location('report_batch_contract', SCRIPT)
         assert spec and spec.loader
         module = importlib.util.module_from_spec(spec)
@@ -24,6 +24,12 @@ class ReportBatchContract(unittest.TestCase):
         reads = [0]
         lock = threading.Lock()
         calls = []
+        original_open = Path.open
+
+        def windows_open(path, *args, **kwargs):
+            if windows_default and path.name == 'report-only.log' and args and args[0] == 'w':
+                kwargs.setdefault('encoding', 'cp1252')
+            return original_open(path, *args, **kwargs)
         def monotonic():
             with lock:
                 reads[0] += 1
@@ -32,6 +38,8 @@ class ReportBatchContract(unittest.TestCase):
             with lock:
                 index = len(calls)
                 calls.append((command, kwargs['timeout']))
+            if windows_default:
+                kwargs['stdout'].write('\u25b6 passed\n')
             path = Path(next(a.split('=', 1)[1] for a in command if a.startswith('--junitxml=')))
             suite = ET.Element('testsuite', tests=str([12, 12, 11][index]), failures='0', errors='0', skipped='0')
             for i in range([12, 12, 11][index]):
@@ -45,15 +53,17 @@ class ReportBatchContract(unittest.TestCase):
             return SimpleNamespace(returncode=1 if bad and index == 1 else 0)
         with tempfile.TemporaryDirectory(prefix='report batch controller ') as directory:
             with mock.patch.object(module, 'canonical_shell', return_value='bash'), \
+                 mock.patch.object(Path, 'open', windows_open), \
                  mock.patch.object(module, 'time', SimpleNamespace(monotonic=monotonic)), \
                  mock.patch.object(module.subprocess, 'run', side_effect=run):
                 result = method(Path('/fixture-repo'), Path(directory), {})
                 assert isinstance(result, dict)
             cases = list(ET.parse(Path(directory)/'report-only.xml').getroot().iter('testcase'))
-            return result, calls, cases
+            summary = (Path(directory)/'report-only.log').read_text(encoding='utf-8')
+            return result, calls, cases, summary
 
     def test_all_parts_keep_original_case_ids_once_and_share_the_existing_300s_budget(self):
-        result, calls, cases = self.exercise()
+        result, calls, cases, _ = self.exercise()
         self.assertEqual(result['returncode'], 0)
         self.assertEqual(result['cases'], 35)
         self.assertEqual(len({(c.get('classname'), c.get('name')) for c in cases}), 35)
@@ -64,13 +74,23 @@ class ReportBatchContract(unittest.TestCase):
             self.assertNotIn('--timeout', command)
 
     def test_failed_part_is_not_retried_or_converted_to_success(self):
-        result, calls, cases = self.exercise(bad=True)
+        result, calls, cases, _ = self.exercise(bad=True)
         self.assertNotEqual(result['returncode'], 0)
         self.assertEqual(len(calls), 3)
         self.assertTrue(any(c.find('failure') is not None for c in cases))
 
     def test_no_new_part_starts_after_the_shared_budget_expires(self):
-        result, calls, cases = self.exercise(exhaust=True)
+        result, calls, cases, _ = self.exercise(exhaust=True)
         self.assertNotEqual(result['returncode'], 0)
         self.assertEqual(len(calls), 0)
         self.assertLess(len(cases), 35)
+
+    def test_unicode_summary_is_independent_of_windows_default_codepage(self):
+        try:
+            result, calls, cases, summary = self.exercise(windows_default=True)
+        except UnicodeEncodeError as exc:
+            self.fail(f'aggregate log used the implicit Windows codepage: {exc}')
+        self.assertEqual(result['returncode'], 0)
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(len(cases), 35)
+        self.assertEqual(summary.count('\u25b6 passed'), 3)

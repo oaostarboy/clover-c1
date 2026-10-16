@@ -118,7 +118,7 @@ def run_report_only_batches(repo, evidence, test_env):
         commands=[part['command'] for part in parts], returncode=0,
         log=str(evidence / 'report-only.log'), junit=str(evidence / 'report-only.xml'))
     merged = ET.Element('testsuites')
-    with (evidence / 'report-only.log').open('w') as stream:
+    with (evidence / 'report-only.log').open('w', encoding='utf-8') as stream:
         for part in parts:
             if part['returncode'] or 'validation_error' in part:
                 result['returncode'] = 1
