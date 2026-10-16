@@ -124,7 +124,7 @@ def run_report_only_batches(repo, evidence, test_env):
                 result['returncode'] = 1
             log = Path(part['log'])
             if log.is_file():
-                stream.write(log.read_text(errors='replace'))
+                stream.write(log.read_text(encoding='utf-8', errors='replace'))
             try:
                 root = ET.parse(part['junit']).getroot()
                 for suite in ([root] if root.tag == 'testsuite' else root.findall('testsuite')):
