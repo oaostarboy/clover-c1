@@ -478,7 +478,11 @@ def _audit_bytes(project: str, name: str, limit: int) -> bytes:
     parts = PurePosixPath(name).parts
     if not parts or tuple(name.split("/")) != parts or any(p in (".", "..", "/") for p in parts):
         raise ValueError("nonlocal audit path")
-    # Fail closed on hosts lacking directory-relative, no-follow opens.
+    import sys
+    if sys.platform == "win32":
+        from agent.windows_audit_reader import read_bytes
+        return read_bytes(project, name, limit)
+    # Fail closed on other hosts lacking directory-relative, no-follow opens.
     fd = os.open(project, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         for part in parts[:-1]:

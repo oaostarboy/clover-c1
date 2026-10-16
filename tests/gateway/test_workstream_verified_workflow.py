@@ -57,7 +57,7 @@ def workflow(monkeypatch, tmp_path, network_guard):
     config["terminal"] = {"env_type": "local"}
     (h.project / "manifest.txt").write_text("actual local deliverable\n")
     digest = hashlib.sha256((h.project / "manifest.txt").read_bytes()).hexdigest()
-    (h.project / "manifest.sha256").write_text(f"{digest}  manifest.txt\n")
+    (h.project / "manifest.sha256").write_bytes(f"{digest}  manifest.txt\n".encode("ascii"))
     script = Script()
     h.scripted.client.chat.completions.create.side_effect = script.create
     h.results = []

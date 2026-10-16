@@ -76,9 +76,16 @@ def main():
     if os.environ.get('GITHUB_ACTIONS') != 'true' or os.environ.get('RUNNER_ENVIRONMENT') != 'github-hosted':
         raise SystemExit('native installer suites require a disposable GitHub-hosted runner')
     subprocess.run(dependency_command(args.repo, sys.executable, os.name), check=True)
+    # Test-only nested shell commands deliberately retain the production
+    # python/python3 grammar. Resolve bare python to this disposable venv.
+    test_env = {**os.environ, 'CLOVER_TEST_FILE_RETRIES': '0',
+                'PATH': str(Path(sys.executable).parent) + os.pathsep + os.environ.get('PATH', '')}
+    suites = dict(SUITES)
+    if os.name == 'nt':
+        suites['windows-secure-reader'] = ('tests/agent/test_windows_audit_native.py', '')
     results = []
     failed = False
-    for label, (file, expression) in SUITES.items():
+    for label, (file, expression) in suites.items():
         if not (args.repo / file).is_file():
             raise FileNotFoundError(file)
         xml = (args.evidence / (label + '.xml')).resolve()
@@ -86,7 +93,7 @@ def main():
         log = args.evidence / (label + '.log')
         with log.open('w') as stream:
             proc = subprocess.run(command, cwd=args.repo, stdout=stream, stderr=subprocess.STDOUT,
-                                  timeout=600, env={**os.environ, 'CLOVER_TEST_FILE_RETRIES': '0'})
+                                  timeout=600, env=test_env)
         result = dict(label=label, command=command, returncode=proc.returncode, log=str(log), junit=str(xml))
         try:
             result['cases'] = validate_junit(xml)
