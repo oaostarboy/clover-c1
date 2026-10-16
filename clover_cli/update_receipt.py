@@ -157,11 +157,49 @@ def _receipt_dir() -> Path:
     return get_clover_home() / "logs" / _RECEIPT_DIR_NAME
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _windows_process_chain(pid: int, *, timeout: float = 5) -> list:
+    from clover_cli.windows_update_receipt_handoff import process_chain
+    return process_chain(pid, timeout=timeout)
+
+
+def _windows_handoff_child_pid() -> int:
+    for name in ('__main__', 'clover_cli.main'):
+        module = getattr(sys, 'modules', {}).get(name)
+        origin = getattr(module, '__file__', None)
+        if origin and Path(origin).resolve() == (_project_root() / 'clover_cli/main.py').resolve():
+            child = getattr(module, '_UPDATE_HANDED_OFF_TO', 0)
+            if type(child) is int and child > 0:
+                return child
+    return 0
+
+
 def begin_update_receipt() -> None:
     """Start recording a new update receipt. Never raises."""
-    global _current, _began_in_process
+    global _current, _began_in_process, _written_in_process
     try:
+        if (sys.platform == 'win32' and os.environ.get('CLOVER_UPDATE_REEXEC') == '1'
+                and _current is not None):
+            tag = _current.data.get('windows_dependency_handoff')
+            if isinstance(tag, dict) and tag.get('continuation_pid') == os.getpid():
+                return
         _current = UpdateReceipt()
+        if sys.platform == "win32" and os.environ.get("CLOVER_UPDATE_REEXEC") == "1":
+            from clover_cli.windows_update_receipt_handoff import resume
+            _current._canonical_path, _status = resume(
+                _current.data, _receipt_dir(), _project_root(),
+                process_chain=_windows_process_chain, now=time.time,
+                interpreter={"prefix": sys.prefix, "executable": sys.executable,
+                             "base_executable": getattr(sys, "_base_executable", None),
+                             "argv": list(sys.argv)},
+            )
+            if _status == 'duplicate':
+                _current = None
+                _began_in_process = _written_in_process = True
+                return
         if sys.platform.startswith("linux"):
             from clover_cli import linux_catchup_handoff
             from clover_cli.config import get_clover_home
@@ -215,6 +253,32 @@ def record_gateway_restart(**kwargs: Any) -> None:
         logger.debug("Could not record gateway restart result: %s", exc)
 
 
+def record_windows_continuation_result(*, healthy: bool, token: dict | None) -> None:
+    """Record actual dependency/resume results, not a new target-to-target run."""
+    if _current is None:
+        return
+    tag = _current.data.get("windows_dependency_handoff")
+    if not isinstance(tag, dict) or tag.get("state") != "adopted":
+        return
+    result = token or {}
+    unmapped = result.get("unmapped_relaunched", 0)
+    valid_unmapped = type(unmapped) is int and unmapped >= 0
+    relaunched = bool(result.get("relaunched_profiles")) or (valid_unmapped and unmapped > 0)
+    incomplete = (not healthy or bool(result.get("resume_needed"))
+                  or (bool(tag.get("resume_expected")) and token is None)
+                  or not valid_unmapped
+                  or (relaunched and result.get("relaunch_verification_result") is not True))
+    _current.gateway_restart_result(
+        restarted_services=result.get("restarted_services"),
+        relaunched_profiles=result.get("relaunched_profiles"),
+        incomplete=incomplete,
+        phase_error="Windows continuation did not complete dependency repair and resume" if incomplete else "",
+    )
+    _current.data["gateway_restart"]["unmapped_relaunched"] = unmapped if valid_unmapped else None
+    _current.data["gateway_restart"]["relaunch_verification_result"] = result.get("relaunch_verification_result")
+    tag["state"] = "incomplete" if incomplete else "completed"
+
+
 def finalize_update_receipt(
     outcome: str, fleet: list | None = None, stop_reason: str = ""
 ) -> Optional[Path]:
@@ -230,6 +294,11 @@ def finalize_update_receipt(
     _current = None
     if receipt is None:
         return None
+
+    handoff = receipt.data.get("windows_dependency_handoff")
+    if isinstance(handoff, dict) and handoff.get("state") != "completed" and outcome == "success":
+        outcome = "partial"
+        stop_reason = stop_reason or "Windows dependency continuation remains unverified"
 
     if sys.platform.startswith("linux"):
         tag = receipt.data.get("linux_systemd_catchup")
@@ -276,7 +345,7 @@ def finalize_update_receipt(
         directory = _receipt_dir()
         directory.mkdir(parents=True, exist_ok=True)
         stamp = time.strftime("%Y%m%d_%H%M%S")
-        path = directory / f"update_{stamp}_{os.getpid()}.json"
+        path = getattr(receipt, "_canonical_path", None) or directory / f"update_{stamp}_{os.getpid()}.json"
         path.write_text(
             json.dumps(receipt.data, indent=2, default=str), encoding="utf-8"
         )
@@ -316,8 +385,24 @@ def finalize_pending_update_receipt(
     without an explicit inner finalize), exit 2 → ``refused`` (the
     updater's preflight-refusal convention), anything else → ``failed``.
     """
+    global _current, _written_in_process
     if _current is None:
         return None
+    if (exit_code in (0, None) and sys.platform == 'win32'
+            and os.environ.get('CLOVER_UPDATE_REEXEC') != '1'):
+        child_pid = _windows_handoff_child_pid()
+        if child_pid:
+            try:
+                from clover_cli.build_info import get_code_identity
+                from clover_cli.windows_update_receipt_handoff import transfer
+                _current.data['post_update'] = get_code_identity(refresh=True)
+                transfer(_current.data, child_pid, _receipt_dir(), transferred_at=_utc_now_iso())
+                _current = None
+                _written_in_process = True
+                return None
+            except Exception:
+                _current.data['windows_dependency_handoff'] = {
+                    'state': 'unverified', 'reason': 'could_not_persist_windows_transfer'}
     if exit_code in (0, None):
         outcome = "success"
     elif exit_code == 2:
