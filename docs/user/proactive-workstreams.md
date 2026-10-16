@@ -170,15 +170,15 @@ claimed. A known missed-need paraphrase remains measured in the test fixtures.
 Only supported native text-summary compaction is audited; opaque provider
 compaction is not. The durable scoped capsule is independent evidence.
 
-This is an unapproved opt-in candidate, not a released or enabled capability.
-All seven local acceptance contracts and independent exact-candidate review
-are required together. Windows/macOS, live providers/transports,
-phone/desktop/TUI suggestions and opaque-native gates are not certified by
-the isolated Linux scripted-provider tests. The original procedure build
-recorded a historical model-substitution exception; this candidate still needs
-independent review of its exact final tree before release.
+This capability ships in 1.5.6 but remains opt-in; installing an update does
+not enable it or enroll existing jobs. Release gates combine independent
+source review, required CI and real native install/update checks. The isolated
+Linux scripted-provider tests alone do not certify live providers/transports,
+phone/desktop/TUI suggestions or opaque-native compaction. Historical build
+records retain their original model identities; release-delta reviews use
+GPT-6.1 SOL with explicit provider/model receipts.
 
-## Verification and helper results (1.5.6 candidate)
+## Verification and helper results (1.5.6)
 
 A helper return is **result received**, not verified work. Reading or delivering
 that output, a zero exit, or a sentence saying “tests passed” does not close an
@@ -259,11 +259,41 @@ narrow progress evidence and reviewable procedure drafts remain supported.
 
 The Linux tests exercise real local pytest and manifest reads, the authenticated
 scripted gateway, temporary SQLite storage, Stop/races and context readback.
-They do not prove live provider behavior or Windows/macOS support. This remains
-an unapproved local 1.5.6 release candidate: independent exact-commit review,
-CI/native-install checks and separately authorized rollout are still required.
-No profile or fleet is enabled by preparing it. Historical records are not
-rewritten or reconciled by this correction.
+Separate native gates exercise fresh installations on Linux, macOS and Windows,
+and updates with a running gateway. Windows chat-update proof uses disposable
+local IRC, not Telegram. These checks do not certify every live provider or
+transport. No profile or fleet is enabled by publishing the update. Historical
+records are not rewritten or reconciled by this correction.
+
+### What the live follow-through trial establishes
+
+One representative, owner-authorized HTML task completed build, content/layout
+checks, independent SOL review, final checks and delivery without a continuation
+nudge. That demonstrates bounded follow-through for that task, not guaranteed
+autonomy, idle wake-ups, or comprehensive live Stop/restart recovery. Existing
+memory still stores facts and preferences; the optional ledger adds scoped
+unfinished-work state and evidence. A side question is not cancellation, but
+an explicit Stop overrides pending continuation. Continued work never grants
+new permissions.
+
+### Other fixes included in 1.5.6
+
+- Direct answers already written in the current turn survive a helper handoff;
+  a question the model never answered still cannot be recovered from nothing.
+- A proven-successful council route check no longer wakes another reply after
+  the answer was delivered. Failures, new findings and uncertain delivery still
+  follow the normal notification path.
+- Native Windows work-record reads fail closed on unsafe file objects. Windows
+  installs use locked Node dependencies without rewriting tracked lockfiles,
+  and update handoffs retain the current owned result through dependency work.
+- CLI context-only ingress remains inert. Test isolation, native interpreter
+  and source checks, PowerShell/Git layout support, UTF-8 proof logs and confined
+  Docker-test permissions strengthen verification without relaxing ownership.
+
+The vanished-folder and distinct automatic-handoff fixes were already released
+in 1.5.5 and remain inherited here. Multi-helper raw formatting and split photo
+album delivery reports are not claimed fixed by 1.5.6. See `CHANGELOG.md` in the
+repository for the release scope and verification boundaries.
 
 ## Settings
 
