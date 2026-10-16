@@ -32,6 +32,28 @@ class NativeRunnerContract(unittest.TestCase):
             self.assertGreater(module.validate_junit(xml), 0)
 
 
+    def test_windows_ucrt64_discovery_uses_the_same_git_installation_root(self):
+        """Portable path-walking contract; actual Windows execution is separate."""
+        spec = importlib.util.spec_from_file_location('native_tests_ucrt64_shell', SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory(prefix='native UCRT64 discovery ') as d:
+            root = Path(d) / 'Program Files/Git'
+            git = root / 'ucrt64/bin/git.exe'
+            git.parent.mkdir(parents=True)
+            git.write_text('inert Git discovery fixture', encoding='utf-8')
+            bash = root / 'bin/bash.exe'
+            bash.parent.mkdir(parents=True)
+            bash.write_text('inert shell path fixture; never executed', encoding='utf-8')
+            with mock.patch.object(module, 'os', types.SimpleNamespace(name='nt')):
+                setattr(module, 'shutil', types.SimpleNamespace(which=lambda name: str(git) if name == 'git' else None))
+                self.assertEqual(module.canonical_shell(), str(bash))
+                bash.unlink()
+                with self.assertRaises(FileNotFoundError):
+                    module.canonical_shell()
+
+
     @unittest.skipIf(os.name == 'nt', 'Portable Bash argv fixture uses a POSIX symlink, not native Windows')
     def test_windows_uses_git_bash_not_path_wsl_and_preserves_real_runner_argv(self):
         spec = importlib.util.spec_from_file_location('native_tests_windows_shell', SCRIPT)

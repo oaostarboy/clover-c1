@@ -48,7 +48,7 @@ def canonical_shell():
     if parent.name.lower() not in {'cmd', 'bin'}:
         raise FileNotFoundError('Cannot identify the Git for Windows shell root')
     root = parent.parent
-    if root.name.lower() in {'mingw32', 'mingw64'}:
+    if root.name.lower() in {'mingw32', 'mingw64', 'ucrt64'}:
         root = root.parent
     bash = root / 'bin' / 'bash.exe'
     if not bash.is_file():
