@@ -3694,7 +3694,7 @@ def atomic_config_write(config_path: Path, data: Any, **kwargs: Any) -> None:
     atomic_yaml_write(config_path, data, **kwargs)
 
 
-def load_config() -> Dict[str, Any]:
+def load_config(*, migrate: bool = True) -> Dict[str, Any]:
     """Load configuration from ~/.clover/config.yaml.
 
     Cached on the config file's (mtime_ns, size). Returns a deepcopy of
@@ -3707,8 +3707,12 @@ def load_config() -> Dict[str, Any]:
     Read-only callers should use ``load_config_readonly()`` to skip the
     defensive deepcopy — that path matters in agent-loop hot spots like
     ``get_provider_request_timeout`` which is called once per API turn.
+
+    ``migrate=False`` retains merged/managed runtime reads but skips the
+    startup migration write. Use it for deterministic status/control menus
+    that must not mutate a legacy config merely by displaying its state.
     """
-    return _load_config_impl(want_deepcopy=True)
+    return _load_config_impl(want_deepcopy=True, migrate=migrate)
 
 
 def load_config_readonly() -> Dict[str, Any]:
@@ -3907,7 +3911,7 @@ def apply_terminal_config_to_env(
     return target
 
 
-def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
+def _load_config_impl(*, want_deepcopy: bool, migrate: bool = True) -> Dict[str, Any]:
     # One cheap stat per load; rerun the ladder only when this profile's file
     # changes. The guard prevents migrations that themselves read config from
     # recursing into the startup check.
@@ -3917,7 +3921,7 @@ def _load_config_impl(*, want_deepcopy: bool) -> Dict[str, Any]:
         signature = (st.st_mtime_ns, st.st_size)
     except OSError:
         signature = None
-    if signature is not None and not getattr(_STARTUP_MIGRATION_GUARD, "active", False):
+    if migrate and signature is not None and not getattr(_STARTUP_MIGRATION_GUARD, "active", False):
         key = str(path)
         if _STARTUP_MIGRATION_CHECKED.get(key) != signature:
             _STARTUP_MIGRATION_GUARD.active = True

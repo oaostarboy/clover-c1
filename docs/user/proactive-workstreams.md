@@ -295,6 +295,66 @@ in 1.5.5 and remain inherited here. Multi-helper raw formatting and split photo
 album delivery reports are not claimed fixed by 1.5.6. See `CHANGELOG.md` in the
 repository for the release scope and verification boundaries.
 
+## Settings menu
+
+`/proactive` opens the current profile's settings: saved On/Off and mode,
+plus the effective values read by the workstream runtime. Telegram shows native
+**Enable** / **Disable** buttons. Other gateway platforms use explicit text
+controls unless their adapter supports the same owned-picker guard. Slack uses
+`/clover proactive [status|on|off]` (to keep its 50 native-slash slots intact),
+or `!proactive`; Matrix also supports `!proactive`. Gateway replies use the
+adapter's working typed prefix. CLI and TUI use the same deterministic controls:
+
+| Command | Result |
+| --- | --- |
+| `/proactive` | Status and controls; no config write |
+| `/proactive status` | Read-only saved and effective state |
+| `/proactive on` | Enable this profile (`enable` is also accepted) |
+| `/proactive off` | Disable only the master flag (`disable` is also accepted) |
+
+Gateway changes require an authenticated, explicitly enrolled admin in
+`platforms.<platform>.allow_admin_from`, or `group_allow_admin_from` in a group.
+An ordinary chat allowlist, pairing, allow-all, or permission to use the
+`proactive` command is **not** admin authority. With no explicit admin list,
+the menu stays read-only. CLI/TUI use the local config-file authority, like
+`clover config set`. No model request is needed for any of these controls.
+
+The first Enable transition from `shadow` selects this bounded preset:
+`enabled: true`, `mode: active`, `recall.enabled: true` and
+`compaction_audit.enabled: true`. Active mode also permits the existing
+human-origin correction consumer; there is no separate correction flag.
+This enables deterministic evidence capture/auditing, **not** automatic
+compaction repair (`max_repairs` is unchanged). It does not enable suggestions,
+procedure generation, auxiliary judges, model calls, new jobs or external-action
+authority. Explicitly configured optional opt-ins keep their existing behavior;
+the menu does not grant missing timing or permission.
+
+Limits, privacy, eligible job enrollment, timing (including non-null `never`
+or `after_reply`), auxiliary/model budgets and other config stay unchanged.
+Once mode is `active`, off/on preserves the saved capability preferences too.
+Disable sets only `enabled: false`; ledger records remain inert and inspectable,
+and independently scheduled jobs and existing `/loop` records remain untouched.
+
+The command uses the existing atomic config writer and checks the saved values.
+Workstream consumers reload settings at turn/operation boundaries, so **no
+restart is required**. In-flight turns keep their current context: the command
+does not rebuild cached prompts, swap tools or rewrite message history. Managed
+settings may make the effective state differ from the saved state; both appear
+in the menu. A failed/unconfirmed write never produces a success reply.
+
+Telegram settings buttons expire after five minutes and bind the original
+user, chat, message, thread, adapter and profile. The callback rechecks admin
+access and is claimed once before applying the change. Old, foreign, revoked
+or replayed taps cannot toggle config. If native send fails, use text controls.
+
+### Migration from the old alias
+
+`/proactive` is no longer an alias for `/loop`. For recurring prompts, use
+`/loop <interval> <prompt>` and `/loop status | pause | resume | stop`.
+Legacy `/proactive <interval> <prompt>` (and other old loop arguments) returns
+migration instructions only: it neither runs a prompt nor changes settings.
+Existing loop records are not renamed, migrated, cancelled or rescheduled.
+
 ## Settings
 
 See the commented `proactive:` block in `cli-config.yaml.example`. Defaults:

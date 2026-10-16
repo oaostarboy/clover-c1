@@ -226,8 +226,10 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("council", "Convene the adversarial multi-model council", "Session",
                gateway_only=True, args_hint="[quick|full|deep] <question>",
                busy_policy="reject"),
+    CommandDef("proactive", "Show or toggle this profile's proactive work ledger", "Session",
+               args_hint="[status | on | off]", subcommands=("status", "on", "off"),
+               busy_policy="dispatch"),
     CommandDef("loop", "Re-run a prompt on a recurring interval in this session", "Session",
-               aliases=("proactive",),
                args_hint="[interval] <prompt> [--times N] [--until <condition>] | status | pause | resume | stop",
                argument_mode="mixed", busy_policy="dispatch", busy_handler="loop"),
     CommandDef("plan", "Write a markdown implementation plan to .clover/plans/ without executing anything", "Session",
@@ -1484,7 +1486,9 @@ _SLACK_PRIORITY_ALIASES: tuple[str, ...] = ()
 #     assistant; reached via /clover results on Slack. Rare (only after a
 #     dropped-result notice) — without this entry /results tips the registry
 #     past the 50-cap and silently clamps /usage, breaking parity.
-_SLACK_VIA_CLOVER_ONLY = frozenset({"moa", "council", "debug", "egress", "init", "version", "diff", "update", "repair", "heartbeat", "refine", "review", "pause", "whoami", "platform", "insights", "skin", "results"})
+#   - proactive: profile settings; reached via /clover proactive [status|on|off]
+#     on Slack so the new command does not displace the existing /usage slash.
+_SLACK_VIA_CLOVER_ONLY = frozenset({"proactive", "moa", "council", "debug", "egress", "init", "version", "diff", "update", "repair", "heartbeat", "refine", "review", "pause", "whoami", "platform", "insights", "skin", "results"})
 
 
 def _sanitize_slack_name(raw: str) -> str:

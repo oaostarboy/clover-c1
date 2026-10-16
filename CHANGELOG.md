@@ -3,6 +3,20 @@
 Short notes shown after `/update` live in [RELEASE_NOTES.md](RELEASE_NOTES.md).
 This changelog records the broader scope and limits of the 1.5.6 release.
 
+## Unreleased
+
+- Add `/proactive` as a deterministic current-profile settings menu, with
+  owned, expiring Telegram Enable/Disable buttons and explicit text controls
+  on other gateways, CLI and TUI. Show saved and effective settings; workstream
+  readers pick changes up at the next turn/operation without a restart.
+- Enabling selects active recall/correction and deterministic compaction audit
+  without granting new model-call, scheduling or external-action authority.
+  Disabling preserves records, preferences and independent scheduled jobs.
+  Gateway writes require an explicitly configured, authenticated admin.
+- Remove only the old `/proactive` alias for `/loop`: legacy interval/prompt
+  syntax gives migration instructions, never executes or toggles. `/loop`
+  behavior and existing loop records are unchanged.
+
 ## 1.5.6 — 2026-10-16
 
 ### Work continuity and truthful completion

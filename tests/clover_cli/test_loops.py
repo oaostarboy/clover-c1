@@ -671,15 +671,15 @@ class TestDispatchLoopCommand:
 
 
 class TestCommandRegistry:
-    def test_loop_registered_with_proactive_alias(self):
+    def test_loop_and_proactive_are_distinct_commands(self):
         from clover_cli.commands import resolve_command
 
         cmd = resolve_command("loop")
         assert cmd is not None
         assert cmd.name == "loop"
-        alias = resolve_command("proactive")
-        assert alias is not None
-        assert alias.name == "loop"
+        proactive = resolve_command("proactive")
+        assert proactive is not None
+        assert proactive.name == "proactive"
 
 
 # ──────────────────────────────────────────────────────────────────────
