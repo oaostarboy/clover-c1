@@ -42,19 +42,36 @@ def proactive_command(args: str = "", *, can_change: bool) -> str:
                 if not isinstance(root, dict):
                     raise ValueError("proactive must be a settings mapping")
                 enabled = action in {"on", "enable"}
+                changed_keys = set()
                 if enabled and load_settings(updated).mode != "active":
                     # First transition from shadow: deterministic recall/correction
                     # and compaction evidence only. No suggestion/judge/procedure
                     # calls, repair budget, monitor enrollment or timing grant.
+                    if root.get("mode") != "active":
+                        changed_keys.add("proactive.mode")
                     root["mode"] = "active"
                     for section in ("recall", "compaction_audit"):
                         child = root.setdefault(section, {})
                         if not isinstance(child, dict):
                             raise ValueError(f"proactive.{section} must be a mapping")
+                        if child.get("enabled") is not True:
+                            changed_keys.add(f"proactive.{section}.enabled")
                         child["enabled"] = True
+                if root.get("enabled") != enabled:
+                    changed_keys.add("proactive.enabled")
                 root["enabled"] = enabled
                 if updated != raw:
-                    config_api.save_config(updated, strip_defaults=False)
+                    from clover_cli import managed_scope
+
+                    # Reject changes to pinned leaves (or their pinned parent),
+                    # but retain *all* saved user preferences under the overlay.
+                    # This is a raw-file edit, not a bulk save of merged config.
+                    pins = managed_scope.managed_config_keys()
+                    if any(key == pin or key.startswith(pin + ".")
+                           or pin.startswith(key + ".")
+                           for key in changed_keys for pin in pins):
+                        raise PermissionError("proactive setting is managed by your administrator")
+                    config_api.save_config(updated, strip_defaults=False, strip_managed=False)
                     persisted = config_api.require_readable_config_before_write()
                     if persisted.get("proactive") != root:
                         raise RuntimeError("settings readback did not match the requested change")
