@@ -4,7 +4,7 @@ import pytest
 from agent import work_lifecycle
 
 
-@pytest.mark.parametrize('name', ['x:y', 'a\\b', 'CON', 'aux.txt', 'dir./x', 'dir /x', '../x', '/x', 'a//b', 'x\x00y'])
+@pytest.mark.parametrize('name', ['x:y', 'a\\b', 'CON', 'aux.txt', 'CONIN$', 'CONOUT$', 'CLOCK$', 'dir./x', 'dir /x', '../x', '/x', 'a//b', 'x\x00y'])
 def test_windows_namespace_paths_are_rejected_before_io(name):
     from agent.windows_audit_reader import validated_parts
     with pytest.raises(ValueError):

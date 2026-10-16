@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-_RESERVED = re.compile(r'^(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)', re.I)
+_RESERVED = re.compile(r'^(?:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|CLOCK\$|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)', re.I)
 
 
 def _component(value: str) -> bool:

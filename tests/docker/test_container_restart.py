@@ -53,7 +53,8 @@ def restart_container(request, built_image: str):
     preserves $CLOVER_HOME/profiles/."""
     safe = request.node.name.replace("[", "_").replace("]", "_")
     name = f"clover-restart-{safe}"
-    volume = f"clover-restart-vol-{safe}"
+    import uuid
+    volume = f"clover-test-volume-{uuid.uuid4().hex}"
     _docker("rm", "-f", name)
     _docker("volume", "rm", "-f", volume)
     _docker("volume", "create", volume, timeout=10).check_returncode()

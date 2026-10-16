@@ -182,7 +182,7 @@ def test_component_replacement_before_child_open_is_excluded(tmp_path, monkeypat
     assert observed == [True]
 
 
-def test_writable_mapped_view_cannot_mutate_a_read(tmp_path, monkeypatch):
+def test_writable_mapped_view_cannot_mutate_a_read(tmp_path, monkeypatch, record_property):
     import ctypes as c
     from ctypes import wintypes as w
     path = tmp_path / 'file'
@@ -215,8 +215,10 @@ def test_writable_mapped_view_cannot_mutate_a_read(tmp_path, monkeypatch):
     api.read = during
     monkeypatch.setattr(reader, '_api', lambda: api)
     try:
-        with pytest.raises((OSError, ValueError)):
+        with pytest.raises((OSError, ValueError)) as refusal:
             _audit_bytes(str(tmp_path), 'file', 100)
+        record_property('mapped_view_mutation_reached', bool(mutated))
+        record_property('mapped_view_refusal', repr(refusal.value))
     finally:
         kernel.UnmapViewOfFile(view)
         kernel.CloseHandle(mapping)

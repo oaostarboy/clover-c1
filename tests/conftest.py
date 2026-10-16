@@ -1624,6 +1624,14 @@ def _live_system_guard(request, monkeypatch):
 
     def _check_subprocess_cmd(name, cmd, args=(), options=None):
         options = options or {}
+        # Affirmative, per-test container capability: exact argv grants only.
+        # Created by the Docker fixture after image/namespace/mount validation;
+        # exec targets are inspected immutable IDs owned by this same test.
+        # No marker, environment flag, command obfuscation or host exception.
+        docker_capability = getattr(request.node, "_docker_test_capability", None)
+        if (docker_capability is not None
+                and docker_capability.admit(name, cmd, args, options)):
+            return
         if _is_blocked_systemctl(cmd):
             raise RuntimeError(
                 f"tests/conftest.py live-system guard: blocked "
