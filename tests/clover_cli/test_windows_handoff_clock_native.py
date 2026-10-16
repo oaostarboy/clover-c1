@@ -5,6 +5,8 @@ parent edge and executable come from actual Windows processes, not fixture rows.
 """
 from datetime import datetime, timezone
 import json
+import os
+from pathlib import Path
 import subprocess
 import sys
 import time
@@ -20,6 +22,13 @@ pytestmark = pytest.mark.skipif(sys.platform != 'win32', reason='Native Windows 
 
 @pytest.mark.parametrize('mode', ['modern', 'modern-inverted', 'legacy-inverted'])
 def test_measured_windows_child_beacon_keeps_strict_birth_boundary(tmp_path, monkeypatch, record_property, mode):
+    # Canonical env -i removes PSModulePath. Hosted differential experiment
+    # 38848785243 proved that absence stalls the bounded PowerShell/CIM query.
+    # Restore this test dependency using only the stock Windows module root,
+    # not inherited user/custom module search paths. Query timeout stays 5s.
+    modules = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/Modules'
+    assert (modules / 'CimCmdlets/CimCmdlets.psd1').is_file()
+    monkeypatch.setenv('PSModulePath', str(modules))
     home = tmp_path / 'disposable-home'
     directory = home / 'logs/update_receipts'
     directory.mkdir(parents=True)
