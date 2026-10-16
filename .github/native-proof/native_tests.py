@@ -6,12 +6,15 @@ JUnit and raw exit codes are retained separately for every selected test file.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
+from typing import Any
 import xml.etree.ElementTree as ET
 
 SUITES = {
@@ -66,6 +69,87 @@ def suite_command(repo, file, expression, xml):
     return command
 
 
+def run_report_only_batches(repo, evidence, test_env):
+    """Original35 cases in disjoint parallel canonical calls, one300s deadline.
+
+    Do not lengthen the old canonical file budget or the receipt deadline.
+    Windows aggregate execution needs parallel, balanced cohorts, not a retry.
+    """
+    first = '(helper_prose or untrusted or zero_only or stale_report or failed_test)'
+    second = '(skipped_test or empty_report or bad_report or report_totals or changed_artifact or changed_spec or changed_evidence or changed_revision or wrong_cwd or wrong_session or new_session or foreign_id)'
+    expressions = ['not test_acceptance_fails_closed or ' + first,
+                   'test_acceptance_fails_closed and ' + second,
+                   'test_acceptance_fails_closed and not (' + first + ' or ' + second + ')']
+    began = time.monotonic()
+    deadline = began + 300
+
+    def run_part(index, expression):
+        xml = evidence / f'report-only-part-{index}.xml'
+        log = evidence / f'report-only-part-{index}.log'
+        command = suite_command(repo, SUITES['report-only'][0], expression, xml)
+        remaining = deadline - time.monotonic()
+        part = dict(part=index, command=command, junit=str(xml), log=str(log),
+                    remaining_seconds=remaining, returncode=1)
+        if remaining <= 0:
+            part['validation_error'] = 'original shared300s budget expired before launch'
+            return part
+        started = time.monotonic()
+        try:
+            with log.open('w') as stream:
+                proc = subprocess.run(command, cwd=repo, stdout=stream, stderr=subprocess.STDOUT,
+                                      timeout=remaining, env=test_env)
+            part['returncode'] = proc.returncode
+            part['cases'] = validate_junit(xml)
+        except (OSError, ET.ParseError, ValueError, subprocess.TimeoutExpired) as exc:
+            part['returncode'] = 1
+            part['validation_error'] = type(exc).__name__
+        part['elapsed_seconds'] = time.monotonic() - started
+        return part
+
+    parts = []
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [pool.submit(run_part, index, expression)
+                   for index, expression in enumerate(expressions, 1)]
+        for future in as_completed(futures):
+            parts.append(future.result())
+            (evidence / 'report-only-batches.json').write_text(json.dumps(parts, indent=2))
+    parts.sort(key=lambda part: part['part'])
+    result: dict[str, Any] = dict(label='report-only', parts=parts,
+        commands=[part['command'] for part in parts], returncode=0,
+        log=str(evidence / 'report-only.log'), junit=str(evidence / 'report-only.xml'))
+    merged = ET.Element('testsuites')
+    with (evidence / 'report-only.log').open('w') as stream:
+        for part in parts:
+            if part['returncode'] or 'validation_error' in part:
+                result['returncode'] = 1
+            log = Path(part['log'])
+            if log.is_file():
+                stream.write(log.read_text(errors='replace'))
+            try:
+                root = ET.parse(part['junit']).getroot()
+                for suite in ([root] if root.tag == 'testsuite' else root.findall('testsuite')):
+                    merged.append(suite)
+            except (OSError, ET.ParseError) as exc:
+                result['validation_error'] = type(exc).__name__
+                result['returncode'] = 1
+    xml = evidence / 'report-only.xml'
+    ET.ElementTree(merged).write(xml, encoding='utf-8', xml_declaration=True)
+    try:
+        result['cases'] = validate_junit(xml)
+        cases = list(merged.iter('testcase'))
+        ids = {(c.get('classname'), c.get('name')) for c in cases}
+        if len(cases) != 35 or len(ids) != 35 or any(not all(i) for i in ids):
+            raise ValueError('original35-case coverage is missing or duplicated')
+    except (OSError, ET.ParseError, ValueError) as exc:
+        result.setdefault('validation_error', str(exc))
+        result['returncode'] = 1
+    if time.monotonic() > deadline or len(parts) != len(expressions):
+        result['returncode'] = 1
+        result.setdefault('validation_error', 'original shared300s budget expired')
+    result['elapsed_seconds'] = time.monotonic() - began
+    return result
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--repo', type=Path, required=True)
@@ -93,6 +177,13 @@ def main():
     for label, (file, expression) in suites.items():
         if not (args.repo / file).is_file():
             raise FileNotFoundError(file)
+        if os.name == 'nt' and label == 'report-only':
+            result = run_report_only_batches(args.repo, args.evidence, test_env)
+            failed |= result['returncode'] != 0 or 'validation_error' in result
+            results.append(result)
+            (args.evidence / 'native-suites.json').write_text(json.dumps(results, indent=2))
+            print(json.dumps(result), flush=True)
+            continue
         xml = (args.evidence / (label + '.xml')).resolve()
         command = suite_command(args.repo, file, expression, xml)
         log = args.evidence / (label + '.log')
