@@ -11,6 +11,7 @@ from tests._docker_safety import DockerTestCapability
 def capability(tmp_path):
     cap = DockerTestCapability.__new__(DockerTestCapability)
     cap.docker = '/usr/bin/docker'
+    cap.script = None
     cap.private = tmp_path
     cap.image = 'sha256:' + '1' * 64
     cap.image_name = 'unit-test-image'
@@ -67,3 +68,56 @@ def test_actual_container_name_teardown_never_removes_unowned_name(monkeypatch):
     with pytest.raises(StopIteration):
         next(fixture)
     assert calls == []
+
+
+def test_recovered_setup_cleanup_owns_only_created_ids(capability, monkeypatch):
+    import json
+    target, remaining = 'a' * 64, 'b' * 64
+    infos = {value: {'Id': value, 'Name': '/must-not-adopt', 'Image': capability.image,
+                    'Config': {'Labels': {'clover.test-owner': 'unit-test-owner'}},
+                    'HostConfig': {}, 'Mounts': []} for value in [target, remaining]}
+    removed = []
+
+    def transport(cmd, *args, **options):
+        if cmd[1] == 'run':
+            return subprocess.CompletedProcess(cmd, 0, stdout=target)
+        if cmd[1:3] == ['container', 'inspect']:
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps([infos[cmd[-1]]]))
+        if cmd[1] == 'rm':
+            removed.append(cmd[-1])
+        return subprocess.CompletedProcess(cmd, 0)
+
+    def initial_inspection_failure(*args):
+        raise ValueError('injected first post-create inspection failure')
+
+    capability.run = transport
+    monkeypatch.setattr(capability, '_inspect', initial_inspection_failure)
+    with pytest.raises(ValueError, match='injected first'):
+        capability.execute(transport, ['docker', 'run', '-d', '--name', 'clover-test-setup', capability.image_name])
+    assert capability.created == {target} and capability.owned == {}
+    capability.created.add(remaining)
+    capability.owned[remaining] = remaining
+    capability.cleanup()
+    assert set(removed) == {target, remaining}
+    assert set(capability.owned) == {target, remaining}
+    assert not capability.grants
+
+
+def test_pty_wrapper_keeps_only_one_safely_quoted_docker_command(capability):
+    import shlex
+    capability.script = '/usr/bin/script'
+    inner = ['docker', 'run', '--rm', '-t', capability.image_name, 'sh', '-c', 'echo safe; echo still-container']
+    prepared = capability.prepare(['script', '-qc', shlex.join(inner), '/dev/null'], (), {})
+    assert prepared[:2] == ['/usr/bin/script', '-qc'] and prepared[-1] == '/dev/null'
+    parsed = shlex.split(prepared[2])
+    assert parsed[:2] == ['/usr/bin/docker', 'run']
+    assert parsed[-3:] == inner[-3:]
+    assert capability.image in parsed
+    assert capability.label in parsed
+    assert not capability.admit('Popen', prepared, (), {})  # no in-flight grant yet
+
+
+def test_pty_wrapper_rejects_privileged_inner_command(capability):
+    capability.script = '/usr/bin/script'
+    with pytest.raises(ValueError):
+        capability.prepare(['script', '-qc', 'docker run --rm --privileged unit-test-image gateway run', '/dev/null'], (), {})

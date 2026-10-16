@@ -12,12 +12,14 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import shlex
 
 
 class DockerTestCapability:
     def __init__(self, run, image: str, private: Path):
         self.run = run
         self.docker = shutil.which('docker')
+        self.script = shutil.which('script')
         if not self.docker:
             raise ValueError('Docker unavailable')
         self.private = private.resolve(strict=True)
@@ -57,6 +59,19 @@ class DockerTestCapability:
         return value
 
     def prepare(self, cmd, args, options):
+        if (type(cmd) is list and len(cmd) == 4 and self.script
+                and cmd[0] in {'script', self.script} and cmd[1] == '-qc'
+                and cmd[3] == '/dev/null'
+                and self._plain([self.docker, 'run'], args, options)):
+            inner = shlex.split(cmd[2])
+            if len(inner) < 3 or inner[:2] != ['docker', 'run']:
+                raise ValueError('PTY wrapper must run one Docker creation')
+            prepared = self._create(inner)
+            if '-d' in prepared:
+                raise ValueError('PTY wrapper must not detach a container')
+            # Serialize EVERY token, including the in-container shell script.
+            # The host shell executes just this pinned, confined Docker command.
+            return [self.script, '-qc', shlex.join(prepared), '/dev/null']
         if not self._plain(cmd, args, options):
             if self.involves_docker(cmd):
                 raise ValueError('Docker subprocess override refused')
@@ -142,7 +157,7 @@ class DockerTestCapability:
         mounts = []
         while index < len(cmd) and cmd[index].startswith('-'):
             flag = cmd[index]
-            if flag in {'--rm', '-d', '--init'}:
+            if flag in {'--rm', '-d', '--init', '-t'}:
                 result.append(flag)
                 index += 1
                 continue
@@ -189,7 +204,10 @@ class DockerTestCapability:
                 raise ValueError('Docker mount inspection refused')
 
     def admit(self, name, cmd, args, options):
-        return (name in {'run', 'Popen'} and self._plain(cmd, args, options)
+        pty = (type(cmd) is list and len(cmd) == 4 and getattr(self, 'script', None)
+               and cmd[:2] == [self.script, '-qc'] and cmd[3] == '/dev/null'
+               and self._plain([self.docker, 'run'], args, options))
+        return (name in {'run', 'Popen'} and (self._plain(cmd, args, options) or pty)
                 and tuple(cmd) in self.grants)
 
     def execute(self, guarded_run, cmd, *args, **options):
@@ -235,6 +253,9 @@ class DockerTestCapability:
             self._confined(info)
             if info['Id'] != target:
                 raise ValueError('Docker cleanup identity changed')
+            # A transient first inspection failure may precede registration.
+            # Recovered exact-ID + ownership validation permits that ID only.
+            self.owned[target] = target
             self.execute(self.run, [self.docker, 'rm', '-f', target], check=True,
                          capture_output=True, timeout=30)
         for volume in self.volumes:
