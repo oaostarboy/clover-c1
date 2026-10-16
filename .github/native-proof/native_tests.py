@@ -61,6 +61,8 @@ def suite_command(repo, file, expression, xml):
                '--file-retries', '0', '-o', 'addopts=', '--junitxml=' + xml.as_posix()]
     if expression:
         command += ['-k', expression]
+    if file == SUITES['report-only'][0]:
+        command += ['-vv', '-o', 'faulthandler_timeout=30']
     return command
 
 

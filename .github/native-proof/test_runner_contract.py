@@ -32,6 +32,19 @@ class NativeRunnerContract(unittest.TestCase):
             self.assertGreater(module.validate_junit(xml), 0)
 
 
+    def test_report_only_keeps_bounded_hang_diagnostics_without_retry_or_timeout_change(self):
+        spec = importlib.util.spec_from_file_location('native_tests_report_diagnostics', SCRIPT)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with mock.patch.object(module, 'canonical_shell', return_value='bash'):
+            command = module.suite_command(Path('/inert-proof-source'),
+                'tests/gateway/test_workstream_acceptance.py', '', Path('/inert-evidence/report.xml'))
+        self.assertEqual(command[-3:], ['-vv', '-o', 'faulthandler_timeout=30'])
+        self.assertEqual(command[command.index('--file-retries') + 1], '0')
+        self.assertNotIn('--timeout', command)
+
+
     def test_windows_ucrt64_discovery_uses_the_same_git_installation_root(self):
         """Portable path-walking contract; actual Windows execution is separate."""
         spec = importlib.util.spec_from_file_location('native_tests_ucrt64_shell', SCRIPT)
