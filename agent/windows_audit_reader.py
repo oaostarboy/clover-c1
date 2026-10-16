@@ -77,8 +77,20 @@ def _api():
     kernel.GetFileInformationByHandleEx.restype = w.BOOL
     kernel.ReadFile.argtypes = [w.HANDLE, w.LPVOID, w.DWORD, c.POINTER(w.DWORD), w.LPVOID]
     kernel.ReadFile.restype = w.BOOL
+    kernel.QueryDosDeviceW.argtypes = [w.LPCWSTR, w.LPWSTR, w.DWORD]
+    kernel.QueryDosDeviceW.restype = w.DWORD
 
     class Api:
+        def volume_root(self, drive):
+            target = c.create_unicode_buffer(32768)
+            if not kernel.QueryDosDeviceW(drive[:2], target, len(target)):
+                raise c.WinError(c.get_last_error())
+            # Bootstrap only the kernel volume device, never a SUBST directory,
+            # network redirector, DOS alias chain or caller-supplied namespace.
+            if not re.fullmatch(r'\\Device\\HarddiskVolume[0-9]+', target.value, re.I):
+                raise ValueError('audit drive is not a direct local volume')
+            return target.value + '\\'
+
         def open(self, parent, part, directory):
             buf = c.create_unicode_buffer(part)
             length = len(part.encode('utf-16-le'))
@@ -130,7 +142,7 @@ def read_bytes(project: str, name: str, limit: int) -> bytes:
     api = _api()
     handles = []
     try:
-        handle = api.open(None, '\\??\\' + root, True)
+        handle = api.open(None, api.volume_root(root), True)
         handles.append(handle)
         directories = [(handle, api.snapshot(handle, True))]
         for part in parts[:-1]:
