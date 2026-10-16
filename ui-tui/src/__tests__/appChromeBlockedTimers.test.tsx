@@ -284,6 +284,10 @@ describe('status-chrome timers under an occluding overlay', () => {
     // Regression guard for the naive fix: an early `return` that pauses the
     // interval but never re-seeds `now` leaves SessionDuration and IdleSince
     // frozen at the instant the overlay opened.
+    // Do not let a later periodic tick heal a missing on-reveal re-seed while
+    // we await React's actual commit. Keep recording both registrations, but
+    // make their backend inert for this one assertion.
+    intervalSpy.mockImplementation(() => 0 as unknown as ReturnType<typeof setInterval>)
     patchOverlayState({ sessions: true })
 
     const rule = mount(idleProps)
@@ -295,17 +299,20 @@ describe('status-chrome timers under an occluding overlay', () => {
     nowSpy.mockReturnValue(T0 + 300_000)
     rule.clear()
     resetOverlayState()
-    await flush()
 
-    const resumed = rule.output()
+    // Observe the real frame instead of assuming the scheduler commits within
+    // a 20ms sleep. Inert interval callbacks keep this an on-reveal assertion.
+    await vi.waitFor(() => {
+      const resumed = rule.output()
 
-    // Caught up to real elapsed time, not stuck on the pre-overlay values.
-    expect(resumed).toContain('6m 0s')
-    expect(resumed).toContain('✓ 5m 5s')
-    expect(resumed).not.toContain('1m 0s')
+      // Caught up to real elapsed time, not stuck on the pre-overlay values.
+      expect(resumed).toContain('6m 0s')
+      expect(resumed).toContain('✓ 5m 5s')
+      expect(resumed).not.toContain('1m 0s')
 
-    // …and the clocks are running again.
-    expect(oneSecondTimers(intervalSpy)).toBe(2)
+      // …and both clocks have registered their intervals again.
+      expect(oneSecondTimers(intervalSpy)).toBe(2)
+    })
   })
 
   it('tears the clocks down when an overlay opens over an already-running status rule', async () => {
