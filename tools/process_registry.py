@@ -407,6 +407,7 @@ class ProcessSession:
     completion_reason: str = "exited"           # exited|killed|lost|failed_start|already_exited
     termination_source: str = ""                # process.kill|kill_all|backend_lost|failed_start
     output_buffer: str = ""                     # Rolling output (last MAX_OUTPUT_CHARS)
+    output_truncated: bool = False               # True once older output was discarded
     max_output_chars: int = MAX_OUTPUT_CHARS
     detached: bool = False                      # True if recovered from crash (no pipe)
     pid_scope: str = "host"                     # "host" for local/PTY PIDs, "sandbox" for env-local PIDs
@@ -481,6 +482,7 @@ class ProcessSession:
     def _append_locked(self, text: str) -> None:
         self.output_buffer += text
         if len(self.output_buffer) > self.max_output_chars:
+            self.output_truncated = True
             self.output_buffer = self.output_buffer[-self.max_output_chars:]
 
     def mark_exited(self, exit_code, reason: str = "exited", source: str = "") -> None:
@@ -1799,13 +1801,18 @@ class ProcessRegistry:
 
         if was_running and session.notify_on_complete:
             from tools.ansi_strip import strip_ansi
+            from clover_cli.config import get_clover_home
             with session._lock:
                 tail = session.output_buffer[-2000:]
+                truncated = session.output_truncated or len(session.output_buffer) > 2000
             output_tail = strip_ansi(tail) if tail else ""
             notification = {
                 "type": "completion",
                 "session_id": session.id,
                 "session_key": session.session_key,
+                "parent_session_id": session.parent_session_id,
+                "origin_clover_home": str(get_clover_home().resolve()),
+                "output_truncated": truncated,
                 "task_id": session.task_id,
                 "command": session.command,
                 "exit_code": session.exit_code,
@@ -3593,6 +3600,12 @@ def format_process_notification(evt: dict) -> "str | None":
                 "delegation's live transcript for full output)\n"
                 + _out[-600:]
             )
+    if "council/runs/" in str(_out).lower() or "council_report=" in str(_out).lower():
+        text += (
+            "If the council result card was already delivered, do not repeat "
+            "or summarize the council answer; report only new process-specific "
+            "findings.\n"
+        )
     text += (
         f"Command: {_cmd}\n"
         f"Output:\n{_out}\n"

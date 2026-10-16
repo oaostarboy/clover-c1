@@ -29129,6 +29129,25 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         self, synth_text: str, evt: dict,
     ) -> Optional[bool]:
         """Fan in concurrent process completions that share one conversation."""
+        if evt.get("type") == "completion":
+            try:
+                from clover_cli.config import get_clover_home
+                from gateway.council_context import should_consume_council_check
+                from tools.process_registry import process_registry
+
+                if should_consume_council_check(
+                    evt, home=get_clover_home(), registry=process_registry,
+                ):
+                    logger.info(
+                        "Consumed verified council route-check completion %s; "
+                        "the council card already owns the user-facing result",
+                        evt.get("session_id"),
+                    )
+                    return True
+            except Exception:
+                # Classification is deliberately fail-open: uncertainty keeps
+                # the normal completion notification path intact.
+                logger.debug("Council completion classifier failed open", exc_info=True)
         # Some unit tests construct GatewayRunner with object.__new__.  Keep the
         # batching seam lazy so those focused lifecycle tests remain valid.
         if not hasattr(self, "_completion_notification_batches"):
@@ -29520,6 +29539,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 if agent_notify and not _pr_check.is_completion_consumed(session_id):
                     from agent.redact import redact_terminal_output
                     from tools.ansi_strip import strip_ansi
+                    from clover_cli.config import get_clover_home
                     _command = getattr(session, "command", "") or ""
                     _raw = strip_ansi(session.output_buffer) if session.output_buffer else ""
                     _raw = redact_terminal_output(_raw, _command)
@@ -29554,6 +29574,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         "completion_reason": getattr(session, "completion_reason", "exited"),
                         "termination_source": getattr(session, "termination_source", ""),
                         "output": _out,
+                        "origin_clover_home": str(get_clover_home().resolve()),
+                        "output_truncated": bool(
+                            getattr(session, "output_truncated", False)
+                            or len(_raw) > _LIMIT
+                        ),
                         # Spawning conversation's session-db id (stamped at
                         # spawn time in terminal_tool). Lets the delivery
                         # pre-flight drop this completion when the user closed
