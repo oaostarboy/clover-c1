@@ -123,6 +123,13 @@ for _win_var in USERPROFILE HOMEDRIVE HOMEPATH LOCALAPPDATA APPDATA SYSTEMROOT T
   fi
 done
 
+# PowerShell's module location is also a Windows runtime dependency. Python
+# normalizes Windows environment keys to uppercase; Git Bash preserves case.
+# Forward that single OS-provided location value, never an environment glob.
+if [ -n "${PSModulePath:-${PSMODULEPATH:-}}" ]; then
+  WIN_ENV+=("PSModulePath=${PSModulePath:-${PSMODULEPATH}}")
+fi
+
 # ── Test-runner knobs (computed before we drop env) ────────────────────────
 # The runner's own documented environment knobs must survive the hermetic
 # `env -i` below, or they are silent no-ops for anyone invoking this script:
