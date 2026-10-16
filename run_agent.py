@@ -3370,6 +3370,11 @@ class AIAgent:
         self._human_ingress_stop_generation = int(getattr(self, "_human_ingress_stop_generation", 0)) + 1
         if hard_cancel:
             self._orchestration_stop_epoch = int(getattr(self, '_orchestration_stop_epoch', 0)) + 1
+            from agent.delegation_ownership import revoke_current_jobs
+            try:
+                revoke_current_jobs(self)
+            except Exception:
+                logger.warning('Could not persist scoped orchestration revocation; the current request remains stopped.', exc_info=True)
             checkpoint = getattr(self, "_delegation_checkpoint", None)
             if checkpoint is not None:
                 checkpoint.revoke_current_followthrough()
@@ -8419,7 +8424,7 @@ class AIAgent:
         invocation paths (concurrent, sequential, inline).
         """
         from tools.delegate_tool import (
-            _strip_model_hidden_task_fields,
+            _model_route_tasks,
             delegate_task as _delegate_task,
         )
         # Delegations from the top-level MODEL always run in the background —
@@ -8437,7 +8442,7 @@ class AIAgent:
         return _delegate_task(
             goal=function_args.get("goal"),
             context=function_args.get("context"),
-            tasks=_strip_model_hidden_task_fields(function_args.get("tasks")),
+            tasks=_model_route_tasks(function_args),
             max_iterations=function_args.get("max_iterations"),
             role=function_args.get("role"),
             background=(not _is_subagent),

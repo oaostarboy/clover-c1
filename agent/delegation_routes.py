@@ -27,6 +27,8 @@ def route_catalog(cfg: dict) -> dict[str, dict[str, str]]:
 def resolve_named_route(task: dict, cfg: dict, parent: Any) -> dict | None:
     selector = task.get('route')
     account = task.get('account')
+    if selector is not None and (not isinstance(selector, str) or not _SELECTOR.fullmatch(selector)):
+        raise ValueError('Invalid named delegation route; no child was started.')
     if account is not None or (isinstance(cfg.get('routes'), dict)
                                and isinstance(cfg['routes'].get(selector), dict)
                                and cfg['routes'][selector].get('account') is not None):
@@ -35,12 +37,14 @@ def resolve_named_route(task: dict, cfg: dict, parent: Any) -> dict | None:
                          'an email in task text or route metadata is not account proof.')
     if selector is None:
         return None
-    if not isinstance(selector, str) or not _SELECTOR.fullmatch(selector):
-        raise ValueError('Invalid named delegation route; no child was started.')
+
     route = route_catalog(cfg).get(selector)
     if route is None:
         raise ValueError('Requested named delegation route is not configured in delegation.routes; '
                          'no child was started and no default model was substituted.')
+    expected = task.get('_route_binding')
+    if expected is not None and expected != {'route': selector, **route}:
+        raise ValueError('The original exact named route changed; no resumed child was started.')
     if task.get('tier'):
         raise ValueError('An exact named route cannot also request a fallback tier.')
     from tools.delegate_tool import _resolve_delegation_credentials

@@ -78,7 +78,7 @@ def build_resume_tasks(record: Dict[str, Any], indexes: List[int]) -> List[Dict[
         steps = t.get("steps") or (single_handoff.get("steps") if len(stored) == 1 else None)
         if steps:
             task["steps"] = steps
-        for key in ("tier", "output_schema"):
+        for key in ("tier", "output_schema", "route", "account", "_route_binding"):
             if t.get(key):
                 task[key] = t[key]
         tasks.append(task)

@@ -224,7 +224,7 @@ def _capture_identity(agent: Any) -> Dict[str, Any]:
     ``request_id`` is kept for the record but is not matched on: a dispatch
     made in an integration window is attributed to the request it answers.
     """
-    identity: Dict[str, Any] = {}
+    identity: Dict[str, Any] = {'stop_epoch': int(getattr(agent, '_orchestration_stop_epoch', 0))}
     try:
         turn_id = str(getattr(agent, "_current_turn_id", "") or "")
         if turn_id:
@@ -646,7 +646,7 @@ def _follow_through_for(
     task = state.verdict.tasks[nxt]
     if len(task.goal) > 2000:
         return None
-    return [{"goal": task.goal, "context": _helper_context(state, nxt, 1, "")}]
+    return [{"goal": task.goal, "context": _helper_context(state, nxt, 1, ""), **_task_route_args(task)}]
 
 
 # ── the hand-off ───────────────────────────────────────────────────────────
@@ -1063,7 +1063,8 @@ def _receipts_work(receipts: List["_fl.DispatchReceipt"]) -> str:
 
 
 def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any]:
-    if _stop_pending(agent):
+    if (_stop_pending(agent) or state.identity.get('stop_epoch', 0)
+            != int(getattr(agent, '_orchestration_stop_epoch', 0))):
         return {'ok': False, 'reason': 'Request interrupted; no automatic handoff started.'}
     if any(t.existing_delegation_id for t in state.verdict.tasks):
         return _dispatch_unclaimed(agent, state, task_id)
@@ -1075,7 +1076,8 @@ def _dispatch(agent: Any, state: RouterTurn, task_id: str = "") -> Dict[str, Any
         if owner:
             return {'ok': True, 'delegation_id': owner['delegation_id'], 'subagent_ids': [],
                     'later': [], 'next_stage': None, 'runtime_stages': False,
-                    'by_runtime': True, 'reused_owner': True, 'actual_model': owner['model']}
+                    'by_runtime': True, 'reused_owner': True, 'actual_model': ', '.join(owner['runtime_models']) or None,
+                    'owner_state': owner['state']}
         return {'ok': False, 'reason': 'This exact request already has a launch claim ('
                 + str(claim.get('state') or 'unknown') + '); no second helper was started.'}
     result: Dict[str, Any] = {'ok': False}
@@ -1110,9 +1112,12 @@ def _dispatch_unclaimed(agent: Any, state: RouterTurn, task_id: str = "") -> Dic
         owner = existing_owner(agent, existing[0], task_id)
         if owner is None:
             return {'ok': False, 'reason': 'Referenced launch owner is not active in this profile/session/project/lifecycle; no replacement was started.'}
+        if any(t.existing_job_epoch != owner['job_epoch'] for t in stage_tasks):
+            return {'ok': False, 'reason': 'Referenced launch lifecycle is missing or stale; no duplicate/replacement was started.'}
         return {'ok': True, 'delegation_id': existing[0], 'subagent_ids': [],
                 'later': [], 'next_stage': None, 'runtime_stages': False,
-                'by_runtime': True, 'reused_owner': True, 'actual_model': owner['model']}
+                'by_runtime': True, 'reused_owner': True, 'actual_model': ', '.join(owner['runtime_models']) or None,
+                'owner_state': owner['state']}
     handoff = _runtime_handoff(
         verdict, state.user_message, agent=agent, history=state.history, stage_tasks=stage_tasks,
     )
@@ -1144,6 +1149,10 @@ def _dispatch_unclaimed(agent: Any, state: RouterTurn, task_id: str = "") -> Dic
     args["handoff"] = handoff
     if notes_id:
         args[_RESERVED_ID_ARG] = notes_id
+    if (_stop_pending(agent) or state.identity.get('stop_epoch', 0)
+            != int(getattr(agent, '_orchestration_stop_epoch', 0))):
+        _drop_notes(state, notes_id)
+        return {'ok': False, 'reason': 'Stop revoked this request during launch preparation; no child was started.'}
     try:
         raw = dispatch_generated_tool(agent, "delegate_task", args, task_id=task_id)
     except Exception as exc:
@@ -1208,7 +1217,7 @@ def _handoff_from(
 def _handoff_text(info: Dict[str, Any]) -> str:
     if info.get('reused_owner'):
         return runtime_note(
-            f"Existing launch owner {info['delegation_id']} is still active (actual model: {info.get('actual_model') or 'unverified'}). "
+            f"Existing launch owner {info['delegation_id']} is {info.get('owner_state') or 'active'} (runtime child model: {info.get('actual_model') or 'not started/verified'}). "
             "No new helper was launched. A setup operator is not proof the requested adviser has started. "
             "Inspect/report the original job's verified status and answer the user's correction; do not start a second setup job."
         )
@@ -1400,6 +1409,7 @@ def _bind_plan(
     tasks: List[Dict[str, Any]], stages: List[Dict[str, Any]], total: int,
     notes_path: str = "", excerpt: str = "",
     hold: Optional[Dict[str, Any]] = None, runtime_policy: Optional[Dict[str, Any]] = None,
+    route_bindings: Optional[Dict[str, Any]] = None, owner_scope: Optional[Dict[str, str]] = None,
 ) -> bool:
     """Persist the remaining stages on the row of the stage just dispatched.
 
@@ -1414,6 +1424,11 @@ def _bind_plan(
         from tools.async_delegation import bind_continuation_plan
 
         now = time.time()
+        from agent.delegation_routes import route_catalog
+        from tools.delegate_tool import _load_config
+        catalog = route_catalog(_load_config())
+        bindings = ({t['route']: catalog.get(t['route']) for t in tasks if t.get('route')}
+                    if route_bindings is None else route_bindings)
         plan = {
             "version": 1, "kind": PLAN_KIND, "delegation_id": delegation_id,
             "request_id": f"router:{delegation_id}", "generation": 0,
@@ -1423,6 +1438,7 @@ def _bind_plan(
             "consumed": 0, "session_id": session_id, "request": request,
             "reason": reason, "tasks": tasks, "total_stages": total,
             "stages": stages, "digests": [stage_digest(st) for st in stages],
+            "route_bindings": bindings, "owner_scope": owner_scope,
         }
         if hold:
             # Runtime-written only (agent.continuation_bridge.select_hold): the
@@ -1487,6 +1503,7 @@ def _adopt(agent: Any, state: RouterTurn) -> None:
         from agent import continuation_bridge as _bridge
 
         hold = _bridge.select_hold(agent)
+        from agent.delegation_ownership import scope_for
         bound = _bind_plan(
             did, session_id=str(getattr(agent, "session_id", "") or ""),
             request=goal_text(state.user_message)[:REQUEST_CHARS],
@@ -1494,6 +1511,7 @@ def _adopt(agent: Any, state: RouterTurn) -> None:
             stages=remaining, total=len(stages), notes_path=state.notes_path,
             excerpt=_excerpt_for(state), hold=hold,
             runtime_policy=_bridge.runtime_fingerprint(agent) if hold else None,
+            owner_scope=scope_for(agent),
         )
         if bound and hold:
             from tools import async_delegation as _ad
@@ -1600,6 +1618,25 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
     from tools import async_delegation as ad
 
     plan = ad.get_continuation_plan(delegation_id)
+    with ad._records_lock:
+        revoked = bool((ad._records.get(delegation_id) or {}).get('_ownership_revoked'))
+    if revoked:
+        return _note('Stop revoked this exact job; its next stage was NOT started.'), None
+    if isinstance(plan, dict) and not plan.get('cancelled') and str(plan.get('session_id') or '') == str(getattr(agent, 'session_id', '') or ''):
+        from agent.delegation_routes import route_catalog
+        from agent.delegation_ownership import scope_for
+        from tools.delegate_tool import _load_config
+        catalog = route_catalog(_load_config())
+        bindings = plan.get('route_bindings') or {}
+        changed = any(catalog.get(name) != route for name, route in bindings.items())
+        current_scope = scope_for(agent)
+        same_lifecycle = all(plan.get('owner_scope', {}).get(k) == current_scope.get(k)
+                             for k in ('profile_home', 'session_id', 'session_key')) if plan.get('owner_scope') else True
+        if (changed or not same_lifecycle
+                or _stop_pending(agent)):
+            ad.revoke_continuation_plan(delegation_id)
+            return _note('The next stage was NOT started: its exact route or owning lifecycle changed, or Stop revoked it. '
+                         'Preserve the completed artifact and report this blocked state; do not substitute a model/account.'), None
     if isinstance(plan, dict) and isinstance(plan.get("hold"), dict):
         from agent.delegation_followthrough import plan_is_live
         from agent import continuation_bridge as bridge
@@ -1719,7 +1756,9 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
     from agent.tool_executor import dispatch_generated_tool
 
     try:
-        raw = dispatch_generated_tool(agent, "delegate_task", args, task_id="")
+        from agent.delegation_ownership import original_workspace
+        with original_workspace(agent, plan.get('owner_scope')):
+            raw = dispatch_generated_tool(agent, "delegate_task", args, task_id="")
         data = _decode(raw)
     except Exception as exc:
         logger.warning("router stages: dispatch raised: %s", exc)
@@ -1753,6 +1792,7 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
         request=str(plan.get("request") or ""), reason=str(plan.get("reason") or ""),
         tasks=tasks, stages=remaining, total=total,
         excerpt=str(plan.get("excerpt") or ""),
+        route_bindings=plan.get('route_bindings'), owner_scope=plan.get('owner_scope'),
     ) if remaining else False
     goals = [verdict.tasks[i].goal for i in index]
     ids = [str(s) for s in (data.get("subagent_ids") or []) if s]

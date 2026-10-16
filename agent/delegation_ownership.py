@@ -11,7 +11,36 @@ import os
 import json
 import time
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
+
+_continuation_workspace: ContextVar[tuple[str, str] | None] = ContextVar('owned_continuation_workspace', default=None)
+
+
+def owned_workspace(agent: Any) -> str | None:
+    binding = _continuation_workspace.get()
+    if binding and binding[0] == str(getattr(agent, 'session_id', '') or ''):
+        return binding[1]
+    return None
+
+
+@contextmanager
+def original_workspace(agent: Any, scope: dict | None):
+    """Only the runtime's claimed stage uses its original admitted project."""
+    scope = scope or {}
+    from clover_constants import get_clover_home
+    if scope and (scope.get('profile_home') != str(get_clover_home().resolve())
+                  or scope.get('session_id') != str(getattr(agent, 'session_id', '') or '')):
+        raise ValueError('Original stage workspace belongs to a different profile/session.')
+    if scope.get('workspace') and not os.path.isdir(scope['workspace']):
+        raise ValueError('Original stage project is no longer available; no replacement project was selected.')
+    token = _continuation_workspace.set((str(getattr(agent, 'session_id', '') or ''), scope['workspace'])
+                                        if scope.get('workspace') else None)
+    try:
+        yield
+    finally:
+        _continuation_workspace.reset(token)
 
 
 def scope_for(agent: Any, task_id: str = '') -> dict:
@@ -21,21 +50,23 @@ def scope_for(agent: Any, task_id: str = '') -> dict:
     _, cwd = _capture_parent_workspace(agent, task_id)
     return {'profile_home': str(get_clover_home().resolve()),
             'session_id': str(getattr(agent, 'session_id', '') or ''),
-            'stop_epoch': str(getattr(agent, '_orchestration_stop_epoch', 0)),
             'session_key': get_current_session_key(default='') or '',
             'workspace': os.path.realpath(cwd) if cwd else ''}
 
 
 def active_owned_jobs(agent: Any, task_id: str = '') -> list[dict]:
     from tools import async_delegation as ad
+    from tools.delegate_tool import list_active_subagents
     scope = scope_for(agent, task_id)
     if not scope['session_id'] or not scope['workspace'] or getattr(agent, '_interrupt_requested', False) is True:
         return []
     with ad._records_lock:
         candidates = [dict(r) for r in ad._records.values()
                       if r.get('owner_scope') == scope and r.get('job_epoch')
-                      and r.get('status') == 'running' and not r.get('_interrupted_at')]
+                      and r.get('status') == 'running' and not r.get('_interrupted_at')
+                      and not r.get('_ownership_revoked')]
     found = []
+    children = list_active_subagents()
     for record in candidates:
         did = record['delegation_id']
         row = ad.get_durable_delegation(did)
@@ -45,7 +76,9 @@ def active_owned_jobs(agent: Any, task_id: str = '') -> list[dict]:
         found.append({'delegation_id': did, 'job_epoch': record['job_epoch'],
                       'goals': record.get('goals') or [record.get('goal')],
                       'requested_routes': record.get('requested_routes') or [],
-                      'model': record.get('model'), 'state': 'running',
+                      'model': record.get('model'),
+                      'runtime_models': [c['model'] for c in children if c.get('delegation_id') == did and c.get('model')],
+                      'state': 'running' if any(c.get('delegation_id') == did for c in children) else 'preparing',
                       'owner_scope': scope})
     return found
 
@@ -53,6 +86,32 @@ def active_owned_jobs(agent: Any, task_id: str = '') -> list[dict]:
 def existing_owner(agent: Any, delegation_id: str, task_id: str = '') -> dict | None:
     return next((r for r in active_owned_jobs(agent, task_id)
                  if r['delegation_id'] == delegation_id), None)
+
+
+def revoke_current_jobs(agent: Any) -> None:
+    """Stop invalidates only this turn/claimed completion's jobs, not siblings.
+
+    Tombstone synchronously before cleanup; a fresh agent object cannot revive
+    the live record by clearing its interrupt flag. Restart descriptors are
+    removed too. This does not terminate unrelated productive workers.
+    """
+    from tools import async_delegation as ad, delegation_inflight
+    from clover_constants import get_clover_home
+    session = str(getattr(agent, 'session_id', '') or '')
+    profile = str(get_clover_home().resolve())
+    turn = str(getattr(agent, '_current_turn_id', '') or '')
+    completions = set(getattr(agent, '_router_completion_ids', ()) or ())
+    with ad._records_lock:
+        ids = []
+        for did, record in ad._records.items():
+            owner = record.get('owner_scope') or {}
+            if (owner.get('profile_home') == profile and owner.get('session_id') == session
+                    and ((turn and record.get('request_turn_id') == turn) or did in completions)):
+                record['_ownership_revoked'] = True
+                ids.append(did)
+    for did in ids:
+        ad.revoke_continuation_plan(did)
+        delegation_inflight.remove_record(did)
 
 
 def claim_dispatch(agent: Any, request_id: str, task_id: str = '') -> tuple[str, dict]:

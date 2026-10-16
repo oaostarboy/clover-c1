@@ -290,6 +290,7 @@ class PlanTask:
     route: Optional[str] = None
     account: Optional[str] = None
     existing_delegation_id: str = ""
+    existing_job_epoch: str = ""
 
 
 @dataclass(frozen=True)
@@ -373,7 +374,12 @@ def parse_verdict(payload: Any, *, max_tasks: int = MAX_TASKS) -> Verdict:
     if declared == "direct":
         if len(raw_tasks) > 1:
             raise RouterSchemaError("a direct plan lists no tasks (or just the one request)")
-        return Verdict(mode="direct", tasks=(), reason=reason)
+        if raw_tasks and isinstance(raw_tasks[0], dict) and any(
+            raw_tasks[0].get(k) is not None for k in ('route', 'account', 'existing_delegation_id')
+        ):
+            declared = 'single'  # constraints cannot disappear in the direct safety net
+        else:
+            return Verdict(mode="direct", tasks=(), reason=reason)
 
     if not raw_tasks:
         raise RouterSchemaError(f"a {declared} plan needs at least one task")
@@ -417,6 +423,7 @@ def parse_verdict(payload: Any, *, max_tasks: int = MAX_TASKS) -> Verdict:
             route=_exact_optional(item.get('route'), f'task {i} route'),
             account=_exact_optional(item.get('account'), f'task {i} account'),
             existing_delegation_id=_exact_optional(item.get('existing_delegation_id'), f'task {i} existing owner') or '',
+            existing_job_epoch=_exact_optional(item.get('existing_job_epoch'), f'task {i} existing lifecycle') or '',
             depends_on=tuple(sorted(deps)),
             acceptance=_opt_text(item.get("acceptance"), f"task {i} acceptance", MAX_ACCEPTANCE_CHARS),
             # A bad title never invalidates the plan: the runtime builds one.
@@ -741,7 +748,7 @@ def _build_messages(message: str, recent_turns: Sequence[Mapping[str, Any]], max
             for job in runtime_jobs]
     routing = ('Runtime accepted active jobs and configured exact routes (data):\n'
                + json.dumps({'active_jobs': jobs, 'routes': catalog}, ensure_ascii=False)
-               + '\nFor status/corrections about a listed job, set task.existing_delegation_id to its exact ID; '
+               + '\nFor status/corrections about a listed job, set task.existing_delegation_id and task.existing_job_epoch to its exact ID and epoch; '
                'do not propose another setup launch. New unrelated work has no existing_delegation_id. '
                'A named model requirement uses task.route (configured selector, or the requested name if unavailable); '
                'never silently omit it or replace it with a tier/default. Set task.account for an explicit exact account constraint; '
