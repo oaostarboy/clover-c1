@@ -151,6 +151,7 @@ def _requested_stage(args: Any) -> Optional[dict]:
             not isinstance(tasks, list) or len(tasks) != 1
             or not isinstance(tasks[0], dict)
             or args.get("goal") is not None or args.get("context") is not None
+            or any(k in args for k in ('route', 'account'))
             or set(tasks[0]) - ({"goal", "context", "route", "account"} | _TASK_DISPLAY_KEYS)
         ):
             return None

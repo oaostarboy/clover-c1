@@ -3369,7 +3369,9 @@ class AIAgent:
         # clear_interrupt must never revive a stopped provenance capability.
         self._human_ingress_stop_generation = int(getattr(self, "_human_ingress_stop_generation", 0)) + 1
         if hard_cancel:
-            self._orchestration_stop_epoch = int(getattr(self, '_orchestration_stop_epoch', 0)) + 1
+            from tools.async_delegation import _records_lock as _orchestration_acceptance_lock
+            with _orchestration_acceptance_lock:
+                self._orchestration_stop_epoch = int(getattr(self, '_orchestration_stop_epoch', 0)) + 1
             from agent.delegation_ownership import revoke_current_jobs
             try:
                 revoke_current_jobs(self)
@@ -8425,8 +8427,12 @@ class AIAgent:
         """
         from tools.delegate_tool import (
             _model_route_tasks,
+            _model_route_error,
             delegate_task as _delegate_task,
         )
+        route_error = _model_route_error(function_args)
+        if route_error:
+            return route_error
         # Delegations from the top-level MODEL always run in the background —
         # the model does not get to choose. delegate_task returns immediately
         # with a handle (one per task) and each subagent's result re-enters the

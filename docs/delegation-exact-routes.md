@@ -56,7 +56,14 @@ Competing automatic dispatches claim one exact runtime request atomically in
 SQLite. A preparing claim is not an accepted child. Independent new requests,
 projects, sessions and explicit parallel tasks remain independent. Stop revokes
 only the relevant request/owned completion and fences in-flight preparation;
-clearing an interrupt flag does not revive a stopped plan. Already-owned staged
+clearing an interrupt flag does not revive a stopped plan. Runtime-only admission
+carries the original Stop generation, exact payload and named-route snapshot
+through handoff preparation and the async executor's acceptance gate; tool
+arguments cannot manufacture that authority. Task-specific Stop also revokes
+that owner's adoption and follow-through, without stopping independent jobs.
+Later-stage existing-owner references keep their exact ID/epoch and may only
+reuse a still-active matching owner; invalid references never create replacements.
+Already-owned staged
 work retains its original project even if another foreground turn changes the
 chat's current folder. User-facing answers and final delivery remain separate
 from job acceptance.

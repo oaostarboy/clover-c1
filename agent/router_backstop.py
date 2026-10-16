@@ -188,6 +188,7 @@ class RouterTurn:
     title: str = ""
     voiced: bool = False
     job_identity: str = field(default_factory=lambda: uuid.uuid4().hex)
+    route_bindings: Optional[Dict[str, Any]] = None
     # The root's own line for a dispatch that has no ``handoff`` summary (no
     # card part to carry it): ``(delegation_id, line)``; ``_ack_text`` sends it
     # as the turn's reply.  Empty when the voice-line call failed.
@@ -337,6 +338,10 @@ def begin(
             identity=_capture_identity(agent),
             planned=not direct, direct=direct,
         )
+        from agent.delegation_routes import route_catalog
+        from tools.delegate_tool import _load_config
+        catalog = route_catalog(_load_config())
+        turn.route_bindings = {t.route: catalog.get(t.route) for t in turn.verdict.tasks if t.route}
         if getattr(settings, "handoff_notes", True):
             turn.work_log = _notes.WorkLog()
         try:
@@ -644,6 +649,8 @@ def _follow_through_for(
         return None
     nxt = stages[1][0]
     task = state.verdict.tasks[nxt]
+    if task.existing_delegation_id:
+        return None  # status ownership is not a next-child spawn payload
     if len(task.goal) > 2000:
         return None
     return [{"goal": task.goal, "context": _helper_context(state, nxt, 1, ""), **_task_route_args(task)}]
@@ -1154,7 +1161,10 @@ def _dispatch_unclaimed(agent: Any, state: RouterTurn, task_id: str = "") -> Dic
         _drop_notes(state, notes_id)
         return {'ok': False, 'reason': 'Stop revoked this request during launch preparation; no child was started.'}
     try:
-        raw = dispatch_generated_tool(agent, "delegate_task", args, task_id=task_id)
+        from agent.delegation_ownership import admitted_dispatch
+        with admitted_dispatch(agent, stop_epoch=state.identity.get('stop_epoch', 0),
+                               tasks=args['tasks'], route_bindings=state.route_bindings or {}):
+            raw = dispatch_generated_tool(agent, "delegate_task", args, task_id=task_id)
     except Exception as exc:
         logger.warning("router backstop dispatch raised: %s", exc)
         _drop_notes(state, notes_id)
@@ -1399,7 +1409,9 @@ def _task_route_args(task: PlanTask) -> Dict[str, str]:
 def _plan_tasks(verdict: PlanVerdict) -> List[Dict[str, Any]]:
     return [
         {"goal": t.goal, "depends_on": list(t.depends_on), "acceptance": t.acceptance,
-         "title": str(getattr(t, "title", "") or ""), **_task_route_args(t)}
+         "title": str(getattr(t, "title", "") or ""), **_task_route_args(t),
+         **({'existing_delegation_id': t.existing_delegation_id,
+             'existing_job_epoch': t.existing_job_epoch} if t.existing_delegation_id else {})}
         for t in verdict.tasks
     ]
 
@@ -1512,6 +1524,7 @@ def _adopt(agent: Any, state: RouterTurn) -> None:
             excerpt=_excerpt_for(state), hold=hold,
             runtime_policy=_bridge.runtime_fingerprint(agent) if hold else None,
             owner_scope=scope_for(agent),
+            route_bindings=state.route_bindings,
         )
         if bound and hold:
             from tools import async_delegation as _ad
@@ -1618,6 +1631,7 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
     from tools import async_delegation as ad
 
     plan = ad.get_continuation_plan(delegation_id)
+    admitted_stop_epoch = int(getattr(agent, '_orchestration_stop_epoch', 0))
     with ad._records_lock:
         revoked = bool((ad._records.get(delegation_id) or {}).get('_ownership_revoked'))
     if revoked:
@@ -1721,6 +1735,8 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
                     acceptance=str(t.get("acceptance") or ""),
                     title=str(t.get("title") or ""),
                     route=t.get('route'), account=t.get('account'),
+                    existing_delegation_id=str(t.get('existing_delegation_id') or ''),
+                    existing_job_epoch=str(t.get('existing_job_epoch') or ''),
                 )
                 for t in tasks
             ),
@@ -1732,6 +1748,22 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
             excerpt=str(plan.get("excerpt") or ""),
         )
         findings = _stage_findings(row)
+        existing = [verdict.tasks[i] for i in index if verdict.tasks[i].existing_delegation_id]
+        if existing:
+            # A status reference can never turn into fresh spawn authority.
+            from agent.delegation_ownership import existing_owner, original_workspace
+            with original_workspace(agent, plan.get('owner_scope')):
+                owner = existing_owner(agent, existing[0].existing_delegation_id)
+            if (len(existing) != len(index) or owner is None
+                    or any(t.existing_delegation_id != owner['delegation_id']
+                           or t.existing_job_epoch != owner['job_epoch'] for t in existing)):
+                return _note('The next stage refers to a stale, cancelled or foreign existing launch owner; '
+                             'no new helper/replacement was started.'), None
+            info = {'delegation_id': owner['delegation_id'], 'subagent_ids': [], 'later': [],
+                    'next_stage': None, 'runtime_stages': False, 'by_runtime': True, 'reused_owner': True,
+                    'actual_model': ', '.join(owner['runtime_models']) or None, 'owner_state': owner['state'],
+                    'verdict': verdict, 'request': str(plan.get('request') or '')}
+            return _handoff_text(info), info
         args = {"tasks": [
             {"goal": verdict.tasks[i].goal,
              "context": _helper_context(pseudo, i, number, findings),
@@ -1756,8 +1788,11 @@ def _continue_one(agent: Any, delegation_id: str, settings: RouterSettings):
     from agent.tool_executor import dispatch_generated_tool
 
     try:
-        from agent.delegation_ownership import original_workspace
-        with original_workspace(agent, plan.get('owner_scope')):
+        from agent.delegation_ownership import original_workspace, admitted_dispatch
+        with original_workspace(agent, plan.get('owner_scope')), admitted_dispatch(
+            agent, stop_epoch=admitted_stop_epoch, tasks=args['tasks'],
+            route_bindings=plan.get('route_bindings') or {}, plan=plan,
+        ):
             raw = dispatch_generated_tool(agent, "delegate_task", args, task_id="")
         data = _decode(raw)
     except Exception as exc:

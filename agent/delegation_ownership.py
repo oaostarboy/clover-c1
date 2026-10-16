@@ -13,9 +13,71 @@ import time
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
+import copy
 from typing import Any
 
 _continuation_workspace: ContextVar[tuple[str, str] | None] = ContextVar('owned_continuation_workspace', default=None)
+_dispatch_admission: ContextVar[Any] = ContextVar('owned_dispatch_admission', default=None)
+
+
+def _task_payload(tasks: list[dict]) -> list[dict]:
+    return [{k: t[k] for k in ('goal', 'context', 'route', 'account') if k in t} for t in tasks]
+
+
+@dataclass(frozen=True)
+class DispatchAdmission:
+    parent: Any
+    stop_epoch: int
+    task_digest: str
+    route_bindings: dict
+    plan_id: str = ''
+    plan_digest: str = ''
+
+    def memory_valid(self) -> bool:
+        # Called under async admission's record lock too: no DB/IO here.
+        from tools import async_delegation as ad
+        return (getattr(self.parent, '_interrupt_requested', False) is not True
+                and int(getattr(self.parent, '_orchestration_stop_epoch', 0)) == self.stop_epoch
+                and not (self.plan_id and (ad._records.get(self.plan_id) or {}).get('_ownership_revoked')))
+
+    def validate(self, agent: Any, tasks: list[dict], cfg: dict) -> None:
+        from agent.delegation_followthrough import stage_digest, plan_is_live
+        from agent.delegation_routes import route_catalog
+        from tools import async_delegation as ad
+        if agent is not self.parent or not self.memory_valid():
+            raise ValueError('The admitted dispatch was revoked by Stop; no child was started.')
+        if stage_digest({'tasks': _task_payload(tasks)}) != self.task_digest:
+            raise ValueError('The admitted task/route payload changed during preparation; no child was started.')
+        catalog = route_catalog(cfg)
+        if any(catalog.get(name) != binding for name, binding in self.route_bindings.items()):
+            raise ValueError('The admitted exact named route changed during preparation; no substitute was started.')
+        if self.plan_id:
+            plan = ad.get_continuation_plan(self.plan_id)
+            if (not isinstance(plan, dict) or not plan_is_live(plan) or stage_digest(plan) != self.plan_digest
+                    or self.plan_id not in ad.owned_receipts_ready((self.plan_id,))):
+                raise ValueError('The exact claimed continuation was revoked or changed; no child was started.')
+
+
+@contextmanager
+def admitted_dispatch(agent: Any, *, stop_epoch: int, tasks: list[dict], route_bindings: dict,
+                      plan: dict | None = None):
+    """Runtime-only admission; model arguments cannot manufacture or replace it."""
+    from agent.delegation_followthrough import stage_digest
+    claimed = {**plan, 'consumed': 1} if plan else None
+    admission = DispatchAdmission(agent, stop_epoch, stage_digest({'tasks': _task_payload(tasks)}),
+                                  copy.deepcopy(route_bindings), str(plan['delegation_id']) if plan else '',
+                                  stage_digest(claimed) if claimed else '')
+    token = _dispatch_admission.set(admission)
+    try:
+        yield admission
+    finally:
+        _dispatch_admission.reset(token)
+
+
+def dispatch_admission(agent: Any) -> DispatchAdmission | None:
+    admission = _dispatch_admission.get()
+    return admission if isinstance(admission, DispatchAdmission) and admission.parent is agent else None
 
 
 def owned_workspace(agent: Any) -> str | None:
@@ -86,6 +148,18 @@ def active_owned_jobs(agent: Any, task_id: str = '') -> list[dict]:
 def existing_owner(agent: Any, delegation_id: str, task_id: str = '') -> dict | None:
     return next((r for r in active_owned_jobs(agent, task_id)
                  if r['delegation_id'] == delegation_id), None)
+
+
+def revoke_owned_job(delegation_id: str) -> None:
+    """A trusted task-specific Stop revokes this batch, not sibling jobs."""
+    from tools import async_delegation as ad
+    with ad._records_lock:
+        record = ad._records.get(delegation_id)
+        if record is not None:
+            record['_ownership_revoked'] = True
+    ad.revoke_continuation_plan(delegation_id)
+    from tools.delegation_inflight import remove_record
+    remove_record(delegation_id)
 
 
 def revoke_current_jobs(agent: Any) -> None:

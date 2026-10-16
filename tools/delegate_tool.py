@@ -285,6 +285,10 @@ def interrupt_subagent(subagent_id: str) -> bool:
     try:
         if not request_hard_interrupt(agent, f"Interrupted via TUI ({subagent_id})"):
             return False
+        delegation_id = record.get('delegation_id')
+        if isinstance(delegation_id, str) and delegation_id:
+            from agent.delegation_ownership import revoke_owned_job
+            revoke_owned_job(delegation_id)
     except Exception as exc:
         logger.debug("interrupt_subagent(%s) failed: %s", subagent_id, exc)
         return False
@@ -4655,6 +4659,8 @@ def delegate_task(
     # Preflight the entire batch before constructing any child. A failed named
     # route must not fall through to the default or a cheaper tier.
     from agent.delegation_routes import resolve_named_route
+    from agent.delegation_ownership import dispatch_admission
+    _dispatch_admission = dispatch_admission(parent_agent)
     from agent.delegation_checkpoint import get_checkpoint
     _checkpoint = get_checkpoint(parent_agent)
     _expected_policy = _checkpoint.expected_followthrough_policy() if _checkpoint else None
@@ -4666,6 +4672,8 @@ def delegate_task(
         inherited_route_indexes = {i for i, t in enumerate(task_list) if not t.get('route')}
         task_list = [{**t, 'route': requested['route']} if not t.get('route') else t for t in task_list]
     try:
+        if _dispatch_admission is not None:
+            _dispatch_admission.validate(parent_agent, task_list, cfg)
         task_route_creds = [resolve_named_route(t, cfg, parent_agent) for t in task_list]
         if follow_through and len(task_list) > 1 and any(c is not None for c in task_route_creds):
             return tool_error('Mixed exact-route follow-through requires a staged plan with an explicit route for each stage; no child was started.')
@@ -5460,6 +5468,15 @@ def delegate_task(
             fanout_delivery=_fanout_mode,
         )
         try:
+            if _dispatch_admission is not None:
+                try:
+                    _dispatch_admission.validate(parent_agent, task_list, _load_config())
+                except ValueError as exc:
+                    _fg_limit.release_ack_part(_batch_delegation_id)
+                    _drop_inflight_record(_batch_delegation_id)
+                    for _bi, _bt, _built in children:
+                        _release_child_resources(_built, parent_agent)
+                    return tool_error(str(exc))
             if (getattr(parent_agent, '_interrupt_requested', False) is True or
                     _request_stop_epoch != int(getattr(parent_agent, '_orchestration_stop_epoch', 0))):
                 _fg_limit.release_ack_part(_batch_delegation_id)
@@ -5494,6 +5511,9 @@ def delegate_task(
                 ),
                 requested_routes=[(c or {}).get('requested_route', {}) for c in task_route_creds],
                 owner_scope=_owner_scope,
+                accept_guard=(_dispatch_admission.memory_valid if _dispatch_admission is not None else
+                              lambda: getattr(parent_agent, '_interrupt_requested', False) is not True and
+                              _request_stop_epoch == int(getattr(parent_agent, '_orchestration_stop_epoch', 0))),
                 straggler_notify=_straggler_notify,
             )
         except BaseException:
@@ -6619,6 +6639,13 @@ def _strip_model_hidden_task_fields(tasks: Any) -> Any:
     return stripped_tasks if changed else tasks
 
 
+def _model_route_error(args: dict) -> Optional[str]:
+    if args.get('tasks') and any(k in args for k in ('route', 'account')):
+        return tool_error('Exact route/account constraints must be inside each task when tasks is present; '
+                          'ambiguous mixed carriers were refused and no child was started.')
+    return None
+
+
 def _model_route_tasks(args: dict) -> Any:
     """Retain exact constraints in a legacy single-stage payload too."""
     tasks = _strip_model_hidden_task_fields(args.get('tasks'))
@@ -6631,7 +6658,7 @@ registry.register(
     name="delegate_task",
     toolset="delegation",
     schema=DELEGATE_TASK_SCHEMA,
-    handler=lambda args, **kw: delegate_task(
+    handler=lambda args, **kw: _model_route_error(args) or delegate_task(
         goal=args.get("goal"),
         context=args.get("context"),
         tasks=_model_route_tasks(args),

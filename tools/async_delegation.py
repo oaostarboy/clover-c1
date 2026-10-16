@@ -2584,6 +2584,7 @@ def dispatch_async_delegation_batch(
     request_identity: Optional[Dict[str, Any]] = None,
     requested_routes: Optional[List[Dict[str, Any]]] = None,
     owner_scope: Optional[Dict[str, str]] = None,
+    accept_guard: Optional[Callable[[], bool]] = None,
     straggler_seconds: float = 0,
     straggler_notify: Optional[Callable[[List[int], bool], None]] = None,
 ) -> Dict[str, Any]:
@@ -2739,6 +2740,7 @@ def dispatch_async_delegation_batch(
             _worker()
 
     submitted = False
+    admitted = False
     try:
         # Propagate the dispatching profile to the detached batch children.
         executor.submit(propagate_context_to_thread(_admitted_worker))
@@ -2752,9 +2754,23 @@ def dispatch_async_delegation_batch(
         }
     finally:
         if submitted:
-            gate.accept()
+            # Order actual child acceptance against scoped Stop's epoch fence.
+            # The guard is runtime-only, memory-only, and never model supplied.
+            with _records_lock:
+                try:
+                    admitted = accept_guard is None or bool(accept_guard())
+                except Exception:
+                    admitted = False
+                if admitted:
+                    gate.accept()
+                else:
+                    gate.abort()
         else:
             gate.abort()
+    if not admitted:
+        _withdraw_unscheduled_batch(delegation_id)
+        return {'status': 'rejected', 'reason': 'revoked',
+                'error': 'The admitted request was stopped before child acceptance; no child was started.'}
     if progress_fn is not None or record["_straggler_seconds"]:
         _ensure_stale_monitor_best_effort(delegation_id)
 
