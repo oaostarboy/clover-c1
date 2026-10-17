@@ -83,6 +83,7 @@ class Binding:
         key = get_secret('OPENAI_API_KEY', '')
         if not isinstance(key, str) or not key:
             raise Denied('OpenAI API key unavailable; no watcher activated')
+        return digest({'fixed_openai_key':key})
 
     def fetch(self, cursor, *, max_items):
         from gateway.config import Platform

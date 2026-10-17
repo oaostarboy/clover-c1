@@ -278,7 +278,8 @@ class Draft:
             if path.exists() and Store(path).read()['policy'] is not None:
                 return Store(path).read()['policy']
             return {'state':'disabled', 'job_id':None, 'digest':digest(snapshot)}
-        self.binding.validate_route()  # no provider call, after explicit acceptance
+        provider_credential = self.binding.validate_route()  # after explicit acceptance only
+        snapshot['provider_credential'] = provider_credential
         path = state_path(snapshot['home'])
         if not path.exists():
             from cron.jobs import load_jobs
@@ -346,6 +347,13 @@ def _register(store, snapshot, revision, binding):
         validate_owned_job(persisted, snapshot, revision)
         if not persisted.get('enabled'):
             failed = True
+        try:
+            current = binding.snapshot()
+            if (current != {k:snapshot.get(k) for k in current}
+                    or binding.validate_route() != snapshot.get('provider_credential')):
+                failed = True
+        except Exception:
+            failed = True  # preserve the exact owned ID; never claim active
         p['state'] = 'pending' if failed else 'active'
         d['status'] = 'registration pending' if failed else 'active; awaiting new-only baseline'
         result = json.loads(canonical(p))
@@ -363,7 +371,8 @@ def retry_registration(binding):
         raise Denied('no pending accepted registration')
     if current != {k:p['snapshot'].get(k) for k in current}:
         raise Denied('pending watcher scope changed; revoke and review again')
-    binding.validate_route()
+    if binding.validate_route() != p['snapshot'].get('provider_credential'):
+        raise Denied('provider credential changed; revoke and review again')
     return _register(store, p['snapshot'], p['digest'], binding)
 
 
@@ -374,8 +383,9 @@ def _policy_guard(store, job, binding):
         raise Denied('watcher is not active')
     snapshot = p['snapshot']
     current = binding.snapshot()
-    if current != {k: snapshot.get(k) for k in current}:
-        raise Denied('current watcher authority or scope changed')
+    if (current != {k: snapshot.get(k) for k in current}
+            or binding.validate_route() != snapshot.get('provider_credential')):
+        raise Denied('current watcher authority, credential or scope changed')
     from cron.jobs import get_job
     latest = get_job(job['id']) or {}
     validate_owned_job(latest, snapshot, p['digest'])

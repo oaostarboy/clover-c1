@@ -22,7 +22,11 @@ Candidate implementation, not live enrollment or a release approval.
 
 Opening discovery reads safe adapter metadata and current policy only. It does
 not fetch mail, look up provider credentials or call a provider. A provider key
-is checked only after explicit extra-usage acceptance, without a provider call.
+is checked and fingerprinted only after explicit extra-usage acceptance, without
+a provider call. Its fingerprint joins the durable consent. Rotation or removal
+denies later fetch/request/delivery and requires a new review; discovery never
+looks it up. Authority and credential bindings are rechecked again after scheduler
+registration, before an active receipt can be claimed.
 No automatic setup/enrollment is performed.
 
 ## Review and enable

@@ -3722,13 +3722,23 @@ class GatewaySlashCommandsMixin:
                         {"value":"cancel", "label":"✖️ Cancel"}]
                     return result
                 except Exception:
+                    # With no owned consent this is still a pure discovery page;
+                    # retain the existing Save/Cancel controls (Save cannot opt in).
+                    unavailable_choices = draft.choices(view)
+                    try:
+                        from cron.inbox_watcher import Store, state_path
+                        if state_path(home).exists():
+                            saved = Store(state_path(home)).read()["policy"]
+                            if (saved and saved["snapshot"]["actor"] == str(source.user_id)
+                                    and saved["snapshot"]["destination"]["chat_id"] == str(source.chat_id)):
+                                unavailable_choices.insert(0, {"value":"paid off", "label":"Watcher Off"})
+                    except Exception:
+                        pass
                     return {"text":"📬 Inbox watcher unavailable · extra model usage requires a connected native Email source, "
                             "current private Telegram admin scope and a supported bounded route. No activation. "
                             "Supported opt-in uses an enforced per-day call budget. "
                             "Use the private chat; connect Email through existing setup. Other sources/routes unavailable.",
-                            "choices":[{"value":"paid off", "label":"Watcher Off"},
-                                       {"value":"view advanced", "label":"‹ Back"},
-                                       {"value":"cancel", "label":"✖️ Cancel"}]}
+                            "choices":unavailable_choices}
             return {"text": draft.render(view), "choices": draft.choices(view)}
 
         async def on_selected(chat_id, value):
