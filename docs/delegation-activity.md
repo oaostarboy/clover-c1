@@ -74,6 +74,34 @@ tool lines. `classic` is the previous look
 (plain checklist plus the 🔀 card). Roll back with
 `clover config set display.helper_card classic` and `/restart`.
 
+## Automatic helper checklists
+
+Every accepted `delegate_task` launch seeds a visible checklist without an
+extra model request. For one task, valid `handoff.steps` takes precedence over
+that task's `steps`. In a multi-task dispatch, each task uses only its own
+`steps`. A missing, empty or invalid list falls back to one short row describing
+that task's public goal. Clover does not mine the parent's old todo list,
+private context or reasoning to invent a plan or claim work is already done.
+Queued helpers show their plan as pending before they start.
+
+The child's real todo list starts with the same rows. Later native todo updates
+can populate an empty card or append missing real rows. Stable todo ids preserve
+ownership and status through reordering and renaming; a unique public label can
+match a seed whose id changed. Lists from one child never update its siblings.
+Unknown statuses and label-free new items cannot create progress rows.
+
+Each visible list is limited to six rows of 60 characters. Labels are redacted
+before truncation; markup, links, control characters, private path prefixes and
+internal job ids are removed or normalized. The usual card-size and grouped-view
+limits still apply. The native todo tool can retain a larger list, but the card
+and its public restart snapshot are bounded views of it.
+
+Gateway restart records retain the applicable public rows, ids and observed
+statuses per task. A resumed task restores that snapshot only for its own
+launch. Older records without one use their saved step labels or public goal.
+Finished and stopped cards reject late updates. Existing Stop controls,
+card following, native activity, tool counts and short final cards do not change.
+
 ## External agent CLI workers (Claude, Codex, Clover/Luna)
 
 In-process `delegate_task` children are observed automatically. Agent CLIs

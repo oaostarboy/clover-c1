@@ -156,10 +156,20 @@ def clean_steps(value: Any) -> Tuple[str, ...]:
     if not isinstance(value, (list, tuple)):
         return ()
     out: List[str] = []
-    for raw in value:
+    for raw in value[:100]:
         if not isinstance(raw, str):
             continue
-        text = " ".join(raw.replace("\r", "\n").split("\n")[0].split()).strip()
+        from agent.delegation_activity import _redact
+        from agent.delegation_checkpoint import _normalize_card_text
+
+        # Redact BEFORE truncation so a cut credential never becomes visible.
+        raw = _redact(raw[:16000])
+        raw = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", raw)
+        raw = re.sub(r"(?:https?://|www\.)\S+", "", raw)
+        raw = re.sub(r"<[^>]*>", "", raw)
+        text = _normalize_card_text(raw, MAX_STEP_CHARS) or ""
+        text = re.sub(r"[<>\[\]\\\\|_*~]", " ", text)
+        text = " ".join(text.split())
         if not any(ch.isalnum() for ch in text):
             continue
         if len(text) > MAX_STEP_CHARS:
@@ -174,19 +184,98 @@ def clean_steps(value: Any) -> Tuple[str, ...]:
     return tuple(out)
 
 
-def _apply_todos_to(steps: List[List[str]], todos: Any) -> bool:
-    """Mirror a helper's todo list onto ``steps`` by position.  True when changed."""
-    if not steps or not isinstance(todos, list):
+def dispatch_steps(goal: Any, steps: Any = ()) -> Tuple[str, ...]:
+    """Use the task's structured public plan, else one truthful goal row.
+
+    Never mine parent todos, history or private worker context for UI labels.
+    The fallback describes the assigned work, not invented verification stages.
+    """
+    explicit = clean_steps(steps)
+    if explicit:
+        return explicit
+    from agent.delegation_activity import _redact
+    from agent.delegation_checkpoint import _goal_title
+
+    public_goal = _goal_title(_redact(goal[:16000])) if isinstance(goal, str) else ""
+    return clean_steps([public_goal]) or ("Work on the assigned task",)
+
+
+def _apply_todos_to(steps: List[List[str]], todos: Any, step_ids: List[str]) -> bool:
+    """Merge observed rows by stable id, then exact public label; never position.
+
+    Seeded stores use s1..sN. Old status-only events can tick those ids but
+    cannot invent labels. New rows require actual public todo content.
+    """
+    if not isinstance(todos, list):
         return False
-    changed = False
-    for i, row in enumerate(steps):
-        if i >= len(todos) or not isinstance(todos[i], dict):
-            break
-        status = str(todos[i].get("status") or "").strip().lower()
-        if status in _STEP_ICON and row[1] != status:
-            row[1] = status
-            changed = True
-    return changed
+    before = [row[:] for row in steps]
+    before_ids = step_ids[:]
+    del step_ids[len(steps):]
+    while len(step_ids) < len(steps):
+        step_ids.append(f"s{len(step_ids) + 1}")
+    incoming_ids = {t['id'] for t in todos[:100] if isinstance(t, dict)
+                    and isinstance(t.get('id'), str) and 0 < len(t['id']) <= 128}
+    seen = set()
+    for todo in todos[:100]:
+        if not isinstance(todo, dict):
+            continue
+        status = str(todo.get("status") or "").strip().lower()
+        if status not in _STEP_ICON:
+            continue
+        raw_id = todo.get("id")
+        tid = raw_id if isinstance(raw_id, str) and 0 < len(raw_id) <= 128 else ""
+        if tid and tid in seen:
+            continue
+        if tid:
+            seen.add(tid)
+        labels = clean_steps([todo.get("content")])
+        text = labels[0] if labels else ""
+        index = step_ids.index(tid) if tid and tid in step_ids else None
+        if index is None and text:
+            # Reserve rows for ids still present in the snapshot, including
+            # ones later in a reordered list. Equal/truncated labels are not
+            # evidence that two distinct tasks share an identity.
+            matches = [i for i, row in enumerate(steps) if row[0].casefold() == text.casefold()
+                       and step_ids[i] not in incoming_ids]
+            index = matches[0] if len(matches) == 1 else None
+        if index is None:
+            if not text or len(steps) >= MAX_STEPS:
+                continue
+            steps.append([text, status])
+            step_ids.append(tid)
+        else:
+            if text:
+                steps[index][0] = text
+            steps[index][1] = status
+            if tid:
+                step_ids[index] = tid
+    return steps != before or step_ids != before_ids
+
+
+def checklist_todos(steps: Sequence[Any], step_ids: Sequence[str] = ()) -> List[Dict[str, str]]:
+    """Bounded public snapshot, with private ids kept out of rendered labels."""
+    return [
+        {"id": step_ids[i] if i < len(step_ids) and step_ids[i] else f"s{i + 1}",
+         "content": row[0], "status": row[1]}
+        for i, row in enumerate(steps[:MAX_STEPS])
+    ]
+
+
+def clean_todos(todos: Any) -> List[Dict[str, str]]:
+    """Validate persisted/observed public rows, without inferring progress."""
+    rows: List[List[str]] = []
+    ids: List[str] = []
+    _apply_todos_to(rows, todos, ids)
+    return checklist_todos(rows, ids)
+
+
+def _persist_todos(did: str, index: int, todos: Any, *, merge: bool = False) -> None:
+    try:
+        from tools.delegation_inflight import note_checklist
+
+        note_checklist(did, index, todos, merge=merge)
+    except Exception:
+        pass  # card updates remain best-effort; no live record is normal
 
 
 def _finish_steps_for(steps: List[List[str]], state: str) -> None:
@@ -226,6 +315,7 @@ class Child:
     steps: List[List[str]] = field(default_factory=list)  # its own [text, status] rows
     open: List[Tuple[str, str, str]] = field(default_factory=list)  # (call id, name, phrase)
     recent: Deque[Tuple[str, bool, int]] = field(default_factory=lambda: deque(maxlen=RECENT_TOOLS_SINGLE))  # (phrase, ok, repeats)
+    step_ids: List[str] = field(default_factory=list)  # private identity, never rendered
 
     @property
     def label(self) -> str:
@@ -259,10 +349,11 @@ class Checklist:
     # says "running" instead of tool lines.
     lifecycle: bool = False
     reason: str = ""  # why it failed, in a few plain words (never raw error text)
+    step_ids: List[str] = field(default_factory=list)
 
     @classmethod
     def start(cls, header: str, steps: Sequence[str], say: str = "") -> "Checklist":
-        rows = [[s, "pending"] for s in steps]
+        rows = [[s, "pending"] for s in clean_steps(steps)]
         if rows:
             rows[0][1] = "in_progress"
         return cls(header=header, steps=rows, say=say)
@@ -270,16 +361,13 @@ class Checklist:
     # -- state -----------------------------------------------------------
 
     def apply_todos(self, todos: Any) -> bool:
-        """Mirror the helper's todo list onto the steps.  True when it changed.
+        """Merge the helper's observed todos, including new rows, by identity.
 
-        Matches by position (the list was seeded from the steps, ids ``s1``..),
-        so a helper that renames an item still ticks the right row.  Items the
-        helper added past the seeded steps are ignored: the user was promised
-        this list.  Never regresses a finished checklist.
+        Finished cards are immutable; late events cannot reopen them.
         """
         if self.state != RUNNING:
             return False
-        return _apply_todos_to(self.steps, todos)
+        return _apply_todos_to(self.steps, todos, self.step_ids)
 
     def finish(self, state: str) -> bool:
         """Close the checklist.  A second call changes nothing."""
@@ -690,6 +778,12 @@ def _section_block(
     block = _Block(header)
     block.head = len(header)
     if obj.state == PENDING:
+        # Accepted/queued helpers already have their public plan. Show it at
+        # once, without pretending an unstarted child's active seed is observed
+        # execution. Explicit completed/cancelled todo states remain truthful.
+        waiting_steps = [(text, "pending" if status == "in_progress" else status)
+                         for text, status in obj.steps]
+        block.extend(_steps_with_tools(waiting_steps, [], _INDENT, _INDENT * 2))
         block.extend(_indent([_italic(trailing)]))
         return block
     tools = _live_lines(obj, tool_cap, TOOL_PHRASE_MULTI) if obj.state == RUNNING else []
@@ -925,7 +1019,9 @@ def child_instruction(steps: Sequence[str]) -> str:
         "Your todo list is already set up with these steps, which the user "
         f"watches live: {listed}. Keep it current with the todo tool as you "
         "work (merge=true): mark a step completed when it is done and the "
-        "next one in_progress. Do not rename, add or remove steps."
+        "next one in_progress. Keep each item's id when you rename or reorder "
+        "it. Add concrete steps you discover; do not mark work completed until "
+        "you have done it."
     )
 
 
@@ -985,8 +1081,10 @@ def open_part(
         part = _PARTS.pop(did, None)
         if part is None:
             n = max(1, int(expected or 1))
-            # Several helpers share the one card: a block each, no step list.
-            part = Part(did, Checklist.start(header, steps if n == 1 else (), say), n)
+            # Seed the first-event/legacy receipt path too. Only public goals
+            # and this dispatch's structured plan are eligible sources.
+            single_steps = dispatch_steps(_nth(goals, 0), steps) if unified() and goals else steps
+            part = Part(did, Checklist.start(header, single_steps if n == 1 else (), say), n)
             global _OPEN_SEQ
             _OPEN_SEQ += 1
             part.opened_seq = _OPEN_SEQ
@@ -994,7 +1092,8 @@ def open_part(
                 part.checklist.kids = [
                     Child(
                         index=i, title=_goal_title(_nth(goals, i)),
-                        steps=_seed_rows(_nth(child_steps, i)),
+                        steps=_seed_rows(dispatch_steps(_nth(goals, i), _nth(child_steps, i))
+                                         if unified() and goals else _nth(child_steps, i)),
                     )
                     for i in range(n)
                 ]
@@ -1138,10 +1237,26 @@ def on_child_event(event_type: Any, **kw: Any) -> bool:
                 if did:
                     early = _EARLY.setdefault(did, [])
                     if et == "subagent.todo":
+                        # A completion fences its helper even before the card
+                        # exists. Never replace pre-completion progress with a
+                        # late list and then replay it as new running work.
+                        def same_child(payload):
+                            ti, sid = kw.get("task_index"), kw.get("subagent_id")
+                            if ti is not None:
+                                return ti == payload.get("task_index")
+                            if sid:
+                                return sid == payload.get("subagent_id")
+                            return payload.get("task_index") is None and not payload.get("subagent_id")
+
+                        if any(e[0] == "subagent.complete" and same_child(e[1]) for e in early):
+                            return False
+                        ti = kw.get("task_index")
+                        if isinstance(ti, int) and not isinstance(ti, bool):
+                            _persist_todos(did, ti, kw.get("todos"), merge=True)
                         # the newest todo list of each helper is enough
                         early[:] = [
                             e for e in early
-                            if not (e[0] == "subagent.todo" and e[1].get("task_index") == kw.get("task_index"))
+                            if not (e[0] == "subagent.todo" and same_child(e[1]))
                         ]
                     early.append((et, {k: kw.get(k) for k in ("todos", "status", "exit_reason", "outcome", "summary", "preview",
                                                              "task_index", "subagent_id", "title", "goal")}))
@@ -1163,30 +1278,40 @@ def _apply_child_todos(part: Part, kw: Dict[str, Any]) -> bool:
     """A helper's todo list ticks ITS steps: by ``task_index`` on a several-helper
     dispatch, the dispatch's own steps otherwise."""
     cl = part.checklist
+    if cl.state != RUNNING:
+        return False
     if not cl.kids:
-        return cl.apply_todos(kw.get("todos"))
-    kid = _child_for(cl, kw)
+        changed = cl.apply_todos(kw.get("todos"))
+        if changed:
+            _persist_todos(part.delegation_id, 0, checklist_todos(cl.steps, cl.step_ids))
+        return changed
+    kid = _child_for(cl, kw, bind=False)
     if kid is None or kid.state not in (PENDING, RUNNING):
         return False
-    return _apply_todos_to(kid.steps, kw.get("todos"))
+    changed = _apply_todos_to(kid.steps, kw.get("todos"), kid.step_ids)
+    if changed:
+        _persist_todos(part.delegation_id, kid.index, checklist_todos(kid.steps, kid.step_ids))
+    return changed
 
 
 _ACTIVITY_EVENTS = frozenset({"subagent.start", "subagent.tool", "subagent.tool_done"})
 
 
-def _child_for(cl: Checklist, kw: Dict[str, Any], *, ending: bool = False) -> Optional[Child]:
+def _child_for(cl: Checklist, kw: Dict[str, Any], *, ending: bool = False, bind: bool = True) -> Optional[Child]:
     """The helper an event belongs to: ``task_index``, else ``subagent_id``.
     A completion that names neither closes the first helper still open."""
     kids = cl.kids
     ti = kw.get("task_index")
     if isinstance(ti, int) and not isinstance(ti, bool) and 0 <= ti < len(kids):
+        if not bind and kids[ti].sid and kw.get("subagent_id") and kids[ti].sid != kw["subagent_id"]:
+            return None
         return kids[ti]
     sid = str(kw.get("subagent_id") or "")
     if sid:
         for k in kids:
             if k.sid == sid:
                 return k
-        for k in kids:
+        for k in kids if bind else ():
             if not k.sid and k.state in (PENDING, RUNNING):
                 k.sid = sid
                 return k

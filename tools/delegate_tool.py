@@ -1768,15 +1768,17 @@ def _build_child_progress_callback(
         if event == DelegateEvent.TASK_TOOL_COMPLETED:
             if tool_name == "todo":
                 # The helper's checklist (task state, not tool output): relayed
-                # so the ack message can tick its steps.  Only the statuses.
+                # so the card can tick existing rows and create missing ones.
+                # Content is public task state, sanitized by the card; never
+                # forward raw tool args/output or private worker context.
                 try:
                     from agent.ack_checklist import todos_from_result
 
                     _todos = todos_from_result(kwargs.get("result"))
                     if _todos is not None:
                         _relay("subagent.todo", todos=[
-                            {"id": str(t.get("id") or ""), "status": str(t.get("status") or "")}
-                            for t in _todos
+                            {"id": t.get("id"), "status": t.get("status"), "content": t.get("content")}
+                            for t in _todos[:100]
                         ])
                 except Exception as e:
                     logger.debug("todo relay failed: %s", e)
@@ -4418,11 +4420,16 @@ def _record_inflight_dispatch(
             return  # not a gateway chat: nothing would restart it
         tasks = []
         for i, t in enumerate(task_list):
+            from agent.ack_checklist import clean_todos
+
+            child = child_agents[i] if i < len(child_agents) else None
+            store = getattr(child, '_todo_store', None)
             tasks.append({
                 "goal": t.get("goal"),
                 "context": t.get("context"),
                 "title": t.get("title"),
                 "steps": t.get("steps"),
+                "checklist": clean_todos(store.read()) if store and callable(getattr(store, 'read', None)) else [],
                 "tier": t.get("tier"),
                 "route": t.get("route"),
                 "account": t.get("account"),
@@ -4827,30 +4834,26 @@ def delegate_task(
     # resolved tool names around each construction under a lock, so child
     # toolset resolution never leaks into the parent (shared with the plugin
     # subagent-lifecycle API).
-    # One helper, one checklist: the steps the root promised the user are the
-    # helper's starting todo list, and it is told to keep that list current.
-    _ack_steps: tuple = ()
-    if n_tasks == 1 and isinstance(handoff, dict):
-        try:
-            from agent.ack_checklist import clean_steps
+    # Resolve once before launch. The same bounded public plan drives the
+    # child's real TodoStore, receipt, initial card and durable restart spec.
+    # Copy tasks: never mutate a caller's payload or read unrelated parent todos.
+    from agent.ack_checklist import clean_steps, clean_todos, dispatch_steps, seed_todos
+    from tools.delegation_inflight import take_resume_checklists
 
-            _ack_steps = clean_steps(handoff.get("steps"))
-        except Exception:
-            _ack_steps = ()
-    # Several helpers: each task may carry its own steps (tasks[i].steps),
-    # which seed and drive that helper's own checklist on the card.
-    _task_steps: List[tuple] = [()] * len(task_list)
-    if n_tasks >= 1:
-        try:
-            from agent.ack_checklist import clean_steps
-
-            _task_steps = [clean_steps(t.get("steps")) for t in task_list]
-        except Exception:
-            _task_steps = [()] * len(task_list)
+    _ack_steps = clean_steps(handoff.get("steps")) if n_tasks == 1 and isinstance(handoff, dict) else ()
+    _task_steps = [dispatch_steps(t.get("goal"), _ack_steps or t.get("steps")) for t in task_list]
+    _restored = take_resume_checklists()
+    _task_todos = [
+        clean_todos(_restored[i]) if i < len(_restored) else []
+        for i in range(n_tasks)
+    ]
+    _task_todos = [todos or seed_todos(_task_steps[i]) for i, todos in enumerate(_task_todos)]
+    _task_steps = [tuple(t['content'] for t in todos) for todos in _task_todos]
+    task_list = [{**t, "steps": list(_task_steps[i])} for i, t in enumerate(task_list)]
     children = []
     try:
         for i, t in enumerate(task_list):
-            _steps_i = _ack_steps or (_task_steps[i] if i < len(_task_steps) else ())
+            _steps_i = _task_steps[i]
             # Per-task role beats top-level; normalise again so unknown
             # per-task values warn and degrade to leaf uniformly.
             effective_role = _normalize_role(t.get("role") or top_role)
@@ -4960,9 +4963,7 @@ def delegate_task(
                 child._delegate_requested_route = task_creds['requested_route']
             if _steps_i:
                 try:
-                    from agent.ack_checklist import seed_todos
-
-                    child._todo_store.write(seed_todos(_steps_i))
+                    child._todo_store.write(_task_todos[i])
                 except Exception:
                     logger.debug("seeding the helper's todo list failed", exc_info=True)
             if task_tier_fallback:
@@ -5031,8 +5032,18 @@ def delegate_task(
                 steps=_task_steps[0] if n_tasks == 1 else (),
                 child_steps=list(_task_steps) if n_tasks > 1 else (),
             )
+            _prime_card_todos(live_deleg_id)
         except Exception:
             logger.debug("foreground helper card unavailable", exc_info=True)
+
+    def _prime_card_todos(delegation_id: str) -> None:
+        from agent.ack_checklist import on_child_event
+
+        for i, todos in enumerate(_task_todos):
+            if i >= len(_restored) or not _restored[i]:
+                continue  # ordinary launches are seeded, not synthetic updates
+            on_child_event('subagent.todo', delegation_id=delegation_id, task_index=i,
+                           subagent_id=getattr(children[i][2], '_subagent_id', None), todos=todos)
 
     def _execute_and_aggregate(
         *,
@@ -5484,6 +5495,9 @@ def delegate_task(
                 for _bi, _bt, _built in children:
                     _release_child_resources(_built, parent_agent)
                 return tool_error('Stop revoked this launch while it was preparing; no background child was started.')
+            # A restored snapshot precedes new child events. The existing
+            # early-event path applies it when the accepted card opens.
+            _prime_card_todos(_batch_delegation_id)
             dispatch = dispatch_async_delegation_batch(
                 goals=_goals,
                 context=context,

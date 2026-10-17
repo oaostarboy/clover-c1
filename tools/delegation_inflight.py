@@ -201,12 +201,14 @@ def _json_safe(value: Any) -> Any:
 @contextlib.contextmanager
 def resume_context(
     resumes: int, resumed_from: str, card: Optional[Dict[str, Any]] = None, work: str = "",
+    checklists: Any = (),
 ) -> Iterator[None]:
     """Mark dispatches made inside as the ``resumes``-th resume of ``resumed_from``;
     ``card`` is where the interrupted job's card message was (re-used if it still exists)."""
     token = _RESUME_CONTEXT.set({
         "resumes": int(resumes), "resumed_from": str(resumed_from), "card": card or None,
         "work": str(work or ""),
+        "checklists": checklists,
     })
     try:
         yield
@@ -236,6 +238,45 @@ def current_resume_card() -> Optional[Dict[str, Any]]:
 def current_resume_work() -> str:
     """The card title the job being resumed had ('' = build one from its tasks)."""
     return str((_RESUME_CONTEXT.get() or {}).get("work") or "")
+
+
+def take_resume_checklists() -> List[Any]:
+    """Consume this resume's filtered snapshots before child contexts are copied.
+
+    A coordinator's later/nested launches must never inherit its old plan.
+    """
+    context = _RESUME_CONTEXT.get() or {}
+    value = context.get("checklists")
+    if value is not None:
+        _RESUME_CONTEXT.set({**context, "checklists": None})
+    return value if isinstance(value, list) else []
+
+
+def note_checklist(delegation_id: Any, task_index: int, todos: Any, *, merge: bool = False) -> bool:
+    """Persist sanitized observed rows on an existing task, never create a job."""
+    from agent.ack_checklist import _apply_todos_to, checklist_todos, clean_todos, dispatch_steps, seed_todos
+
+    if not isinstance(task_index, int) or isinstance(task_index, bool):
+        return False
+    with _LOCK:
+        record = read_record(delegation_id)
+        tasks = (record or {}).get('tasks')
+        if not isinstance(tasks, list) or not 0 <= task_index < len(tasks):
+            return False
+        if not isinstance(tasks[task_index], dict):
+            return False
+        if merge:
+            task = tasks[task_index]
+            previous = clean_todos(task.get('checklist'))
+            if not previous:
+                handoff = record.get('handoff') or {}
+                steps = task.get('steps') or (handoff.get('steps') if len(tasks) == 1 else ())
+                previous = seed_todos(dispatch_steps(task.get('goal'), steps))
+            rows = [[t['content'], t['status']] for t in previous]
+            ids = [t['id'] for t in previous]
+            _apply_todos_to(rows, todos, ids)
+            todos = checklist_todos(rows, ids)
+        return _update_task(delegation_id, task_index, checklist=clean_todos(todos))
 
 
 def _card_work(handoff: Any) -> str:
