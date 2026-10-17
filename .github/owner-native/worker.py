@@ -11,8 +11,12 @@ if not (ROOT / 'gateway').is_dir():
 sys.path.insert(0, str(ROOT))
 
 if sys.argv[1] == 'console':
+    from console_phase_probe import start
+    done = start()
     from clover_cli.pairing import telegram_owner_command
-    sys.exit(0 if telegram_owner_command('owner-confirm') else 2)
+    result = telegram_owner_command('owner-confirm')
+    done()
+    sys.exit(0 if result else 2)
 
 v = json.load(sys.stdin)
 from gateway.pairing import VerifiedOwnerStore

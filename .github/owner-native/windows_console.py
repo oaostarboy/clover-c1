@@ -13,6 +13,9 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+import os
+import tempfile
+import traceback
 import time
 
 
@@ -88,6 +91,8 @@ def _console(request):
     import win32event
 
     process_type, native_type, identity = _locked_conpty()
+    phase_file = Path(tempfile.gettempdir()) / ('owner-console-phase-' + str(os.getpid()) + '.jsonl')
+    request['env']['OWNER_CONSOLE_PHASE_FILE'] = str(phase_file)
     # Locked spawn uses `backend or env_override` then int(backend). The public
     # conversion accepts truthy '0', so it reaches native Some(0) even if the
     # environment requests WinPTY. Numeric zero would select auto/the override.
@@ -113,6 +118,16 @@ def _console(request):
         result = {'transcript': reader.text, 'exitstatus': status,
                   'backend': identity['name'], 'backend_identity': identity,
                   'eof': reader.eof}
+    except BaseException:
+        frame = sys._current_frames().get(p._thread.ident)
+        safe = {'phase': 'console-failure', 'cancel': request['cancel'],
+                'child_alive': p.pty.isalive(), 'child_exitstatus': p.exitstatus,
+                'reader_alive': p._thread.is_alive(),
+                'reader_stack': [{'file': Path(x.filename).name, 'function': x.name, 'line': x.lineno}
+                                 for x in traceback.extract_stack(frame)],
+                'child_phases': phase_file.read_text(encoding='utf-8') if phase_file.exists() else None}
+        print(json.dumps(safe), file=sys.stderr, flush=True)
+        raise
     finally:
         # This is library-resource cleanup, not an extension of either success
         # deadline. The outer 35s cap also bounds spawn/close/join themselves.
