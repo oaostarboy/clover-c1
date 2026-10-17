@@ -1,0 +1,253 @@
+{
+  "status": "proposed candidate; not shipped or rolled out",
+  "inventory_base": "d3b6bdeb (PR133 main before concurrent PR134 integration)",
+  "scope": "All proactive config defaults plus existing adjacent monitoring/automation and research-only observation distinctions. Core settings not safely supported by a live consumer are information, not switches.",
+  "capabilities": [
+    {
+      "id": "master",
+      "gates": [
+        "proactive.enabled",
+        "proactive.mode"
+      ],
+      "menu": "On / Off",
+      "text_command": "/proactive on",
+      "status": "explicit fresh preset; existing sections and active choices preserved; Off does not cancel schedules",
+      "consumer": "clover_cli/proactive.py; agent/workstreams.py",
+      "tests": [
+        "tests/test_proactive_customize.py",
+        "tests/cli/test_proactive_command.py",
+        "tests/test_proactive_customize_wire.py"
+      ],
+      "advanced": false
+    },
+    {
+      "id": "recall",
+      "gates": [
+        "proactive.recall.enabled",
+        "proactive.recall.max_items",
+        "proactive.recall.max_bytes"
+      ],
+      "menu": "🧠 Recall · On/Off; Advanced > Scope / limits",
+      "text_command": "/proactive recall on",
+      "status": "working switch; limits read-only; recommended On for absent section",
+      "consumer": "agent/workstreams.py:recall_context; agent/turn_context.py",
+      "tests": [
+        "tests/test_proactive_customize_native.py",
+        "tests/agent/test_workstream_context.py",
+        "tests/agent/test_workstream_evidence_retrieval.py"
+      ],
+      "advanced": false
+    },
+    {
+      "id": "tracking-corrections-evidence",
+      "gates": [
+        "proactive.threads.max_items",
+        "proactive.threads.max_context_bytes",
+        "proactive.threads.retention_days"
+      ],
+      "menu": "On; Advanced > Scope / evidence / limits",
+      "text_command": "/proactive scope",
+      "status": "active tracking/corrections and bounded read-only evidence retrieval; owner receipts only; limits informational",
+      "consumer": "agent/work_lifecycle.py; agent/workstream_human_hooks.py; agent/workstream_evidence.py",
+      "tests": [
+        "tests/agent/test_workstream_human_hooks.py",
+        "tests/agent/test_workstream_evidence_retrieval.py",
+        "tests/test_proactive_customize_consumers.py"
+      ],
+      "advanced": true
+    },
+    {
+      "id": "suggestions",
+      "gates": [
+        "proactive.suggestions.enabled",
+        "proactive.suggestions.preferred_timing",
+        "proactive.suggestions.cooldown_seconds",
+        "proactive.suggestions.max_per_session"
+      ],
+      "menu": "💡 Suggestions; 🕓 Timing; ⏱ Frequency",
+      "text_command": "/proactive suggestions on",
+      "status": "working local-only offers; explicit after_reply/never; hourly/daily each 1/session; existing custom values displayed and retained",
+      "consumer": "agent/workstream_suggestions.py; agent/workstreams.py:evaluate_suggestion",
+      "tests": [
+        "tests/test_proactive_customize.py",
+        "tests/test_proactive_customize_consumers.py",
+        "tests/agent/test_workstream_suggestion_policy.py",
+        "tests/gateway/test_workstream_suggestion_offer.py"
+      ],
+      "advanced": false
+    },
+    {
+      "id": "procedure-drafts",
+      "gates": [
+        "proactive.procedures.enabled",
+        "proactive.procedures.min_verified_runs",
+        "proactive.procedures.min_sessions"
+      ],
+      "menu": "📚 Skill drafts · On/Off; Advanced > Scope / limits",
+      "text_command": "/proactive skill-drafts on",
+      "status": "working optional verified-local-audit proposals to existing pending store; not installed; off in recommendation; semantic ordinary-skill matching remains uncoordinated",
+      "consumer": "agent/workstream_procedures.py; agent/curator.py:propose_procedure_candidates; tools/write_approval.py",
+      "tests": [
+        "tests/test_proactive_customize_consumers.py",
+        "tests/agent/test_workstream_procedure_host.py",
+        "tests/agent/test_workstream_procedures.py"
+      ],
+      "advanced": false
+    },
+    {
+      "id": "summary-audit",
+      "gates": [
+        "proactive.compaction_audit.enabled"
+      ],
+      "menu": "🧾 Context checks · On/Off",
+      "text_command": "/proactive audit on",
+      "status": "working local capsule for native text-summary compaction; opaque provider compaction unsupported",
+      "consumer": "agent/workstream_continuity.py",
+      "tests": [
+        "tests/agent/test_workstream_continuity_host.py",
+        "tests/agent/test_workstream_compaction.py",
+        "tests/test_proactive_customize_native.py"
+      ],
+      "advanced": false
+    },
+    {
+      "id": "repair",
+      "gates": [
+        "proactive.compaction_audit.max_repairs"
+      ],
+      "menu": "Advanced > 🛠 Repair · Unavailable",
+      "text_command": "/proactive repairs",
+      "status": "informational only: configured max_repairs is not a wired model-repair consumer; no activation or spending",
+      "consumer": "agent/workstream_continuity.py:audit_current_summary (repair_model_calls=0)",
+      "tests": [
+        "tests/agent/test_workstream_continuity_host.py",
+        "tests/test_proactive_customize_native.py"
+      ],
+      "advanced": true
+    },
+    {
+      "id": "model-judges",
+      "gates": [
+        "proactive.aux.max_calls_per_event",
+        "proactive.aux.max_calls_per_day",
+        "proactive.aux.max_output_tokens"
+      ],
+      "menu": "Advanced > ⚖️ Judges · Unavailable",
+      "text_command": "/proactive judges",
+      "status": "informational only: limits are parsed but foreground suggestions have no model-judge caller; supplied verdict only suppresses/defers; limits do not budget classifier",
+      "consumer": "agent/workstreams.py:apply_judge; agent/workstream_suggestions.py:gate_candidate",
+      "tests": [
+        "tests/agent/test_workstream_suggestion_policy.py",
+        "tests/test_proactive_customize_native.py"
+      ],
+      "advanced": true
+    },
+    {
+      "id": "task-monitor-continuation",
+      "gates": [
+        "proactive.eligible_jobs",
+        "monitor_script",
+        "monitor_url",
+        "job.workstream_id",
+        "continuation permission/Stop/expiry/budget"
+      ],
+      "menu": "Advanced > 👀 Task monitors · Guide",
+      "text_command": "/proactive monitors",
+      "status": "guided discovery only, no all-jobs enrollment or new job; approved per-job exact scope required; source change is evidence not authority",
+      "consumer": "agent/workstream_job_scope.py; agent/continuation_bridge.py; cron/monitor.py; cron/scheduler.py",
+      "tests": [
+        "tests/cron/test_workstream_resume.py",
+        "tests/cron/test_workstream_monitor_persistence.py",
+        "tests/test_proactive_customize_native.py"
+      ],
+      "advanced": true
+    },
+    {
+      "id": "privacy-scope",
+      "gates": [
+        "proactive.private_only"
+      ],
+      "menu": "Advanced > 🔒 Scope / limits · Info",
+      "text_command": "/proactive scope",
+      "status": "read-only current saved/effective limits and private scope; no permission or group capture switch",
+      "consumer": "agent/workstreams.py:Scope; gateway/slash_commands.py:_proactive_caller_is_admin",
+      "tests": [
+        "tests/test_proactive_command_access_wire.py",
+        "tests/test_proactive_customize_native.py",
+        "tests/agent/test_workstream_policy.py"
+      ],
+      "advanced": true
+    },
+    {
+      "id": "inbox-watcher",
+      "gates": [
+        "auxiliary.monitor",
+        "catalog:important-mail-monitor",
+        "cron schedule",
+        "cron delivery"
+      ],
+      "menu": "Advanced > 📬 Inbox watcher · Paid",
+      "text_command": "/proactive watcher",
+      "status": "existing separate classifier automation; guide only; no activation. Reads connected inbox candidates; catalog cadence 30m; extra classifier and scheduled-agent usage. Missing enforced daily classifier budget blocks safe Customize activation. No dollar estimate. Existing jobs unchanged.",
+      "consumer": "cron/suggestion_catalog.py; cron/scripts/classify_items.py (task=monitor, max_tokens=1024); agent/auxiliary_client.py",
+      "tests": [
+        "tests/test_proactive_customize.py",
+        "tests/test_proactive_customize_native.py",
+        "tests/cron/test_suggestions.py"
+      ],
+      "advanced": true
+    },
+    {
+      "id": "routines",
+      "gates": [
+        "cron.jobs",
+        "/loop",
+        "/suggestions"
+      ],
+      "menu": "Advanced > 📅 Routines · Guide",
+      "text_command": "/proactive routines",
+      "status": "read-only links to existing distinct controls; scheduling can cost usage; master Off does not cancel independent schedules/loops",
+      "consumer": "cron/jobs.py; cron/suggestions.py; clover_cli/loops.py",
+      "tests": [
+        "tests/cli/test_proactive_command.py",
+        "tests/test_proactive_customize_native.py"
+      ],
+      "advanced": true
+    },
+    {
+      "id": "desktop-observation",
+      "gates": [],
+      "menu": "Advanced > 🖥 Capture · Unavailable",
+      "text_command": "/proactive desktop",
+      "status": "unavailable: no screen/audio/keystroke/app watcher in this package; MineContext/N.E.K.O. remain research; context-engine hooks are not ambient capture",
+      "consumer": "agent/context_engine.py:on_turn_complete (provider hook only); no ambient-capture consumer",
+      "tests": [
+        "tests/test_proactive_customize.py",
+        "tests/test_proactive_customize_native.py"
+      ],
+      "advanced": true
+    },
+    {
+      "id": "ordinary-learning",
+      "gates": [
+        "auxiliary.background_review",
+        "curator",
+        "skill_manage"
+      ],
+      "menu": "📚 Skill drafts explanation",
+      "text_command": "/proactive skill-drafts off",
+      "status": "existing ordinary skill creation/background review independent of optional procedure evidence; not a new learning master or duplicate engine",
+      "consumer": "tools/skill_manager_tool.py; agent/curator.py; agent/agent_runtime_helpers.py",
+      "tests": [
+        "tests/test_proactive_customize_consumers.py",
+        "tests/agent/test_workstream_procedure_host.py"
+      ],
+      "advanced": false
+    }
+  ],
+  "intentional_gaps": [
+    "No safe paid watcher activation until source/cadence/cost/permission and enforced classifier budgets are available.",
+    "No semantic dedupe/update routing between generated procedure names and differently named ordinary skills.",
+    "No phone screenshot or native Windows/macOS execution in this candidate."
+  ]
+}

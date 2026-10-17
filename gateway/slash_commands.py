@@ -3630,7 +3630,7 @@ class GatewaySlashCommandsMixin:
         import copy
         import time
         from clover_constants import get_clover_home
-        from clover_cli.proactive import proactive_command, PROACTIVE_ACTIONS
+        from clover_cli.proactive import proactive_command, PROACTIVE_ACTIONS, ProactiveDraft, HELP, ADVANCED_ENTRIES
         from gateway.run import _profile_runtime_scope
 
         if getattr(event, "internal", False):
@@ -3659,7 +3659,7 @@ class GatewaySlashCommandsMixin:
         if isinstance(prefix, str) and prefix != "/":
             text = (text.replace("/proactive", f"{prefix}proactive")
                     .replace("/loop", f"{prefix}loop").replace("/whoami", f"{prefix}whoami"))
-        if args or not can_change:
+        if args.lower() not in {"", "customize", "advanced", *ADVANCED_ENTRIES} or not can_change:
             return text
 
         # Capture the admitted source, not a mutable event or ambient callback
@@ -3672,6 +3672,12 @@ class GatewaySlashCommandsMixin:
         credential = self._adapter_credential_fingerprint(adapter)
         expires_at = time.monotonic() + 300
         used = False
+        try:
+            snapshot = ProactiveDraft.open()
+        except Exception:
+            return text
+        draft = snapshot if args else None
+        view = args.lower() if args.lower() in {"advanced", *ADVANCED_ENTRIES} else "basic"
 
         def authorized(uid):
             if used or str(uid) != str(source.user_id) or time.monotonic() > expires_at:
@@ -3682,23 +3688,61 @@ class GatewaySlashCommandsMixin:
                         and self._resolve_profile_home_for_source(source).resolve() == route_home
                         and self._proactive_caller_is_admin(source))
 
-        async def on_selected(chat_id, value):
-            nonlocal used
-            if str(chat_id) != str(source.chat_id) or value not in {"on", "off"} or not authorized(source.user_id):
-                return "Picker expired or no longer authorized; run /proactive again."
-            used = True
-            with _profile_runtime_scope(home):
-                return proactive_command(value, can_change=True, show_commands=False)
+        def page():
+            assert draft is not None
+            return {"text": draft.render(view), "choices": draft.choices(view)}
 
+        async def on_selected(chat_id, value):
+            nonlocal used, draft, view
+            if str(chat_id) != str(source.chat_id) or not authorized(source.user_id):
+                return "Picker expired or no longer authorized; run /proactive again."
+            with _profile_runtime_scope(home):
+                if draft is None:
+                    if value == "customize":
+                        draft = snapshot
+                        return page()
+                    if value not in {"on", "off"}:
+                        return "Invalid choice; run /proactive again."
+                    used = True
+                    return proactive_command(value, can_change=True, show_commands=False,
+                                             expected=snapshot.baseline)
+                if value == "cancel":
+                    used = True
+                    return "Cancelled; no settings changed. /proactive — On / Off / Customize."
+                if value == "save":
+                    used = True
+                    return draft.save() + "\n" + proactive_command(can_change=True, show_commands=False)
+                if value.startswith("view "):
+                    target = value[5:]
+                    if target not in {"basic", "advanced", "timing", "frequency", *ADVANCED_ENTRIES, "recall", "suggestions", "audit", "skill-drafts"}:
+                        used = True
+                        return "Invalid page; no settings changed."
+                    view = target
+                elif value == "recommended":
+                    draft.recommended()
+                    view = "recommended"
+                else:
+                    try:
+                        draft.set(*value.split())
+                        view = value.split()[0]
+                    except (TypeError, ValueError):
+                        used = True
+                        return "Invalid choice; no settings changed. Run /proactive again."
+                return page()
+
+        choices = draft.choices(view) if draft is not None else [
+            {"value": "on", "label": "On"}, {"value": "off", "label": "Off"},
+            {"value": "customize", "label": "⚙️ Customize"}]
+        if draft is not None:
+            text = draft.render(view)
         sent = await self._try_send_choice_picker(
-            event, self._session_key_for_source(source), text,
-            [{"value": "on", "label": "On"}, {"value": "off", "label": "Off"}],
+            event, self._session_key_for_source(source), text, choices,
             on_selected, choice_guard={"owner_user_id": str(source.user_id),
                                        "expires_at": expires_at, "authorize": authorized},
         )
         if sent:
             return None
-        controls = PROACTIVE_ACTIONS
+        controls = HELP if draft is not None else PROACTIVE_ACTIONS
         if isinstance(prefix, str) and prefix != "/":
             controls = controls.replace("/proactive", f"{prefix}proactive")
         return text + "\n" + controls

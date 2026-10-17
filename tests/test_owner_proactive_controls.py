@@ -63,7 +63,7 @@ async def test_verified_owner_without_admin_lists_has_buttons_guests_unchanged_a
     assert isinstance(wire["reply_markup"], InlineKeyboardMarkup)
     assert [b.text for b in wire["reply_markup"].inline_keyboard[0]] == ["On", "Off"]
     print("OWNER_NATIVE_MENU=" + json.dumps({"text": wire["text"], "markup": wire["reply_markup"].to_dict()}))
-    assert wire["text"].startswith("Proactive: Off") and len(wire["text"]) < 160
+    assert wire["text"].startswith("Proactive: Off") and len(wire["text"]) < 280
     assert (home / "config.yaml").read_bytes() == before
     assert not load_settings().enabled
     q = query(uid=UID, data=wire["reply_markup"].inline_keyboard[0][0].callback_data)
