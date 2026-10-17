@@ -4,6 +4,11 @@ PtyProcess.read() has no blocking keyword and can wait forever in its UTF-8
 completion loop. Read its actual transport socket with a deadline and a stateful
 decoder instead. Keep the real ConPTY in an owned, kill-on-close Windows job so
 neither a library reader thread nor a terminal child can outlive a failed probe.
+
+The locked wrapper's blocking reader can enter native read after the child has
+exited and never return to its EOF check. Inherit its exact spawn/selector, but
+own a nonblocking native-to-socket pump: drain native cache to an empty read AND
+native EOF before closing the socket. Process exit alone is never transcript EOF.
 """
 import codecs
 import hashlib
@@ -13,9 +18,7 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
-import os
-import tempfile
-import traceback
+import threading
 import time
 
 
@@ -85,18 +88,82 @@ def _locked_conpty():
     return wrapper.PtyProcess, native.PTY, identity
 
 
+def _bounded_process_type(base):
+    from winpty import WinptyError
+
+    class ConsoleProcess(base):
+        # Inherit the locked wheel's spawn (including explicit backend dispatch),
+        # writes and process APIs. Only its Python transport lifetime is owned.
+        def __init__(self, pty):
+            self.pty = pty
+            self.pid = pty.pid
+            self.closed = False
+            self.flag_eof = False
+            self.read_blocking = False
+            self.delayafterterminate = self.delayafterclose = .1
+            self.native_eof = False
+            self.reader_error = None
+            self._stop_reader = threading.Event()
+            self.fileobj, self._server = socket.socketpair()
+            self.fd = self.fileobj.fileno()
+            self._thread = threading.Thread(target=self._pump, daemon=True)
+            self._thread.start()
+
+        def _pump(self):
+            try:
+                while not self._stop_reader.is_set():
+                    try:
+                        data = self.pty.read(4096, blocking=False)
+                    except WinptyError as exc:
+                        # Native cache EOF is a specific error in this binding;
+                        # arbitrary native read errors must never become success.
+                        if str(exc) != 'Standard out reached EOF':
+                            raise
+                        data = ''
+                    if data:
+                        self._server.sendall(data.encode('utf-8'))
+                    # iseof alone does not account for native cached output.
+                    # Keep reading cached chunks, even after the child is dead.
+                    if not data and self.pty.iseof() and not self.pty.isalive():
+                        self.native_eof = True
+                        break
+                    self._stop_reader.wait(.001)
+            except BaseException as exc:
+                self.reader_error = exc
+            finally:
+                self._server.close()
+
+    return ConsoleProcess
+
+
+def _close_console(p):
+    try:
+        p.close(force=True)
+    finally:
+        try:
+            if hasattr(p, '_stop_reader'):
+                p._stop_reader.set()
+                # Locked isalive() sets closed=True without closing resources.
+                # Do not let that bookkeeping skip our actual socket cleanup.
+                try:
+                    p.fileobj.close()
+                finally:
+                    p._server.close()
+        finally:
+            p._thread.join(timeout=2)
+            assert not p._thread.is_alive(), 'pywinpty reader thread did not finish'
+
+
 def _console(request):
     # Load only AFTER the parent assigns this process to its private job and
     # sends stdin. Any subsequently spawned ConPTY process inherits that job.
     import win32event
 
     process_type, native_type, identity = _locked_conpty()
-    phase_file = Path(tempfile.gettempdir()) / ('owner-console-phase-' + str(os.getpid()) + '.jsonl')
-    request['env']['OWNER_CONSOLE_PHASE_FILE'] = str(phase_file)
     # Locked spawn uses `backend or env_override` then int(backend). The public
     # conversion accepts truthy '0', so it reaches native Some(0) even if the
     # environment requests WinPTY. Numeric zero would select auto/the override.
-    p = process_type.spawn(request['command'], cwd=request['cwd'],
+    p = _bounded_process_type(process_type).spawn(request['command'], cwd=request['cwd'],
                            env=request['env'], backend=str(identity['id']))
     try:
         if type(p.pty) is not native_type:
@@ -109,6 +176,7 @@ def _console(request):
         # EOF, not merely process exit: include every buffered trailing byte in
         # the hidden-input assertion, including a split final UTF-8 character.
         reader.until(deadline)
+        assert p.native_eof and p.reader_error is None, 'native transport did not drain to EOF'
         remaining = deadline - time.monotonic()
         assert remaining > 0, 'native console child exceeded fixed bound'
         waited = win32event.WaitForSingleObject(p.pty.fd, int(remaining * 1000))
@@ -118,22 +186,10 @@ def _console(request):
         result = {'transcript': reader.text, 'exitstatus': status,
                   'backend': identity['name'], 'backend_identity': identity,
                   'eof': reader.eof}
-    except BaseException:
-        frame = sys._current_frames().get(p._thread.ident)
-        safe = {'phase': 'console-failure', 'cancel': request['cancel'],
-                'child_alive': p.pty.isalive(), 'child_exitstatus': p.exitstatus,
-                'reader_alive': p._thread.is_alive(),
-                'reader_stack': [{'file': Path(x.filename).name, 'function': x.name, 'line': x.lineno}
-                                 for x in traceback.extract_stack(frame)],
-                'child_phases': phase_file.read_text(encoding='utf-8') if phase_file.exists() else None}
-        print(json.dumps(safe), file=sys.stderr, flush=True)
-        raise
     finally:
         # This is library-resource cleanup, not an extension of either success
         # deadline. The outer 35s cap also bounds spawn/close/join themselves.
-        p.close(force=True)
-        p._thread.join(timeout=2)
-        assert not p._thread.is_alive(), 'pywinpty reader thread did not finish'
+        _close_console(p)
     return result
 
 
