@@ -19,6 +19,7 @@ import socket
 import subprocess
 import sys
 import threading
+import traceback
 import time
 
 
@@ -103,6 +104,8 @@ def _bounded_process_type(base):
             self.delayafterterminate = self.delayafterclose = .1
             self.native_eof = False
             self.reader_error = None
+            self.reader_phase = 'starting'
+            self.reader_calls = 0
             self._stop_reader = threading.Event()
             self.fileobj, self._server = socket.socketpair()
             self.fd = self.fileobj.fileno()
@@ -113,7 +116,10 @@ def _bounded_process_type(base):
             try:
                 while not self._stop_reader.is_set():
                     try:
+                        self.reader_phase = 'native-read-false'
+                        self.reader_calls += 1
                         data = self.pty.read(4096, blocking=False)
+                        self.reader_phase = 'native-read-returned'
                     except WinptyError as exc:
                         # Native cache EOF is a specific error in this binding;
                         # arbitrary native read errors must never become success.
@@ -121,9 +127,11 @@ def _bounded_process_type(base):
                             raise
                         data = ''
                     if data:
+                        self.reader_phase = 'socket-send'
                         self._server.sendall(data.encode('utf-8'))
                     # iseof alone does not account for native cached output.
                     # Keep reading cached chunks, even after the child is dead.
+                    self.reader_phase = 'native-eof-check'
                     if not data and self.pty.iseof() and not self.pty.isalive():
                         self.native_eof = True
                         break
@@ -186,6 +194,16 @@ def _console(request):
         result = {'transcript': reader.text, 'exitstatus': status,
                   'backend': identity['name'], 'backend_identity': identity,
                   'eof': reader.eof}
+    except BaseException:
+        frame = sys._current_frames().get(p._thread.ident)
+        safe = {'phase': 'nonblocking-console-failure', 'cancel': request['cancel'],
+                'child_alive': p.pty.isalive(), 'child_exitstatus': p.exitstatus,
+                'reader_alive': p._thread.is_alive(), 'reader_phase': p.reader_phase,
+                'reader_calls': p.reader_calls, 'native_eof': p.native_eof,
+                'reader_stack': [{'file': Path(x.filename).name, 'function': x.name, 'line': x.lineno}
+                                 for x in traceback.extract_stack(frame)]}
+        print(json.dumps(safe), file=sys.stderr, flush=True)
+        raise
     finally:
         # This is library-resource cleanup, not an extension of either success
         # deadline. The outer 35s cap also bounds spawn/close/join themselves.
