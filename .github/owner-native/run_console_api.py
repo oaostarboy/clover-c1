@@ -101,7 +101,7 @@ print(json.dumps({'blocked':blocked,'pairing_origin':gateway.pairing.__file__,'c
         receipts.save('plan.json', {'scope': 'Windows Job API then unchanged console cases only',
                                    'product': receipts.TARGET, 'product_tree': receipts.TREE,
                                    'helper': helper, 'job_preflight_expected': 5,
-                                   'console_expected': 2, 'retries': 0,
+                                   'console_expected': 2, 'transport_expected': 3, 'retries': 0,
                                    'console_deadlines': '20s prompt + 15s exit; 35s outer; cleanup unchanged',
                                    'not_exercised': ['full platform matrix', 'CLI timeout diagnosis', 'deployment']})
         row = measured('job-api-preflight', [sys.executable, str(HELPER / 'test_windows_job_api.py')],
@@ -118,10 +118,11 @@ print(json.dumps({'blocked':blocked,'pairing_origin':gateway.pairing.__file__,'c
         bash = shutil.which('bash')
         assert bash and 'git' in bash.lower() and 'wsl' not in bash.lower(), bash
         xml = OUT / 'console.xml'
+        console_work = OUT / 'console-work'
         args = [bash, str(SOURCE / 'scripts/run_tests.sh'), '-j', '1', '--file-retries', '0',
                 str(HELPER / 'test_native_owner.py'), '-k',
                 'test_native_console_hidden_confirmation_and_cancellation', '-p', 'no:randomly',
-                '--junitxml=' + xml.as_posix(), '-r', 'a', '--tb=short', '-s']
+                '--junitxml=' + xml.as_posix(), '--basetemp=' + console_work.as_posix(), '-r', 'a', '--tb=short', '-s']
         row = measured('console', args, env, 360, SOURCE)
         cases = []
         if xml.exists():
@@ -131,7 +132,18 @@ print(json.dumps({'blocked':blocked,'pairing_origin':gateway.pairing.__file__,'c
                               'outcome': outcome,
                               'detail': ''.join(case.find(outcome).itertext()) if outcome != 'passed' else ''})
         receipts.save('console-cases.json', cases)
+        console_receipts = [json.loads(p.read_text(encoding='utf-8'))
+                            for p in sorted(console_work.rglob('native-console-receipt.json'))]
+        receipts.save('native-console-receipts.json', console_receipts)
+        # Do not upload synthetic profile contents or any proof-store material.
+        shutil.rmtree(console_work)
         assert len(cases) == 2, 'incomplete console XML'
+        import windows_console
+        assert len(console_receipts) == 2 and {r['cancel'] for r in console_receipts} == {False, True}
+        for r in console_receipts:
+            assert r['backend_identity'] == windows_console.LOCKED_CONPTY and r['eof'] is True
+            assert r['exitstatus'] == (1 if r['cancel'] else 0)
+            assert r['lifecycle']['native_cache_eof'] and r['lifecycle']['reader_joined'] and r['lifecycle']['thread_handles_closed']
         assert transport['exit'] == 0, 'native transport lifecycle controls failed'
         assert row['exit'] == 0 and all(c['outcome'] == 'passed' for c in cases), 'console gate failed; preserve finding'
     finally:

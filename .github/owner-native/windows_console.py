@@ -267,6 +267,13 @@ def run_console(command, cwd, env, code, cancel):
         # Safe backend provenance only: never print the transcript or proof code.
         print(json.dumps({'console_backend_identity': result['backend_identity']}), flush=True)
         print(json.dumps({'console_lifecycle': life}), flush=True)
+        # The canonical per-file runner hides passing stdout. Retain ONLY safe
+        # validated metadata in the synthetic profile for the driver to collect.
+        # Never persist the transcript, input code, environment or request.
+        if 'CLOVER_HOME' in env:
+            receipt = {'cancel': cancel, 'exitstatus': result['exitstatus'], 'eof': result['eof'],
+                       'backend_identity': result['backend_identity'], 'lifecycle': life}
+            (Path(env['CLOVER_HOME']) / 'native-console-receipt.json').write_text(json.dumps(receipt), encoding='utf-8')
         return result['transcript']
     finally:
         try:
