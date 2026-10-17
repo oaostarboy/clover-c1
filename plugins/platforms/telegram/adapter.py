@@ -4620,20 +4620,24 @@ class TelegramAdapter(BasePlatformAdapter):
             return
         from telegram.ext import ApplicationHandlerStop
 
-        message = getattr(update, "message", None)
-        if message is not None:
-            try:
-                await self._handle_owner_verification(message)
-            except Exception:
-                # Even an unexpected identity/SDK failure must not hand the
-                # raw proof-bearing update to ordinary PTB error handlers.
-                pass
-        if self._update_admission:
-            # Stop also bypasses group-100 finalization. Release the no-event
-            # claim without recording a receipt or retaining a proof envelope.
-            from plugins.platforms.telegram.update_admission import make_finalize_handler
+        try:
+            message = getattr(update, "message", None)
+            if message is not None:
+                try:
+                    await self._handle_owner_verification(message)
+                except Exception:
+                    # Even an unexpected identity/SDK failure must not hand the
+                    # raw proof-bearing update to ordinary PTB error handlers.
+                    pass
+        finally:
+            if self._update_admission:
+                # Stop and cancellation bypass group-100 finalization. Release
+                # only this no-event claim, without a receipt. The finalizer
+                # has no suspension point, so cancellation still propagates
+                # after cleanup without a shield or background task.
+                from plugins.platforms.telegram.update_admission import make_finalize_handler
 
-            await make_finalize_handler(self, _bot_id_from_token(self.config.token))(update, context)
+                await make_finalize_handler(self, _bot_id_from_token(self.config.token))(update, context)
         raise ApplicationHandlerStop
 
     def _register_handlers(self, app) -> None:
