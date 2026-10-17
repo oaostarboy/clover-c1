@@ -137,7 +137,9 @@ def binding_for_job(job, adapters, loop):
 
 
 def status(binding):
-    snapshot = binding.snapshot()
+    # Status, like Off, must survive source removal or credential rotation.
+    # It reads only the exact current private administrative scope and receipt.
+    snapshot = binding.revocation_scope()
     path = state_path(snapshot['home'])
     if not path.exists():
         return '📬 Watcher Off · extra model usage only after a separate paid review.'

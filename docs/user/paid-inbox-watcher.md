@@ -122,7 +122,10 @@ notification cap); inspect status so a quiet watcher is not mistaken for healthy
 ```
 
 Status shows the persisted allowance day, conservative remaining attempts and last
-bounded outcome without mail. Remaining allowance is conservative until the next
+bounded outcome without mail, even if the mail source disappears. The native
+watcher page and main On/Off/status acknowledgements also show existing watcher
+state in its authorized private scope, without a source read or provider-key lookup.
+Remaining allowance is conservative until the next
 physical reservation advances its UTC day. Watcher Off durably revokes consent,
 drops pending delivery and pauses only its owned job; it still works if the mail
 source disappeared. It cannot unspend a request already transmitted. A new

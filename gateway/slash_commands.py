@@ -3651,9 +3651,21 @@ class GatewaySlashCommandsMixin:
                 return "Watcher controls locked by current scoped admin policy."
             from gateway.inbox_watcher_controls import Binding, text_command
             return text_command(Binding(self, event.source), args)
+        def watcher_status_suffix():
+            # No source/provider lookup: main Off leaves this separate job alive.
+            from cron.inbox_watcher import state_path
+            if not can_change or not state_path(get_clover_home()).exists():
+                return ""
+            try:
+                from gateway.inbox_watcher_controls import Binding, status
+                return "\n" + status(Binding(self, event.source))
+            except Exception:
+                return "\n📬 Watcher status unavailable in this scope; main Off does not stop independent jobs."
+
         permission_help = args.lower() in {"setup", "status"}
         text = proactive_command("status" if args.lower() == "setup" else args,
                                  can_change=can_change, show_commands=bool(args) or not can_change)
+        text += watcher_status_suffix()
         if permission_help:
             from gateway.slash_access import _keys_for_scope, _scope_for_chat_type
             scope = _scope_for_chat_type(event.source.chat_type)
@@ -3711,6 +3723,7 @@ class GatewaySlashCommandsMixin:
                     if watcher_draft is None:
                         watcher_draft = Draft(Binding(self, source))
                     result = watcher_draft.render()
+                    result["text"] += watcher_status_suffix()
                     from cron.inbox_watcher import state_path, Store
                     state_file = state_path(home)
                     if state_file.exists():
@@ -3737,7 +3750,8 @@ class GatewaySlashCommandsMixin:
                     return {"text":"📬 Inbox watcher unavailable · extra model usage requires a connected native Email source, "
                             "current private Telegram admin scope and a supported bounded route. No activation. "
                             "Supported opt-in uses an enforced per-day call budget. "
-                            "Use the private chat; connect Email through existing setup. Other sources/routes unavailable.",
+                            "Use the private chat; connect Email through existing setup. Other sources/routes unavailable."
+                            + watcher_status_suffix(),
                             "choices":unavailable_choices}
             return {"text": draft.render(view), "choices": draft.choices(view)}
 
@@ -3753,8 +3767,8 @@ class GatewaySlashCommandsMixin:
                     if value not in {"on", "off"}:
                         return "Invalid choice; run /proactive again."
                     used = True
-                    return proactive_command(value, can_change=True, show_commands=False,
-                                             expected=snapshot.baseline)
+                    return (proactive_command(value, can_change=True, show_commands=False,
+                                             expected=snapshot.baseline) + watcher_status_suffix())
                 if value == "paid retry-registration" and view == "watcher":
                     from gateway.inbox_watcher_controls import Binding
                     from cron.inbox_watcher import retry_registration
@@ -3796,7 +3810,8 @@ class GatewaySlashCommandsMixin:
                     return "Cancelled; no settings changed. /proactive — On / Off / Customize."
                 if value == "save":
                     used = True
-                    return draft.save() + "\n" + proactive_command(can_change=True, show_commands=False)
+                    return (draft.save() + "\n" + proactive_command(can_change=True, show_commands=False)
+                            + watcher_status_suffix())
                 if value.startswith("view "):
                     target = value[5:]
                     if target not in {"basic", "advanced", "timing", "frequency", *ADVANCED_ENTRIES, "recall", "suggestions", "audit", "skill-drafts"}:
