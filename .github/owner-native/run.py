@@ -69,6 +69,20 @@ def identity(label):
 def main():
     initial = identity('before')
     save('dependencies.json', {x: importlib.metadata.version(x) for x in ['python-telegram-bot', 'pytest', 'pytest-asyncio', 'pywinpty' if os.name == 'nt' else 'ptyprocess']})
+    save('dependency-inventory.json', {d.metadata['Name']: d.version for d in importlib.metadata.distributions()})
+    filesystem = []
+    if os.name == 'nt':
+        commands = [['fsutil', 'fsinfo', 'volumeinfo', OUT.anchor.rstrip('\\/')]]
+    elif sys.platform == 'darwin':
+        df = subprocess.run(['df', '-P', str(OUT)], capture_output=True, text=True)
+        filesystem.append({'command': df.args, 'exit': df.returncode, 'stdout': df.stdout, 'stderr': df.stderr})
+        commands = [['diskutil', 'info', df.stdout.splitlines()[-1].split()[0]]] if df.returncode == 0 else []
+    else:
+        commands = [['df', '-T', str(OUT)]]
+    for command in commands:
+        measured = subprocess.run(command, capture_output=True, text=True)
+        filesystem.append({'command': command, 'exit': measured.returncode, 'stdout': measured.stdout, 'stderr': measured.stderr})
+    save('filesystem.json', filesystem)
     assert importlib.metadata.version('python-telegram-bot') == '22.8'
     # Read-only tracked files. Generated caches/homes are outside product source.
     for path in initial['tracked_sha256']:
