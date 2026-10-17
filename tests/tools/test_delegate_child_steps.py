@@ -122,11 +122,11 @@ def test_each_child_todo_list_is_seeded_from_its_own_steps(built):
     assert out["status"] == "dispatched", out
     assert [c._todo_store.items for c in built.kids] == [
         ac.seed_todos(("open it", "check links")),
-        None,
+        ac.seed_todos(("check the silas studios site thoroughly",)),
         ac.seed_todos(("read it", "list typos", "report")),
     ]
     rec = list(root._fg_own_dispatches.values())[0]
-    assert rec.child_steps == (("open it", "check links"), (), ("read it", "list typos", "report"))
+    assert rec.child_steps == (("open it", "check links"), ("check the silas studios site thoroughly",), ("read it", "list typos", "report"))
 
 
 def test_a_single_task_keeps_the_handoff_steps(built):
@@ -138,12 +138,15 @@ def test_a_single_task_keeps_the_handoff_steps(built):
     assert list(root._fg_own_dispatches.values())[0].child_steps == ()
 
 
-def test_no_task_steps_means_nothing_is_seeded(built):
+def test_no_task_steps_seeds_each_helpers_own_goal(built):
     root = _root()
     dt.delegate_task(parent_agent=root, tasks=[{"goal": "check the first site thoroughly"},
                                                {"goal": "check the second site thoroughly"}],
                      handoff=_handoff(), background=True)
-    assert [c._todo_store.items for c in built.kids] == [None, None]
+    assert [c._todo_store.items for c in built.kids] == [
+        ac.seed_todos(("check the first site thoroughly",)),
+        ac.seed_todos(("check the second site thoroughly",)),
+    ]
 
 
 # -- routing by task_index -----------------------------------------------------
@@ -176,7 +179,7 @@ def test_todo_events_tick_only_their_own_helpers_steps():
                       todos=_todos("in_progress", "pending"))
     assert [r[1] for r in card.parts[0].checklist.kids[2].steps] == ["completed", "in_progress", "pending"]
     assert [r[1] for r in card.parts[0].checklist.kids[0].steps] == ["in_progress", "pending"]
-    assert card.parts[0].checklist.kids[1].steps == []
+    assert card.parts[0].checklist.kids[1].steps == [["b", "in_progress"]]
 
 
 def test_a_finished_helper_keeps_its_steps_with_final_icons():
