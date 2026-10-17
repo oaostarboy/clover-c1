@@ -57,9 +57,16 @@ jobs:
         shell: bash
         working-directory: source
         run: uv sync --locked --python 3.11 --extra all --extra dev --extra messaging
+      - name: Freeze helper identity before the unchanged complete native gate
+        shell: bash
+        run: uv run --project source --no-sync python helpers/.github/owner-native/run_supplementals.py --before
       - name: Canonical one-worker no-retry offline native evidence
         shell: bash
         run: uv run --project source --no-sync python helpers/.github/owner-native/run.py
+      - name: Additive writer and native lifecycle controls with combined identity readback
+        if: always()
+        shell: bash
+        run: uv run --project source --no-sync python helpers/.github/owner-native/run_supplementals.py --after
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
