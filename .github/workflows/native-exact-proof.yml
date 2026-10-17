@@ -44,8 +44,8 @@ jobs:
           TARGET_TREE: ${{ inputs.target_tree }}
         run: |
           set -euo pipefail
-          test "$TARGET_REF" = de9df79dad8e07ba27b4e6dd1c9c674701dca70b
-          test "$TARGET_TREE" = 23b47f3cc04be64bc3e93be16d2d092ec28c83a9
+          test "$TARGET_REF" = 918cf7ae3d39556cb10102d282b7283dc486467b
+          test "$TARGET_TREE" = ad870be841e691f7a00f175ea8dca43c4c1b037e
           test "$(git -C source rev-parse HEAD)" = "$TARGET_REF"
           test "$(git -C source rev-parse HEAD^{tree})" = "$TARGET_TREE"
           test -z "$(git -C source status --porcelain --untracked-files=no)"
