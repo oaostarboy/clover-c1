@@ -112,8 +112,43 @@ def _cached_read(path: Path, cache: Dict[str, tuple], parse):
     return parsed
 
 
-def load_managed_config() -> dict:
-    """Parsed managed config.yaml, or {} when absent/malformed (fail-open)."""
+class ManagedPolicyError(ValueError):
+    """Current administrator settings cannot safely authorize a control write."""
+
+
+def load_managed_config(*, strict: bool = False) -> dict:
+    """Load policy; startup stays forgiving, control writes use a fresh strict read.
+
+    Strict mode preserves absent scope/file and empty YAML/null/mapping semantics,
+    but never treats an unreadable or invalid existing file as unrestricted.
+    It bypasses the startup cache so same-size/mtime edits are also revalidated.
+    """
+    if strict:
+        try:
+            managed_dir = get_managed_dir()
+            if managed_dir is None:
+                return {}
+            path = managed_dir / "config.yaml"
+            try:
+                text = path.read_text(encoding="utf-8-sig")
+            except FileNotFoundError:
+                # A missing file is unconfigured; a dangling policy link is not.
+                try:
+                    path.lstat()
+                except FileNotFoundError:
+                    return {}
+                raise
+            parsed = yaml.safe_load(text)
+            if parsed is None:
+                return {}
+            if not isinstance(parsed, dict):
+                raise ValueError("managed policy must be a settings mapping")
+            return parsed
+        except (OSError, UnicodeError, yaml.YAMLError, ValueError) as exc:
+            raise ManagedPolicyError(
+                "Not saved: administrator settings could not be read or are invalid. "
+                "Ask the profile operator to fix them, then try again."
+            ) from exc
     managed_dir = get_managed_dir()
     if managed_dir is None:
         return {}
@@ -199,9 +234,9 @@ def _flatten_keys(d: dict, prefix: str = "") -> set:
     return keys
 
 
-def managed_config_keys() -> set:
+def managed_config_keys(*, strict: bool = False) -> set:
     """Dotted leaf keys pinned by the managed config (e.g. {'model.default'})."""
-    return _flatten_keys(load_managed_config())
+    return _flatten_keys(load_managed_config(strict=strict))
 
 
 def is_key_managed(dotted_key: str) -> bool:

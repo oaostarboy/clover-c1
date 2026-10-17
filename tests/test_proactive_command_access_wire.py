@@ -242,7 +242,7 @@ async def test_managed_feature_rejection_at_callback_and_text_is_not_success(hom
             await dispatch(app, a, command(app, "/proactive on"))
             replies = [p["text"] for m, p in endpoint.calls if m in {"sendMessage", "editMessageText"}][1:]
             assert len(replies) == 2
-            assert all("could not be confirmed" in text and "Saved" not in text for text in replies)
+            assert all(("could not be confirmed" in text or "Not saved" in text) and "Saved" not in text for text in replies)
             assert not load_settings().enabled
             assert (home / "config.yaml").read_bytes() == before
         finally:

@@ -29,6 +29,7 @@ class OfferTurn:
     row_id: int
     event_id: str
     query: str
+    ingress: Any
 
 
 def _now() -> datetime:
@@ -87,7 +88,7 @@ def prepare_offer_turn(agent: Any, row: Any) -> None:
     if not root or root != db.get_conversation_root(ingress.session_id):
         return
     agent._workstream_suggestion_turn = OfferTurn(
-        scope, agent.session_id, root, row_id, ingress.event_id, text)
+        scope, agent.session_id, root, row_id, ingress.event_id, text, ingress)
 
 
 def _artifact_detail(receipt: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -222,6 +223,11 @@ def present_offer(agent: Any, result: Any, *, is_current) -> Optional[dict]:
     if committed is None or _artifact_detail(committed) != artifact or not is_current():
         return None
     artifact["receipt_id"] = receipt_id
+    from agent.actionable_suggestions import propose
+
+    action = propose(agent, turn, artifact, is_current=is_current)
+    if action is not None:
+        artifact["action"] = action
     # The existing response adapter treats bare paths and MEDIA: tags as
     # attachment directives. Its blockquote mask is the supported literal
     # presentation surface. Prefix EVERY line (including CR/Unicode newlines)

@@ -23070,6 +23070,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
             _turn_seconds = time.monotonic() - _turn_started_monotonic
 
+            from gateway.actionable_suggestions import after_reply as _action_after_reply
+
+            try:
+                await _action_after_reply(self, event, agent_result)
+            except Exception:
+                logger.debug("optional actionable offer unavailable", exc_info=True)
             # Stop persistent typing indicator now that the agent is done.
             # Slack AI status is scoped to a thread/workspace, so preserve the
             # same routing metadata used by the response delivery path.

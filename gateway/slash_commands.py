@@ -3617,7 +3617,7 @@ class GatewaySlashCommandsMixin:
             # spellings before shared-key bridging can mask a denial.
             from clover_cli.managed_scope import load_managed_config
             from gateway.slash_access import _scope_for_chat_type, policy_from_extra
-            platforms = load_managed_config().get("platforms", {})
+            platforms = load_managed_config(strict=True).get("platforms", {})
             managed = platforms.get(source.platform.value, {})
             for extra in (managed, managed.get("extra", {})):
                 if not policy_from_extra(extra, _scope_for_chat_type(source.chat_type)).is_admin(source.user_id):
@@ -3630,18 +3630,42 @@ class GatewaySlashCommandsMixin:
         import copy
         import time
         from clover_constants import get_clover_home
-        from clover_cli.proactive import proactive_command, PROACTIVE_ACTIONS
+        from clover_cli.proactive import proactive_command, PROACTIVE_ACTIONS, ProactiveDraft, HELP, ADVANCED_ENTRIES
         from gateway.run import _profile_runtime_scope
 
         if getattr(event, "internal", False):
             return "Use a current authenticated /proactive command to change settings."
         if self._is_stale_offline_command(event):
             return self._stale_offline_command_reply("proactive")
+        from clover_cli.managed_scope import load_managed_config, ManagedPolicyError
+        try:
+            load_managed_config(strict=True)
+        except ManagedPolicyError as exc:
+            # A broken administrator file is not an ordinary unconfigured gate.
+            # Explain the refusal before offering unusable controls or admin setup.
+            return str(exc)
         can_change = self._proactive_caller_is_admin(event.source)
         args = event.get_command_args().strip()
+        if args.lower().startswith("watcher "):
+            if not can_change:
+                return "Watcher controls locked by current scoped admin policy."
+            from gateway.inbox_watcher_controls import Binding, text_command
+            return text_command(Binding(self, event.source), args)
+        def watcher_status_suffix():
+            # No source/provider lookup: main Off leaves this separate job alive.
+            from cron.inbox_watcher import state_path
+            if not can_change or not state_path(get_clover_home()).exists():
+                return ""
+            try:
+                from gateway.inbox_watcher_controls import Binding, status
+                return "\n" + status(Binding(self, event.source))
+            except Exception:
+                return "\n📬 Watcher status unavailable in this scope; main Off does not stop independent jobs."
+
         permission_help = args.lower() in {"setup", "status"}
         text = proactive_command("status" if args.lower() == "setup" else args,
                                  can_change=can_change, show_commands=bool(args) or not can_change)
+        text += watcher_status_suffix()
         if permission_help:
             from gateway.slash_access import _keys_for_scope, _scope_for_chat_type
             scope = _scope_for_chat_type(event.source.chat_type)
@@ -3659,7 +3683,7 @@ class GatewaySlashCommandsMixin:
         if isinstance(prefix, str) and prefix != "/":
             text = (text.replace("/proactive", f"{prefix}proactive")
                     .replace("/loop", f"{prefix}loop").replace("/whoami", f"{prefix}whoami"))
-        if args or not can_change:
+        if args.lower() not in {"", "customize", "advanced", *ADVANCED_ENTRIES} or not can_change:
             return text
 
         # Capture the admitted source, not a mutable event or ambient callback
@@ -3672,6 +3696,13 @@ class GatewaySlashCommandsMixin:
         credential = self._adapter_credential_fingerprint(adapter)
         expires_at = time.monotonic() + 300
         used = False
+        try:
+            snapshot = ProactiveDraft.open()
+        except Exception:
+            return text
+        draft = snapshot if args else None
+        watcher_draft = None
+        view = args.lower() if args.lower() in {"advanced", *ADVANCED_ENTRIES} else "basic"
 
         def authorized(uid):
             if used or str(uid) != str(source.user_id) or time.monotonic() > expires_at:
@@ -3682,23 +3713,137 @@ class GatewaySlashCommandsMixin:
                         and self._resolve_profile_home_for_source(source).resolve() == route_home
                         and self._proactive_caller_is_admin(source))
 
-        async def on_selected(chat_id, value):
-            nonlocal used
-            if str(chat_id) != str(source.chat_id) or value not in {"on", "off"} or not authorized(source.user_id):
-                return "Picker expired or no longer authorized; run /proactive again."
-            used = True
-            with _profile_runtime_scope(home):
-                return proactive_command(value, can_change=True, show_commands=False)
+        def page():
+            nonlocal watcher_draft
+            assert draft is not None
+            if view == "watcher":
+                from gateway.inbox_watcher_controls import Binding
+                from cron.inbox_watcher import Draft
+                try:
+                    if watcher_draft is None:
+                        watcher_draft = Draft(Binding(self, source))
+                    result = watcher_draft.render()
+                    result["text"] += watcher_status_suffix()
+                    from cron.inbox_watcher import state_path, Store
+                    state_file = state_path(home)
+                    if state_file.exists():
+                        saved = Store(state_file).read()["policy"]
+                        if saved and saved["state"] == "pending":
+                            result["choices"].append({"value":"paid retry-registration", "label":"Retry registration"})
+                    result["choices"] += [{"value":"paid off", "label":"Watcher Off"},
+                        {"value":"view advanced", "label":"‹ Back"},
+                        {"value":"cancel", "label":"✖️ Cancel"}]
+                    return result
+                except Exception:
+                    # With no owned consent this is still a pure discovery page;
+                    # retain the existing Save/Cancel controls (Save cannot opt in).
+                    unavailable_choices = draft.choices(view)
+                    try:
+                        from cron.inbox_watcher import Store, state_path
+                        if state_path(home).exists():
+                            saved = Store(state_path(home)).read()["policy"]
+                            if (saved and saved["snapshot"]["actor"] == str(source.user_id)
+                                    and saved["snapshot"]["destination"]["chat_id"] == str(source.chat_id)):
+                                unavailable_choices.insert(0, {"value":"paid off", "label":"Watcher Off"})
+                    except Exception:
+                        pass
+                    return {"text":"📬 Inbox watcher unavailable · extra model usage requires a connected native Email source, "
+                            "current private Telegram admin scope and a supported bounded route. No activation. "
+                            "Supported opt-in uses an enforced per-day call budget. "
+                            "Use the private chat; connect Email through existing setup. Other sources/routes unavailable."
+                            + watcher_status_suffix(),
+                            "choices":unavailable_choices}
+            return {"text": draft.render(view), "choices": draft.choices(view)}
 
+        async def on_selected(chat_id, value):
+            nonlocal used, draft, view
+            if str(chat_id) != str(source.chat_id) or not authorized(source.user_id):
+                return "Picker expired or no longer authorized; run /proactive again."
+            with _profile_runtime_scope(home):
+                if draft is None:
+                    if value == "customize":
+                        draft = snapshot
+                        return page()
+                    if value not in {"on", "off"}:
+                        return "Invalid choice; run /proactive again."
+                    used = True
+                    return (proactive_command(value, can_change=True, show_commands=False,
+                                             expected=snapshot.baseline) + watcher_status_suffix())
+                if value == "paid retry-registration" and view == "watcher":
+                    from gateway.inbox_watcher_controls import Binding
+                    from cron.inbox_watcher import retry_registration
+                    used = True
+                    try:
+                        result = retry_registration(Binding(self, source))
+                        return f"📬 Watcher {result['state']} · owned job {result['job_id']}. /proactive watcher off"
+                    except Exception:
+                        return "Registration retry refused; accepted scope changed or no pending job."
+                if value == "paid off" and view == "watcher":
+                    from gateway.inbox_watcher_controls import Binding
+                    from cron.inbox_watcher import revoke
+                    used = True
+                    try:
+                        return revoke(Binding(self, source))
+                    except Exception:
+                        return "Watcher Off could not be confirmed; current private admin authority required."
+                if value.startswith("paid "):
+                    if view != "watcher" or watcher_draft is None:
+                        used = True
+                        return "Invalid watcher page; no activation."
+                    from cron.inbox_watcher import revoke
+                    try:
+                        action = value[5:]
+                        if action == "off":
+                            used = True
+                            return revoke(watcher_draft.binding)
+                        if action == "accept-extra-usage":
+                            used = True
+                            result = watcher_draft.accept(action)
+                            return f"📬 Watcher {result['state']} · owned job {result['job_id']}. /proactive watcher off"
+                        watcher_draft.choose(action)
+                        return page()
+                    except Exception:
+                        used = True
+                        return "Watcher review refused; no activation confirmed. Reopen and check source, policy, route and limits."
+                if value == "cancel":
+                    used = True
+                    return "Cancelled; no settings changed. /proactive — On / Off / Customize."
+                if value == "save":
+                    used = True
+                    return (draft.save() + "\n" + proactive_command(can_change=True, show_commands=False)
+                            + watcher_status_suffix())
+                if value.startswith("view "):
+                    target = value[5:]
+                    if target not in {"basic", "advanced", "timing", "frequency", *ADVANCED_ENTRIES, "recall", "suggestions", "audit", "skill-drafts"}:
+                        used = True
+                        return "Invalid page; no settings changed."
+                    view = target
+                elif value == "recommended":
+                    draft.recommended()
+                    view = "recommended"
+                else:
+                    try:
+                        draft.set(*value.split())
+                        view = value.split()[0]
+                    except (TypeError, ValueError):
+                        used = True
+                        return "Invalid choice; no settings changed. Run /proactive again."
+                return page()
+
+        initial_page = page() if draft is not None else None
+        choices = initial_page["choices"] if initial_page is not None else [
+            {"value": "on", "label": "On"}, {"value": "off", "label": "Off"},
+            {"value": "customize", "label": "⚙️ Customize"}]
+        if initial_page is not None:
+            text = initial_page["text"]
         sent = await self._try_send_choice_picker(
-            event, self._session_key_for_source(source), text,
-            [{"value": "on", "label": "On"}, {"value": "off", "label": "Off"}],
+            event, self._session_key_for_source(source), text, choices,
             on_selected, choice_guard={"owner_user_id": str(source.user_id),
                                        "expires_at": expires_at, "authorize": authorized},
         )
         if sent:
             return None
-        controls = PROACTIVE_ACTIONS
+        controls = HELP if draft is not None else PROACTIVE_ACTIONS
         if isinstance(prefix, str) and prefix != "/":
             controls = controls.replace("/proactive", f"{prefix}proactive")
         return text + "\n" + controls

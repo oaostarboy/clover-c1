@@ -1,10 +1,23 @@
 # Proactive workstreams
 
-Telegram's private Enable / Disable buttons require an explicit scoped admin or
-[verified owner](telegram-owner.md). Setup verifies the actual Telegram sender
-with local operator confirmation; it never enables proactivity or changes guest
-permissions during enrollment. Existing installs without owner proof can use
-`/proactive setup` for the secure one-time confirmation steps.
+Telegram's On / Off / Customize controls use existing source admission and
+scoped command authority. With an explicit admin list, guests remain read-only;
+without an admin gate, admitted users can use the controls. No separate owner
+pairing, terminal, enrollment or permission grant is needed. `/proactive status`
+explains the current policy. Installation and updates do not enable anything.
+
+Proactive controls reread administrator settings before saving and when a bot
+button is used. If an existing managed policy file cannot be read, contains
+broken YAML or has a non-mapping root, On, Off and Customize Save do not write
+preferences. The bot does not offer new controls until that policy is readable;
+an already-open button loses authority. Run `/proactive` again for the reason,
+and ask the profile operator to fix the administrator settings before retrying.
+Missing managed scope/file, blank or comment-only YAML, YAML `null` and an empty
+mapping mean no managed pins; they do not add an owner or admin setup step.
+Valid current managed pins and scoped admin restrictions still win. This strict
+check is limited to proactive controls; the existing forgiving startup overlay
+and unrelated commands are unchanged. It is a fresh pre-write check, not a
+transaction with an administrator concurrently replacing the policy file.
 
 An **opt-in**, per-profile ledger that keeps unfinished work, your corrections
 and verified progress across new chats, restarts and compaction. It is stored
@@ -359,21 +372,81 @@ independent command authority. Other commands and admin lists are unchanged.
 
 ### Toggle behavior
 
-The first On transition from `shadow` selects this bounded preset:
-`enabled: true`, `mode: active`, `recall.enabled: true` and
-`compaction_audit.enabled: true`. Active mode also permits the existing
-human-origin correction consumer; there is no separate correction flag.
-This enables deterministic evidence capture/auditing, **not** automatic
-compaction repair (`max_repairs` is unchanged). It does not enable suggestions,
-procedure generation, auxiliary judges, model calls, new jobs or external-action
-authority. Explicitly configured optional opt-ins keep their existing behavior;
-the menu does not grant missing timing or permission.
+The first explicit On on an uncustomized profile selects a useful bounded
+package: active work tracking/corrections, work recall, local after-reply
+suggestions (3600-second cooldown, at most one per session), and supported
+native text-summary auditing. The menu discloses suggestions before the tap.
+This does not add model calls, paid watchers, repair, jobs or action authority.
 
-Limits, privacy, eligible job enrollment, timing (including non-null `never`
-or `after_reply`), auxiliary/model budgets and other config stay unchanged.
-Once mode is `active`, off/on preserves the saved capability preferences too.
-Off sets only `enabled: false`; ledger records remain inert and inspectable,
-and independently scheduled jobs and existing `/loop` records remain untouched.
+**Saved choices win.** Existing sections (including false, never, zero budgets
+and omitted leaves using the old defaults) remain unchanged. Once active,
+Off/On only suspends/resumes the master. Fully materialized older default files
+cannot be distinguished from intentionally saved Off choices: they are preserved,
+not guessed away. Choose **Use recommended → Save → On** to deliberately select
+the whole package in that case. Recommended changes only the exposed preset
+leaves, sets optional skill drafts Off, and preserves master On/Off, thresholds,
+privacy, enrollment, auxiliary budgets and other preferences.
+
+Off sets only `enabled: false`; records remain inspectable. It **does not cancel
+independently scheduled jobs or existing loops**, which have their own controls.
+An update or opening any menu never saves preferences or starts jobs.
+
+### Customize on a phone
+
+The short native menu uses labelled feature buttons with matching emoji:
+Recall, Suggestions, Skill drafts and Context checks. Tap a feature for its
+explanation and On/Off choices. Timing chooses after-reply or never; Frequency
+chooses hourly or daily cooldown, each capped at one offer per session. Existing
+custom cooldown/cap values are displayed and retained unless explicitly changed.
+Save commits the draft atomically; Cancel writes nothing. New page tokens prevent
+replayed taps from selecting a different control at the same button position.
+If another control changes preferences while the draft is open, Save refuses it
+instead of overwriting those edits. Unrelated config edits are preserved.
+
+**Advanced / costs** exposes the complete capability inventory without fake
+switches: task/job monitoring and authorized continuation guidance; the paid
+inbox urgency classifier; model-judge and repair availability; scope, evidence
+and limits; routines/reminders; desktop-capture availability. Descriptions and
+cost caveats appear after tapping, not as a large Customize front-page paragraph.
+
+The separate [paid inbox watcher](paid-inbox-watcher.md) supports one narrow,
+explicit opt-in: connected native Email / INBOX headers, a pinned non-reasoning
+OpenAI route, and private native Telegram count alerts. Review source, cadence,
+private destination, route, urgency and usage caps, then **Accept extra usage**.
+Opening, Cancel, ordinary Save, main On and recommended cannot enable it. A
+script-only owned job has no scheduling agent. Durable per-physical-attempt
+reservations cover bounded input and generated tokens, not a dollar guarantee.
+Discovery never fetches mail or calls a provider. Watcher Off revokes only its
+owned job; main Off leaves it independent. Legacy catalog/manual mail jobs and
+their costs are unchanged and outside this allowance. Other sources/transports,
+multiplexed profiles and desktop/screen/audio capture are unavailable.
+
+Model-assisted suggestion judges are not wired to the foreground offer path;
+`max_repairs` does not activate model repair in the supported summary audit.
+Their saved limits are visible as information, not misleading working toggles.
+Ordinary skill creation and background review/curation remain independent.
+Optional procedure drafts reuse `/skills pending`; exact generated-name and
+proposal-receipt deduplication exists, but semantic matching to ordinary skills
+is not coordinated. Review that overlap; the recommended package leaves drafts Off.
+
+Accessible text equivalents save each valid choice immediately:
+
+```text
+/proactive recall on|off
+/proactive suggestions on|off
+/proactive timing after_reply|never
+/proactive frequency hourly|daily
+/proactive audit on|off
+/proactive skill-drafts on|off
+/proactive recommended
+```
+
+Read-only discovery: `/proactive customize`, `advanced`, `monitors`, `watcher`,
+`judges`, `repairs`, `scope`, `routines`, `desktop`, and `status`. Unknown or
+invalid inputs show help without a write. Text `save`/`cancel` are not invented
+transactions: use explicit single-choice commands or the native Save/Cancel UI.
+See [capability coverage](proactive-controls-coverage.json) for every config gate,
+menu entry, consumer and regression test.
 
 The command uses the existing atomic config writer and checks the saved values.
 Workstream consumers reload settings at turn/operation boundaries, so **no

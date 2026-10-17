@@ -5645,6 +5645,29 @@ class TelegramAdapter(BasePlatformAdapter):
         else:  # "first" (default)
             return chunk_index == 0
 
+    async def send_inbox_watcher_alert(self, chat_id: str, count: int, guard) -> SendResult:
+        """One guarded, private, count-only PTB send; no rich/fallback/resend.
+
+        Return the normal adapter receipt contract. The durable watcher outbox
+        owns later retries, each with renewed authority and without model usage.
+        """
+        if (not isinstance(chat_id, str) or not chat_id.isdigit() or int(chat_id) <= 0
+                or type(count) is not int or not 1 <= count <= 5 or not self._bot):
+            return SendResult(success=False, error="watcher private delivery unavailable")
+        try:
+            guard()
+            message = await self._bot.send_message(
+                chat_id=chat_id, parse_mode=None, disable_notification=False,
+                text=f"📬 {count} urgent new inbox message(s). Open your mail app. "
+                     "Header-only scoring; /proactive watcher off stops this watcher.",
+            )
+            mid = getattr(message, "message_id", None)
+            if type(mid) is not int or mid <= 0:
+                return SendResult(success=False, error="watcher delivery unconfirmed")
+            return SendResult(success=True, message_id=str(mid))
+        except Exception:
+            return SendResult(success=False, error="watcher delivery unconfirmed")
+
     async def send(
         self,
         chat_id: str,
@@ -7100,11 +7123,18 @@ class TelegramAdapter(BasePlatformAdapter):
             except Exception:
                 owned = False
             if not owned:
-                await query.answer(text="Picker expired or not owned by you; run /proactive again.")
+                await query.answer(text=guard.get("denied_text") or "Picker expired or not owned by you; run /proactive again.")
                 return
 
         try:
-            idx = int(data[3:])
+            payload = data[3:].split(":")
+            if state.get("nonce"):
+                if len(payload) != 2 or payload[1] != state["nonce"]:
+                    await query.answer(text="Picker already used; use the current buttons.")
+                    return
+            elif len(payload) != 1:
+                raise ValueError("unexpected callback token")
+            idx = int(payload[0])
             if idx < 0:
                 raise ValueError("negative choice index")
             choice = state["choices"][idx]
@@ -7130,19 +7160,38 @@ class TelegramAdapter(BasePlatformAdapter):
             logger.error("Choice picker selection failed: %s", exc)
             result_text = f"Error applying selection: {exc}"
 
+        # An owned settings page may continue in the same message. Every page
+        # gets a new token, so a delayed/repeated old tap cannot select a new
+        # control at the same index. Unowned generic pickers retain their API.
+        next_state = None
+        keyboard = None
+        if guard is not None and isinstance(result_text, dict):
+            import secrets
+            nonce = secrets.token_hex(6)
+            choices = result_text["choices"]
+            buttons = [InlineKeyboardButton(str(c["label"]), callback_data=f"cp:{i}:{nonce}")
+                       for i, c in enumerate(choices)]
+            keyboard = InlineKeyboardMarkup([buttons[i:i + 2] for i in range(0, len(buttons), 2)])
+            next_state = dict(state, choices=choices, nonce=nonce)
+            result_text = result_text["text"]
+        edited = False
         try:
             await query.edit_message_text(
                 text=self.format_message(result_text),
                 parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=None,
+                reply_markup=keyboard,
             )
+            edited = True
         except Exception:
             try:
                 await query.edit_message_text(
-                    text=result_text, parse_mode=None, reply_markup=None,
+                    text=result_text, parse_mode=None, reply_markup=keyboard,
                 )
+                edited = True
             except Exception:
                 pass
+        if edited and next_state is not None and chat_id not in self._choice_picker_state:
+            self._choice_picker_state[chat_id] = next_state
         await query.answer()
         if self._choice_picker_state.get(chat_id) is state:
             self._choice_picker_state.pop(chat_id, None)
