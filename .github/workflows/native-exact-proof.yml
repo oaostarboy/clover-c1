@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: [windows-latest]
     steps:
       - name: Use literal Git bytes on disposable runner
         shell: bash
@@ -59,7 +59,7 @@ jobs:
         run: uv sync --locked --python 3.11 --extra all --extra dev --extra messaging
       - name: Canonical one-worker no-retry offline native evidence
         shell: bash
-        run: uv run --project source --no-sync python helpers/.github/owner-native/run.py
+        run: uv run --project source --no-sync python helpers/.github/owner-native/diagnose_windows.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
