@@ -672,19 +672,19 @@ class TestRegisterHandlers:
         app = MagicMock()
         a._register_handlers(app)
 
-        # Six core handlers (default group, no group kwarg — incl. the
-        # inline command picker), the dispatch-accounting counter alone in
-        # its own group, and the gateway_platform_event observer alone in
-        # group 99, so it observes alongside rather than displacing the
-        # core handlers. (This adapter has no bot-id token, so the
-        # update-admission groups are not registered.)
+        # The proof-envelope guard must precede all six normal handlers
+        # (including the inline picker) and the observer. Dispatch accounting
+        # still runs first. This adapter has no bot-id token, so opt-in
+        # update-admission groups are not registered.
         from plugins.platforms.telegram.adapter import _DISPATCH_COUNT_GROUP
 
         calls = app.add_handler.call_args_list
-        assert len(calls) == 8
+        assert len(calls) == 9
         assert len([c for c in calls if c.kwargs.get("group") == 99]) == 1
         assert len([c for c in calls if c.kwargs.get("group") == _DISPATCH_COUNT_GROUP]) == 1
-        assert len([c for c in calls if not c.kwargs]) == 6
+        assert len([c for c in calls if c.kwargs.get("group") == 0]) == 1
+        assert len([c for c in calls if c.kwargs.get("group") == 1]) == 6
+        assert _DISPATCH_COUNT_GROUP < 0 < 1 < 99
 
     def test_rebuild_re_registers_observer(self):
         """A second call on a fresh app (e.g. a future rebuild) re-registers
@@ -696,7 +696,7 @@ class TestRegisterHandlers:
         a._register_handlers(first_app)
         a._register_handlers(rebuilt_app)  # the rebuild path
 
-        assert rebuilt_app.add_handler.call_count == 8
+        assert rebuilt_app.add_handler.call_args_list == first_app.add_handler.call_args_list
         assert len(self._observer_calls(rebuilt_app)) == 1
 
     def test_transient_init_rebuild_uses_shared_registration(self, monkeypatch):

@@ -89,6 +89,19 @@ host supports them. Do not copy or hand-edit this record to enroll someone.
 
 ## Trust limits
 
+Telegram updates containing recognizable owner-proof markers are consumed
+before ordinary chat processing, batching or observed history. This includes
+message text, captions, replied-to text/captions, native quotes and edits.
+Only a new direct private message can submit the setup challenge; a caption,
+quote, callback or edit cannot submit it. Confirmation still happens locally.
+Transport log redaction is a separate safeguard, not the chat isolation boundary.
+
+This textual check does not read proof codes from arbitrary image pixels or
+audio, or recognize an unlabelled code pasted without its marker. Do not send
+screenshots or recordings of setup secrets to the bot. Enter the confirmation
+code only in the local terminal. These safeguards do not erase earlier logs or
+history from an installation that already exposed a code.
+
 The local profile operator already controls the profile's files and bot
 credentials. This ceremony is not a sandbox against code or people with that
 same filesystem authority, nor does a terminal by itself prove a human is
