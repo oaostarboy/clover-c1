@@ -18,12 +18,12 @@ Security features (based on OWASP + NIST SP 800-63-4 guidance):
 Storage: ~/.clover/pairing/
 """
 
+import errno
 import hashlib
 import json
 import logging
 import os
 import secrets
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -416,7 +416,22 @@ def _secure_write(path: Path, data: str) -> None:
     complete file or the new one — never a partial write.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    # tempfile.mkstemp retries PermissionError on Windows when os.access says
+    # the parent is writable. That check need not reflect an NTFS create ACL,
+    # so genuine denial can spend its entire name-retry budget in tempfile.
+    # Retry only exclusive-create collisions; all other errors fail closed.
+    tmp_dir = os.path.abspath(path.parent)
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    for _ in range(100):
+        tmp_path = os.path.join(tmp_dir, f"tmp{secrets.token_hex(16)}.tmp")
+        try:
+            fd = os.open(tmp_path, flags, 0o600)
+        except FileExistsError:
+            continue
+        break
+    else:
+        raise FileExistsError(errno.EEXIST, "No usable temporary file name found", tmp_dir)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(data)
