@@ -40,6 +40,7 @@ def git(*args):
 def identity(label):
     entries = subprocess.check_output(['git', '-C', str(SOURCE), 'ls-tree', '-rz', 'HEAD']).split(b'\0')
     mismatches = []
+    checkout_transforms = []
     hashes = {}
     for e in filter(None, entries):
         meta, path = e.split(b'\t', 1)
@@ -50,9 +51,15 @@ def identity(label):
         content = p.read_bytes()
         actual = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
         if actual != oid.decode():
-            mismatches.append(str(p.relative_to(SOURCE)))
+            # Honor the reviewed .gitattributes checkout contract, including
+            # deliberate PowerShell CRLF. Never rewrite or ignore a path.
+            expected = subprocess.check_output(['git', '-C', str(SOURCE), 'cat-file', '--filters', 'HEAD:' + os.fsdecode(path)])
+            if content != expected:
+                mismatches.append(str(p.relative_to(SOURCE)))
+            else:
+                checkout_transforms.append({'path': os.fsdecode(path), 'blob': oid.decode(), 'checkout_sha256': hashlib.sha256(content).hexdigest(), 'attributes': git('check-attr', '--all', '--', os.fsdecode(path))})
         hashes[os.fsdecode(path)] = hashlib.sha256(content).hexdigest()
-    result = {'head': git('rev-parse', 'HEAD'), 'tree': git('rev-parse', 'HEAD^{tree}'), 'replacement_refs': git('replace', '-l'), 'tracked_status': git('status', '--porcelain', '--untracked-files=no'), 'mismatches': mismatches, 'tracked_sha256': hashes, 'python': sys.version, 'platform': platform.platform(), 'helper_head': subprocess.check_output(['git', '-C', str(HELPER), 'rev-parse', 'HEAD'], text=True).strip()}
+    result = {'head': git('rev-parse', 'HEAD'), 'tree': git('rev-parse', 'HEAD^{tree}'), 'replacement_refs': git('replace', '-l'), 'tracked_status': git('status', '--porcelain', '--untracked-files=no'), 'checkout_transforms': checkout_transforms, 'mismatches': mismatches, 'tracked_sha256': hashes, 'python': sys.version, 'platform': platform.platform(), 'helper_head': subprocess.check_output(['git', '-C', str(HELPER), 'rev-parse', 'HEAD'], text=True).strip()}
     save(label + '-identity.json', result)
     assert result['head'] == TARGET and result['tree'] == TREE
     assert not result['replacement_refs'] and not result['tracked_status'] and not mismatches, 'exact tracked-byte identity rejected; see receipt'
