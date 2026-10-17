@@ -26,10 +26,12 @@ from the helper's own ``todo`` list -- observed status, never guessed.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import threading
 import time
+import unicodedata
 from collections import deque
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
@@ -147,6 +149,37 @@ def clean_say(value: Any) -> str:
     return text
 
 
+_PUBLIC_ASSIGNMENT_RE = re.compile(
+    r"(?<![\w])(?:password|passwd|pwd|token|secret|api[_ -]?key|"
+    r"access[_ -]?token|refresh[_ -]?token|client[_ -]?secret)"
+    r"[\"'`]*\s*[:=]\s*"
+    r'''(?:"(?:\\.|[^"\\])*(?:"|$)|'(?:\\.|[^'\\])*(?:'|$)|`[^`]*(?:`|$)|[^\s,;}\]]+)''',
+    re.IGNORECASE,
+)
+
+
+def _public_step_text(raw: str) -> str:
+    """Strict public-label boundary, separate from the general log redactor.
+
+    Normalize display disguises before finding assignments; remove full quoted
+    values (including whitespace), before any line extraction or truncation.
+    Ordinary labels about password/token handling remain useful.
+    """
+    from agent.delegation_activity import _redact
+
+    raw = unicodedata.normalize("NFKC", html.unescape(raw[:16000]))
+    raw = raw.translate(str.maketrans({'“': '"', '”': '"', '‘': "'", '’': "'"}))
+    raw = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw)
+    raw = "".join(ch if ch.isspace() or unicodedata.category(ch) not in {"Cc", "Cf"}
+                  else "" for ch in raw)
+    raw = re.sub(r"<[^>]*>", "", raw)
+    raw = re.sub(r"[*]|_{2,}|~{2,}", "", raw)
+    raw = _PUBLIC_ASSIGNMENT_RE.sub("[redacted]", raw)
+    raw = _redact(raw)
+    raw = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", raw)
+    return re.sub(r"(?:https?://|www\.)\S+", "", raw)
+
+
 def clean_steps(value: Any) -> Tuple[str, ...]:
     """1-6 short single-line steps from the model's ``handoff.steps``.
 
@@ -159,14 +192,10 @@ def clean_steps(value: Any) -> Tuple[str, ...]:
     for raw in value[:100]:
         if not isinstance(raw, str):
             continue
-        from agent.delegation_activity import _redact
         from agent.delegation_checkpoint import _normalize_card_text
 
         # Redact BEFORE truncation so a cut credential never becomes visible.
-        raw = _redact(raw[:16000])
-        raw = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", raw)
-        raw = re.sub(r"(?:https?://|www\.)\S+", "", raw)
-        raw = re.sub(r"<[^>]*>", "", raw)
+        raw = _public_step_text(raw)
         text = _normalize_card_text(raw, MAX_STEP_CHARS) or ""
         text = re.sub(r"[<>\[\]\\\\|_*~]", " ", text)
         text = " ".join(text.split())
@@ -193,10 +222,9 @@ def dispatch_steps(goal: Any, steps: Any = ()) -> Tuple[str, ...]:
     explicit = clean_steps(steps)
     if explicit:
         return explicit
-    from agent.delegation_activity import _redact
     from agent.delegation_checkpoint import _goal_title
 
-    public_goal = _goal_title(_redact(goal[:16000])) if isinstance(goal, str) else ""
+    public_goal = _goal_title(_public_step_text(goal)) if isinstance(goal, str) else ""
     return clean_steps([public_goal]) or ("Work on the assigned task",)
 
 
@@ -1041,6 +1069,7 @@ _MAX_CARDS = 32
 # Delegation ids promised a part: the dispatch is about to start its helpers,
 # whose first events can fire before the receipt opens the part.
 _RESERVED: Dict[str, float] = {}
+_RESERVED_CHECKLISTS: Dict[str, List[List[Dict[str, str]]]] = {}
 BIND_WINDOW_SECONDS = 180.0
 
 
@@ -1079,12 +1108,18 @@ def open_part(
     with _LOCK:
         _RESERVED.pop(did, None)
         part = _PARTS.pop(did, None)
+        initial = _RESERVED_CHECKLISTS.pop(did, [])
         if part is None:
             n = max(1, int(expected or 1))
             # Seed the first-event/legacy receipt path too. Only public goals
             # and this dispatch's structured plan are eligible sources.
             single_steps = dispatch_steps(_nth(goals, 0), steps) if unified() and goals else steps
-            part = Part(did, Checklist.start(header, single_steps if n == 1 else (), say), n)
+            saved = _nth(initial, 0) if n == 1 else []
+            checklist = (Checklist(header=header, say=say,
+                                   steps=[[t['content'], t['status']] for t in saved],
+                                   step_ids=[t['id'] for t in saved]) if saved else
+                         Checklist.start(header, single_steps if n == 1 else (), say))
+            part = Part(did, checklist, n)
             global _OPEN_SEQ
             _OPEN_SEQ += 1
             part.opened_seq = _OPEN_SEQ
@@ -1092,8 +1127,11 @@ def open_part(
                 part.checklist.kids = [
                     Child(
                         index=i, title=_goal_title(_nth(goals, i)),
-                        steps=_seed_rows(dispatch_steps(_nth(goals, i), _nth(child_steps, i))
-                                         if unified() and goals else _nth(child_steps, i)),
+                        steps=([[t['content'], t['status']] for t in initial[i]]
+                               if i < len(initial) and initial[i] else
+                               _seed_rows(dispatch_steps(_nth(goals, i), _nth(child_steps, i))
+                                          if unified() and goals else _nth(child_steps, i))),
+                        step_ids=([t['id'] for t in initial[i]] if i < len(initial) else []),
                     )
                     for i in range(n)
                 ]
@@ -1178,7 +1216,7 @@ def abandon(delegation_id: Any) -> None:
         _PARTS.pop(str(delegation_id or ""), None)
 
 
-def reserve(delegation_id: Any) -> bool:
+def reserve(delegation_id: Any, *, checklists: Sequence[Any] = ()) -> bool:
     """Claim ``delegation_id`` for the unified card before its helpers start,
     so ``owns_delegation`` is true from their very first event (and the
     gateway never posts a separate 🔀 card).  ``open_part`` fulfils the
@@ -1188,8 +1226,15 @@ def reserve(delegation_id: Any) -> bool:
         return False
     with _LOCK:
         _RESERVED[did] = time.monotonic()
+        # Only the authorized dispatch passes these one-launch snapshots.
+        # Initialize exact identities under the same lock as part creation,
+        # before replay/render; never merge label-only s1..sN competitors.
+        if checklists and did not in _PARTS and did not in _RESERVED_CHECKLISTS:
+            _RESERVED_CHECKLISTS[did] = [clean_todos(todos) for todos in checklists]
         while len(_RESERVED) > _MAX_PARTS:
-            _RESERVED.pop(next(iter(_RESERVED)))
+            expired = next(iter(_RESERVED))
+            _RESERVED.pop(expired)
+            _RESERVED_CHECKLISTS.pop(expired, None)
     return True
 
 
@@ -1197,6 +1242,7 @@ def release(delegation_id: Any) -> None:
     did = str(delegation_id or "").strip()
     with _LOCK:
         _RESERVED.pop(did, None)
+        _RESERVED_CHECKLISTS.pop(did, None)
 
 
 def _nth(items: Any, i: int) -> Any:
@@ -2050,3 +2096,4 @@ def reset_for_tests() -> None:
         _CARDS.clear()
         _EARLY.clear()
         _RESERVED.clear()
+        _RESERVED_CHECKLISTS.clear()

@@ -57,3 +57,21 @@ on their existing paths.
 Nothing in this handoff authorizes publication or deployment. This branch does
 not change providers, accounts, selected models, live configuration or the
 release version. A frozen candidate is not a shipped or phone-accepted fix.
+
+## Corrective review scope
+
+The independent review of `e75ef5dd8222ef2520962b6afdb883a5e3f6e11f`
+requested two corrections: strict inline-assignment privacy at the public
+checklist boundary, and exact saved identity/status initialization on resume.
+The corrective candidate retains those six failing reviewer cases, expands the
+wire/public-persistence tests, and keeps the original 35 real-path tests intact.
+Its exact source identity and bounded results are in the separate correction
+`CANDIDATE.json` and `RESULT.md`; historical receipts are not final-tree proof.
+
+A separate test-only commit excludes generated `__pycache__/*.pyc` files from
+the fixed-shop fixture's source inventory. Its exact config/source-change
+assertions remain unchanged; unexpected source/text files still participate.
+The baseline and candidate both reproduced that precompile artifact on locked
+Python 3.11. Workspace admission tests use neutral temporary roots, without
+removing git markers or weakening admission. No owner-pairing, renderer design,
+live settings, installation, restart or publication changes are included.

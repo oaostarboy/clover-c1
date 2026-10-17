@@ -4407,6 +4407,7 @@ def _record_inflight_dispatch(
     live_paths: Any,
     child_agents: Any,
     fanout_delivery: str,
+    checklists: Any = (),
 ) -> None:
     """Persist the spec of a background dispatch of a gateway chat, so a
     gateway restart can start it again (``tools.delegation_inflight``).
@@ -4429,7 +4430,8 @@ def _record_inflight_dispatch(
                 "context": t.get("context"),
                 "title": t.get("title"),
                 "steps": t.get("steps"),
-                "checklist": clean_todos(store.read()) if store and callable(getattr(store, 'read', None)) else [],
+                "checklist": (clean_todos(checklists[i]) if i < len(checklists) else
+                              clean_todos(store.read()) if store and callable(getattr(store, 'read', None)) else []),
                 "tier": t.get("tier"),
                 "route": t.get("route"),
                 "account": t.get("account"),
@@ -5026,24 +5028,21 @@ def delegate_task(
         try:
             if getattr(parent_agent, "_delegate_depth", 0) > 0 or not live_deleg_id:
                 return
+            _prime_card_todos(live_deleg_id)
             _fg_limit.open_headless_card(
                 live_deleg_id, [t["goal"] for t in task_list],
                 titles=[t.get("title") for t in task_list],
                 steps=_task_steps[0] if n_tasks == 1 else (),
                 child_steps=list(_task_steps) if n_tasks > 1 else (),
             )
-            _prime_card_todos(live_deleg_id)
         except Exception:
             logger.debug("foreground helper card unavailable", exc_info=True)
 
     def _prime_card_todos(delegation_id: str) -> None:
-        from agent.ack_checklist import on_child_event
+        from agent.ack_checklist import reserve
 
-        for i, todos in enumerate(_task_todos):
-            if i >= len(_restored) or not _restored[i]:
-                continue  # ordinary launches are seeded, not synthetic updates
-            on_child_event('subagent.todo', delegation_id=delegation_id, task_index=i,
-                           subagent_id=getattr(children[i][2], '_subagent_id', None), todos=todos)
+        if any(_restored):
+            reserve(delegation_id, checklists=_task_todos)
 
     def _execute_and_aggregate(
         *,
@@ -5464,6 +5463,7 @@ def delegate_task(
         # this delegation first, so their first events never get a separate
         # 🔀 roster card (note_own_dispatch opens the real part afterwards).
         _fg_limit.reserve_ack_part(_batch_delegation_id, handoff, _goals)
+        _prime_card_todos(_batch_delegation_id)
         _record_inflight_dispatch(
             _batch_delegation_id,
             task_list=task_list,
@@ -5477,6 +5477,7 @@ def delegate_task(
             live_paths=live_paths,
             child_agents=_child_agents,
             fanout_delivery=_fanout_mode,
+            checklists=_task_todos,
         )
         try:
             if _dispatch_admission is not None:
@@ -5495,9 +5496,8 @@ def delegate_task(
                 for _bi, _bt, _built in children:
                     _release_child_resources(_built, parent_agent)
                 return tool_error('Stop revoked this launch while it was preparing; no background child was started.')
-            # A restored snapshot precedes new child events. The existing
-            # early-event path applies it when the accepted card opens.
-            _prime_card_todos(_batch_delegation_id)
+            # Exact saved rows are reserved before persistence and child events;
+            # opening the accepted part hydrates them atomically before replay.
             dispatch = dispatch_async_delegation_batch(
                 goals=_goals,
                 context=context,

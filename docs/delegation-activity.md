@@ -92,13 +92,21 @@ Unknown statuses and label-free new items cannot create progress rows.
 
 Each visible list is limited to six rows of 60 characters. Labels are redacted
 before truncation; markup, links, control characters, private path prefixes and
-internal job ids are removed or normalized. The usual card-size and grouped-view
+internal job ids are removed or normalized. Public checklist labels also remove
+inline sensitive assignments such as `password=` and `token=`, including quoted
+values and display disguises. This strict public boundary does not change the
+general log redactor. Safe labels about password/token handling remain useful.
+The usual card-size and grouped-view
 limits still apply. The native todo tool can retain a larger list, but the card
 and its public restart snapshot are bounded views of it.
 
 Gateway restart records retain the applicable public rows, ids and observed
 statuses per task. A resumed task restores that snapshot only for its own
-launch. Older records without one use their saved step labels or public goal.
+launch. Exact saved ids and statuses initialize the card atomically before its
+first render and buffered events; equal labels never create competing anonymous
+seed rows. The child todo store preserves those identities and statuses (with
+its usual active-before-pending ordering). The new durable public snapshot keeps
+the saved card order. Older records without one use their saved step labels or public goal.
 Finished and stopped cards reject late updates. Existing Stop controls,
 card following, native activity, tool counts and short final cards do not change.
 
