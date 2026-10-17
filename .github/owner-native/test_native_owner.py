@@ -210,29 +210,11 @@ def test_native_console_hidden_confirmation_and_cancellation(tmp_path, cancel):
     command = [sys.executable, str(WORKER), 'console']
     transcript = ''
     if os.name == 'nt':
-        from winpty import PtyProcess
-        p = PtyProcess.spawn(subprocess.list2cmdline(command), cwd=str(SOURCE), env=env)
-        try:
-            deadline = time.monotonic() + 20
-            while 'Telegram confirmation code' not in transcript and time.monotonic() < deadline:
-                try:
-                    transcript += p.read(4096, blocking=False)
-                except EOFError:
-                    break
-                time.sleep(.05)
-            assert 'Telegram confirmation code' in transcript, 'ConPTY did not reach actual password prompt'
-            p.write('\x03' if cancel else code + '\r\n')
-            deadline = time.monotonic() + 15
-            while p.isalive() and time.monotonic() < deadline:
-                try:
-                    transcript += p.read(4096, blocking=False)
-                except EOFError:
-                    break
-                time.sleep(.05)
-            assert not p.isalive(), 'native console child exceeded fixed bound'
-        finally:
-            if p.isalive():
-                p.terminate(force=True)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('owner_windows_console', WORKER.with_name('windows_console.py'))
+        console = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(console)
+        transcript = console.run_console(command, str(SOURCE), env, code, cancel)
     else:
         import pty
         pid, fd = pty.fork()
