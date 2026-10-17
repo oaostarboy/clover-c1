@@ -17,8 +17,8 @@ SOURCE = BASE / 'source'
 HELPER = Path(__file__).resolve().parent
 OUT = Path(os.environ.get('RUNNER_TEMP', str(BASE))) / 'owner-native-evidence'
 OUT.mkdir(parents=True, exist_ok=True)
-TARGET = '918cf7ae3d39556cb10102d282b7283dc486467b'
-TREE = 'ad870be841e691f7a00f175ea8dca43c4c1b037e'
+TARGET = 'ea0103820a9f295bf782e4696c32623505dee569'
+TREE = '97c21c73105f1527074ab5ec75f82fcc20480ecd'
 FILES = [
  'tests/test_verified_owner.py', 'tests/test_owner_setup.py',
  'tests/test_owner_telegram_wire.py', 'tests/test_owner_proactive_controls.py',
