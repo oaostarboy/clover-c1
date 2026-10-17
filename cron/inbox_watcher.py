@@ -481,16 +481,21 @@ def run(job, binding, *, now=None):
             if current['last_poll'] and now - current['last_poll'] < s['cadence']*60:
                 return ''
             # Persistent cadence reservation handles duplicate ticks/crashes.
-            if current['last_poll'] and now - current['last_poll'] > 86400:
-                current['cursor'] = None
+            rebaseline = bool(current['last_poll'] and now - current['last_poll'] > 86400)
+            # Keep the accepted UIDVALIDITY durable even while skipping history.
+            # A failed/new-epoch baseline must not erase that identity on retry.
             current['last_poll'], current['clock'] = now, now
             before, pending = current['cursor'], current['outbox']
         def guard():
             return _policy_guard(store, job, binding)
         if pending is None:
             guard()  # current source/authority immediately before read-only fetch
-            result = binding.fetch(before, max_items=limits.items)
-            rows = _batch(result, before, limits)
+            source_cursor = None if rebaseline else before
+            result = binding.fetch(source_cursor, max_items=limits.items)
+            rows = _batch(result, source_cursor, limits)
+            if before is not None and (result['epoch'] != before['epoch']
+                                       or result['cursor'] < before['cursor']):
+                raise Denied('source cursor changed')
             next_cursor = {k:result[k] for k in ('epoch','cursor')}
             if not rows:
                 guard()
