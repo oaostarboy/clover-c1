@@ -3617,7 +3617,7 @@ class GatewaySlashCommandsMixin:
             # spellings before shared-key bridging can mask a denial.
             from clover_cli.managed_scope import load_managed_config
             from gateway.slash_access import _scope_for_chat_type, policy_from_extra
-            platforms = load_managed_config().get("platforms", {})
+            platforms = load_managed_config(strict=True).get("platforms", {})
             managed = platforms.get(source.platform.value, {})
             for extra in (managed, managed.get("extra", {})):
                 if not policy_from_extra(extra, _scope_for_chat_type(source.chat_type)).is_admin(source.user_id):
@@ -3637,6 +3637,13 @@ class GatewaySlashCommandsMixin:
             return "Use a current authenticated /proactive command to change settings."
         if self._is_stale_offline_command(event):
             return self._stale_offline_command_reply("proactive")
+        from clover_cli.managed_scope import load_managed_config, ManagedPolicyError
+        try:
+            load_managed_config(strict=True)
+        except ManagedPolicyError as exc:
+            # A broken administrator file is not an ordinary unconfigured gate.
+            # Explain the refusal before offering unusable controls or admin setup.
+            return str(exc)
         can_change = self._proactive_caller_is_admin(event.source)
         args = event.get_command_args().strip()
         permission_help = args.lower() in {"setup", "status"}

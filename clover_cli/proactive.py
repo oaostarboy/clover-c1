@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from agent.workstreams import load_settings
 from clover_cli import config as config_api
+from clover_cli import managed_scope
 
 PROACTIVE_ACTIONS = (
     "/proactive on — On; /proactive off — Off; /proactive customize — Customize"
@@ -174,7 +175,6 @@ def _put(root: dict, section: str, key: str, value) -> None:
 
 def _persist(raw: dict, updated: dict) -> str:
     """Caller holds config lock; save only explicit leaf changes, then read back."""
-    from clover_cli import managed_scope
     before, after = raw.get("proactive", {}), updated.get("proactive", {})
     keys = set()
     for name, value in after.items():
@@ -186,7 +186,10 @@ def _persist(raw: dict, updated: dict) -> str:
                             if k not in old_values or value[k] != old_values[k])
             else:
                 keys.add(f"proactive.{name}")
-    pins = managed_scope.managed_config_keys()
+    try:
+        pins = managed_scope.managed_config_keys(strict=True)
+    except managed_scope.ManagedPolicyError as exc:
+        return str(exc)
     if any(k == p or k.startswith(p + ".") or p.startswith(k + ".") for k in keys for p in pins):
         return "Not saved: a changed setting is managed by your administrator."
     if updated == raw:
@@ -317,6 +320,7 @@ class ProactiveDraft:
     def save(self) -> str:
         try:
             with config_api._CONFIG_LOCK:
+                managed_scope.load_managed_config(strict=True)
                 raw = config_api.require_readable_config_before_write()
                 if raw.get("proactive", {}) != self.baseline:
                     return "Not saved: preferences changed elsewhere. Open Customize again."
@@ -326,6 +330,8 @@ class ProactiveDraft:
                 # previously absent leaves with a new preset.
                 updated["proactive"]["mode"] = "active"
                 return _persist(raw, updated)
+        except managed_scope.ManagedPolicyError as exc:
+            return str(exc)
         except Exception:
             return FAILED
 
@@ -341,6 +347,8 @@ def proactive_command(args: str = "", *, can_change: bool, show_commands: bool =
         return LOCKED + "\n/proactive status — permission details."
     note = ""
     try:
+        if mutation or action == "customize":
+            managed_scope.load_managed_config(strict=True)
         if action in {*ADVANCED_ENTRIES, "advanced"}:
             return advanced_info(action, config_api.load_config(migrate=False).get("proactive", {}))
         if action == "customize":
@@ -380,6 +388,8 @@ def proactive_command(args: str = "", *, can_change: bool, show_commands: bool =
         effective_root = config_api.load_config(migrate=False).get("proactive", {})
         _validate(effective_root)
         persisted, effective = load_settings({"proactive": saved}), load_settings({"proactive": effective_root})
+    except managed_scope.ManagedPolicyError as exc:
+        return str(exc)
     except Exception:
         return FAILED
     saved_state, effective_state = ("On" if persisted.enabled else "Off"), ("On" if effective.enabled else "Off")

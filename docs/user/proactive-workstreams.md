@@ -6,6 +6,19 @@ without an admin gate, admitted users can use the controls. No separate owner
 pairing, terminal, enrollment or permission grant is needed. `/proactive status`
 explains the current policy. Installation and updates do not enable anything.
 
+Proactive controls reread administrator settings before saving and when a bot
+button is used. If an existing managed policy file cannot be read, contains
+broken YAML or has a non-mapping root, On, Off and Customize Save do not write
+preferences. The bot does not offer new controls until that policy is readable;
+an already-open button loses authority. Run `/proactive` again for the reason,
+and ask the profile operator to fix the administrator settings before retrying.
+Missing managed scope/file, blank or comment-only YAML, YAML `null` and an empty
+mapping mean no managed pins; they do not add an owner or admin setup step.
+Valid current managed pins and scoped admin restrictions still win. This strict
+check is limited to proactive controls; the existing forgiving startup overlay
+and unrelated commands are unchanged. It is a fresh pre-write check, not a
+transaction with an administrator concurrently replacing the policy file.
+
 An **opt-in**, per-profile ledger that keeps unfinished work, your corrections
 and verified progress across new chats, restarts and compaction. It is stored
 in the existing `cron/notepad.db` and is **off by default**: with
