@@ -1,4 +1,4 @@
-name: Exact-target owner onboarding native diagnostics
+name: Exact-target Windows console Job API diagnostic
 on:
   workflow_dispatch:
     inputs:
@@ -15,13 +15,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   native:
-    name: Owner persistence, policy, wire and console / ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
+    name: Windows Job API preflight then exact console cases
+    runs-on: windows-latest
     timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
     steps:
       - name: Use literal Git bytes on disposable runner
         shell: bash
@@ -57,12 +53,12 @@ jobs:
         shell: bash
         working-directory: source
         run: uv sync --locked --python 3.11 --extra all --extra dev --extra messaging
-      - name: Canonical one-worker no-retry offline native evidence
+      - name: Fail-fast Job API preflight then canonical no-retry console evidence
         shell: bash
-        run: uv run --project source --no-sync python helpers/.github/owner-native/run.py
+        run: uv run --project source --no-sync python helpers/.github/owner-native/run_console_api.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: owner-native-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: owner-console-api-windows-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/owner-native-evidence
           if-no-files-found: error
