@@ -110,6 +110,11 @@ print(json.dumps({'blocked':blocked,'pairing_origin':gateway.pairing.__file__,'c
         native = json.loads((OUT / row['log']).read_text(encoding='utf-8').splitlines()[-1])
         receipts.save('job-api-observations.json', native)
         assert native['tests'] == 5 and all(native[k] == 0 for k in ('failures','errors','skips'))
+        transport = measured('console-transport',
+                             [sys.executable, str(HELPER / 'test_windows_console_transport.py')],
+                             {**env, 'PYTHONPATH': str(guard)}, 120, OUT)
+        # Preserve original product console cases even if a control exposes a
+        # transport failure; aggregate refusal follows their complete evidence.
         bash = shutil.which('bash')
         assert bash and 'git' in bash.lower() and 'wsl' not in bash.lower(), bash
         xml = OUT / 'console.xml'
@@ -127,6 +132,7 @@ print(json.dumps({'blocked':blocked,'pairing_origin':gateway.pairing.__file__,'c
                               'detail': ''.join(case.find(outcome).itertext()) if outcome != 'passed' else ''})
         receipts.save('console-cases.json', cases)
         assert len(cases) == 2, 'incomplete console XML'
+        assert transport['exit'] == 0, 'native transport lifecycle controls failed'
         assert row['exit'] == 0 and all(c['outcome'] == 'passed' for c in cases), 'console gate failed; preserve finding'
     finally:
         final = receipts.identity('after')
