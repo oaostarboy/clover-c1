@@ -62,16 +62,110 @@ def jobs_scope(job: dict) -> ws.Scope | None:
         return None
 
 
+def _saved_authorization() -> tuple[str, bool]:
+    """Fresh scoped authorization inputs, never startup caches or all-file hashes.
+
+    Keep the two saved layers separate: an administrator overlay must not hide
+    a changed user restriction. No config/env/cache mutation or raw policy logs.
+    Missing/empty documents retain their ordinary unconfigured meaning.
+    """
+    from agent.skill_utils import parse_config_string_list
+    from clover_cli.config import _expand_env_vars, fast_safe_load, get_config_path
+    from clover_cli.managed_scope import load_managed_config
+
+    def mapping(value):
+        if value is None:
+            return {}
+        if not isinstance(value, dict) or any(not isinstance(k, str) for k in value):
+            raise ValueError("invalid authorization mapping")
+        return value
+
+    def names(value):
+        if value is None:
+            return []
+        if not isinstance(value, (str, list)):
+            raise ValueError("invalid authorization names")
+        if isinstance(value, list) and any(not isinstance(v, str) for v in value):
+            raise ValueError("invalid authorization name")
+        if isinstance(value, str) and value.strip().startswith("["):
+            import ast
+
+            parsed = ast.literal_eval(value.strip())
+            if not isinstance(parsed, list) or any(not isinstance(v, str) for v in parsed):
+                raise ValueError("invalid authorization names")
+        return sorted({v.strip() for v in parse_config_string_list(value) if v.strip()})
+
+    denied = False
+    def relevant(document):
+        nonlocal denied
+        document = mapping(document)
+        agent = mapping(document.get("agent"))
+        disabled = names(agent.get("disabled_toolsets"))
+        # The loaded task tool surface can itself predate a saved denial.
+        # Use the ordinary toolset subtraction rules, including bundle semantics.
+        from toolsets import bundle_non_core_tools, get_toolset, resolve_toolset, validate_toolset
+
+        for name in disabled:
+            if validate_toolset(name):
+                tools = (bundle_non_core_tools(name) if name.startswith("clover-")
+                         or (get_toolset(name) or {}).get("posture") else resolve_toolset(name))
+                if "cronjob" in tools:
+                    denied = True
+        platform_tools = mapping(document.get("platform_toolsets"))
+        platforms = mapping(document.get("platforms"))
+        # Restrict source binding to admission/control/credential inputs, not
+        # display/model/latency preferences. Native actor/route checks still run.
+        source_keys = {"enabled", "token", "allow_from", "group_allow_from", "dm_policy",
+                       "group_policy", "allow_admin_from", "group_allow_admin_from",
+                       "user_allowed_commands", "group_user_allowed_commands", "allowed_users",
+                       "allowed_chats", "group_allowed_chats", "allowed_topics", "require_mention",
+                       "verified_owner_controls"}
+        def source(value):
+            value = mapping(value)
+            extra = mapping(value.get("extra"))
+            return {k: v for k, v in {**extra, **value}.items() if k in source_keys}
+
+        return {"disabled_toolsets": disabled,
+                "toolsets": names(document.get("toolsets")),
+                "platform_toolsets": {k: names(v) for k, v in platform_tools.items()},
+                "platforms": {k: source(v) for k, v in platforms.items()},
+                "gateway_platforms": {k: source(v) for k, v in mapping(
+                    mapping(document.get("gateway")).get("platforms")).items()},
+                "approvals": mapping(document.get("approvals")),
+                "approval_transport": mapping(mapping(document.get("security")).get("approval")),
+                "command_allowlist": names(document.get("command_allowlist"))}
+
+    try:
+        path = get_config_path()
+        try:
+            user = fast_safe_load(path.read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            # A dangling settings link is unreadable policy, not absence.
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                user = None
+            else:
+                raise
+        layers = [relevant(_expand_env_vars(user)),
+                  relevant(_expand_env_vars(load_managed_config(strict=True)))]
+        encoded = json.dumps(layers, sort_keys=True, allow_nan=False)
+        if "${" in encoded:
+            raise ValueError("unresolved authorization input")
+        return hashlib.sha256(encoded.encode()).hexdigest(), denied
+    except Exception:
+        # Parser messages may contain private config values. Never expose them.
+        raise ValueError("Current saved permissions are unavailable, invalid or deny this action. Nothing ran.") from None
+
+
 def _policy(agent) -> dict:
     from agent.delegation_followthrough import runtime_policy_for
-    from clover_cli.config import load_config_readonly
 
-    config = load_config_readonly()
-    # Runtime snapshots do not notice a newly saved tool restriction. Bind the
-    # current source/tool policy too; a change invalidates, never widens, an offer.
-    restrictions = {k: config.get(k) for k in ("agent", "toolsets", "platforms")}
-    digest = hashlib.sha256(json.dumps(restrictions, sort_keys=True).encode()).hexdigest()
-    return {"runtime": runtime_policy_for({}, agent), "source_policy": digest}
+    # Runtime state still binds the original tools, route, approvals and budget;
+    # the saved fingerprint independently bypasses both mtime/size caches.
+    digest, denied = _saved_authorization()
+    return {"runtime": runtime_policy_for({}, agent), "source_policy": digest,
+            "saved_tool_denied": denied}
 
 
 def propose(agent: Any, turn: Any, artifact: dict, *, is_current) -> dict | None:
@@ -91,8 +185,14 @@ def propose(agent: Any, turn: Any, artifact: dict, *, is_current) -> dict | None
     job = jobs.get_job(job_id)
     if not job or not _job_ok(job, turn.scope) or not is_current():
         return None
+    try:
+        policy = _policy(agent)
+    except ValueError:
+        return None
+    if policy["saved_tool_denied"]:
+        return None
     proposal = _Proposal(agent, turn, artifact["receipt_id"], job,
-                         _policy(agent), is_current,
+                         policy, is_current,
                          time.monotonic() + TTL_SECONDS, turn.ingress)
     with _LOCK:
         for key, old in list(_PENDING.items()):
@@ -128,7 +228,8 @@ def _check(p: _Proposal) -> None:
         raise ValueError("Action offers are now disabled.")
     if "cronjob" not in (getattr(agent, "valid_tool_names", ()) or ()):
         raise ValueError("The original task no longer has this tool permission.")
-    if _policy(agent) != p.policy:
+    policy = _policy(agent)
+    if policy["saved_tool_denied"] or policy != p.policy:
         raise ValueError("Tool or approval permissions changed. Ask again.")
     budget = getattr(agent, "iteration_budget", None)
     if budget is None or budget.remaining <= 0:
