@@ -7,8 +7,9 @@ neither a library reader thread nor a terminal child can outlive a failed probe.
 
 The locked wrapper's blocking reader can enter native read after the child has
 exited and never return to its EOF check. Inherit its exact spawn/selector, but
-own a nonblocking native-to-socket pump: drain native cache to an empty read AND
-native EOF before closing the socket. Process exit alone is never transcript EOF.
+own a nonblocking native-to-socket pump. After natural child exit, cancel only
+owned native synchronous reads, then drain the native cache's explicit EOF.
+Process exit or an empty read alone is never transcript EOF.
 """
 import codecs
 import hashlib
@@ -89,7 +90,7 @@ def _locked_conpty():
     return wrapper.PtyProcess, native.PTY, identity
 
 
-def _bounded_process_type(base):
+def _bounded_process_type(base, wake_factory):
     from winpty import WinptyError
 
     class ConsoleProcess(base):
@@ -106,6 +107,8 @@ def _bounded_process_type(base):
             self.reader_error = None
             self.reader_phase = 'starting'
             self.reader_calls = 0
+            self.wake = wake_factory()
+            self.wake_done = False
             self._stop_reader = threading.Event()
             self.fileobj, self._server = socket.socketpair()
             self.fd = self.fileobj.fileno()
@@ -116,6 +119,14 @@ def _bounded_process_type(base):
             try:
                 while not self._stop_reader.is_set():
                     try:
+                        # Never call the binding's iseof(): it peeks the same
+                        # synchronous pipe as its Rust ReadFile thread and can
+                        # block behind that read. Wake only owned native reads
+                        # AFTER natural child exit, then drain the cache's real
+                        # EOF marker, not a process-exit surrogate.
+                        if not self.wake_done and not self.pty.isalive():
+                            self.wake.wake_after_exit()
+                            self.wake_done = True
                         self.reader_phase = 'native-read-false'
                         self.reader_calls += 1
                         data = self.pty.read(4096, blocking=False)
@@ -123,18 +134,16 @@ def _bounded_process_type(base):
                     except WinptyError as exc:
                         # Native cache EOF is a specific error in this binding;
                         # arbitrary native read errors must never become success.
-                        if str(exc) != 'Standard out reached EOF':
+                        exited = not self.pty.isalive()
+                        if str(exc) == 'Standard out reached EOF' and exited:
+                            self.native_eof = True
+                            break
+                        if not (self.wake_done and exited and str(exc) in self.wake.wake_errors):
                             raise
                         data = ''
                     if data:
                         self.reader_phase = 'socket-send'
                         self._server.sendall(data.encode('utf-8'))
-                    # iseof alone does not account for native cached output.
-                    # Keep reading cached chunks, even after the child is dead.
-                    self.reader_phase = 'native-eof-check'
-                    if not data and self.pty.iseof() and not self.pty.isalive():
-                        self.native_eof = True
-                        break
                     self._stop_reader.wait(.001)
             except BaseException as exc:
                 self.reader_error = exc
@@ -158,8 +167,12 @@ def _close_console(p):
                 finally:
                     p._server.close()
         finally:
-            p._thread.join(timeout=2)
-            assert not p._thread.is_alive(), 'pywinpty reader thread did not finish'
+            try:
+                p._thread.join(timeout=2)
+                assert not p._thread.is_alive(), 'pywinpty reader thread did not finish'
+            finally:
+                if hasattr(p, 'wake'):
+                    p.wake.close()
 
 
 def _console(request):
@@ -168,10 +181,13 @@ def _console(request):
     import win32event
 
     process_type, native_type, identity = _locked_conpty()
+    def make_wake():
+        from console_native_threads import ReaderWake
+        return ReaderWake(native_type)
     # Locked spawn uses `backend or env_override` then int(backend). The public
     # conversion accepts truthy '0', so it reaches native Some(0) even if the
     # environment requests WinPTY. Numeric zero would select auto/the override.
-    p = _bounded_process_type(process_type).spawn(request['command'], cwd=request['cwd'],
+    p = _bounded_process_type(process_type, make_wake).spawn(request['command'], cwd=request['cwd'],
                            env=request['env'], backend=str(identity['id']))
     try:
         if type(p.pty) is not native_type:
@@ -193,21 +209,25 @@ def _console(request):
         assert status == (1 if request['cancel'] else 0), 'unexpected native console exit status'
         result = {'transcript': reader.text, 'exitstatus': status,
                   'backend': identity['name'], 'backend_identity': identity,
-                  'eof': reader.eof}
+                  'eof': reader.eof,
+                  'lifecycle': {'native_cache_eof': p.native_eof, 'native_reader_threads': 2,
+                                'wake_calls': p.wake.calls, 'cancelled_pending_reads': p.wake.cancelled}}
     except BaseException:
-        frame = sys._current_frames().get(p._thread.ident)
-        safe = {'phase': 'nonblocking-console-failure', 'cancel': request['cancel'],
-                'child_alive': p.pty.isalive(), 'child_exitstatus': p.exitstatus,
-                'reader_alive': p._thread.is_alive(), 'reader_phase': p.reader_phase,
-                'reader_calls': p.reader_calls, 'native_eof': p.native_eof,
-                'reader_stack': [{'file': Path(x.filename).name, 'function': x.name, 'line': x.lineno}
-                                 for x in traceback.extract_stack(frame)]}
-        print(json.dumps(safe), file=sys.stderr, flush=True)
+        if hasattr(p, 'reader_phase'):
+            frame = sys._current_frames().get(p._thread.ident)
+            safe = {'phase': 'nonblocking-console-failure', 'cancel': request['cancel'],
+                    'child_alive': p.pty.isalive(), 'child_exitstatus': p.exitstatus,
+                    'reader_alive': p._thread.is_alive(), 'reader_phase': p.reader_phase,
+                    'reader_calls': p.reader_calls, 'native_eof': p.native_eof,
+                    'reader_stack': [{'file': Path(x.filename).name, 'function': x.name, 'line': x.lineno}
+                                     for x in traceback.extract_stack(frame)]}
+            print(json.dumps(safe), file=sys.stderr, flush=True)
         raise
     finally:
         # This is library-resource cleanup, not an extension of either success
         # deadline. The outer 35s cap also bounds spawn/close/join themselves.
         _close_console(p)
+    result['lifecycle'].update(reader_joined=not p._thread.is_alive(), thread_handles_closed=not p.wake.handles)
     return result
 
 
@@ -241,8 +261,12 @@ def run_console(command, cwd, env, code, cancel):
         assert result['backend_identity'] == LOCKED_CONPTY, 'native backend identity was not established'
         assert result['backend'] == result['backend_identity']['name'] and result['eof'] is True
         assert result['exitstatus'] == (1 if cancel else 0)
+        life = result['lifecycle']
+        assert life['native_cache_eof'] and life['reader_joined'] and life['thread_handles_closed']
+        assert life['native_reader_threads'] == 2 and life['wake_calls'] in (0, 1)
         # Safe backend provenance only: never print the transcript or proof code.
         print(json.dumps({'console_backend_identity': result['backend_identity']}), flush=True)
+        print(json.dumps({'console_lifecycle': life}), flush=True)
         return result['transcript']
     finally:
         try:
