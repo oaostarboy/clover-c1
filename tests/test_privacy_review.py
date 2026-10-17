@@ -133,7 +133,7 @@ async def test_dispatch_seed_wire_receipt_and_snapshot_are_public(launch, name, 
     record = inflight.read_record(out['delegation_id'])
     receipts = [asdict(r) for r in fl.own_dispatch_receipts(launch.root)]
     public = {'steps': record['tasks'][0]['steps'], 'checklist': record['tasks'][0]['checklist'],
-              'receipts': receipts}
+              'handoff_steps': (record.get('handoff') or {}).get('steps'), 'receipts': receipts}
     record_property('public_fields', json.dumps(public, default=str))
     record_property('wire_calls', json.dumps(launch.endpoint.calls))
     assert forbidden not in json.dumps(public, default=str)

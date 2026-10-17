@@ -225,6 +225,12 @@ def _handoff_for_record(handoff: Any) -> Optional[Dict[str, Any]]:
         k: v for k, v in handoff.items()
         if k in ("work", "outcome", "steps", "estimated_minutes_min", "estimated_minutes_max")
     }
+    if "steps" in keep:
+        from agent.ack_checklist import clean_steps
+
+        # This is public restart metadata too, not the private task context.
+        # Do not retain an unsanitized second copy of the dispatch seed.
+        keep["steps"] = list(clean_steps(keep["steps"]))
     return _json_safe(keep) or None
 
 
