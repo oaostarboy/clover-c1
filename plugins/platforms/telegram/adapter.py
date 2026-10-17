@@ -244,6 +244,7 @@ from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
     BasePlatformAdapter,
     absorb_inbound_receipts,
+    merge_telegram_album_media,
     complete_inbound_handoff,
     MessageEvent,
     MessageType,
@@ -873,6 +874,9 @@ class TelegramAdapter(BasePlatformAdapter):
         self._pending_photo_batch_tasks: Dict[str, asyncio.Task] = {}
         self._media_group_events: Dict[str, MessageEvent] = {}
         self._media_group_tasks: Dict[str, asyncio.Task] = {}
+        # Popped batches belong to dispatch, not to the debounce timer.
+        # Track them separately so disconnect still cancels and awaits them.
+        self._media_dispatch_tasks: set[asyncio.Task] = set()
         # Buffer rapid text messages so Telegram client-side splits of long
         # messages are aggregated into a single MessageEvent.  Lower defaults
         # (0.3s / 1.0s instead of 0.6s / 2.0s) let short replies stream
@@ -5365,6 +5369,8 @@ class TelegramAdapter(BasePlatformAdapter):
         for task in list(self._media_group_tasks.values()):
             collect(task)
         for task in list(self._pending_photo_batch_tasks.values()):
+            collect(task)
+        for task in list(getattr(self, "_media_dispatch_tasks", ())):
             collect(task)
         for task in list(self._pending_text_batch_tasks.values()):
             collect(task)
@@ -10761,6 +10767,8 @@ class TelegramAdapter(BasePlatformAdapter):
         media_group_id = getattr(msg, "media_group_id", None)
         if media_group_id:
             return f"{session_key}:album:{media_group_id}"
+        if event.get_command() == "queue":
+            return f"{session_key}:photo-request:{event.message_id}"
         return f"{session_key}:photo-burst"
 
     async def _flush_photo_batch(self, batch_key: str) -> None:
@@ -10772,6 +10780,10 @@ class TelegramAdapter(BasePlatformAdapter):
             event = self._pending_photo_batches.pop(batch_key, None)
             if not event:
                 return
+            if self._pending_photo_batch_tasks.get(batch_key) is current_task:
+                self._pending_photo_batch_tasks.pop(batch_key, None)
+            if current_task is not None:
+                self.__dict__.setdefault("_media_dispatch_tasks", set()).add(current_task)
             if self._should_drop_delayed_delivery():
                 self._hold_inbound_event(event, where="photo-flush")
                 event = None
@@ -10780,12 +10792,13 @@ class TelegramAdapter(BasePlatformAdapter):
             await self.handle_message(event)
             event = None
         except asyncio.CancelledError:
-            if event is not None:
+            if event is not None and not getattr(event, "_adapter_handoff_complete", False):
                 self._hold_inbound_event(event, where="photo-flush-cancelled")
             raise
         finally:
             if self._pending_photo_batch_tasks.get(batch_key) is current_task:
                 self._pending_photo_batch_tasks.pop(batch_key, None)
+            getattr(self, "_media_dispatch_tasks", set()).discard(current_task)
 
     def _enqueue_photo_event(self, batch_key: str, event: MessageEvent) -> None:
         """Merge photo events into a pending batch and schedule flush."""
@@ -10795,6 +10808,7 @@ class TelegramAdapter(BasePlatformAdapter):
 
         existing = self._pending_photo_batches.get(batch_key)
         if existing is None:
+            event.metadata["telegram_media_batch"] = f"photo:{event.message_id or id(event)}"
             self._pending_photo_batches[batch_key] = event
         else:
             existing.media_urls.extend(event.media_urls)
@@ -11121,12 +11135,22 @@ class TelegramAdapter(BasePlatformAdapter):
             self._hold_inbound_event(event, where="media-group-enqueue")
             return
 
+        event.metadata["telegram_media_batch"] = f"album:{media_group_id}"
+        if event.message_id and str(event.message_id).isdigit():
+            event.metadata["telegram_album_members"] = {
+                str(event.message_id): [list(event.media_urls), list(event.media_types)]
+            }
+        # Telegram album IDs must not coalesce different senders/topic lanes,
+        # even when those lanes deliberately share a gateway session.
+        media_group_id = repr((media_group_id, event.source.chat_id,
+                               event.source.user_id, event.source.thread_id))
         existing = self._media_group_events.get(media_group_id)
         if existing is None:
             self._media_group_events[media_group_id] = event
         else:
-            existing.media_urls.extend(event.media_urls)
-            existing.media_types.extend(event.media_types)
+            if not merge_telegram_album_media(existing, event):
+                existing.media_urls.extend(event.media_urls)
+                existing.media_types.extend(event.media_types)
             if event.text:
                 existing.text = self._merge_caption(existing.text, event.text)
             absorb_inbound_receipts(existing, event)
@@ -11147,6 +11171,10 @@ class TelegramAdapter(BasePlatformAdapter):
             event = self._media_group_events.pop(media_group_id, None)
             if event is None:
                 return
+            if self._media_group_tasks.get(media_group_id) is current_task:
+                self._media_group_tasks.pop(media_group_id, None)
+            if current_task is not None:
+                self.__dict__.setdefault("_media_dispatch_tasks", set()).add(current_task)
             if self._should_drop_delayed_delivery():
                 self._hold_inbound_event(event, where="media-group-flush")
                 event = None
@@ -11155,12 +11183,13 @@ class TelegramAdapter(BasePlatformAdapter):
             event = None
         except asyncio.CancelledError:
             # Cancelled after pop but before durable dispatch — hold, don't lose.
-            if event is not None:
+            if event is not None and not getattr(event, "_adapter_handoff_complete", False):
                 self._hold_inbound_event(event, where="media-group-flush-cancelled")
             raise
         finally:
             if self._media_group_tasks.get(media_group_id) is current_task:
                 self._media_group_tasks.pop(media_group_id, None)
+            getattr(self, "_media_dispatch_tasks", set()).discard(current_task)
 
     async def _handle_sticker(self, msg: Message, event: "MessageEvent") -> None:
         """

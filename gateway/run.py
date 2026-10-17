@@ -9789,6 +9789,28 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             is MergeResult.MERGED
         )
 
+    def _merge_into_queued_media_batch(self, adapter: Any, session_key: str, event: "MessageEvent") -> bool:
+        """Route late Telegram album members to their queued owner, not the head.
+
+        Search only waiting turns in this session; never mutate an active model
+        request or infer an album from time proximity. The shared merge keeps
+        sender/topic/trust boundaries and receipt ownership intact.
+        """
+        batch = (event.metadata or {}).get("telegram_media_batch")
+        if not isinstance(batch, str) or not batch.startswith("album:"):
+            return False
+        state = self._peek_session_state(session_key)
+        candidates = [getattr(adapter, "_pending_messages", {}).get(session_key)]
+        if state:
+            candidates.extend(state.conversation.queued_events)
+        for candidate in candidates:
+            if candidate is None or (candidate.metadata or {}).get("telegram_media_batch") != batch:
+                continue
+            if merge_pending_message_event({session_key: candidate}, session_key, event) is MergeResult.MERGED:
+                self._record_if_shutting_down(event)
+                return True
+        return False
+
     def _merge_or_enqueue(
         self,
         adapter: Any,
@@ -9798,6 +9820,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         merge_text: bool = False,
     ) -> "MergeResult":
         """Merge into the adapter's pending slot; queue behind it when refused."""
+        if self._merge_into_queued_media_batch(adapter, session_key, event):
+            return MergeResult.MERGED
         result = merge_pending_message_event(
             adapter._pending_messages, session_key, event, merge_text=merge_text
         )
@@ -11284,6 +11308,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         adapter = self._adapter_for_source(event.source)
         if not adapter:
             return False
+        if self._merge_into_queued_media_batch(adapter, session_key, event):
+            return True
         # #28503 — Previously this called ``merge_pending_message_event``
         # with the default ``merge_text=False``, which silently OVERWROTE
         # the single pending slot when consecutive text messages arrived
@@ -11516,6 +11542,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not adapter:
             return False  # let default path handle it
 
+        if self._merge_into_queued_media_batch(adapter, session_key, event):
+            # A continuation is not another user request or another ack.
+            release_inbound_handoff(event)
+            return True
+        if (
+            event.source.platform == Platform.TELEGRAM
+            and event.message_type == MessageType.PHOTO
+            and (event.metadata or {}).get("telegram_media_batch")
+        ):
+            # Match the adapter's no-interrupt photo policy. The busy callback
+            # runs before that fallback and must not steal the active task.
+            effective_mode = "queue"
+
         # --- Internal synthetic events must never interrupt/steer ---
         # Async-delegation completions (delegate_task(background=true)) and
         # background-process completions (terminal notify_on_complete) re-enter
@@ -11660,6 +11699,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # receipt, so a replay after a crash is admitted (a double answer
             # at worst) instead of suppressed.
             release_inbound_handoff(event)
+            # The live transport must not redispatch an already-queued event
+            # if disconnect cancels the acknowledgement below. This is only
+            # an in-process handoff marker, never a durable replay receipt.
+            setattr(event, "_adapter_handoff_complete", True)
         is_queue_mode = effective_mode == "queue"
         is_steer_mode = effective_mode == "steer"
         is_redirect_mode = effective_mode == "interrupt" and redirected
@@ -18834,25 +18877,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return "Usage: /queue <prompt>"
         adapter = self._adapter_for_source(source)
         if adapter:
-            queued_event = MessageEvent(
+            queued_event = dataclasses.replace(
+                event,
                 text=queued_text,
                 message_type=event.message_type if has_media else MessageType.TEXT,
-                source=event.source,
-                raw_message=event.raw_message,
-                message_id=event.message_id,
-                media_urls=list(getattr(event, "media_urls", []) or []),
-                media_types=list(getattr(event, "media_types", []) or []),
-                reply_to_message_id=event.reply_to_message_id,
-                reply_to_text=event.reply_to_text,
-                reply_to_author_id=event.reply_to_author_id,
-                reply_to_author_name=event.reply_to_author_name,
-                reply_to_is_own_message=event.reply_to_is_own_message,
-                auto_skill=event.auto_skill,
-                channel_prompt=event.channel_prompt,
-                channel_context=event.channel_context,
-                internal=event.internal,
-                timestamp=event.timestamp,
+                media_urls=list(event.media_urls or []),
+                media_types=list(event.media_types or []),
+                metadata=dict(event.metadata or {}),
+                inbound_receipts=list(event.inbound_receipts or []),
             )
+            if self._merge_into_queued_media_batch(adapter, quick_key, queued_event):
+                return None
             self._enqueue_fifo(quick_key, queued_event, adapter)
         depth = self._queue_depth(quick_key, adapter=self._adapter_for_source(source))
         if depth <= 1:

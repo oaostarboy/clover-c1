@@ -3037,6 +3037,25 @@ def absorb_inbound_receipts(existing: Any, incoming: Any) -> None:
     mine.extend(cb for cb in theirs if cb not in mine)
 
 
+def merge_telegram_album_media(existing: Any, incoming: Any) -> bool:
+    """Merge transport-owned album members once, in Telegram message order.
+
+    Callers must first establish matching batch and security context. Keep the
+    member ledger with the queued payload, so debounce/queue retry boundaries
+    do not reorder downloads or append the same member twice.
+    """
+    first = (existing.metadata or {}).get("telegram_album_members")
+    second = (incoming.metadata or {}).get("telegram_album_members")
+    if not first or not second:
+        return False
+    members = {**second, **first}  # retain the first successful cache per message
+    ordered = [members[key] for key in sorted(members, key=int)]
+    existing.metadata["telegram_album_members"] = members
+    existing.media_urls = [url for member in ordered for url in member[0]]
+    existing.media_types = [mime for member in ordered for mime in member[1]]
+    return True
+
+
 def merge_pending_message_event(
     pending_messages: Dict[str, MessageEvent],
     session_key: str,
@@ -3069,14 +3088,22 @@ def merge_pending_message_event(
         ):
             return MergeResult.REFUSED
 
+        # Telegram has already established album/burst boundaries. Never let
+        # a later album donate its attachments to an unrelated queued request.
+        existing_batch = (getattr(existing, "metadata", None) or {}).get("telegram_media_batch")
+        incoming_batch = (getattr(event, "metadata", None) or {}).get("telegram_media_batch")
+        if (existing_batch or incoming_batch) and existing_batch != incoming_batch:
+            return MergeResult.REFUSED
+
         existing_is_photo = getattr(existing, "message_type", None) == MessageType.PHOTO
         incoming_is_photo = event.message_type == MessageType.PHOTO
         existing_has_media = bool(existing.media_urls)
         incoming_has_media = bool(event.media_urls)
 
         if existing_is_photo and incoming_is_photo:
-            existing.media_urls.extend(event.media_urls)
-            existing.media_types.extend(event.media_types)
+            if not merge_telegram_album_media(existing, event):
+                existing.media_urls.extend(event.media_urls)
+                existing.media_types.extend(event.media_types)
             if event.text:
                 existing.text = BasePlatformAdapter._merge_caption(existing.text, event.text)
             _invalidate_pending_stt_cache(existing)
@@ -3085,8 +3112,9 @@ def merge_pending_message_event(
 
         if existing_has_media or incoming_has_media:
             if incoming_has_media:
-                existing.media_urls.extend(event.media_urls)
-                existing.media_types.extend(event.media_types)
+                if not merge_telegram_album_media(existing, event):
+                    existing.media_urls.extend(event.media_urls)
+                    existing.media_types.extend(event.media_types)
             if event.text:
                 if existing.text:
                     existing.text = BasePlatformAdapter._merge_caption(existing.text, event.text)
@@ -6738,6 +6766,9 @@ class BasePlatformAdapter(ABC):
                 try:
                     _thread_meta = _thread_metadata_for_source(event.source, _reply_anchor_for_event(event))
                     response = await self._message_handler(event)
+                    # Ownership transferred, possibly to a memory-only FIFO.
+                    # Cancelling the ack send must not replay the command.
+                    setattr(event, "_adapter_handoff_complete", True)
                     settle_inbound_handoff(event)
                     _text, _eph_ttl = self._unwrap_ephemeral(response)
                     if _text:
