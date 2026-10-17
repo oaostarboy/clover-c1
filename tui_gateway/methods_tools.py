@@ -903,6 +903,10 @@ def _(rid, params: dict) -> dict:
             {"type": "send", "notice": notice, "message": state.goal},
         )
 
+    if name == "proactive":
+        from clover_cli.proactive import proactive_command
+        return _ok(rid, {"type": "exec", "output": proactive_command(arg, can_change=True)})
+
     if name == "loop":
         # /loop — recurring in-session wakeups (Claude Code parity). State
         # mutation via the shared dispatcher; the notification poller thread

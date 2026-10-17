@@ -3596,6 +3596,93 @@ class GatewaySlashCommandsMixin:
         idx = len(mgr.state.subgoals) if mgr.state else 0
         return f"✓ Added subgoal {idx}: {text}"
 
+    def _proactive_caller_is_admin(self, source: SessionSource) -> bool:
+        """Persistent profile controls need explicit admin enrollment, not allow-all."""
+        try:
+            from gateway.slash_access import policy_for_source
+            config = self.config
+            if getattr(config, "multiplex_profiles", False):
+                from gateway.config import load_gateway_config
+                config = load_gateway_config()
+            policy = policy_for_source(config, source)
+            return bool(source.user_id and policy.enabled and policy.is_admin(source.user_id)
+                        and self._is_user_authorized_for_source(source))
+        except Exception:
+            return False
+
+    async def _handle_proactive_command(self, event: MessageEvent) -> Optional[str]:
+        import copy
+        import time
+        from clover_constants import get_clover_home
+        from clover_cli.proactive import proactive_command, PROACTIVE_ACTIONS
+        from gateway.run import _profile_runtime_scope
+
+        if getattr(event, "internal", False):
+            return "Use a current authenticated /proactive command to change settings."
+        if self._is_stale_offline_command(event):
+            return self._stale_offline_command_reply("proactive")
+        can_change = self._proactive_caller_is_admin(event.source)
+        args = event.get_command_args().strip()
+        text = proactive_command(args, can_change=can_change, show_commands=bool(args) or not can_change)
+        if args.lower() == "status" and not can_change:
+            from gateway.slash_access import _keys_for_scope, _scope_for_chat_type
+            admin_key, _ = _keys_for_scope(_scope_for_chat_type(event.source.chat_type))
+            platform_key = event.source.platform.value
+            text += (
+                "\nOwner setup (local terminal, current profile): verify the sender's /whoami user ID "
+                "with the owner, not a chat ID, username or message claim. Inspect and preserve any existing admins.\n"
+                f"clover config set platforms.{platform_key}.{admin_key} '[\"VERIFIED_USER_ID\"]'\n"
+                "Replace the placeholder with the verified user ID (and retain existing admin IDs). "
+                "This enables slash-command gating for this chat type: other users' slash commands may be restricted. "
+                "It does not grant chat access; keep the existing source allowlist. "
+                "The operator must reload gateway policy through the normal approved lifecycle, then reopen /proactive."
+            )
+        prefix = self._typed_command_prefix_for(event.source.platform)
+        if isinstance(prefix, str) and prefix != "/":
+            text = (text.replace("/proactive", f"{prefix}proactive")
+                    .replace("/loop", f"{prefix}loop").replace("/whoami", f"{prefix}whoami"))
+        if args or not can_change:
+            return text
+
+        # Capture the admitted source, not a mutable event or ambient callback
+        # task's profile. The opt-in transport guard binds actor/chat/message/
+        # thread/expiry and claims the picker before invoking this closure.
+        source = copy.deepcopy(event.source)
+        home = get_clover_home().resolve()
+        route_home = self._resolve_profile_home_for_source(source).resolve()
+        adapter = self._adapter_for_source(source)
+        expires_at = time.monotonic() + 300
+        used = False
+
+        def authorized(uid):
+            if used or str(uid) != str(source.user_id) or time.monotonic() > expires_at:
+                return False
+            with _profile_runtime_scope(home):
+                return (self._adapter_for_source(source) is adapter
+                        and self._resolve_profile_home_for_source(source).resolve() == route_home
+                        and self._proactive_caller_is_admin(source))
+
+        async def on_selected(chat_id, value):
+            nonlocal used
+            if str(chat_id) != str(source.chat_id) or value not in {"on", "off"} or not authorized(source.user_id):
+                return "Picker expired or no longer authorized; run /proactive again."
+            used = True
+            with _profile_runtime_scope(home):
+                return proactive_command(value, can_change=True, show_commands=False)
+
+        sent = await self._try_send_choice_picker(
+            event, self._session_key_for_source(source), text,
+            [{"value": "on", "label": "Enable"}, {"value": "off", "label": "Disable"}],
+            on_selected, choice_guard={"owner_user_id": str(source.user_id),
+                                       "expires_at": expires_at, "authorize": authorized},
+        )
+        if sent:
+            return None
+        controls = PROACTIVE_ACTIONS
+        if isinstance(prefix, str) and prefix != "/":
+            controls = controls.replace("/proactive", f"{prefix}proactive")
+        return text + "\n" + controls
+
     async def _get_loop_manager_for_event(self, event: "MessageEvent"):
         """Return a LoopManager bound to the session for this gateway event.
 
@@ -4311,6 +4398,8 @@ class GatewaySlashCommandsMixin:
         title: str,
         choices: list,
         on_choice_selected,
+        *,
+        choice_guard: Optional[dict] = None,
     ) -> bool:
         """Send an interactive choice picker when the platform supports it.
 
@@ -4323,12 +4412,15 @@ class GatewaySlashCommandsMixin:
             adapter is not None
             and getattr(type(adapter), "send_choice_picker", None) is not None
         )
-        if not has_picker:
+        if not has_picker or (choice_guard is not None and
+                              getattr(type(adapter), "supports_owned_choice_picker", False) is not True):
             return False
         try:
             metadata = self._thread_metadata_for_source(
                 event.source, self._reply_anchor_for_event(event)
             )
+            if choice_guard is not None:
+                metadata = dict(metadata or {}, choice_guard=choice_guard)
             result = await adapter.send_choice_picker(
                 chat_id=event.source.chat_id,
                 title=title,

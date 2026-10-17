@@ -18656,6 +18656,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Return ordinary slash handlers shared by idle and busy dispatch."""
         return {
             "status": self._handle_status_command,
+            "proactive": self._handle_proactive_command,
             "context": self._handle_context_command,
             "restart": self._handle_restart_command,
             "approve": self._handle_approve_command,

@@ -6883,6 +6883,10 @@ class TelegramAdapter(BasePlatformAdapter):
             logger.warning("[%s] send_model_picker failed: %s", self.name, _redact_telegram_error_text(e))
             return SendResult(success=False, error=_redact_telegram_error_text(e))
 
+    # Opt-in guard contract for persistent settings; other adapters fall back
+    # to explicit text commands until they can bind native taps as strictly.
+    supports_owned_choice_picker = True
+
     _PROVIDER_PAGE_SIZE = 10
 
     async def send_choice_picker(
@@ -6942,6 +6946,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 "choices": choices,
                 "session_key": session_key,
                 "on_choice_selected": on_choice_selected,
+                "guard": dict(metadata["choice_guard"], thread_id=thread_id)
+                if metadata and metadata.get("choice_guard") is not None else None,
             }
             return SendResult(success=True, message_id=str(msg.message_id))
         except Exception as e:
@@ -6972,8 +6978,29 @@ class TelegramAdapter(BasePlatformAdapter):
             await query.answer(text="⛔ You are not authorized to change this setting.")
             return
 
+        guard = state.get("guard")
+        if guard is not None:
+            # Opt-in persistent-setting contract: admission alone is not admin
+            # authority. Bind the exact originating actor, message and thread,
+            # then recheck the owner's live policy in its captured profile.
+            try:
+                owned = (
+                    str(getattr(query.from_user, "id", "")) == guard["owner_user_id"]
+                    and str(getattr(query_message, "message_id", "")) == str(state["msg_id"])
+                    and str(getattr(query_message, "message_thread_id", None) or "") == str(guard["thread_id"] or "")
+                    and time.monotonic() <= guard["expires_at"]
+                    and guard["authorize"](str(query.from_user.id))
+                )
+            except Exception:
+                owned = False
+            if not owned:
+                await query.answer(text="Picker expired or not owned by you; run /proactive again.")
+                return
+
         try:
             idx = int(data[3:])
+            if idx < 0:
+                raise ValueError("negative choice index")
             choice = state["choices"][idx]
         except (ValueError, IndexError):
             await query.answer(text="Invalid selection.")
@@ -6984,6 +7011,13 @@ class TelegramAdapter(BasePlatformAdapter):
             await query.answer(text=_ui("expired", "Picker expired."))
             return
 
+        if guard is not None:
+            # Claim before the first await in the application callback: duplicate
+            # taps cannot race a persistent write. Invalid taps never consume it.
+            if self._choice_picker_state.get(chat_id) is not state:
+                await query.answer(text="Picker already used.")
+                return
+            self._choice_picker_state.pop(chat_id, None)
         try:
             result_text = await callback(chat_id, str(choice.get("value") or ""))
         except Exception as exc:
@@ -7004,7 +7038,8 @@ class TelegramAdapter(BasePlatformAdapter):
             except Exception:
                 pass
         await query.answer()
-        self._choice_picker_state.pop(chat_id, None)
+        if self._choice_picker_state.get(chat_id) is state:
+            self._choice_picker_state.pop(chat_id, None)
 
     async def send_skin_picker(
         self,

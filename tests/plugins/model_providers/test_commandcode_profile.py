@@ -43,6 +43,36 @@ def commandcode_anthropic_profile():
     return profile
 
 
+@pytest.fixture(params=["catalog", "plugin-only"])
+def commandcode_catalog(request, monkeypatch):
+    """Exercise the real resolver with fresh, local models.dev cache inputs.
+
+    Catalog metadata may differ from a runtime plugin's credential names.
+    Keep both precedence paths offline, without replacing resolver functions.
+    """
+    import json
+
+    from agent import models_dev
+
+    catalog = {
+        "unrelated": {
+            "id": "unrelated", "name": "Unrelated", "env": [], "models": {},
+        },
+    }
+    if request.param == "catalog":
+        catalog["commandcode"] = {
+            "id": "commandcode",
+            "name": "CommandCode",
+            "env": ["CMD_API_KEY"],
+            "api": "https://api.commandcode.ai/provider/v1",
+            "models": {},
+        }
+    models_dev._get_cache_path().write_text(json.dumps(catalog))
+    monkeypatch.setattr(models_dev, "_models_dev_cache", {})
+    monkeypatch.setattr(models_dev, "_models_dev_cache_time", 0)
+    return catalog.get("commandcode")
+
+
 # ── Chat Completions profile ──────────────────────────────────────────────────
 
 class TestCommandCodeProfileIdentity:
@@ -257,7 +287,7 @@ class TestCommandCodeFetchModelsPickerContract:
         assert profile is not None
         assert "base_url" in inspect.signature(profile.fetch_models).parameters
 
-    def test_resolve_provider_full(self):
+    def test_resolve_provider_full(self, commandcode_catalog):
         """Both profiles must resolve through the model-switch path.
 
         Regression: ``resolve_provider_full`` only knew models.dev + overlay
@@ -266,15 +296,118 @@ class TestCommandCodeFetchModelsPickerContract:
         them.
         """
         from clover_cli.providers import resolve_provider_full
+        from providers import get_provider_profile
 
         chat = resolve_provider_full("commandcode", {}, [])
         assert chat is not None and chat.id == "commandcode"
         assert chat.transport == "openai_chat"
-        assert "COMMANDCODE_API_KEY" in chat.api_key_env_vars
+        # models.dev metadata wins when present; the registered plugin is
+        # the fallback, not an override of the catalog's env declaration.
+        if commandcode_catalog is not None:
+            assert chat.source == "models.dev"
+            assert chat.api_key_env_vars == tuple(commandcode_catalog["env"])
+            assert chat.base_url == commandcode_catalog["api"]
+        else:
+            profile = get_provider_profile("commandcode")
+            assert profile is not None
+            assert chat.source == "plugin-profile"
+            assert chat.api_key_env_vars == profile.env_vars
+            assert chat.base_url == profile.base_url
 
         anth = resolve_provider_full("commandcode-anthropic", {}, [])
         assert anth is not None and anth.id == "commandcode-anthropic"
         assert anth.transport == "anthropic_messages"
+        assert anth.source == "plugin-profile"
+        anth_profile = get_provider_profile("commandcode-anthropic")
+        assert anth_profile is not None
+        assert anth.api_key_env_vars == anth_profile.env_vars
+
+
+class TestCommandCodeRuntimeCredentials:
+    """Catalog env metadata does not redefine the plugin's runtime auth.
+
+    These are offline real imports, real temp-profile files, real credential
+    resolution and real gates. No credential resolver or pool is stubbed.
+    """
+
+    @pytest.mark.parametrize("provider_name", ["commandcode", "commandcode-anthropic"])
+    @pytest.mark.parametrize("location", ["environment", "dotenv"])
+    def test_plugin_key_resolves_runtime(
+        self, provider_name, location, commandcode_catalog, monkeypatch
+    ):
+        import model_tools  # noqa: F401 — real plugin discovery
+        from clover_constants import get_clover_home
+        from clover_cli.auth import PROVIDER_REGISTRY, resolve_api_key_provider_credentials
+        from clover_cli.runtime_provider import resolve_runtime_provider
+        from providers import get_provider_profile
+
+        key = "commandcode-fixture-credential-not-a-live-key"
+        if location == "environment":
+            monkeypatch.setenv("COMMANDCODE_API_KEY", key)
+        else:
+            (get_clover_home() / ".env").write_text(f"COMMANDCODE_API_KEY={key}\n")
+        profile = get_provider_profile(provider_name)
+        assert profile is not None
+        config = PROVIDER_REGISTRY[provider_name]
+        assert config.api_key_env_vars == ("COMMANDCODE_API_KEY",)
+        assert config.base_url_env_var in profile.env_vars
+        assert config.base_url_env_var not in config.api_key_env_vars
+        credentials = resolve_api_key_provider_credentials(provider_name)
+        assert credentials["api_key"] == key
+        assert credentials["source"] == "COMMANDCODE_API_KEY"
+        runtime = resolve_runtime_provider(requested=provider_name)
+        assert runtime["provider"] == provider_name
+        assert runtime["api_key"] == key
+        assert runtime["base_url"] == profile.base_url
+        assert runtime["api_mode"] == profile.api_mode
+
+    @pytest.mark.parametrize("provider_name", ["commandcode", "commandcode-anthropic"])
+    @pytest.mark.parametrize("noncredential", ["missing", "catalog-key", "base-url-only"])
+    def test_missing_plugin_key_fails_closed(
+        self, provider_name, noncredential, commandcode_catalog, monkeypatch
+    ):
+        import model_tools  # noqa: F401
+        from clover_cli.auth import AuthError, PROVIDER_REGISTRY
+        from clover_cli.runtime_provider import resolve_runtime_provider
+
+        if noncredential == "catalog-key":
+            # CMD_API_KEY is catalog metadata, not a declared runtime alias.
+            monkeypatch.setenv("CMD_API_KEY", "catalog-fixture-not-a-runtime-key")
+        elif noncredential == "base-url-only":
+            monkeypatch.setenv(
+                PROVIDER_REGISTRY[provider_name].base_url_env_var,
+                "https://api.commandcode.ai/provider/v1",
+            )
+        with pytest.raises(AuthError) as error:
+            resolve_runtime_provider(requested=provider_name)
+        assert error.value.code == "missing_api_key"
+        assert error.value.provider == provider_name
+        assert "COMMANDCODE_API_KEY" in str(error.value)
+
+    @pytest.mark.parametrize("provider_name", ["commandcode", "commandcode-anthropic"])
+    def test_disabled_provider_rejects_even_valid_plugin_key(
+        self, provider_name, commandcode_catalog, monkeypatch
+    ):
+        import model_tools  # noqa: F401
+        import yaml
+        from clover_constants import get_clover_home
+        from clover_cli.runtime_provider import resolve_runtime_provider
+
+        monkeypatch.setenv("COMMANDCODE_API_KEY", "commandcode-fixture-not-a-live-key")
+        (get_clover_home() / "config.yaml").write_text(yaml.safe_dump({
+            "providers": {provider_name: {"enabled": False}},
+        }))
+        with pytest.raises(ValueError, match="disabled in config"):
+            resolve_runtime_provider(requested=provider_name)
+
+    @pytest.mark.parametrize("env_name", ["COMMANDCODE_API_KEY", "CMD_API_KEY"])
+    def test_both_credential_names_are_redacted(self, env_name):
+        from agent.redact import redact_sensitive_text
+
+        key = "commandcode-fixture-sensitive-value-not-a-live-key"
+        redacted = redact_sensitive_text(f"{env_name}={key}", force=True)
+        assert env_name in redacted
+        assert key not in redacted
 
 
 # ── base_url endpoint override ───────────────────────────────────────────────

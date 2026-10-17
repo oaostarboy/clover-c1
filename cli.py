@@ -12880,6 +12880,10 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
             self._handle_refine_command(cmd_original)
         elif canonical == "review":
             self._handle_review_command(cmd_original)
+        elif canonical == "proactive":
+            from clover_cli.proactive import proactive_command
+            parts = cmd_original.split(None, 1)
+            self.console.print(proactive_command(parts[1] if len(parts) > 1 else "", can_change=True), markup=False)
         elif canonical == "loop":
             self._handle_loop_command(cmd_original)
         elif canonical == "plan":

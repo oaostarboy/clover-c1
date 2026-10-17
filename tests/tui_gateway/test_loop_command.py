@@ -96,10 +96,23 @@ def test_loop_set_persists(server, session):
     assert mgr.state.interval_seconds == 300.0
 
 
-def test_loop_proactive_alias_resolves(server, session):
-    sid, _, _ = session
+def test_proactive_legacy_loop_syntax_instructs_migration(server, session):
+    sid, session_key, _ = session
     r = _call(server, "command.dispatch", name="proactive", arg="5m ping", session_id=sid)
-    assert "Loop set" in r["result"]["output"]
+    assert "/loop <interval> <prompt>" in r["result"]["output"]
+    from clover_cli.loops import load_loop
+    assert load_loop(session_key) is None
+
+
+def test_proactive_controls_are_deterministic_in_tui(server, session):
+    from agent.workstreams import load_settings
+    sid, _, s = session
+    for arg, state in [("", False), ("on", True), ("status", True), ("off", False)]:
+        r = _call(server, "command.dispatch", name="proactive", arg=arg, session_id=sid)
+        assert r["result"]["type"] == "exec"
+        assert ("On" if state else "Off") in r["result"]["output"]
+        assert load_settings().enabled is state
+    assert s["history"] == []
 
 
 def test_loop_pause_resume_stop(server, session):
