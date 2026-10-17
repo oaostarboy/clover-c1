@@ -83,7 +83,27 @@ def main():
     (guard / 'sitecustomize.py').write_text('import sys\ndef guard(event,args):\n    if event == "socket.connect":\n        addr=args[1]\n        if isinstance(addr,tuple) and addr[0] not in ("127.0.0.1","::1","localhost"):\n            raise OSError("native owner fixture blocks external network")\n    if event == "socket.getaddrinfo" and args[0] not in (None,"localhost","127.0.0.1","::1"):\n        raise OSError("native owner fixture blocks external DNS")\nsys.addaudithook(guard)\n')
     env = {k: v for k, v in os.environ.items() if k.upper() in {'PATH','SYSTEMROOT','WINDIR','COMSPEC','PATHEXT','TEMP','TMP','LOCALAPPDATA','APPDATA','PSMODULEPATH','PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMW6432'}}
     env.update(HOME=str(home), USERPROFILE=str(home), PYTHONUTF8='1', TZ='UTC', TERM='xterm-256color')
-    save('plan.json', {'files': FILES, 'workers': 1, 'file_retries': 0, 'file_timeout': 'canonical default unchanged', 'console': 'native ConPTY on Windows, controlling PTY on macOS', 'expected_product_core_counts': [21,10,16,16,30,8], 'additional_native_cases': 9, 'not_claimed': ['installers','service readiness','live Telegram','providers','production deployment','private ACL provisioning']})
+    save('plan.json', {'files': FILES, 'workers': 1, 'file_retries': 0, 'file_timeout': 'canonical default unchanged', 'console': 'native ConPTY on Windows, controlling PTY on macOS', 'expected_product_core_counts': [21,10,16,16,30,8], 'additional_native_cases': 10, 'not_claimed': ['installers','service readiness','live Telegram','providers','production deployment','private ACL provisioning']})
+    probe_code = '''import json,socket,sys,importlib.metadata
+from pathlib import Path
+import gateway.pairing,clover_cli.pairing
+blocked=[]
+for name,fn in [('connect',lambda:socket.create_connection(('198.51.100.1',443),timeout=1)),('dns',lambda:socket.getaddrinfo('example.invalid',443))]:
+    try: fn()
+    except OSError as exc:
+        assert 'native owner fixture blocks external' in str(exc), repr(exc)
+        blocked.append(name)
+    else: raise AssertionError('external audit guard missing')
+with socket.socket() as local:
+    local.bind(('127.0.0.1',0))
+print(json.dumps({'blocked_before_network':blocked,'loopback_bind':True,'python':sys.executable,'pairing_origin':gateway.pairing.__file__,'cli_origin':clover_cli.pairing.__file__,'editable':json.loads(importlib.metadata.distribution('clover-c1').read_text('direct_url.json'))}))
+'''
+    probe = subprocess.run([sys.executable, '-c', probe_code], cwd=OUT, env={**env, 'PYTHONPATH': str(guard)}, capture_output=True, text=True, timeout=20)
+    save('preflight.json', {'exit': probe.returncode, 'stdout': probe.stdout, 'stderr': probe.stderr})
+    assert probe.returncode == 0, probe.stderr
+    measured = json.loads(probe.stdout)
+    assert Path(measured['pairing_origin']).resolve() == SOURCE / 'gateway/pairing.py'
+    assert Path(measured['cli_origin']).resolve() == SOURCE / 'clover_cli/pairing.py'
     results = []
     bash = shutil.which('bash')
     assert bash
@@ -93,6 +113,8 @@ def main():
         xml = OUT / f'{i:02d}-{Path(name).stem}.xml'
         log = OUT / f'{i:02d}-{Path(name).stem}.log'
         args = [bash, str(SOURCE / 'scripts/run_tests.sh'), '-j', '1', '--file-retries', '0', name, '-p', 'no:randomly', '--junitxml=' + xml.as_posix(), '-r', 'a', '--tb=short']
+        if i == len(FILES) - 1:
+            args.append('-s')  # native diagnostics print only safe OS metadata
         started = time.monotonic()
         with log.open('w', encoding='utf-8') as f:
             proc = subprocess.run(args, cwd=SOURCE, env=env, stdout=f, stderr=subprocess.STDOUT, timeout=360)
@@ -101,12 +123,14 @@ def main():
             for case in ET.parse(xml).getroot().iter('testcase'):
                 outcome = next((x for x in ('failure','error','skipped') if case.find(x) is not None), 'passed')
                 cases.append({'classname': case.get('classname'), 'name': case.get('name'), 'outcome': outcome, 'detail': ''.join(case.find(outcome).itertext()) if outcome != 'passed' else ''})
-        row = {'file': name, 'exit': proc.returncode, 'seconds': time.monotonic()-started, 'cases': cases, 'xml': xml.name if xml.exists() else None, 'log': log.name, 'command': args}
+        row = {'file': name, 'expected_cases': [21,10,16,16,30,8,30,13,10,7,7,10][i], 'exit': proc.returncode, 'seconds': time.monotonic()-started, 'cases': cases, 'xml': xml.name if xml.exists() else None, 'log': log.name, 'command': args}
         results.append(row)
         save('test-results.json', results)
         print(json.dumps({'file': name, 'exit': proc.returncode, 'counts': {s: sum(c['outcome'] == s for c in cases) for s in ['passed','failure','error','skipped']}}), flush=True)
-    identity('after')
+    final = identity('after')
+    assert initial['tracked_sha256'] == final['tracked_sha256'], 'tracked bytes changed during execution'
     assert len(results) == len(FILES)
+    assert all(len(row['cases']) == row['expected_cases'] for row in results), 'collected counts differ from frozen plan'
     assert all(row['exit'] == 0 and row['cases'] for row in results), 'one or more native rows failed; see per-file evidence'
 
 

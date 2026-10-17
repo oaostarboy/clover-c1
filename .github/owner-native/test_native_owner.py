@@ -53,6 +53,9 @@ def test_native_competing_lock_blocks_then_releases(tmp_path):
     s, code = prepared(tmp_path)
     lock = s._lock()
     with lock:
+        denied = child('lock-denied', s.home)
+        assert denied['denied'], 'native primitive admitted a conflicting writer'
+        print('NATIVE_LOCK_DENIAL', denied)
         p = subprocess.Popen([sys.executable, str(WORKER), 'lock'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         p.stdin.write(json.dumps({'home': str(s.home)}))
         p.stdin.close()
@@ -122,7 +125,37 @@ def test_native_permission_denial_and_private_directory_contract(tmp_path):
     assert s.confirm(code) == '12345678'
 
 
-def test_native_actual_replace_failure_preserves_previous_record(tmp_path):
+def test_native_post_write_readback_denial_never_returns_success(tmp_path, monkeypatch):
+    s, code = prepared(tmp_path)
+    from gateway import pairing
+    original = pairing._secure_write
+    sid = None
+    if os.name == 'nt':
+        import csv
+        sid = list(csv.reader([subprocess.check_output(['whoami', '/user', '/fo', 'csv', '/nh'], text=True).strip()]))[0][1]
+    def write_then_deny(path, data):
+        original(path, data)
+        if os.name == 'nt':
+            result = subprocess.run(['icacls', str(path), '/deny', f'*{sid}:(R)'], capture_output=True, text=True)
+            assert result.returncode == 0, result.stdout + result.stderr
+        else:
+            path.chmod(0)
+    monkeypatch.setattr(pairing, '_secure_write', write_then_deny)
+    try:
+        with pytest.raises(OSError):
+            s.confirm(code)
+        assert not s.is_owner('12345678'), 'unreadable proof must fail closed'
+    finally:
+        if os.name == 'nt':
+            result = subprocess.run(['icacls', str(s.path), '/remove:d', f'*{sid}'], capture_output=True, text=True)
+            assert result.returncode == 0, result.stdout + result.stderr
+        else:
+            s.path.chmod(0o600)
+    # Disk write did happen; lack of verified readback must not announce success.
+    assert s.is_owner('12345678')
+
+
+def test_native_actual_replace_failure_cleans_temp_and_fails_closed(tmp_path):
     s, code = prepared(tmp_path)
     before = s.path.read_bytes()
     # The actual target is made a directory; OS replacement must reject it.
@@ -225,7 +258,13 @@ def test_native_console_hidden_confirmation_and_cancellation(tmp_path, cancel):
                         break
                     transcript += buf.decode(errors='replace')
             waited, status = os.waitpid(pid, os.WNOHANG)
+            # PTY EOF may precede process reaping. Use only the remainder of
+            # the SAME fixed deadline, not a retry or increased test budget.
+            while waited == 0 and time.monotonic() < deadline:
+                time.sleep(.01)
+                waited, status = os.waitpid(pid, os.WNOHANG)
             assert waited == pid, 'PTY child exceeded fixed bound'
+            assert os.waitstatus_to_exitcode(status) == (1 if cancel else 0)
         finally:
             os.close(fd)
             try:

@@ -27,6 +27,20 @@ elif op == 'revoke':
     print(json.dumps(s.owner_user_id()))
 elif op == 'prove':
     print(json.dumps(s.prove(v['challenge'], v['uid'])))
+elif op == 'lock-denied':
+    # Genuine competing-process nonblocking primitive denial, not a shim.
+    with s.path.with_suffix('.lock').open('a+b') as f:
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            print(json.dumps({'denied': True, 'errno': exc.errno, 'winerror': getattr(exc, 'winerror', None)}))
+        else:
+            print(json.dumps({'denied': False}))
 elif op == 'lock':
     print('READY', flush=True)
     with s._lock():
