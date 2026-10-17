@@ -206,7 +206,18 @@ def test_real_cli_process_loads_exact_profile_and_confirms_saved_owner(profile, 
     # Required on native Windows to locate core DLLs; no credential borrowing.
     for name in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP"):
         if name in os.environ: env[name] = os.environ[name]
-    result = subprocess.run([sys.executable, "-m", "clover_cli.main", "pairing", "owner-confirm", "telegram"],
+    command = [sys.executable, "-m", "clover_cli.main", "pairing", "owner-confirm", "telegram"]
+    if os.name == "nt":
+        # This is a piped-input/bootstrap test, not a native console test.
+        # Windows getpass otherwise reads the console even when fd 0 is a pipe.
+        # A real redirected Python stream selects its stdlib fallback; keep
+        # the proof on stdin and run the complete, unmocked CLI module.
+        command = [sys.executable, "-c",
+                   "import io, runpy, sys; "
+                   "sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding=sys.stdin.encoding, errors=sys.stdin.errors); "
+                   "sys.argv = ['clover_cli.main', 'pairing', 'owner-confirm', 'telegram']; "
+                   "runpy.run_module('clover_cli.main', run_name='__main__')"]
+    result = subprocess.run(command,
                             input=code + "\n", text=True, env=env, capture_output=True, timeout=30)
     assert result.returncode == 0, result.stderr
     assert "verified and saved" in result.stdout.lower(), result.stdout + result.stderr
