@@ -1284,27 +1284,37 @@ class TelegramAdapter(BasePlatformAdapter):
                         )
                     return
                 try:
-                    await self.handle_message(event)
+                    if await self.handle_message(event) is False:
+                        # Explicit failed queue handoff: retain it and the
+                        # remainder, but never spin retrying a poison input.
+                        for rest in events[idx:]:
+                            self._hold_inbound_event(
+                                rest, where="redispatch-unaccepted", schedule=False
+                            )
+                        allow_followup_schedule = False
+                        return
                 except asyncio.CancelledError:
-                    self._hold_inbound_event(
-                        event, where="redispatch-cancelled", schedule=False
-                    )
+                    if not getattr(event, "_adapter_handoff_complete", False):
+                        self._hold_inbound_event(
+                            event, where="redispatch-cancelled", schedule=False
+                        )
                     for rest in events[idx + 1 :]:
                         self._hold_inbound_event(
                             rest, where="redispatch-cancelled", schedule=False
                         )
                     raise
                 except Exception:
-                    # Retryable failure: keep current + remainder. Do not
+                    # Keep only unaccepted work plus the remainder. Do not
                     # immediately reschedule — a poison event would tight-loop.
                     # Next mark_connected or a later connected-path hold drains.
                     logger.exception(
-                        "[Telegram] Failed to redispatch held inbound (%d chars); re-holding",
+                        "[Telegram] Failed to redispatch held inbound (%d chars); retaining unaccepted work",
                         len(getattr(event, "text", None) or ""),
                     )
-                    self._hold_inbound_event(
-                        event, where="redispatch-failed", schedule=False
-                    )
+                    if not getattr(event, "_adapter_handoff_complete", False):
+                        self._hold_inbound_event(
+                            event, where="redispatch-failed", schedule=False
+                        )
                     for rest in events[idx + 1 :]:
                         self._hold_inbound_event(
                             rest, where="redispatch-failed", schedule=False
@@ -10789,7 +10799,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 event = None
                 return
             logger.info("[Telegram] Flushing photo batch %s with %d image(s)", batch_key, len(event.media_urls))
-            await self.handle_message(event)
+            if await self.handle_message(event) is False:
+                self._hold_inbound_event(event, where="photo-flush-unaccepted", schedule=False)
             event = None
         except asyncio.CancelledError:
             if event is not None and not getattr(event, "_adapter_handoff_complete", False):
@@ -11131,15 +11142,16 @@ class TelegramAdapter(BasePlatformAdapter):
         new user message and interrupts the first. We debounce briefly and merge the
         attachments into a single MessageEvent.
         """
-        if self._should_drop_delayed_delivery():
-            self._hold_inbound_event(event, where="media-group-enqueue")
-            return
-
         event.metadata["telegram_media_batch"] = f"album:{media_group_id}"
         if event.message_id and str(event.message_id).isdigit():
             event.metadata["telegram_album_members"] = {
                 str(event.message_id): [list(event.media_urls), list(event.media_types)]
             }
+        # Recovery redispatches the event directly, not through this method.
+        # Transport identity must already exist if disconnect takes ownership.
+        if self._should_drop_delayed_delivery():
+            self._hold_inbound_event(event, where="media-group-enqueue")
+            return
         # Telegram album IDs must not coalesce different senders/topic lanes,
         # even when those lanes deliberately share a gateway session.
         media_group_id = repr((media_group_id, event.source.chat_id,
@@ -11179,7 +11191,8 @@ class TelegramAdapter(BasePlatformAdapter):
                 self._hold_inbound_event(event, where="media-group-flush")
                 event = None
                 return
-            await self.handle_message(event)
+            if await self.handle_message(event) is False:
+                self._hold_inbound_event(event, where="media-group-flush-unaccepted", schedule=False)
             event = None
         except asyncio.CancelledError:
             # Cancelled after pop but before durable dispatch — hold, don't lose.

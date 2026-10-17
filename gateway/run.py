@@ -11320,24 +11320,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # semantics); everything else appends to the overflow tail.
         pending_slot = getattr(adapter, "_pending_messages", None)
         existing = pending_slot.get(session_key) if isinstance(pending_slot, dict) else None
-        security_metadata_keys = (
-            "clover_plugin_id",
-            "clover_plugin_injection",
-            "gateway_session_key",
-            "gateway_session_id",
-            "gateway_session_strict",
-        )
         same_security_context = existing is not None and events_share_security_context(
             existing, event
-        ) and (
-            getattr(existing, "internal", False) == getattr(event, "internal", False)
-            and getattr(existing, "allow_gateway_control", True)
-            == getattr(event, "allow_gateway_control", True)
-            and all(
-                (getattr(existing, "metadata", None) or {}).get(key)
-                == (getattr(event, "metadata", None) or {}).get(key)
-                for key in security_metadata_keys
-            )
         )
         if same_security_context and (
             getattr(existing, "message_type", None) == MessageType.PHOTO
@@ -18876,6 +18860,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not queued_text and not has_media:
             return "Usage: /queue <prompt>"
         adapter = self._adapter_for_source(source)
+        if adapter is None or getattr(adapter, "_pending_messages", None) is None:
+            # _enqueue_fifo is a no-op without a queue. Do not acknowledge
+            # or transfer provenance to a clone that has no waiting owner.
+            raise RuntimeError("Queue is unavailable before handoff")
         if adapter:
             queued_event = dataclasses.replace(
                 event,
@@ -18887,8 +18875,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 inbound_receipts=list(event.inbound_receipts or []),
             )
             if self._merge_into_queued_media_batch(adapter, quick_key, queued_event):
+                setattr(event, "_adapter_handoff_complete", True)
                 return None
             self._enqueue_fifo(quick_key, queued_event, adapter)
+            # Explicit in-process acceptance precedes any reply/status work.
+            # A later handler/ack error must not replay this queued payload.
+            setattr(event, "_adapter_handoff_complete", True)
+            from agent.workstream_origin import transfer_queued_human_ingress
+            transfer_queued_human_ingress(event, queued_event)
         depth = self._queue_depth(quick_key, adapter=self._adapter_for_source(source))
         if depth <= 1:
             return "Queued for the next turn."

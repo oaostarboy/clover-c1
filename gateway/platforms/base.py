@@ -2892,9 +2892,12 @@ def events_share_security_context(first: Any, second: Any) -> bool:
     def _origin(event: Any) -> tuple:
         source = getattr(event, "source", None)
         return (
+            getattr(source, "platform", None),
+            getattr(source, "chat_type", None),
             getattr(source, "user_id", None),
             getattr(source, "chat_id", None),
             getattr(source, "thread_id", None),
+            getattr(event, "user_id", None),
         )
 
     return (
@@ -2904,6 +2907,14 @@ def events_share_security_context(first: Any, second: Any) -> bool:
         and getattr(first, "allow_gateway_control", True)
         == getattr(second, "allow_gateway_control", True)
         and _origin(first) == _origin(second)
+        and all(
+            (getattr(first, "metadata", None) or {}).get(key)
+            == (getattr(second, "metadata", None) or {}).get(key)
+            for key in (
+                "clover_plugin_id", "clover_plugin_injection",
+                "gateway_session_key", "gateway_session_id", "gateway_session_strict",
+            )
+        )
     )
 
 
@@ -6671,13 +6682,18 @@ class BasePlatformAdapter(ABC):
 
         await self._drain_pending_after_session_command(session_key, command_guard)
 
-    async def handle_message(self, event: MessageEvent) -> None:
+    async def handle_message(self, event: MessageEvent) -> Optional[bool]:
         """
         Process an incoming message.
         
         This method returns quickly by spawning background tasks.
         This allows new messages to be processed even while an agent is running,
         enabling interruption support.
+
+        False explicitly reports an unsuccessful /queue handler handoff, so
+        a transport retaining the payload can hold it without an eager retry.
+        Other handlers/commands keep their existing contract; this is not a
+        general retry policy for commands with arbitrary side effects.
         """
         if not self._message_handler:
             return
@@ -6786,6 +6802,8 @@ class BasePlatformAdapter(ABC):
                             )
                 except Exception as e:
                     logger.error("[%s] Command '/%s' dispatch failed: %s", self.name, cmd, e, exc_info=True)
+                    if cmd == "queue" and not getattr(event, "_adapter_handoff_complete", False):
+                        return False
                 return
 
             # Clarify reply bypass: if the agent is blocked on a
