@@ -2750,8 +2750,43 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
     return None
 
 
+_pause_guard: ContextVar[Optional[tuple]] = ContextVar("cron_pause_guard", default=None)
+
+
+@contextlib.contextmanager
+def pause_job_guard(snapshot: dict, authorize):
+    """Runtime-only restriction for one approved exact pause; never a grant.
+
+    Kept through middleware and checked under the job owner's existing lock.
+    Model args cannot install this guard or bypass ordinary runtime controls.
+    """
+    receipt = {}
+    token = _pause_guard.set((snapshot, authorize, receipt))
+    try:
+        yield receipt
+    finally:
+        _pause_guard.reset(token)
+
+
 def pause_job(job_id: str, reason: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Pause a job without deleting it. Accepts a job ID or name."""
+    guard = _pause_guard.get()
+    if guard is not None:
+        snapshot, authorize, receipt = guard
+        with _jobs_lock():
+            current = get_job(job_id)
+            if job_id != snapshot.get("id") or current != snapshot:
+                raise ValueError("The exact proposed job changed; nothing was paused.")
+            authorize()
+            # Reentrant existing owner lock covers read, authorization and write.
+            token = _pause_guard.set(None)
+            try:
+                updated = pause_job(job_id, reason=reason)
+                if updated is not None and get_job(job_id) == updated:
+                    receipt.update(job_id=job_id, completed=True)
+                return updated
+            finally:
+                _pause_guard.reset(token)
     job = resolve_job_ref(job_id)
     if not job:
         return None

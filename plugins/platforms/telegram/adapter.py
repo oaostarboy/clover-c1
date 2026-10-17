@@ -7084,7 +7084,7 @@ class TelegramAdapter(BasePlatformAdapter):
             except Exception:
                 owned = False
             if not owned:
-                await query.answer(text="Picker expired or not owned by you; run /proactive again.")
+                await query.answer(text=guard.get("denied_text") or "Picker expired or not owned by you; run /proactive again.")
                 return
 
         try:

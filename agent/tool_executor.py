@@ -598,7 +598,8 @@ def _run_agent_tool_execution_middleware(agent, **kwargs) -> "_ManagedToolResult
 
 
 def dispatch_generated_tool(
-    agent, function_name: str, function_args: dict, *, task_id: str = ""
+    agent, function_name: str, function_args: dict, *, task_id: str = "",
+    before_dispatch=None,
 ) -> str:
     """Run a call the RUNTIME generates through the executor's authorization.
 
@@ -620,6 +621,10 @@ def dispatch_generated_tool(
     def _execute(next_args: dict) -> Any:
         from tools.registry import registry
 
+        # A bounded approval can only narrow admission after all rewrites.
+        # Raising refuses dispatch; this never grants or skips middleware.
+        if before_dispatch is not None:
+            before_dispatch(next_args)
         return registry.dispatch(function_name, next_args, parent_agent=agent)
 
     managed = _run_agent_tool_execution_middleware(
