@@ -24,7 +24,7 @@ PROACTIVE_ACTIONS = "/proactive on — Enable; /proactive off — Disable"
 def proactive_command(args: str = "", *, can_change: bool, show_commands: bool = True) -> str:
     """Read status or apply a bounded preset through the config persistence owner.
 
-    Gateway callers MUST pass a decision from their authenticated admin boundary.
+    Gateway callers MUST pass a decision from their scoped control authorization.
     Local CLI/TUI use the same filesystem authority as `clover config set`.
     """
     action = args.strip().lower()
@@ -32,9 +32,8 @@ def proactive_command(args: str = "", *, can_change: bool, show_commands: bool =
         return MIGRATION
     changing = action in {"on", "off", "enable", "disable"}
     if changing and not can_change:
-        return ("Controls locked: admin enrollment required.\n"
-                "Ask the owner to verify your /whoami user ID.\n"
-                "/proactive status — details and owner setup.")
+        return ("Controls locked by command policy: admin access required.\n"
+                "/proactive status — permission details.")
     note = ""
     try:
         if changing:
@@ -116,8 +115,8 @@ def proactive_command(args: str = "", *, can_change: bool, show_commands: bool =
                 text += PROACTIVE_ACTIONS + "\n"
             text += "/proactive status — Details"
         else:
-            text += ("Controls locked: admin enrollment required. Verify /whoami with the owner.\n"
-                     "/proactive status — details and owner setup.")
+            text += ("Controls locked by command policy: admin access required.\n"
+                     "/proactive status — permission details.")
         return text
     text = (
         f"{note}Proactive: {saved_state} (saved, mode: {persisted.mode}).\n"
@@ -131,5 +130,5 @@ def proactive_command(args: str = "", *, can_change: bool, show_commands: bool =
     if can_change:
         text += "\n" + PROACTIVE_ACTIONS
     else:
-        text += "\nControls require an explicitly enrolled gateway admin."
+        text += "\nControls locked by command policy: admin access required."
     return text

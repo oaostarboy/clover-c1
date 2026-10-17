@@ -238,7 +238,7 @@ async def test_verified_owner_native_picker_and_callback_use_real_ptb_http_seria
         assert len(sends) == 1
         markup = sends[0]["reply_markup"]
         assert isinstance(markup, dict)
-        assert [b["text"] for b in markup["inline_keyboard"][0]] == ["Enable", "Disable"]
+        assert [b["text"] for b in markup["inline_keyboard"][0]] == ["On", "Off"]
         json.dumps(markup)  # Not a MagicMock-shaped UI.
         print("OWNER_REAL_PTB_WIRE=" + json.dumps({"text": sends[0]["text"], "reply_markup": markup}))
         assert not load_settings().enabled

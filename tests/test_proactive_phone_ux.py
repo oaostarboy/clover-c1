@@ -1,4 +1,4 @@
-"""Phone-sized menu and explicit enrollment, through real dispatch/transport."""
+"""Phone-sized menus and scoped command authority through real dispatch/transport."""
 import json
 from unittest.mock import AsyncMock, MagicMock
 from types import SimpleNamespace
@@ -14,25 +14,20 @@ from tests.gateway.test_slash_access_dispatch import _make_runner
 
 
 @pytest.mark.asyncio
-async def test_unenrolled_live_shape_is_short_and_explains_missing_controls(home):
-    # The screenshot's relevant state: active settings, no admin enrollment.
+async def test_unconfigured_policy_has_short_controls_without_owner_setup(home):
     config.save_config({"proactive": {"enabled": True, "mode": "active"}}, strip_defaults=False)
-    config.load_config()  # Establish current-schema baseline before gateway admission.
+    config.load_config()
     r = _make_runner(platform=Platform.TELEGRAM)
     a = TelegramAdapter(r.config.platforms[Platform.TELEGRAM])
     a._bot = MagicMock()
-    a._send_message_with_thread_fallback = AsyncMock()
+    a._send_message_with_thread_fallback = AsyncMock(return_value=SimpleNamespace(message_id=41))
     r.adapters = {Platform.TELEGRAM: a}
     before = (home / "config.yaml").read_bytes()
-    text = await r._handle_message(event("/proactive"))
-    assert isinstance(text, str)
-    print("PROACTIVE_UX_UNENROLLED=" + json.dumps({"text": text, "characters": len(text), "reply_markup": None}))
-    assert len(text) <= 260
-    assert text.startswith("Proactive: On\n")
-    assert "admin" in text.lower() and "/whoami" in text
-    assert "/proactive status" in text
-    assert "/proactive on" not in text
-    a._send_message_with_thread_fallback.assert_not_called()
+    assert await r._handle_message(event("/proactive")) is None
+    wire = a._send_message_with_thread_fallback.call_args.kwargs
+    assert wire["text"].startswith("Proactive: On\n")
+    assert len(wire["text"]) <= 160
+    assert [b.text for b in wire["reply_markup"].inline_keyboard[0]] == ["On", "Off"]
     assert (home / "config.yaml").read_bytes() == before
 
 
@@ -68,7 +63,7 @@ async def test_cli_enrolled_owner_gets_short_native_menu_and_compact_callback(ho
     assert len(wire["text"]) <= 160
     assert "/proactive on" not in wire["text"]
     buttons = wire["reply_markup"].inline_keyboard[0]
-    assert [b.text for b in buttons] == ["Enable", "Disable"]
+    assert [b.text for b in buttons] == ["On", "Off"]
     q = query(uid="12345678", data=buttons[index].callback_data)
     await tap(a, q)
     result = q.edit_message_text.call_args.kwargs["text"]
@@ -81,23 +76,17 @@ async def test_cli_enrolled_owner_gets_short_native_menu_and_compact_callback(ho
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("chat_type,key", [("dm", "allow_admin_from"), ("group", "group_allow_admin_from")])
-async def test_status_has_scoped_local_setup_with_policy_side_effect_warning(home, chat_type, key):
+async def test_status_explains_current_scoped_command_policy(home, chat_type, key):
     r = _make_runner(platform=Platform.TELEGRAM)
     text = await r._handle_message(event("/proactive status", "12345678", chat_type=chat_type))
     assert isinstance(text, str)
-    if chat_type == "dm":
-        assert "clover pairing owner-setup telegram" in text
-        assert "confirmation code" in text and "Guest access" in text
-        assert "no policy reload" in text
-        assert "clover config set" not in text  # Enrollment must not silently gate guest commands.
-    else:
-        assert f"clover config set platforms.telegram.{key}" in text
-        assert "other users" in text and "slash commands" in text
-        assert "reload" in text.lower()
-    assert "/whoami" in text
-    assert "current profile" in text
-    assert "--force" not in text and "12345678" not in text
+    assert f"platforms.telegram.{key}" in text
+    assert "No separate owner verification" in text
+    assert "guests gives read-only access" in text
+    assert "owner-setup" not in text and "clover config set" not in text
     assert not (home / "config.yaml").exists()
+
+
 
 
 def test_tui_dispatch_uses_same_short_controls_without_a_model(home):
@@ -121,20 +110,20 @@ def test_tui_dispatch_uses_same_short_controls_without_a_model(home):
 
 
 @pytest.mark.asyncio
-async def test_readonly_text_fallback_uses_adapter_discovery_prefix(home):
+async def test_text_fallback_uses_adapter_discovery_prefix(home):
     class TypedAdapter:
         typed_command_prefix = "!"
     r = _make_runner(platform=Platform.TELEGRAM)
     r.adapters = {Platform.TELEGRAM: TypedAdapter()}
     text = await r._handle_message(event("/proactive"))
     assert isinstance(text, str)
-    assert "!whoami" in text and "!proactive status" in text
+    assert "!proactive on" in text and "!proactive status" in text
     assert "/whoami" not in text and "/proactive" not in text
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("access", ["single-allowlist", "wildcard", "open"])
-async def test_chat_admission_never_bootstraps_admin(home, monkeypatch, access):
+async def test_unrestricted_command_authority_does_not_create_admin_enrollment(home, monkeypatch, access):
     r = _make_runner(platform=Platform.TELEGRAM)
     r._is_user_authorized = GatewayRunner._is_user_authorized.__get__(r)
     extra = r.config.platforms[Platform.TELEGRAM].extra
@@ -146,10 +135,10 @@ async def test_chat_admission_never_bootstraps_admin(home, monkeypatch, access):
     r.adapters = {Platform.TELEGRAM: a}
     src = event("/proactive on", "12345678").source
     assert r._is_user_authorized_for_source(src)  # Eligible admission baseline.
-    assert not r._proactive_caller_is_admin(src)
+    assert r._proactive_caller_is_admin(src)
     text = await r._handle_message(event("/proactive on", "12345678"))
-    assert isinstance(text, str) and "admin" in text and len(text) < 180
-    assert not (home / "config.yaml").exists()
+    assert isinstance(text, str) and "Saved" in text and len(text) < 180
+    assert "allow_admin_from" not in config.require_readable_config_before_write().get("platforms", {}).get("telegram", {})
 
 
 @pytest.mark.asyncio

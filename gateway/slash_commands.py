@@ -3597,38 +3597,32 @@ class GatewaySlashCommandsMixin:
         return f"✓ Added subgoal {idx}: {text}"
 
     def _proactive_caller_is_admin(self, source: SessionSource) -> bool:
-        """Profile controls need explicit scoped admin or locally verified ownership.
+        """Use existing scoped control authority, independently of chat admission.
 
-        Disabled slash gating is compatibility, never evidence of ownership.
-        Enrolling an owner does not turn that gate on or change guest commands.
+        An unconfigured slash gate deliberately allows admitted users to control
+        the profile. With an admin list, command discovery/listing alone never
+        grants settings rights. No owner enrollment or admin-list write occurs.
         """
         try:
-            from gateway.slash_access import policy_for_source, _scope_for_chat_type
+            from gateway.slash_access import policy_for_source
             config = self.config
             if getattr(config, "multiplex_profiles", False):
                 from gateway.config import load_gateway_config
                 config = load_gateway_config()
             policy = policy_for_source(config, source)
-            if not source.user_id or not self._is_user_authorized_for_source(source):
+            if not source.user_id or not self._is_user_authorized_for_source(source) or not policy.is_admin(source.user_id):
                 return False
-            if policy.enabled:
-                # Explicit policy (including managed admin lists) wins over
-                # a separately verified owner. Group authority stays explicit.
-                return policy.is_admin(source.user_id)
-            if source.platform.value != "telegram" or _scope_for_chat_type(source.chat_type) != "dm":
-                return False
-            from clover_constants import get_clover_home
-            from gateway.pairing import VerifiedOwnerStore
-            home = get_clover_home().resolve()
-            adapter = self._adapter_for_source(source)
-            if (adapter is None or getattr(adapter, "_owner_verification_home", None) != home
-                    or self._resolve_profile_home_for_source(source).resolve() != home):
-                return False
-            platform_config = config.platforms.get(source.platform)
-            from gateway.slash_access import telegram_verified_owner_allowed
-            if platform_config is None or not telegram_verified_owner_allowed(platform_config, str(source.user_id)):
-                return False
-            return VerifiedOwnerStore(adapter.config.token, home=home).is_owner(str(source.user_id))
+            # Managed restrictions are current at mutation, even when the
+            # running gateway snapshot predates them. Check both supported
+            # spellings before shared-key bridging can mask a denial.
+            from clover_cli.managed_scope import load_managed_config
+            from gateway.slash_access import _scope_for_chat_type, policy_from_extra
+            platforms = load_managed_config().get("platforms", {})
+            managed = platforms.get(source.platform.value, {})
+            for extra in (managed, managed.get("extra", {})):
+                if not policy_from_extra(extra, _scope_for_chat_type(source.chat_type)).is_admin(source.user_id):
+                    return False
+            return True
         except Exception:
             return False
 
@@ -3645,32 +3639,21 @@ class GatewaySlashCommandsMixin:
             return self._stale_offline_command_reply("proactive")
         can_change = self._proactive_caller_is_admin(event.source)
         args = event.get_command_args().strip()
-        owner_setup = args.lower() == "setup"
-        text = proactive_command("status" if owner_setup else args, can_change=can_change,
-                                 show_commands=bool(args) or not can_change)
-        if (owner_setup or (args.lower() == "status" and not can_change)) and event.source.platform.value == "telegram" and event.source.chat_type in {"dm", "direct", "private", "", None}:
-            text += (
-                "\nOwner confirmation (local setup, current profile): ask the person who set up Clover "
-                "to run `clover pairing owner-setup telegram`. Open your bot's private chat, send the "
-                "setup challenge, then enter the bot's confirmation code in that same local setup. "
-                "Never share either code with someone else. This verifies the actual Telegram sender, "
-                "not a /whoami ID, username or text claim. Guest access and slash commands stay unchanged. "
-                "Proactivity stays Off if it was Off; verification never enables it. "
-                "Existing chat admission and explicit admin/managed policy still apply. "
-                "After confirmation, reopen /proactive for buttons; no policy reload is needed for this grant."
-            )
-        elif args.lower() == "status" and not can_change:
+        permission_help = args.lower() in {"setup", "status"}
+        text = proactive_command("status" if args.lower() == "setup" else args,
+                                 can_change=can_change, show_commands=bool(args) or not can_change)
+        if permission_help:
             from gateway.slash_access import _keys_for_scope, _scope_for_chat_type
-            admin_key, _ = _keys_for_scope(_scope_for_chat_type(event.source.chat_type))
-            platform_key = event.source.platform.value
+            scope = _scope_for_chat_type(event.source.chat_type)
+            admin_key, _ = _keys_for_scope(scope)
             text += (
-                "\nOwner setup (local terminal, current profile): verify the sender's /whoami user ID "
-                "with the owner, not a chat ID, username or message claim. Inspect and preserve any existing admins.\n"
-                f"clover config set platforms.{platform_key}.{admin_key} '[\"VERIFIED_USER_ID\"]'\n"
-                "Replace the placeholder with the verified user ID (and retain existing admin IDs). "
-                "This enables slash-command gating for this chat type: other users' slash commands may be restricted. "
-                "It does not grant chat access; keep the existing source allowlist. "
-                "The operator must reload gateway policy through the normal approved lifecycle, then reopen /proactive."
+                "\nPermissions: existing source admission and scoped command policy apply. "
+                f"When platforms.{event.source.platform.value}.{admin_key} has a nonempty admin list, "
+                f"only its admins can change settings in this {scope} scope; listing /proactive "
+                "for guests gives read-only access. With no admin gate, admitted users can use "
+                "the controls. No separate owner verification is required. "
+                "If denied, ask the profile operator to review the current policy; "
+                "managed settings remain authoritative."
             )
         prefix = self._typed_command_prefix_for(event.source.platform)
         if isinstance(prefix, str) and prefix != "/":
@@ -3686,6 +3669,7 @@ class GatewaySlashCommandsMixin:
         home = get_clover_home().resolve()
         route_home = self._resolve_profile_home_for_source(source).resolve()
         adapter = self._adapter_for_source(source)
+        credential = self._adapter_credential_fingerprint(adapter)
         expires_at = time.monotonic() + 300
         used = False
 
@@ -3694,6 +3678,7 @@ class GatewaySlashCommandsMixin:
                 return False
             with _profile_runtime_scope(home):
                 return (self._adapter_for_source(source) is adapter
+                        and self._adapter_credential_fingerprint(adapter) == credential
                         and self._resolve_profile_home_for_source(source).resolve() == route_home
                         and self._proactive_caller_is_admin(source))
 
@@ -3707,7 +3692,7 @@ class GatewaySlashCommandsMixin:
 
         sent = await self._try_send_choice_picker(
             event, self._session_key_for_source(source), text,
-            [{"value": "on", "label": "Enable"}, {"value": "off", "label": "Disable"}],
+            [{"value": "on", "label": "On"}, {"value": "off", "label": "Off"}],
             on_selected, choice_guard={"owner_user_id": str(source.user_id),
                                        "expires_at": expires_at, "authorize": authorized},
         )

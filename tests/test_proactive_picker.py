@@ -40,7 +40,7 @@ async def test_native_enable_single_use_no_model_and_profile_pinned(picker, home
     assert await r._handle_message(event("/proactive")) is None
     wire = a._send_message_with_thread_fallback.call_args.kwargs
     buttons = wire["reply_markup"].inline_keyboard[0]
-    assert [b.text.lstrip("✓") for b in buttons] == ["Enable", "Disable"]
+    assert [b.text.lstrip("✓") for b in buttons] == ["On", "Off"]
     assert all(len(b.callback_data.encode()) <= 64 for b in buttons)
     other = tmp_path / "other-profile"
     other.mkdir()
